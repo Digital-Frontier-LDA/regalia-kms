@@ -52,13 +52,17 @@ HOW PART 2 DIFFERS FROM PRODUCTION, stated so nothing is read into it:
   * a's TPM is behind tpm2-abrmd (D-Bus), not the kernel's /dev/tpmrm0: the units' DevicePolicy is not
     exercised here (part 1 does that), and tabrmd keeps a disconnected client's sessions reclaimable where
     the kernel flushes them, so nothing that uses a session across processes is proven by it (#65).
+  * the ESP is a plain directory, /efi, on the runner's own filesystem, not a FAT partition: the unit's
+    RequiresMountsFor= and the write are exercised, not a vfat mount nor a boot from it (that is
+    tests/test_baremetal_unlock_boot.py, boots 10-12).
   * the KMS daemon runs as the invoking user through systemd-run, not as the shipped regalia-kms.service
     (its user, sandbox, AppArmor profile and credentials): what is proven is the admission contract
     between the units and the daemon, not the daemon's own confinement (that is e2e/kms-hardened-serve.sh).
 
   6  b's tunnel to node a comes up from the same manifest
   7  catch-up: b holds epoch 2 and its heartbeat; regalia-sync pulls both over the tunnel, publishes, and
-     the path unit runs regalia-wg-apply for the new chain
+     the path unit runs regalia-wg-apply for the new chain; regalia-sync leaves a's TPM anchor at 1, and
+     regalia-esp-advance (root, no capability) writes the chain to the ESP, then moves the anchor to 2 (#66 B3)
   8  the KMS daemon (SoftHSM, as a unit named regalia-kms.service) is up and NOT ready; regalia-admission
      re-attests to b with a's TPM, b's TPM signs a lease, the admission file admits, and the daemon signs
   9  b receives the manifest that revokes a: it refuses to renew, by name, and the daemon stops serving at
@@ -94,7 +98,10 @@ import tests.test_baremetal_heartbeat as hbt                                    
 
 PREFIX = "/usr/lib/regalia-kms"
 UNITS = ("regalia-authtime.service", "regalia-wg-apply.service", "regalia-wg-apply.path", "regalia-boot-session.service",
-         "regalia-admission.service", "regalia-sync.service", "regalia-authority-authtime.service")
+         "regalia-admission.service", "regalia-sync.service", "regalia-authority-authtime.service",
+         "regalia-esp-advance.service", "regalia-esp-advance.path")
+ESP = "/efi"                     # the unit's ESP; made by the test where the runner has none, and removed after (MADE)
+MADE = []
 ADMISSION_FILE = "/run/regalia/admission/admission.json"
 DAEMON_UNITS = ("regalia-kms.service", "regalia-audit-collector.service")
 NS, A_TCTI = "regalia-e2e-b", "device:/dev/tpmrm0"
@@ -247,6 +254,8 @@ def main():
         for name in DAEMON_UNITS + tuple(reversed(UNITS)) + ("tpm2-abrmd.service",):
             sh("systemctl", "stop", name, check=False)
         sh("ip", "netns", "del", NS, check=False)
+        if MADE:
+            shutil.rmtree(MADE[0], ignore_errors=True)
         dropin = pathlib.Path("/etc/systemd/system/tpm2-abrmd.service.d/e2e.conf")
         if dropin.exists():
             dropin.unlink()
@@ -860,7 +869,12 @@ def part2(work, binaries, user, ctx, servers, status):
     store.commit(signed(m2))
     freshness.accept(hbt.beat(m2, 2, issued=int(time.time())), m2)
     before = show("regalia-wg-apply.service", "InvocationID")["InvocationID"]
-    sh("systemctl", "start", "regalia-wg-apply.path", "regalia-sync.service")
+    if not os.path.exists(ESP):
+        os.mkdir(ESP, 0o755)
+        MADE.append(ESP)
+    anchor = membership.HighWater(cfg["nv_epoch"], cfg["tcti"])
+    ok(anchor.value() == 1, "a's TPM anchor is at epoch 1 before the catch-up", anchor.value())
+    sh("systemctl", "start", "regalia-esp-advance.path", "regalia-wg-apply.path", "regalia-sync.service")
     caught = until(lambda: chain_epoch() == 2, 90, 2)
     ok(caught is True, "regalia-sync pulled epoch 2 from b and published it", journal("regalia-sync.service")[-800:])
     pulled = [e for e in events if e.get("event") == "sync-pull" and e.get("subject") == "a"]
@@ -876,7 +890,21 @@ def part2(work, binaries, user, ctx, servers, status):
     rerun = until(applied_epoch_2, 90, 1)
     ok(bool(rerun), "regalia-wg-apply ran again and applied epoch 2, by its own run's journal (restarts: %s)"
        % (rerun.get("NRestarts") if isinstance(rerun, dict) else "?"), journal("regalia-wg-apply.service")[-600:])
-    # regalia-sync and the path unit keep running from here, beside regalia-admission, as on a host
+    # #66 B3: regalia-sync committed and published epoch 2 without moving the anchor; the ESP advance wrote the chain
+    # to the ESP and only then moved the anchor
+    on_esp = pathlib.Path(ESP) / "EFI" / "regalia" / "membership.json"
+    advanced = until(lambda: on_esp.exists() and anchor.value() == 2
+                     and [e["manifest"]["epoch"] for e in membership.load(on_esp.read_bytes(), membership.MAX_CHAIN_BYTES)] == [1, 2], 90, 2)
+    ok(advanced is True, "regalia-esp-advance wrote epochs 1-2 to %s, then moved a's TPM anchor to 2" % on_esp,
+       journal("regalia-esp-advance.service")[-800:])
+    ok(on_esp.exists() and on_esp.read_bytes() == pathlib.Path("/var/lib/regalia-sync/chain.json").read_bytes(),
+       "the ESP's chain is the published chain, byte for byte")
+    said = sh("journalctl", "-u", "regalia-esp-advance.service", "-o", "cat", "--no-pager", check=False).stdout
+    ok("the ESP's membership chain is epoch 2" in said, "its run said so", said[-600:])
+    sandbox = show("regalia-esp-advance.service", "User", "CapabilityBoundingSet", "PrivateNetwork", "ReadWritePaths")
+    ok((sandbox.get("User"), sandbox.get("CapabilityBoundingSet"), sandbox.get("PrivateNetwork")) == ("root", "", "yes")
+       and sandbox.get("ReadWritePaths") == ESP, "regalia-esp-advance as systemd applied it: root, no capability, no network, writes %s only" % ESP, sandbox)
+    # regalia-sync and the path units keep running from here, beside regalia-admission, as on a host
 
     header("8  the KMS daemon, and a lease from b over the tunnel")
     daemon.start()

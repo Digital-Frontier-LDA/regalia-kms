@@ -1272,11 +1272,19 @@ class Store:
     record existed.
     """
 
-    def __init__(self, path, root_key, highwater, documents=None):
+    def __init__(self, path, root_key, highwater, documents=None, anchors=True):
         """`documents(manifest)`, when given, refuses (raises Refused) unless the document that manifest commits to is
         held (measurements.Documents.require_for, #332): no epoch is committed, nor the TPM anchor moved to it,
-        without the reference values to judge it by. Generic here: membership does not know what a document is."""
+        without the reference values to judge it by. Generic here: membership does not know what a document is.
+
+        `anchors` False (#66 B3, the ESP advance): this store NEVER moves the TPM anchor. load() verifies the chain
+        against it (the manifest the TPM recorded, the chain at or above the high-water) without anchoring a newer
+        chain, and commit()/restore() write the disk only, refusing to run further ahead of the anchor than the
+        jump bound (the initrd and HighWater.advance() refuse a larger jump). The node's sync runs so: the anchor
+        is moved by the root ESP advance, which writes the boot chain to the ESP FIRST, so that no reboot ever
+        finds an ESP chain below its TPM anchor (the initrd refuses that as a ROLLBACK)."""
         self.path, self.root_key, self.hw, self.documents = path, root_key, highwater, documents
+        self.anchors = anchors
         self.lock_path = path + ".lock"
 
     @staticmethod
@@ -1314,6 +1322,13 @@ class Store:
         hw = self.hw.value()
         require(epoch >= hw, "ROLLBACK: the membership on disk is epoch %d but the TPM high-water is %d; "
                 "fetch the chain from a peer" % (epoch, hw))
+        if not self.anchors:
+            # the recorded manifest, or refused; a newer chain on disk is left for the ESP advance to anchor
+            self.hw.verify(self._digests(manifests))
+            require(epoch - hw <= self.hw.MAX_JUMP, "the membership on disk is epoch %d, %d above the TPM high-water: the jump "
+                    "exceeds the bound %d: anomaly" % (epoch, epoch - hw, self.hw.MAX_JUMP))
+            self.chain, self.manifests = chain, manifests
+            return current
         # the recorded manifest, or refused; then a record or a counter left behind by a crash is completed
         self.hw.anchor(epoch, self._digests(manifests))
         self.hw.check(epoch)
@@ -1362,8 +1377,9 @@ class Store:
             if self.documents is not None:              # #332: the epoch restored to is judged by its own document
                 self.documents(current)
             self._write(copy.deepcopy(envelopes))
-            self.hw.anchor(current["epoch"], self._digests(manifests))
-            self.hw.check(current["epoch"])
+            if self.anchors:                            # else: the ESP advance anchors it, ESP first
+                self.hw.anchor(current["epoch"], self._digests(manifests))
+                self.hw.check(current["epoch"])
             self.chain, self.manifests = copy.deepcopy(envelopes), manifests
             return current
 
@@ -1443,6 +1459,13 @@ class Store:
             return current
         if final and self.documents is not None:       # before the disk and the TPM: refused, nothing has moved
             self.documents(nxt)
+        if not self.anchors:                            # the disk only: the ESP advance moves the anchor, ESP first
+            hw = self.hw.value()
+            require(nxt["epoch"] - hw <= self.hw.MAX_JUMP, "epoch %d is %d above the TPM high-water: the jump exceeds the bound %d "
+                    "until the ESP advance anchors what is held" % (nxt["epoch"], nxt["epoch"] - hw, self.hw.MAX_JUMP))
+            self._write(self.chain + [envelope])
+            self.chain, self.manifests = self.chain + [envelope], self.manifests + [nxt]
+            return nxt
         self._write(self.chain + [envelope])
         self.hw.anchor(nxt["epoch"], self._digests(self.manifests + [nxt]))
         self.chain, self.manifests = self.chain + [envelope], self.manifests + [nxt]

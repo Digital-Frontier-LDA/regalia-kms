@@ -2,15 +2,22 @@
 """A KMS node's running services, assembled from one configuration file (#80, step 3b).
 
     python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json authtime | wg-apply | boot-session | admission | sync
+    python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json esp-advance [--esp /efi]
 
-Five processes, each the smallest one that can do its part. Only the first three are root, and none of
-them parses what a peer sends except `sync` and `admission`, which hold no capability and are not root:
+Six processes, each the smallest one that can do its part. Four are root (authtime, wg-apply, esp-advance,
+boot-session), and none of them parses what a peer sends; `sync` and `admission` do, and hold no capability
+and are not root:
 
     authtime   root, CAP_DAC_OVERRIDE   asks chrony whether time is authenticated; writes
                                         /run/regalia/authtime.json (authtime.py)
     wg-apply   root, CAP_NET_ADMIN      makes wg-svc and wg-unlock what the CURRENT manifest says, and
                                         reads the result back (wgsvc.py, bootnet.py); a oneshot, run at
                                         boot and again whenever the published chain changes
+    esp-advance   root, no capability, the TPM through its group
+                                        a oneshot, whenever the published chain changes: writes it to
+                                        the ESP (EFI/regalia/membership.json, the chain the initrd
+                                        renders the next boot from, #66 B3), THEN moves the TPM anchor
+                                        to it (esp_advance)
     boot-session  root, no capability   a oneshot: on a boot where the unlock client presented no
                                         session (the disk opened with the recovery key), makes one and
                                         leaves the pair in /run/regalia, as the client would have
@@ -33,6 +40,13 @@ the TPM anchor, which only goes up. A `sync` that is compromised can therefore w
 publish an older one, and either way the other services see a chain below the anchor and refuse it: the
 node stops serving, it does not go on under an old manifest.
 
+`sync` NEVER MOVES THE ANCHOR (#66 B3: membership.Store(anchors=False)). The initrd refuses an ESP chain below
+the anchor (ROLLBACK), so the ESP must hold epoch N before the anchor reaches N: `esp-advance`, root, writes
+the published chain to the ESP, durably, and only then anchors it. A crash between the two leaves the ESP
+ahead of the anchor, which the initrd accepts (up to the jump bound) and the next run completes. Until it
+runs, the published chain is ahead of the anchor: the root services act on it (it is verified from the root
+key, and is not below the anchor), and sync refuses to run further ahead than the jump bound.
+
 THE BOOT SESSION. A runtime lease is asked for with a quote over this boot's session, and a peer allows
 one session per boot of a node's TPM. If the unlock client presented one in the initrd it left
 /run/regalia/boot-session (64 hex) and boot-session.pub (hex of the key's DER); `boot-session` is written
@@ -53,6 +67,7 @@ import argparse
 import binascii
 import contextlib
 import errno
+import hashlib
 import json
 import os
 import re
@@ -172,6 +187,24 @@ def published(path, root_key, anchor):
     epoch the very manifest its record names, so a fork the TPM never recorded is refused (CONFLICT). The
     read takes no lock (these services cannot write regalia-sync's lock directory); a CONFLICT can be a
     commit racing the read, so it is read once more before it stands."""
+    envelopes = read_published(path)
+    manifest = membership.accept_chain(None, envelopes, root_key)
+    manifests = [e["manifest"] for e in envelopes]                       # verified, epoch 1 first
+
+    def digest_of(epoch):
+        require(epoch <= len(manifests), "ROLLBACK: the published chain ends at epoch %d, below the TPM anchor %d" % (len(manifests), epoch))
+        return membership.digest(manifests[epoch - 1]) if epoch else membership.HighWater.ZERO
+    try:
+        anchor.verify(digest_of, lock=False)
+    except Refused as refused:
+        if str(refused).startswith("ROLLBACK"):
+            raise
+        anchor.verify(digest_of, lock=False)        # a commit may have been racing the read: it stands only if it stays
+    return manifest
+
+
+def read_published(path):
+    """The published chain's envelopes, as written (NOT verified: published() and esp_advance verify them)."""
     # The file is written by a process that parses what other machines send, and read here by root: no
     # symlink is followed, and nothing but a regular file is read (a FIFO would hang the reader).
     try:
@@ -192,19 +225,75 @@ def published(path, root_key, anchor):
         os.close(fd)
     envelopes = membership.load(raw, membership.MAX_CHAIN_BYTES)        # refuses a deeply nested document itself
     require(isinstance(envelopes, list) and envelopes, "the published membership chain is empty")
-    manifest = membership.accept_chain(None, envelopes, root_key)
-    manifests = [e["manifest"] for e in envelopes]                       # verified, epoch 1 first
+    return envelopes
 
-    def digest_of(epoch):
-        require(epoch <= len(manifests), "ROLLBACK: the published chain ends at epoch %d, below the TPM anchor %d" % (len(manifests), epoch))
-        return membership.digest(manifests[epoch - 1]) if epoch else membership.HighWater.ZERO
+
+# ---- the ESP advance (#66 B3) ----
+
+ESP_LOCK = "/run/regalia-esp-advance/highwater.lock"     # its RuntimeDirectory: the anchor's one run-time writer
+# bootcreds.esp_files renders the boot configuration as a check (what the initrd will render must render); the
+# device it names goes only into the site credential, which esp_advance does not write
+ESP_RENDER_DEVICE = "/dev/disk/by-partlabel/regalia-root"
+
+
+def esp_advance(node, esp, lock_path=ESP_LOCK):
+    """Bring the boot chain on the ESP (`esp`, its mount point) up to the published chain, THEN move the TPM anchor
+    to it: the order that never leaves the initrd an ESP chain below its anchor (a ROLLBACK, refused at boot).
+
+    The chain is read from the published file and verified here, from the root key and against the anchor, with
+    the render the initrd will do (bootcreds.esp_files: a chain ahead of the anchor is accepted up to the jump
+    bound). ONLY the chain is written (bootcreds.CHAIN_ON_ESP): the measured site credential is the site's, not
+    the manifest's, and is left as enrolment wrote it. The write is enrolment's own (enrol._replace_esp, a
+    temporary file fsynced and renamed, the directory fsynced, under a trusted path), and is read back before the
+    anchor moves. A crash after the write and before the anchor leaves the ESP ahead, which the initrd accepts and
+    the next run completes. Returns (epoch, the chain's SHA-256, whether the ESP was rewritten).
+
+    `lock_path`: the anchor's lock. regalia-sync's (the state directory's, 0600) cannot be opened by a root without
+    CAP_DAC_OVERRIDE; sync no longer writes the anchor, and systemd runs one start of this unit at a time."""
+    from deploy.baremetal import bootcreds, enrol
+    envelopes = read_published(node.path(PUBLISHED))
+    anchor = node.anchor(lock_path=lock_path)
+    files = bootcreds.esp_files(node.site, envelopes, node.cfg["root_key"], ESP_RENDER_DEVICE, anchor)
+    chain = files[bootcreds.CHAIN_ON_ESP]
+    relative = enrol._rendered_path(bootcreds.CHAIN_ON_ESP)
+    directory, filename = os.path.join(esp, os.path.dirname(relative)), os.path.basename(relative)
+    target = os.path.join(directory, filename)
     try:
-        anchor.verify(digest_of, lock=False)
-    except Refused as refused:
-        if str(refused).startswith("ROLLBACK"):
-            raise
-        anchor.verify(digest_of, lock=False)        # a commit may have been racing the read: it stands only if it stays
-    return manifest
+        enrol._ensure_trusted_dir(directory)
+    except enrol.Refused as refused:
+        raise Refused(str(refused)) from None
+    rewritten = _read_regular(target, len(chain) + 1) != chain
+    if rewritten:
+        enrol._replace_esp(directory, filename, chain)
+        require(_read_regular(target, len(chain) + 1) == chain, "the chain read back from %s is not the one written" % target)
+    manifests = [e["manifest"] for e in envelopes]               # verified by esp_files
+    epoch = manifests[-1]["epoch"]
+    anchor.anchor(epoch, membership.Store._digests(manifests))
+    anchor.check(epoch)
+    return epoch, hashlib.sha256(chain).hexdigest(), rewritten
+
+
+
+def _read_regular(path, limit):
+    """The bytes of the regular file `path` (up to `limit`), never through a link; None if it is not there."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    except OSError as error:                        # ELOOP: a link
+        raise Refused("%s cannot be read as a regular file (%s): it is not followed" % (path, error.strerror)) from None
+    try:
+        require(stat.S_ISREG(os.fstat(fd).st_mode), "%s is not a regular file" % path)
+        chunks, size = [], 0
+        while size < limit:
+            chunk = os.read(fd, min(1 << 20, limit - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
 
 
 # ---- the boot session ----
@@ -391,10 +480,11 @@ class Node:
     def tpm_clock(self):
         return heartbeat.TpmClock(self.tcti, self.run)
 
-    def anchor(self):
+    def anchor(self, lock_path=None):
         """The membership epoch anchor: membership.HighWater on its own index (and the pair and slots after it),
-        with this node's approved-image write policy (image_policy) for an index written by policy (#242)."""
-        return membership.HighWater(self.cfg["nv_epoch"], self.tcti, self.run, lock_path=self.path("highwater.lock"),
+        with this node's approved-image write policy (image_policy) for an index written by policy (#242).
+        `lock_path`: the writer's lock, by default sync's in the state directory (esp_advance has its own)."""
+        return membership.HighWater(self.cfg["nv_epoch"], self.tcti, self.run, lock_path=lock_path or self.path("highwater.lock"),
                                     policy=lambda: image_policy(self.cfg), image_key=lambda: image_key(self.cfg))
 
     def manifest(self, patience=2.0, step=0.25):
@@ -418,8 +508,10 @@ class Node:
         return measurements.Documents(self.path(measurements.STORE_DIR))
 
     def store(self):
-        # an epoch is committed only with the measurements it commits to held (#332)
-        return membership.Store(self.path("membership.json"), self.cfg["root_key"], self.anchor(), documents=self.documents().require_for)
+        # an epoch is committed only with the measurements it commits to held (#332). Sync never moves the TPM anchor
+        # (#66 B3): the root ESP advance writes the boot chain to the ESP first, then anchors (esp_advance)
+        return membership.Store(self.path("membership.json"), self.cfg["root_key"], self.anchor(), documents=self.documents().require_for,
+                                anchors=False)
 
     def freshness(self):
         counter = heartbeat_counter(self.cfg, self.run)
@@ -764,7 +856,8 @@ def authtime_service(cfg):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", default="/etc/regalia/node.json")
-    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check", "time-clear"))
+    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check", "time-clear", "esp-advance"))
+    parser.add_argument("--esp", default="/efi", help="esp-advance only: the ESP's mount point")
     parser.add_argument("--reason", help="time-clear only: why chronyd may run again. FIRST compare the declared NTS servers "
                         "with an independent clock (another site's, a GNSS receiver, a phone on the mobile network): chronyd "
                         "stopped because two of them agreed on a jump, and a restarted chronyd steps to what they agree on")
@@ -791,6 +884,10 @@ def main(argv=None):
             print(json.dumps({"node_id": node.node_id, "epoch": node.manifest()["epoch"]}))
         elif args.service == "wg-apply":
             print("wg-svc and %s applied under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
+        elif args.service == "esp-advance":
+            epoch, sha, rewritten = esp_advance(node, args.esp)
+            print("the ESP's membership chain is epoch %d (sha256 %s%s), and the TPM anchor with it"
+                  % (epoch, sha, ", written now" if rewritten else ", already there"))
         elif args.service == "admission":
             admission_service(node).run(lambda: False)
         else:

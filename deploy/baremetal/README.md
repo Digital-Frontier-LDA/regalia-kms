@@ -644,6 +644,32 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   chain the same way, renders what the initrd will render (refusing, e.g., a host left with no peer), and
   writes the site document and the chain, and removes the four files an earlier stage rendered onto the ESP.
 
+  **A new manifest reaches the ESP before the TPM anchor does** (the ESP advance). The initrd refuses an ESP
+  chain below its anchor (ROLLBACK, boot 12 of the boot test), so the order matters. `regalia-sync` commits and
+  publishes a manifest WITHOUT moving the anchor (`membership.Store(anchors=False)`). `regalia-esp-advance`
+  (root, no capability, run by its `.path` unit on each new published chain; §8) verifies the published chain,
+  writes it to `/efi/EFI/regalia/membership.json` (fsynced, renamed, read back), and only then moves the anchor.
+  A crash between the two leaves the ESP ahead, which the initrd accepts up to the jump bound (boot 10), and the
+  next run completes it. **Current limitations:**
+  - It writes only the chain. A change to the site (the measured `regalia.site.cred`) still goes through
+    enrolment's render; nothing at run time rewrites it.
+  - Until it has run, the node's own services act on the published chain while the anchor is behind it (the
+    chain is root-signed and not below the anchor, so this is not a rollback). `regalia-sync` refuses to run more
+    than the jump bound (1000 epochs) ahead.
+  - The ESP must be mounted at `/efi` (the unit's `RequiresMountsFor=`). If it is not, the run fails, is retried
+    every 15 s, and the anchor stays behind. A failed run is visible in the journal and in NRestarts, not in
+    `--failed`.
+  - The run is recorded in the journal only. It has no hash-chained trail of its own (#278). The commit it
+    follows is in the sync trail.
+  - The anchor's run-time writer lock is its own (`/run/regalia-esp-advance/highwater.lock`). Enrolment and
+    `reanchor.py`, run by hand, take a different lock, so do not run them while the node's units run.
+  - Enrolment still anchors epoch 1 before it writes the ESP. That is safe only because the host has not booted
+    from that ESP yet. A crash in between needs a rerun of `commit`, which resumes.
+  - Proven by unit tests (`tests/test_baremetal_esp_advance.py`, `test_baremetal_store_anchors.py`), under a
+    real systemd (`e2e/node-units-systemd.py` step 7, on a plain `/efi` directory and not a FAT partition), and
+    by QEMU boots of the three ESP/anchor orders (boots 10-12). Those boots write the ESP with the test's own
+    code, not with the service, and no physical host has run it.
+
   **Nothing in the initrd acts on a credential by name.** The image's command line (signed, in PCR 11)
   carries `systemd.import_credentials=no`: systemd imports no credential from any source, not the ESP,
   not SMBIOS type 11 or QEMU's fw_cfg (which nothing the peers attest measures), not the command line.
@@ -803,7 +829,7 @@ the single-site baseline (initramfs-tools, TPM-only crypttab); they change when 
 
 ## 8. The node's running services (three-site, #80): not commissioned yet
 
-Five systemd units in `deploy/baremetal/units/`, all run from one configuration, `/etc/regalia/node.json`
+Six systemd units in `deploy/baremetal/units/`, all run from one configuration, `/etc/regalia/node.json`
 (`deploy/baremetal/node.py`; schema `regalia.node/v1`, every field required):
 
 | Unit | Runs as | Privilege | Does |
@@ -812,7 +838,8 @@ Five systemd units in `deploy/baremetal/units/`, all run from one configuration,
 | `regalia-wg-apply` (+ `.path`) | root | `CAP_NET_ADMIN` | makes `wg-svc` and `wg-unlock` what the current manifest says, reads them back, brings them up only then; re-run whenever the published chain changes |
 | `regalia-boot-session` | root | none, no network, no device; a oneshot | on a boot where the unlock client presented no session (recovery key), makes one and writes the pair in `/run/regalia` |
 | `regalia-admission` | `regalia-admission` (#191) | none; the TPM through `tss`; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission/admission.json`, its own directory and nothing else. Its trail (`admission_dir/audit.jsonl`, #340) holds each renewal (`admission-renew`: the issuing peer; a refusal whole the first time of its kind, then counted, one line a minute at most, so a node cut off writes tens of lines a day; attempts back off from 5 s to 60 s while they fail) and each change between serving and not (`admission-serving`, with the reason): it serves only once that change is recorded, and stops serving at once, recording after (a failed record is logged loudly and tried again) |
-| `regalia-sync` | `regalia-sync` | none; the TPM through `tss` | answers peers and booting nodes, pulls manifests and heartbeats, keeps the membership store, runs the heartbeat watch |
+| `regalia-sync` | `regalia-sync` | none; the TPM through `tss` | answers peers and booting nodes, pulls manifests and heartbeats, keeps the membership store (never moving the TPM anchor), runs the heartbeat watch |
+| `regalia-esp-advance` (+ `.path`) | root | none, no network; the TPM through `tss`; writes `/efi` only | on each new published chain: writes it to the ESP (`EFI/regalia/membership.json`), then moves the TPM anchor to it (§7, #66 B3) |
 
 - **One writer of the membership chain.** `regalia-sync` owns the store and publishes the verified chain
   (`/var/lib/regalia-sync/chain.json`, 0644). The other services (wg-apply, admission) verify that copy

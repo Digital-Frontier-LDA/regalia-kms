@@ -47,6 +47,11 @@
 #           root's device wait gave up, and nothing ended in a shell. Boots 8 and 9 need KVM.
 #   boot 9  THE PEERS COME BACK (#70, a blackout). Unreachable for 150 s and past the backoff's cap, then
 #           back: nobody types anything, and the host unlocks by itself.
+#   boots 10-12  A NEW MANIFEST (#66 B3, the ESP advance). The ESP at epoch 2 with the TPM anchor still at 1
+#           (a crash between regalia-esp-advance's two steps): rendered under epoch 2. Both at 2: rendered.
+#           The order reversed, the ESP at 1 under an anchor at 2: a ROLLBACK, the recovery key. The ESP is
+#           written here by the test, not by node.esp_advance (tests/test_baremetal_esp_advance.py), and the
+#           peers stay at epoch 1, so these boots show the render, not an unlock under epoch 2.
 #
 # The guest is built here from Debian's own packages (mmdebstrap). REGALIA_BOOT_ROOTFS names a directory
 # to use instead: the one variable to change when the appliance image of #61 exists.
@@ -277,4 +282,4 @@ fi
 if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: 14 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, a forked chain refused by the TPM anchor, an older signed image approved and then retired (refused: the recovery key), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock)"
+echo "unlock-boot-qemu: 17 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, a forked chain refused by the TPM anchor, an older signed image approved and then retired (refused: the recovery key), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock, a new epoch on the ESP ahead of the anchor and with it, the ESP behind the anchor refused)"

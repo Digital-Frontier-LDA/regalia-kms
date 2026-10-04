@@ -659,6 +659,59 @@ class OnQemu(tub.OnSwtpm):
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
         no_shell(self, said)
 
+        # boots 10-12, A NEW MANIFEST (#66 B3, the ESP advance): regalia-sync never moves the TPM anchor;
+        # regalia-esp-advance writes the chain to the ESP, THEN anchors it. These boots come last: they leave the
+        # guest's anchor at epoch 2. The peers still hold epoch 1, so the unlock itself is not what is shown here
+        # (the recovery key is typed if asked): only what the initrd renders from, or refuses.
+        m2 = dict(self.m1, epoch=2, prev_digest=membership.digest(self.m1), issued_at="2026-10-04T00:00:00Z")
+        two = [self.chain[0], self.signed(m2)]
+        # boot 10, THE ESP AHEAD OF THE ANCHOR: the ESP written and the anchor not yet (a crash between the two
+        # steps, or a reboot before the service ran): accepted, and rendered under the new epoch
+        self.chain = two
+        said = self.boot("10-esp-ahead", credentials, recovery=True)
+        self.assertIn("regalia-unlock: rendered the boot configuration of a under manifest epoch 2 (TPM high-water 1)", said)
+        self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+        no_shell(self, said)
+        # boot 11, BOTH ADVANCED: the anchor moved to the chain the ESP holds, as regalia-esp-advance leaves a host
+        self.anchor_guest(two)
+        said = self.boot("11-advanced", credentials, recovery=True)
+        self.assertIn("regalia-unlock: rendered the boot configuration of a under manifest epoch 2 (TPM high-water 2)", said)
+        self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+        no_shell(self, said)
+        # boot 12, THE ORDER REVERSED: an ESP left at epoch 1 under an anchor at 2 (what a sync that anchored first
+        # would leave after a crash) is a ROLLBACK to the initrd: nothing rendered, no peer asked, the recovery key
+        self.chain = two[:1]
+        since = len(self.events)
+        said = self.boot("12-esp-behind", credentials, recovery=True)
+        self.assertRegex(said, r"regalia-unlock: the boot configuration cannot be rendered: ROLLBACK")
+        self.assertNotIn("regalia-unlock: gave the key", said)
+        self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+        no_shell(self, said)
+        self.assertEqual([e for e in self.events[since:] if e.get("event") == "unlock"], [])
+
+    def anchor_guest(self, envelopes):
+        """The guest's TPM anchor moved to the tip of `envelopes` while the guest is off (what regalia-esp-advance
+        does on a running host, after the ESP holds the chain: node.esp_advance)."""
+        sock = self.d + "/a-off.sock"
+        tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--server", "type=unixio,path=" + sock,
+                                "--ctrl", "type=unixio,path=%s.ctrl" % sock, "--flags", "not-need-init,startup-clear"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            for _ in range(100):
+                if os.path.exists(sock):
+                    break
+                time.sleep(0.1)
+            tcti = "swtpm:path=" + sock
+            membership.accept_chain(None, envelopes, self.signed({})["signature"]["key"])
+            manifests = [e["manifest"] for e in envelopes]
+            anchor = membership.HighWater("0x1500016", tcti=tcti, lock_path=self.d + "/a-hw.lock")
+            anchor.anchor(len(manifests), membership.Store._digests(manifests))
+            anchor.check(len(manifests))
+            run(["tpm2_shutdown", "-c", "-T", tcti], capture_output=True, check=True)
+        finally:
+            tpm.terminate()
+            tpm.wait(30)
+
 
 if __name__ == "__main__":
     unittest.main()
