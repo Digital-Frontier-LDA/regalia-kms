@@ -45,7 +45,7 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
 import threenode                                     # noqa: E402
-from threenode import AUTH, sh, until                # noqa: E402
+from threenode import sh, until                      # noqa: E402
 from deploy.baremetal import authtime                # noqa: E402
 
 passed, failed = 0, 0
@@ -217,7 +217,7 @@ def main():
         print("three-node-theft: refused: this changes the machine (namespaces, interfaces, loop devices, dm-crypt, transient units). "
               "It runs on a GitHub-hosted runner; on another throwaway host set REGALIA_THREE_NODE_HOST_OK to its /etc/machine-id.")
         return 2
-    present = [p for p in ("/run/netns/" + threenode.SWITCH,) + tuple("/run/netns/e2e3-" + n for n in threenode.NAMES + (AUTH,)) if os.path.exists(p)]
+    present = [p for p in ("/run/netns/" + threenode.SWITCH,) + tuple("/run/netns/e2e3-" + n for n in threenode.NAMES) if os.path.exists(p)]
     present += sh("systemctl", "list-units", "--all", "--plain", "--no-legend", threenode.UNIT_PREFIX + "*", check=False).stdout.split()[:1]
     present += [p for p in (os.path.join(authtime.RUN_DIR, "authtime.json"),) if os.path.lexists(p)]
     present += [authtime.RUN_DIR + " (not empty)"] if os.path.isdir(authtime.RUN_DIR) and os.listdir(authtime.RUN_DIR) else []

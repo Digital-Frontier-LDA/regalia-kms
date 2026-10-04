@@ -203,8 +203,8 @@ jobs:
           grep -q '^rolling-threenode: 50 passed, 0 failed$' "$RUNNER_TEMP/rolling.log" || {
             echo "::error::the rolling-update test did not pass all 50 checks" >&2; exit 1; }
 
-  # #71 (Phase 11): a total outage of the three nodes and the revocation authority, restored by one manual
-  # recovery (the authority's host first; then one node by hand; then the other two through it).
+  # #71 (Phase 11): a total outage of the three nodes, restored by one manual recovery (one node by hand, its
+  # heartbeat co-signed by an owner key, owner.py beat; then the other two through it; #199: no authority host).
   three-node-outage:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -222,7 +222,7 @@ jobs:
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
-      - name: A total outage, the authority first, one node by hand, the rest through it
+      - name: A total outage, one node by hand, the rest through it
         run: |
           set -o pipefail
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
@@ -230,8 +230,8 @@ jobs:
           grep -q '^three-node-outage: 34 passed, 0 failed$' "$RUNNER_TEMP/outage.log" || {
             echo "::error::the three-node outage test did not pass all 34 checks" >&2; exit 1; }
 
-  # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, through the
-  # real authority), and its retired hardware refused.
+  # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
+  # running nodes by sync), and its retired hardware refused.
   three-node-replace:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -257,7 +257,7 @@ jobs:
           grep -q '^three-node-replace: 16 passed, 0 failed$' "$RUNNER_TEMP/replace.log" || {
             echo "::error::the three-node replacement test did not pass all 16 checks" >&2; exit 1; }
 
-  # #69 (Phase 9): a stolen node revoked through the real authority, the revocation spreading, and the window a
+  # #69 (Phase 9): a stolen node revoked by the owner off the nodes (revoke.py), the revocation spreading, and the window a
   # partition leaves (an nftables table inside one node's namespace only).
   three-node-theft:
     runs-on: ubuntu-24.04
@@ -288,11 +288,11 @@ jobs:
           grep -q '^three-node-theft: 24 passed, 0 failed$' "$RUNNER_TEMP/theft.log" || {
             echo "::error::the three-node theft test did not pass all 24 checks" >&2; exit 1; }
 
-  # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, through the
-  # real authority), and its retired hardware refused.
+  # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
+  # running nodes by sync), and its retired hardware refused.
 
-  # #74 (Phase 14): runtime leases on three nodes and the real authority: renewal, failover to the other peer,
-  # the authority down, a partition, and a running node revoked (it stops serving by itself at its lease's end).
+  # #74 (Phase 14): runtime leases on three nodes signing their own heartbeats: renewal, failover to the other peer,
+  # a partition, and a running node revoked by two nodes (it stops serving by itself at its lease's end).
   three-node-leases:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -310,7 +310,7 @@ jobs:
             python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
-      - name: Runtime leases, renewal and failover, the authority down, a running node revoked
+      - name: Runtime leases, renewal and failover, a running node revoked
         run: |
           set -o pipefail
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
@@ -318,5 +318,5 @@ jobs:
           grep -q '^three-node-leases: 12 passed, 0 failed$' "$RUNNER_TEMP/leases.log" || {
             echo "::error::the three-node lease test did not pass all 12 checks" >&2; exit 1; }
 
-  # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, through the
-  # real authority), and its retired hardware refused.
+  # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
+  # running nodes by sync), and its retired hardware refused.

@@ -227,7 +227,7 @@ cat > "$T/site-mesh.json" <<EOF
  "time": {"nts": [{"name": "nts-a.lab", "cidrs": ["${IP[ntp]}/32"]}, {"name": "nts-b.lab", "cidrs": ["203.0.113.195/32"]}]},
  "boot_mesh": {"node_id": "kms", "interface": "wg-unlock", "listen_port": 51820, "address": "10.89.0.1", "unlock_port": 7443, "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": null,
                "peers": [{"node_id": "peer", "underlay": "${IP[peer]}", "address": "10.89.0.2"}]},
- "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444, "authority": null}}
+ "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444}}
 EOF
 python3 -Es "$BM/firewall.py" "$T/site-mesh.json" > "$T/mesh.nft" && x kms nft -c -f "$T/mesh.nft" && x kms nft -f "$T/mesh.nft" \
   && P "the ruleset with both meshes renders, passes nft -c and loads inside the KMS namespace" || F "the meshed ruleset did not load"

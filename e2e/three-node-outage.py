@@ -32,8 +32,7 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
 import threenode                                     # noqa: E402
-from threenode import AUTH, sh, until                # noqa: E402
-from deploy.baremetal import authtime                # noqa: E402
+from threenode import sh, until                      # noqa: E402
 
 passed, failed = 0, 0
 SERVICES = ("sync", "wg-apply", "admission")
@@ -152,12 +151,8 @@ def main():
         print("three-node-outage: refused: this changes the machine (namespaces, interfaces, loop devices, dm-crypt, transient units). "
               "It runs on a GitHub-hosted runner; on another throwaway host set REGALIA_THREE_NODE_HOST_OK to its /etc/machine-id.")
         return 2
-    present = [p for p in ("/run/netns/" + threenode.SWITCH,) + tuple("/run/netns/e2e3-" + n for n in threenode.NAMES + (AUTH,)) if os.path.exists(p)]
+    present = [p for p in ("/run/netns/" + threenode.SWITCH,) + tuple("/run/netns/e2e3-" + n for n in threenode.NAMES) if os.path.exists(p)]
     present += sh("systemctl", "list-units", "--all", "--plain", "--no-legend", threenode.UNIT_PREFIX + "*", check=False).stdout.split()[:1]
-    # the authority's time is the host's /run/regalia/authtime.json, which the fixture writes and removes by name: never
-    # over one this host's own regalia-authtime keeps (regalia-kms-51)
-    present += [p for p in (os.path.join(authtime.RUN_DIR, "authtime.json"),) if os.path.lexists(p)]
-    present += [authtime.RUN_DIR + " (not empty)"] if os.path.isdir(authtime.RUN_DIR) and os.listdir(authtime.RUN_DIR) else []
     if present:
         print("three-node-outage: refused: %s exists: another run's leftovers are still here" % ", ".join(present))
         return 2

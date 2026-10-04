@@ -20,14 +20,14 @@ Stand-ins, each named where it is made, and each replaceable when the real piece
   * authenticated time: authtime.Service with a reading that says chrony is synchronised with two NTS
     sources. It writes the real status file the services read; `cluster.time[n] = False` makes it say
     not authenticated (#70 blackout 3b);
-  * heartbeats: under v4 (the default, #199) none from here: the nodes sign their own (beat.py) with their TPM
+  * heartbeats: none from here (#199, membership v4): the nodes sign their own (beat.py) with their TPM
     signing keys, each node's PCR 11 extended as a booted image's and signed by a fixture system-phase PCR key
     (its tpm2-pcr-signature.json and the key bound at /run/systemd in its units), and the owner's two keys
     (ADR-0002 D30) on a SoftHSM token, signed through Pkcs11Signer as the YubiKeys are; owner_beat() is the hand
-    recovery. With authority=True (v1): signed by the test revocation key the chain names, written into each
-    node's freshness state, as the revocation authority's pull would deliver them;
-  * a new epoch (advance): the authority's publication, given to one seed node while its services are down;
-    the running nodes pull it from there with their real sync;
+    recovery;
+  * a new epoch (advance): a root- or owner-signed envelope given to one seed node while its services are down;
+    the running nodes pull it from there with their real sync (revoke_by_nodes and revoke_by_owner are revoke.py's
+    own paths);
   * the pre-root client's two systemd roles: the local half, unsealed by this fixture from the node's TPM,
     passed as a plain credential (on a host LoadCredentialEncrypted= unseals it under the TPM's policy), and
     the key socket (socket activation, systemd-cryptsetup's side played by this fixture);
@@ -38,7 +38,6 @@ the others' underlay addresses, its boot mesh (wg-unlock) and its service mesh (
 Root only; it changes the machine (namespaces, interfaces, transient units), so its callers run only on a
 throwaway machine (a GitHub-hosted runner)."""
 import configparser
-import contextlib
 import grp
 import hashlib
 import json
@@ -70,7 +69,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from deploy.baremetal import attest, authtime, bootnet, heartbeat, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
-import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
+import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root key
 
 NAMES = ("a", "b", "c")
 RECOVERY = b"cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuuvvcb"     # the TEST recovery key (as the unlock tests')
@@ -128,7 +127,6 @@ class NodeHere:
         return sh("ip", "netns", "exec", self.ns, *argv, check=check, **kw)
 
 
-AUTH = "auth"                                     # the revocation authority's member name here (its own host, #199)
 # The image the fixture boots (v4, #199): PCR 11 extended with this after every TPM start, as a booted UKI extends it, so
 # that the system-phase PCR key's signature over it lets the node's TPM signing key sign
 BOOTED = b"e2e3: an approved image, booted"
@@ -137,25 +135,18 @@ OWNER_PIN = "246813"                              # the SoftHSM owner token's TE
 
 
 class Cluster:
-    def __init__(self, work, names=NAMES, authority=False, audit=False):
+    def __init__(self, work, names=NAMES, audit=False):
         self.work = pathlib.Path(work)
-        # #199: without the authority the cluster is v4. The nodes sign their own heartbeats with their TPM signing keys
-        # (beat.py), the owner's party is two Ed25519 keys on a SoftHSM token (the two owner YubiKeys of ADR-0002 D30),
-        # and each node boots an image whose PCR 11 a fixture system-phase key signed. With the authority: v1, as before
-        self.v4 = not authority
+        # #199: the cluster is v4. The nodes sign their own heartbeats with their TPM signing keys (beat.py), the owner's
+        # party is two Ed25519 keys on a SoftHSM token (the two owner YubiKeys of ADR-0002 D30), and each node boots an
+        # image whose PCR 11 a fixture system-phase key signed
         self.pcr_values = {n: set() for n in names}   # the PCR 11 values each node's signature file covers
         # the real audit trail shippers and collector (#340): each node's own trails shipped as a host ships them,
         # so a scenario can hold every event it caused to the collector's chained stream (audit_complete)
         self.audit = audit
         self.audit_bin = pathlib.Path(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"))
         self.nodes = {n: NodeHere(self.work, n, i + 1) for i, n in enumerate(names)}
-        # the revocation authority, when asked for: its own namespace, TPM, clock and WireGuard key, and its real
-        # `serve` signing the heartbeats (then nothing here writes one)
-        self.auth = NodeHere(self.work, AUTH, len(names) + 1) if authority else None
-        if self.auth:                                 # authority.json's run_dir is /run/regalia, validated (#323): the real one
-            self.auth.run = pathlib.Path(authtime.RUN_DIR)
-            self.made_run = not self.auth.run.exists()
-        self.time = {n: True for n in list(names) + ([AUTH] if authority else [])}   # authenticated time, per member
+        self.time = {n: True for n in names}          # authenticated time, per node
         self.stop_threads = False
         self.threads = []
         self.chain = []                               # the signed envelopes, epoch 1 first
@@ -164,16 +155,15 @@ class Cluster:
         self.authtimes = {}
         self.loops = {}
         self.services = {n: () for n in names}        # what start() last started on each node, until stop()
-        self.pending = {}                             # node -> the heartbeat it gets when it runs again (its time is off now)
         self.client = os.environ.get("REGALIA_UNLOCK_BIN", "")
         self.code = self.work / "src"                 # the package as a host installs it: root's, readable by the services
 
     def members(self):
-        """The nodes, and the authority when there is one: everything with a namespace, a TPM and a clock."""
-        return list(self.nodes.values()) + ([self.auth] if self.auth else [])
+        """The nodes: everything with a namespace, a TPM and a clock."""
+        return list(self.nodes.values())
 
     def member(self, name):
-        return self.auth if name == AUTH and self.auth else self.nodes[name]
+        return self.nodes[name]
 
     # ---- building ----
 
@@ -185,29 +175,21 @@ class Cluster:
         shutil.copytree(ROOT / "deploy", self.code / "deploy", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         sh("chown", "-R", "root:root", str(self.code))
         sh("chmod", "-R", "u=rwX,go=rX", str(self.code))
-        if self.v4:
-            self._pcr_key()
-            self._owner_token()
+        self._pcr_key()
+        self._owner_token()
         self._network()
         for n in self.members():
             for d in (n.dir / "etc", n.state, n.admission, n.run):
-                d.mkdir(parents=True, exist_ok=(d == n.run and n is self.auth))     # /run/regalia may be there already
+                d.mkdir(parents=True)
             os.chmod(n.dir, 0o711)
             self._tpm(n)
-            if n is not self.auth:                    # the authority's is made by its own `wg-key`
-                self._wg_keys(n)
-        if self.auth:
-            self._authority_config()
+            self._wg_keys(n)
         self._identities_and_chain()
         for n in self.nodes.values():
             self._configure(n)
             self._anchor_and_store(n)
         self._authtime()
-        if self.auth:
-            self._authority()
-        for n in self.nodes.values():
-            if not self.auth and not self.v4:         # with the authority, or under v4 (the nodes', #199), none from here
-                self.beat(n.name, 1)
+        for n in self.nodes.values():                 # no heartbeat from here: the nodes sign their own (#199)
             # owned as the units' StateDirectory= would make them: the services are not root
             sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
             os.chmod(n.state, 0o755)
@@ -252,8 +234,7 @@ class Cluster:
             denied = sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False).stdout[-800:]
             raise RuntimeError("%s's software TPM did not start (%d): %s %s | log: %s | apparmor: %s"
                                % (n.name, done.returncode, done.stdout.strip(), done.stderr.strip(), log, denied))
-        if self.v4 and n is not self.auth:
-            self._booted(n)
+        self._booted(n)
 
     # ---- v4 (#199): the booted image's signed PCR 11, and the owner's two keys ----
 
@@ -357,8 +338,7 @@ class Cluster:
         if image is None:
             return dict(base)
         value = hashlib.sha256(bytes.fromhex(base["pcrs"]["11"]) + hashlib.sha256(image.encode()).digest()).hexdigest()
-        if self.v4:                                   # an image the root approves: the system-phase key signs its PCR 11 too
-            self._sign_pcr11(name, value)
+        self._sign_pcr11(name, value)                 # an image the root approves: the system-phase key signs its PCR 11 too
         return dict(base, label=image, pcrs=dict(base["pcrs"], **{"11": value}))
 
     def accept(self, seed, sets, name):
@@ -400,11 +380,10 @@ class Cluster:
             os.environ.pop("TPM2TOOLS_TCTI") if before is None else os.environ.__setitem__("TPM2TOOLS_TCTI", before)
         ek, ak = (out / "ek.pub").read_bytes(), (out / "ak.pub").read_bytes()
         ek_name = attest.name_of(attest.public_area(ek, "the EK public area")).hex()
-        if self.v4:
-            # #199: the signing key, made in the node's TPM and certified by its AK, accepted as `enrol entry` accepts it
-            blob = signkey.create(self.pcr_pem, tcti=n.tcti)
-            info, sig = signkey.certify(tcti=n.tcti)
-            self.signing[n.name] = signkey.verify_certification(blob, info, sig, ak, ek_name, self.pcr_pem)
+        # #199: the signing key, made in the node's TPM and certified by its AK, accepted as `enrol entry` accepts it
+        blob = signkey.create(self.pcr_pem, tcti=n.tcti)
+        info, sig = signkey.certify(tcti=n.tcti)
+        self.signing[n.name] = signkey.verify_certification(blob, info, sig, ak, ek_name, self.pcr_pem)
         return ek_name, attest.ak_identity(ak)[0].hex(), ak.hex()
 
     def _reference(self, n, pcrs):
@@ -424,31 +403,29 @@ class Cluster:
         self.reference = {n.name: self._reference(n, example["pcrs"]) for n in self.nodes.values()}
         self.document = {"schema": measurements.SCHEMA, "name": "e2e3",
                          "nodes": {n.name: {"accepted": [dict(self.reference[n.name])]} for n in self.nodes.values()}}
-        self.manifest = {"schema": membership.SCHEMA, "epoch": 1, "prev_digest": "", "policy_version": measurements.version(self.document),
-                         "issued_at": "2026-10-01T00:00:00Z", "revocation_keys": [hbt.pub(hbt.REVOKE)],
+        # #199: the first real manifest is v4 (no ceremony has run): the nodes and the owner sign, by quorum
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        names = [n.name for n in self.nodes.values()]
+        self.manifest = {"schema": membership.SCHEMA_V4, "epoch": 1, "prev_digest": "", "policy_version": measurements.version(self.document),
+                         "issued_at": "2026-10-01T00:00:00Z", "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600,
+                         "owner_keys": self.owner_keys,
+                         "heartbeat_signers": {"threshold": 2, "parties": names + [membership.OWNER]},
+                         "activation_signers": {"threshold": 2, "parties": names},
+                         "revocation_signers": [{"threshold": 2, "parties": names}, {"threshold": 1, "parties": [membership.OWNER]}],
                          "nodes": [{"node_id": n.name, "state": "ACTIVE", "ek_name": self.ids[n.name][0], "ak_name": self.ids[n.name][1],
                                     "wg_boot_pub": self.keys[n.name]["boot"][1], "wg_service_pub": self.keys[n.name]["service"][1],
                                     "hsm_serials": ["E2E3%s" % n.name.upper()]} for n in self.nodes.values()]}
-        if self.v4:
-            # #199: the first real manifest is v4 (no ceremony has run): the nodes and the owner sign, by quorum
-            from cryptography.hazmat.primitives import serialization
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-            names = [n.name for n in self.nodes.values()]
-            del self.manifest["revocation_keys"]
-            self.manifest.update(schema=membership.SCHEMA_V4, heartbeat_max_lifetime_s=21600, owner_heartbeat_lifetime_s=3600,
-                                 owner_keys=self.owner_keys,
-                                 heartbeat_signers={"threshold": 2, "parties": names + [membership.OWNER]},
-                                 activation_signers={"threshold": 2, "parties": names},
-                                 revocation_signers=[{"threshold": 2, "parties": names}, {"threshold": 1, "parties": [membership.OWNER]}])
-            for entry in self.manifest["nodes"]:
-                ssh = Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-                entry.update(ssh_host_pub=ssh.hex(), signing_key=self.signing[entry["node_id"]])
+        for entry in self.manifest["nodes"]:
+            ssh = Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+            entry.update(ssh_host_pub=ssh.hex(), signing_key=self.signing[entry["node_id"]])
         self.chain = [self.signed(self.manifest)]
 
     @staticmethod
-    def signed(manifest, key=None, signer="root"):
-        key = key or (hbt.ROOT if signer == "root" else hbt.REVOKE)
-        return {"manifest": manifest, "signature": {"signer": signer, "key": hbt.pub(key), "sig": key.sign(membership.DOMAIN + membership.canonical(manifest)).hex()}}
+    def signed(manifest, key=None):
+        """The root's envelope (the test root key, or `key`)."""
+        key = key or hbt.ROOT
+        return {"manifest": manifest, "signature": {"signer": "root", "key": hbt.pub(key), "sig": key.sign(membership.DOMAIN + membership.canonical(manifest)).hex()}}
 
     def _configure(self, n):
         example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
@@ -460,9 +437,7 @@ class Cluster:
                 "boot_mesh": {"node_id": n.name, "interface": "wg-unlock", "listen_port": 51820, "address": n.boot_address, "unlock_port": 7443,
                               "nic_mac": "52:54:00:12:34:%02x" % (0x50 + n.index), "prefix": 24, "gateway": None,
                               "peers": [{"node_id": o.name, "underlay": o.underlay, "address": o.boot_address} for o in others]},
-                "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444,
-                                 "authority": {"key": self.keys[AUTH]["service"][1], "underlay": self.auth.underlay, "port": 51821}
-                                 if self.auth else None}}
+                "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444}}
         _replace(n.dir / "etc" / "site.json", json.dumps(site))            # whole, never torn: running services read them
         # no measurements.json: the document is in the node's store by digest, and later ones come by sync (#332)
         cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=n.tcti,
@@ -483,8 +458,7 @@ class Cluster:
         here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
         here.store().commit(self.chain[0])
         node.heartbeat_counter(here.cfg).define()
-        if self.v4:
-            node.signing_counter(here.cfg).define()  # #199: the highest sequence this node has signed
+        node.signing_counter(here.cfg).define()      # #199: the highest sequence this node has signed
 
     # ---- the stand-ins ----
 
@@ -507,15 +481,6 @@ class Cluster:
         thread = threading.Thread(target=service.run, args=(lambda: self.stop_threads,), kwargs={"interval": 5}, daemon=True)
         thread.start()
         self.threads.append(thread)
-
-    def beat(self, name, sequence, manifest=None):
-        """A heartbeat signed by the test revocation key, delivered into the node's freshness state. Refused with the
-        real authority (authority=True): its heartbeats are then the only ones (regalia-kms-51); and under v4, where
-        the nodes sign their own (#199: fresh() waits for them)."""
-        if self.auth or self.v4:
-            raise RuntimeError("heartbeats come from the authority's serve or, under v4, from the nodes: never from the fixture")
-        manifest = manifest or self.manifest
-        self.node(name).freshness().accept(hbt.beat(manifest, sequence, issued=int(time.time())), manifest)
 
     # ---- running ----
 
@@ -540,20 +505,15 @@ class Cluster:
         props = ["NetworkNamespacePath=/run/netns/" + n.ns, "WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1"]
         props += ["%s=%s" % (key, value) for key, value in self.identity(service).items()]
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
-        if self.v4 and n is not self.auth:
-            # where a booted host's systemd-stub puts the image's PCR signatures and its system-phase key: the node's own
-            pcr = n.dir / "pcr"
-            props += ["BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                      "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", signkey.PCR_PUBLIC_KEY_PATH)]
+        # where a booted host's systemd-stub puts the image's PCR signatures and its system-phase key: the node's own
+        pcr = n.dir / "pcr"
+        props += ["BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
+                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", signkey.PCR_PUBLIC_KEY_PATH)]
         return props
-
-    AUTH_SERVICES = ("wg-apply", "serve")
 
     def start(self, name, services=("sync", "wg-apply")):
         """The node's services, each a transient unit in its namespace, as a host runs them: sync first (it
         publishes the chain the others verify), wg-apply once the chain is published."""
-        if name == AUTH:
-            return self._start_authority()
         n = self.nodes[name]
         admission_run = n.run / "admission"                # as regalia.tmpfiles.conf makes it at every boot
         if not admission_run.exists():
@@ -563,12 +523,6 @@ class Cluster:
         if not self.time[name]:                       # booted again: its time is checked again (chrony, on a host)
             self.time[name] = True
             self.authtimes[name].step()
-        if name in self.pending and not self.running(name) and not self.v4:   # the authority's heartbeat, which it pulls once it runs
-            try:
-                self.beat(name, *self.pending.pop(name))
-            except membership.Refused as refused:     # e.g. a node the epoch revoked: it runs without, and says so
-                print("  (%s took no heartbeat: %s)" % (name, refused))
-            sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         for service in services:
             if service == "wg-apply" and not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
                 raise RuntimeError("%s's sync published no chain" % name)
@@ -584,67 +538,14 @@ class Cluster:
 
     def _run(self, n, service, oneshot=False, unit=None, extra=(), args=()):
         argv = ["systemd-run", "--unit", unit or self.unit(n.name, service), "--collect"] + list(extra)
-        # the authority's own commands run as regalia-authority.service does; its wg-apply as the nodes' (root)
-        identity = "authority" if n is self.auth and service != "wg-apply" else service
-        for prop in self.properties(n.name, identity):
+        for prop in self.properties(n.name, service):
             argv += ["-p", prop]
         if oneshot:
             argv += ["--wait", "-p", "Type=oneshot"]
-        module = "deploy.baremetal.authority" if n is self.auth else "deploy.baremetal.node"
-        done = sh(*(argv + ["/usr/bin/python3", "-Es", "-m", module, "--config", str(n.cfg_path), service] + list(args)), check=False)
+        done = sh(*(argv + ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.node", "--config", str(n.cfg_path), service] + list(args)), check=False)
         if done.returncode != 0:                      # what the unit itself said: a oneshot's own output is in its journal
             said = sh("journalctl", "-u", unit or self.unit(n.name, service), "-n", "30", "--no-pager", "-o", "cat", check=False).stdout
             raise RuntimeError("%s's %s failed (%d): %s | %s" % (n.name, service, done.returncode, done.stderr.strip()[-300:], said[-1500:]))
-
-    def _authority_config(self):
-        """The revocation authority's host, before the chain: its users, its signing key (the test revocation key,
-        a file signer), its configuration and directories, and its WireGuard key made by `authority wg-key` (as
-        root: root:regalia-authority 0640), whose public key the nodes' site configurations take."""
-        from cryptography.hazmat.primitives import serialization
-        a = self.auth
-        sh("systemd-sysusers", str(ROOT / "deploy" / "baremetal" / "units" / "regalia-authority.sysusers.conf"))
-        etc = a.dir / "etc"
-        key = etc / "revocation.pem"
-        key.write_bytes(hbt.REVOKE.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
-        shutil.chown(key, "regalia-authority", "regalia-authority")
-        os.chmod(key, 0o600)
-        a.cfg_path = etc / "authority.json"
-        a.cfg_path.write_text(json.dumps({
-            "schema": "regalia.authority/v1", "root_key": hbt.pub(hbt.ROOT), "tcti": a.tcti, "nv_epoch": "0x01500016",
-            "nv_sequence": "0x01500020", "state_dir": str(a.state), "run_dir": str(a.run), "signer": {"kind": "file", "path": str(key)},
-            "time_servers": ["nts1.e2e3.invalid", "nts2.e2e3.invalid"],
-            "interval_s": 600, "lifetime_s": None, "sequence_offset": 0, "sequence_stride": 1, "revoke_requesters": ["local-root"],
-            "wg_service_key": str(etc / "wg-service.key"), "underlays": {n.name: n.underlay for n in self.nodes.values()},
-            "listen_port": 51821, "sync_port": 7444, "control_socket": str(a.dir / "control" / "control.sock")}))
-        # run_dir is where regalia-authtime (root) publishes authtime.json, which is believed only from a root-owned
-        # file in a root-owned directory (/run/regalia on a host); the control socket is in the unit's own
-        # RuntimeDirectory (/run/regalia-authority, 0700)
-        (a.dir / "control").mkdir(exist_ok=True)
-        for d, mode in ((a.state, 0o751), (a.dir / "control", 0o700)):      # StateDirectoryMode= and RuntimeDirectoryMode=
-            shutil.chown(d, "regalia-authority", "regalia-authority")
-            os.chmod(d, mode)
-        said = self.authority_command("wg-key").stdout
-        self.keys[AUTH] = {"service": (None, said.strip().rsplit(" ", 1)[-1])}
-
-    def authority_command(self, *argv):
-        """`authority.py` as root on its host (wg-key, revoke, status)."""
-        return sh("/usr/bin/python3", "-Es", "-m", "deploy.baremetal.authority", "--config", str(self.auth.cfg_path), *argv, cwd=str(self.code))
-
-    def _authority(self):
-        """Its store and counters initialised from the chain (`init`, as its own user)."""
-        a = self.auth
-        chain = a.dir / "etc" / "chain.json"
-        chain.write_text(json.dumps(self.chain))
-        document = a.dir / "etc" / "measurements-1.json"
-        document.write_text(json.dumps(self.document))
-        self._run(a, "init", oneshot=True, unit=self.unit(AUTH, "init"), args=("--chain", str(chain), "--documents", str(document)))
-
-    def revoke(self, name, state, reason):
-        """The authority revokes a node: `authority revoke`, as root on its host, asked of the running serve (once
-        serve has made its control socket: a started unit is not yet a listening one)."""
-        if not until(lambda: (self.auth.dir / "control" / "control.sock").exists(), 60, 1):
-            raise RuntimeError("the authority's control socket did not appear: %s" % self.journal(AUTH, "serve")[-600:])
-        return self.authority_command("revoke", "--node", name, "--state", state, "--reason", reason)
 
     # ---- a node replaced (#76, Phase 16) ----
 
@@ -674,80 +575,30 @@ class Cluster:
         entry = {"node_id": new, "state": "ACTIVE", "ek_name": self.ids[new][0], "ak_name": self.ids[new][1],
                  "wg_boot_pub": self.keys[new]["boot"][1], "wg_service_pub": self.keys[new]["service"][1], "hsm_serials": ["E2E3%s" % new.upper()]}
         current = self.manifest
-        if self.v4:                                   # #199: its SSH host key and its signing key; it joins every signer rule
-            from cryptography.hazmat.primitives import serialization
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-            ssh = Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-            entry.update(ssh_host_pub=ssh.hex(), signing_key=self.signing[new])
+        # #199: its SSH host key and its signing key; it joins every signer rule
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        ssh = Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        entry.update(ssh_host_pub=ssh.hex(), signing_key=self.signing[new])
         if reuse:
             source = next(m for m in self.manifest["nodes"] if m["node_id"] == reuse[0])
             entry.update({k: source[k] for k in reuse[1]})
         nodes = [dict(m, state="RETIRED") if m["node_id"] == old else m for m in current["nodes"]] + [entry]
         candidate = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
                          policy_version=measurements.version(document), issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
-        if self.v4:
-            joined = lambda rule: dict(rule, parties=rule["parties"] + [new])        # noqa: E731
-            candidate.update(heartbeat_signers=joined(current["heartbeat_signers"]), activation_signers=joined(current["activation_signers"]),
-                             revocation_signers=[joined(r) if membership.OWNER not in r["parties"] else r for r in current["revocation_signers"]])
+        joined = lambda rule: dict(rule, parties=rule["parties"] + [new])            # noqa: E731
+        candidate.update(heartbeat_signers=joined(current["heartbeat_signers"]), activation_signers=joined(current["activation_signers"]),
+                         revocation_signers=[joined(r) if membership.OWNER not in r["parties"] else r for r in current["revocation_signers"]])
         return candidate, document
 
     def replace(self, old, new):
         """#76: `old` replaced by `new`, as an operator does it with the root. The candidate is checked as the root's
-        operator checks it (measurements.check_replacement) and signed by the root; the authority takes it between
-        runs of its serve (`accept`, as its own user) and publishes it; every node's site configuration and
-        measurements document follow (an operator's change); the new node's store holds the chain, and its
-        heartbeat counter starts one below the sequence `authority status` reports (read as root, not verified by
-        the new node), so the authority's current heartbeat is new to it and sync delivers it. #279's
-        `enrol --replace` instead defines the counter AT a heartbeat the node verifies (Freshness.accept_first).
-        The old node keeps the configuration it had, as the hardware left. The running nodes take the epoch from
-        the authority by sync. Returns the envelope. Under v4 (#199, no authority): the root's envelope is delivered to a
-        running node as advance() delivers an epoch (_replace_v4)."""
-        if self.v4:
-            return self._replace_v4(old, new)
-        candidate, document = self.replacement(old, new)
-        measurements.check_replacement(self.manifest, candidate, self.document, document, old, new)
-        envelope = self.signed(candidate)
-        a = self.auth
-        cfg = json.loads(a.cfg_path.read_text())
-        cfg["underlays"] = {n.name: n.underlay for n in self.nodes.values()}
-        a.cfg_path.write_text(json.dumps(cfg))
-        accepted = a.dir / "etc" / ("accept-%d.json" % candidate["epoch"])
-        accepted.write_text(json.dumps([envelope]))
-        # the document goes to the authority with the epoch, and from it to every node by sync (#332)
-        documented = a.dir / "etc" / ("measurements-%d.json" % candidate["epoch"])
-        documented.write_text(json.dumps(document))
-        self.stop(AUTH, power=None)                   # accept runs between runs of serve (one writer)
-        self._run(a, "accept", oneshot=True, unit=self.unit(AUTH, "accept"), args=("--chain", str(accepted), "--documents", str(documented)))
-        self.start(AUTH)
-        self.chain.append(envelope)
-        self.manifest, self.document = candidate, document
-        for n in self.nodes.values():
-            if n.name != old:
-                self._configure(n)
-        n = self.nodes[new]
-        here = self.node(new)
-        here.anchor().define()
-        here.documents().put(document)               # the new node's own: the document of the epoch it starts at
-        for i, held in enumerate(self.chain):
-            here.store().commit(held, final=i == len(self.chain) - 1)
-        if not until(lambda: (a.dir / "control" / "control.sock").exists(), 60, 1):
-            raise RuntimeError("the authority's control socket did not appear")
-        # one below the authority's current sequence: the heartbeat it holds now is then new to this node, which takes
-        # it by sync (#279 defines the counter AT the verified sequence and keeps that heartbeat as held; the fixture
-        # writes no heartbeat beside the authority's)
-        sequence = json.loads(self.authority_command("status").stdout)["sequence"]
-        node.heartbeat_counter(here.cfg).define_at(max(sequence - 1, 0))
-        sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
-        os.chmod(n.state, 0o755)
-        sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
-        os.chmod(n.admission, ADMISSION_DIR_MODE)            # as the shipped unit makes it (#345)
-        return envelope
-
-    def _replace_v4(self, old, new):
-        """replace() under v4: checked and signed by the root as there; given to a running node (the seed) as advance() gives
-        an epoch, and pulled by the other running node; neither `old` (the hardware that left keeps the chain it had) nor
-        `new` (not yet set up) is touched by that. Then every node's site configuration follows, and the new node gets its
-        anchor, the chain, the epoch's document and its two counters at 0: its first heartbeat comes from the nodes by sync."""
+        operator checks it (measurements.check_replacement) and signed by the root; it is given to a running node (the
+        seed) as advance() gives an epoch, and pulled by the other running node; neither `old` (the hardware that left keeps
+        the chain it had) nor `new` (not yet set up) is touched by that. Then every node's site configuration follows, and
+        the new node gets its anchor, the chain, the epoch's document and its two counters at 0: its first heartbeat comes
+        from the nodes by sync (#199). #279's `enrol --replace` instead defines the counter AT a heartbeat the node
+        verifies (Freshness.accept_first). Returns the envelope."""
         candidate, document = self.replacement(old, new)
         measurements.check_replacement(self.manifest, candidate, self.document, document, old, new)
         seed = next(name for name in self.nodes if name not in (old, new) and self.running(name))
@@ -767,7 +618,7 @@ class Cluster:
         sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
-        os.chmod(n.admission, ADMISSION_DIR_MODE)
+        os.chmod(n.admission, ADMISSION_DIR_MODE)            # as the shipped unit makes it (#345)
         return envelope
 
     # ---- #199: restrictive changes without the root (revoke.py), as the operators make them ----
@@ -832,26 +683,6 @@ class Cluster:
             self._beaten(manifest, owner_recovery)
         return full
 
-    def _start_authority(self):
-        """The authority's host booted: its time checked again, its wg-svc applied, then `serve` (which signs a
-        heartbeat as soon as its time is authenticated)."""
-        a = self.auth
-        if not self.time[AUTH]:
-            self.time[AUTH] = True
-            self.authtimes[AUTH].step()
-        control = a.dir / "control"                   # its RuntimeDirectory: made again, empty, at every start
-        control.mkdir(exist_ok=True)
-        for entry in control.iterdir():
-            entry.unlink()
-        shutil.chown(control, "regalia-authority", "regalia-authority")
-        os.chmod(control, 0o700)
-        self._run(a, "wg-apply", oneshot=True)
-        # and again at every chain it publishes, as regalia-authority-wg-apply.path runs it
-        self._run(a, "wg-apply", unit=self.unit(AUTH, "wg-watch"),
-                  extra=["--path-property=PathChanged=%s" % (a.state / node.PUBLISHED), "-p", "Type=oneshot"])
-        self._run(a, "serve")
-        self.services[AUTH] = self.AUTH_SERVICES
-
     def running(self, name):
         return sh("systemctl", "is-active", self.unit(name, "sync"), check=False).stdout.strip() == "active"
 
@@ -880,25 +711,17 @@ class Cluster:
         emptied (tmpfs on a host), its tunnels gone, its TPM through the power loss (power_cycle) and its time no
         longer authenticated until it starts again. power=None: the services only, as a crash."""
         n = self.member(name)
-        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply", "serve")] + [self.unit(name, "wg-watch") + t for t in (".path", ".service")] + \
+        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply")] + [self.unit(name, "wg-watch") + t for t in (".path", ".service")] + \
                 [self.unit(name, "ship-" + trail) for trail, _, _ in AUDIT_TRAILS]:
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
         self.services[name] = ()
-        if name == AUTH and self.auth:                # its RuntimeDirectory, which systemd removes when the service stops
-            control = self.auth.dir / "control"
-            for entry in (control.iterdir() if control.exists() else ()):
-                entry.unlink()
         if os.path.exists("/dev/mapper/e2e3-" + name):
             sh("cryptsetup", "close", "e2e3-" + name, check=False)
         if power:
             self.time[name] = False
-            if n is self.auth:                        # the host's /run/regalia: only what the authority's time stand-in wrote
-                with contextlib.suppress(FileNotFoundError):
-                    (n.run / "authtime.json").unlink()
-            else:
-                for entry in n.run.iterdir():
-                    shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+            for entry in n.run.iterdir():
+                shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
             for interface in ("wg-svc", "wg-unlock", "wg-boot"):
                 n.in_ns("ip", "link", "del", interface, check=False)
             self.power_cycle(name, orderly=(power == "cycle"))
@@ -1132,15 +955,6 @@ class Cluster:
         """The public keys `interface` in the node's namespace has as peers."""
         return set(self.member(name).in_ns("wg", "show", interface, "peers", check=False).stdout.split())
 
-    # The epoch's heartbeat, unless the node holds it already: sync delivers it from the seed with the epoch, and a
-    # second delivery of the same sequence is a REPLAY (sequence == the TPM counter), which here means "already in".
-    BEAT = ("import json, sys\nfrom deploy.baremetal import membership, node\nd = json.load(sys.stdin)\n"
-            "f = node.Node(node.load(d['cfg'])).freshness()\nwant = d['beat']['heartbeat']\n"
-            "def holds():\n    held = f.held()\n"
-            "    return bool(held) and held['heartbeat']['epoch'] == want['epoch'] and held['heartbeat']['sequence'] >= want['sequence']\n"
-            "if not holds():\n    try:\n        f.accept(d['beat'], d['manifest'])\n"
-            "    except membership.Refused:\n        if not holds():\n            raise\n")
-
     def owner_signature(self, manifest, which=0):
         """The owner's signature over a manifest (a restrictive change, which the owner alone may sign under v4)."""
         signer = self.owner_signer(which)
@@ -1200,8 +1014,7 @@ class Cluster:
                     if str(e.get("event", "")).startswith(("beat", "sync-beat", "owner-beat"))][-last:] for n in names}
 
     def heartbeat_signers(self, name):
-        """The parties that signed the heartbeat the node holds (its freshness state, read as root): [] for none, or for a
-        v1 heartbeat (one revocation key)."""
+        """The parties that signed the heartbeat the node holds (its freshness state, read as root): [] for none."""
         held = self.node(name).freshness().held()
         return [s.get("party") for s in (held or {}).get("signatures", [])]
 
@@ -1211,30 +1024,29 @@ class Cluster:
         return bool(held) and held["heartbeat"]["epoch"] == epoch
 
     def advance(self, seed, signer="root", document=None, owner_recovery=False, candidate=None, skip=(), **states):
-        """A new epoch with nodes' states changed ({node: state}), signed by the root or the revocation key. The
-        authority's publication, stood in for: `seed`, a running node, has its services stopped (a crash: the same
+        """A new epoch with nodes' states changed ({node: state}), signed by the root or (signer "owner", a restrictive
+        change) by the owner alone. `seed`, a running node, has its services stopped (a crash: the same
         boot), takes the epoch into its store with its heartbeat, and starts again. Nodes whose services are
         stopped take it into their stores as they are (they would pull it when they come back). The other running
-        nodes are left to pull it from the seed with their real sync (their trails say from whom); each then gets
-        the epoch's heartbeat, written under its sync unit's identity. Returns (the new manifest, when the seed
+        nodes are left to pull it from the seed with their real sync (their trails say from whom); the counting nodes
+        then sign the epoch's heartbeat themselves (_beaten). Returns (the new manifest, when the seed
         started again). With `document`, the epoch commits to that measurement document (its policy_version). It goes
         into the store of every node this step commits to (the seed, and the nodes that are stopped), as an operator's
         `measurements install` does on one host; the running nodes fetch it from the seed by sync with the epoch,
         and no node is ever judged by another epoch's document (#332)."""
-        if self.auth:
-            raise RuntimeError("with the authority, epochs come from `authority revoke` (cluster.revoke), never from advance()")
         current = self.manifest
         nodes = [dict(n, state=states.get(n["node_id"], n["state"])) for n in current["nodes"]]
         manifest = candidate or dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
                                      issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
         if document is not None and candidate is None:
             manifest["policy_version"] = measurements.version(document)
-        if self.v4 and signer in ("revocation", "owner"):
+        if signer == "owner":
             # #199: no revocation key under v4: a restrictive change is the owner's alone (or two nodes', revoke.py)
-            signer = "owner"
             envelope = {"manifest": manifest, "signatures": [self.owner_signature(manifest)]}
+        elif signer == "root":
+            envelope = self.signed(manifest)
         else:
-            envelope = self.signed(manifest, signer=signer)
+            raise ValueError("signer must be root or owner, not %r" % signer)
         others = [name for name in self.nodes if name != seed and self.running(name)]
         running = [name for name in others if membership.may(manifest, name, "authorize")]   # they pull it from the seed
         services = self.services[seed]
@@ -1246,13 +1058,7 @@ class Cluster:
                 continue
             if document is not None:                  # by digest, beside the documents it holds: nothing is replaced (#332)
                 self.node(name).documents().put(document)
-            self.node(name).store().commit(envelope)
-            if self.v4:
-                pass                                  # #199: its heartbeat for the epoch comes from the nodes once it runs
-            elif self.time[name]:
-                self.beat(name, manifest["epoch"] + 1, manifest)
-            else:                                     # powered off: no authenticated time to judge a heartbeat by, yet
-                self.pending[name] = (manifest["epoch"] + 1, manifest)
+            self.node(name).store().commit(envelope)  # #199: its heartbeat for the epoch comes from the nodes once it runs
             sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[name].state))
         self.chain.append(envelope)
         self.manifest = manifest
@@ -1261,22 +1067,15 @@ class Cluster:
         for name in running:
             if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
                 raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], seed))
-        if self.v4:
-            self._beaten(manifest, owner_recovery)
-            return manifest, since
-        for name in running:
-            if until(lambda: self.holds_heartbeat(name, manifest["epoch"]), 30, 2):
-                continue                              # sync brought it from the seed with the epoch: the real path
-            self._as_sync(name, self.BEAT, {"cfg": str(self.nodes[name].cfg_path), "manifest": manifest,
-                                            "beat": hbt.beat(manifest, manifest["epoch"] + 1, issued=int(time.time()))})
+        self._beaten(manifest, owner_recovery)
         return manifest, since
 
     def journal(self, name, service, lines=40):
         return sh("journalctl", "-u", self.unit(name, service), "-n", str(lines), "--no-pager", "-o", "cat", check=False).stdout
 
     def trail(self, name):
-        """The node's sync trail (the authority's own trail for AUTH), parsed."""
-        path = (self.auth.state / "audit.jsonl") if name == AUTH and self.auth else self.nodes[name].state / "sync-audit.jsonl"
+        """The node's sync trail, parsed."""
+        path = self.nodes[name].state / "sync-audit.jsonl"
         if not path.exists():
             return []
         return [json.loads(line) for line in path.read_text().splitlines() if line.startswith("{")]
@@ -1524,9 +1323,3 @@ class Cluster:
         sh("ip", "netns", "del", SWITCH, check=False)
         for loop in self.loops.values():
             sh("losetup", "-d", loop, check=False)
-        if self.auth:                                 # the host's /run/regalia: what this made there, by exact name
-            with contextlib.suppress(FileNotFoundError):
-                (self.auth.run / "authtime.json").unlink()
-            if self.made_run:
-                with contextlib.suppress(OSError):
-                    self.auth.run.rmdir()
