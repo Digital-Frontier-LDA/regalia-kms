@@ -176,14 +176,18 @@ class Cluster:
         sh("ip", "netns", "exec", SWITCH, "ip", "link", "add", "br0", "type", "bridge")
         sh("ip", "netns", "exec", SWITCH, "ip", "link", "set", "br0", "up")
         for n in self.members():
-            sh("ip", "netns", "add", n.ns)
-            port = "sw-" + n.name
-            sh("ip", "link", "add", port, "netns", SWITCH, "type", "veth", "peer", "name", "eth0", "netns", n.ns)
-            sh("ip", "netns", "exec", SWITCH, "ip", "link", "set", port, "master", "br0")
-            sh("ip", "netns", "exec", SWITCH, "ip", "link", "set", port, "up")
-            n.in_ns("ip", "link", "set", "lo", "up")
-            n.in_ns("ip", "address", "add", n.underlay + "/24", "dev", "eth0")
-            n.in_ns("ip", "link", "set", "eth0", "up")
+            self._wire(n)
+
+    def _wire(self, n):
+        """The member's namespace, on the switch at its underlay address."""
+        sh("ip", "netns", "add", n.ns)
+        port = "sw-" + n.name
+        sh("ip", "link", "add", port, "netns", SWITCH, "type", "veth", "peer", "name", "eth0", "netns", n.ns)
+        sh("ip", "netns", "exec", SWITCH, "ip", "link", "set", port, "master", "br0")
+        sh("ip", "netns", "exec", SWITCH, "ip", "link", "set", port, "up")
+        n.in_ns("ip", "link", "set", "lo", "up")
+        n.in_ns("ip", "address", "add", n.underlay + "/24", "dev", "eth0")
+        n.in_ns("ip", "link", "set", "eth0", "up")
 
     def _tpm(self, n):
         (n.dir / "tpm").mkdir(exist_ok=True)
@@ -256,7 +260,7 @@ class Cluster:
         sh("tpm2_quote", "-T", n.tcti, "-c", attest.AK_HANDLE, "-g", "sha256", "-l", "sha256:%d" % pcrs[0], "-q", "00" * 32,
            "-m", str(n.dir / "ref.quote"), "-s", str(n.dir / "ref.sig"), "-f", "plain")
         sh("tpm2_flushcontext", "-T", n.tcti, "-t", check=False)
-        return {"label": "e2e-" + n.name, "tpm_firmware_version": attest.parse_quote((n.dir / "ref.quote").read_bytes())["firmware_version"],
+        return {"label": "e2e-image", "tpm_firmware_version": attest.parse_quote((n.dir / "ref.quote").read_bytes())["firmware_version"],
                 "pcrs": {str(i): raw[32 * k:32 * (k + 1)].hex() for k, i in enumerate(pcrs)}}
 
     def _identities_and_chain(self):
@@ -314,18 +318,21 @@ class Cluster:
         """Authenticated time, per node: authtime's own Service and status file, with a reading that says chrony
         is synchronised to two NTS sources, or (cluster.time[n] False) that no source answers."""
         for n in self.members():
-            def reading(name=n.name):
-                now = time.time()
-                answering = self.time[name]
-                return {"leap": "Normal" if answering else "Not synchronised", "reference_time": now, "system_offset": 0.0,
-                        "sources": [{"name": s, "state": state, "reaching": answering, "mode": "NTS", "keyed": True}
-                                    for s, state in (("nts1.e2e3.invalid", "*"), ("nts2.e2e3.invalid", "+"))]}
-            service = authtime.Service(str(n.run / "authtime.json"), ["nts1.e2e3.invalid", "nts2.e2e3.invalid"], reading=reading)
-            self.authtimes[n.name] = service
-            service.step()
-            thread = threading.Thread(target=service.run, args=(lambda: self.stop_threads,), kwargs={"interval": 5}, daemon=True)
-            thread.start()
-            self.threads.append(thread)
+            self._authtime_for(n)
+
+    def _authtime_for(self, n):
+        def reading(name=n.name):
+            now = time.time()
+            answering = self.time[name]
+            return {"leap": "Normal" if answering else "Not synchronised", "reference_time": now, "system_offset": 0.0,
+                    "sources": [{"name": s, "state": state, "reaching": answering, "mode": "NTS", "keyed": True}
+                                for s, state in (("nts1.e2e3.invalid", "*"), ("nts2.e2e3.invalid", "+"))]}
+        service = authtime.Service(str(n.run / "authtime.json"), ["nts1.e2e3.invalid", "nts2.e2e3.invalid"], reading=reading)
+        self.authtimes[n.name] = service
+        service.step()
+        thread = threading.Thread(target=service.run, args=(lambda: self.stop_threads,), kwargs={"interval": 5}, daemon=True)
+        thread.start()
+        self.threads.append(thread)
 
     def beat(self, name, sequence, manifest=None):
         """A heartbeat signed by the test revocation key, delivered into the node's freshness state. Refused with the
@@ -455,6 +462,79 @@ class Cluster:
             raise RuntimeError("the authority's control socket did not appear: %s" % self.journal(AUTH, "serve")[-600:])
         return self.authority_command("revoke", "--node", name, "--state", state, "--reason", reason)
 
+    # ---- a node replaced (#76, Phase 16) ----
+
+    def add_node(self, name):
+        """A new host for a node that failed for good: its own namespace on the switch, a fresh TPM (a new EK and
+        AK), new WireGuard keys, its directories and clock. Not yet in any manifest."""
+        n = NodeHere(self.work, name, max(m.index for m in self.members()) + 1)
+        self.nodes[name], self.time[name], self.services[name] = n, True, ()
+        for d in (n.dir / "etc", n.state, n.admission, n.run):
+            d.mkdir(parents=True)
+        os.chmod(n.dir, 0o711)
+        self._wire(n)
+        self._tpm(n)
+        self._wg_keys(n)
+        self.ids[name] = self._identity(n)
+        self._authtime_for(n)
+        return n
+
+    def replacement(self, old, new, reuse=None):
+        """The manifest replacing `old` by `new` (one root-signed step, replacement.py), and the measurements
+        document it binds: `new` enrolled ACTIVE with its own identities (or, for a refusal test, `reuse` of them
+        taken from another node), `old` kept as RETIRED. Returns (candidate, document)."""
+        example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
+        n = self.nodes[new]
+        document = dict(self.document, nodes=dict(self.document["nodes"], **{new: {"accepted": [self._reference(n, example["pcrs"])]}}))
+        entry = {"node_id": new, "state": "ACTIVE", "ek_name": self.ids[new][0], "ak_name": self.ids[new][1],
+                 "wg_boot_pub": self.keys[new]["boot"][1], "wg_service_pub": self.keys[new]["service"][1], "hsm_serials": ["E2E3%s" % new.upper()]}
+        if reuse:
+            source = next(m for m in self.manifest["nodes"] if m["node_id"] == reuse[0])
+            entry.update({k: source[k] for k in reuse[1]})
+        current = self.manifest
+        nodes = [dict(m, state="RETIRED") if m["node_id"] == old else m for m in current["nodes"]] + [entry]
+        candidate = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
+                         policy_version=measurements.version(document), issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
+        return candidate, document
+
+    def replace(self, old, new):
+        """#76: `old` replaced by `new`, as an operator does it with the root. The candidate is checked as the root's
+        operator checks it (measurements.check_replacement) and signed by the root; the authority takes it between
+        runs of its serve (`accept`, as its own user) and publishes it; every node's site configuration and
+        measurements document follow (an operator's change); the new node's store holds the chain, and its
+        heartbeat counter starts at the authority's verified sequence (what #279's `enrol --replace` does). The
+        running nodes take the epoch from the authority by sync. Returns the envelope."""
+        candidate, document = self.replacement(old, new)
+        measurements.check_replacement(self.manifest, candidate, self.document, document, old, new)
+        envelope = self.signed(candidate)
+        a = self.auth
+        cfg = json.loads(a.cfg_path.read_text())
+        cfg["underlays"] = {n.name: n.underlay for n in self.nodes.values()}
+        a.cfg_path.write_text(json.dumps(cfg))
+        accepted = a.dir / "etc" / ("accept-%d.json" % candidate["epoch"])
+        accepted.write_text(json.dumps([envelope]))
+        self.stop(AUTH, power=None)                   # accept runs between runs of serve (one writer)
+        self._run(a, "accept", oneshot=True, unit=self.unit(AUTH, "accept"), args=("--chain", str(accepted)))
+        self.start(AUTH)
+        self.chain.append(envelope)
+        self.manifest, self.document = candidate, document
+        for n in self.nodes.values():
+            self._configure(n)
+        n = self.nodes[new]
+        here = self.node(new)
+        here.anchor().define()
+        for held in self.chain:
+            here.store().commit(held)
+        if not until(lambda: (a.dir / "control" / "control.sock").exists(), 60, 1):
+            raise RuntimeError("the authority's control socket did not appear")
+        sequence = json.loads(self.authority_command("status").stdout)["sequence"]
+        node.heartbeat_counter(here.cfg).define_at(sequence)
+        sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
+        os.chmod(n.state, 0o755)
+        sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
+        os.chmod(n.admission, 0o700)
+        return envelope
+
     def _start_authority(self):
         """The authority's host booted: its time checked again, its wg-svc applied, then `serve` (which signs a
         heartbeat as soon as its time is authenticated)."""
@@ -549,16 +629,25 @@ class Cluster:
         sh("cryptsetup", "close", mapped)
         return loop
 
-    def enrol(self, name):
-        """One peer path from each other node (enrolment, as unlock's tests and #190 do it): the local half sealed
-        to the node's own TPM under PCR 7; each peer mints a contribution in its real contributions file and wraps
-        it to the node's one-time key; a keyslot and token per peer. And the node's AK enrolled in each peer's
-        verifier (the credential challenge, activated by the node's TPM). Run before the peers' services start."""
+    def enrol(self, name, peers=None):
+        """One peer path from each of `peers` (by default every other node the manifest lets authorize), as unlock's
+        tests and #190 do it: the local half sealed to the node's own TPM under PCR 7 (the one its paths already
+        share, when it has some); each peer mints a contribution in its real contributions file and wraps it to the
+        node's one-time key; a keyslot and token per peer. And the node's AK enrolled in each peer's verifier (the
+        credential challenge, activated by the node's TPM). Run while neither the node's nor the peers' services
+        run (the fixture writes the peers' stores)."""
         n, loop = self.nodes[name], self.loops[name]
-        local = os.urandom(32)
-        sealed = unlock.seal_local(local, pcrs="7", tpm2_device=n.tcti)
+        held = [t for _, t in unlock.path_tokens(unlock.luks_meta(loop))]
+        if held:                                          # the client unseals one local half for every path
+            sealed = held[0]["local"]
+            local = unlock.unseal_local(sealed, tpm2_device=n.tcti)
+        else:
+            local = os.urandom(32)
+            sealed = unlock.seal_local(local, pcrs="7", tpm2_device=n.tcti)
         ek, ak = (n.dir / "ids" / "ek.pub").read_bytes(), (n.dir / "ids" / "ak.pub").read_bytes()
-        for peer in [p for p in self.nodes if p != name]:
+        if peers is None:
+            peers = [p for p in self.nodes if p != name and membership.may(self.manifest, p, "authorize")]
+        for peer in peers:
             here = self.node(peer)
             enrolment = unlock.Enrolment(name)
             wrapped = unlock.contribute(unlock.Contributions(here.path("contributions.json")), self.manifest, peer, name, enrolment.public, enrolment.fingerprint)
