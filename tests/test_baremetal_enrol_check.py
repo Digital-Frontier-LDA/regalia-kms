@@ -80,6 +80,17 @@ class Check(unittest.TestCase):
             else:
                 self.refused("the manifest's signing_key for a is not this host's", self.envelope(man))
 
+    def test_a_signing_key_a_manifest_before_v4_does_not_name_is_said(self):
+        """51's read of #358: a host with a signing key checked against a v3 (or older) manifest passes, and is told its key
+        waits for v4."""
+        man = self.manifest()
+        self.check(self.envelope(man))
+        self.assertIsNone(enrol.signing_note(self.d, man))                   # a bundle from before #199: nothing to say
+        with open(self.d + "/bundle.json", "w") as f:
+            json.dump(dict(self.bundle, signing_key="04" + "ab" * 64), f)
+        self.assertEqual(self.check(self.envelope(man)), man)
+        self.assertIn("names no signing key for a; this host's key at 0x81010003", enrol.signing_note(self.d, man))
+
     def test_the_fingerprint_typed_must_be_the_root_keys(self):
         other = enrol.fingerprint(hbt.pub(hbt.OTHER))
         self.refused("is not the one typed", self.envelope(self.manifest()), typed=other)

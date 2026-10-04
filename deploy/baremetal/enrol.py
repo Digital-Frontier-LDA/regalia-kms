@@ -616,6 +616,17 @@ def check_manifest(directory, chain, root_key, typed, document, replace=None):
     return manifest
 
 
+def signing_note(directory, manifest):
+    """What the operator is told when this host has a signing key (#199) that the manifest does not name (a manifest
+    before v4): nothing is wrong, but the key waits, and heartbeats under v4 will need it. None otherwise."""
+    bundle = _bundle(directory)
+    entry = {n["node_id"]: n for n in manifest["nodes"]}.get(bundle["node_id"], {})
+    if isinstance(bundle.get("signing_key"), str) and "signing_key" not in entry:
+        return ("NOTE: the manifest (%s) names no signing key for %s; this host's key at %s (%s...) waits for a v4 manifest, "
+                "under which the nodes sign the heartbeats (#199)" % (manifest["schema"], bundle["node_id"], signkey.HANDLE, bundle["signing_key"][:18]))
+    return None
+
+
 NODE_JSON = "/etc/regalia/node.json"
 
 
@@ -1586,6 +1597,9 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     require(journal.state("identity") == "done", "this host has no identity yet: run `enrol init` first")
     identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
     manifest = check_manifest(directory, chain, root_key, typed, document, replace)
+    note = signing_note(directory, manifest)
+    if note:
+        print(note, file=out)
     initrd_pub = None
     if boot is not None:                                            # checked before anything is written
         initrd_pub = approved_image(boot["image"], boot["record"], boot["initrd_pub"], boot["system_pub"],
@@ -1770,6 +1784,9 @@ def main(argv=None):
         print("OK: the manifest (epoch %d, %s) is root-signed by the key whose fingerprint was typed, names this host "
               "as its bundle says, and commits to these measurements. Nothing was written." % (manifest["epoch"],
               membership.digest(manifest)[:16]))
+        note = signing_note(args.enrol_dir, manifest)
+        if note:
+            print(note)
         return 0
     if args.command == "entry":
         try:

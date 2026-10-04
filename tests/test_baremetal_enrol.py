@@ -129,6 +129,16 @@ class InitOnSwtpm(unittest.TestCase):
         forged = dict(bundle, signing_public=bundle["signing_public"][:-2] + "00")
         with self.assertRaises(membership.Refused):
             enrol.entry(forged, SYSTEM_PUB)
+        # another AK of this TPM, named consistently in the bundle (its Name recomputes): the certification is not its
+        other = self.d + "/other-ak"
+        subprocess.run(["tpm2_createak", "-C", attest.EK_HANDLE, "-c", other + ".ctx", "-G", "ecc", "-g", "sha256", "-s", "ecdsa",
+                        "-u", other + ".pub"], check=True, capture_output=True)
+        subprocess.run(["tpm2_flushcontext", "-t"], capture_output=True)
+        with open(other + ".pub", "rb") as f:
+            other_ak = f.read()
+        swapped = dict(bundle, ak_public=other_ak.hex(), ak_name=attest.name_of(attest.public_area(other_ak, "ak")).hex())
+        with self.assertRaisesRegex(membership.Refused, "does not verify under the AK"):
+            enrol.entry(swapped, SYSTEM_PUB)
         for k in ("signing_public", "signing_certify", "signing_sig"):
             with self.subTest(missing=k), self.assertRaisesRegex(enrol.Refused, "no %s: it was made before #199" % k):
                 enrol.entry({x: v for x, v in bundle.items() if x != k}, SYSTEM_PUB)
