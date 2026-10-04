@@ -513,49 +513,73 @@ class InitOnSwtpm(unittest.TestCase):
 
 
 class Tokens(unittest.TestCase):
-    """#363 (#72 G1): the serials the daemon compares, read from the devices: the SmartCard-HSM's PKCS#11 serial and the
-    YubiKey's, never typed."""
+    """#363 (#72 G1): the serials the daemon compares, read from the devices in every form a backend pins: the
+    SmartCard-HSM's PKCS#11 serial, the YubiKey's decimal serial (PIV) and its OpenPGP-applet PKCS#11 serial, never typed.
+    The listings are the bench's, 2026-10-04 (Nitrokey DENK0404144, YubiKey 35718625, OpenSC 0.26)."""
 
+    # OpenSC's default drivers: the YubiKey FIRST, as its PIV token (whose serial is not the YubiKey's), then the HSM
     SLOTS = ("Available slots:\n"
-             "Slot 0 (0x0): Nitrokey Nitrokey HSM (DENK0500001) 00 00\n"
-             "  token label        : SmartCard-HSM (UserPIN)\n"
+             "Slot 0 (0x4): Yubico YubiKey OTP+FIDO+CCID 01 00\n"
+             "  token label        : PIV_II\n"
+             "  token manufacturer : piv_II\n"
+             "  serial num         : b9ab85b1d5d5846c\n"
+             "Slot 1 (0x8): Nitrokey Nitrokey HSM (DENK04041440000         ) 02 00\n"
+             "  token label        : regalia-staging\n"
              "  token manufacturer : www.CardContact.de\n"
              "  token model        : PKCS#15 emulated\n"
-             "  serial num         : DENK0500001\n"
-             "Slot 1 (0x4): Yubico YubiKey OTP+FIDO+CCID 01 00\n"
-             "  token label        : YubiKey PIV #35718625\n"
-             "  token manufacturer : piv_II\n"
-             "  serial num         : 00000000\n")
+             "  serial num         : DENK0404144\n"
+             "Slot 2 (0xc): Generic reader with no card 00 00\n"
+             "  (empty)\n")
+    # OpenSC told to use its openpgp driver only: the YubiKey's OpenPGP applet, two tokens under one serial
+    OPENPGP = ("Available slots:\n"
+               "Slot 0 (0x4): Yubico YubiKey OTP+FIDO+CCID 01 00\n"
+               "  token label        : OpenPGP card (User PIN)\n"
+               "  token manufacturer : Yubico\n"
+               "  serial num         : 000635718625\n"
+               "Slot 1 (0x5): Yubico YubiKey OTP+FIDO+CCID 01 00\n"
+               "  token label        : OpenPGP card (User PIN (sig))\n"
+               "  token manufacturer : Yubico\n"
+               "  serial num         : 000635718625\n")
 
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
 
-    def run_with(self, slots=SLOTS, ykman="35718625\n"):
-        def run(argv, **kw):
+    def run_with(self, slots=SLOTS, ykman="35718625\n", openpgp=OPENPGP):
+        def run(argv, env=None, **kw):
             if argv[0] == "pkcs11-tool":
+                if env and env.get("OPENSC_CONF"):
+                    with open(env["OPENSC_CONF"]) as f:
+                        self.assertEqual(f.read(), enrol.OPENPGP_ONLY)
+                    return subprocess.CompletedProcess(argv, 0, openpgp, "")
                 return subprocess.CompletedProcess(argv, 0, slots, "")
             if argv[:2] == ["ykman", "list"]:
                 return subprocess.CompletedProcess(argv, 0, ykman, "")
             raise AssertionError("no other tool reaches a card: %s" % argv)
         return run
 
-    def test_the_hsm_and_the_yubikey(self):
+    def test_the_hsm_and_the_yubikey_in_each_form(self):
         with unittest.mock.patch.object(enrol.shutil, "which", lambda t: "/usr/bin/" + t):
-            self.assertEqual(enrol.token_serials("m.so", self.run_with()), ["DENK0500001", "35718625"])
-            self.assertEqual(enrol.token_serials("m.so", self.run_with(ykman="")), ["DENK0500001"], "a node with no YubiKey (Pico alone)")
+            self.assertEqual(enrol.token_serials("m.so", self.run_with()), ["DENK0404144", "35718625", "000635718625"])
+            self.assertEqual(enrol.token_serials("m.so", self.run_with(openpgp="Available slots:\n")), ["DENK0404144", "35718625"],
+                             "a YubiKey whose OpenPGP applet OpenSC does not present: its PIV form only")
+            self.assertEqual(enrol.token_serials("m.so", self.run_with(ykman="", openpgp="")), ["DENK0404144"], "no YubiKey (Pico alone)")
 
     def test_refusals(self):
         with unittest.mock.patch.object(enrol.shutil, "which", lambda t: "/usr/bin/" + t):
-            two = self.SLOTS + self.SLOTS.replace("Slot 0", "Slot 2").replace("DENK0500001", "DENK0500002")
+            two = self.SLOTS + self.SLOTS.replace("Slot 1", "Slot 3").replace("DENK0404144", "DENK0404380")
             with self.assertRaisesRegex(enrol.Refused, "2 SmartCard-HSM tokens are attached"):
                 enrol.token_serials("m.so", self.run_with(slots=two))
             with self.assertRaisesRegex(enrol.Refused, "0 SmartCard-HSM tokens"):
                 enrol.token_serials("m.so", self.run_with(slots="Available slots:\n"))
             with self.assertRaisesRegex(enrol.Refused, "appears twice"):
                 enrol.token_serials("m.so", self.run_with(ykman="35718625\n35718625\n"))
-            with self.assertRaisesRegex(enrol.Refused, "not one the manifest can list"):
+            with self.assertRaisesRegex(enrol.Refused, "not a YubiKey's"):
                 enrol.token_serials("m.so", self.run_with(ykman="3571-8625\n"))
+            with self.assertRaisesRegex(enrol.Refused, "an OpenPGP card is attached that is not one of this host's YubiKeys \\(000699999999\\)"):
+                enrol.token_serials("m.so", self.run_with(openpgp=self.OPENPGP.replace("000635718625", "000699999999", 1)))
+            with self.assertRaisesRegex(enrol.Refused, "not one the manifest can list"):
+                enrol.token_serials("m.so", self.run_with(slots=self.SLOTS.replace("DENK0404144\n", "DENK-0404144\n")))
         os.makedirs(self.d + "/1-1")
         with open(self.d + "/1-1/idVendor", "w") as f:
             f.write("1050\n")
@@ -563,7 +587,7 @@ class Tokens(unittest.TestCase):
             with self.assertRaisesRegex(enrol.Refused, "a YubiKey is attached and ykman is not installed"):
                 enrol.token_serials("m.so", self.run_with(), usb_root=self.d)
             os.unlink(self.d + "/1-1/idVendor")
-            self.assertEqual(enrol.token_serials("m.so", self.run_with(), usb_root=self.d), ["DENK0500001"])
+            self.assertEqual(enrol.token_serials("m.so", self.run_with(), usb_root=self.d), ["DENK0404144"])
 
 
 class ChronyPath(unittest.TestCase):

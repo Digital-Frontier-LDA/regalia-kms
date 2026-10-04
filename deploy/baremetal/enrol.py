@@ -12,8 +12,9 @@ WHAT IT MAKES, each on the host and never imported (ADR-0002 D5's rule, applied 
     PolicyAuthorize of the system-phase PCR key given with --system-pub, and certified by the AK;
   * the WG-SERVICE key, /etc/regalia/wg-service.key, root 0600;
   * the WG-BOOT key, kept root 0600 in the enrolment directory until `commit` seals it to this TPM.
-It READS, and records in the bundle, the serial of every hardware token the node serves from (#363): its SmartCard-HSM's
-PKCS#11 serial and its YubiKey's serial, as the daemon compares them, for the manifest's hsm_serials.
+It READS, and records in the bundle, the serial of every hardware token the node serves from (#363), in each form a
+backend pins it: its SmartCard-HSM's PKCS#11 serial, and its YubiKey's decimal serial (PIV) and OpenPGP-applet PKCS#11
+serial (yubikey-openpgp), for the manifest's hsm_serials.
 The local unlock contribution is NOT made here: `commit` makes it and seals it in one step, so it is never
 on disk in the clear between the two phases. It then stays root 0600 in the enrolment directory (local.bin)
 only until the peers' LUKS paths are enrolled, which need it; its sealed copy opens only in the initrd.
@@ -281,24 +282,36 @@ def signing_key(journal, directory, system_pub, ids, run):
 TOKEN_SERIAL = re.compile(r"[A-Za-z0-9]{1,32}")     # membership's hsm_serials entry
 CARDCONTACT = "CardContact"                       # the SmartCard-HSM's PKCS#11 manufacturer (Nitrokey HSM 2, Pico HSM)
 YUBICO_VENDOR = "1050"
+# OpenSC told to use its OpenPGP card driver only: how the yubikey-openpgp backend (D26, regalia#541) sees a YubiKey
+OPENPGP_ONLY = "app default {\n  card_drivers = openpgp;\n}\n"
+
+
+def _pkcs11_tokens(module, run, env=None):
+    """pkcs11-tool's slot listing as one dict per slot, each field taken from its own slot's block (a slot with no
+    token prints no serial)."""
+    done = run(["pkcs11-tool", "--module", module, "--list-token-slots"], capture_output=True, text=True, env=env)
+    require(done.returncode == 0, "pkcs11-tool could not list the token slots: %s" % (done.stderr or "").strip()[-200:])
+    slots, slot = [], None
+    for line in done.stdout.splitlines():
+        if line.startswith("Slot "):
+            slot = {}
+            slots.append(slot)
+        elif slot is not None and ":" in line:
+            key, _, value = line.partition(":")
+            slot[key.strip()] = value.strip()
+    return [slot for slot in slots if slot.get("serial num")]
 
 
 def token_serials(module, run=subprocess.run, usb_root="/sys/bus/usb/devices"):
-    """The serials of the hardware tokens this host serves from, as the daemon compares them (#363, #72 G1): each
-    SmartCard-HSM's PKCS#11 token serial (TokenInfo.serialNumber, trimmed: the Nitrokey provider's), then each YubiKey's
-    serial (ykman, decimal: the PIV provider's). Read from the devices, never typed. Exactly one SmartCard-HSM; a
-    YubiKey attached with no ykman to read it is refused rather than left out."""
-    done = run(["pkcs11-tool", "--module", module, "--list-token-slots"], capture_output=True, text=True)
-    require(done.returncode == 0, "pkcs11-tool could not list the token slots: %s" % (done.stderr or "").strip()[-200:])
-    hsm, slot = [], {}
-    for line in done.stdout.splitlines() + ["Slot end"]:
-        if line.startswith("Slot "):
-            if CARDCONTACT in slot.get("token manufacturer", "") and slot.get("serial num"):
-                hsm.append(slot["serial num"])
-            slot = {}
-        elif ":" in line:
-            key, _, value = line.partition(":")
-            slot[key.strip()] = value.strip()
+    """The serials of the hardware tokens this host serves from, in every form a backend pins them (#363, #72 G1), all
+    read from the devices, never typed:
+      * the SmartCard-HSM's PKCS#11 token serial (TokenInfo.serialNumber, trimmed): nitrokey-pkcs11. Exactly one.
+      * each YubiKey's decimal serial (ykman): yubikey-piv.
+      * each YubiKey's OpenPGP-applet PKCS#11 serial, as OpenSC's openpgp driver presents it: yubikey-openpgp. Measured
+        2026-10-04 on YubiKey 35718625 (OpenSC 0.26, ykman 5.6.1): 000635718625, Yubico's manufacturer 0006 then the
+        decimal serial, on two tokens (User PIN, User PIN (sig)). Each must be an attached YubiKey's, or it is refused.
+    A YubiKey attached with no ykman to read it is refused rather than left out."""
+    hsm = [slot["serial num"] for slot in _pkcs11_tokens(module, run) if CARDCONTACT in slot.get("token manufacturer", "")]
     require(len(hsm) == 1, "%d SmartCard-HSM tokens are attached; a node serves from exactly one (attach only its own)" % len(hsm))
     yubikeys = []
     if shutil.which("ykman"):
@@ -311,7 +324,21 @@ def token_serials(module, run=subprocess.run, usb_root="/sys/bus/usb/devices"):
             with open(vendor) as f:
                 attached += [vendor] if f.read().strip() == YUBICO_VENDOR else []
         require(not attached, "a YubiKey is attached and ykman is not installed to read its serial: install yubikey-manager")
-    serials = hsm + yubikeys
+    require(all(re.fullmatch(r"[0-9]{1,8}", s) for s in yubikeys), "ykman listed a serial that is not a YubiKey's: %s" % yubikeys)
+    openpgp = []
+    if yubikeys:
+        with tempfile.TemporaryDirectory() as conf_dir:
+            conf = os.path.join(conf_dir, "opensc.conf")
+            with open(conf, "w") as f:
+                f.write(OPENPGP_ONLY)
+            env = dict(os.environ, OPENSC_CONF=conf)
+            for slot in _pkcs11_tokens(module, run, env):
+                if slot["serial num"] not in openpgp:
+                    openpgp.append(slot["serial num"])
+        expected = {"0006%08d" % int(s) for s in yubikeys}
+        require(set(openpgp) <= expected, "an OpenPGP card is attached that is not one of this host's YubiKeys (%s): attach only "
+                "the node's own tokens" % ", ".join(sorted(set(openpgp) - expected)))
+    serials = hsm + yubikeys + openpgp
     require(all(TOKEN_SERIAL.fullmatch(s) for s in serials), "a token serial is not one the manifest can list: %s" % serials)
     require(len(set(serials)) == len(serials), "a token serial appears twice: %s" % serials)
     return serials
