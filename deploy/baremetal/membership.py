@@ -706,13 +706,16 @@ class HighWater:
 
     def _base(self):
         """Checks both indices' attributes and returns the base (one call per value/advance/check)."""
-        a = self._attributes(self.index)
+        a, a_size = self._public(self.index)
         require_anchor(a & self.NT_MASK == self.NT_COUNTER and a & self.WRITTEN, "NV index %s is not a written counter" % self.index)
         self._as_defined(self.index, a, "counter")
-        b = self._attributes(self.base_index)
+        require_anchor(a_size == 8, "NV index %s is %d bytes, not 8" % (self.index, a_size))
+        b, b_size = self._public(self.base_index)
         require_anchor(b & self.NT_MASK == self.NT_ORDINARY and b & self.WRITTEN and b & self.WRITELOCKED,
                  "base index %s is not written and write-locked" % self.base_index)
         self._as_defined(self.base_index, b, "base")
+        # a base of another size is not this anchor's (Unusable, which a re-anchor repairs), not a TPM that failed
+        require_anchor(b_size == 8, "NV index %s is %d bytes, not 8" % (self.base_index, b_size))
         return self._read8(self.base_index)
 
     def _epoch(self, base):
