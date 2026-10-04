@@ -86,7 +86,7 @@ import subprocess
 import sys
 import tempfile
 
-from deploy.baremetal import attest, espcreds, membership, p11uri
+from deploy.baremetal import attest, debverify, espcreds, membership, p11uri
 
 Refused, require = membership.Refused, membership.require
 
@@ -682,6 +682,12 @@ def load_inventory(path=INVENTORY):
                     and re.fullmatch(r"[fldcbps?] [0-7]{4} \d+:\d+", " ".join(words[2:5])) is not None,
                     "%s:%d is not CLASS ORIGIN TYPE MODE UID:GID PATH VALUE" % (path, number))
             require(words[5] not in pinned, "%s:%d names %s twice" % (path, number, words[5]))
+            if words[0] == "generated" and words[1].startswith("dracut-over:"):
+                rule = DRACUT_OVER.get(words[5])
+                require(rule is not None and rule[0] == words[1][len("dracut-over:"):].partition("=")[0],
+                        "%s:%d: %s is not on the pinned list of the paths dracut writes over (uki.DRACUT_OVER)" % (path, number, words[5]))
+                require(rule[1][0] != "link" or (words[2], words[6]) == ("l", _escape(rule[1][1])),
+                        "%s:%d: %s is not dracut's link to %s" % (path, number, words[5], rule[1][1]))
             pinned[words[5]] = " ".join(words[2:5] + words[6:])
     return pinned
 
@@ -720,6 +726,33 @@ def ours():
     return pinned
 
 
+# #246: the paths of a package that dracut writes over, each with what dracut puts there and the line of dracut-core
+# 106-6 that does it. Only these are classed "generated dracut-over:OWNER" in the inventory; a package file that
+# differs from what the build machine installed anywhere else stays "package", and the archive check refuses it
+# (deploy/baremetal/debverify.py). Each is still checked: a link by its target here, a file against dracut-core's
+# .deb at the source path here. {path in the image: (owning package, ("link", target) | (package, path in its .deb))}
+_DRACUT_SYSTEMD = "usr/lib/dracut/modules.d/98dracut-systemd/"
+DRACUT_OVER = {
+    # usr/bin/dracut: ln -sfn ../run "$initdir/var/run"; ln -sfn ../run/lock "$initdir/var/lock"
+    "var/run": ("base-files", ("link", "../run")),
+    "var/lock": ("base-files", ("link", "../run/lock")),
+    # 98dracut-systemd/module-setup.sh: ln -sf initrd-release "$initdir"/usr/lib/os-release (and etc/os-release)
+    "usr/lib/os-release": ("base-files", ("link", "initrd-release")),
+    "etc/os-release": ("base-files", ("link", "initrd-release")),
+    # 01systemd-udevd/module-setup.sh: ln_r "$(find_binary true)" "/usr/bin/loginctl"
+    "usr/bin/loginctl": ("systemd", ("link", "true")),
+    # 98dracut-systemd/module-setup.sh: ln_r "${systemdsystemunitdir}/initrd.target" "${systemdsystemunitdir}/default.target"
+    UNIT_DIR + "/default.target": ("systemd", ("link", "initrd.target")),
+    # 98dracut-systemd/module-setup.sh: inst_simple "$moddir/emergency.service" .../emergency.service (and .../rescue.service)
+    UNIT_DIR + "/emergency.service": ("systemd", ("dracut-core", _DRACUT_SYSTEMD + "emergency.service")),
+    UNIT_DIR + "/rescue.service": ("systemd", ("dracut-core", _DRACUT_SYSTEMD + "emergency.service")),
+}
+# 98dracut-systemd/module-setup.sh installs its own dracut-*.service units over dracut-core's systemd copies
+DRACUT_OVER.update({UNIT_DIR + "/" + unit: ("dracut-core", ("dracut-core", _DRACUT_SYSTEMD + unit)) for unit in (
+    "dracut-cmdline.service", "dracut-initqueue.service", "dracut-mount.service", "dracut-pre-mount.service",
+    "dracut-pre-pivot.service", "dracut-pre-trigger.service", "dracut-pre-udev.service")})
+
+
 def _ours_path(path, files):
     """Whether an entry of the image is this repository's (for the inventory's CLASS column)."""
     if path in ours() or path in UNLOCK_BINARIES or path == "etc/crypttab":
@@ -728,9 +761,30 @@ def _ours_path(path, files):
     return os.path.basename(path) == RESET_DROPIN[0] and entry is not None and entry[1] == RESET_DROPIN[1]
 
 
+def _as_installed(root, path, entry):
+    """Whether an initrd entry is what the build machine has installed at that path (or at its /lib, /bin, /sbin
+    form on a merged-/usr tree): the same type, and the same bytes or link target."""
+    for candidate in [path] + ([path[4:]] if path.startswith("usr/") else []):
+        full = os.path.join(root, candidate)
+        if not os.path.lexists(full):
+            continue
+        mode = entry[0]
+        if stat_link(mode):
+            return os.path.islink(full) and os.readlink(full) == entry[1].decode("utf-8", "surrogateescape")
+        if stat_regular(mode):
+            if os.path.islink(full) or not os.path.isfile(full):
+                return False
+            with open(full, "rb") as f:
+                return sha256(f.read()) == sha256(entry[1])
+        return stat_dir(mode) and os.path.isdir(full) and not os.path.islink(full)
+    return False
+
+
 def initrd_inventory_lines(data, run=subprocess.run, tools=TOOLS, root=None):
     """The inventory of an initrd (`uki initrd-inventory`): every entry, classed "ours", "generated" (no package
-    owns it on the build machine) or "package" (with its owner), sorted so the generated lines read together.
+    owns it on the build machine, or dracut put something else at a package's path: origin "dracut-over:PKG=VER")
+    or "package" (with its owner, and what the build machine has installed there), sorted so the generated lines
+    read together. Only "package" entries are checked against the archive (deploy/baremetal/debverify.py).
     Without `root` (the build machine's root, for its dpkg database) nothing is classed but ours."""
     files = _Files(initrd_files(data, run, tools))
     owners = _owners(root) if root else None
@@ -746,6 +800,11 @@ def initrd_inventory_lines(data, run=subprocess.run, tools=TOOLS, root=None):
         else:
             owner = owners.get(raw) or (owners.get(raw[4:]) if raw.startswith("usr/") else None)
             cls, origin = ("package", owner) if owner else ("generated", "dracut")
+            if owner and raw in DRACUT_OVER and DRACUT_OVER[raw][0] == owner.partition("=")[0] \
+                    and not _as_installed(root, raw, files[raw]):
+                # a pinned path dracut writes over (its own unit, a link to initrd-release): dracut's, checked against
+                # DRACUT_OVER's source (#246). Anywhere else a difference stays "package", and debverify refuses it.
+                cls, origin = "generated", "dracut-over:" + owner
         kind, mode, owner_ids, value = state.split(" ")
         rows.append(({"ours": 0, "generated": 1, "unclassified": 1, "package": 2}[cls], path,
                      " ".join((cls, origin, kind, mode, owner_ids, path, value))))
@@ -901,10 +960,26 @@ OPTIONAL_INPUTS = ("microcode",)
 # initrd and THIS client, or the image is not built and not signed.
 INITRD_BUILD_SCHEMA = "regalia.initrd-build/v1"
 INITRD_BUILD_KEYS = ("schema", "commit", "go", "snapshot", "source_date_epoch", "suite", "kernel", "dracut", "packages_requested",
-                     "client_sha256", "repository_files", "packages_sha256", "packages", "initrd_sha256", "initrd_size", "initrd_entries")
+                     "client_sha256", "repository_files", "packages_sha256", "packages", "initrd_sha256", "initrd_size", "initrd_entries",
+                     "verified_packages")
+VERIFIED_SCHEMA = "regalia.initrd-packages/v1"
 
 
-def check_initrd_build(inputs, client_sha256):
+def inventory_package_origins(path=None):
+    """{"name=version"} of the inventory's "package" entries: what the build record's verified_packages must name."""
+    return set(_inventory_counts(path)[0])
+
+
+def _inventory_counts(path=None):
+    """({"name=version": package lines}, dracut-over lines, the file's sha256) of the inventory."""
+    with open(path or INVENTORY, "rb") as f:
+        raw = f.read()
+    load_inventory(path or INVENTORY)                # its shape, and only pinned dracut-over lines
+    owned, over = debverify.inventory_entries(raw.decode("utf-8").splitlines())
+    return {origin: len(lines) for origin, lines in owned.items()}, len(over), sha256(raw)
+
+
+def check_initrd_build(inputs, client_sha256, inventory=None):
     """The initrd's build record, read and held to the initrd and the client given; None when there is none
     (a library caller's test fixture: the build and sign commands require one)."""
     if not inputs.get("initrd_build"):
@@ -924,6 +999,31 @@ def check_initrd_build(inputs, client_sha256):
             "the initrd's build record is for another initrd (%s, not --initrd's %s)" % (built["initrd_sha256"], sha256(read(inputs["initrd"]))))
     require(client_sha256 is not None and built["client_sha256"] == client_sha256,
             "the initrd's build record names another unlock client (%s, not %s)" % (built["client_sha256"], client_sha256))
+    # #246: every package the inventory names was checked by the builder against its .deb along Debian's signed chain
+    # (deploy/baremetal/debverify.py): exactly those packages, at those versions, no more and no fewer
+    verified = built["verified_packages"]
+    membership.exact(verified, ("schema", "packages", "releases", "keyring_sha256", "inventory_sha256", "entries", "dracut_over"),
+                     "the initrd's build record's verified_packages")
+    require(verified["schema"] == VERIFIED_SCHEMA and isinstance(verified["packages"], dict) and isinstance(verified["releases"], dict)
+            and attest.is_hex(verified["keyring_sha256"], 64) and attest.is_hex(verified["inventory_sha256"], 64)
+            and type(verified["entries"]) is int and type(verified["dracut_over"]) is int
+            and all(isinstance(v, dict) and set(v) == {"version", "deb_sha256"} and isinstance(v["version"], str)
+                    and attest.is_hex(v["deb_sha256"], 64) for v in verified["packages"].values())
+            and all(attest.is_hex(v, 64) for v in verified["releases"].values()),
+            "the initrd's build record's verified_packages is not a %s" % VERIFIED_SCHEMA)
+    require(verified["keyring_sha256"] == debverify.KEYRING_SHA256,
+            "the initrd's build record's packages were verified with another keyring than the pinned Debian archive keyring")
+    owned, over, inventory_sha256 = _inventory_counts(inventory)
+    # what the builder verified is this inventory, the reviewed one, byte for byte: its classes and origins included
+    require(verified["inventory_sha256"] == inventory_sha256,
+            "the initrd's build record verified another inventory than the one reviewed (%s, not %s)" % (verified["inventory_sha256"], inventory_sha256))
+    named = {"%s=%s" % (name, v["version"]) for name, v in verified["packages"].items()}
+    want = set(owned)
+    require(named == want, "the initrd's build record verified other packages than the inventory names (not verified: %s; not in the "
+            "inventory: %s)" % (", ".join(sorted(want - named)) or "none", ", ".join(sorted(named - want)) or "none"))
+    require((verified["entries"], verified["dracut_over"]) == (sum(owned.values()), over),
+            "the initrd's build record verified %d package and %d dracut-over lines, the inventory has %d and %d"
+            % (verified["entries"], verified["dracut_over"], sum(owned.values()), over))
     return built
 
 
@@ -1026,7 +1126,7 @@ def build(inputs, uname, name, out_dir, run=subprocess.run, tools=TOOLS, invento
         values, _ = _predict(parts, run, tools, work)
         # the staged copy: the bytes just measured
         review = review_initrd(inputs["initrd"], run, tools, inventory, sha256(read(unlock_client)) if unlock_client else None)
-        check_initrd_build(inputs, sha256(read(unlock_client)) if unlock_client else None)
+        check_initrd_build(inputs, sha256(read(unlock_client)) if unlock_client else None, inventory)
         record = {
             "schema": SCHEMA, "name": name, "uname": uname,
             "inputs": {k: {"sha256": sha256(read(inputs[k])), "size": os.path.getsize(inputs[k])} for k in INPUTS if inputs.get(k)},
@@ -1189,7 +1289,7 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
         mine = review_initrd(inputs["initrd"], run, tools, inventory, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]))
         require(mine == record["initrd_review"],
                 "this machine's review of the initrd is not the record's: nothing is signed")
-        check_initrd_build(inputs, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]))
+        check_initrd_build(inputs, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]), inventory)
         # the third build: this machine must get the bytes the record names before it signs anything
         data = _ukify(inputs, uname, os.path.join(work, "unsigned.efi"), run, tools)
         require(sha256(data) == record["unsigned_sha256"], "this machine built another image than the record's (%s, not %s): "
