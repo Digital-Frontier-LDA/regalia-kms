@@ -119,10 +119,12 @@ def validate(doc):
     authtime.servers(doc["time_servers"])
     interval = doc["pull_interval"]
     require(isinstance(interval, int) and not isinstance(interval, bool) and 10 <= interval <= 3600, "pull_interval must be 10 to 3600 seconds")
-    # #199: how often the nodes sign a heartbeat (beat.Proposer); 900 in production (#69), shorter only in tests
+    # #199: how often the nodes sign a heartbeat (beat.Proposer); 900 in production (#69). Never below
+    # heartbeat.MIN_INTERVAL_S: a node's jump allowance grows by one per MIN_INTERVAL_S of issue time, so beating faster
+    # would leave a node that was off for about a day refusing every heartbeat as an anomaly (regalia-kms-1e's read)
     beat_every = doc["beat_interval_s"]
-    require(isinstance(beat_every, int) and not isinstance(beat_every, bool) and 60 <= beat_every <= 3600,
-            "beat_interval_s must be 60 to 3600 seconds")
+    require(isinstance(beat_every, int) and not isinstance(beat_every, bool) and heartbeat.MIN_INTERVAL_S <= beat_every <= 3600,
+            "beat_interval_s must be %d to 3600 seconds" % heartbeat.MIN_INTERVAL_S)
     return doc
 
 
