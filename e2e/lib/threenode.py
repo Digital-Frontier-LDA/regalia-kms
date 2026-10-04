@@ -21,7 +21,14 @@ Stand-ins, each named where it is made, and each replaceable when the real piece
     sources. It writes the real status file the services read; `cluster.time[n] = False` makes it say
     not authenticated (#70 blackout 3b);
   * heartbeats: signed by the test revocation key the chain names, written into each node's freshness
-    state, as the revocation authority's pull would deliver them.
+    state, as the revocation authority's pull would deliver them (into a running node's under its sync
+    unit's own identity);
+  * a new epoch (advance): the authority's publication, given to one seed node while its services are down;
+    the running nodes pull it from there with their real sync;
+  * the pre-root client's two systemd roles: the local half, unsealed by this fixture from the node's TPM,
+    passed as a plain credential (on a host LoadCredentialEncrypted= unseals it under the TPM's policy), and
+    the key socket (socket activation, systemd-cryptsetup's side played by this fixture);
+  * regalia-wg-apply.path: the same trigger (PathChanged= on the published chain), a transient path unit.
 
 Underlay: a bridge in a switch namespace, node i at 192.0.2.(10*i)/24. Each node's site configuration names
 the others' underlay addresses, its boot mesh (wg-unlock) and its service mesh (wg-svc), as on a host.
@@ -33,6 +40,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -105,6 +113,7 @@ class Cluster:
         self.keys = {}
         self.authtimes = {}
         self.loops = {}
+        self.services = {n: () for n in names}        # what start() last started on each node, until stop()
         self.client = os.environ.get("REGALIA_UNLOCK_BIN", "")
         self.code = self.work / "src"                 # the package as a host installs it: root's, readable by the services
 
@@ -340,23 +349,39 @@ class Cluster:
             if service == "admission":                # regalia-boot-session.service, Before= it: a session when the unlock client left none
                 self._run(n, "boot-session", oneshot=True)
             self._run(n, service, oneshot=(service == "wg-apply"))
+            if service == "wg-apply":                 # and again at every new chain, as regalia-wg-apply.path runs it
+                self._run(n, "wg-apply", unit=self.unit(name, "wg-watch"),
+                          extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
+        self.services[name] = tuple(services)
 
-    def _run(self, n, service, oneshot=False):
-        argv = ["systemd-run", "--unit", self.unit(n.name, service), "--collect"]
+    def _run(self, n, service, oneshot=False, unit=None, extra=()):
+        argv = ["systemd-run", "--unit", unit or self.unit(n.name, service), "--collect"] + list(extra)
         for prop in self.properties(n.name, service):
             argv += ["-p", prop]
         if oneshot:
             argv += ["--wait", "-p", "Type=oneshot"]
         sh(*(argv + ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.node", "--config", str(n.cfg_path), service]))
 
+    def running(self, name):
+        return sh("systemctl", "is-active", self.unit(name, "sync"), check=False).stdout.strip() == "active"
+
+    def _as_sync(self, name, code, data):
+        """Python `code` run as the node's sync unit runs (its identity, its namespace, blind to the others), `data`
+        (JSON) on its standard input: for a write into the state a running sync holds, with no root-owned window."""
+        argv = ["systemd-run", "--unit", self.unit(name, "as-sync"), "--collect", "--wait", "--pipe", "--quiet"]
+        for prop in self.properties(name, "sync"):
+            argv += ["-p", prop]
+        sh(*(argv + ["/usr/bin/python3", "-Es", "-c", code]), input=json.dumps(data))
+
     def stop(self, name, power="cycle"):
         """The node's services stopped. power="cycle" (an orderly power-off and on) or "cut" (power lost): its /run
         emptied (tmpfs on a host), its tunnels gone, its TPM through the power loss (power_cycle) and its time no
         longer authenticated until it starts again. power=None: the services only, as a crash."""
         n = self.nodes[name]
-        for service in ("admission", "sync", "wg-apply"):
-            sh("systemctl", "stop", self.unit(name, service), check=False)
-            sh("systemctl", "reset-failed", self.unit(name, service), check=False)
+        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply")] + [self.unit(name, "wg-watch") + t for t in (".path", ".service")]:
+            sh("systemctl", "stop", unit, check=False)
+            sh("systemctl", "reset-failed", unit, check=False)
+        self.services[name] = ()
         if os.path.exists("/dev/mapper/e2e3-" + name):
             sh("cryptsetup", "close", "e2e3-" + name, check=False)
         if power:
@@ -463,18 +488,21 @@ class Cluster:
         asker = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         asker.connect(path)                                        # systemd-cryptsetup, waiting for its key
 
-        def activated():                                           # sd_listen_fds: descriptor 3
-            os.dup2(listener.fileno(), 3)
-            os.set_inheritable(3, True)
+        fd = listener.fileno()
+        # In its own mount namespace, the other nodes' directories covered (as InaccessiblePaths= does for the
+        # units); the listener moved to descriptor 3 (sd_listen_fds) by the shell, no preexec_fn (two unlocks run
+        # from two threads in 10.5); LISTEN_PID the client's own: the shell's, which execs ip, which execs the client.
+        blind = "".join("mount -t tmpfs -o ro,size=4k e2e3-blind %s; " % shlex.quote(str(o.dir)) for o in self.nodes.values() if o is not n)
+        script = blind + ("" if fd == 3 else "exec 3<&%d %d<&-; " % (fd, fd)) + 'LISTEN_PID=$$ exec "$@"'
         result = {"rc": None, "peer": None, "marker": False, "stderr": ""}
+        mnt, mounted = n.dir / "mnt", False
         try:
-            # LISTEN_PID is the client's own: the shell's, which execs ip, which execs the client in the namespace
             env = dict(os.environ, LISTEN_FDS="1", CREDENTIALS_DIRECTORY=str(creds))
-            argv = ["sh", "-c", 'LISTEN_PID=$$ exec "$@"', "sh", "ip", "netns", "exec", n.ns, self.client, "-once", "-config", str(config),
+            argv = ["unshare", "--mount", "--propagation", "private", "sh", "-c", script, "sh",
+                    "ip", "netns", "exec", n.ns, self.client, "-once", "-config", str(config),
                     "-tpm", "unix:" + str(n.tpm_sock), "-session-dir", str(n.run), "-wait", "1s", "-rounds", str(rounds)]
             try:
-                done = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
-                                      preexec_fn=activated, close_fds=False)
+                done = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, pass_fds=(fd,))
                 result["rc"], result["stderr"] = done.returncode, done.stderr[-1500:]
             except subprocess.TimeoutExpired as late:            # still asking when the time ran out: no key
                 result["rc"], result["stderr"] = "timeout", (late.stderr or b"")[-1500:].decode(errors="replace")
@@ -486,12 +514,14 @@ class Cluster:
                 found = re.search(rb"Key slot (\d+) unlocked", opened.stdout)
                 if opened.returncode == 0 and found:
                     result["peer"] = self.keyslot_peer(name, int(found.group(1)))
-                    mnt = n.dir / "mnt"
                     sh("mount", "-o", "ro", "/dev/mapper/" + mapped, str(mnt))
+                    mounted = True
                     result["marker"] = (mnt / "marker").read_bytes() == MARKER
-                    sh("umount", str(mnt))
-                    sh("cryptsetup", "close", mapped)
         finally:
+            if mounted:
+                sh("umount", str(mnt), check=False)
+            if os.path.exists("/dev/mapper/" + mapped):
+                sh("cryptsetup", "close", mapped, check=False)
             asker.close()
             listener.close()
             shutil.rmtree(creds, True)
@@ -508,26 +538,52 @@ class Cluster:
             return None
         return document if document.get("serve_until_boottime_ms", 0) > admission.boottime_ms() else None
 
-    def advance(self, signer="root", **states):
-        """A new epoch with nodes' states changed ({node: state}), signed by the root or the revocation key, committed
-        into every node's store whose services are stopped, and given to the running ones by their peers' sync.
-        Returns the new manifest."""
+    def lease_issuer(self, name):
+        """The peer that issued the lease the node's admission holds (its lease.json), or None."""
+        try:
+            return json.loads((self.nodes[name].admission / "lease.json").read_text())["envelope"]["lease"]["issuer"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def wg_peers(self, name, interface):
+        """The public keys `interface` in the node's namespace has as peers."""
+        return set(self.nodes[name].in_ns("wg", "show", interface, "peers", check=False).stdout.split())
+
+    BEAT = ("import json, sys\nfrom deploy.baremetal import node\nd = json.load(sys.stdin)\n"
+            "node.Node(node.load(d['cfg'])).freshness().accept(d['beat'], d['manifest'])\n")
+
+    def advance(self, seed, signer="root", **states):
+        """A new epoch with nodes' states changed ({node: state}), signed by the root or the revocation key. The
+        authority's publication, stood in for: `seed`, a running node, has its services stopped (a crash: the same
+        boot), takes the epoch into its store with its heartbeat, and starts again. Nodes whose services are
+        stopped take it into their stores as they are (they would pull it when they come back). The other running
+        nodes are left to pull it from the seed with their real sync (their trails say from whom); each then gets
+        the epoch's heartbeat, written under its sync unit's identity. Returns (the new manifest, when the seed
+        started again)."""
         current = self.manifest
         nodes = [dict(n, state=states.get(n["node_id"], n["state"])) for n in current["nodes"]]
         manifest = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
                         issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
         envelope = self.signed(manifest, signer=signer)
+        running = [name for name in self.nodes if name != seed and self.running(name)]
+        services = self.services[seed]
+        self.stop(seed, power=None)
         for name in self.nodes:
-            store = self.node(name).store()
-            if store.load()["epoch"] < manifest["epoch"]:           # a running sync may have taken it from a peer already
-                store.commit(envelope)
+            if name in running:
+                continue
+            self.node(name).store().commit(envelope)
+            self.beat(name, manifest["epoch"] + 1, manifest)
             sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[name].state))
         self.chain.append(envelope)
         self.manifest = manifest
-        for name in self.nodes:
-            self.beat(name, manifest["epoch"] + 1, manifest)
-            sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[name].state))
-        return manifest
+        since = time.time()
+        self.start(seed, services)
+        for name in running:
+            if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
+                raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], seed))
+            self._as_sync(name, self.BEAT, {"cfg": str(self.nodes[name].cfg_path), "manifest": manifest,
+                                            "beat": hbt.beat(manifest, manifest["epoch"] + 1, issued=int(time.time()))})
+        return manifest, since
 
     def journal(self, name, service, lines=40):
         return sh("journalctl", "-u", self.unit(name, service), "-n", str(lines), "--no-pager", "-o", "cat", check=False).stdout

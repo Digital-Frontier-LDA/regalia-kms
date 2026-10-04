@@ -18,8 +18,15 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
   3  PoC 10.2-10.4: for each survivor, the two others power-cycled and both unlocked through the survivor
      before either starts (the survivor the only source); both then hold leases the survivor issued
   4  PoC 10.5: two returners ask one survivor at the same time: both get their key from it
-  5  N: a QUARANTINED (by the revocation key), then RETIRED (by the root), then b REVOKED_STOLEN: each,
-     power-cycled, gets no key from any peer and no lease
+  5  PoC 10.5, the session binding: b crashed (the same TPM boot) presents a second session and a gives it
+     nothing, while c, in a new boot, unlocks through a at the same time; b power-cycled then unlocks through a
+  6  N: a QUARANTINED (by the revocation key), then RETIRED (by the root), then b REVOKED_STOLEN. In each, a
+     control first (a node that may still ask opens its volume: the setup works), then the epoch given to one
+     survivor and taken by the others with their sync; the survivors' wg-unlock drops the node; it gets no key,
+     and no lease, with the reason (a survivor's DENY naming its state, or it is off wg-svc)
+
+L always: a live lease in the node's admission, whose holder names the peer as issuer, and that peer's trail
+saying it issued one.
 """
 import itertools
 import os
@@ -59,6 +66,22 @@ def leased_by(cluster, peer, subject, since):
                for e in cluster.trail(peer))
 
 
+def leased(cluster, name, peer, since):
+    """L: the node's admission holds a live lease, the one it holds names `peer` as its issuer, and `peer`'s trail
+    says it issued it one since `since`."""
+    return bool(cluster.lease(name)) and cluster.lease_issuer(name) == peer and leased_by(cluster, peer, name, since)
+
+
+def unlocked(got, peer):
+    """U: the client gave a key, it opened the keyslot of `peer`'s path, and the filesystem reads back."""
+    return got.get("rc") == 0 and got.get("peer") == peer and bool(got.get("marker"))
+
+
+def may(manifest, name, action):
+    return action in {"ACTIVE": ("serve", "request", "authorize"), "MAINTENANCE": ("request",), "DRAINING": ("serve",)}.get(
+        next(m for m in manifest["nodes"] if m["node_id"] == name)["state"], ())
+
+
 def scenario(cluster):
     names = list(cluster.nodes)
 
@@ -81,11 +104,10 @@ def scenario(cluster):
         cluster.stop(third)
         since = time.time()
         got = cluster.unlock(target)
-        ok(got["rc"] == 0 and got["peer"] == peer and got["marker"],
-           "U: %s, with only %s up, opened its volume through %s's keyslot and read it back" % (target, peer, peer), got)
+        ok(unlocked(got, peer), "U: %s, with only %s up, opened its volume through %s's keyslot and read it back" % (target, peer, peer), got)
         cluster.start(target, SERVICES)
-        leased = until(lambda: cluster.lease(target) and leased_by(cluster, peer, target, since), 120, 2)
-        ok(bool(leased), "L: %s holds a lease %s issued" % (target, peer), cluster.journal(target, "admission")[-600:])
+        ok(until(lambda: leased(cluster, target, peer, since), 120, 2) is True, "L: %s holds a lease %s issued" % (target, peer),
+           cluster.journal(target, "admission")[-600:])
         cluster.start(third, SERVICES)
         until(lambda: cluster.lease(third), 120, 2)
 
@@ -97,13 +119,12 @@ def scenario(cluster):
         since = time.time()
         for name in down:                              # both unlocked before either starts: the survivor is the only source
             got = cluster.unlock(name)
-            ok(got["rc"] == 0 and got["peer"] == survivor and got["marker"],
-               "U: %s, with only %s up, opened its volume through %s's keyslot" % (name, survivor, survivor), got)
+            ok(unlocked(got, survivor), "U: %s, with only %s up, opened its volume through %s's keyslot" % (name, survivor, survivor), got)
         for name in down:
             cluster.start(name, SERVICES)
         for name in down:
-            leased = until(lambda: cluster.lease(name) and leased_by(cluster, survivor, name, since), 120, 2)
-            ok(bool(leased), "L: %s holds a lease %s issued" % (name, survivor), cluster.journal(name, "admission")[-600:])
+            ok(until(lambda: leased(cluster, name, survivor, since), 120, 2) is True, "L: %s holds a lease %s issued" % (name, survivor),
+               cluster.journal(name, "admission")[-600:])
 
     header("4  PoC 10.5: two recovery requests to one survivor at once")
     survivor, down = names[0], names[1:]
@@ -116,30 +137,88 @@ def scenario(cluster):
     for worker in workers:
         worker.join()
     for name in down:
-        got = results.get(name, {"rc": None, "peer": None, "marker": False})
-        ok(got["rc"] == 0 and got["peer"] == survivor and got["marker"],
-           "U: %s, asking %s at the same time as %s, opened its volume through %s's keyslot"
-           % (name, survivor, next(o for o in down if o != name), survivor), got)
+        ok(unlocked(results.get(name, {}), survivor), "U: %s, asking %s at the same time as %s, opened its volume through %s's keyslot"
+           % (name, survivor, next(o for o in down if o != name), survivor), results.get(name))
     for name in down:
         cluster.start(name, SERVICES)
     for name in down:
         until(lambda: cluster.lease(name), 120, 2)
 
-    header("5  N: a quarantined, then retired; b reported stolen: no key, no lease")
+    header("5  PoC 10.5: one boot, one session: a second session in the same boot is refused, and only it")
+    # b crashes (its services stop, its TPM does not: the same boot) and a new client of b's presents a new session;
+    # c, power-cycled (a new boot), asks the same survivor at the same time
+    survivor, crashed, rebooted = "a", "b", "c"
+    cluster.stop(rebooted)
+    cluster.stop(crashed, power=None)
+    before = cluster.reset_count(crashed)
+    (cluster.nodes[crashed].run / "boot-session").unlink()   # what the client before it left: gone, so it asks again
+    results = {}
+    workers = [threading.Thread(target=lambda name=name, rounds=rounds: results.__setitem__(name, cluster.unlock(name, timeout=150, rounds=rounds)))
+               for name, rounds in ((rebooted, 5), (crashed, 2))]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    ok(unlocked(results.get(rebooted, {}), survivor),
+       "U: %s, in a new boot, opened its volume through %s's keyslot while %s asked too" % (rebooted, survivor, crashed), results.get(rebooted))
+    got = results.get(crashed, {})
+    ok(got.get("rc") != 0 and got.get("peer") is None and cluster.reset_count(crashed) == before,
+       "N: %s, in the same TPM boot (resetCount %d) with a second session, gets no key from %s" % (crashed, before, survivor), got)
+    cluster.stop(crashed)                                       # the power cycle: a new boot
+    ok(cluster.reset_count(crashed) == before + 1, "%s power-cycled: resetCount %d -> %d" % (crashed, before, cluster.reset_count(crashed)))
+    since = time.time()
+    got = cluster.unlock(crashed)
+    ok(unlocked(got, survivor), "U: %s, in its new boot, opened its volume through %s's keyslot" % (crashed, survivor), got)
+    for name in (crashed, rebooted):
+        cluster.start(name, SERVICES)
+    ok(until(lambda: leased(cluster, crashed, survivor, since), 120, 2) is True, "L: %s holds a lease %s issued" % (crashed, survivor),
+       cluster.journal(crashed, "admission")[-600:])
+    until(lambda: cluster.lease(rebooted), 120, 2)
+
+    header("6  N: a quarantined, then retired; b reported stolen: no key, no lease, and why")
     for victim, signer, state in (("a", "revocation", "QUARANTINED"), ("a", "root", "RETIRED"), ("b", "revocation", "REVOKED_STOLEN")):
-        manifest = cluster.advance(signer=signer, **{victim: state})
-        survivors = [n for n in names if n != victim and next(m for m in manifest["nodes"] if m["node_id"] == n)["state"] == "ACTIVE"]
-        for name in survivors:                                   # the survivors run under the new epoch
-            until(lambda: cluster.node(name).manifest()["epoch"] == manifest["epoch"], 60, 2)
-        cluster.stop(victim)
+        before = cluster.manifest
+        survivors = [n for n in names if n != victim and may(before, n, "authorize")]
+        # the control: the setup works at this moment (tunnels, endpoints, the survivors' services); only the epoch changes
+        subject = victim if may(before, victim, "request") else survivors[-1]
+        cluster.stop(subject)
+        got = cluster.unlock(subject)
+        ok(got.get("rc") == 0 and got.get("peer") in survivors and got.get("marker"),
+           "control: %s, at epoch %d, still opens its volume through %s's keyslot" % (subject, before["epoch"], got.get("peer")), got)
+        cluster.start(subject, SERVICES)
+        until(lambda: cluster.lease(subject), 120, 2)
+
+        cluster.stop(victim)                            # down when it is revoked: it takes the epoch as a stopped node
+        seed = survivors[0]
+        manifest, since = cluster.advance(seed, signer=signer, **{victim: state})
+        pulled = [s for s in survivors if s != seed]
+        ok(all(cluster.node(s).store().load()["epoch"] == manifest["epoch"] for s in survivors)
+           and all(any(e.get("event") == "sync-apply" and e.get("peer") == seed and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
+                       for e in cluster.trail(s)) for s in pulled),
+           "epoch %d (%s %s, by the %s key) given to %s; %s took it from %s by sync"
+           % (manifest["epoch"], victim, state, signer, seed, ", ".join(pulled) or "nobody else", seed))
+        boot_key, svc_key = cluster.keys[victim]["boot"][1], cluster.keys[victim]["service"][1]
+        cut = until(lambda: all(boot_key not in cluster.wg_peers(s, "wg-unlock") for s in survivors), 60, 2)
+        ok(cut is True, "why no key: %s's wg-apply (run again by the new chain) dropped %s from wg-unlock" % (", ".join(survivors), victim),
+           {s: sorted(cluster.wg_peers(s, "wg-unlock")) for s in survivors})
         got = cluster.unlock(victim, timeout=120, rounds=2)
         ok(got["rc"] != 0 and got["peer"] is None, "N: %s, %s at epoch %d, gets no key from %s"
            % (victim, state, manifest["epoch"], ", ".join(survivors)), got)
         since = time.time()
-        cluster.start(victim, ("sync", "wg-apply", "admission"))
-        time.sleep(30)
-        ok(not cluster.lease(victim) and not any(leased_by(cluster, s, victim, since) for s in survivors),
-           "N: and no lease (none issued to it by %s)" % ", ".join(survivors), cluster.journal(victim, "admission")[-400:])
+        cluster.start(victim, SERVICES)
+        refused = "may not serve under epoch %d" % manifest["epoch"]
+
+        def why():
+            denied = [s for s in survivors if any(e.get("event") == "sync-lease" and e.get("subject") == victim and e.get("outcome") == "DENY"
+                                                  and refused in e.get("reason", "") and e.get("at", 0) >= since for e in cluster.trail(s))]
+            if denied:
+                return "%s refused its lease request: %s" % (", ".join(denied), refused)
+            if state in ("RETIRED", "REVOKED_STOLEN") and all(svc_key not in cluster.wg_peers(s, "wg-svc") for s in survivors):
+                return "%s dropped it from wg-svc: it cannot ask" % ", ".join(survivors)
+            return None
+        reason = until(why, 90, 3)
+        ok(bool(reason) and not cluster.lease(victim) and not any(leased_by(cluster, s, victim, since) for s in survivors),
+           "N: and no lease, because %s" % reason, cluster.journal(victim, "admission")[-400:])
 
 
 def main():
