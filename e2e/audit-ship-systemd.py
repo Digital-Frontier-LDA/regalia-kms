@@ -178,8 +178,9 @@ def scenario(work, binaries):
     ok(until(lambda: stream_lines(state) == 5, 75), "the stream holds 5 lines after the next pass", stream_lines(state))
     ok(until(lambda: metrics_say('regalia_audit_trail_committed{trail="sync"} 5', 'regalia_audit_trail_tampered{trail="sync"} 0'), 30),
        "the metrics say 5 committed, not tampered", METRICS.read_text() if METRICS.exists() else "")
-    # The directory is the control (regalia-kms-48): 2750, group regalia-metrics, so nobody outside the group can
-    # reach the file, which the shipper writes 0644 (replaceFile) and which takes the group from the setgid bit.
+    # The directory is the control: 2750, group regalia-metrics, so nobody outside the group can reach the file,
+    # which cmd/regalia-audit-ship/main.go's replaceFile makes 0644 (its Chmod) and which takes the group from the
+    # setgid bit.
     info, held = (METRICS.stat(), METRICS.parent.stat()) if METRICS.exists() else (None, None)
     ok(info is not None and stat.S_IMODE(held.st_mode) == 0o2750 and grp.getgrgid(held.st_gid).gr_name == "regalia-metrics"
        and grp.getgrgid(info.st_gid).gr_name == "regalia-metrics",

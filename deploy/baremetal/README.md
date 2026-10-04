@@ -891,7 +891,8 @@ the reason itself goes to the time trail.
 - **Who can read the files.** Each directory is its writer's, group `regalia-metrics`, setgid, 2750
   (`regalia.tmpfiles.conf`, and `regalia-audit-ship.tmpfiles.conf` on the authority host too). The directory is
   the control: nobody outside the group can reach a file in it. The Python writers make files 0640; the Go
-  shipper makes them 0644.
+  shipper makes them 0644. A host upgraded from before #305 keeps a stale
+  `/var/lib/regalia-audit-ship/<trail>.prom` that nothing reads any more: remove it by its exact name.
   node_exporter's user `prometheus` is the group's only other member (the sysusers files), so it reads them all
   and writes none, and no writer can replace another's file.
 - **When a directory is missing.** A unit's metrics directory is `-`-prefixed in its sandbox. A missing one
