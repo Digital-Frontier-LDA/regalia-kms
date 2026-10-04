@@ -1299,7 +1299,9 @@ def write_record(journal, directory, node, manifest, peers, run=subprocess.run, 
         full = membership.load(f.read(membership.MAX_BYTES + 1))
     hw = node.anchor()
     from deploy.baremetal import heartbeat
-    counter = heartbeat.Counter(node.cfg["nv_heartbeat"], node.tcti, run, lock_path=node.path("heartbeat-counter.lock"))
+    from deploy.baremetal.node import image_policy
+    counter = heartbeat.Counter(node.cfg["nv_heartbeat"], node.tcti, run, lock_path=node.path("heartbeat-counter.lock"),
+                                policy=lambda: image_policy(node.cfg))      # read with the node's policy (#242)
     paths = []
     for peer in peers:
         fact = journal.get("path:" + peer)

@@ -511,7 +511,7 @@ class Command(Case):
         self.said = io.StringIO()
         with contextlib.redirect_stderr(self.said), contextlib.redirect_stdout(self.said):
             rc = reanchor.main(argv + list(extra), ask=answer if ask == "given" else None, tty=tty,
-                               highwater=lambda index, tcti: m.HighWater(index, lock_path=self.d + "/hw.lock", run=self.run_tpm))
+                               highwater=lambda index, tcti, policy=None: m.HighWater(index, lock_path=self.d + "/hw.lock", run=self.run_tpm, policy=policy))
         return rc, asked
 
     def audit(self, log="audit.jsonl"):
@@ -705,7 +705,7 @@ class OnSwtpm(_Swtpm):
         argv = ["--membership", path, "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "b", "--authority", self.d + "/authority.json",
                 "--peer", "c=%s/c.json" % self.d, "--audit-log", self.d + "/audit.jsonl", "--tcti", self.tcti]
         os.environ.pop("TPM2TOOLS_TCTI", None)
-        make = lambda index, tcti: m.HighWater(index, tcti=tcti, lock_path=self.d + "/hw.lock")
+        make = lambda index, tcti, policy=None: m.HighWater(index, tcti=tcti, lock_path=self.d + "/hw.lock", policy=policy)
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(reanchor.main(argv, ask=lambda prompt: "no", highwater=make), 1)
             self.assertEqual(self.hw.slots(), [None, None])                          # refused: the TPM as it was

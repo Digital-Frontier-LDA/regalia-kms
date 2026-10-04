@@ -275,3 +275,5 @@ func TestAnUnreadableKeyIDRefusesRatherThanGuessing(t *testing.T) {
 			"one that exposes none")
 	}
 }
+
+func (m *pairedCardModule) GetSlotInfo(uint) (pkcs11.SlotInfo, error) { return pkcs11.SlotInfo{}, nil }

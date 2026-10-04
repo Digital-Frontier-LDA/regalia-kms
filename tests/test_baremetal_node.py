@@ -44,9 +44,9 @@ class Case(unittest.TestCase):
         with open(os.path.join(self.d, "etc", "wg-service.key"), "w") as f:
             f.write(PRIVATE + "\n")
         self.cfg = {"schema": node.SCHEMA, "node_id": "a", "site": self.d + "/etc/site.json", "root_key": ROOT, "tcti": None,
-                    "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
+                    "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "nv_signing": "0x0150001c", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
                     "wg_service_key": self.d + "/etc/wg-service.key", "measurements": self.d + "/etc/measurements.json",
-                    "pcrs": [7, 11], "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60}
+                    "pcrs": [7, 11], "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
         self.tpm = hbt.FakeTpm()
         self.m1 = hbt.manifest()
         self.e1 = rt.sign(self.m1)
@@ -119,8 +119,31 @@ class Indices(unittest.TestCase):
                     node.validate(dict(base, nv_heartbeat="0x%08x" % beat))
                 self.assertIn("must not overlap", str(caught.exception))
         node.validate(dict(base, nv_heartbeat="0x%08x" % (epoch + 2)))          # C+2, C+3: free between base and record
-        node.validate(dict(base, nv_heartbeat="0x%08x" % (epoch + 6)))
+        node.validate(dict(base, nv_heartbeat="0x%08x" % (epoch + 6), nv_signing="0x%08x" % (epoch + 2)))
         node.validate(base)
+
+    def test_the_beat_interval_is_bounded(self):
+        base = json.loads(open(os.path.join(os.path.dirname(node.__file__), "node.example.json")).read())
+        self.assertEqual(base["beat_interval_s"], 900)
+        # below MIN_INTERVAL_S (600) a node off for about a day would refuse every later heartbeat (1e's read): refused
+        for bad in (60, 599, 3601, True, "900", None):
+            with self.subTest(bad=bad), self.assertRaises(m.Refused) as caught:
+                node.validate(dict(base, beat_interval_s=bad))
+            self.assertIn("beat_interval_s must be 600 to 3600 seconds", str(caught.exception))
+        node.validate(dict(base, beat_interval_s=600))
+
+    def test_the_signing_counter_overlaps_neither(self):
+        """#199: the signing counter (S, S+1) is a third set, disjoint from the anchor's and the heartbeat counter's."""
+        base = json.loads(open(os.path.join(os.path.dirname(node.__file__), "node.example.json")).read())
+        epoch, beat = int(base["nv_epoch"], 16), int(base["nv_heartbeat"], 16)
+        for label, signing, which in (("S = H", beat, "nv_heartbeat and nv_signing"), ("S = H+1, its base", beat + 1, "nv_ and nv_signing"),
+                                      ("S = C+4, a record slot", epoch + 4, "nv_epoch and nv_signing"), ("S = C", epoch, "nv_epoch and nv_signing")):
+            with self.subTest(label):
+                with self.assertRaises(m.Refused) as caught:
+                    node.validate(dict(base, nv_signing="0x%08x" % signing))
+                self.assertIn("nv_signing must not overlap", str(caught.exception))
+                self.assertIn(which.split(" and ")[0], str(caught.exception))
+        self.assertEqual(int(base["nv_signing"], 16), epoch + 6)
 
 
 class Publishing(Case):

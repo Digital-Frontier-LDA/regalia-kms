@@ -49,6 +49,11 @@ func (driver *fakeDriver) Open(context.Context, registry.Binding) (Session, erro
 func (driver *fakeDriver) Ready(context.Context) bool { return true }
 
 type fakeSession struct {
+	// reader, removable and readerErr are what Reader answers (regalia-kms#72, G2): by default a slot that
+	// cannot be removed, which the reader watcher does not apply to.
+	reader                 string
+	removable              bool
+	readerErr              error
 	serial, devaut         string
 	secure, logged, closed bool
 	pin                    []byte
@@ -498,4 +503,8 @@ func TestExecuteRefusesWhenSignReturnsError(t *testing.T) {
 	if len(out) != 0 {
 		t.Fatalf("sign error did not zero output: out=%v", out)
 	}
+}
+
+func (session *fakeSession) Reader(context.Context) (string, bool, error) {
+	return session.reader, session.removable, session.readerErr
 }

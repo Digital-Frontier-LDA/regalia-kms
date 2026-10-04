@@ -119,7 +119,9 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     # ---- build ---------------------------------------------------------------------------------------
     env = dict(os.environ, GOFLAGS=os.environ.get("GOFLAGS", ""))
     for name in ("regalia-kms", "regalia-audit-collector"):
-        run(["go", "-C", ROOT, "build", "-o", w / name, "./cmd/" + name], env=env)
+        # the production build: with admission required, a daemon without PC/SC refuses to start (#72, G2)
+        tags = ["-tags", "piv"] if name == "regalia-kms" else []
+        run(["go", "-C", ROOT, "build", *tags, "-o", w / name, "./cmd/" + name], env=env)
 
     # ---- the token: SoftHSM, in the temporary state directory ------------------------------------------
     softhsm = dict(os.environ, SOFTHSM2_CONF=str(etc / "softhsm2.conf"))
@@ -283,6 +285,7 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     ok("NOT admitted" in log() and "the admission file" in log(), "the daemon's log says why: there is no admission file")
 
     # ---- the lease side: node a and peer b on software TPMs (the fixture of tests/test_baremetal_lease.py) -------
+    fixture.hsm_serials = {"a": [serial]}   # the daemon serves only from a token the manifest lists for this node (#72 G1)
     fixture.setUp()
     world = {"manifest": fixture.m1, "peer_up": True}
     holder = lease.Holder("a", lt.SESSION, fixture.clock, hbt.simulated_ticks(fixture, fixture.tcti["a"]), str(w / "holder.json"))

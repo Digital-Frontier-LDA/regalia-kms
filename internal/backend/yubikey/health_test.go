@@ -168,3 +168,5 @@ func TestReadyRequiresADriverAPINSourceAndAReadyDriver(t *testing.T) {
 		t.Error("a fully configured provider with a ready driver reported not ready")
 	}
 }
+
+func (s *healthSession) Reader() string { return testReader }
