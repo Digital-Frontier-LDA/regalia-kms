@@ -15,7 +15,10 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
      by the peers' real stores, the local half sealed to the node's TPM); every node starts and is leased
   2  PoC 10.1, all six directed relationships: X and the third node power-cycled, X restored by P alone
      (U through P's keyslot; L from P); the third node back
-  3  N: a QUARANTINED (by the revocation key), then RETIRED (by the root), then b REVOKED_STOLEN: each,
+  3  PoC 10.2-10.4: for each survivor, the two others power-cycled and both unlocked through the survivor
+     before either starts (the survivor the only source); both then hold leases the survivor issued
+  4  PoC 10.5: two returners ask one survivor at the same time: both get their key from it
+  5  N: a QUARANTINED (by the revocation key), then RETIRED (by the root), then b REVOKED_STOLEN: each,
      power-cycled, gets no key from any peer and no lease
 """
 import itertools
@@ -23,6 +26,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
@@ -85,7 +89,43 @@ def scenario(cluster):
         cluster.start(third, SERVICES)
         until(lambda: cluster.lease(third), 120, 2)
 
-    header("3  N: a quarantined, then retired; b reported stolen: no key, no lease")
+    header("3  PoC 10.2-10.4: two nodes down, the survivor restores both")
+    for survivor in names:
+        down = [n for n in names if n != survivor]
+        for name in down:
+            cluster.stop(name)
+        since = time.time()
+        for name in down:                              # both unlocked before either starts: the survivor is the only source
+            got = cluster.unlock(name)
+            ok(got["rc"] == 0 and got["peer"] == survivor and got["marker"],
+               "U: %s, with only %s up, opened its volume through %s's keyslot" % (name, survivor, survivor), got)
+        for name in down:
+            cluster.start(name, SERVICES)
+        for name in down:
+            leased = until(lambda: cluster.lease(name) and leased_by(cluster, survivor, name, since), 120, 2)
+            ok(bool(leased), "L: %s holds a lease %s issued" % (name, survivor), cluster.journal(name, "admission")[-600:])
+
+    header("4  PoC 10.5: two recovery requests to one survivor at once")
+    survivor, down = names[0], names[1:]
+    for name in down:
+        cluster.stop(name)
+    results = {}
+    workers = [threading.Thread(target=lambda name=name: results.__setitem__(name, cluster.unlock(name))) for name in down]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    for name in down:
+        got = results.get(name, {"rc": None, "peer": None, "marker": False})
+        ok(got["rc"] == 0 and got["peer"] == survivor and got["marker"],
+           "U: %s, asking %s at the same time as %s, opened its volume through %s's keyslot"
+           % (name, survivor, next(o for o in down if o != name), survivor), got)
+    for name in down:
+        cluster.start(name, SERVICES)
+    for name in down:
+        until(lambda: cluster.lease(name), 120, 2)
+
+    header("5  N: a quarantined, then retired; b reported stolen: no key, no lease")
     for victim, signer, state in (("a", "revocation", "QUARANTINED"), ("a", "root", "RETIRED"), ("b", "revocation", "REVOKED_STOLEN")):
         manifest = cluster.advance(signer=signer, **{victim: state})
         survivors = [n for n in names if n != victim and next(m for m in manifest["nodes"] if m["node_id"] == n)["state"] == "ACTIVE"]

@@ -337,12 +337,17 @@ class Cluster:
         for service in services:
             if service == "wg-apply" and not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
                 raise RuntimeError("%s's sync published no chain" % name)
-            argv = ["systemd-run", "--unit", self.unit(name, service), "--collect"]
-            for prop in self.properties(name, service):
-                argv += ["-p", prop]
-            if service == "wg-apply":
-                argv += ["--wait", "-p", "Type=oneshot"]
-            sh(*(argv + ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.node", "--config", str(n.cfg_path), service]))
+            if service == "admission":                # regalia-boot-session.service, Before= it: a session when the unlock client left none
+                self._run(n, "boot-session", oneshot=True)
+            self._run(n, service, oneshot=(service == "wg-apply"))
+
+    def _run(self, n, service, oneshot=False):
+        argv = ["systemd-run", "--unit", self.unit(n.name, service), "--collect"]
+        for prop in self.properties(n.name, service):
+            argv += ["-p", prop]
+        if oneshot:
+            argv += ["--wait", "-p", "Type=oneshot"]
+        sh(*(argv + ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.node", "--config", str(n.cfg_path), service]))
 
     def stop(self, name, power="cycle"):
         """The node's services stopped. power="cycle" (an orderly power-off and on) or "cut" (power lost): its /run
