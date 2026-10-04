@@ -220,7 +220,8 @@ class OnQemu(tub.OnSwtpm):
              watch=None):
         """One boot of the guest under OVMF, to power-off, with `credentials` and `image` on its ESP. Returns what its
         console said. With `recovery`, the recovery key is typed whenever the console asks for a passphrase; when it is
-        a function of (console so far, seconds since start), only once that says so. `watch`, a function of the same, is
+        a function of (console so far, seconds since start), only once that says so (and what it returns, when that is
+        bytes, is typed instead). `watch`, a function of the same, is
         called as the console grows (to change the network under the guest), and the times it returned true are kept in
         self.watched."""
         self.on_esp = self.esp(credentials or {}, image)
@@ -277,10 +278,11 @@ class OnQemu(tub.OnSwtpm):
                     elapsed = time.monotonic() - started
                     if watch and watch(said, elapsed):
                         self.watched.append(elapsed)
-                    if recovery and prompts > answered and (recovery is True or recovery(said, elapsed)):
+                    typed = recovery and prompts > answered and (recovery is True or recovery(said, elapsed))
+                    if typed:
                         answered = prompts
                         time.sleep(1)
-                        qemu.stdin.write(tub.RECOVERY + b"\n")
+                        qemu.stdin.write((typed if isinstance(typed, bytes) else tub.RECOVERY) + b"\n")
                         qemu.stdin.flush()
                 elif qemu.poll() is not None:
                     break
@@ -539,20 +541,42 @@ class OnQemu(tub.OnSwtpm):
             print("boot 7: the stub ignored the SMBIOS command line; the unlock went on (%s)" % ("allowed" if allowed else "refused"),
                   file=sys.stderr)
 
-        # boot 8, NO PEER, FOR LONGER THAN ANY DEFAULT TIMEOUT (#70): the client keeps asking, past the backoff's cap
-        # (attempt 6), and the console, which asked from the start, still takes the recovery key after 150 s: neither
-        # systemd-cryptsetup (timeout=0) nor the root's device wait (rootflags=x-systemd.device-timeout=0; 90 s by
-        # default) gave up meanwhile, and nothing ended in a shell
+        # boot 8, NO PEER, FOR LONGER THAN ANY DEFAULT TIMEOUT (#70): the client keeps asking, at the backoff's schedule
+        # and past its cap (attempt 6), and the console, which asked from the start, still takes the recovery key after
+        # 150 s: neither systemd-cryptsetup (timeout=0) nor the root's device wait (rootflags=x-systemd.device-timeout=0;
+        # 90 s by default) gave up meanwhile. A WRONG key typed first only brings the prompt back (tries=0): no
+        # emergency, no reboot. Nothing ends in a shell. Under TCG the long boots 8 and 9 would outlast the job: KVM only.
+        kvm = os.access("/dev/kvm", os.R_OK | os.W_OK)
+        if not kvm:
+            print("boots 8 and 9 skipped: they wait 150 s each, which needs KVM", file=sys.stderr)
+            return
         for peer in ("b", "c"):
             self.ip("ip", "link", "set", "eth0", "down", ns=self.peer_ns[peer])
         since = len(self.events)
-        kvm = os.access("/dev/kvm", os.R_OK | os.W_OK)
-        waited = lambda said, elapsed: elapsed > 150 and "regalia-unlock: attempt 6: " in said
-        said = self.boot("8-no-peer", credentials, recovery=waited, timeout=1200 if kvm else 3600)
-        self.assertRegex(said, PROMPT.pattern.decode())
+        attempts, mistyped = {}, []           # attempt -> (seconds since start when its line arrived, the pause it announced)
+        def seen(said, elapsed):
+            for m in re.finditer(r"regalia-unlock: attempt (\d+): .*; asking again in (?:(\d+)m)?(\d+)s\b", said):
+                attempts.setdefault(int(m.group(1)), (elapsed, int(m.group(2) or 0) * 60 + int(m.group(3))))
+            return False
+        def wrong_then_right(said, elapsed):
+            if elapsed <= 150 or "regalia-unlock: attempt 6: " not in said:
+                return False
+            if not mistyped:
+                mistyped.append(len(said))
+                return b"not-the-recovery-key"
+            return True
+        said = self.boot("8-no-peer", credentials, recovery=wrong_then_right, watch=seen, timeout=1200)
+        self.assertEqual(len(mistyped), 1, "the wrong key was never typed")
+        self.assertRegex(said[mistyped[0]:], PROMPT.pattern.decode(), "the prompt did not come back after a wrong key")
         self.assertLess(self.prompted_after, 120)
+        print("boot 8: attempts (arrived at, announced pause): %s" % sorted(attempts.items()), file=sys.stderr)
+        self.assertTrue(all(n in attempts for n in range(1, 7)), sorted(attempts))
         for n in range(1, 7):
-            self.assertIn("regalia-unlock: attempt %d: " % n, said)
+            arrived, pause = attempts[n]
+            nominal = min(2 * 2 ** (n - 1), 60)                  # 2 s doubling, capped at 60 s, then x[0.8, 1.2)
+            self.assertTrue(0.8 * nominal - 1 <= pause <= 1.2 * nominal + 1, "attempt %d announced %d s, nominal %d s" % (n, pause, nominal))
+            if n + 1 in attempts:                                # and it did pause that long: no hot loop
+                self.assertGreaterEqual(attempts[n + 1][0] - arrived, pause - 2, "attempt %d came early" % (n + 1))
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
         self.assertRegex(said, r"regalia-unlock: /dev/mapper/root is open: standing down|Stopped regalia-unlock\.service")
         no_shell(self, said)
@@ -567,7 +591,7 @@ class OnQemu(tub.OnSwtpm):
                 self.ip("ip", "link", "set", "eth0", "up", ns=self.peer_ns[peer])
             return True
         since = len(self.events)
-        said = self.boot("9-peers-return", credentials, watch=back, timeout=1200 if kvm else 3600)
+        said = self.boot("9-peers-return", credentials, watch=back, timeout=1200)
         self.assertEqual(len(self.watched), 1, "the peers were never brought back")
         print("boot 9: the peers came back %.0f s after the guest started" % self.watched[0], file=sys.stderr)
         gave = re.search(r"regalia-unlock: gave the key of %s for keyslot [12], through [bc]" % re.escape(device), said)

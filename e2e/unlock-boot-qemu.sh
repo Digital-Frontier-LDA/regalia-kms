@@ -39,8 +39,9 @@
 #           back on, and an extra unit): either the stub ignores it, or PCR 12 moves and the peers refuse;
 #           nothing planted runs.
 #   boot 8  NO PEER, FOR LONGER THAN ANY DEFAULT TIMEOUT (#70). The peers are unreachable; the client keeps
-#           asking past the backoff's cap, and the recovery key typed after 150 s still opens: neither
-#           systemd-cryptsetup nor the root's device wait gave up, and nothing ended in a shell.
+#           asking, at the backoff's schedule and past its cap; after 150 s a wrong key only brings the
+#           prompt back (tries=0), and the recovery key still opens: neither systemd-cryptsetup nor the
+#           root's device wait gave up, and nothing ended in a shell. Boots 8 and 9 need KVM.
 #   boot 9  THE PEERS COME BACK (#70, a blackout). Unreachable for 150 s and past the backoff's cap, then
 #           back: nobody types anything, and the host unlocks by itself.
 #
