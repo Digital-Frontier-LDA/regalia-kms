@@ -29,3 +29,14 @@ regexes = [
     '''^c2VjcmV0LWVudmVsb3BlLWZpeHR1cmU=$''',
     '''^d3JhcHBlZA==$''',
 ]
+
+[[allowlists]]
+description = "Ed25519 PUBLIC keys of regalia-ceremony's fixed test seeds in tests/vectors/card-ceremony-record/ (copied from regalia-ceremony#121, qubes/emulator/tests/vectors/card-ceremony-record/make.py: bytes([n]) * 32 for n = 1, 2, 11, 12, 13), pinned by value"
+regexTarget = "secret"
+regexes = [
+    '''^8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c$''',
+    '''^8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394$''',
+    '''^0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d$''',
+    '''^66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a$''',
+    '''^91a28a0b74381593a4d9469579208926afc8ad82c8839b7644359b9eba9a4b3a$''',
+]

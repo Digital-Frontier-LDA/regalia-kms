@@ -7,6 +7,7 @@ import json
 import os
 
 from deploy.baremetal import enrol, measurements
+from deploy.baremetal import heartbeat as hb
 from deploy.baremetal import membership as m
 import tests.test_baremetal_heartbeat as hbt
 import tests.test_baremetal_node as nt
@@ -96,7 +97,9 @@ class Anchor(nt.Case):
 
     def test_a_heartbeat_counter_already_moved_is_refused(self):
         node = self.node()
-        counter = node.freshness().counter
+        held = node.freshness().counter
+        # someone else's counter at the node's index: laid down as any tool would, not by the node's definer
+        counter = hb.Counter(held.index, node.tcti, node.run, lock_path=held.lock_path)
         counter.define()
         counter.advance(5)
         with self.assertRaisesRegex(enrol.Refused, "heartbeat counter"):
@@ -115,13 +118,16 @@ if __name__ == "__main__":
 class Documents(Anchor):
     def test_the_anchor_step_needs_the_last_epochs_measurements_and_moves_nothing_without_them(self):
         """#332: the chain's last epoch commits to a document the store does not hold: refused before the store is
-        written or the anchor moves past what it stood at."""
+        written or the anchor is defined (#242: the definer's policy comes from that document, so the refusal comes
+        before the first write)."""
         chain = self.chain(2)
         other = dict(DOC, name="anchor-tests-2")
         last = dict(chain[1]["manifest"], policy_version=measurements.version(other))
         chain = [chain[0], rt.sign(last)]
         with self.assertRaisesRegex(m.Refused, "epoch 2 commits to measurements %s, which this node does not hold" % measurements.version(other)):
             self.anchor(chain)
-        self.assertEqual(self.node().anchor().value(), 1)               # epoch 1 passed through; 2 is not anchored
+        hw = self.node().anchor()                                        # nothing written: no anchor index, no store
+        self.assertEqual([i for i in hw._indices() if hw._tpm("nvreadpublic", i).returncode == 0], [])
+        self.assertFalse(os.path.exists(self.node().path("membership.json")))
         enrol.store_documents(self.cfg["state_dir"], other, chown=False)
         self.assertEqual(self.anchor(chain)[0], 2)
