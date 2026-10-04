@@ -76,7 +76,8 @@ Refused, require = membership.Refused, membership.require
 
 SCHEMA = "regalia.authority/v1"
 KEYS = ("schema", "root_key", "tcti", "nv_epoch", "nv_sequence", "state_dir", "run_dir", "signer", "interval_s", "lifetime_s",
-        "sequence_offset", "sequence_stride", "revoke_requesters", "wg_service_key", "underlays", "listen_port", "sync_port", "control_socket")
+        "sequence_offset", "sequence_stride", "revoke_requesters", "wg_service_key", "underlays", "listen_port", "sync_port", "control_socket",
+        "time_servers")
 SIGNER_KINDS = ("file", "pkcs11")
 REQUESTERS = ("local-root",)
 RESTRICTIVE = ("QUARANTINED", "REVOKED_STOLEN")
@@ -106,6 +107,7 @@ def validate(doc):
     anchor = {int(i, 16) for i in membership.HighWater(doc["nv_epoch"])._indices()}
     sequence = {int(i, 16) for i in heartbeat.Counter(doc["nv_sequence"])._indices()}
     require(not anchor & sequence, "nv_epoch and nv_sequence must not overlap (both take %s)" % ", ".join("0x%x" % i for i in sorted(anchor & sequence)))
+    authtime.servers(doc["time_servers"])          # chrony's NTS sources here, as a node's (units/regalia-authority-authtime.service)
     for k in ("state_dir", "run_dir", "wg_service_key", "control_socket"):
         require(isinstance(doc[k], str) and doc[k].startswith("/"), "%s must be an absolute path" % k)
     signer = doc["signer"]

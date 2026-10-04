@@ -532,9 +532,7 @@ def bind_when_up(where, stop, family=socket.AF_INET, create=socket.create_server
 def authtime_service(cfg):
     """Takes the configuration only: it reads nothing else (not the site configuration, not a key), and
     its unit hides the rest of /etc and all of /var from it."""
-    return authtime.Service(os.path.join(cfg["run_dir"], "authtime.json"), cfg["time_servers"],
-                            record=Trail(trails.where(authtime.TRAIL), authtime.TRAIL),      # each transition, audited (#303)
-                            metrics=lambda samples: metrics.publish("authtime", samples))     # #305
+    return authtime.service(cfg["run_dir"], cfg["time_servers"])     # the one entry point, the authority host's too (#71)
 
 
 # ---- command line ----

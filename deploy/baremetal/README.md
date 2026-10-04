@@ -950,7 +950,15 @@ it (`service_mesh.authority`).
   republishes the same bytes (kept in the state directory), and bytes that expire unpublished are
   dropped with their number. The key
   is checked against the manifest before reserving, and failures back off from 60 s to `interval_s`.
-- **Time:** it signs only while `authtime` says the clock is authenticated.
+- **Time:** it signs only while `authtime` says the clock is authenticated: `<run_dir>/authtime.json`, believed only
+  from a root-owned file in a root-owned directory (`run_dir` is `/run/regalia`, as on a node). On the authority
+  host `units/regalia-authority-authtime.service` publishes it: regalia-authtime's unit in all but its command,
+  `python3 -Es -m deploy.baremetal.authtime serve --config /etc/regalia/authority.json`, which reads that
+  configuration's `run_dir` and `time_servers` alone (the same entry point a node's `node.py authtime` calls).
+  chrony there is NTS-only as on a node: `python3 -Es -m deploy.baremetal.authtime chrony-conf --config
+  /etc/regalia/authority.json` writes what `/etc/chrony/regalia.conf` holds, with `units/chrony.service.d/regalia.conf`;
+  `units/regalia-authority.tmpfiles.conf` and `regalia-authority.sysusers.conf` make its directories and groups.
+  Without authenticated time the authority signs nothing (fail closed; each transition on the time trail, #303).
 - **What root reads:** the store (`membership.json`) is the service user's alone, 0600. `serve` publishes the
   verified chain as `chain.json` (0644) after `init`, `accept` and every revocation's commit, at its start and at
   every beat; `wg-apply` reads that, verifying it from the root key and against the TPM anchor, as a node's

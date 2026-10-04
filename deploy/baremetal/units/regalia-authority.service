@@ -10,8 +10,8 @@
 [Unit]
 Description=Regalia KMS: revocation authority (heartbeats and revocations)
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
-After=regalia-authtime.service
-Wants=regalia-authtime.service
+After=regalia-authority-authtime.service
+Wants=regalia-authority-authtime.service
 
 [Service]
 Type=simple

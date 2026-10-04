@@ -21,7 +21,7 @@ def config(d, **override):
            "state_dir": d, "run_dir": d, "signer": {"kind": "file", "path": d + "/revocation.pem"}, "interval_s": 900, "lifetime_s": None,
            "sequence_offset": 0, "sequence_stride": 1, "revoke_requesters": ["local-root"], "wg_service_key": d + "/wg.key",
            "underlays": {"a": "192.0.2.11", "b": "192.0.2.12", "c": "192.0.2.13"}, "listen_port": 51821, "sync_port": 7444,
-           "control_socket": d + "/control.sock"}
+           "control_socket": d + "/control.sock", "time_servers": ["nts.netnod.se", "time.cloudflare.com"]}
     cfg.update(override)
     return cfg
 

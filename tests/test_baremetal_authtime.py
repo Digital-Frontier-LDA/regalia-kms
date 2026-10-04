@@ -421,3 +421,49 @@ class LeapZone(Publishing):
             self.assertEqual(authtime.leap_zone(), "/opt/zones/right/UTC")
         with unittest.mock.patch.dict(os.environ, {"TZDIR": ""}):
             self.assertEqual(authtime.leap_zone(), "/usr/share/zoneinfo/right/UTC")
+
+
+class EntryPoint(unittest.TestCase):
+    """authtime.py serve/chrony-conf (#71): the one entry point for a node and the authority host, from a
+    configuration's run_dir and time_servers alone."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def config(self, **doc):
+        path = os.path.join(self.d, "config.json")
+        with open(path, "w") as f:
+            json.dump(doc, f)
+        return path
+
+    def test_a_node_s_and_the_authority_s_configuration_alike(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        node_example = os.path.join(root, "deploy", "baremetal", "node.example.json")
+        self.assertEqual(authtime.configured(node_example), ("/run/regalia", ("nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com")))
+        authority = self.config(schema="regalia.authority/v1", run_dir="/run/regalia", time_servers=["nts.netnod.se", "time.cloudflare.com"],
+                                signer={"kind": "file", "path": "/var/lib/regalia-authority/revocation.pem"})
+        self.assertEqual(authtime.configured(authority), ("/run/regalia", ("nts.netnod.se", "time.cloudflare.com")))
+
+    def test_what_it_refuses(self):
+        for doc, reason in (({"time_servers": ["nts.netnod.se", "time.cloudflare.com"]}, "run_dir must be an absolute path"),
+                            ({"run_dir": "run/regalia", "time_servers": ["nts.netnod.se", "time.cloudflare.com"]}, "run_dir must be an absolute path"),
+                            ({"run_dir": "/run/../etc", "time_servers": ["nts.netnod.se", "time.cloudflare.com"]}, "run_dir must be an absolute path"),
+                            ({"run_dir": "/run/regalia"}, "")):
+            with self.subTest(doc), self.assertRaises(m.Refused) as caught:
+                authtime.configured(self.config(**doc))
+            self.assertIn(reason, str(caught.exception))
+        os.symlink(self.config(run_dir="/run/regalia", time_servers=["nts.netnod.se", "time.cloudflare.com"]), os.path.join(self.d, "link.json"))
+        with self.assertRaises(m.Refused):
+            authtime.configured(os.path.join(self.d, "link.json"))         # a link is not followed
+
+    def test_the_service_publishes_where_the_configuration_says(self):
+        service = authtime.service(self.d, ["nts.netnod.se", "time.cloudflare.com"], reading=lambda: None)
+        self.assertEqual((service.path, service.declared), (os.path.join(self.d, "authtime.json"), ("nts.netnod.se", "time.cloudflare.com")))
+
+    def test_chrony_conf_is_the_one_enrolment_installs(self):
+        import io
+        path = self.config(run_dir="/run/regalia", time_servers=["nts.netnod.se", "time.cloudflare.com"])
+        with unittest.mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(authtime.main(["chrony-conf", "--config", path]), 0)
+        self.assertEqual(out.getvalue(), authtime.conf(["nts.netnod.se", "time.cloudflare.com"]))

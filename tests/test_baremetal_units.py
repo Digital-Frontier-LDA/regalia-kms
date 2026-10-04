@@ -171,9 +171,26 @@ class Units(unittest.TestCase):
                          "/var/lib/%s/%s" % (unit("regalia-authority.service")["Service"]["StateDirectory"], node.PUBLISHED))
         self.assertEqual(unit("regalia-authority-wg-apply.path")["Path"]["Unit"], "regalia-authority-wg-apply.service")
 
+    def test_the_authority_host_s_authtime_is_a_node_s_from_its_own_configuration(self):
+        """#71: the authority signs only under authenticated time, so its host runs regalia-authtime's unit in all
+        but its command and configuration file, and makes the same directories (root's /run/regalia)."""
+        node_unit, authority_unit = unit("regalia-authtime.service")["Service"], unit("regalia-authority-authtime.service")["Service"]
+        differ = ("ExecStart", "BindReadOnlyPaths")
+        self.assertEqual({k: v for k, v in authority_unit.items() if k not in differ}, {k: v for k, v in node_unit.items() if k not in differ})
+        self.assertIn("-m deploy.baremetal.authtime serve --config /etc/regalia/authority.json", authority_unit["ExecStart"])
+        self.assertEqual(authority_unit["BindReadOnlyPaths"], node_unit["BindReadOnlyPaths"].replace("/etc/regalia/node.json", "/etc/regalia/authority.json"))
+        self.assertEqual(unit("regalia-authority.service")["Unit"]["Wants"], "regalia-authority-authtime.service")
+        node_dirs = {line for line in (UNITS / "regalia.tmpfiles.conf").read_text().splitlines() if line.startswith("d ")}
+        authority_dirs = {line for line in (UNITS / "regalia-authority.tmpfiles.conf").read_text().splitlines() if line.startswith("d ")}
+        self.assertLessEqual(authority_dirs, node_dirs)
+        self.assertIn("d /run/regalia 0755 root root -", authority_dirs)
+        groups = (UNITS / "regalia-authority.sysusers.conf").read_text()
+        self.assertIn("g regalia-audit-time -", groups)
+        self.assertIn("g regalia-metrics -", groups)
+
     @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
     def test_systemd_accepts_the_units_and_scores_them_well_exposed_at_most_a_little(self):
-        paths = [str(UNITS / (name + ".service")) for name in SERVICES + ("regalia-authority-wg-apply",)] + \
+        paths = [str(UNITS / (name + ".service")) for name in SERVICES + ("regalia-authority-wg-apply", "regalia-authority-authtime")] + \
             [str(UNITS / "regalia-wg-apply.path"), str(UNITS / "regalia-authority-wg-apply.path")]
         done = subprocess.run(["systemd-analyze", "verify", "--man=no", "--recursive-errors=no"] + paths, capture_output=True, text=True)
         problems = [line for line in done.stderr.splitlines() if "chrony.service" not in line and "network-online" not in line and line.strip()]
