@@ -242,8 +242,8 @@ class Cluster:
         others = [o for o in self.nodes.values() if o is not n]
         site = {"schema": "regalia.baremetal-site/v1", "site": "e2e3-" + n.name, "host_ipv4": n.underlay, "kms_port": 8443, "ssh_port": 22,
                 "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["203.0.113.128/32"], "admin_cidrs": ["203.0.113.0/28"],
-                "outbound": [{"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514},
-                             {"name": "ntp", "cidr": "203.0.113.193/32", "proto": "udp", "port": 123}],
+                "outbound": [{"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514}],
+                "time": {"nts": [{"name": "nts-a.lab", "cidrs": ["203.0.113.193/32"]}, {"name": "nts-b.lab", "cidrs": ["203.0.113.195/32"]}]},
                 "boot_mesh": {"node_id": n.name, "interface": "wg-unlock", "listen_port": 51820, "address": n.boot_address, "unlock_port": 7443,
                               "nic_mac": "52:54:00:12:34:%02x" % (0x50 + n.index), "prefix": 24, "gateway": None,
                               "peers": [{"node_id": o.name, "underlay": o.underlay, "address": o.boot_address} for o in others]},

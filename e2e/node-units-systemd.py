@@ -458,6 +458,9 @@ def scenario(work, binaries, user):
     # until an operator clears it, because a fresh chronyd steps during its first updates. Nothing may start
     # it again: not regalia-authtime (After=, never Wants=), not a package upgrade's restart, not a boot.
     trail = pathlib.Path("/var/log/regalia-time/time.jsonl")
+    # SIGKILL stands in for the real trigger, which a host under test cannot be made to see: on maxchange, Debian 13's
+    # chronyd 4.6.1 exits with status 1 after "exceeds the allowed maximum" (measured by regalia-kms-d9 in
+    # authtime-chrony-nts.py's scenario 8), SERVICE_RESULT=exit-code, which latches the same way as this signal
     sh("systemctl", "kill", "-s", "KILL", "chrony.service", check=False)
     latch = pathlib.Path(authtime.LATCH)
     ok(until(lambda: show("chrony.service", "ActiveState")["ActiveState"] in ("failed", "inactive") and latch.exists(), 20) and

@@ -131,11 +131,11 @@ class Mesh(Case):
         order = [text.index(rule) for rule in ("ct state established,related accept", unlock_rule, 'iifname "wg-unlock" drop',
                                                "tcp dport 8443", "tcp dport 22", "icmp type echo-request")]
         self.assertEqual(order, sorted(order))
-        self.assertEqual(text.count(" dport "), 6)                    # kms, ssh, audit, ntp, and the two of the mesh
+        self.assertEqual(text.count(" dport "), 12)                   # kms, ssh, audit, dns, 2 per NTS server (#303), and the two of the mesh
         self.assertEqual(text.count("7443"), 1)                       # the unlock port is open inside the tunnel and nowhere else
         plain = firewall.render(sitecfg.validate(json.loads(EXAMPLE.read_text())))
         self.assertNotIn("boot mesh", plain)
-        self.assertEqual(plain.count(" dport "), 4)
+        self.assertEqual(plain.count(" dport "), 10)                  # kms, ssh, audit, dns, 2 per NTS server (#303)
 
     @unittest.skipUnless(shutil.which("nft", path="/usr/sbin:/sbin:/usr/bin"), "nft not installed")
     def test_nft_accepts_both_rulesets(self):
