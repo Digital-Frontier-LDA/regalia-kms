@@ -570,9 +570,6 @@ func TestTheQuoteIsAskedForThroughGoTPM(t *testing.T) {
 	}
 }
 
-// Wire v2: the quoted PCRs are read beside the quote, and sent only if they hash to the quote's own digest.
-// A PCR that moves between the two is met by quoting again; one that keeps moving is an error, never values
-// that do not match.
 // THE INITRD-PHASE PCR 11 IS SAID ON THE CONSOLE before anything is quoted (#75 tier Q, regalia-kms-d9): one plain line,
 // the value as the TPM holds it, and a line that says so when it cannot be read (nothing else depends on it).
 func TestTheInitrdPCR11IsSaidAsTheTPMHoldsIt(t *testing.T) {
@@ -586,6 +583,9 @@ func TestTheInitrdPCR11IsSaidAsTheTPMHoldsIt(t *testing.T) {
 	}
 }
 
+// Wire v2: the quoted PCRs are read beside the quote, and sent only if they hash to the quote's own digest.
+// A PCR that moves between the two is met by quoting again; one that keeps moving is an error, never values
+// that do not match.
 func TestThePCRValuesBesideTheQuoteAreTheQuotedOnes(t *testing.T) {
 	qualifying := bytes.Repeat([]byte{0x5c}, 32)
 	seven, eleven := bytes.Repeat([]byte{0x07}, 32), bytes.Repeat([]byte{0x11}, 32)

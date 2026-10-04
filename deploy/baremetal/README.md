@@ -596,7 +596,9 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   restarts the client, and its attempts go on being numbered.
   **It says the initrd-phase PCR 11 first** (#75): before it quotes anything, one plain line,
   `regalia-unlock: initrd PCR 11 (sha256) = <64 hex>`, as the TPM holds it then (the unit runs after
-  `systemd-pcrphase-initrd`: the `enter-initrd` phase). It is not secret. When a peer refuses the node for its
+  `systemd-pcrphase-initrd`: the `enter-initrd` phase). The unit sends its output to the console as well as the
+initrd's journal (`StandardOutput=`/`StandardError=journal+console`), so this line and every attempt and refusal of
+the client are on the console with no kernel argument. It is not secret. When a peer refuses the node for its
   PCR 11, compare it on the console (the iLO's too) with `pcr11["initrd"]` in the image's build record
   (`uki.py build`). The boot test (`e2e/unlock-boot-qemu.sh`) checks it against that value, computed on the host.
   A PCR that cannot be read is said instead (`… could not be read: <reason>`); nothing else depends on the line.
