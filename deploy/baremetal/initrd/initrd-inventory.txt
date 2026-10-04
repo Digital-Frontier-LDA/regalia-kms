@@ -15,16 +15,12 @@
 # --add regalia-unlock, DRACUT_NO_MKNOD=1, so no dev/* nodes and no hard links), the client compiled by it from this
 # repository's cmd/regalia-unlock (CGO_ENABLED=0, -trimpath, -buildvcs=false, the go.mod Go release). The initrd's
 # sha256 moves with the client's source; every builder CI runs gets the same one (initrd-reproducible).
-ours regalia-kms f 0644 0:0 etc/crypttab 2285d917152e2b7db793e7e7397e83586d3d735b9fdf7e1184485939ca1c0894
-ours regalia-kms l 0777 0:0 etc/systemd/system/cryptsetup.target.wants/regalia-unlock-relay.service /usr/lib/systemd/system/regalia-unlock-relay.service
-ours regalia-kms l 0777 0:0 etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket /usr/lib/systemd/system/regalia-unlock-core.socket
+ours regalia-kms f 0644 0:0 etc/crypttab 71ce00157d1a94a11ba7ecd31064ec77926aa804e866597412723a334b8912ce
+ours regalia-kms l 0777 0:0 etc/systemd/system/cryptsetup.target.wants/regalia-unlock.service /usr/lib/systemd/system/regalia-unlock.service
 ours regalia-kms f 0755 0:0 usr/bin/regalia-unlock =compiled
 ours regalia-kms f 0755 0:0 usr/lib/regalia/wg-boot 73427ea38a3d34b1f8796811943a06a41ab62b9c97456650853cdb26cafa4386
-ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-unlock-core.socket f8e474073cfe4c94958ef0057ad80036e35349f7d1c30e901c9f1a823e755c52
-ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-unlock-relay.service 36892d783b6df368ba9f490a89bf64baf2544727bddd433f3d3e179541361374
-ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-unlock.service 3314788318da98a45981524f266bb793d50041db24f9beaf1cefc5abe6b6f3f5
+ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-unlock.service 915ab716f06edd48835d8d5f597a84f590aaa9165a376095edec382c8b11a423
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-wg-boot.service 448ec7fcef586757e81dc89bd6e04e66c93bc174f7124fc3b85c6c5c67210a78
-ours regalia-kms f 0644 0:0 usr/lib/systemd/system/systemd-cryptsetup@.service.d/50-regalia-relay.conf 5ed95648f9d14d917711ac2b3598104b1e972a31999ef6ddc35aafa582fb4bef
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/systemd-cryptsetup@.service.d/99-regalia-no-credentials.conf dd201bf4c2811719633fd27a1134f32d17a74430f4f7dbcb2360fb90a1f72900
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/systemd-journald.service.d/99-regalia-no-credentials.conf dd201bf4c2811719633fd27a1134f32d17a74430f4f7dbcb2360fb90a1f72900
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/systemd-sysctl.service.d/99-regalia-no-credentials.conf dd201bf4c2811719633fd27a1134f32d17a74430f4f7dbcb2360fb90a1f72900
@@ -58,7 +54,6 @@ generated dracut l 0777 0:0 etc/systemd/system/initrd.target.wants/dracut-pre-mo
 generated dracut l 0777 0:0 etc/systemd/system/initrd.target.wants/dracut-pre-pivot.service /usr/lib/systemd/system/dracut-pre-pivot.service
 generated dracut l 0777 0:0 etc/systemd/system/initrd.target.wants/dracut-pre-trigger.service /usr/lib/systemd/system/dracut-pre-trigger.service
 generated dracut l 0777 0:0 etc/systemd/system/initrd.target.wants/dracut-pre-udev.service /usr/lib/systemd/system/dracut-pre-udev.service
-generated dracut d 0755 0:0 etc/systemd/system/sockets.target.wants -
 generated dracut f 0644 0:0 etc/udev/rules.d/11-dm.rules 7a42ae0582bec603f18aa490e21550088680481f15206213718a6b8b84f610bf
 generated dracut f 0644 0:0 etc/udev/rules.d/59-persistent-storage.rules b588882cd9d2b749ec2719aa9d22b5aa4e41d1b655706a8a1dc2945c857d30eb
 generated dracut f 0644 0:0 etc/udev/rules.d/61-persistent-storage.rules 6592192c2ad641cfdc475d31c9f56b23a76d458a95157c2343bbadd36c455775
