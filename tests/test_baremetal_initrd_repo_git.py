@@ -121,23 +121,46 @@ class RepoGit(unittest.TestCase):
         """#390: before git runs as root, every directory from / to the checkout, and .git, is root's and not group or
         other writable, a sticky directory excepted. `stat` and `realpath` are stubbed (root-owned fixtures need sudo)."""
         ok = {"/": "0 755", "/srv": "0 755", "/srv/r": "0 755", "/srv/r/.git": "0 755"}
-        cases = (("all root's, 755", {}, True),
-                 ("a user's parent", {"/srv": "1000 755"}, False),
-                 ("a group-writable top", {"/srv/r": "0 775"}, False),
-                 ("an other-writable .git", {"/srv/r/.git": "0 757"}, False),
-                 ("a sticky /srv, like /tmp", {"/srv": "0 1777"}, True),
-                 ("a user's .git", {"/srv/r/.git": "1000 755"}, False))
-        for name, change, safe in cases:
+        cases = (("all root's, 755", {}, {}, True, None),
+                 ("a user's parent", {"/srv": "1000 755"}, {}, False, "/srv is not root's"),
+                 ("a group-writable top", {"/srv/r": "0 775"}, {}, False, "/srv/r is writable"),
+                 ("an other-writable .git", {"/srv/r/.git": "0 757"}, {}, False, "/srv/r/.git is writable"),
+                 ("a sticky /srv, like /tmp", {"/srv": "0 1777"}, {}, True, None),
+                 ("a user's .git", {"/srv/r/.git": "1000 755"}, {}, False, "/srv/r/.git is not root's"),
+                 # regalia-kms-1e's read of #394
+                 ("a sticky other-writable .git", {"/srv/r/.git": "0 1777"}, {}, False, "/srv/r/.git is writable"),
+                 ("a sticky other-writable top", {"/srv/r": "0 1777"}, {}, False, "/srv/r is writable"),
+                 ("a symlinked component", {}, {"REALPATH": "/elsewhere/r"}, False, "is not its own real path"),
+                 ("a gitfile or link .git", {}, {"REALDIR": "no"}, False, "is not a directory of its own"),
+                 ("a group-writable .git/config", {}, {"LOOSE": "/srv/r/.git/config"}, False, "/srv/r/.git/config (in .git)"))
+        for name, change, extra, safe, why in cases:
             with self.subTest(name):
                 table = dict(ok, **change)
                 stubs = " ".join('"%s") echo "%s";;' % (k, v) for k, v in table.items())
-                script = ('. "$LIB"; realpath(){ echo /srv/r; }; stat(){ case "${@: -1}" in %s esac; }; '
+                script = ('. "$LIB"; realpath(){ echo "${REALPATH:-/srv/r}"; }; _rg_owner_mode(){ case "$1" in %s esac; }; '
+                          '_rg_is_real_dir(){ [ "${REALDIR:-yes}" = yes ]; }; _rg_loose_inside(){ echo "${LOOSE:-}"; }; '
                           'repo_git_root_safe' % stubs)
                 done = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
-                                      env={"PATH": "/usr/bin:/bin", "LIB": LIB, "REPO": "/srv/r"})
+                                      env=dict({"PATH": "/usr/bin:/bin", "LIB": LIB, "REPO": "/srv/r"}, **extra))
                 self.assertEqual(done.returncode == 0, safe, done.stderr)
-                if not safe:
+                if why:
+                    self.assertIn(why, done.stderr)
                     self.assertIn("(#390)", done.stderr)
+
+    def test_the_real_filesystem_questions(self):
+        """The three helpers on real files: a real directory (not a link or a gitfile), and anything in .git that is not
+        root's (here: everything, owned by this test's user) reported."""
+        os.symlink(os.path.join(self.repo, ".git"), os.path.join(self.d, "linked"))
+        with open(os.path.join(self.d, "gitfile"), "w") as f:
+            f.write("gitdir: /elsewhere\n")
+        script = ('. "$LIB"; _rg_is_real_dir "$REPO/.git" && echo real; _rg_is_real_dir "$D/linked" || echo link; '
+                  '_rg_is_real_dir "$D/gitfile" || echo gitfile; [ -n "$(_rg_loose_inside "$REPO/.git")" ] && echo loose; '
+                  '_rg_owner_mode "$REPO"')
+        done = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                              env={"PATH": "/usr/bin:/bin", "LIB": LIB, "REPO": self.repo, "D": self.d})
+        lines = done.stdout.split()
+        self.assertEqual(lines[:4], ["real", "link", "gitfile", "loose"], done.stderr)
+        self.assertEqual(lines[4], str(os.getuid()))
 
     def test_the_allowlist_is_uki_pys(self):
         """The builder and the signer refuse the same configurations (#374's CLONE_CONFIG, once it lands)."""

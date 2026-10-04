@@ -40,21 +40,43 @@ repo_git_root_safe(){
   # .git/config (#390, regalia-kms-1e). Every directory from / down to the checkout's real path, and .git, is
   # root's and not writable by group or others; a sticky directory (like /tmp) is allowed, since only its entry's
   # owner can rename that entry, and the entry below it is then required to be root's. Returns 1, saying which.
-  local path dir info uid mode
+  # (regalia-kms-1e's read of #394) $REPO must already be its own real path: git -C, safe.directory and every read of
+  # the builder use $REPO, so a symlinked component would be checked resolved and then followed again, retargeted.
+  local path dir info uid mode loose strict=""
   path="$(realpath -e "$REPO")" || { echo "build-initrd: $REPO cannot be resolved" >&2; return 1; }
-  for dir in "$path/.git" "$path" $(d="$path"; while [ "$d" != / ]; do d="$(dirname "$d")"; echo "$d"; done); do
-    info="$(stat -c '%u %a' "$dir")" || return 1
+  if [ "$path" != "$REPO" ]; then
+    echo "build-initrd: $REPO is not its own real path ($path): a symlinked component could be retargeted under root's git (#390)" >&2; return 1
+  fi
+  # .git a real directory: a gitfile or a link would send git to a gitdir (and its commondir) never checked here
+  if ! _rg_is_real_dir "$path/.git"; then
+    echo "build-initrd: $path/.git is not a directory of its own (a gitfile or a link): root's git would read elsewhere (#390)" >&2; return 1
+  fi
+  # .git and the top: root's, no group or other write, sticky or not (a sticky directory still lets others CREATE
+  # entries, and git reads files that may not exist yet: commondir, config.worktree). Strict ancestors: sticky allowed,
+  # since the entry below each exists and is required to be root's, and the sticky bit stops its rename.
+  while IFS= read -r dir; do
+    info="$(_rg_owner_mode "$dir")" || return 1
     uid="${info% *}" mode="${info#* }"
     if [ "$uid" != 0 ]; then
       echo "build-initrd: $dir is not root's (uid $uid): another user could replace what root's git reads (#390)" >&2; return 1
     fi
-    # the low two octal digits: group and other; write is 2. A sticky directory (mode 1xxx) only lets an entry's
-    # owner rename it, and the entry below has just been required to be root's.
-    if (( (8#$mode & 8#022) != 0 )) && (( (8#$mode & 8#1000) == 0 )); then
+    if (( (8#$mode & 8#022) != 0 )) && { [ -z "$strict" ] || (( (8#$mode & 8#1000) == 0 )); }; then
       echo "build-initrd: $dir is writable by group or others (mode $mode): another user could replace what root's git reads (#390)" >&2; return 1
     fi
-  done
+    [ "$dir" = "$path" ] && strict=yes                 # everything after the top is a strict ancestor
+  done < <(printf '%s\n' "$path/.git" "$path"; d="$path"; while [ "$d" != / ]; do d="$(dirname "$d")"; printf '%s\n' "$d"; done)
+  # what .git holds, two levels down (config, config.worktree, commondir, info/attributes, hooks...): root's, and not
+  # writable by group or others (tar -x or cp -a as root keep other owners and modes)
+  loose="$(_rg_loose_inside "$path/.git")"
+  if [ -n "$loose" ]; then
+    echo "build-initrd: $loose (in .git) is not root's or is writable by group or others: it could be rewritten under root's git (#390)" >&2; return 1
+  fi
 }
+
+# the filesystem questions repo_git_root_safe asks, one function each (a test stubs them: root-owned fixtures need sudo)
+_rg_owner_mode(){ stat -c '%u %a' "$1"; }
+_rg_is_real_dir(){ [ -d "$1" ] && [ ! -L "$1" ]; }
+_rg_loose_inside(){ find "$1" -maxdepth 2 \( ! -user 0 -o -perm /022 \) -print -quit 2>/dev/null; }
 
 repo_git(){
   local uid gid

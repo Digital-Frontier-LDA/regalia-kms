@@ -41,7 +41,7 @@ umask 022
 CALLER_GO="$(command -v go || true)"
 CALLER_GOPROXY="${GOPROXY:-}" CALLER_HTTPS_PROXY="${HTTPS_PROXY:-${https_proxy:-}}"
 export LC_ALL=C TZ=UTC PATH="/usr/sbin:/usr/bin:/sbin:/bin"
-REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd -P)"     # the real path: what is checked is what is read (#390)
 cd "$REPO"
 SCRIPT="deploy/baremetal/initrd/build-initrd.sh"
 SCHEMA="regalia.initrd-build/v1"
