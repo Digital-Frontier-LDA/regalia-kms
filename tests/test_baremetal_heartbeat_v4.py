@@ -1,5 +1,7 @@
 """Heartbeats under a v4 manifest (#199): signed by a quorum of the nodes and the owner, the owner's an emergency
 credential with a short life. The membership side (counting_parties, meets, the v4 fields) is #350's."""
+import json
+import pathlib
 import unittest
 
 from deploy.baremetal import heartbeat as hb
@@ -7,6 +9,7 @@ from deploy.baremetal import membership as m
 from tests.test_baremetal_membership_v4 import A, B, C, NODE_KEYS, O1, O2, OWNER_KEYS, STRANGER, manifest4, nodes4, p256_sig, pub
 
 T0 = 1790000000
+VECTORS = pathlib.Path(__file__).resolve().parent / "vectors" / "heartbeat-v4.json"
 
 
 def stamp(seconds):
@@ -87,6 +90,35 @@ class Quorum(unittest.TestCase):
 
     def test_the_owner_lifetime_never_loosens_the_manifest_bound(self):
         self.refused("lives at most 21600 s", quorum(body(self.man, lifetime=21601), A, B), self.man)
+
+
+def restored(document):
+    """A document from the vectors file: every "public" read back as "key" (tests/vectors/make-heartbeat-v4.py)."""
+    if isinstance(document, dict):
+        return {("key" if k == "public" else k): restored(v) for k, v in document.items()}
+    if isinstance(document, list):
+        return [restored(v) for v in document]
+    return document
+
+
+class Vectors(unittest.TestCase):
+    def test_the_shared_vectors_are_what_this_python_decides(self):
+        """tests/vectors/heartbeat-v4.json, which the Go port reads, replayed here: a vector the Python no longer
+        decides the same way fails, so the file cannot drift from the code."""
+        cases = json.loads(VECTORS.read_text())["cases"]
+        seen = {"accepted": 0, "refused": 0}
+        for case in cases:
+            with self.subTest(case["name"]):
+                try:
+                    outcome = {"accepted": hb.verify(restored(case["envelope"]), restored(case["current"]))}
+                except m.Refused as refusal:
+                    outcome = {"refused": str(refusal)}
+                want = {k: case[k] for k in ("accepted", "refused") if k in case}
+                self.assertEqual(outcome, want)
+                seen[next(iter(want))] += 1
+        self.assertTrue(seen["accepted"] >= 5 and seen["refused"] >= 12, seen)
+        # the owner's lifetime, both ways, is in the file for the Go side's arithmetic
+        self.assertTrue(any("owner signed lives at most" in c.get("refused", "") for c in cases))
 
 
 if __name__ == "__main__":
