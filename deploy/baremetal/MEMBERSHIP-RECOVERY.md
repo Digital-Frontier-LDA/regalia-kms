@@ -138,9 +138,12 @@ they are opened by hand too. Rehearsed end to end on three nodes by `e2e/three-n
 **A server whose two peers are both destroyed is not re-anchored.** No two other nodes can give it a chain,
 and nothing else may: a single source is refused by design. That is a **root ceremony**: new nodes enrolled
 under a root-signed manifest (`replacement.py`, `enrol.py`), with the owner's keys and the shares it needs.
-With only ONE other node left (the other destroyed or revoked), re-anchoring is refused as well; this is the
-same gap as `convergence.recover(..., minimum=1)` in the refusals table, and no tool covers it yet: decide it
-with the root's holder before acting.
+With only ONE other node left (the other destroyed or revoked), a single peer's chain is refused as now. The
+decided path (regalia-kms-24 on #388, the v4 rule 2 of {a, b, c, owner}) is **the owner as the second source**:
+an owner-key signature, by touch on a developer card, over that peer chain's tip digest and epoch, verified
+against the `owner_keys` the chain itself names; behind `--one-source`, with a phrase typed at `/dev/tty`, and
+recorded. The same applies to `convergence.recover(..., minimum=1)` in the refusals table. **#387, to build:**
+until it lands there is no tool for this case, and both peers gone remains a root ceremony.
 
 ## What is tested, and what is not
 
