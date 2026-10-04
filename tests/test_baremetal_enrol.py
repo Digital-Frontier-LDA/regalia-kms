@@ -14,7 +14,18 @@ import time
 import unittest
 import unittest.mock
 
-from deploy.baremetal import attest, enrol
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+from deploy.baremetal import attest, enrol, membership, signkey
+
+
+def _rsa_pem():
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+
+
+SYSTEM_PUB, OTHER_PUB = _rsa_pem(), _rsa_pem()          # the system-phase PCR key the signing key is made for, and another
 
 
 class Crash(BaseException):
@@ -46,8 +57,8 @@ class InitOnSwtpm(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.dir, self.wg = self.d + "/enrol", self.d + "/etc/wg-service.key"
 
-    def init(self, run=subprocess.run, node_id="a"):
-        return enrol.init(node_id, self.dir, self.wg, run=run, out=io.StringIO())
+    def init(self, run=subprocess.run, node_id="a", system_pub=None):
+        return enrol.init(node_id, system_pub or SYSTEM_PUB, self.dir, self.wg, run=run, out=io.StringIO())
 
     def test_init_makes_the_keys_on_the_host_and_names_them_in_the_bundle(self):
         bundle = self.init()
@@ -101,6 +112,108 @@ class InitOnSwtpm(unittest.TestCase):
         with self.assertRaisesRegex(enrol.Refused, "started as node 'a', not 'b'"):
             self.init(node_id="b")
 
+    def proven(self, bundle, rand=os.urandom):
+        """The AK's proof, as the ceremony runs it: `challenge` on the root's side, `activate` on this host's TPM."""
+        credential, keep = enrol.challenge(bundle, rand=rand)
+        return keep, enrol.activate(credential)
+
+    def test_the_ak_is_proven_to_be_in_the_ek_s_tpm_before_its_certification_counts(self):
+        """CodeRabbit on #358: the AK's certification of the signing key is worth something only once the AK is shown to be
+        in the TPM the EK names (credential activation). Without the right answer, entry prints nothing."""
+        bundle = self.init()
+        keep, answer = self.proven(bundle)
+        self.assertNotIn(answer, json.dumps(keep), "the root's machine keeps the secret itself")
+        self.assertEqual(enrol.entry(bundle, SYSTEM_PUB, keep, answer)["node_id"], "a")
+        with self.assertRaisesRegex(enrol.Refused, "the answer is not the challenge's secret"):
+            enrol.entry(bundle, SYSTEM_PUB, keep, "00" * 32)
+        with self.assertRaisesRegex(enrol.Refused, "the answer is the 64 hex"):
+            enrol.entry(bundle, SYSTEM_PUB, keep, None)
+        other_keep = dict(keep, ak_name="000b" + "11" * 32)
+        with self.assertRaisesRegex(enrol.Refused, "made for another bundle"):
+            enrol.entry(bundle, SYSTEM_PUB, other_keep, answer)
+        # a bundle naming an AK its public area is not: no challenge is made for it
+        with self.assertRaisesRegex(enrol.Refused, "the bundle's AK Name is not its AK's"):
+            enrol.challenge(dict(bundle, ak_name="000b" + "22" * 32))
+        # a credential made to another AK under this EK (one the TPM holds no persistent object for at the AK handle):
+        # this host's TPM releases nothing for it
+        other = self.d + "/other-ak"
+        subprocess.run(["tpm2_createak", "-C", attest.EK_HANDLE, "-c", other + ".ctx", "-G", "ecc", "-g", "sha256", "-s", "ecdsa",
+                        "-u", other + ".pub"], check=True, capture_output=True)
+        subprocess.run(["tpm2_flushcontext", "-t"], capture_output=True)
+        with open(other + ".pub", "rb") as f:
+            other_ak = f.read()
+        credential, _ = enrol.challenge(dict(bundle, ak_public=other_ak.hex(), ak_name=attest.name_of(attest.public_area(other_ak, "ak")).hex()))
+        with self.assertRaises(attest.Refused):
+            enrol.activate(credential)
+
+    def test_commit_rechecks_the_signing_key_before_it_writes(self):
+        """CodeRabbit on #358: commit re-checks the signing key at its handle by the Name the journal recorded, and that
+        bundle.json still names it, before its first write."""
+        self.init()
+        journal = enrol.Journal(self.dir, "a")
+        enrol.recheck_signing_key(journal, self.dir, subprocess.run)
+        with open(self.dir + "/bundle.json") as f:
+            bundle = json.load(f)
+        with open(self.dir + "/bundle.json", "w") as f:
+            json.dump(dict(bundle, signing_key="04" + "ab" * 64), f)
+        with self.assertRaisesRegex(enrol.Refused, "bundle.json names another signing key"):
+            enrol.recheck_signing_key(journal, self.dir, subprocess.run)
+        with open(self.dir + "/bundle.json", "w") as f:
+            json.dump(bundle, f)
+        subprocess.run(["tpm2_evictcontrol", "-C", "o", "-c", signkey.HANDLE], check=True, capture_output=True)
+        with self.assertRaisesRegex(enrol.Refused, "no longer at 0x81010003: nothing was written"):
+            enrol.recheck_signing_key(journal, self.dir, subprocess.run)
+
+    def test_the_signing_key_is_made_certified_and_checked_as_the_root_checks_it(self):
+        """#199: the bundle carries the signing key's public area and the AK's certification; `entry` (the root's side)
+        accepts it only for the system-phase key the root names, and a second init keeps the same key."""
+        bundle = self.init()
+        keep, answer = self.proven(bundle)
+        got = enrol.entry(bundle, SYSTEM_PUB, keep, answer)
+        self.assertEqual(sorted(got), sorted(enrol.ENTRY_KEYS))
+        self.assertEqual((got["node_id"], got["ek_name"], got["ak_name"]), ("a", bundle["ek_name"], bundle["ak_name"]))
+        self.assertEqual(got["signing_key"], {"alg": "ecdsa-p256", "key": bundle["signing_key"]})
+        self.assertEqual(self.init()["signing_key"], bundle["signing_key"])
+        with self.assertRaisesRegex(membership.Refused, "not PolicyAuthorize of this system-phase PCR key"):
+            enrol.entry(bundle, OTHER_PUB, keep, answer)
+        with self.assertRaisesRegex(enrol.Refused, "made for another system-phase PCR key"):
+            self.init(system_pub=OTHER_PUB)
+        # a bundle whose signing key another TPM certified: the AK's signature does not cover it
+        forged = dict(bundle, signing_public=bundle["signing_public"][:-2] + "00")
+        with self.assertRaises(membership.Refused):
+            enrol.entry(forged, SYSTEM_PUB, keep, answer)
+        # another AK of this TPM, named consistently in the bundle (its Name recomputes): the certification is not its
+        other = self.d + "/other-ak"
+        subprocess.run(["tpm2_createak", "-C", attest.EK_HANDLE, "-c", other + ".ctx", "-G", "ecc", "-g", "sha256", "-s", "ecdsa",
+                        "-u", other + ".pub"], check=True, capture_output=True)
+        subprocess.run(["tpm2_flushcontext", "-t"], capture_output=True)
+        with open(other + ".pub", "rb") as f:
+            other_ak = f.read()
+        swapped = dict(bundle, ak_public=other_ak.hex(), ak_name=attest.name_of(attest.public_area(other_ak, "ak")).hex())
+        # proven as if its activation had passed (a fixed secret): the certification check still refuses it on its own
+        secret = os.urandom(32)
+        _, sw_keep = enrol.challenge(swapped, rand=lambda n: secret)
+        with self.assertRaisesRegex(membership.Refused, "does not verify under the AK"):
+            enrol.entry(swapped, SYSTEM_PUB, sw_keep, secret.hex())
+        for k in ("signing_public", "signing_certify", "signing_sig"):
+            with self.subTest(missing=k), self.assertRaisesRegex(enrol.Refused, "no %s: it was made before #199" % k):
+                enrol.entry({x: v for x, v in bundle.items() if x != k}, SYSTEM_PUB, keep, answer)
+
+    def test_a_signing_key_this_enrolment_did_not_make_is_refused_and_left_alone(self):
+        foreign = signkey.create(OTHER_PUB)                      # somebody's key at the signing handle
+        with self.assertRaisesRegex(enrol.Refused, "persistent object at 0x81010003"):
+            self.init()
+        self.assertEqual(signkey.public(), foreign)
+        # "started" without a recorded Name does not license evicting it either
+        with open(self.d + "/enrol/journal.json") as f:
+            journal = json.load(f)
+        journal["steps"]["signing_key"] = {"state": "started", "at": 0}
+        with open(self.d + "/enrol/journal.json", "w") as f:
+            json.dump(journal, f)
+        with self.assertRaisesRegex(enrol.Refused, "persistent object at 0x81010003"):
+            self.init()
+        self.assertEqual(signkey.public(), foreign, "a foreign signing key was evicted")
+
     def test_a_crash_at_any_call_is_finished_by_running_init_again(self):
         calls = []
         self.init(run=lambda argv, *a, **k: (calls.append(argv[0]), subprocess.run(argv, *a, **k))[1])
@@ -111,7 +224,7 @@ class InitOnSwtpm(unittest.TestCase):
                 shutil.rmtree(self.dir, True)
                 if os.path.exists(self.wg):
                     os.unlink(self.wg)
-                for handle in (attest.AK_HANDLE, attest.EK_HANDLE):
+                for handle in (attest.AK_HANDLE, attest.EK_HANDLE, signkey.HANDLE):
                     subprocess.run(["tpm2_evictcontrol", "-C", "o", "-c", handle], capture_output=True)
                 seen = []
 
@@ -130,6 +243,9 @@ class InitOnSwtpm(unittest.TestCase):
                     self.assertEqual(attest.name_of(attest.public_area(f.read(), "ak")).hex(), bundle["ak_name"])
                 self.assertEqual(enrol._wg_public_of(self.wg, subprocess.run), bundle["wg_service_pub"])
                 self.assertEqual(enrol._wg_public_of(self.dir + "/wg-boot.key", subprocess.run), bundle["wg_boot_pub"])
+                self.assertEqual(signkey.identity(signkey.public(), SYSTEM_PUB)[1], bundle["signing_key"])
+                keep, answer = self.proven(bundle)
+                self.assertEqual(enrol.entry(bundle, SYSTEM_PUB, keep, answer)["signing_key"], {"alg": "ecdsa-p256", "key": bundle["signing_key"]})
 
     def _plant(self, index, data):
         with open(self.d + "/nv.bin", "wb") as f:
