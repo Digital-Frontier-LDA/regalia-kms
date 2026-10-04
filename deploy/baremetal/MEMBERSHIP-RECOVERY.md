@@ -145,6 +145,28 @@ against the `owner_keys` the chain itself names; behind `--one-source`, with a p
 recorded. The same applies to `convergence.recover(..., minimum=1)` in the refusals table. **#387, to build:**
 until it lands there is no tool for this case, and both peers gone remains a root ceremony.
 
+**What the rehearsal does not show.** It is one run of the path on software TPMs, not evidence about a host:
+
+- **The TPM is a software TPM.** No DL360's TPM has been re-anchored, and nothing here shows how a physical TPM
+  behaves if power is lost during the redefinition (the unit tests cut the power at every TPM command, also on a
+  software TPM).
+- **One kind of damage.** The epoch counter is undefined, with a record slot still valid. Other operator rows of the
+  table (both record slots invalid, an inconsistent counter, a foreign index) reach the same command, but are
+  rehearsed only in `tests/test_baremetal_reanchor.py`. A replaced TPM is a node replacement, not this path.
+- **"Opened by hand" is the fixture's `cryptsetup open` with the recovery key**, on a loop device, as root on the
+  runner: not the initrd's prompt at a physical console, and the node does not boot through its initrd.
+- **The operator's checks are not run.** The chains are copied as local files, not fetched over SSH under pinned host
+  keys. Neither each peer's `rollout epoch` nor the comparison with the signing record ("Deciding that the sources
+  are right") is exercised. a and c stay stopped while their chains are taken; on hosts they run, and the
+  same-epoch rule is what keeps their two copies consistent.
+- **The terminal is a pty** driving `systemd-run --pty` in b's namespace. It shows the command needs a terminal and
+  reads the phrase from it, but not a physical console.
+- **TPM owner authorization.** The anchor's commands pass none (`-C o`): they work because the owner authorization is
+  empty, on the software TPM as the code assumes it is on hosts. A host whose owner authorization had been set
+  would refuse every anchor command, enrolment's included; nothing here tests that.
+- **Not rehearsed:** one peer left (the owner as the second source, #387, to build) and both peers destroyed (a
+  root ceremony).
+
 ## What is tested, and what is not
 
 - A record write cut at every byte is repaired by the next load; cuts all the way through a restore

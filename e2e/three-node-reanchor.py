@@ -25,6 +25,15 @@ start and b serves again. A server whose two peers are both destroyed has no suc
      under the new anchor, and the file is regalia-sync's again (#388: written by root, given back); run again, it is
      refused, since the anchor is usable
   7  the three start: b holds a heartbeat the nodes signed and a lease, and issues one: it serves again
+
+NOT SHOWN HERE (MEMBERSHIP-RECOVERY.md, "What the rehearsal does not show"):
+  * a physical TPM: these are software TPMs, and power is never cut during the redefinition here;
+  * other kinds of damage: one only, the epoch counter undefined with a record slot still valid;
+  * a real console: "by hand" is the fixture's cryptsetup with the recovery key, and the terminal is a pty;
+  * the operator's checks: the chains are copied as local files, not fetched over SSH under pinned host keys, and
+    neither the peers' `rollout epoch` nor the signing record is compared;
+  * a set TPM owner authorization: the anchor's commands pass none;
+  * one peer left (the owner as the second source, #387) and both peers destroyed (a root ceremony).
 """
 import json
 import os
