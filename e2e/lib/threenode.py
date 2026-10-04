@@ -755,12 +755,14 @@ class Cluster:
         anchor, the chain, the epoch's document and its two counters at 0: its first heartbeat comes from the nodes by sync."""
         candidate, document = self.replacement(old, new)
         measurements.check_replacement(self.manifest, candidate, self.document, document, old, new)
-        seed = next(name for name in self.nodes if name not in (old, new) and self.running(name))
-        self.advance(seed, candidate=candidate, document=document, skip=(old, new))
-        envelope = self.chain[-1]
+        # the operator's site change first (every node's site configuration names c2), as on hosts: a node that takes the
+        # epoch and runs wg-apply for it must already know where c2 is
         for n in self.nodes.values():
             if n.name != old:
                 self._configure(n)
+        seed = next(name for name in self.nodes if name not in (old, new) and self.running(name))
+        self.advance(seed, candidate=candidate, document=document, skip=(old, new))
+        envelope = self.chain[-1]
         n = self.nodes[new]
         here = self.node(new)
         here.anchor().define()
