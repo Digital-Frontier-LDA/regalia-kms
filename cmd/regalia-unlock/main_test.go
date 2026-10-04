@@ -573,6 +573,19 @@ func TestTheQuoteIsAskedForThroughGoTPM(t *testing.T) {
 // Wire v2: the quoted PCRs are read beside the quote, and sent only if they hash to the quote's own digest.
 // A PCR that moves between the two is met by quoting again; one that keeps moving is an error, never values
 // that do not match.
+// THE INITRD-PHASE PCR 11 IS SAID ON THE CONSOLE before anything is quoted (#75 tier Q, regalia-kms-d9): one plain line,
+// the value as the TPM holds it, and a line that says so when it cannot be read (nothing else depends on it).
+func TestTheInitrdPCR11IsSaidAsTheTPMHoldsIt(t *testing.T) {
+	eleven := bytes.Repeat([]byte{0x11}, 32)
+	device := &wireTPM{pcrs: map[int][]byte{11: eleven}}
+	if got, want := initrdPCR11Line(device), "regalia-unlock: initrd PCR 11 (sha256) = "+hex.EncodeToString(eleven); got != want {
+		t.Fatalf("said %q, want %q", got, want)
+	}
+	if got := initrdPCR11Line(&wireTPM{pcrs: map[int][]byte{}}); !strings.HasPrefix(got, "regalia-unlock: initrd PCR 11 (sha256) could not be read: ") {
+		t.Fatalf("an unreadable PCR 11 said %q", got)
+	}
+}
+
 func TestThePCRValuesBesideTheQuoteAreTheQuotedOnes(t *testing.T) {
 	qualifying := bytes.Repeat([]byte{0x5c}, 32)
 	seven, eleven := bytes.Repeat([]byte{0x07}, 32), bytes.Repeat([]byte{0x11}, 32)

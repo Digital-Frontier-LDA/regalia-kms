@@ -77,6 +77,24 @@ func quoted(response *tpm2.QuoteResponse) (attest, signature []byte, err error) 
 	return attest, signature, nil
 }
 
+// initrdPCR11Line is the one plain line the client says before it quotes anything (#75, tier Q; regalia-kms-d9): PCR 11
+// as the TPM holds it now, in the initrd phase (the unit runs after systemd-pcrphase-initrd), which is what the image's
+// build record predicts for that phase (uki.pcr11). It is not a secret, an operator reads it on the console (the iLO's
+// too) when a peer refuses the node for its PCR 11, and the boot test compares it with the value the host computes
+// from the build record, never with one the guest computes. A PCR that cannot be read is said too; nothing else
+// depends on this line.
+func initrdPCR11Line(device tpmtransport.TPM) string {
+	values, err := pcrValues(device, []int{11})
+	if err != nil || len(values["11"]) != 64 {
+		reason := "no value"
+		if err != nil {
+			reason = err.Error()
+		}
+		return "regalia-unlock: initrd PCR 11 (sha256) could not be read: " + reason
+	}
+	return "regalia-unlock: initrd PCR 11 (sha256) = " + values["11"]
+}
+
 // pcrValues reads the SHA-256 value of each PCR as {"<index>": "<64 hex>"} (wire v2): one PCR_Read over the
 // whole selection, so they are read at one instant; a TPM that answers part of a selection per call (it may
 // return at most eight) is asked again for the rest.

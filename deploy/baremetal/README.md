@@ -594,6 +594,12 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   and the real systemd-cryptsetup: the volume is mapped with the client's answer; with no peer the
   console's recovery key opens it and the client stands down; a mistyped recovery key neither stops nor
   restarts the client, and its attempts go on being numbered.
+  **It says the initrd-phase PCR 11 first** (#75): before it quotes anything, one plain line,
+  `regalia-unlock: initrd PCR 11 (sha256) = <64 hex>`, as the TPM holds it then (the unit runs after
+  `systemd-pcrphase-initrd`: the `enter-initrd` phase). It is not secret. When a peer refuses the node for its
+  PCR 11, compare it on the console (the iLO's too) with `pcr11["initrd"]` in the image's build record
+  (`uki.py build`). The boot test (`e2e/unlock-boot-qemu.sh`) checks it against that value, computed on the host.
+  A PCR that cannot be read is said instead (`… could not be read: <reason>`); nothing else depends on the line.
   **One boot carries one attested session.** The client is one process for the whole initrd phase and
   makes one boot session; a retry in the same boot (a lost reply, peers that came back) is asked under
   the same session and is answered. One valid response is used per boot: the key made from it is kept
