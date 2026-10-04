@@ -22,7 +22,9 @@ them parses what a peer sends except `sync` and `admission`, which hold no capab
                                         answers peers on wg-svc (sync.py) and booting nodes on
                                         wg-unlock (unlock.py), pulls manifests and heartbeats from the
                                         peers and the revocation authority, keeps the membership store,
-                                        and runs the heartbeat watch (heartbeat_watch.py)
+                                        and runs the heartbeat watch (heartbeat_watch.py); under a v4
+                                        manifest it also proposes and co-signs the heartbeats with the
+                                        TPM signing key and its signing counter (beat.py, #199)
 
 ONE WRITER OF THE MEMBERSHIP CHAIN. `sync` owns the store (membership.Store: its files are its own, 0600).
 After every change it PUBLISHES the verified chain, 0644, beside it (publish()). The other services read
@@ -528,10 +530,12 @@ class Sync:
         """This node's beat.Signer: the signing counter, and the TPM signing key under the running image's system-phase PCR
         key (systemd-stub's copy of the image's .pcrpkey: a key the signing key's policy does not name signs nothing)."""
         if self._beat_signer is None:
-            found = [p for p in signkey.PCR_PUBLIC_KEY_PATHS if os.path.exists(p)]
-            require(found, "no system-phase PCR public key at %s: this boot is not a UKI with a signed PCR policy" % " or ".join(signkey.PCR_PUBLIC_KEY_PATHS))
-            with open(found[0], "rb") as f:
-                pem = f.read(65536)
+            try:
+                with open(signkey.PCR_PUBLIC_KEY_PATH, "rb") as f:
+                    pem = f.read(65536)
+            except FileNotFoundError:
+                raise Refused("no system-phase PCR public key at %s: this boot is not a UKI with a signed PCR policy"
+                              % signkey.PCR_PUBLIC_KEY_PATH) from None
             tcti, run = self.node.tcti, self.node.run
             point = signkey.identity(signkey.public(tcti, run), pem)[1]
             self._beat_signer = beat.Signer(self.node.node_id, signing_counter(self.node.cfg, run),
