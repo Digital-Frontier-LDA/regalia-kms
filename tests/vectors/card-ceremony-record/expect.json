@@ -1,0 +1,9 @@
+{
+ "bad-signature.json": "the signature does not verify under the pinned root",
+ "missing-dev-backup.json": "owner_keys holds exactly the two developer cards' SIG keys (D30.3)",
+ "other-root.json": "the record names another root than the pinned one",
+ "release-is-owner.json": "the release key is an owner key: the release cards hold no owner key (D30.3)",
+ "unknown-field.json": "owner_keys[0] has an unknown field: comment",
+ "valid.json": "ok",
+ "wrong-domain.json": "the signature does not verify under the pinned root"
+}
