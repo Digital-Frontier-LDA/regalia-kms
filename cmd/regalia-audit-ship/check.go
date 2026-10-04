@@ -128,7 +128,9 @@ func endpointFlags(flags *flag.FlagSet) func(time.Time) (endpoint, error) {
 	key := flags.String("tls-key", "", "PEM client private key")
 	ca := flags.String("server-ca", "", "PEM CA bundle the collector's certificate is verified against")
 	receipts := flags.String("receipt-keys", "", "the pinned receipt keys (one Ed25519 public key a line, hex)")
-	return func(now time.Time) (endpoint, error) { return loadEndpoint(*collector, *site, *cert, *key, *ca, *receipts, now) }
+	return func(now time.Time) (endpoint, error) {
+		return loadEndpoint(*collector, *site, *cert, *key, *ca, *receipts, now)
+	}
 }
 
 func checkCommand(arguments []string, out io.Writer) error {
