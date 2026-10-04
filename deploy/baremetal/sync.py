@@ -22,6 +22,8 @@ and HOW MUCH of it is accepted.
     path-nonce    -                                        a nonce                     attest.Verifier.nonce
     path          its boot session, a quote binding an     this node's contribution    enrolpeer.contribution
                   enrolment key, and that key              wrapped to that key
+    beat-sign     a heartbeat body the caller proposes,    this node's signature       beat.cosign (#199)
+                  and the caller's signature over it       over it
 
 THE ENROLMENT OPERATIONS (#190) need the node's enrolpeer.Peer; a source without one (the revocation
 authority) refuses them. They are spent from their own rate class, so a node enrolling cannot use up its
@@ -114,7 +116,9 @@ REQUEST_FIELDS = {"pull": ("v", "op", "summary", "sequence"),
                   "path-nonce": ("v", "op"),
                   "path": ("v", "op", "session_id", "evidence", "binding"),
                   # the measurement document a manifest commits to, by its policy_version (#332)
-                  "measurements": ("v", "op", "version")}
+                  "measurements": ("v", "op", "version"),
+                  # #199: co-sign a heartbeat the caller proposes and has signed (beat.py)
+                  "beat-sign": ("v", "op", "heartbeat", "signature")}
 ANSWER_FIELDS = {"pull": ("v", "ok", "summary", "bundle"),
                  "lease-nonce": ("v", "ok", "nonce"),
                  "lease": ("v", "ok", "lease"),
@@ -124,11 +128,12 @@ ANSWER_FIELDS = {"pull": ("v", "ok", "summary", "bundle"),
                  "ak-activate": ("v", "ok", "secret"),
                  "path-nonce": ("v", "ok", "nonce"),
                  "path": ("v", "ok", "enrolment"),
-                 "measurements": ("v", "ok", "document")}
+                 "measurements": ("v", "ok", "document"),
+                 "beat-sign": ("v", "ok", "signature")}
 ENROL_OPS = ("ak-challenge", "ak-enroll", "ak-public", "ak-activate", "path-nonce", "path")
 REFUSAL_FIELDS = ("v", "ok", "refused")
 EVIDENCE_FIELDS = ("ephemeral_public", "nonce", "quote", "signature")
-RATE = {"address": (30, 60), "any": (20, 60), "lease": (6, 60), "enrol": (12, 60), "drop": (1, 60), "listener": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
+RATE = {"address": (30, 60), "any": (20, 60), "lease": (6, 60), "beat": (6, 60), "enrol": (12, 60), "drop": (1, 60), "listener": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
 OPEN = ("address", "drop")       # the classes keyed by a source address: anybody who can connect makes a key
 MAX_BUCKETS = 4096               # address-keyed buckets remembered at once; idle ones are forgotten first
 EVERYBODY = "*"                  # the one key the "too many callers" refusal is counted under
@@ -283,10 +288,13 @@ class Server:
     that has already expired."""
 
     def __init__(self, node_id, store, freshness, attester, signer, identify, sink, buckets=None, clock=time.time, enrol=None,
-                 documents=None):
-        """`enrol`: an enrolpeer.Peer, for the enrolment operations (None: they are refused, as on the authority)."""
+                 documents=None, cosigner=None):
+        """`enrol`: an enrolpeer.Peer, for the enrolment operations (None: they are refused, as on the authority).
+        `cosigner(manifest, caller, heartbeat, signature)`: this node's co-signature of a proposed heartbeat (beat.cosign,
+        #199), or None: beat-sign is refused."""
         self.node_id, self.store, self.freshness, self.attester, self.signer = node_id, store, freshness, attester, signer
         self.documents = documents        # measurements.Documents: what a `measurements` request is answered from (#332)
+        self.cosigner = cosigner
         self.enrol, self._offered, self._offered_lock = enrol, {}, threading.Lock()   # ak-public given: caller -> when
         self.identify, self.sink, self.buckets, self.clock = identify, sink, buckets or Buckets(), clock
         self._seen = None       # the manifest of the last request that read the store: see _is_a_node
@@ -515,6 +523,14 @@ class Server:
         require(document is not None, "this source does not hold measurements %s" % wanted)
         return {"document": document}
 
+    def _beat_sign(self, view, manifest, caller, message):
+        """#199: this node's signature over a heartbeat `caller` proposes (beat.cosign decides). Its own rate class,
+        spent before the TPM is touched: a node asking too often cannot run this node's signing counter."""
+        require(self.cosigner is not None, "this node co-signs no heartbeats")
+        require(isinstance(message["heartbeat"], dict) and isinstance(message["signature"], dict), "heartbeat and signature are objects")
+        self._spend(view.late, caller, "beat")
+        return {"signature": self.cosigner(manifest, caller, message["heartbeat"], message["signature"])}
+
     # ---- a node's enrolment (#190): every one of these is from the node the tunnel identified, as above ----
 
     @staticmethod
@@ -658,6 +674,16 @@ class Client:
             except Exception as failure:      # noqa: BLE001 - see above
                 raise Refused("%s (%s)" % (what, type(failure).__name__)) from None
         return run
+
+    def beat_sign(self, source, body, signature):
+        """`source`'s co-signature of the heartbeat `body` this node proposes and signed (`signature`), or Refused.
+        Only its shape is checked here: the proposer verifies the assembled envelope (beat.Proposer)."""
+        answer = self._ask(source, "beat-sign", heartbeat=body, signature=signature)
+        theirs = answer["signature"]
+        require(isinstance(theirs, dict), "the co-signature is not an object")
+        membership.exact(theirs, ("party", "key", "sig"), "co-signature")
+        require(theirs["party"] == source, "%s answered with a signature by %s" % (source, convergence._printable(theirs["party"])))
+        return theirs
 
     def pull(self, source):
         """Ask `source` for what this node lacks and apply it, round after round until it has nothing more

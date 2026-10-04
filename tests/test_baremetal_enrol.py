@@ -48,9 +48,17 @@ class InitOnSwtpm(unittest.TestCase):
         subprocess.run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=" + state, "--server", "type=unixio,path=" + sock,
                         "--ctrl", "type=unixio,path=" + sock + ".ctrl", "--flags", "not-need-init,startup-clear",
                         "--daemon", "--pid", "file=%s/pid" % self.d], check=True, capture_output=True)
-        time.sleep(0.5)
-        with open(self.d + "/pid") as f:
-            pid = int(f.read())
+        # swtpm --daemon writes its pid file after the fork: wait for it (a loaded runner can take more than 0.5 s)
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                with open(self.d + "/pid") as f:
+                    pid = int(f.read())
+                break
+            except (FileNotFoundError, ValueError):
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.05)
         self.addCleanup(lambda: os.kill(pid, 15))
         patcher = unittest.mock.patch.dict(os.environ, TPM2TOOLS_TCTI="swtpm:path=" + sock)
         patcher.start()
@@ -466,9 +474,9 @@ class InitOnSwtpm(unittest.TestCase):
         root = hbt.pub(hbt.ROOT)
         example = {"schema": "regalia.node/v1", "node_id": "x", "site": etc + "site.json", "root_key": "00" * 32,
                    "tcti": os.environ["TPM2TOOLS_TCTI"], "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018",
-                   "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
+                   "nv_signing": "0x0150001c", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
                    "wg_service_key": self.wg, "measurements": etc + "measurements.json", "pcrs": [7, 11],
-                   "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60}
+                   "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
         with unittest.mock.patch.object(enrol, "CONFIG_DIR", etc), unittest.mock.patch.object(enrol, "NODE_JSON", etc + "node.json"), \
                 unittest.mock.patch.object(enrol, "CHRONY_CONF", self.d + "/etc-chrony/regalia.conf"):
             in_process = lambda config, chain: enrol.anchor_and_store(config, chain)   # noqa: E731
