@@ -16,6 +16,8 @@ on:
       - cmd/regalia-audit-ship/**
       - internal/audit/**
       - e2e/audit-ship-systemd.py
+      - e2e/three-node-netns.py
+      - e2e/lib/threenode.py
   push:
     branches: [main]
     paths:
@@ -29,6 +31,8 @@ on:
       - cmd/regalia-audit-ship/**
       - internal/audit/**
       - e2e/audit-ship-systemd.py
+      - e2e/three-node-netns.py
+      - e2e/lib/threenode.py
 
 permissions:
   contents: read
@@ -101,3 +105,23 @@ jobs:
           REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/audit-ship-systemd.py | tee "$RUNNER_TEMP/ship.log"
           grep -q '^audit-ship-systemd: 17 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
             echo "::error::the shipper test did not pass all 17 checks" >&2; exit 1; }
+
+  # #70 (Phase 10), PR 1: three nodes on one machine, each its real services in its own namespace against
+  # its own software TPM, the fixture the recovery rehearsals build on (e2e/lib/threenode.py).
+  three-node-netns:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The software TPM, tpm2-tools, WireGuard
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 python3-cryptography
+      - name: Three nodes, their sync and wg-apply, the service mesh, a power cut
+        run: |
+          set -o pipefail
+          sudo --preserve-env=RUNNER_ENVIRONMENT python3 -Es e2e/three-node-netns.py | tee "$RUNNER_TEMP/three.log"
+          grep -q '^three-node-netns: 26 passed, 0 failed$' "$RUNNER_TEMP/three.log" || {
+            echo "::error::the three-node test did not pass all 26 checks" >&2; exit 1; }
