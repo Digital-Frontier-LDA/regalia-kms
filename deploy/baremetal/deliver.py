@@ -46,10 +46,11 @@ def deliver(node, envelopes, documents, trail):
     try:
         for document in documents:
             held.put(document)
-        require(any(isinstance(e["manifest"].get("epoch"), int) and e["manifest"]["epoch"] > start for e in envelopes),
+        require(any(isinstance(e["manifest"].get("epoch"), int) and not isinstance(e["manifest"]["epoch"], bool)
+                    and e["manifest"]["epoch"] > start for e in envelopes),
                 "this node holds epoch %d already: nothing in the chain is newer" % start)
         convergence.catch_up(store, envelopes)
-    except Refused as refused:
+    except (Refused, OSError) as refused:              # a disk that fails part-way is recorded as a refusal is
         refusal = refused
     reached = store.load()["epoch"]
     if reached > start:                                 # what was committed is published, whatever came after it
