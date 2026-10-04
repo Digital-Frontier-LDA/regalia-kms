@@ -41,17 +41,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   never argv), enrolment, reanchor, recount and replacement fail closed on a host whose owner
   authorization is set. Enrolment does not yet refuse a TPM whose owner or lockout authorization is
   empty.
-- **Re-anchoring on a real host has three known faults, fixed in #391 (not merged):**
-  - Run as root, `reanchor` writes `membership.json` as root with mode 0600, so the node's `regalia-sync`
-    cannot read its own chain afterwards and the node cannot serve.
-  - **Security:** `membership._exclusive` opens its lock with `O_CREAT` and no `O_NOFOLLOW`. Root
-    running `reanchor`, or any Store or HighWater, in `regalia-sync`'s state directory can be made to
-    open or create any file read-write through a planted symlink.
-  - `reanchor`'s anchor lock (`/run/lock/regalia-highwater-<idx>.lock`) is not the services'
-    (`<state>/highwater.lock`), so the two do not serialize.
-- **No total-outage re-anchor rehearsal** (#391 adds it). The procedure in MEMBERSHIP-RECOVERY.md is not
-  yet the total-outage one, and its example names `/var/lib/regalia/membership.json`, while the store
-  is under `/var/lib/regalia-sync`.
+- **The total-outage re-anchor is rehearsed on software TPMs only** (#391, `e2e/three-node-reanchor.py`). It covers one
+  kind of damage, uses cryptsetup and a pty rather than a console, and doesn't run the operator's source checks.
+  The one-peer and both-peers-destroyed cases aren't rehearsed (MEMBERSHIP-RECOVERY.md, "What the rehearsal does
+  not show").
 - **Nothing advances the ESP's chain after genesis** (#377 is merged; the fix is #410). The initrd refuses an ESP
   chain below the TPM anchor, and `regalia-sync` advances the anchor on every accepted manifest, so a
   node that accepts a second manifest would boot to the recovery prompt. The fix is to write the ESP
