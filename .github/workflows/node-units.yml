@@ -277,8 +277,8 @@ jobs:
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
             sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-theft.py | tee "$RUNNER_TEMP/theft.log"
-          grep -q '^three-node-theft: 21 passed, 0 failed$' "$RUNNER_TEMP/theft.log" || {
-            echo "::error::the three-node theft test did not pass all 21 checks" >&2; exit 1; }
+          grep -q '^three-node-theft: 23 passed, 0 failed$' "$RUNNER_TEMP/theft.log" || {
+            echo "::error::the three-node theft test did not pass all 23 checks" >&2; exit 1; }
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, through the
   # real authority), and its retired hardware refused.

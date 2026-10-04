@@ -189,6 +189,12 @@ def scenario(cluster):
     for name in ("b", "c"):
         took = cluster.audit_has(name, "sync", event="sync-apply", outcome="ALLOW", epoch=lambda e: e == 2)
         ok(bool(took), "%s taking the revocation (epoch 2) is in %s's stream" % (name, name))
+    # the admission trail (#347): every node's own record of serving, and the stolen a's of not serving
+    serving = {name: bool(cluster.audit_has(name, "admission", event="admission-serving", outcome="ALLOW")) for name in names}
+    ok(all(serving.values()), "each node's change to serving is in its own admission stream", serving)
+    refused = cluster.audit_has("a", "admission", event="admission-serving", outcome="DENY")
+    ok(bool(refused), "the stolen a's own trail says it is not serving, and why (%s)" % ((refused or [{}])[-1].get("reason", "")[:80]),
+       cluster.audit_stream("a", "admission")[-3:])
 
 
 def main():

@@ -609,7 +609,7 @@ class Cluster:
         sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
-        os.chmod(n.admission, 0o700)
+        os.chmod(n.admission, ADMISSION_DIR_MODE)            # as the shipped unit makes it (#345)
         return envelope
 
     def _start_authority(self):
