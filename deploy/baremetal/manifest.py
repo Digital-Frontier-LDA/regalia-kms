@@ -282,18 +282,24 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
     # found: a signature that does not verify is still a use of the root key (as an HSM's own audit logs each sign
     # operation), and the line names the digest it was asked to sign. The envelope leaves this tool only when the
     # signature verified AND its line is on the record (regalia-kms-95 on #156).
-    verified, reason = False, ""
+    verified, reason, failed = False, "", None
     try:
         accepted = membership.accept(current, envelope, root)
         require(membership.digest(accepted) == digest, "the accepted manifest is not the one signed")
         verified = True
     except Exception as failure:          # noqa: BLE001 - recorded as the reason; raised again below
-        reason = str(failure) or type(failure).__name__
-        raise
-    finally:
+        reason, failed = str(failure) or type(failure).__name__, failure
+    try:
         _append_record(state, {"epoch": candidate["epoch"], "digest": digest, "signer": signer_role, "key": public,
                                "token_serial": signer.serial, "token_label": signer.label, "pin_source": pin_source,
                                "verified": verified, "reason": reason, "at": int(time.time())})
+    except OSError as unrecorded:
+        if failed is not None:            # both: say both (regalia-kms-95)
+            raise Refused("the token's signature did not verify (%s) AND it could not be recorded (%s): nothing was written; "
+                          "note this signature by hand in the ceremony log" % (reason, unrecorded)) from None
+        raise
+    if failed is not None:
+        raise failed
     data = membership.canonical(envelope) + b"\n"
     _write_new(out, data)
     if chain_out:

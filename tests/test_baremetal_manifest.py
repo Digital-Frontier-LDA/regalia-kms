@@ -108,6 +108,14 @@ class Signing(Case):
         self.assertFalse(os.path.exists(os.path.join(self.d, "e2.json")))
         self.assertIn("sign", self.fake.calls)                                  # the token did sign: that is why it is recorded
 
+    def test_a_bad_signature_that_cannot_be_recorded_names_both(self):
+        flip = lambda sig: sig[:-1] + bytes([sig[-1] ^ 1])
+        with unittest.mock.patch.object(tool, "_append_record", side_effect=OSError(28, "No space left on device")):
+            self.refused("the token's signature did not verify (", self.sign, self.proposal(), open_signer=self.bad_signer(flip))
+            self.refused("AND it could not be recorded ([Errno 28] No space left on device)", self.sign, self.proposal(),
+                         open_signer=self.bad_signer(flip), out="e2b.json")
+        self.assertFalse(os.path.exists(os.path.join(self.d, "e2.json")))
+
     def test_an_unrecorded_signature_never_leaves_the_tool(self):
         """95's ask: if the record line cannot be written, the envelope is not written either, and it is a refusal."""
         with unittest.mock.patch.object(tool, "_append_record", side_effect=OSError(28, "No space left on device")):
