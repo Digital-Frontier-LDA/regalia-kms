@@ -680,7 +680,7 @@ class Cluster:
         entry = {"node_id": new, "state": "ACTIVE", "ek_name": self.ids[new][0], "ak_name": self.ids[new][1],
                  "wg_boot_pub": self.keys[new]["boot"][1], "wg_service_pub": self.keys[new]["service"][1], "hsm_serials": ["E2E3%s" % new.upper()]}
         current = self.manifest
-        if self.v4:                                   # #199: its SSH host key and its signing key; it joins every signer rule
+        if self.v4:                                   # #199: its SSH host key and its signing key; it takes the old one's place in every signer rule
             from cryptography.hazmat.primitives import serialization
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
             ssh = Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
@@ -691,10 +691,9 @@ class Cluster:
         nodes = [dict(m, state="RETIRED") if m["node_id"] == old else m for m in current["nodes"]] + [entry]
         candidate = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
                          policy_version=measurements.version(document), issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
-        if self.v4:
-            joined = lambda rule: dict(rule, parties=rule["parties"] + [new])        # noqa: E731
-            candidate.update(heartbeat_signers=joined(current["heartbeat_signers"]), activation_signers=joined(current["activation_signers"]),
-                             revocation_signers=[joined(r) if membership.OWNER not in r["parties"] else r for r in current["revocation_signers"]])
+        if self.v4:                                   # the new node takes the old one's place in every signer rule, and nothing else changes
+            for k in ("heartbeat_signers", "activation_signers", "revocation_signers"):
+                candidate[k] = membership.rename_party(current[k], old, new)
         return candidate, document
 
     def replace(self, old, new):
