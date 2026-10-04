@@ -82,17 +82,17 @@ func quoted(response *tpm2.QuoteResponse) (attest, signature []byte, err error) 
 // build record predicts for that phase (uki.pcr11). It is not a secret, an operator reads it on the console (the iLO's
 // too) when a peer refuses the node for its PCR 11, and the boot test compares it with the value the host computes
 // from the build record, never with one the guest computes. A PCR that cannot be read is said too; nothing else
-// depends on this line.
-func initrdPCR11Line(device tpmtransport.TPM) string {
+// depends on this line. Read, it is a status line (the client's output, as "gave the key"); unread, a diagnostic.
+func initrdPCR11Line(device tpmtransport.TPM) (line string, read bool) {
 	values, err := pcrValues(device, []int{11})
 	if err != nil || len(values["11"]) != 64 {
 		reason := "no value"
 		if err != nil {
 			reason = err.Error()
 		}
-		return "regalia-unlock: initrd PCR 11 (sha256) could not be read: " + reason
+		return "regalia-unlock: initrd PCR 11 (sha256) could not be read: " + reason, false
 	}
-	return "regalia-unlock: initrd PCR 11 (sha256) = " + values["11"]
+	return "regalia-unlock: initrd PCR 11 (sha256) = " + values["11"], true
 }
 
 // pcrValues reads the SHA-256 value of each PCR as {"<index>": "<64 hex>"} (wire v2): one PCR_Read over the
