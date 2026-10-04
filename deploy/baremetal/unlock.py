@@ -667,16 +667,19 @@ def serve(peer, listener, count=None, caller=None, connections=MAX_CONNECTIONS, 
 
     def answer(conn, node, key):
         try:
-            with conn:
-                deadline = time.monotonic() + IO_TIMEOUT
-                reply = membership.canonical(peer.handle(_read_all(conn, deadline), caller=node) if caller is not None
-                                             else peer.handle(_read_all(conn, deadline)))
-                conn.settimeout(max(deadline - time.monotonic(), 0.001))
-                conn.sendall(reply)
-        except OSError:
+            with conn:                      # closed only after a failure is recorded: no caller sees the end first
+                try:
+                    deadline = time.monotonic() + IO_TIMEOUT
+                    reply = membership.canonical(peer.handle(_read_all(conn, deadline), caller=node) if caller is not None
+                                                 else peer.handle(_read_all(conn, deadline)))
+                    conn.settimeout(max(deadline - time.monotonic(), 0.001))
+                    conn.sendall(reply)
+                except OSError:
+                    pass
+                except Exception as error:  # never a reason to stop answering the nodes that reboot next
+                    failed(error)
+        except OSError:                     # the close itself
             pass
-        except Exception as error:          # never a reason to stop answering the nodes that reboot next
-            failed(error)
         finally:
             with lock:
                 active.remove(key)
