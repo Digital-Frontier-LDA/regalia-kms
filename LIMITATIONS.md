@@ -30,14 +30,24 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Accepted, once #387 lands:** a one-peer recovery cannot see a revocation that was made after the
   signing laptop last synced, if the surviving peer withholds it and the audit collector has no
   receipt for it. The owner is asked before signing ([`deploy/baremetal/MEMBERSHIP-RECOVERY.md`](deploy/baremetal/MEMBERSHIP-RECOVERY.md)).
-- **TPM owner authorization: not built** (#242 step C). Every owner-authorized TPM call runs with an
-  **empty** owner authorization: the anchor's define, define-time writes and undefine
-  (`membership.HighWater`), the heartbeat counter's definition, recount's undefine, and the AK's
-  `evictcontrol` (attest.py, enrol.py). The decided production posture sets the owner authorization,
-  kept off the host in envelopes for the owner's cards. Until step C passes it in (through one channel,
-  never argv), enrolment, reanchor, recount and replacement fail closed on a host whose owner
-  authorization is set. Enrolment does not yet refuse a TPM whose owner or lockout authorization is
-  empty.
+- **TPM owner authorization: partly built** (#242 step C).
+  - **Built (C1, #411):**
+    - `enrol ownerauth` sets the owner authorization from the node's envelope. It sets it from empty only and
+      refuses a TPM whose owner authorization is already set.
+    - In the library, every owner-authorized call takes it through one channel: a sealed memfd, never argv. That
+      covers the anchor (`membership.HighWater`), the heartbeat counter's definition, recount's undefine, the AK's
+      and the signing key's `evictcontrol`, and the signing key's `createprimary`.
+    - A grep test holds `deploy/` (Python and shell) and `cmd/` to that channel.
+  - **Not built yet (C2):**
+    - `enrol commit` (and its steps run as regalia-sync), `reanchor`, `recount` and `deploy/seal-hsm-pin.sh` do not
+      pass the value. On a host whose owner authorization is set, their owner-authorized steps fail closed.
+    - Enrolment does not yet refuse a TPM whose owner or lockout authorization is empty under v4.
+    - Nothing checks that systemd's SRK (0x81000001) is persistent before the owner authorization is set.
+  - `attest.py node-init` (the lab CLI, stdlib-only) keeps an empty owner authorization.
+  - **Residuals:**
+    - The owner authorization crosses the TPM bus in clear when used (password sessions, #414).
+    - The value cannot be zeroed in Python memory.
+    - While an owner-authorized call runs, the value is readable through /proc by root.
 - **Re-anchoring on a real host has three known faults, fixed in #391 (not merged):**
   - Run as root, `reanchor` writes `membership.json` as root with mode 0600, so the node's `regalia-sync`
     cannot read its own chain afterwards and the node cannot serve.
