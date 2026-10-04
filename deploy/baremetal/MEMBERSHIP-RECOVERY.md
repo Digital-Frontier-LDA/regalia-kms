@@ -161,9 +161,13 @@ until it lands there is no tool for this case, and both peers gone remains a roo
   same-epoch rule is what keeps their two copies consistent.
 - **The terminal is a pty** driving `systemd-run --pty` in b's namespace. It shows the command needs a terminal and
   reads the phrase from it, but not a physical console.
-- **TPM owner authorization.** The anchor's commands pass none (`-C o`): they work because the owner authorization is
-  empty, on the software TPM as the code assumes it is on hosts. A host whose owner authorization had been set
-  would refuse every anchor command, enrolment's included; nothing here tests that.
+- **TPM owner authorization: today the commands assume it is EMPTY.** The anchor's define and undefine pass none
+  (`-C o`), on the software TPM and on hosts alike. #242 decided the opposite posture: the owner authorization is
+  SET, held off-host in envelopes for the developer cards, with the lockout authorization set too; after the
+  definition every write goes by policy. The fix (the anchor's define and undefine take the owner authorization
+  by file descriptor, never on the command line, and enrolment refuses an empty one under v4) is tracked as a
+  must-land item (regalia-kms-24, with regalia-kms-95). Until it lands, this command, like enrolment, works only
+  on a TPM whose owner authorization is empty.
 - **Not rehearsed:** one peer left (the owner as the second source, #387, to build) and both peers destroyed (a
   root ceremony).
 
