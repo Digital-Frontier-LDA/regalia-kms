@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """#69 (Phase 9): a stolen node revoked, the revocation spreading, and the window a partition leaves, on three nodes
-and the revocation authority (e2e/lib/threenode.py with authority=True: each node its real services in its own
-namespace against its own TPM, the authority its real `serve`; revocations by `authority revoke`, epochs reaching
-the nodes only by sync).
+(e2e/lib/threenode.py, v4 since #199: each node its real services in its own namespace against its own TPM, the nodes
+signing their own heartbeats; no authority host). The revocation is the owner's, made off the nodes (revoke.py export,
+owner.py sign-manifest, revoke.py import on b), since one node is stolen and one cut off; epochs reach the other nodes
+only by sync.
 
     REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-theft.py
 
@@ -10,17 +11,17 @@ IT CHANGES THE MACHINE (namespaces, interfaces, loop devices, dm-crypt mappings,
 inside one node's namespace, never the host's), so it runs only on a GitHub-hosted runner, or on a throwaway host
 whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
 
-  1  three nodes and the authority, every node leased
-  2  c partitioned from b and the authority (its service mesh only; the boot mesh stays up); the window it is left
-     with measured: the remaining life of the heartbeat it holds, beside that heartbeat's lifetime
-  3  a powered off (stolen); `authority revoke a REVOKED_STOLEN`; b takes the new epoch by sync (timed from the
-     revoke command); c, cut off, tries (its pulls do not answer) and does not
+  1  three nodes, every node leased
+  2  c partitioned from b (its service mesh only; the boot mesh stays up); the window it is left with measured: the
+     remaining life of the heartbeat it holds, beside that heartbeat's lifetime
+  3  a powered off (stolen); the owner revokes it (REVOKED_STOLEN) off the nodes and b imports it; c, cut off, tries
+     (its pulls do not answer) and does not take it
   4  9.4, THE WINDOW, shown and not hidden: the stolen a boots with its genuine TPM, keys and paths; b refuses it
      (b's unlock tunnel no longer admits it), and the stale c gives it its key: a partitioned node trusts a stolen
      one until its heartbeat expires or the new epoch reaches it (the bound is heartbeat_max_lifetime_s: 6 h in
      production, decided on #69)
-  5  the partition healed: c takes the epoch (timed) and drops a from its unlock tunnel; a, power-cycled, gets no key
-     from anyone (9.1), and no lease (off every service tunnel)
+  5  the partition healed: c takes the epoch (timed) and drops a from its unlock tunnel; b and c sign epoch 2's
+     heartbeat together; a, power-cycled, gets no key from anyone (9.1), and no lease (off every service tunnel)
   6  9.2: a, whose own chain is still the old ACTIVE one, through a service tunnel forced open by hand on b: b's sync
      refuses it by name, and b's store stays at the current epoch
   7  9.3: b power-cycled with only a (revoked) and nobody else up: b's chain is current, its boot configuration does
@@ -29,8 +30,7 @@ whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
      (Cluster(audit=True)); every node's sync and admission trail is written and in the collector line for line, chained
      from genesis, each DENY a deny, its head as the signed receipt and the shipper's head file state it; and the
      scenario's own security events are there by name, for the node that recorded them. Not here: the time trail (the
-     fixture's time stand-in writes none; a time loss shows as the sync refusals it causes, which are covered) and the
-     authority's own trail (it goes away with #199)
+     fixture's time stand-in writes none; a time loss shows as the sync refusals it causes, which are covered)
 
 Not here: the expiry itself (a heartbeat lifetime is at least 40 minutes: freshness's unit tests show the refusal at
 expiry, and step 2 measures the window); a stale b asking a (the same window as 4, stated on #69); the physical
@@ -79,20 +79,19 @@ def took_epoch(cluster, name, epoch):
 def scenario(cluster):
     names = ["a", "b", "c"]
 
-    header("1  three nodes and the authority, every node leased")
+    header("1  three nodes, every node leased")
     cluster.build()
     for name in names:
         cluster.disk(name)
     for name in names:
         cluster.enrol(name)
-    cluster.start(AUTH)
     for name in names:
         cluster.start(name, SERVICES)
     for name in names:
         ok(bool(until(lambda: cluster.lease(name), 150, 3)), "%s holds a lease" % name, cluster.journal(name, "admission")[-400:])
 
-    header("2  c partitioned from b and the authority; the window it is left with")
-    cluster.partition("c", ["b", AUTH])
+    header("2  c partitioned from b; the window it is left with")
+    cluster.partition("c", ["b"])
     cut_at = time.time()
     left = cluster.heartbeat_left("c")
     held = cluster.node("c").freshness().held()
@@ -101,22 +100,23 @@ def scenario(cluster):
     life = stamp(held["heartbeat"]["expires_at"]) - stamp(held["heartbeat"]["issued_at"]) if held else None
     ok(left is not None and life is not None and 0 < left <= life,
        "c holds a heartbeat with %.0f s left of its %.0f s at the cut: the longest a stale c can trust a stolen node" % (left or 0, life or 0), held)
-    print("  MEASURED: c's heartbeat window at the cut: %.0f s (%.1f h), of a heartbeat lifetime of %.0f s. FIXTURE manifest: schema v1, "
-          "which has no heartbeat_max_lifetime_s (its bound is 24 h); PRODUCTION: v2/v3 with 21600 s, so at most 6 h (#69)"
+    print("  MEASURED: c's heartbeat window at the cut: %.0f s (%.1f h), of a heartbeat lifetime of %.0f s. The manifest is v4, as in "
+          "production: heartbeat_max_lifetime_s 21600, so at most 6 h (#69)"
           % (left or 0, (left or 0) / 3600, life or 0))
 
-    header("3  a stolen: powered off and revoked; b takes the epoch, c does not")
+    header("3  a stolen: powered off and revoked by the owner; b takes the epoch, c does not")
     cluster.stop("a")
     revoked_at = time.time()
-    cluster.revoke("a", "REVOKED_STOLEN", "e2e: a stolen node")
-    took = until(lambda: took_epoch(cluster, "b", 2), 120, 1)
+    # one node stolen and one cut off: no two nodes can co-sign, so the owner revokes, off the nodes, and b imports it
+    cluster.revoke_by_owner("b", "a", "REVOKED_STOLEN", "e2e: a stolen node", pull=[], beat=False)
     b_after = time.time() - revoked_at
-    ok(took is True, "b took epoch 2 (a REVOKED_STOLEN) from the authority by sync, %.0f s after the revocation" % b_after)
-    print("  MEASURED: dissemination to b: %.0f s" % b_after)
+    ok(took_epoch(cluster, "b", 2) and any(e.get("event") == "revoke-commit" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= revoked_at
+                                           for e in cluster.trail("b")),
+       "b holds epoch 2 (a REVOKED_STOLEN, signed by the owner alone off the nodes), committed by its import %.0f s after the start" % b_after)
     tried = until(lambda: [e.get("reason") for e in cluster.trail("c") if e.get("event") == "sync-apply" and e.get("outcome") == "DENY"
-                           and e.get("peer") in ("b", "@authority") and "did not answer" in e.get("reason", "") and e.get("at", 0) >= cut_at], 90, 3)
+                           and e.get("peer") == "b" and "did not answer" in e.get("reason", "") and e.get("at", 0) >= cut_at], 90, 3)
     ok(bool(tried) and took_epoch(cluster, "c", 1),
-       "c, cut off, tried (its pulls from b and the authority did not answer) and still holds epoch 1", tried)
+       "c, cut off, tried (its pulls from b did not answer) and still holds epoch 1", tried)
 
     header("4  9.4, the window: the stolen a boots; b refuses it, the stale c gives it its key")
     boot_a = as_wg(cluster.keys["a"]["boot"][1])
@@ -135,6 +135,9 @@ def scenario(cluster):
     c_after = time.time() - healed_at
     ok(took is True, "c took epoch 2 %.0f s after the partition healed" % c_after)
     print("  MEASURED: convergence of c after the heal: %.0f s" % c_after)
+    # #199: with c back, the two nodes that count sign the new epoch's heartbeat themselves (the owner is not needed)
+    fresh = cluster.fresh(["b", "c"], 2, timeout=300)
+    ok(all(fresh.values()), "b and c sign epoch 2's heartbeat together, with no owner (%s)" % fresh, cluster.beat_events(["b", "c"]))
     ok(until(lambda: all(boot_a not in cluster.wg_peers(p, "wg-unlock") for p in ("b", "c")), 60, 2) is True,
        "no peer's unlock tunnel admits a any more", {p: sorted(cluster.wg_peers(p, "wg-unlock")) for p in ("b", "c")})
     got = cluster.unlock("a", timeout=150, rounds=2)
@@ -191,9 +194,12 @@ def scenario(cluster):
     ok(bool(named), "b's refusal of the stolen a by name (9.2) is in b's stream", len(named))
     cut = cluster.audit_has("c", "sync", event="sync-apply", outcome="DENY", reason=lambda r: bool(r) and "did not answer" in r)
     ok(bool(cut), "c's pulls that did not answer while it was cut off are in c's stream (%d)" % len(cut))
-    for name in ("b", "c"):
-        took = cluster.audit_has(name, "sync", event="sync-apply", outcome="ALLOW", epoch=lambda e: e == 2)
-        ok(bool(took), "%s taking the revocation (epoch 2) is in %s's stream" % (name, name))
+    # b committed the owner's revocation by import; c took it from b by sync (moved_by_sync: the round is filed under
+    # the epoch it began at, regalia-kms-1e and 3e on #370)
+    took = cluster.audit_has("b", "sync", event="revoke-commit", outcome="ALLOW", epoch=lambda e: e == 2)
+    ok(bool(took), "b's import of the revocation (epoch 2) is in b's stream")
+    peer = cluster.moved_by_sync("c", cut_at, 2)
+    ok(peer == "b", "c taking the revocation (epoch 2) from b by sync is in c's stream (moved by %s)" % peer)
     # the admission trail (#347): every node's own record of serving, and the stolen a's of not serving
     serving = {name: bool(cluster.audit_has(name, "admission", event="admission-serving", outcome="ALLOW")) for name in names}
     ok(all(serving.values()), "each node's change to serving is in its own admission stream", serving)
@@ -224,7 +230,7 @@ def main():
               "with the built regalia-audit-ship and regalia-audit-collector (#340)")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work, authority=True, audit=True)
+    cluster = threenode.Cluster(work, audit=True)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once
@@ -232,7 +238,7 @@ def main():
         ok(False, "the scenario ran to its end", traceback.format_exc()[-1500:])
         for name in list(cluster.nodes):
             print("----- %s sync\n%s\n----- %s admission\n%s" % (name, cluster.journal(name, "sync"), name, cluster.journal(name, "admission")))
-        print("----- authority serve\n%s" % cluster.journal(AUTH, "serve"))
+        print("----- heartbeat events\n%s" % cluster.beat_events(list(cluster.nodes), last=8))
     finally:
         cluster.close()
         sh("rm", "-rf", "--", str(work), check=False)

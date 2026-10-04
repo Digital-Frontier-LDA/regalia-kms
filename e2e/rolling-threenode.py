@@ -168,30 +168,6 @@ def moved(cluster, name, image, what):
     return r
 
 
-def moved_by_sync(cluster, name, since, epoch):
-    """The peer whose sync round moved `name` to `epoch`, from its collector stream since `since`; None if none did.
-
-    A sync-apply event is filed under the manifest held when its round BEGAN (sync.Client.pull), and a pull goes round
-    after round on ONE source until it has nothing more: the round that moved the node is the LAST sync-apply before the
-    node's first pull event under `epoch` (that round's sync-heartbeat, or the next round's sync-apply), filed under the
-    epoch before and from the same peer. Not merely the last ALLOW: every pull that received nothing is an ALLOW under
-    the old epoch too, and must not stand in for the move (regalia-kms-1e on #393). A round refused after it had moved
-    the membership counts only when it says so ("had moved from epoch N-1 to N"), and the answer says it was refused."""
-    events = cluster.audit_has(name, "sync", since=since)
-    first = next((i for i, e in enumerate(events) if e.get("epoch") == epoch and e.get("event") in ("sync-heartbeat", "sync-apply")), None)
-    if first is None:
-        return None
-    rounds = [e for e in events[:first] if e.get("event") == "sync-apply"]
-    if not rounds or rounds[-1].get("epoch") != epoch - 1 or rounds[-1].get("peer") != events[first].get("peer"):
-        return None
-    moved = rounds[-1]
-    if moved.get("outcome") == "ALLOW":
-        return moved.get("peer")
-    if "had moved from epoch %d to %d" % (epoch - 1, epoch) in (moved.get("reason") or ""):
-        return "%s (refused after it moved)" % moved.get("peer")
-    return None
-
-
 def retire_check(cluster, manifest, both, nxt):
     try:
         return rollout.check_lockout(manifest, both, nxt, measurements.transition(both, nxt), states(cluster), False, [])
@@ -314,7 +290,7 @@ def scenario(cluster):
             if int(on_next["since"]) < e.get("at", 0) < int(rolled_back["since"])] for s in (b, c)),   # whole seconds: the
             # second step 5 began in may hold a lease from CURRENT (audit_has takes it), and no lease from NEXT
        "the leases a issued to b and c while it was on %s (step 5, before its roll back in step 6) are in a's stream" % NEXT_IMAGE)
-    took = {n: moved_by_sync(cluster, n, retired, 3) for n in (b, c)}
+    took = {n: cluster.moved_by_sync(n, retired, 3) for n in (b, c)}
     ok(all(took.values()), "the sync round that moved b and c to epoch 3, the retire, is in each one's stream (from %s)" % took,
        {n: [{k: e.get(k) for k in ("event", "epoch", "outcome", "peer", "at", "reason")} for e in cluster.audit_has(n, "sync", since=retired - 5)][:16]
         for n, peer in took.items() if peer is None})
