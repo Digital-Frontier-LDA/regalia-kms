@@ -186,7 +186,7 @@ ceremony (a ceremony prerequisite).
 
   Its limits: PCR 11 is one `tpm2_pcrextend` of the image's name, not systemd-stub measuring a real UKI; `update apply`
   itself (BootNext, the trial boot, the reset) is not run, only the `may_reboot` question it asks; the epochs and
-  heartbeats come from the fixture, not the revocation authority. The document reaches each running node with its
+  heartbeats come from the fixture's nodes, signing by quorum (#199). The document reaches each running node with its
   epoch, by sync, and no service is stopped for it (2.7, #332). Tier Q, real UKIs
   under OVMF with the firmware's BootNext, is #75's next step.
 - **On one software TPM** (`e2e/pcr-signed-policy-swtpm.sh`): a PIN sealed once opens under the new
