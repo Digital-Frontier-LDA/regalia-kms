@@ -42,9 +42,12 @@ envelopes), verified from ROOT every time.
      only: it is refused unless REGALIA_MANIFEST_TEST=1 is also set, and the signing record says which
      source gave the PIN. A PIN the token refuses latches (DIR/pin-latch.json) and is never presented
      again until `clear-pin-latch`;
-  7. the signature is verified and membership.accept() takes the finished envelope; a line is appended to
-     DIR/signing-record.jsonl for every signature the token made, and only then is the envelope written
-     (--out, and with --chain-out the chain plus it, from which the next proposal of the session is made).
+  7. the signature is verified and membership.accept() takes the finished envelope; THEN, whatever that found, one
+     line is appended to DIR/signing-record.jsonl for the signature the token made: the digest it was asked to
+     sign, "verified" true or false, and the reason if false (every use of the root key is recorded, as an HSM's
+     own audit records each sign operation). Only a verified signature whose line is on the record is written
+     (--out, and with --chain-out the chain plus it, from which the next proposal of the session is made): a
+     signature that does not verify, or a record that cannot be written, leaves nothing but the refusal.
 
 A key in a file is not a signing backend here: the root signs only on its token."""
 import argparse
@@ -274,12 +277,23 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
     require(typed == [str(candidate["epoch"]), digest[:8]], "the confirmation does not match: nothing was signed")
     message = membership.DOMAIN + membership.canonical(candidate)                              # 6
     signature = signer.sign(message)
-    _append_record(state, {"epoch": candidate["epoch"], "digest": digest, "signer": signer_role, "key": public,  # 7
-                           "token_serial": signer.serial, "token_label": signer.label, "pin_source": pin_source,
-                           "at": int(time.time())})
     envelope = {"manifest": candidate, "signature": {"signer": signer_role, "key": public, "sig": signature.hex()}}
-    accepted = membership.accept(current, envelope, root)
-    require(membership.digest(accepted) == digest, "the accepted manifest is not the one signed")
+    # 7. EVERY signature the token made is recorded, once, AFTER the software verification has run, whatever it
+    # found: a signature that does not verify is still a use of the root key (as an HSM's own audit logs each sign
+    # operation), and the line names the digest it was asked to sign. The envelope leaves this tool only when the
+    # signature verified AND its line is on the record (regalia-kms-95 on #156).
+    verified, reason = False, ""
+    try:
+        accepted = membership.accept(current, envelope, root)
+        require(membership.digest(accepted) == digest, "the accepted manifest is not the one signed")
+        verified = True
+    except Exception as failure:          # noqa: BLE001 - recorded as the reason; raised again below
+        reason = str(failure) or type(failure).__name__
+        raise
+    finally:
+        _append_record(state, {"epoch": candidate["epoch"], "digest": digest, "signer": signer_role, "key": public,
+                               "token_serial": signer.serial, "token_label": signer.label, "pin_source": pin_source,
+                               "verified": verified, "reason": reason, "at": int(time.time())})
     data = membership.canonical(envelope) + b"\n"
     _write_new(out, data)
     if chain_out:

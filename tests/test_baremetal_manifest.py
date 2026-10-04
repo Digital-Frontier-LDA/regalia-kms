@@ -77,9 +77,43 @@ class Signing(Case):
             self.assertEqual(json.loads(f.read()), envelope)
         self.assertEqual(self.fake.logins, [(0, self.pin)])
         record = self.record()
-        self.assertEqual([(r["epoch"], r["signer"], r["token_serial"], r["token_label"]) for r in record], [(2, "root", SERIAL, LABEL)])
+        self.assertEqual([(r["epoch"], r["signer"], r["token_serial"], r["token_label"], r["verified"], r["reason"]) for r in record],
+                         [(2, "root", SERIAL, LABEL, True, "")])
         self.assertNotIn(self.pin, json.dumps(record))
         self.assertIn("node c: state: \"ACTIVE\" -> \"MAINTENANCE\"", "\n".join(self.said))
+
+    def bad_signer(self, how):
+        """The real token signer, whose signatures are then spoiled: a token that misbehaves, or another key."""
+        real = self.signer()
+
+        class Spoiled:
+            serial, label = real.serial, real.label
+
+            def public(self):
+                return real.public()
+
+            def sign(self, message):
+                return how(real.sign(message))
+        return lambda: Spoiled()
+
+    def test_a_signature_that_does_not_verify_is_recorded_and_nothing_is_written(self):
+        """regalia-kms-95 and 3e on #156: every use of the root key is on the record, the digest it was asked to sign
+        included, even when the signature then fails verification; and such a signature never leaves the tool."""
+        candidate = self.proposal()
+        flip = lambda sig: sig[:-1] + bytes([sig[-1] ^ 1])
+        self.refused("does not verify", self.sign, candidate, open_signer=self.bad_signer(flip))
+        record = self.record()
+        self.assertEqual([(r["epoch"], r["digest"], r["verified"]) for r in record], [(2, m.digest(candidate), False)])
+        self.assertIn("does not verify", record[0]["reason"])
+        self.assertFalse(os.path.exists(os.path.join(self.d, "e2.json")))
+        self.assertIn("sign", self.fake.calls)                                  # the token did sign: that is why it is recorded
+
+    def test_an_unrecorded_signature_never_leaves_the_tool(self):
+        """95's ask: if the record line cannot be written, the envelope is not written either, and it is a refusal."""
+        with unittest.mock.patch.object(tool, "_append_record", side_effect=OSError(28, "No space left on device")):
+            with self.assertRaises(OSError):
+                self.sign()
+        self.assertFalse(os.path.exists(os.path.join(self.d, "e2.json")))
 
     def test_two_manifests_in_one_session_approve_then_retire(self):
         self.sign(chain_out="chain2.json")
