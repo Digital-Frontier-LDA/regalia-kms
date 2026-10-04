@@ -492,7 +492,7 @@ class Command(Case):
         self.assertEqual(self.run_reanchor(self.sources())["epoch"], 3)              # run again: it completes
         self.assertEqual(self.outcomes()[-1], ("reanchor", "ALLOW"))
 
-    def program(self, *extra, typed=None, peers=(OTHER, "c"), upto=3, log="audit.jsonl", ask="given", tty=None):
+    def program(self, *extra, typed=None, peers=(OTHER, "c"), upto=3, log="audit.jsonl", ask="given", tty=None, owner_check=reanchor._owner_check):
         for name in peers:
             with open("%s/%s.json" % (self.d, name), "wb") as f:
                 f.write(m.canonical(self.envs[:upto]))
@@ -511,9 +511,54 @@ class Command(Case):
             return typed if typed is not None else prompt.split("Type exactly: ")[1].split("\n")[0]
         self.said = io.StringIO()
         with contextlib.redirect_stderr(self.said), contextlib.redirect_stdout(self.said):
-            rc = reanchor.main(argv + list(extra), ask=answer if ask == "given" else None, tty=tty,
+            rc = reanchor.main(argv + list(extra), ask=answer if ask == "given" else None, tty=tty, owner_check=owner_check,
                                highwater=lambda index, tcti, policy=None: m.HighWater(index, lock_path=self.d + "/hw.lock", run=self.run_tpm, policy=policy))
         return rc, asked
+
+    def one_source(self, verdict, peers=(OTHER,), extra=()):
+        """--one-source with the owner's check stood in for (recover.py's own tests check the statement): `verdict`
+        is what it does with the tip, and what it was given is kept."""
+        self.checked = []
+
+        def owner_check(config, node_id, statement, peer):
+            self.checked.append((config, node_id, statement, peer))
+            return lambda tip: verdict(tip)
+        return self.program("--one-source", "--owner-statement", self.d + "/st.json", "--node-config", self.d + "/node.json", *extra,
+                            peers=peers, owner_check=owner_check)
+
+    def test_one_other_node_and_the_owner_re_anchor_and_the_owner_is_named_as_a_source(self):
+        self.lose_record()
+        seen = []
+        rc, asked = self.one_source(seen.append)
+        self.assertEqual((rc, len(asked)), (0, 1), self.said.getvalue())
+        self.assertEqual((seen[0]["epoch"], self.checked[0][1:]), (3, ("b", self.d + "/st.json", OTHER)))
+        self.assertEqual((self.hw.value(), self.hw.record()), (3, (3, self.digest(3))))
+        self.assertEqual(self.audit()[-1]["sources"], [OTHER, "owner"])
+
+    def test_one_source_takes_exactly_one_node_the_owner_s_word_and_the_disk_s_manifest(self):
+        self.lose_record()
+        before = self.state()
+        for peers in ((OTHER, "c"), ()):
+            with self.subTest(peers=peers):
+                self.assertEqual(self.one_source(lambda tip: None, peers=peers)[0], 1)
+                self.assertIn("--one-source takes exactly one", self.said.getvalue())
+        self.assertEqual(self.program("--one-source", peers=(OTHER,))[0], 1)
+        self.assertIn("needs --owner-statement and --node-config", self.said.getvalue())
+
+        def refuse(tip):
+            raise m.Refused("the statement has expired")
+        rc, asked = self.one_source(refuse)
+        self.assertEqual((rc, asked), (1, []))                                    # refused before anything is asked
+        self.assertIn("the statement has expired", self.said.getvalue())
+        self.assertEqual(self.audit()[-1]["outcome"], "DENY")
+        # the disk still holds epochs 1..3 of ANOTHER chain: the peer's is a fork of it, refused whatever the owner says
+        fork = chain(3, c="DRAINING")
+        with open("%s/fork.json" % self.d, "wb") as f:
+            f.write(m.canonical(fork))
+        rc, asked = self.one_source(lambda tip: None, peers=(), extra=("--peer", "%s=%s/fork.json" % (OTHER, self.d)))
+        self.assertEqual((rc, asked), (1, []))
+        self.assertIn("does not extend this node's last known manifest", self.said.getvalue())
+        self.assertEqual(self.state(), before)
 
     def audit(self, log="audit.jsonl"):
         with open("%s/%s" % (self.d, log)) as f:
