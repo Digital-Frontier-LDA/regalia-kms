@@ -101,11 +101,17 @@ class NodeHere:
         return sh("ip", "netns", "exec", self.ns, *argv, check=check, **kw)
 
 
+AUTH = "auth"                                     # the revocation authority's member name here (its own host, #199)
+
+
 class Cluster:
-    def __init__(self, work, names=NAMES):
+    def __init__(self, work, names=NAMES, authority=False):
         self.work = pathlib.Path(work)
         self.nodes = {n: NodeHere(self.work, n, i + 1) for i, n in enumerate(names)}
-        self.time = {n: True for n in names}          # authenticated time, per node (the stand-in's switch)
+        # the revocation authority, when asked for: its own namespace, TPM, clock and WireGuard key, and its real
+        # `serve` signing the heartbeats (then nothing here writes one)
+        self.auth = NodeHere(self.work, AUTH, len(names) + 1) if authority else None
+        self.time = {n: True for n in list(names) + ([AUTH] if authority else [])}   # authenticated time, per member
         self.stop_threads = False
         self.threads = []
         self.chain = []                               # the signed envelopes, epoch 1 first
@@ -118,6 +124,13 @@ class Cluster:
         self.client = os.environ.get("REGALIA_UNLOCK_BIN", "")
         self.code = self.work / "src"                 # the package as a host installs it: root's, readable by the services
 
+    def members(self):
+        """The nodes, and the authority when there is one: everything with a namespace, a TPM and a clock."""
+        return list(self.nodes.values()) + ([self.auth] if self.auth else [])
+
+    def member(self, name):
+        return self.auth if name == AUTH and self.auth else self.nodes[name]
+
     # ---- building ----
 
     def build(self):
@@ -129,7 +142,7 @@ class Cluster:
         sh("chown", "-R", "root:root", str(self.code))
         sh("chmod", "-R", "u=rwX,go=rX", str(self.code))
         self._network()
-        for n in self.nodes.values():
+        for n in self.members():
             for d in (n.dir / "etc", n.state, n.admission, n.run):
                 d.mkdir(parents=True)
             os.chmod(n.dir, 0o711)
@@ -140,8 +153,11 @@ class Cluster:
             self._configure(n)
             self._anchor_and_store(n)
         self._authtime()
+        if self.auth:
+            self._authority()
         for n in self.nodes.values():
-            self.beat(n.name, 1)
+            if not self.auth:                         # with the authority, its heartbeats are the only ones
+                self.beat(n.name, 1)
             # owned as the units' StateDirectory= would make them: the services are not root
             sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
             os.chmod(n.state, 0o755)
@@ -152,7 +168,7 @@ class Cluster:
         sh("ip", "netns", "add", SWITCH)
         sh("ip", "netns", "exec", SWITCH, "ip", "link", "add", "br0", "type", "bridge")
         sh("ip", "netns", "exec", SWITCH, "ip", "link", "set", "br0", "up")
-        for n in self.nodes.values():
+        for n in self.members():
             sh("ip", "netns", "add", n.ns)
             port = "sw-" + n.name
             sh("ip", "link", "add", port, "netns", SWITCH, "type", "veth", "peer", "name", "eth0", "netns", n.ns)
@@ -186,7 +202,7 @@ class Cluster:
         started again on the same state, which sends TPM2_Startup(CLEAR): resetCount one higher, the PCRs back to
         their reset values, every transient object and session gone, as on a host. Without `orderly`, a cut: no
         Shutdown, which a TPM counts against its dictionary-attack limit (#57)."""
-        n = self.nodes[name]
+        n = self.member(name)
         if orderly:
             sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False)
         pid = int((n.dir / "tpm.pid").read_text())
@@ -197,7 +213,7 @@ class Cluster:
 
     def reset_count(self, name):
         """The TPM's resetCount (TPM2_ReadClock): one higher after each power cycle."""
-        out = sh("tpm2_readclock", "-T", self.nodes[name].tcti).stdout
+        out = sh("tpm2_readclock", "-T", self.member(name).tcti).stdout
         return int(next(line.split(":", 1)[1] for line in out.splitlines() if "reset_count" in line))
 
     def _wg_keys(self, n):
@@ -263,7 +279,9 @@ class Cluster:
                 "boot_mesh": {"node_id": n.name, "interface": "wg-unlock", "listen_port": 51820, "address": n.boot_address, "unlock_port": 7443,
                               "nic_mac": "52:54:00:12:34:%02x" % (0x50 + n.index), "prefix": 24, "gateway": None,
                               "peers": [{"node_id": o.name, "underlay": o.underlay, "address": o.boot_address} for o in others]},
-                "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444, "authority": None}}
+                "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444,
+                                 "authority": {"key": self.keys[AUTH]["service"][1], "underlay": self.auth.underlay, "port": 51821}
+                                 if self.auth else None}}
         (n.dir / "etc" / "site.json").write_text(json.dumps(site))
         (n.dir / "etc" / "measurements.json").write_text(json.dumps(self.document))
         cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=n.tcti,
@@ -288,7 +306,7 @@ class Cluster:
     def _authtime(self):
         """Authenticated time, per node: authtime's own Service and status file, with a reading that says chrony
         is synchronised to two NTS sources, or (cluster.time[n] False) that no source answers."""
-        for n in self.nodes.values():
+        for n in self.members():
             def reading(name=n.name):
                 now = time.time()
                 answering = self.time[name]
@@ -324,17 +342,21 @@ class Cluster:
         return {key: unit[key] for key in Cluster.IDENTITY if key in unit}
 
     def properties(self, name, service):
-        """systemd-run -p for one service of one node: its namespace, the installed unit's identity, and no view of
-        the other nodes' directories."""
-        n = self.nodes[name]
+        """systemd-run -p for one service of one member: its namespace, the installed unit's identity, and no view
+        of the other members' directories."""
+        n = self.member(name)
         props = ["NetworkNamespacePath=/run/netns/" + n.ns, "WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1"]
         props += ["%s=%s" % (key, value) for key, value in self.identity(service).items()]
-        props += ["InaccessiblePaths=" + str(o.dir) for o in self.nodes.values() if o is not n]
+        props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
         return props
+
+    AUTH_SERVICES = ("wg-apply", "serve")
 
     def start(self, name, services=("sync", "wg-apply")):
         """The node's services, each a transient unit in its namespace, as a host runs them: sync first (it
         publishes the chain the others verify), wg-apply once the chain is published."""
+        if name == AUTH:
+            return self._start_authority()
         n = self.nodes[name]
         admission_run = n.run / "admission"                # as regalia.tmpfiles.conf makes it at every boot
         if not admission_run.exists():
@@ -361,13 +383,54 @@ class Cluster:
                           extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
         self.services[name] = tuple(dict.fromkeys(self.services[name] + tuple(services)))   # stop() clears it
 
-    def _run(self, n, service, oneshot=False, unit=None, extra=()):
+    def _run(self, n, service, oneshot=False, unit=None, extra=(), args=()):
         argv = ["systemd-run", "--unit", unit or self.unit(n.name, service), "--collect"] + list(extra)
-        for prop in self.properties(n.name, service):
+        # the authority's own commands run as regalia-authority.service does; its wg-apply as the nodes' (root)
+        identity = "authority" if n is self.auth and service != "wg-apply" else service
+        for prop in self.properties(n.name, identity):
             argv += ["-p", prop]
         if oneshot:
             argv += ["--wait", "-p", "Type=oneshot"]
-        sh(*(argv + ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.node", "--config", str(n.cfg_path), service]))
+        module = "deploy.baremetal.authority" if n is self.auth else "deploy.baremetal.node"
+        sh(*(argv + ["/usr/bin/python3", "-Es", "-m", module, "--config", str(n.cfg_path), service] + list(args)))
+
+    def _authority(self):
+        """The revocation authority's host: its users, its key (the test revocation key, a file signer), its
+        configuration, and its store and counters initialised from the chain (`init`, as its own user)."""
+        from cryptography.hazmat.primitives import serialization
+        a = self.auth
+        sh("systemd-sysusers", str(ROOT / "deploy" / "baremetal" / "units" / "regalia-authority.sysusers.conf"))
+        etc = a.dir / "etc"
+        key = etc / "revocation.pem"
+        key.write_bytes(hbt.REVOKE.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        (etc / "chain.json").write_text(json.dumps(self.chain))
+        a.cfg_path = etc / "authority.json"
+        a.cfg_path.write_text(json.dumps({
+            "schema": "regalia.authority/v1", "root_key": hbt.pub(hbt.ROOT), "tcti": a.tcti, "nv_epoch": "0x01500016",
+            "nv_sequence": "0x01500020", "state_dir": str(a.state), "run_dir": str(a.run), "signer": {"kind": "file", "path": str(key)},
+            "interval_s": 600, "lifetime_s": None, "sequence_offset": 0, "sequence_stride": 1, "revoke_requesters": ["local-root"],
+            "wg_service_key": str(etc / "wg-service.key"), "underlays": {n.name: n.underlay for n in self.nodes.values()},
+            "listen_port": 51821, "sync_port": 7444, "control_socket": str(a.run / "control.sock")}))
+        for path in (key, etc / "wg-service.key"):
+            shutil.chown(path, "regalia-authority", "regalia-authority")
+            os.chmod(path, 0o600)
+        for d, mode in ((a.state, 0o751), (a.run, 0o700)):      # StateDirectoryMode= and RuntimeDirectoryMode= of its unit
+            shutil.chown(d, "regalia-authority", "regalia-authority")
+            os.chmod(d, mode)
+        self._run(a, "init", oneshot=True, unit=self.unit(AUTH, "init"), args=("--chain", str(etc / "chain.json")))
+
+    def _start_authority(self):
+        """The authority's host booted: its time checked again, its wg-svc applied, then `serve` (which signs a
+        heartbeat as soon as its time is authenticated)."""
+        a = self.auth
+        if not self.time[AUTH]:
+            self.time[AUTH] = True
+            self.authtimes[AUTH].step()
+        shutil.chown(a.run, "regalia-authority", "regalia-authority")
+        os.chmod(a.run, 0o700)
+        self._run(a, "wg-apply", oneshot=True)
+        self._run(a, "serve")
+        self.services[AUTH] = self.AUTH_SERVICES
 
     def running(self, name):
         return sh("systemctl", "is-active", self.unit(name, "sync"), check=False).stdout.strip() == "active"
@@ -396,8 +459,8 @@ class Cluster:
         """The node's services stopped. power="cycle" (an orderly power-off and on) or "cut" (power lost): its /run
         emptied (tmpfs on a host), its tunnels gone, its TPM through the power loss (power_cycle) and its time no
         longer authenticated until it starts again. power=None: the services only, as a crash."""
-        n = self.nodes[name]
-        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply")] + [self.unit(name, "wg-watch") + t for t in (".path", ".service")]:
+        n = self.member(name)
+        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply", "serve")] + [self.unit(name, "wg-watch") + t for t in (".path", ".service")]:
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
         self.services[name] = ()
@@ -465,6 +528,30 @@ class Cluster:
                 leftover.unlink()
             sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[peer].state))
         del local, secret
+
+    def recover(self, name):
+        """#71's manual recovery: the node's volume opened by hand with its recovery key (the systemd-recovery
+        keyslot, S1's one exception), its filesystem read back, closed again for the boot to open. Returns
+        {rc, slot, peer, marker}: `peer` None for the recovery keyslot."""
+        loop, mapped, mnt = self.loops[name], "e2e3-" + name, self.nodes[name].dir / "mnt"
+        result = {"rc": None, "slot": None, "peer": "?", "marker": False}
+        mounted = False
+        try:
+            opened = subprocess.run(["cryptsetup", "open", "--key-file", "-", "-v", loop, mapped], input=RECOVERY, capture_output=True)
+            result["rc"] = opened.returncode
+            found = re.search(rb"Key slot (\d+) unlocked", opened.stdout)
+            if opened.returncode == 0 and found:
+                result["slot"] = int(found.group(1))
+                result["peer"] = self.keyslot_peer(name, result["slot"])
+                sh("mount", "-o", "ro", "/dev/mapper/" + mapped, str(mnt))
+                mounted = True
+                result["marker"] = (mnt / "marker").read_bytes() == MARKER
+        finally:
+            if mounted:
+                sh("umount", str(mnt), check=False)
+            if os.path.exists("/dev/mapper/" + mapped):
+                sh("cryptsetup", "close", mapped, check=False)
+        return result
 
     def keyslot_peer(self, name, slot):
         """The peer whose path token names `slot` on the node's volume (None for the recovery keyslot)."""
@@ -620,9 +707,9 @@ class Cluster:
 
     def close(self):
         self.stop_threads = True
-        for name in self.nodes:
-            self.stop(name, power=None)
-        for n in self.nodes.values():
+        for n in self.members():
+            self.stop(n.name, power=None)
+        for n in self.members():
             try:
                 pid = int((n.dir / "tpm.pid").read_text())
                 os.kill(pid, 15)
