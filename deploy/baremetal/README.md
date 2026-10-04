@@ -650,6 +650,16 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   swap-backed memory in the initrd. The volume key also lives, by design, in dm-crypt in the kernel and
   briefly in systemd-cryptsetup.
 
+  **A failed unlock reboots; it never offers a shell.** `uki.py build` also requires `rd.shell=0` and
+  `rd.emergency=reboot`, refuses dracut's older `rdshell` and `rdbreak`, and refuses an initrd fragment
+  under `etc/cmdline.d` that says otherwise (#242). A boot whose unlock the peers refuse, as they refuse
+  a retired image's, would otherwise reach dracut's emergency shell, and a shell in the initrd can
+  extend PCR 11 by hand to the booted phase. The root device's wait must not time out into that
+  emergency path while the recovery-key prompt is up; that timeout is set on the root's own entry
+  (#70), not as systemd's default device timeout, which the booted system would apply to every device.
+  The boot test proving both (no shell on a refused unlock; the prompt still takes the recovery key
+  after the old 90 s timeout) lands with #70's ask-password agent.
+
   **The ESP is a channel into the initrd, and PCR 12 is what judges it.** Whoever can write the
   ESP can add credentials of their own, and systemd in the initrd consumes some by name: a unit or a
   drop-in (`systemd.extra-unit.*`, `systemd.unit-dropin.*`), tmpfiles, sysctl and fstab lines. Sealed to
@@ -842,9 +852,14 @@ removing only what it can prove it made.
     stays until a rerun completes. It is overwritten with zeros, synced and then unlinked; on an SSD the
     overwrite is best effort, and the root volume's encryption is what protects the freed blocks.
   The peers answer through `sync`'s enrolment operations (`enrolpeer.py`).
-
-**Still NOT BUILT** (placed by hand, as the end-to-end test does):
-- the enrolment record signed by the AK's quote.
+- **The enrolment record** (step 8), written by `paths` after the last path and before `local.bin` goes, to
+  `/var/lib/regalia-enrol/enrolment.json`. It holds public values only: the manifest epoch and digest, the
+  root fingerprint, the EK and AK, the WireGuard keys, the NV indices read back, the `espcreds` record (the
+  PCR 12 the peers must expect), and the peers and paths. It is signed by the node's AK in a TPM quote whose
+  qualifying data is the record's digest under its own label, so no session quote can stand in for it.
+  An `enrol` event carrying its SHA-256 goes to the enrol trail (`/var/log/regalia/enrol.jsonl`, `trails.py`)
+  first. To check it with no TPM, run
+  `enrol verify-record --record F --manifest CHAIN --root-key K`.
 
 ### Shipping the audit trails (#278)
 

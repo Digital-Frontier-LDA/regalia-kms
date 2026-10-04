@@ -921,6 +921,9 @@ def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run
         return _without_path(unlock.luks_meta(device, run), node_id, peers, sealed_local)
 
     if journal.state("paths") == "done" and not without_path(journal.get("paths").get("peers") or []):
+        if journal.state("record") != "done":            # a crash between the two: the record is written now
+            node = node_module.Node(node_module.load(config_path or NODE_JSON), run)
+            write_record(journal, directory, node, node.manifest(), journal.get("paths")["peers"], run)
         _remove_local(journal, directory, without_path)
         return []
     config_path = config_path or NODE_JSON
@@ -932,7 +935,7 @@ def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run
     local = local_contribution(journal, directory)
     session = node_module.boot_session(node.runtime)      # (ID hex, key): the one this boot presents to everyone
     lost = set(without_path(peers))
-    key, missing = None, []
+    key, missing, made = None, [], []
     try:
         for peer in peers:
             if journal.state("path:" + peer) == "done":
@@ -951,6 +954,7 @@ def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run
                 missing.append("%s (%s)" % (peer, refusal))
                 continue
             journal.done("path:" + peer, **{k: v for k, v in result.items() if v is not None})
+            made.append(peer)
             print("PATH from %s: %s" % (peer, "already in the header" if result.get("existing") else
                                         "path epoch %d, keyslot %d" % (result["path_epoch"], result["keyslot"])), file=out)
     finally:
@@ -962,9 +966,125 @@ def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run
         print("NOT FINISHED: no path yet from %s. local.bin stays; run `enrol paths` again once they answer" % "; ".join(missing), file=out)
         return missing
     journal.done("paths", peers=peers)
+    if journal.state("record") != "done" or made:      # a path made again (the header had lost it): the record follows
+        write_record(journal, directory, node, manifest, peers, run)
     _remove_local(journal, directory, without_path)
     print("ENROLLED: a path from every peer (%s); the local contribution is only sealed now" % ", ".join(peers), file=out)
     return []
+
+
+RECORD_SCHEMA = "regalia.enrolment-record/v1"
+RECORD_FILE = "enrolment.json"
+RECORD_KEYS = ("schema", "node_id", "epoch", "manifest_digest", "root_fingerprint", "ek_name", "ak_name", "ak_public",
+               "wg_service_pub", "wg_boot_pub", "nv", "espcreds", "peers", "paths", "tool", "at")
+
+
+VERSION_FILE = os.path.join(PACKAGE_ROOT, "deploy", "baremetal", "VERSION")
+
+
+def _tool():
+    """This tool's version, for the record: the one line the package build writes to deploy/baremetal/VERSION, or
+    "unknown". Never by running git: enrolment runs as root, and git in a tree another user can write would run
+    that tree's configured helpers as root (regalia-kms-3e on #277)."""
+    try:
+        with open(VERSION_FILE, "rb") as f:
+            text = f.read(129).decode("ascii", "replace").strip()
+    except OSError:
+        return "unknown"
+    return text if re.fullmatch(r"[A-Za-z0-9._+-]{1,128}", text) else "unknown"
+
+
+def write_record(journal, directory, node, manifest, peers, run=subprocess.run, now=time.time, tool=_tool):
+    """Design step 8 of #190: the enrolment record, public values only, signed by this node's AK in a TPM quote over
+    its system-phase PCRs (attest.quote_document: qualifying data = the record's digest under its own label), so it
+    chains to what the ceremony saw: the root key, the manifest naming this AK, the quote, the record. The `enrol`
+    event (with the record's SHA-256) goes to the enrolment trail BEFORE the file is written; the journal's "record"
+    step comes last. Returns the record."""
+    from deploy.baremetal import node as node_module
+    bundle = _bundle(directory)
+    with open(os.path.join(directory, "bundle.json"), "rb") as f:
+        full = membership.load(f.read(membership.MAX_BYTES + 1))
+    hw = node.anchor()
+    from deploy.baremetal import heartbeat
+    counter = heartbeat.Counter(node.cfg["nv_heartbeat"], node.tcti, run, lock_path=node.path("heartbeat-counter.lock"))
+    paths = []
+    for peer in peers:
+        fact = journal.get("path:" + peer)
+        paths.append({"peer": peer, "path_epoch": fact.get("path_epoch"), "keyslot": fact.get("keyslot")})
+    nodes = membership.validate(manifest)
+    record = {"schema": RECORD_SCHEMA, "node_id": bundle["node_id"], "epoch": manifest["epoch"],
+              "manifest_digest": membership.digest(manifest), "root_fingerprint": fingerprint(node.cfg["root_key"]),
+              "ek_name": bundle["ek_name"], "ak_name": bundle["ak_name"], "ak_public": full["ak_public"],
+              "wg_service_pub": bundle["wg_service_pub"], "wg_boot_pub": bundle["wg_boot_pub"],
+              "nv": {"anchor": {"indices": list(hw._indices()), "attributes": dict(membership.HighWater.ATTRIBUTES),
+                                "epoch": hw.value(), "record": list(hw.record())},
+                     "heartbeat": {"index": counter.index, "base": counter.base_index}},
+              "espcreds": {k: v for k, v in journal.get("espcreds").items() if k not in ("state", "at")},
+              "peers": [{"peer": p, "ak_name": nodes[p]["ak_name"]} for p in peers], "paths": paths,
+              "tool": tool(), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now()))}
+    payload = membership.canonical(record)
+    from deploy.baremetal import trails
+    trail = node_module.Trail(trails.where("enrol"))     # the registry's one path for this trail (#278)
+    # requested, then the outcome (reanchor's order): a crash before the file is in place leaves INCOMPLETE, and the
+    # rerun's ALLOW names the one record that exists (regalia-kms-3e on #277)
+    trail({"event": "enrol", "node": record["node_id"], "epoch": record["epoch"], "manifest_digest": record["manifest_digest"],
+           "outcome": "INCOMPLETE", "reason": "writing the enrolment record"})
+    env = dict(os.environ, TPM2TOOLS_TCTI=node.tcti) if node.tcti else None
+    with tempfile.TemporaryDirectory(prefix="enrol-record-") as d:
+        qpath, spath = os.path.join(d, "quote"), os.path.join(d, "signature")
+        attest.quote_document(payload, node.cfg["pcrs"], qpath, spath,
+                              run=lambda argv, **kw: run(argv, **dict(kw, **({"env": env} if env else {}))))
+        with open(qpath, "rb") as f:
+            quote = f.read(1025)
+        with open(spath, "rb") as f:
+            signature = f.read(257)
+    attest.verify_document(payload, bytes.fromhex(record["ak_public"]), record["ek_name"], quote, signature)
+    document = {"record": record, "quote": quote.hex(), "signature": signature.hex()}
+    digest = hashlib.sha256(membership.canonical(document)).hexdigest()
+    _atomic_json(os.path.join(directory, RECORD_FILE), document)        # written, fsynced, renamed, directory fsynced
+    os.chmod(os.path.join(directory, RECORD_FILE), 0o644)
+    with open(os.path.join(directory, RECORD_FILE), "rb") as f:
+        read_back = membership.load(f.read(membership.MAX_BYTES + 1))
+    require(hashlib.sha256(membership.canonical(read_back)).hexdigest() == digest, "the record read back is not the one written")
+    trail({"event": "enrol", "node": record["node_id"], "epoch": record["epoch"], "manifest_digest": record["manifest_digest"],
+           "record_sha256": digest, "outcome": "ALLOW", "reason": ""})
+    journal.done("record", sha256=digest)
+    return record
+
+
+def verify_record(document, chain, root_key):
+    """`enrol verify-record`: the record (as written) against a root-signed manifest chain, with no TPM. The root key
+    is the record's fingerprint's; the manifest at the record's epoch is in the chain with the record's digest and
+    names this node with the record's EK, AK and WireGuard keys; and the quote is by that AK under that EK over
+    exactly this record. Returns the quote's facts."""
+    membership.exact(document, ("record", "quote", "signature"), "enrolment record")
+    record = document["record"]
+    membership.exact(record, RECORD_KEYS, "record")
+    require(record["schema"] == RECORD_SCHEMA, "schema must be %s" % RECORD_SCHEMA)
+    require(fingerprint(root_key) == record["root_fingerprint"], "the root key given is not the one the record names")
+    envelopes = chain if isinstance(chain, list) else [chain]
+    manifests, current = [], None
+    for envelope in envelopes:
+        current = membership.accept(current, envelope, root_key)
+        manifests.append(current)
+    at = [m for m in manifests if m["epoch"] == record["epoch"]]
+    require(at and membership.digest(at[0]) == record["manifest_digest"], "the chain has no manifest at epoch %d with the record's digest" % record["epoch"])
+    node = membership.validate(at[0]).get(record["node_id"])
+    require(node is not None, "the manifest does not name %s" % record["node_id"])
+    wg = {k: base64.b64decode(record[k]).hex() for k in ("wg_service_pub", "wg_boot_pub")}
+    for field, mine in (("ek_name", record["ek_name"]), ("ak_name", record["ak_name"]), ("wg_service_pub", wg["wg_service_pub"]),
+                        ("wg_boot_pub", wg["wg_boot_pub"])):
+        require(node[field] == mine, "the record's %s is not the manifest's" % field)
+    # the peers too: each AK the record names is the one that manifest gives that peer, so nothing in the record
+    # is only its own claim (regalia-kms-1e on #277)
+    every = membership.validate(at[0])
+    for entry in record["peers"]:
+        require(isinstance(entry, dict) and entry.get("peer") in every and entry.get("ak_name") == every[entry["peer"]]["ak_name"],
+                "the record's AK for peer %r is not the manifest's" % (entry.get("peer") if isinstance(entry, dict) else entry,))
+    facts = attest.verify_document(membership.canonical(record), bytes.fromhex(record["ak_public"]), record["ek_name"],
+                                   bytes.fromhex(document["quote"]), bytes.fromhex(document["signature"]))
+    require(facts["ak_name"] == node["ak_name"], "the record's AK public area is not the manifest's AK")
+    return facts
 
 
 def _without_path(meta, node_id, peers, sealed_local):
@@ -991,11 +1111,12 @@ def _zero(buffer):
 
 
 def _remove_local(journal, directory, without_path):
-    """The last step: local.bin goes only after "paths" is journalled done AND the header, read again now, holds
+    """The last step: local.bin goes only after "paths" and the record are journalled done AND the header, read again now, holds
     a path from every journalled peer (`without_path(peers)` is empty). It is overwritten with zeros, synced,
     unlinked, and the directory synced; then that is journalled. On an SSD the overwrite is best effort (the
     flash translation layer may keep the old blocks); what protects them is that the root volume is encrypted."""
     require(journal.state("paths") == "done", "local.bin is removed only once every peer's path is journalled")
+    require(journal.state("record") == "done", "local.bin is removed only once the enrolment record is written")
     gone = without_path(journal.get("paths").get("peers") or [])
     require(not gone, "local.bin stays: the header has no path from %s" % ", ".join(gone))
     path = os.path.join(directory, LOCAL_FILE)
@@ -1480,12 +1601,34 @@ def main(argv=None):
     q.add_argument("--esp", required=True, help="the ESP's mount point (the sealed unlock-local credential is read from it)")
     q.add_argument("--device", default=ROOT_DEVICE)
     q.add_argument("--enrol-dir", default=ENROL_DIR)
+    v = sub.add_parser("verify-record", help="check an enrolment record against the root-signed chain (no TPM needed)")
+    v.add_argument("--record", required=True)
+    v.add_argument("--manifest", required=True, help="the root-signed envelope, or the JSON list of envelopes from epoch 1")
+    v.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
     x = sub.add_parser("_aks", help=argparse.SUPPRESS)
     x.add_argument("--config", required=True)
     a = sub.add_parser("_anchor", help=argparse.SUPPRESS)
     a.add_argument("--config", required=True)
     a.add_argument("--chain", required=True, choices=["-"], help="always -: the chain comes on standard input")
     args = ap.parse_args(argv)
+    if args.command == "verify-record":
+        try:
+            with open(args.record, "rb") as f:
+                document = membership.load(f.read(membership.MAX_BYTES + 1))
+            with open(args.manifest, "rb") as f:
+                chain = membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), membership.MAX_CHAIN_BYTES)
+            facts = verify_record(document, chain, args.root_key)
+        except (Refused, membership.Refused, attest.Refused, OSError, ValueError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        record = document["record"]
+        # only what was checked: the quote's PCR VALUES are not in it (only their digest), so the record's expected PCR 12
+        # is the record's claim, not something this verification shows
+        print("VERIFIED: node %s enrolled on epoch %d (manifest %s); the record is signed by its AK %s, the manifest's, under its "
+              "EK, in a quote over PCRs %s (TPM reset count %d)"
+              % (record["node_id"], record["epoch"], record["manifest_digest"][:16], facts["ak_name"][:20],
+                 ",".join(str(p) for p in facts["pcrs"]), facts["reset_count"]))
+        return 0
     if args.command == "_aks":                       # run by paths, as regalia-sync
         try:
             results = enrol_aks(args.config)

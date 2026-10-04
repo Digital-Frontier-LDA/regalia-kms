@@ -66,6 +66,14 @@ class Paths(unittest.TestCase):
         patcher = unittest.mock.patch.object(enrol, "_ask_for", lambda node, manifest, peer: peer)
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.records = []
+
+        def write_record(journal, directory, node, manifest, peers, run=None):        # step 8: test_baremetal_enrol_record.py
+            self.records.append(list(peers))
+            journal.done("record", sha256="ab" * 32)
+        patcher = unittest.mock.patch.object(enrol, "write_record", write_record)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def request_path(self, manifest, node_id, peer, ask, session, quote, local, sealed_local, device, recovery, run):
         self.asked.append((peer, session, local, sealed_local, device, bytes(recovery)))
@@ -118,7 +126,8 @@ class Paths(unittest.TestCase):
         self.assertFalse(os.path.exists(self.local()))
         steps = enrol.Journal(self.dir, "a").doc["steps"]
         self.assertEqual([steps["path:b"]["keyslot"], steps["path:c"]["keyslot"]], [3, 4])
-        self.assertEqual((steps["paths"]["state"], steps["local_removed"]["state"]), ("done", "done"))
+        self.assertEqual((steps["paths"]["state"], steps["record"]["state"], steps["local_removed"]["state"]), ("done", "done", "done"))
+        self.assertEqual(self.records, [["b", "c"]], "the record is written once, with every peer, before local.bin goes")
         self.assertEqual(self.paths(), [])                      # again: nothing more to do
         self.assertEqual(len(self.asked), 2)
 
@@ -163,8 +172,11 @@ class Paths(unittest.TestCase):
         with self.assertRaisesRegex(enrol.Refused, "not sealed yet"):
             self.paths()
 
-    def test_local_bin_is_never_removed_before_every_path_is_journalled(self):
+    def test_local_bin_is_never_removed_before_every_path_and_the_record_are_journalled(self):
         with self.assertRaisesRegex(enrol.Refused, "only once every peer's path is journalled"):
+            enrol._remove_local(self.journal, self.dir, lambda peers: [])
+        self.journal.done("paths", peers=["b", "c"])
+        with self.assertRaisesRegex(enrol.Refused, "only once the enrolment record is written"):
             enrol._remove_local(self.journal, self.dir, lambda peers: [])
         self.assertTrue(os.path.exists(self.local()))
 
@@ -189,9 +201,11 @@ class Paths(unittest.TestCase):
         self.refuse = set()
         self.assertEqual(self.paths(), [])
         self.assertFalse(os.path.exists(self.local()))
+        self.assertEqual(self.records, [["b", "c"], ["b", "c"]], "the record is written again, naming c's new path")
 
     def test_the_last_step_itself_reads_the_header(self):
         self.journal.done("paths", peers=["b", "c"])
+        self.journal.done("record", sha256="00" * 32)
         with self.assertRaisesRegex(enrol.Refused, "local.bin stays: the header has no path from c"):
             enrol._remove_local(self.journal, self.dir, lambda peers: ["c"])
         self.assertTrue(os.path.exists(self.local()))

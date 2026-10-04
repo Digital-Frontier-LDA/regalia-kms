@@ -232,7 +232,7 @@ class Case(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.d, True)
         self.tools = FakeTools()
         self.inputs = {}
-        for name, content in (("linux", b"a kernel"), ("initrd", unlock_initrd()), ("cmdline", b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n"),
+        for name, content in (("linux", b"a kernel"), ("initrd", unlock_initrd()), ("cmdline", b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n"),
                               ("os_release", b"ID=debian\n"), ("stub", b"a stub")):
             self.inputs[name] = self.write(name, content)
         self.inputs["pcrpkey"] = self.key("system", "pub")
@@ -356,15 +356,15 @@ class Arithmetic(unittest.TestCase):
             self.assertIn("the image has no %s section" % missing, str(caught.exception))
 
     def test_the_command_line(self):
-        self.assertEqual(uki.cmdline_text(b"root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n"),
-                         "root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1")
+        self.assertEqual(uki.cmdline_text(b"root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n"),
+                         "root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot")
         # the word every image must carry, and the record keeps the command line it was built with
         with self.assertRaises(m.Refused) as caught:
             uki.cmdline_text(b"root=/dev/mapper/root ro quiet\n")
         self.assertIn("does not carry systemd.import_credentials=no", str(caught.exception))
         # (each case changes ONE word of a valid line, and the reason is asserted: a line can be refused for
         # several missing words, and a case must not pass for another word's reason)
-        full = "root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1"
+        full = "root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot"
         for near in ("systemd.import_credentials=0", "systemd.import_credentials=yes", "import_credentials=no"):
             with self.subTest(near=near), self.assertRaises(m.Refused) as caught:
                 uki.cmdline_text(full.replace("systemd.import_credentials=no", near).encode())
@@ -374,7 +374,7 @@ class Arithmetic(unittest.TestCase):
                       "systemd.import_credentials=no", "systemd.import-credentials=yes", "rd.systemd.import-credentials=yes",
                       "systemd.import-credentials=no", "SYSTEMD.import_credentials=yes"):
             with self.subTest(extra=extra), self.assertRaises(m.Refused) as caught:
-                uki.cmdline_text(("root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 %s" % extra).encode())
+                uki.cmdline_text(("root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot %s" % extra).encode())
             self.assertIn("gives systemd.import_credentials more than once or with another value or spelling", str(caught.exception))
 
         # the kernel zeroes pages it frees and hands out (#221): each word must be there, exactly, once
@@ -392,8 +392,24 @@ class Arithmetic(unittest.TestCase):
                 uki.cmdline_text(full.replace("init_on_free=1", near).encode())
             self.assertIn("does not carry init_on_free=1", str(caught.exception))
 
+        # a failed unlock reboots, with no shell, and the root device's wait never times out into that (#242)
+        for word in ("rd.shell=0", "rd.emergency=reboot"):
+            with self.subTest(missing=word), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(full.replace(" " + word, "").encode())
+            self.assertIn("does not carry %s" % word, str(caught.exception))
+        for near, word in (("rd.emergency=poweroff", "rd.emergency=reboot"), ("rd.emergency=halt", "rd.emergency=reboot"),
+                           ("emergency=reboot", "rd.emergency=reboot"), ("shell=0", "rd.shell=0"), ("rd.shell=no", "rd.shell=0")):
+            with self.subTest(spelling=near), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(full.replace(word, near).encode())
+            self.assertIn("does not carry %s" % word, str(caught.exception))
+        for extra, key in (("rd.emergency=poweroff", "rd.emergency"), ("rd.emergency=halt", "rd.emergency"), ("rd.emergency=reboot", "rd.emergency"),
+                           ("rd.shell=off", "rd.shell"), ("rd.shell=0", "rd.shell")):
+            with self.subTest(extra=extra), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(("%s %s" % (full, extra)).encode())
+            self.assertIn("gives %s more than once or with another value or spelling" % key, str(caught.exception))
+
         # the forms that turn a shell OFF are what an image should carry (the unlock test boots with them)
-        hardened = "root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=poweroff systemd.debug_shell=0 rd.systemd.debug-shell=off"
+        hardened = full + " systemd.debug_shell=0 rd.systemd.debug-shell=off"
         self.assertEqual(uki.cmdline_text(hardened.encode()), hardened)
         for raw, reason in ((b"", "one line of printable ASCII"), (b"\n", "one line of printable ASCII"), (b"a\nb\n", "one line of printable ASCII"),
                             (b"root=x\tro", "one line of printable ASCII"), ("root=é".encode(), "not ASCII")):
@@ -402,10 +418,10 @@ class Arithmetic(unittest.TestCase):
             self.assertIn(reason, str(caught.exception))
         for word in ("rd.luks.uuid=abcd", "rd.luks=0", "luks=no", "luks.key=/x", "rd.shell", "rd.shell=1", "rd.shell=yes", "rd.break=0",
                      "root=UUID=0b6c3d34-1e0a-4b1e-9c2e-8a1f8c9f0a11", "root=PARTUUID=abcd", "root=PARTLABEL=regalia-root", "rd.luks.options=tpm2-device=auto", "rd.break", "rd.break=pre-mount", "rd.shell",
-                     "systemd.debug_shell", "systemd.debug-shell=1", "rd.systemd.debug_shell", "init=/bin/sh", "rdinit=/bin/sh",
+                     "systemd.debug_shell", "systemd.debug-shell=1", "rd.systemd.debug_shell", "rdshell", "rdshell=1", "rdbreak", "rdbreak=pre-mount", "init=/bin/sh", "rdinit=/bin/sh",
                      "systemd.unit=emergency.target", "rd.systemd.unit=rescue.target", "emergency", "rescue", "single", "S", "s", "1", "-b"):
             with self.subTest(word=word), self.assertRaises(m.Refused) as caught:
-                uki.cmdline_text(("root=/dev/mapper/root %s ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1" % word).encode())
+                uki.cmdline_text(("root=/dev/mapper/root %s ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot" % word).encode())
             self.assertIn("holds %r, which a KMS host's image does not carry" % word, str(caught.exception))
 
 
@@ -418,7 +434,7 @@ class Build(Case):
         self.assertEqual(record["pcr11"], {phase: predicted(parts, path) for phase, path in uki.PHASE_PATHS.items()})
         self.assertNotEqual(record["pcr11"]["initrd"], record["pcr11"]["system"])
         self.assertEqual(record["sections"], {"." + n: hashlib.sha256(c).hexdigest() for n, c in parts.items()})
-        self.assertEqual(parts["cmdline"], b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1")            # the file's newline is not in the image
+        self.assertEqual(parts["cmdline"], b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot")            # the file's newline is not in the image
         self.assertEqual(record["inputs"]["linux"], {"sha256": hashlib.sha256(b"a kernel").hexdigest(), "size": 8})
         self.assertEqual(sorted(record["inputs"]), ["cmdline", "initrd", "initrd_build", "linux", "os_release", "pcrpkey", "stub"])
         self.assertEqual(record["pcrpkey_pkfp"], uki.public_key(self.public()["system"], "k")[0])
@@ -466,7 +482,7 @@ class Build(Case):
 
     def test_names_and_the_command_line_are_checked_before_anything_runs(self):
         for kw, reason in (({"name": "an image"}, "short plain name"), ({"name": "../x"}, "short plain name"), ({"uname": "6.12; rm"}, "--uname must be a kernel version"),
-                           ({"inputs": {"cmdline": self.write("c", b"root=x rd.luks.uuid=1 systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n")}}, "holds 'rd.luks.uuid=1'")):
+                           ({"inputs": {"cmdline": self.write("c", b"root=x rd.luks.uuid=1 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n")}}, "holds 'rd.luks.uuid=1'")):
             with self.subTest(**{k: str(v) for k, v in kw.items()}):
                 self.tools.calls.clear()
                 self.refused(reason, self.build, **kw)
@@ -906,7 +922,7 @@ class Records(Case):
         self.refused("the record is of an unsigned image", uki.load_record, json.dumps(record).encode(), signed=True)
 
     def test_the_command_refuses_with_a_reason_and_no_traceback(self):
-        argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n"),
+        argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n"),
                 "--os-release", self.inputs["os_release"], "--uname", "6.12", "--stub", self.inputs["stub"], "--pcrpkey", self.inputs["pcrpkey"],
                 "--initrd-build", self.initrd_build(), "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
         with contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()) as out:
@@ -1091,7 +1107,7 @@ class InitrdReview(Case):
         self.refused("is not CLASS ORIGIN TYPE MODE UID:GID PATH VALUE", uki.load_inventory, self.write("bad.txt", b"usr/lib/x sha256:00\n"))
 
     def test_a_planted_rd_luks_word_is_refused(self):
-        for word in ("rd.luks.uuid=0b1c", "rd.luks=0", "luks.options=tpm2-device=auto", "rd.luks.key=/key", "rd.break", "systemd.debug_shell"):
+        for word in ("rd.luks.uuid=0b1c", "rd.luks=0", "luks.options=tpm2-device=auto", "rd.luks.key=/key", "rd.break", "systemd.debug_shell", "rdshell", "rdbreak=pre-mount"):
             with self.subTest(word):
                 self.refused_by(unlock_initrd({"etc/cmdline.d/90-crypt.conf": (0o100644, ("%s\n" % word).encode())}),
                                 "etc/cmdline.d/90-crypt.conf holds %r" % word)
@@ -1100,6 +1116,12 @@ class InitrdReview(Case):
                                       drop=("etc/cmdline.d/10-quiet.conf",)), "etc/cmdline.d/x.conf holds 'rd.luks.uuid=1'")
         self.passes(unlock_initrd({"etc/cmdline.d/20.conf": (0o100644, b"# rd.luks.uuid=x\nrd.shell=0\n"),
                                    "etc/cmdline.d/notes.txt": (0o100644, b"rd.luks=1")}))
+        # a fragment may repeat what the image's command line requires, and may not say otherwise (#242)
+        for word in ("rd.emergency=shell", "rd.emergency=poweroff", "emergency=halt", "systemd.import_credentials=yes", "init_on_free=0"):
+            with self.subTest(word):
+                self.refused_by(unlock_initrd({"etc/cmdline.d/90-x.conf": (0o100644, ("%s\n" % word).encode())}),
+                                "etc/cmdline.d/90-x.conf holds %r: the initrd's command line must not change what the image's command line requires" % word)
+        self.passes(unlock_initrd({"etc/cmdline.d/20.conf": (0o100644, b"rd.emergency=reboot\n")}))
 
     def test_the_crypttab_holds_the_one_generic_line_and_nothing_else(self):
         line = b"root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach\n"

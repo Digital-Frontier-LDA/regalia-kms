@@ -170,6 +170,25 @@ ceremony (a ceremony prerequisite).
   falls back and is still unlocked; retirement is refused until every node is on the new image; after
   it, the old image gets no unlock and no lease; a peer's membership restored from before the
   retirement refuses to load.
+- **On three nodes with their real services, in CI** (`e2e/rolling-threenode.py`, #75's tier N; an image is
+  PCR 11, extended after a power cycle). It shows the whole sequence:
+  - CURRENT, then NEXT before it is approved: no key from either peer while the other two serve;
+  - CURRENT and NEXT approved in one epoch, which every node holds;
+  - `may_reboot`, asked as `update apply` asks it (as root in the node's namespace, on leases asked for at that
+    moment, the running set read from the TPM), says yes to one node and WAIT to the others;
+  - each node onto NEXT, unlocked by the real pre-root client through a peer and leased by the real admission
+    service, and vouching for the nodes still on CURRENT;
+  - a rollback to CURRENT under the same epoch, still unlocked;
+  - the retire judged from the peers' real attestation state: refused naming the node still on CURRENT, accepted
+    once every node is seen on NEXT;
+  - after the retire, CURRENT gets no key;
+  - during every reboot the two other nodes are given fresh leases.
+
+  Its limits: PCR 11 is one `tpm2_pcrextend` of the image's name, not systemd-stub measuring a real UKI; `update apply`
+  itself (BootNext, the trial boot, the reset) is not run, only the `may_reboot` question it asks; the epochs and
+  heartbeats come from the fixture, not the revocation authority. The fixture takes the document and its epoch
+  together by stopping every node's services across the change; a host has no such step yet (2.7). Tier Q, real UKIs
+  under OVMF with the firmware's BootNext, is #75's next step.
 - **On one software TPM** (`e2e/pcr-signed-policy-swtpm.sh`): a PIN sealed once opens under the new
   image with no reseal, and does not open without the host key.
 - **On no physical machine.** Nothing here has run on a DL360, a physical TPM, a real UKI or a real

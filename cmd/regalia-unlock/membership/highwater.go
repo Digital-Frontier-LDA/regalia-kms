@@ -43,7 +43,7 @@ func requireAnchor(condition bool, format string, args ...any) error {
 }
 
 // NV is what the reader needs of a TPM: the NV indices it lists, an index's public area, and its bytes
-// (read with owner authorization, as tpm2_nvread -C o does).
+// (read with the index's own authorization, as tpm2_nvread <index> -C <index> does).
 type NV interface {
 	Defined() (map[uint32]bool, error)
 	Public(index uint32) (attributes uint32, size int, err error)
@@ -99,7 +99,7 @@ func asDefined(index uint32, attributes uint32, kind string) error {
 
 // baseValue is HighWater._base: both indices' attributes, then the base.
 func (h highWater) baseValue() (uint64, error) {
-	a, _, err := h.public(h.index)
+	a, aSize, err := h.public(h.index)
 	if err != nil {
 		return 0, err
 	}
@@ -109,7 +109,10 @@ func (h highWater) baseValue() (uint64, error) {
 	if err := asDefined(h.index, a, "counter"); err != nil {
 		return 0, err
 	}
-	b, _, err := h.public(h.base)
+	if err := requireAnchor(aSize == 8, "NV index %s is %d bytes, not 8", name(h.index), aSize); err != nil {
+		return 0, err
+	}
+	b, bSize, err := h.public(h.base)
 	if err != nil {
 		return 0, err
 	}
@@ -118,6 +121,10 @@ func (h highWater) baseValue() (uint64, error) {
 		return 0, err
 	}
 	if err := asDefined(h.base, b, "base"); err != nil {
+		return 0, err
+	}
+	// another size is not this anchor's (Unusable, which a re-anchor repairs), not a TPM that failed (#336)
+	if err := requireAnchor(bSize == 8, "NV index %s is %d bytes, not 8", name(h.base), bSize); err != nil {
 		return 0, err
 	}
 	return h.read8(h.base)

@@ -508,7 +508,8 @@ class HighWater:
         0x62002 (and write-locked), slots 0x60002 (and not write-locked). A reader refuses any other mask:
         that covers authwrite, policywrite, ppwrite and writeall (others could write the index), a missing
         ownerread (the owner could not read it), and locks that clear at startup. Reads are open (authread):
-        nothing here is secret.
+        nothing here is secret, and every reader reads with the index's own empty authorization (nvread
+        <index> -C <index>), never the owner's, so a reader works whatever the owner authorization is (#242).
         A slot holds  epoch (8 bytes, unsigned big-endian) || digest (32 bytes) || tag (8 bytes),  where
         digest is the SHA-256 of the canonical JSON of the manifest at that epoch (membership.digest; 32 zero
         bytes at epoch 0) and  tag = SHA-256(b"regalia-membership-record/v1\x00" || epoch || digest)[0:8].
@@ -531,7 +532,7 @@ class HighWater:
     RECORD_TAG = b"regalia-membership-record/v1\0"
     NT_MASK, NT_COUNTER, NT_ORDINARY = 0xF0, 0x10, 0x00
     WRITTEN, WRITELOCKED = 0x20000000, 0x800
-    OWNERWRITE, AUTHWRITE, POLICYWRITE, AUTHREAD = 0x2, 0x4, 0x8, 0x40000
+    OWNERWRITE, AUTHWRITE, POLICYWRITE, OWNERREAD, AUTHREAD = 0x2, 0x4, 0x8, 0x20000, 0x40000
     # The attributes this software defines, exactly, apart from the two that change with use (written, and the
     # base's write lock). Anything else (authwrite, policywrite, ppwrite, writeall, no ownerread, read or write
     # locks that clear at startup, ...) is not this anchor's index: comparing the whole mask refuses them all.
@@ -577,7 +578,7 @@ class HighWater:
         return self._public(index)[0]
 
     def _read8(self, index):
-        r = self._tpm("nvread", index, "-C", "o", "-s", "8")
+        r = self._tpm("nvread", index, "-C", index, "-s", "8")
         require(r.returncode == 0 and len(r.stdout) == 8, "cannot read 8 bytes from NV index %s" % index)
         return int.from_bytes(r.stdout, "big")
 
@@ -763,7 +764,7 @@ class HighWater:
         self._as_defined(index, a, "slot")
         if not a & self.WRITTEN:
             return None
-        r = self._tpm("nvread", index, "-C", "o", "-s", str(self.RECORD_BYTES))
+        r = self._tpm("nvread", index, "-C", index, "-s", str(self.RECORD_BYTES))
         require(r.returncode == 0 and len(r.stdout) == self.RECORD_BYTES, "cannot read %d bytes from the record index %s: the anchor "
                 "is unavailable (fail closed)" % (self.RECORD_BYTES, index))
         epoch, held = int.from_bytes(r.stdout[:8], "big"), r.stdout[8:40].hex()
@@ -822,11 +823,11 @@ class HighWater:
             return None
 
     def _read_any(self, index, size, attributes):
-        """The index's bytes, read with the owner's authorization or, failing that, its own (authread): for
+        """The index's bytes, read with its own authorization (authread) or, failing that, the owner's: for
         remains(), which must see what an index holds whatever else is wrong with it. Refused if neither reads."""
-        r = self._tpm("nvread", index, "-C", "o", "-s", str(size))
-        if (r.returncode != 0 or len(r.stdout) != size) and attributes & self.AUTHREAD:
-            r = self._tpm("nvread", index, "-C", index, "-s", str(size))
+        r = self._tpm("nvread", index, "-C", index, "-s", str(size))
+        if (r.returncode != 0 or len(r.stdout) != size) and attributes & self.OWNERREAD:
+            r = self._tpm("nvread", index, "-C", "o", "-s", str(size))
         require(r.returncode == 0 and len(r.stdout) == size, "cannot read %d bytes from NV index %s: what the anchor holds cannot "
                 "be known (fail closed)" % (size, index))
         return r.stdout
