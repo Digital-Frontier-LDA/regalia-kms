@@ -195,6 +195,18 @@ Commissioning has two halves:
   token is simply never served. A root-signed manifest that drops a stolen or retired token's serial
   takes it out of service at the lease service's next step, with no change to the daemon's
   configuration.
+  **A pull nobody saw is seen too (#72, G2).** The daemon watches every PC/SC reader for as long as it runs.
+  A Nitrokey HSM 2, a Pico HSM and a YubiKey are each a USB reader with its card, so pulling one takes
+  the reader away and replugging makes a new one. A token whose reader moved between two operations is
+  treated as having been away, though no operation saw it go, and waits for a fresh lease like any
+  returned token. Where admission is required, a token on a removable slot is served only while its
+  reader is watched, and a daemon that has lost pcscd refuses them until it reconnects (then they
+  wait for a fresh lease). The watcher is in the `-tags piv` build, so **the production daemon is the
+  piv build** (`go build -tags piv -trimpath ./cmd/regalia-kms`, which needs libpcsclite). A daemon built
+  without it refuses to START where admission is required and a token is configured, and says why. A warm card reset with no removal
+  is deliberately not an absence: the sealed PIN is presented on every operation under the current
+  lease, so the card's own login state never authorized anything. SoftHSM slots are not removable and
+  are not watched.
   `python3 -Es -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
   lease service to a peer is not shipped yet (#80). Where admission is required, a token that was
   absent (removed and returned, or the daemon restarted) serves again only once the node holds a lease
@@ -815,8 +827,20 @@ Five systemd units in `deploy/baremetal/units/`, all run from one configuration,
 **Provisioning a node (#190), PARTLY BUILT: `python3 -Es -m deploy.baremetal.enrol`.** Two phases, as root at
 the console; every step is journalled in `/var/lib/regalia-enrol` (root, 0700), and a rerun resumes,
 removing only what it can prove it made.
-- `init --node-id X` makes the EK and AK in the TPM, the WG-SERVICE key (`/etc/regalia/wg-service.key`,
-  0600) and the WG-BOOT key, and writes the identity bundle (public values) for the manifest ceremony.
+- `init --node-id X --system-pub PEM` makes the EK and AK in the TPM, the signing key (#199: at 0x81010003,
+  usable only under PolicyAuthorize of the system-phase PCR key, `signkey.py`) with the AK's certification of
+  it, the WG-SERVICE key (`/etc/regalia/wg-service.key`, 0600) and the WG-BOOT key, and writes the identity
+  bundle (public values) for the manifest ceremony.
+- The root's side, on its own machine and without a TPM, in three steps:
+  - `challenge --bundle B --out CRED --keep KEEP` makes a credential to the bundle's EK and AK Name. KEEP holds only
+    the secret's SHA-256.
+  - `activate --credential CRED`, run as root on the node, prints the secret. Only the TPM that holds that EK and
+    that AK can release it, which proves the AK is the EK's. Without that proof, the AK's certification of the
+    signing key would prove nothing.
+  - `entry --bundle B --system-pub PEM --keep KEEP --answer HEX` checks the answer. It then checks the bundle: the
+    EK and AK Names from their public areas, and the signing key certified by that AK, with the attributes and
+    policy of the root's own system-phase key. Only then does it print the node's identity fields as a v4
+    manifest entry carries them.
 - `check` verifies a root-signed manifest chain against this host and writes nothing.
 - `commit` takes the chain, the root fingerprint typed by hand, the measurements document, the site
   configuration and the signed boot image (`--image --image-record --initrd-pub --system-pub
@@ -882,6 +906,10 @@ Every trail in `deploy/baremetal/trails.py`'s registry is hash-chained line by l
 audit collector by one instance of `units/regalia-audit-ship@.service` per trail
 (`systemctl enable --now regalia-audit-ship@sync`; `cmd/regalia-audit-ship`, `internal/audit/trail.go`).
 Each line becomes one audit event on the stream `<site>.<trail>`.
+
+The collector is an **external service** the owner chooses (#351). `AUDIT-COLLECTOR.md` is the contract it must
+meet and what each node gives it. `regalia-audit-ship check` validates a node's endpoint configuration (and the
+unit runs it before each start); `regalia-audit-ship conformance` checks a candidate service against the contract.
 - **No local state.** Each pass rebuilds the events from the file and goes on only if the collector's
   committed head is one of them. A file cut short, rewritten or removed under what was shipped raises an
   alarm in the collector's `alarms.jsonl`, and the instance exits 3. The unit does not restart it, and

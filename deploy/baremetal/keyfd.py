@@ -100,6 +100,42 @@ def sealed_memfd(buffer, name="regalia-key"):
         raise
 
 
+def tty_secret(prompt, what, limit=256, tty="/dev/tty"):
+    """A secret typed at this process's controlling terminal, echo off, as a bytearray: refused without a terminal, and
+    never read from standard input (getpass falls back to stdin, with echo, when /dev/tty cannot be opened). `what`
+    names it in a refusal ("the PIN")."""
+    import termios
+    try:
+        fd = os.open(tty, os.O_RDWR | os.O_NOCTTY)
+    except OSError as error:
+        raise Refused("%s is typed at the console: no controlling terminal (%s)" % (what, error.strerror)) from None
+    typed = bytearray()
+    try:
+        require(os.isatty(fd), "%s is typed at the console: %s is not a terminal" % (what, tty))
+        old = termios.tcgetattr(fd)
+        new = list(old)
+        new[3] &= ~(termios.ECHO | termios.ECHONL)
+        termios.tcsetattr(fd, termios.TCSAFLUSH, new)      # echo off and typeahead dropped, THEN the prompt
+        try:
+            os.write(fd, prompt.encode())
+            while len(typed) <= limit:
+                chunk = os.read(fd, 1)
+                if not chunk or chunk in (b"\n", b"\r"):
+                    break
+                typed += chunk
+        finally:
+            termios.tcsetattr(fd, termios.TCSAFLUSH, old)
+            os.write(fd, b"\n")
+        require(len(typed) <= limit, "%s is longer than %d bytes" % (what, limit))
+        require(typed, "no %s was typed" % what)
+        return typed
+    except BaseException:
+        zero(typed)
+        raise
+    finally:
+        os.close(fd)
+
+
 def tty_line(prompt):
     """A line typed at this process's controlling terminal (stdin is the ceremony's /dev/null): refused without one."""
     try:

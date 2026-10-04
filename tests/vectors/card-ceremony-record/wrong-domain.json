@@ -1,0 +1,64 @@
+{
+ "record": {
+  "at": "2026-10-04T12:00:00Z",
+  "event": "card-ceremony",
+  "owner_keys": [
+   {
+    "alg": "ed25519",
+    "attested": true,
+    "key": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
+    "role": "dev-main",
+    "serial": "40000001"
+   },
+   {
+    "alg": "ed25519",
+    "attested": true,
+    "key": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d",
+    "role": "dev-backup",
+    "serial": "40000002"
+   }
+  ],
+  "ownerauth_recipients": [
+   {
+    "primary": "A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1",
+    "serial": "40000001",
+    "subkey": "B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1"
+   },
+   {
+    "primary": "A2A2A2A2A2A2A2A2A2A2A2A2A2A2A2A2A2A2A2A2",
+    "serial": "40000002",
+    "subkey": "B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2"
+   }
+  ],
+  "release_key": {
+   "alg": "ed25519",
+   "attested": false,
+   "cards": [
+    "40000003",
+    "40000004"
+   ],
+   "fingerprint": "C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3",
+   "imported": true,
+   "key": "91a28a0b74381593a4d9469579208926afc8ad82c8839b7644359b9eba9a4b3a"
+  },
+  "root_entry": {
+   "alg": "ed25519",
+   "key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+  },
+  "root_fingerprint": "34750f98bd59fcfc946da45aaabe933be154a4b5094e1c4abf42866505f3c97e",
+  "schema": "regalia.card-ceremony-record/v1",
+  "session": "0123456789abcdef0123456789abcdef",
+  "ssh_signers": [
+   {
+    "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINVCB9oZSXfc9Grb/sK8LnW1LVqKQhhP7f3AACTw4+ja",
+    "serial": "40000001"
+   },
+   {
+    "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFEcNKGiy1Id8WuyRrjejnmXziNcfnayKj11A6JIGd2K",
+    "serial": "40000002"
+   }
+  ],
+  "tool": "card-ceremony-vectors/1"
+ },
+ "signature": "0dbfbe0126bb7d70a89ef009e282e77fb0fbdde952cc938bc344624f07e1358c80c49226f860cde1a4e6e4402d2620389b378be59d5edbbd3d72b2d87de9360e"
+}

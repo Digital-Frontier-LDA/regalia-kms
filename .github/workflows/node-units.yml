@@ -75,7 +75,7 @@ jobs:
           sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update -qq
           sudo apt-get build-dep -y -qq swtpm
-          sudo apt-get install -y -qq --no-install-recommends libfuse-dev libfuse3-dev pkg-config
+          sudo apt-get install -y -qq --no-install-recommends libfuse-dev libfuse3-dev pkg-config libpcsclite-dev
           cd "$RUNNER_TEMP" && apt-get source -qq swtpm && cd swtpm-*/
           [ -x configure ] || autoreconf -fi
           ./configure -q --prefix=/usr/local --with-cuse --with-openssl
@@ -88,7 +88,9 @@ jobs:
       - name: Build the KMS daemon and the audit collector (part 2 runs them)
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
-          for name in regalia-kms regalia-audit-collector; do go build -o "$RUNNER_TEMP/bin/$name" "./cmd/$name"; done
+          # the daemon as production builds it (-tags piv): with admission required, a build without PC/SC refuses to start (#72, G2)
+          go build -tags piv -o "$RUNNER_TEMP/bin/regalia-kms" ./cmd/regalia-kms
+          go build -o "$RUNNER_TEMP/bin/regalia-audit-collector" ./cmd/regalia-audit-collector
       - name: The four units, as shipped, under systemd; a peer's lease, the daemon, a revocation
         run: |
           set -o pipefail
@@ -117,7 +119,7 @@ jobs:
         run: |
           set -o pipefail
           REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/audit-ship-systemd.py | tee "$RUNNER_TEMP/ship.log"
-          grep -q '^audit-ship-systemd: 20 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
+          grep -q '^audit-ship-systemd: 21 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
             echo "::error::the shipper test did not pass all 20 checks" >&2; exit 1; }
 
   # #70 (Phase 10), PR 1: three nodes on one machine, each its real services in its own namespace against
@@ -185,15 +187,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs
-      - name: Build the pre-root client
-        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
-      - name: A new image through three nodes, CURRENT and NEXT both accepted, then CURRENT retired
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: A new image through three nodes, CURRENT and NEXT both accepted, then CURRENT retired; every event in the audit collector
         run: |
           set -o pipefail
-          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/rolling-threenode.py | tee "$RUNNER_TEMP/rolling.log"
-          grep -q '^rolling-threenode: 43 passed, 0 failed$' "$RUNNER_TEMP/rolling.log" || {
-            echo "::error::the rolling-update test did not pass all 43 checks" >&2; exit 1; }
+          grep -q '^rolling-threenode: 50 passed, 0 failed$' "$RUNNER_TEMP/rolling.log" || {
+            echo "::error::the rolling-update test did not pass all 50 checks" >&2; exit 1; }
 
   # #71 (Phase 11): a total outage of the three nodes and the revocation authority, restored by one manual
   # recovery (the authority's host first; then one node by hand; then the other two through it).

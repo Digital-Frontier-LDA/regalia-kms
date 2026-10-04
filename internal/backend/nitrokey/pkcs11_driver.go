@@ -53,6 +53,7 @@ type PINRetryProbe interface {
 type cryptoki interface {
 	GetSlotList(bool) ([]uint, error)
 	GetTokenInfo(uint) (pkcs11.TokenInfo, error)
+	GetSlotInfo(uint) (pkcs11.SlotInfo, error)
 	GetMechanismList(uint) ([]*pkcs11.Mechanism, error)
 	OpenSession(uint, uint) (pkcs11.SessionHandle, error)
 	CloseSession(pkcs11.SessionHandle) error
@@ -659,6 +660,20 @@ func (session *pkcs11Session) PublicKey(ctx context.Context, objectID string) ([
 	}
 	attributes = append(attributes, pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, keyType))
 	return marshalPublicKey(attributes)
+}
+
+// Reader is the PC/SC reader the session's slot is: OpenSC names a slot after its reader, and marks
+// it removable (CKF_REMOVABLE_DEVICE) when the token can be pulled, as a USB token can (regalia-kms#72,
+// G2). The name is trimmed of the padding CK_SLOT_INFO carries.
+func (session *pkcs11Session) Reader(ctx context.Context) (string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	info, err := session.module.GetSlotInfo(session.slot)
+	if err != nil {
+		return "", false, err
+	}
+	return strings.TrimRight(info.SlotDescription, " \x00"), info.Flags&pkcs11.CKF_REMOVABLE_DEVICE != 0, nil
 }
 
 func (session *pkcs11Session) Close() error {

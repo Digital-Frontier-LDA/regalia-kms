@@ -13,7 +13,12 @@
 #   /etc/regalia/audit-ship.env       COLLECTOR=https://collector.example:8443  SITE=sitea
 #   /etc/regalia/audit-ship/%i.env    TRAIL_PATH=/var/lib/regalia-sync/sync-audit.jsonl
 #   (the path is trails.where(%i, the node's or authority's configuration))
-#   /etc/regalia/audit-ship/client.crt, client.key (0640 root:regalia-audit-ship), collector-ca.pem
+#   /etc/regalia/audit-ship/client.crt, client.key (0640 root:regalia-audit-ship), collector-ca.pem,
+#   collector-receipt.pub (the external collector's pinned receipt keys; deploy/baremetal/AUDIT-COLLECTOR.md)
+# Before each start, `regalia-audit-ship check` validates all of it together (the https origin, the site, the
+# certificate and key as a pair valid now, the CA, the receipt keys): a broken configuration fails the start by
+# name instead of retrying for ever. It does not reach the collector: an unreachable collector is retried by the
+# shipper, never blocks the service whose trail it is, and alerts (deploy/monitoring/regalia-node.rules.yml: RegaliaAuditTrailBehind, RegaliaAuditTrailNeverShipped).
 # Its own user (regalia-audit-ship.sysusers.conf) and NO capability: each instance reads its one trail
 # through that trail's group, from its drop-in regalia-audit-ship@%i.service.d/reader.conf (the
 # registry's group: the writer's own, or regalia-audit for the operator tools'). Trails are 0640.
@@ -28,6 +33,9 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=/etc/regalia/audit-ship.env
 EnvironmentFile=/etc/regalia/audit-ship/%i.env
+ExecStartPre=/usr/bin/regalia-audit-ship check -collector ${COLLECTOR} -site ${SITE} \
+    -tls-cert /etc/regalia/audit-ship/client.crt -tls-key /etc/regalia/audit-ship/client.key \
+    -server-ca /etc/regalia/audit-ship/collector-ca.pem -receipt-keys /etc/regalia/audit-ship/collector-receipt.pub
 ExecStart=/usr/bin/regalia-audit-ship -trail %i -path ${TRAIL_PATH} -collector ${COLLECTOR} -site ${SITE} \
     -tls-cert /etc/regalia/audit-ship/client.crt -tls-key /etc/regalia/audit-ship/client.key \
     -server-ca /etc/regalia/audit-ship/collector-ca.pem -metrics /run/regalia-metrics/audit-ship/%i.prom \

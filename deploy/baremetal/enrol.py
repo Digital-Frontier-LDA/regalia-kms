@@ -1,10 +1,15 @@
 """regalia-node enrol, phase 1: `init` makes this host's keys, on this host, and prints what the
 manifest ceremony needs to name it (#190).
 
-    sudo python3 -Es -m deploy.baremetal.enrol init --node-id a
+    sudo python3 -Es -m deploy.baremetal.enrol init --node-id a --system-pub SYSTEM-PCR-KEY.pem
+    python3 -Es -m deploy.baremetal.enrol challenge --bundle bundle.json --out CRED.bin --keep KEEP.json   (the root's side, no TPM)
+    sudo python3 -Es -m deploy.baremetal.enrol activate --credential CRED.bin                      (on the node: prints the answer)
+    python3 -Es -m deploy.baremetal.enrol entry --bundle bundle.json --system-pub SYSTEM-PCR-KEY.pem --keep KEEP.json --answer HEX
 
 WHAT IT MAKES, each on the host and never imported (ADR-0002 D5's rule, applied to node keys):
   * the EK and a restricted signing AK, persistent in the TPM (attest.node_init, 0x81010001/0x81010002);
+  * the SIGNING KEY (#199, schema v4's signing_key: signkey.py), persistent at 0x81010003, usable only under
+    PolicyAuthorize of the system-phase PCR key given with --system-pub, and certified by the AK;
   * the WG-SERVICE key, /etc/regalia/wg-service.key, root 0600;
   * the WG-BOOT key, kept root 0600 in the enrolment directory until `commit` seals it to this TPM.
 The local unlock contribution is NOT made here: `commit` makes it and seals it in one step, so it is never
@@ -21,12 +26,14 @@ loader/credentials, never replacing a file, with their SHA-256 and size journall
 
 WHAT IT PRINTS: the identity bundle (bundle.json in the enrolment directory), public values only: the EK
 and AK public areas and Names, the EK certificate when the TPM carries one (checked here to certify THIS
-EK; the ceremony verifies it to the manufacturer's CA), both WireGuard public keys, and the TPM's
-firmware version. Without an EK certificate, the EK Name and its SHA-256 are shown on screen, to be copied
+EK; the ceremony verifies it to the manufacturer's CA), both WireGuard public keys, the signing key's public
+area with the AK's certification of it, and the TPM's firmware version. `entry`, on the root's machine,
+checks a bundle without a TPM (signkey.verify_certification against the root's own system-phase PCR key) and
+prints the node's identity fields as a v4 manifest entry carries them. Without an EK certificate, the EK Name and its SHA-256 are shown on screen, to be copied
 by hand to the ceremony (the fallback the ceremony records).
 
-WHAT IT REFUSES: a persistent object at the EK or AK handle, or a WG-SERVICE key, that this enrolment did
-not make. A host that was enrolled is re-enrolled only as a new node, through replacement (#76).
+WHAT IT REFUSES: a persistent object at the EK, AK or signing key handle, or a WG-SERVICE key, that this
+enrolment did not make. A host that was enrolled is re-enrolled only as a new node, through replacement (#76).
 
 BETWEEN THE PHASES the WG-BOOT private key is in the clear on the encrypted root, 0600 in a root-only
 directory; `commit` seals it to the TPM and removes it. Host backups must exclude /var/lib/regalia-enrol
@@ -50,7 +57,7 @@ import sys
 import tempfile
 import time
 
-from deploy.baremetal import attest, espcreds, measurements, membership
+from deploy.baremetal import attest, espcreds, measurements, membership, signkey
 
 SCHEMA_JOURNAL = "regalia.enrol-journal/v1"
 SCHEMA_BUNDLE = "regalia.enrol-bundle/v1"
@@ -231,6 +238,125 @@ def identity(journal, directory, run):
     facts = {"ek_public": ek_blob.hex(), "ek_name": ek_name, "ak_public": ak_blob.hex(), "ak_name": ak_name}
     journal.done("identity", **facts)
     return facts
+
+
+def signing_key(journal, directory, system_pub, ids, run):
+    """The signing key (signkey.py) at signkey.HANDLE, made once and certified by the AK. #234's rules: an object at
+    the handle is removed only when the journal recorded its Name before it was made persistent (a crash between the
+    two); anything else there is refused, never evicted."""
+    handle = signkey.HANDLE.lower()
+    if journal.state("signing_key") == "done":
+        facts = journal.get("signing_key")
+        require(handle in persistent_handles(run) and _name_at(signkey.HANDLE, directory, run) == facts["signing_name"],
+                "the signing key this enrolment made is no longer at %s" % signkey.HANDLE)
+        require(facts["system_pkfp"] == signkey.pcr_key_fingerprint(system_pub),
+                "the signing key was made for another system-phase PCR key (%s...); a host's signing key is made once"
+                % facts["system_pkfp"][:16])
+        return facts
+    if handle in persistent_handles(run):
+        recorded = journal.get("signing_key").get("signing_name") if journal.state("signing_key") == "started" else None
+        require(recorded is not None and _name_at(signkey.HANDLE, directory, run) == recorded,
+                "the TPM already holds a persistent object at %s, which this enrolment did not make. A host that was "
+                "enrolled is re-enrolled only as a new node, through replacement (#76)" % signkey.HANDLE)
+        _evict(signkey.HANDLE, run)              # recorded right after it was created: ours, unseen
+
+    def record(name):
+        journal.doc["steps"]["signing_key"]["signing_name"] = name         # BEFORE it is made persistent
+        _atomic_json(journal.path, journal.doc)
+
+    journal.started("signing_key")
+    blob = signkey.create(system_pub, run=run, record=record)
+    info, sig = signkey.certify(run=run)
+    entry = signkey.verify_certification(blob, info, sig, bytes.fromhex(ids["ak_public"]), ids["ek_name"], system_pub, run=run)
+    facts = {"signing_public": blob.hex(), "signing_certify": info.hex(), "signing_sig": sig.hex(), "signing_key": entry["key"],
+             "signing_name": signkey.identity(blob, system_pub)[0].hex(), "system_pkfp": signkey.pcr_key_fingerprint(system_pub)}
+    journal.done("signing_key", **facts)
+    return facts
+
+
+def recheck_signing_key(journal, directory, run):
+    """Before `commit` writes anything: the signing key this enrolment made is still the object at its handle (its Name
+    the journal recorded), and it is the one the bundle names. A key removed or replaced after `init` would otherwise
+    go into a v4 manifest this TPM cannot sign for. Nothing to check for an enrolment made before #199."""
+    if journal.state("signing_key") != "done":
+        return
+    facts = journal.get("signing_key")
+    require(signkey.HANDLE.lower() in persistent_handles(run) and _name_at(signkey.HANDLE, directory, run) == facts["signing_name"],
+            "the signing key this enrolment made is no longer at %s: nothing was written" % signkey.HANDLE)
+    require(_bundle(directory).get("signing_key") == facts["signing_key"], "bundle.json names another signing key than the one this "
+            "enrolment made: nothing was written")
+
+
+ENTRY_KEYS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key")
+CHALLENGE_SCHEMA = "regalia.enrol-challenge/v1"
+
+
+def _bundle_identity(bundle):
+    """The bundle's EK and AK public areas, with their Names recomputed and required to be the ones it states."""
+    require(isinstance(bundle, dict) and bundle.get("schema") == SCHEMA_BUNDLE, "not an identity bundle")
+    for k in ("node_id", "ek_public", "ek_name", "ak_public", "ak_name"):
+        require(isinstance(bundle.get(k), str), "the bundle has no %s" % k)
+    require(NODE_ID.fullmatch(bundle["node_id"]), "the bundle's node ID is not a node ID")
+    ek_public, ak_public = bytes.fromhex(bundle["ek_public"]), bytes.fromhex(bundle["ak_public"])
+    require(attest.name_of(attest.public_area(ek_public, "the EK public area")).hex() == bundle["ek_name"], "the bundle's EK Name is not its EK's")
+    require(attest.ak_identity(ak_public)[0].hex() == bundle["ak_name"], "the bundle's AK Name is not its AK's")
+    return ek_public, ak_public
+
+
+def challenge(bundle, run=subprocess.run, rand=os.urandom):
+    """The root's side, no TPM: a credential to the bundle's EK and AK Name (TPM2_MakeCredential in software) and what to
+    KEEP to check the answer: only the SHA-256 of the secret, never the secret. Only the TPM that holds that EK and an
+    object of that AK Name under it can release the secret (enrol activate), which is what proves the AK is in the TPM
+    the EK names: the AK's certification of the signing key is worth nothing without it (a software "AK" could sign any
+    TPMS_ATTEST; CodeRabbit's finding on #358). This is an AK enrolment challenge, carrying nothing else, as
+    attest.make_credential's invariant requires. Returns (credential bytes, keep document)."""
+    ek_public, _ = _bundle_identity(bundle)
+    secret = bytearray(rand(32))
+    try:
+        credential = attest.make_credential(ek_public, bytes.fromhex(bundle["ak_name"]), bytes(secret), run)
+        keep = {"schema": CHALLENGE_SCHEMA, "node_id": bundle["node_id"], "ek_name": bundle["ek_name"], "ak_name": bundle["ak_name"],
+                "secret_sha256": hashlib.sha256(secret).hexdigest()}
+    finally:
+        secret[:] = bytes(len(secret))
+    return credential, keep
+
+
+def activate(credential, run=subprocess.run):
+    """On the node (root): the secret its TPM releases for `credential` under its persistent EK and AK (attest.node_activate),
+    as hex, for the operator to carry back to the root's machine."""
+    with tempfile.TemporaryDirectory(prefix="enrol-activate-") as d:
+        path, out = os.path.join(d, "credential"), os.path.join(d, "secret")
+        with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+            f.write(credential)
+        attest.node_activate(path, out, run=run)
+        with open(out, "rb") as f:
+            return f.read().hex()
+
+
+def entry(bundle, system_pub, keep, answer, run=subprocess.run):
+    """The root's side, on its own machine and without a TPM: a node's identity fields as a v4 manifest entry carries
+    them, from its bundle, once everything in it that can be checked is. The EK and AK Names are recomputed from their
+    public areas, and the signing key is accepted only as signkey.verify_certification accepts it: certified by THIS
+    AK under THIS EK, with the attributes and the PolicyAuthorize of `system_pub` (the root's own copy of the
+    system-phase PCR key, never the node's word). The EK certificate is the ceremony's to verify, as before.
+
+    `keep` and `answer` are the AK's proof (challenge, then activate on the node): the secret only the TPM holding this EK
+    and this AK could release. Without it the AK's certification proves nothing, and nothing is printed."""
+    for k in ("wg_service_pub", "wg_boot_pub", "signing_public", "signing_certify", "signing_sig"):
+        require(isinstance(bundle.get(k), str), "the bundle has no %s%s" % (k, ": it was made before #199" if k.startswith("signing") else ""))
+    _, ak_public = _bundle_identity(bundle)
+    require(isinstance(keep, dict) and keep.get("schema") == CHALLENGE_SCHEMA, "the kept challenge is not one `enrol challenge` wrote")
+    require((keep.get("node_id"), keep.get("ek_name"), keep.get("ak_name")) == (bundle["node_id"], bundle["ek_name"], bundle["ak_name"]),
+            "the kept challenge was made for another bundle")
+    require(isinstance(answer, str) and re.fullmatch(r"[0-9a-f]{64}", answer or "") is not None, "the answer is the 64 hex `enrol activate` printed")
+    import hmac
+    require(hmac.compare_digest(hashlib.sha256(bytes.fromhex(answer)).hexdigest(), keep.get("secret_sha256", "")),
+            "the answer is not the challenge's secret: the AK is not proven to be in the TPM this EK names")
+    signing = signkey.verify_certification(bytes.fromhex(bundle["signing_public"]), bytes.fromhex(bundle["signing_certify"]),
+                                           bytes.fromhex(bundle["signing_sig"]), ak_public, bundle["ek_name"], system_pub, run=run)
+    wg = {k: base64.b64decode(bundle[k], validate=True).hex() for k in ("wg_service_pub", "wg_boot_pub")}
+    require(all(len(v) == 64 for v in wg.values()), "a WireGuard public key is 32 bytes")
+    return dict(zip(ENTRY_KEYS, (bundle["node_id"], bundle["ek_name"], bundle["ak_name"], wg["wg_service_pub"], wg["wg_boot_pub"], signing)))
 
 
 def _der_exact(raw, index):
@@ -434,12 +560,15 @@ def _safe_directory(directory):
         os.close(parent)
 
 
-def init(node_id, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout):
+def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout):
+    """`system_pub`: the system-phase PCR public key (PEM bytes) the signing key's policy names."""
     require(NODE_ID.fullmatch(node_id or ""), "a node ID is a lower-case name, such as a")
+    signkey.pcr_key_name(system_pub)                 # an RSA-2048 PEM, before anything is made
     _safe_directory(directory)
     journal = Journal(directory, node_id)
     ids = identity(journal, directory, run)
     cert = ek_certificate(journal, directory, run)
+    signing = signing_key(journal, directory, system_pub, ids, run)     # after the EK checks: nothing more is made on a refusal
     service = wg_key(journal, "wg_service", wg_service_key, run)
     boot = wg_key(journal, "wg_boot", os.path.join(directory, "wg-boot.key"), run)
     bundle = {"schema": SCHEMA_BUNDLE, "node_id": node_id,
@@ -447,6 +576,8 @@ def init(node_id, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subpro
               "ak_public": ids["ak_public"], "ak_name": ids["ak_name"],
               "ek_certificate": cert["certificate"],
               "wg_service_pub": service, "wg_boot_pub": boot,
+              "signing_public": signing["signing_public"], "signing_certify": signing["signing_certify"],
+              "signing_sig": signing["signing_sig"], "signing_key": signing["signing_key"],
               "tpm_firmware_version": firmware_version(run)}
     _atomic_json(os.path.join(directory, "bundle.json"), bundle)
     os.chmod(os.path.join(directory, "bundle.json"), 0o644)
@@ -533,8 +664,12 @@ def check_manifest(directory, chain, root_key, typed, document, replace=None):
     require(membership.CAPABILITIES[node["state"]] & {"request", "serve"},
             "the manifest names %s %s: a node in that state is not enrolled" % (node_id, node["state"]))
     wg = {k: base64.b64decode(bundle[k]).hex() for k in ("wg_service_pub", "wg_boot_pub")}
-    for field, mine in (("ek_name", bundle["ek_name"]), ("ak_name", bundle["ak_name"]),
-                        ("wg_service_pub", wg["wg_service_pub"]), ("wg_boot_pub", wg["wg_boot_pub"])):
+    mine_all = [("ek_name", bundle["ek_name"]), ("ak_name", bundle["ak_name"]),
+                ("wg_service_pub", wg["wg_service_pub"]), ("wg_boot_pub", wg["wg_boot_pub"])]
+    if "signing_key" in node:                        # v4 (#199): the key this host made and its AK certified
+        require(isinstance(bundle.get("signing_key"), str), "this host's bundle has no signing key: it was made before #199")
+        mine_all.append(("signing_key", {"alg": "ecdsa-p256", "key": bundle["signing_key"]}))
+    for field, mine in mine_all:
         require(node[field] == mine, "the manifest's %s for %s is not this host's: it was made from another bundle, or "
                 "for another host. Nothing was written" % (field, node_id))
     try:
@@ -542,6 +677,17 @@ def check_manifest(directory, chain, root_key, typed, document, replace=None):
     except membership.Refused as refusal:            # measurements raises the same class
         raise Refused("the measurements are refused: %s" % refusal)
     return manifest
+
+
+def signing_note(directory, manifest):
+    """What the operator is told when this host has a signing key (#199) that the manifest does not name (a manifest
+    before v4): nothing is wrong, but the key waits, and heartbeats under v4 will need it. None otherwise."""
+    bundle = _bundle(directory)
+    entry = {n["node_id"]: n for n in manifest["nodes"]}.get(bundle["node_id"], {})
+    if isinstance(bundle.get("signing_key"), str) and "signing_key" not in entry:
+        return ("NOTE: the manifest (%s) names no signing key for %s; this host's key at %s (%s...) waits for a v4 manifest, "
+                "under which the nodes sign the heartbeats (#199)" % (manifest["schema"], bundle["node_id"], signkey.HANDLE, bundle["signing_key"][:18]))
+    return None
 
 
 NODE_JSON = "/etc/regalia/node.json"
@@ -1535,7 +1681,11 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     journal = Journal(directory, _bundle(directory)["node_id"])
     require(journal.state("identity") == "done", "this host has no identity yet: run `enrol init` first")
     identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
+    recheck_signing_key(journal, directory, run)                    # and the signing key at its own (#199; CodeRabbit on #358)
     manifest = check_manifest(directory, chain, root_key, typed, document, replace)
+    note = signing_note(directory, manifest)
+    if note:
+        print(note, file=out)
     initrd_pub = None
     if boot is not None:                                            # checked before anything is written
         initrd_pub = approved_image(boot["image"], boot["record"], boot["initrd_pub"], boot["system_pub"],
@@ -1582,6 +1732,19 @@ def main(argv=None):
     p.add_argument("--node-id", required=True)
     p.add_argument("--enrol-dir", default=ENROL_DIR)
     p.add_argument("--wg-service-key", default=WG_SERVICE_KEY)
+    p.add_argument("--system-pub", required=True, help="the system-phase PCR key's public half (PEM): the signing key is usable "
+                   "only under PCR 11 policies it signed")
+    g = sub.add_parser("challenge", help="(the root's side, no TPM) a credential to the bundle's EK and AK, for `activate`")
+    g.add_argument("--bundle", required=True)
+    g.add_argument("--out", required=True, help="the credential, to carry to the node")
+    g.add_argument("--keep", required=True, help="what the root's machine keeps: the secret's SHA-256, never the secret")
+    a = sub.add_parser("activate", help="(on the node, root) the secret its TPM releases for the root's credential")
+    a.add_argument("--credential", required=True)
+    e = sub.add_parser("entry", help="(the root's side, no TPM) check a bundle and print the node's v4 identity fields")
+    e.add_argument("--bundle", required=True)
+    e.add_argument("--system-pub", required=True, help="the root's own copy of the system-phase PCR key's public half (PEM)")
+    e.add_argument("--keep", required=True, help="the file `challenge` kept")
+    e.add_argument("--answer", required=True, help="the 64 hex `activate` printed on the node")
     c = sub.add_parser("check", help="check the root-signed manifest against this host, writing nothing")
     c.add_argument("--manifest", required=True, help="the root-signed epoch-1 envelope, or a JSON list of the "
                    "envelopes from epoch 1 to the one that first names this host")
@@ -1718,12 +1881,48 @@ def main(argv=None):
         print("OK: the manifest (epoch %d, %s) is root-signed by the key whose fingerprint was typed, names this host "
               "as its bundle says, and commits to these measurements. Nothing was written." % (manifest["epoch"],
               membership.digest(manifest)[:16]))
+        note = signing_note(args.enrol_dir, manifest)
+        if note:
+            print(note)
+        return 0
+    if args.command == "challenge":
+        try:
+            with open(args.bundle, "rb") as f:
+                credential, keep = challenge(membership.load(f.read(membership.MAX_BYTES + 1)))
+            for path, data in ((args.out, credential), (args.keep, json.dumps(keep, sort_keys=True).encode())):
+                with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+                    f.write(data)
+        except (Refused, membership.Refused, attest.Refused, OSError, ValueError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        print("WRITTEN: the credential %s (to the node: enrol activate) and the kept hash %s" % (args.out, args.keep))
+        return 0
+    if args.command == "activate":
+        try:
+            with open(args.credential, "rb") as f:
+                print("ANSWER %s" % activate(f.read(4096)))
+        except (Refused, attest.Refused, OSError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        return 0
+    if args.command == "entry":
+        try:
+            with open(args.bundle, "rb") as f:
+                document = membership.load(f.read(membership.MAX_BYTES + 1))
+            with open(args.keep, "rb") as f:
+                keep = membership.load(f.read(4096))
+            with open(args.system_pub, "rb") as f:
+                print(json.dumps(entry(document, f.read(65536), keep, args.answer), indent=1, sort_keys=True))
+        except (Refused, membership.Refused, attest.Refused, OSError, ValueError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
         return 0
     if os.geteuid() != 0:
         print("REFUSED: enrolment runs as root, at the host's console", file=sys.stderr)
         return 2
     try:
-        init(args.node_id, args.enrol_dir, args.wg_service_key)
+        with open(args.system_pub, "rb") as f:
+            init(args.node_id, f.read(65536), args.enrol_dir, args.wg_service_key)
     except (Refused, attest.Refused, OSError, ValueError) as error:       # json.JSONDecodeError is a ValueError
         print("REFUSED: %s" % error, file=sys.stderr)
         return 1
