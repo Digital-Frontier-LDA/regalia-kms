@@ -1027,12 +1027,25 @@ class Cluster:
         n = self.nodes[name]
         return {"sync": n.state / "sync-audit.jsonl", "admission": n.admission / "audit.jsonl"}[trail]
 
+    def _trail_groups(self, name):
+        """Each of the node's trails (and its rotated archives) back in its reader group, 0640, as its writer keeps it on a
+        host (trails.py, #286). This fixture's `chown -R <service>:<service>` of a node's directories, made where a unit's
+        StateDirectory= would make the owner, also resets the GROUP, which no host does: the shipper, in the trail's
+        reader group only, could then read nothing (the first CI run of #355 shipped no line at all)."""
+        for trail, _, _ in AUDIT_TRAILS:
+            path = self._trail_path(name, trail)
+            for f in [path] + sorted(path.parent.glob(path.name + ".*")):
+                if f.is_file() and not f.is_symlink():
+                    shutil.chown(f, group="regalia-audit-" + trail)
+                    os.chmod(f, 0o640)
+
     def _ship_start(self, name):
         """regalia-audit-ship for each of the node's own trails, with regalia-audit-ship@<trail>'s identity: its own user, the
         trail's reader group and nothing else (the shipped drop-ins, #286), no capability, a read-only system but for its
         head files; one stream per node, e2e3-<node>.<trail>. (Not its whole sandbox, nor its metrics file:
         e2e/audit-ship-systemd.py runs the shipped unit itself.)"""
         d = self.audit_dir
+        self._trail_groups(name)
         for trail, _, _ in AUDIT_TRAILS:
             unit = self.unit(name, "ship-" + trail)
             if sh("systemctl", "is-active", unit, check=False).stdout.strip() == "active":
@@ -1124,7 +1137,8 @@ class Cluster:
                         wrong[(name, trail)] = "the trail was never written"
                         continue
                     if len(stream) != len(lines):
-                        wrong[(name, trail)] = "%d trail lines, %d in the collector" % (len(lines), len(stream))
+                        said = self.journal(name, "ship-" + trail, 3).strip().replace("\n", " | ")
+                        wrong[(name, trail)] = "%d trail lines, %d in the collector (its shipper: %s)" % (len(lines), len(stream), said[-300:])
                         continue
                     for i, (line, event) in enumerate(zip(lines, stream)):
                         detail = event.get("detail") or {}
