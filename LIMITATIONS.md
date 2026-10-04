@@ -134,6 +134,8 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 
 ## Tests
 
-- rolling-threenode has an intermittent failure on its audit-stream check (fix: #393).
-- `audit_complete` can race trails that are still growing (#409), and fail on a count that differs by one.
-- The theft scenario's step-8 epoch check can pass vacuously until #381 lands `moved_by_sync`.
+- `moved_by_sync` (the sync round that moved a node to an epoch) cannot see how many envelopes a round received:
+  trail events don't carry it. A node moved other than by its sync, right after a no-op round from the same peer,
+  would be credited to that peer. In the scenarios only the seed is moved otherwise, and it is never asked (#393).
+- `audit_complete` judges each trail at a snapshot taken when it is called. Lines written after it are checked only
+  if the collector already holds them, so a scenario must call it after the events it names (#393, #409).
