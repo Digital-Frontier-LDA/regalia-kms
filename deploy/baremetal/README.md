@@ -818,10 +818,15 @@ removing only what it can prove it made.
   - then this node's LUKS path from every peer that may authorize. The node quotes over its boot session,
     and the quote binds a one-time enrolment key. The peer re-wraps the same secret on a rerun, and gives
     at most 3 wraps per boot session;
-  - the recovery key is typed at the console, never on argv or in the environment;
+  - the recovery key is typed at the console: read from the controlling terminal with echo off, refused
+    when standard input is not a terminal (never a pipe, a script, argv or the environment), and zeroed in
+    its buffer once used (Python may hold copies it made; that much it cannot promise);
   - each path is journalled;
-  - `local.bin` is removed only after every peer's path is journalled, as the last step. A peer that is
-    down is named, and `local.bin` stays until a rerun completes.
+  - `local.bin` is removed only after every peer's path is journalled AND the LUKS header, read again,
+    holds a live token from each (its keyslot present, over the local half this enrolment sealed). A path
+    the journal holds but the header lost is asked for again. A peer that is down is named, and `local.bin`
+    stays until a rerun completes. It is overwritten with zeros, synced and then unlinked; on an SSD the
+    overwrite is best effort, and the root volume's encryption is what protects the freed blocks.
   The peers answer through `sync`'s enrolment operations (`enrolpeer.py`).
 
 **Still NOT BUILT** (placed by hand, as the end-to-end test does):

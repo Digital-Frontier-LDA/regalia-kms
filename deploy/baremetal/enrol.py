@@ -890,14 +890,28 @@ def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run
       1. the AKs both ways, as regalia-sync (`aks`, default run_aks_as_sync);
       2. as root, this node's LUKS path from every peer that may authorize (enrolpeer.request_path), each
          journalled ("path:<peer>") once its keyslot opens and its token is written;
-      3. only when EVERY such peer has a path: "paths" done in the journal, then local.bin unlinked, then
-         "local_removed" journalled. Nothing else removes it.
-    `recovery()` returns the recovery key (typed at the console). Returns the peers still without a path."""
-    from deploy.baremetal import enrolpeer, node as node_module
-    journal = Journal(directory, _bundle(directory)["node_id"])
+      3. only when EVERY such peer has a path IN THE HEADER (read again, not the journal's word): "paths" done in
+         the journal, then local.bin overwritten and unlinked, then "local_removed" journalled. Nothing else
+         removes it.
+    A path the journal holds but the header no longer has (a reseal, a killed keyslot) is asked for again.
+    `recovery()` returns the recovery key (typed at the console) as a bytearray, zeroed here once used.
+    Returns the peers still without a path."""
+    from deploy.baremetal import enrolpeer, node as node_module, unlock
+    node_id = _bundle(directory)["node_id"]
+    journal = Journal(directory, node_id)
     require(journal.state("seal") == "done", "the boot credentials are not sealed yet: run `enrol commit` first")
-    if journal.state("paths") == "done":
-        _remove_local(journal, directory)
+    sealed_file = os.path.join(esp, "loader", "credentials", SEALED[0][0] + espcreds.SUFFIX)
+    with open(sealed_file, "rb") as f:
+        sealed = f.read(1 << 20)
+    require(hashlib.sha256(sealed).hexdigest() == journal.get("seal")["files"][os.path.basename(sealed_file)]["sha256"],
+            "%s is not the credential this enrolment sealed" % sealed_file)
+    sealed_local = "".join(sealed.decode("ascii").split())
+
+    def without_path(peers):
+        return _without_path(unlock.luks_meta(device, run), node_id, peers, sealed_local)
+
+    if journal.state("paths") == "done" and not without_path(journal.get("paths").get("peers") or []):
+        _remove_local(journal, directory, without_path)
         return []
     config_path = config_path or NODE_JSON
     node = node_module.Node(node_module.load(config_path), run)
@@ -905,50 +919,129 @@ def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run
     peers = peers_to_enrol(manifest, node.node_id)
     require(peers, "no other node may authorize under epoch %d: no path can be made" % manifest["epoch"])
     ak_results = (aks or run_aks_as_sync)(config_path)
-    sealed_file = os.path.join(esp, "loader", "credentials", SEALED[0][0] + espcreds.SUFFIX)
-    with open(sealed_file, "rb") as f:
-        sealed = f.read(1 << 20)
-    require(hashlib.sha256(sealed).hexdigest() == journal.get("seal")["files"][os.path.basename(sealed_file)]["sha256"],
-            "%s is not the credential this enrolment sealed" % sealed_file)
-    sealed_local = "".join(sealed.decode("ascii").split())
     local = local_contribution(journal, directory)
     session = node_module.boot_session(node.runtime)      # (ID hex, key): the one this boot presents to everyone
+    lost = set(without_path(peers))
     key, missing = None, []
-    for peer in peers:
-        if journal.state("path:" + peer) == "done":
-            continue
-        if ak_results.get(peer) != "ok":
-            missing.append("%s (AK step: %s)" % (peer, ak_results.get(peer, "not reached")))
-            continue
-        if key is None:
-            key = recovery()
-        try:
-            result = enrolpeer.request_path(manifest, node.node_id, peer, _ask_for(node, manifest, peer), session, _quote_with(node),
-                                            local, sealed_local, device, key, run)
-        except (Refused, membership.Refused, attest.Refused, OSError) as refusal:
-            missing.append("%s (%s)" % (peer, refusal))
-            continue
-        journal.done("path:" + peer, **{k: v for k, v in result.items() if v is not None})
-        print("PATH from %s: %s" % (peer, "already in the header" if result.get("existing") else
-                                    "path epoch %d, keyslot %d" % (result["path_epoch"], result["keyslot"])), file=out)
-    del key, local
+    try:
+        for peer in peers:
+            if journal.state("path:" + peer) == "done":
+                if peer not in lost:
+                    continue
+                print("PATH from %s: journalled, but no longer in the header: asked for again" % peer, file=out)
+            if ak_results.get(peer) != "ok":
+                missing.append("%s (AK step: %s)" % (peer, ak_results.get(peer, "not reached")))
+                continue
+            if key is None:
+                key = recovery()
+            try:
+                result = enrolpeer.request_path(manifest, node.node_id, peer, _ask_for(node, manifest, peer), session, _quote_with(node),
+                                                local, sealed_local, device, key, run)
+            except (Refused, membership.Refused, attest.Refused, OSError) as refusal:
+                missing.append("%s (%s)" % (peer, refusal))
+                continue
+            journal.done("path:" + peer, **{k: v for k, v in result.items() if v is not None})
+            print("PATH from %s: %s" % (peer, "already in the header" if result.get("existing") else
+                                        "path epoch %d, keyslot %d" % (result["path_epoch"], result["keyslot"])), file=out)
+    finally:
+        _zero(key)
+        del key, local
+    if not missing:
+        missing = ["%s (journalled, but the header has no path from it)" % peer for peer in without_path(peers)]
     if missing:
         print("NOT FINISHED: no path yet from %s. local.bin stays; run `enrol paths` again once they answer" % "; ".join(missing), file=out)
         return missing
     journal.done("paths", peers=peers)
-    _remove_local(journal, directory)
+    _remove_local(journal, directory, without_path)
     print("ENROLLED: a path from every peer (%s); the local contribution is only sealed now" % ", ".join(peers), file=out)
     return []
 
 
-def _remove_local(journal, directory):
-    """The last step: local.bin goes only after "paths" is journalled done; then that is journalled too."""
+def _without_path(meta, node_id, peers, sealed_local):
+    """The peers of `peers` the LUKS2 header `meta` holds no live path from: a well-formed token for this node
+    from that peer, naming a keyslot that exists, over the local half this enrolment sealed."""
+    from deploy.baremetal import unlock
+    keyslots = set(meta.get("keyslots") or {})
+    live = set()
+    for _, token in unlock.path_tokens(meta):
+        try:
+            unlock.validate_token(token)
+        except (Refused, membership.Refused):
+            continue
+        if token["target"] == node_id and token["keyslots"][0] in keyslots and token["local"] == sealed_local:
+            live.add(token["peer"])
+    return [peer for peer in peers if peer not in live]
+
+
+def _zero(buffer):
+    """Overwrite a bytearray in place. Python may have copied it before (a slice, a subprocess pipe): this
+    clears the one buffer this module holds, no more."""
+    if isinstance(buffer, bytearray):
+        buffer[:] = bytes(len(buffer))
+
+
+def _remove_local(journal, directory, without_path):
+    """The last step: local.bin goes only after "paths" is journalled done AND the header, read again now, holds
+    a path from every journalled peer (`without_path(peers)` is empty). It is overwritten with zeros, synced,
+    unlinked, and the directory synced; then that is journalled. On an SSD the overwrite is best effort (the
+    flash translation layer may keep the old blocks); what protects them is that the root volume is encrypted."""
     require(journal.state("paths") == "done", "local.bin is removed only once every peer's path is journalled")
+    gone = without_path(journal.get("paths").get("peers") or [])
+    require(not gone, "local.bin stays: the header has no path from %s" % ", ".join(gone))
     path = os.path.join(directory, LOCAL_FILE)
     if os.path.lexists(path):
+        fd = os.open(path, os.O_WRONLY | os.O_NOFOLLOW)
+        try:
+            size = os.fstat(fd).st_size
+            os.pwrite(fd, bytes(size), 0)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         os.unlink(path)
+        dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
     if journal.state("local_removed") != "done":
         journal.done("local_removed")
+
+
+def console_key(prompt, tty="/dev/tty"):
+    """A secret typed at the console, as a bytearray: only when standard input is a terminal AND this process
+    has a controlling terminal it reads from directly, with echo off. Never a pipe, a here-string or a script
+    (getpass would fall back to standard input when /dev/tty cannot be opened)."""
+    import termios
+    require(sys.stdin.isatty(), "the recovery key is typed at the console: standard input is not a terminal")
+    try:
+        fd = os.open(tty, os.O_RDWR | os.O_NOCTTY)
+    except OSError as error:
+        raise Refused("the recovery key is typed at the console: no controlling terminal (%s)" % error.strerror) from None
+    typed = bytearray()
+    try:
+        require(os.isatty(fd), "the recovery key is typed at the console: %s is not a terminal" % tty)
+        old = termios.tcgetattr(fd)
+        new = list(old)
+        new[3] &= ~(termios.ECHO | termios.ECHONL)
+        termios.tcsetattr(fd, termios.TCSAFLUSH, new)      # echo off and typeahead dropped, THEN the prompt
+        try:
+            os.write(fd, prompt.encode())
+            while len(typed) <= 1024:
+                chunk = os.read(fd, 1)
+                if not chunk or chunk in (b"\n", b"\r"):
+                    break
+                typed += chunk
+        finally:
+            termios.tcsetattr(fd, termios.TCSAFLUSH, old)
+            os.write(fd, b"\n")
+        require(len(typed) <= 1024, "the recovery key is longer than 1024 bytes")
+        require(typed, "no recovery key was typed")
+        return typed
+    except BaseException:
+        _zero(typed)
+        raise
+    finally:
+        os.close(fd)
 
 
 def _hand_over(state, chown=True):
@@ -1395,12 +1488,8 @@ def main(argv=None):
             return 2
 
         def recovery():
-            # the recovery key from the console only: never argv, the environment, a file or the journal
-            import getpass
-            require(os.path.exists("/dev/tty"), "the recovery key is typed at the console; there is no terminal")
-            typed = getpass.getpass("The recovery key of this host's root volume (from its card; not shown): ")
-            require(typed, "no recovery key was typed")
-            return typed.encode()
+            # the recovery key from the console only: never argv, the environment, a pipe, a file or the journal
+            return console_key("The recovery key of this host's root volume (from its card; not shown): ")
         try:
             missing = enrol_paths(args.enrol_dir, args.esp, recovery, args.device)
         except (Refused, membership.Refused, attest.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
