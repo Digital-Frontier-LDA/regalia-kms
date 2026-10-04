@@ -1003,10 +1003,11 @@ def _inventory_counts(path=None):
 # SHA-256. A record written by hand, or by a builder at another commit or with another script, is refused by name.
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BUILDER = "deploy/baremetal/initrd/build-initrd.sh"
-# what `git clone`/`git init` + fetch and a developer write into a checkout's own config, none naming a command: any
-# other key there (a filter or textconv driver, core.pager/editor/sshCommand, an include) is refused (Checkout.check_config)
+# what `git clone`/`git init` + fetch, actions/checkout (gc.auto) and a developer write into a checkout's own config,
+# none naming a command: any other key there (a filter or textconv driver, core.pager/editor/sshCommand/worktree, an
+# include) is refused (Checkout.check_config)
 CLONE_CONFIG = re.compile(r"core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)"
-                          r"|extensions\.(objectformat|worktreeconfig)|user\.(name|email)"
+                          r"|extensions\.(objectformat|worktreeconfig)|user\.(name|email)|gc\.auto"
                           r"|remote\.[^\0\n]+\.(url|pushurl|fetch|tagopt|prune|promisor|partialclonefilter)"
                           r"|branch\.[^\0\n]+\.(remote|merge|rebase|pushremote)")
 

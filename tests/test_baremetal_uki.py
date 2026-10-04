@@ -1634,6 +1634,7 @@ class RealCheckout(unittest.TestCase):
     def test_a_clone_s_own_config_passes(self):
         self.git_config("remote.origin.url", "https://example.invalid/r.git")
         self.git_config("branch.feat/x.merge", "refs/heads/feat/x")
+        self.git_config("gc.auto", "0")                                     # actions/checkout's
         self.checkout.check_config()
 
     def test_a_planted_clean_filter_is_refused_before_git_status_can_run_it(self):
