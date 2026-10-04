@@ -332,16 +332,21 @@ class Node:
             time.sleep(step)
 
     # sync's parts
+    def documents(self):
+        """The measurement documents this node holds, by digest (#332), in its state directory."""
+        return measurements.Documents(self.path(measurements.STORE_DIR))
+
     def store(self):
-        return membership.Store(self.path("membership.json"), self.cfg["root_key"], self.anchor())
+        # an epoch is committed only with the measurements it commits to held (#332)
+        return membership.Store(self.path("membership.json"), self.cfg["root_key"], self.anchor(), documents=self.documents().require_for)
 
     def freshness(self):
         counter = heartbeat_counter(self.cfg, self.run)
         return heartbeat.Freshness(counter, self.clock(), self.tpm_clock(), self.path("freshness.json"))
 
     def attester_for(self, manifest):
-        with open(self.cfg["measurements"], "rb") as f:
-            document = measurements.load(f.read(measurements.MAX_BYTES + 1))
+        # the document THIS manifest commits to, by digest, and no other (#332): refused when it is not held
+        document = measurements.held(self.documents(), manifest)
         policy = measurements.attest_policy(manifest, document, self.node_id)
         return attest.Verifier(policy, self.path("attest.json"), run=self.run)
 
@@ -523,6 +528,8 @@ class Sync:
     """The `sync` process: the two listeners, the pull loop and the heartbeat watch, on one store."""
 
     def __init__(self, node):
+        # #332: the single document of before (node.json's `measurements`) goes into the store by digest, once
+        measurements.migrate(node.documents(), node.cfg["measurements"], log=lambda line: print("sync: " + line, file=sys.stderr))
         self.node, self.store, self.freshness = node, node.store(), node.freshness()
         self.trail = Trail(node.path("sync-audit.jsonl"), "sync")
         self.signer = lease.TpmSigner(node.tcti, node.run)
@@ -534,12 +541,12 @@ class Sync:
         return self.store.load()
 
     def server(self):
-        manifest = self.manifest()
         # the enrolment operations (#190): the same contribution store the unlock peer serves paths from
         enrol = enrolpeer.Peer(unlock.Contributions(self.node.path("contributions.json")), enrolpeer.Wraps(self.node.path("enrol-wraps.json")),
                                enrolpeer.tpm_identity(self.node.tcti, self.node.run), enrolpeer.tpm_activate(self.node.tcti, self.node.run))
-        return sync.Server(self.node.node_id, self.store, self.freshness, self.node.attester_for(manifest), self.signer,
-                           wgsvc.key_at, self.trail, enrol=enrol)
+        # attester_for itself: each request is judged under the manifest held then, by that manifest's document (#332)
+        return sync.Server(self.node.node_id, self.store, self.freshness, self.node.attester_for, self.signer,
+                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents())
 
     def unlock_peer(self):
         return unlock.Peer(self.node.node_id, self.store, self.freshness, self.node.attester_for,
@@ -567,7 +574,7 @@ class Sync:
         chain is published after EACH source, not after all of them: a commit moves the TPM anchor, and
         the root services refuse the published chain until it catches up (Node.manifest)."""
         sources = self.node.sources(self.manifest())
-        client = sync.Client(self.node.node_id, self.store, self.freshness, sources, self.trail)
+        client = sync.Client(self.node.node_id, self.store, self.freshness, sources, self.trail, documents=self.node.documents())
         changed = False
         for name in sorted(sources):
             with contextlib.suppress(Refused):

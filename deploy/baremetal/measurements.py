@@ -85,13 +85,28 @@ cannot recognise the compromised image on OTHER hardware under a new label, nor 
 enrolled under an approved label. The control for both is the operator comparing the document with
 each node's PCR survey (pcr_survey.py) before signing.
 
+WHERE A NODE KEEPS THEM (#332): BY DIGEST, ONE FILE PER DOCUMENT. `Documents` is a directory of immutable files,
+each named by the SHA-256 of the canonical document it holds (<sha256 hex>.json), written whole and never
+replaced. A node may hold several side by side; `held(directory, manifest)` takes the one the CURRENT manifest
+commits to (by policy_version) and nothing else, and refuses when it is not there: "epoch N commits to
+measurements vX, which this node does not hold". There is no file that is "the" document, so a node can never
+judge one epoch against another epoch's document. The document travels WITH the epoch: sync's `measurements`
+request fetches it from the source that sent the manifest, and the membership store does not commit an epoch
+(nor move the TPM anchor to it) unless its document is held (membership.Store's `documents`). `install` puts a
+document into a node's store by hand (one node is enough: sync carries it to the others).
+
 NOT HERE: how the reference values are obtained (pcr_survey.py on the real hosts, systemd-measure for
 PCR 11), the PCR-signing key's custody, and the reboot itself. rollout.py holds the two decisions an
 update asks for: may this node reboot now, and may CURRENT be retired.
 """
+import argparse
 import base64
 import hashlib
+import json
+import os
 import re
+import sys
+import tempfile
 
 from deploy.baremetal import attest, membership, replacement, signkey
 
@@ -346,3 +361,156 @@ def transition(old, new, emergency=False, dropped=()):
     require(len(kinds) <= 1, "one document does two things: %s. One step, one document"
             % "; ".join("%s on %s" % (k, ", ".join(v)) for k, v in sorted(kinds.items())))
     return next(iter(kinds), "unchanged")
+
+
+# ---- the store, by digest (#332) ----
+
+STORE_DIR = "measurements"          # in a node's (or the authority's) state directory
+_NAME = re.compile(r"[0-9a-f]{64}\.json")
+
+
+def version_of_digest(digest_hex):
+    """The policy_version of the document whose canonical JSON has SHA-256 `digest_hex`: what a store file's name
+    says without the file being opened (version() is this, from the document)."""
+    return VERSION_PREFIX + base64.urlsafe_b64encode(bytes.fromhex(digest_hex)).decode("ascii")[:VERSION_CHARS]
+
+
+class Documents:
+    """A directory of measurement documents by digest: <sha256 hex of the canonical document>.json, immutable.
+    `owner` (uid, gid), when given, is who files and the directory are made for (root installing into
+    regalia-sync's state directory); otherwise they are the caller's."""
+
+    def __init__(self, directory, owner=None):
+        self.directory, self.owner = directory, owner
+
+    def _path(self, digest_hex):
+        return os.path.join(self.directory, digest_hex + ".json")
+
+    def versions(self):
+        """{policy_version: sha256 hex} of every document held, by file name alone."""
+        try:
+            names = os.listdir(self.directory)
+        except FileNotFoundError:
+            return {}
+        return {version_of_digest(n[:64]): n[:64] for n in names if _NAME.fullmatch(n)}
+
+    def holds(self, policy_version):
+        return policy_version in self.versions()
+
+    def get(self, policy_version):
+        """The document of `policy_version`, read and checked (its bytes ARE the name's digest, and validate), or
+        None when none is held."""
+        digest_hex = self.versions().get(policy_version)
+        if digest_hex is None:
+            return None
+        with open(self._path(digest_hex), "rb") as f:
+            raw = f.read(MAX_BYTES + 1)
+        require(hashlib.sha256(raw).hexdigest() == digest_hex,
+                "%s does not hold the document its name is the digest of: the store is damaged; remove that file" % self._path(digest_hex))
+        document = load(raw)
+        require(version(document) == policy_version, "%s is not the document of %s" % (self._path(digest_hex), policy_version))
+        return document
+
+    def put(self, document):
+        """Write `document` (validated) under its digest, whole: a temporary file, fsync, link(2) to its name, the
+        directory fsync. A file already there must be byte-identical: anything else is refused and left. Returns
+        its policy_version."""
+        validate(document)
+        raw = membership.canonical(document)
+        require(len(raw) <= MAX_BYTES, "the document exceeds %d bytes" % MAX_BYTES)
+        digest_hex = hashlib.sha256(raw).hexdigest()
+        target = self._path(digest_hex)
+        if not os.path.isdir(self.directory):
+            os.makedirs(self.directory, 0o755, exist_ok=True)
+            if self.owner is not None:
+                os.chown(self.directory, *self.owner)
+        if not os.path.lexists(target):
+            fd, tmp = tempfile.mkstemp(prefix=".measurements-", dir=self.directory)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(raw)
+                    f.flush()
+                    os.fchmod(f.fileno(), 0o644)
+                    if self.owner is not None:
+                        os.fchown(f.fileno(), *self.owner)
+                    os.fsync(f.fileno())
+                try:
+                    os.link(tmp, target)                     # never replaces: a file there since is compared below
+                except FileExistsError:
+                    pass
+            finally:
+                os.unlink(tmp)
+            dfd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        require(os.path.isfile(target) and not os.path.islink(target), "%s is not a regular file: refused" % target)
+        with open(target, "rb") as f:
+            require(f.read(MAX_BYTES + 1) == raw, "%s already exists with other bytes than the document of that digest: refused, "
+                    "nothing replaced; the store is damaged" % target)
+        return version_of_digest(digest_hex)
+
+    def require_for(self, manifest):
+        """membership.Store's `documents` check: the document `manifest` commits to is held, or Refused."""
+        require(self.holds(manifest["policy_version"]), "epoch %d commits to measurements %s, which this node does not hold: "
+                "fetch it from a peer (sync does), or install it (measurements install)" % (manifest["epoch"], manifest["policy_version"]))
+
+
+def held(directory, manifest):
+    """THE document a node judges by under `manifest`: the one it commits to, from the store in `directory`, bound
+    (bind). Refused when it is not held. There is never a fallback to another document."""
+    store = directory if isinstance(directory, Documents) else Documents(directory)
+    document = store.get(manifest["policy_version"])
+    require(document is not None, "epoch %d commits to measurements %s, which this node does not hold"
+            % (manifest["epoch"], manifest["policy_version"]))
+    bind(manifest, document)
+    return document
+
+
+def migrate(store, legacy_path, log=None):
+    """Once, at start: the legacy single document (node.json's `measurements`, before #332) into the store, if it
+    exists and is not held yet. Returns its version, or None when there was nothing to import."""
+    if not legacy_path or not os.path.isfile(legacy_path):
+        return None
+    with open(legacy_path, "rb") as f:
+        document = load(f.read(MAX_BYTES + 1))
+    if store.holds(version(document)):
+        return None
+    got = store.put(document)
+    if log is not None:
+        log("imported the measurements document %s (%s) from %s into %s" % (got, document["name"], legacy_path, store.directory))
+    return got
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.measurements", description="measurement documents (#75, #332)")
+    sub = ap.add_subparsers(dest="command", required=True)
+    i = sub.add_parser("install", help="put a document into this node's store, by its digest (sync carries it to the others)")
+    i.add_argument("--doc", required=True, help="the measurements document")
+    i.add_argument("--config", default="/etc/regalia/node.json", help="this node's node.json (its state_dir holds the store)")
+    v = sub.add_parser("version", help="the policy_version a manifest must carry to approve a document")
+    v.add_argument("--doc", required=True)
+    args = ap.parse_args(argv)
+    try:
+        with open(args.doc, "rb") as f:
+            document = load(f.read(MAX_BYTES + 1))
+        if args.command == "version":
+            print(version(document))
+            return 0
+        from deploy.baremetal import node as node_module
+        with open(args.config, "rb") as f:
+            cfg = node_module.validate(membership.load(f.read(node_module.MAX_BYTES + 1), node_module.MAX_BYTES))
+        state = cfg["state_dir"]
+        st = os.stat(state)
+        store = Documents(os.path.join(state, STORE_DIR), owner=(st.st_uid, st.st_gid) if os.geteuid() == 0 else None)
+        got = store.put(document)
+    except (Refused, OSError, ValueError) as error:
+        print("REFUSED: %s" % error, file=sys.stderr)
+        return 1
+    print("INSTALLED: measurements %s (%s) in %s" % (got, document["name"], store.directory))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

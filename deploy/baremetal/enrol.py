@@ -622,12 +622,11 @@ def _install(journal, step, path, data, prefix=""):
     return digest
 
 
-def install_config(journal, node_id, root_key, example, site, document, prefix=""):
-    """Phase 2's configuration: node.json, the site configuration, the measurements document the manifest
-    commits to, each where node.json says, and chrony.conf (#303), rendered from the site's time.nts by
-    authtime.conf, at CHRONY_CONF, where the shipped chrony drop-in points chronyd (Debian's own
+def install_config(journal, node_id, root_key, example, site, prefix=""):
+    """Phase 2's configuration: node.json and the site configuration, each where node.json says, and chrony.conf
+    (#303), rendered from the site's time.nts by authtime.conf, at CHRONY_CONF, where the shipped chrony drop-in points chronyd (Debian's own
     /etc/chrony/chrony.conf, a package conffile, is never touched). Each refused if something else is already
-    there."""
+    there. The measurements document is not configuration: commit puts it into the node's store by digest (#332)."""
     from deploy.baremetal import authtime, sitecfg
     validated = sitecfg.validate(site)
     config = node_config(node_id, root_key, example, validated)
@@ -635,7 +634,6 @@ def install_config(journal, node_id, root_key, example, site, document, prefix="
         require(config[key].startswith(CONFIG_DIR), "node.json puts %s at %s, outside %s" % (key, config[key], CONFIG_DIR))
     pretty = lambda doc: (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode()        # noqa: E731
     _install(journal, "config", config["site"], pretty(site), prefix)
-    _install(journal, "config", config["measurements"], pretty(document), prefix)
     _install(journal, "config", CHRONY_CONF, authtime.conf(config["time_servers"]).encode(), prefix)
     _install(journal, "config", NODE_JSON, pretty(config), prefix)
     return config
@@ -705,8 +703,10 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
                     % ", ".join(present))
         else:
             hw.define()
-    for envelope in envelopes[already:]:            # what the store holds already is this chain's beginning (checked)
-        store.commit(envelope)
+    rest = envelopes[already:]                       # what the store holds already is this chain's beginning (checked)
+    for index, envelope in enumerate(rest):
+        # the chain's last epoch is the one the node is left at: its measurements are in the store already (#332)
+        store.commit(envelope, final=index == len(rest) - 1)
     manifest = store.load()
     return manifest["epoch"], membership.digest(manifest)
 
@@ -785,7 +785,9 @@ def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bo
         trail(dict(event, sequence=0, outcome="ALLOW", reason="bootstrap: the counter starts at 0"))
         return 0, None
     sequence, source, envelope = max(found, key=lambda f: f[0])
-    event.update(sequence=sequence, issuer=envelope["signature"]["key"], source=source)
+    # who signed it: the revocation key (v1 to v3), or the quorum's parties (v4, #199)
+    issuer = envelope["signature"]["key"] if "signature" in envelope else ",".join(sorted(s.get("party", "?") for s in envelope.get("signatures", [])))
+    event.update(sequence=sequence, issuer=issuer, source=source)
     trail(dict(event, outcome="INCOMPLETE", reason="taking the first heartbeat"))
     try:
         left = freshness.accept_first(envelope, manifest)
@@ -823,6 +825,16 @@ def run_as_sync(config_path, chain, run=subprocess.run):
     m = re.search(r"^ANCHORED epoch (\d+) digest ([0-9a-f]{64})$", done.stdout, re.M)
     require(m is not None, "the anchor step did not report its result")
     return int(m.group(1)), m.group(2)
+
+
+def store_documents(state, document, chown=True):
+    """`document` into the measurement store of the state directory `state` (measurements.Documents), owned like the
+    state directory: regalia-sync's (`chown` False in tests: the caller's). Immutable by digest: a resumed run finds
+    the same file and passes."""
+    from deploy.baremetal import measurements
+    st = os.stat(state)
+    store = measurements.Documents(os.path.join(state, measurements.STORE_DIR), owner=(st.st_uid, st.st_gid) if chown else None)
+    return store.put(document)
 
 
 # ---- design steps 6 and 7: the peers' AKs, and this node's LUKS path from each peer (#190) ----
@@ -1518,8 +1530,11 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     if boot is not None:                                            # checked before anything is written
         initrd_pub = approved_image(boot["image"], boot["record"], boot["initrd_pub"], boot["system_pub"],
                                     boot["secure_boot_cert"], document, journal.doc["node_id"], run)
-    config = install_config(journal, journal.doc["node_id"], root_key, example, site, document, prefix)
+    config = install_config(journal, journal.doc["node_id"], root_key, example, site, prefix)
     _hand_over(prefix + config["state_dir"], as_sync is None)
+    # the measurements document the manifest commits to, into the node's store by digest (#332), regalia-sync's,
+    # before the anchor: the store commits no epoch whose document it does not hold
+    store_documents(prefix + config["state_dir"], document, as_sync is None)
     journal.started("anchor")
     epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain if isinstance(chain, list) else [chain])
     require(epoch == manifest["epoch"] and digest == membership.digest(manifest),

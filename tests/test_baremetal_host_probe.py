@@ -318,7 +318,7 @@ class HostProbe(unittest.TestCase):
         return dict({"type": "regalia-peer-unlock", "keyslots": [slot], "version": 1, "target": "a", "peer": peer,
                      "path_epoch": 1, "local": cred(local)}, **change)
 
-    def peer_host(self, *tokens, crypttab="root_crypt UUID=abcd /run/regalia-unlock/key.sock luks\n", keyslots=None):
+    def peer_host(self, *tokens, crypttab="root_crypt UUID=abcd none luks,tries=0\n", keyslots=None):
         recovery = LUKS_META["tokens"]["1"]
         tokens = tokens or (self.path("b", "1"), recovery, self.path("c", "3"))
         h = self.judge(*tokens, keyslots=keyslots)
@@ -405,23 +405,29 @@ class HostProbe(unittest.TestCase):
         self.assertFalse(value, why)
         self.assertIn("keyslot 0 is named by no token", why)
 
-    def test_the_peer_shaped_volume_takes_its_key_from_the_unlock_clients_socket_and_nowhere_else(self):
-        from deploy.baremetal import unlock
-        self.assertEqual(host_probe.PEER_KEY_SOCKET, unlock.KEY_SOCKET)       # one path, in two files
-        sock = host_probe.PEER_KEY_SOCKET
-        self.assertTrue(host_probe.root_unlock(self.peer_host(crypttab="# root\nroot_crypt UUID=abcd %s luks,discard\n" % sock), self.RECORD)[0])
-        every = ",".join(sorted(o + "=1" if o in ("tries", "timeout", "token-timeout", "tpm2-measure-pcr", "tpm2-measure-bank") else o
+    def test_the_peer_shaped_volume_is_asked_for_its_passphrase_and_names_no_key_file(self):
+        """#70: the unlock client is a password agent; the volume's entry names no key file (a key file would be
+        read instead of asking) and carries tries=0 (a mistyped recovery key is asked again, never the end)."""
+        for key_file in ("none", "-"):
+            self.assertTrue(host_probe.root_unlock(self.peer_host(crypttab="# root\nroot_crypt UUID=abcd %s luks,tries=0,discard\n" % key_file), self.RECORD)[0])
+        every = ",".join(sorted("tries=0" if o == "tries" else o + "=1" if o in ("timeout", "token-timeout", "tpm2-measure-pcr", "tpm2-measure-bank")
+                                else "x-systemd.device-timeout=0" if o == "x-systemd.device-timeout" else o
                                 for o in host_probe.PEER_CRYPTTAB_OPTIONS))
-        self.assertTrue(host_probe.root_unlock(self.peer_host(crypttab="root_crypt UUID=abcd %s %s\n" % (sock, every)), self.RECORD)[0])
+        self.assertTrue(host_probe.root_unlock(self.peer_host(crypttab="root_crypt UUID=abcd none %s\n" % every), self.RECORD)[0])
         self.assertEqual(host_probe.PEER_CRYPTTAB_OPTIONS, {"luks", "x-initrd.attach", "discard", "tries", "timeout", "token-timeout",
-                                                             "no-read-workqueue", "no-write-workqueue", "same-cpu-crypt",
-                                                             "submit-from-crypt-cpus", "tpm2-measure-pcr", "tpm2-measure-bank"})
+                                                             "x-systemd.device-timeout", "no-read-workqueue", "no-write-workqueue",
+                                                             "same-cpu-crypt", "submit-from-crypt-cpus", "tpm2-measure-pcr", "tpm2-measure-bank"})
+        # the initrd's own line passes as the host's
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "deploy", "baremetal", "initrd", "dracut",
+                               "90regalia-unlock", "crypttab")) as f:
+            line = [l for l in f if l.strip() and not l.startswith("#")][0].replace("root PARTLABEL=regalia-root", "root_crypt UUID=abcd")
+        self.assertTrue(host_probe.root_unlock(self.peer_host(crypttab=line), self.RECORD)[0], line)
         # ONLY options known to leave the unlock alone: each of these changes what opens the volume or where its key goes
         for option in ("header=/boot/root.hdr", "link-volume-key=@u::%logon:rootkey", "plain", "tcrypt", "bitlk", "swap", "tmp",
                        "try-empty-password", "noauto", "headless", "headless=true", "key-slot=1", "keyfile-size=16", "nofail",
                        "an-option-of-tomorrow"):
             with self.subTest(option=option):
-                value, why = host_probe.root_unlock(self.peer_host(crypttab="root_crypt UUID=abcd %s luks,%s\n" % (sock, option)), self.RECORD)
+                value, why = host_probe.root_unlock(self.peer_host(crypttab="root_crypt UUID=abcd none luks,tries=0,%s\n" % option), self.RECORD)
                 self.assertFalse(value, why)
                 self.assertIn("its crypttab entry has %s: not among the options known to leave" % option, why)
         # the kernel command line configuring LUKS means the initrd did not go by crypttab
@@ -437,15 +443,16 @@ class HostProbe(unittest.TestCase):
         h.files.pop("/proc/cmdline")
         self.assertIn("cannot read /proc/cmdline", host_probe.root_unlock(h, self.RECORD)[1])
         for label, crypttab, reason in (
-                ("no entry", "", "is not listed in /etc/crypttab: nothing asks the unlock client for its key at boot"),
-                ("only another volume listed", "swap UUID=ef01 %s luks\n" % sock, "is not listed in /etc/crypttab"),
-                ("no key file", "root_crypt UUID=abcd none luks\n", "its crypttab key file is 'none', not the unlock client's socket"),
-                ("no key file field at all", "root_crypt UUID=abcd\n", "its crypttab key file is 'none'"),
-                ("a key file on disk", "root_crypt UUID=abcd /etc/keys/root.key luks\n", "its crypttab key file is '/etc/keys/root.key'"),
-                ("another socket", "root_crypt UUID=abcd /run/other/key.sock luks\n", "its crypttab key file is '/run/other/key.sock'"),
-                ("the TPM as well", "root_crypt UUID=abcd %s tpm2-device=auto\n" % sock, "its crypttab entry has tpm2-device=auto: not among"),
-                ("a FIDO2 token as well", "root_crypt UUID=abcd %s luks,fido2-device=auto\n" % sock, "its crypttab entry has fido2-device=auto: not among"),
-                ("a PKCS#11 token as well", "root_crypt UUID=abcd %s pkcs11-uri=auto\n" % sock, "its crypttab entry has pkcs11-uri=auto: not among")):
+                ("no entry", "", "is not listed in /etc/crypttab: nothing asks for its passphrase at boot"),
+                ("only another volume listed", "swap UUID=ef01 none luks,tries=0\n", "is not listed in /etc/crypttab"),
+                ("a key file on disk", "root_crypt UUID=abcd /etc/keys/root.key luks,tries=0\n", "names the key file '/etc/keys/root.key': it would be read"),
+                ("the retired key socket", "root_crypt UUID=abcd /run/regalia-unlock/key.sock luks,tries=0\n", "names the key file '/run/regalia-unlock/key.sock'"),
+                ("tries left at the default", "root_crypt UUID=abcd none luks\n", "tries=3 (the default): a recovery key mistyped 3 times"),
+                ("tries=1", "root_crypt UUID=abcd none luks,tries=1\n", "tries=1: a recovery key mistyped 1 times"),
+                ("no key file field at all, so no tries=0", "root_crypt UUID=abcd\n", "tries=3 (the default)"),
+                ("the TPM as well", "root_crypt UUID=abcd none tpm2-device=auto,tries=0\n", "its crypttab entry has tpm2-device=auto: not among"),
+                ("a FIDO2 token as well", "root_crypt UUID=abcd none luks,tries=0,fido2-device=auto\n", "its crypttab entry has fido2-device=auto: not among"),
+                ("a PKCS#11 token as well", "root_crypt UUID=abcd none pkcs11-uri=auto,tries=0\n", "its crypttab entry has pkcs11-uri=auto: not among")):
             with self.subTest(label):
                 value, why = host_probe.root_unlock(self.peer_host(crypttab=crypttab), self.RECORD)
                 self.assertFalse(value, why)
