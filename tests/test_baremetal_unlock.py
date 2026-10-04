@@ -895,7 +895,7 @@ class Units(unittest.TestCase):
         here = os.path.join(REPO, "deploy/baremetal/initrd")
         loading = [n for n in sorted(os.listdir(here)) if n.endswith(".service")
                    and [k for k, _ in self.unit(n).get("Service", []) if k.startswith("LoadCredential")]]
-        self.assertEqual(loading, ["regalia-unlock.service", "regalia-wg-boot.service"])   # a new one is checked too
+        self.assertEqual(loading, ["regalia-boot-render.service", "regalia-unlock.service", "regalia-wg-boot.service"])   # a new one is checked too
         for name in loading:
             after = " ".join(v for k, v in self.unit(name)["Unit"] if k == "After").split()
             self.assertIn("systemd-pcrphase-initrd.service", after, name)
@@ -912,9 +912,14 @@ class Units(unittest.TestCase):
         unit = dict(self.unit("regalia-unlock.service")["Unit"])
         install = dict(self.unit("regalia-unlock.service")["Install"])
         self.assertEqual(install["WantedBy"], "cryptsetup.target")
-        for key in ("Requires", "BindsTo", "Requisite", "PartOf"):
+        for key in ("BindsTo", "Requisite", "PartOf"):
             self.assertNotIn(key, unit)
+        # it needs its boot configuration (#66 B3), and nothing of the cryptsetup side
+        self.assertEqual(unit.get("Requires"), "regalia-boot-render.service")
         self.assertNotIn("cryptsetup", unit.get("Before", "") + unit.get("After", ""))
+        # nor is the console made to wait for the render: nothing orders the cryptsetup side after it
+        render = self.unit("regalia-boot-render.service")["Unit"]
+        self.assertFalse([v for k, v in render if k in ("Before", "WantedBy", "RequiredBy") and "cryptsetup" in v])
         with open(os.path.join(REPO, "deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh")) as f:
             module = f.read()
         self.assertIn('"${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock.service', module)
@@ -923,16 +928,17 @@ class Units(unittest.TestCase):
         self.assertNotIn("Wants=regalia", module)
         # the client runs for as long as the initrd lasts: no attempt budget, no round count
         client = dict(self.unit("regalia-unlock.service")["Service"])["ExecStart"]
-        self.assertEqual(client, "/usr/bin/regalia-unlock -config %d/regalia.unlock-config")
+        self.assertEqual(client, "/usr/bin/regalia-unlock -config /run/regalia-boot/regalia.unlock-config")
 
     def test_the_image_is_the_same_for_every_host(self):
         """Nothing per host is in the initrd (#66): every per-host file comes from the ESP, read by a fixed path
         under the stub's archive (/.extra/global_credentials), never from systemd's credential store, and the
         one crypttab line names the root partition by its GPT label."""
         here = os.path.join(REPO, "deploy/baremetal/initrd")
-        secret = {"regalia-unlock.service": ["regalia.unlock-local"], "regalia-wg-boot.service": ["regalia.wg-boot-key"]}
-        plain = {"regalia-unlock.service": ["regalia.unlock-config"],
-                 "regalia-wg-boot.service": ["regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env"]}
+        # (the rest is rendered in the initrd from the verified membership chain, #66 B3: not read from the ESP)
+        secret = {"regalia-unlock.service": ["regalia.unlock-local"], "regalia-wg-boot.service": ["regalia.wg-boot-key"],
+                  "regalia-boot-render.service": []}
+        plain = {"regalia-unlock.service": [], "regalia-wg-boot.service": [], "regalia-boot-render.service": ["regalia.site"]}
         for name in secret:
             service = self.unit(name)["Service"]
             # each by its fixed path under the stub's archive: no credential is taken from systemd's store
@@ -950,8 +956,9 @@ class Units(unittest.TestCase):
             module = f.read()
         install = module[module.index("install() {"):]
         installed = re.findall(r"inst_(?:simple|multiple)\s+(?:-\S+\s+)?([^\n]+)", install)
-        # from the build machine: programs, the module's own units and script, and the crypttab line IN THE MODULE
-        self.assertEqual(installed, ["regalia-unlock wg nft ip sed cat sleep", "/usr/lib/regalia/wg-boot",
+        # from the build machine: programs, the module's own units and script, the membership root (a build input,
+        # #156: the same for every host of a deployment, not per host), and the crypttab line IN THE MODULE
+        self.assertEqual(installed, ["regalia-unlock wg nft ip sed cat sleep", "/usr/lib/regalia/wg-boot", "/usr/lib/regalia/root-key.json",
                                      '"${systemdsystemunitdir:?}/$unit"', '"${moddir:?}/crypttab" /etc/crypttab'])
         check = module[module.index("check() {"):module.index("depends() {")]
         self.assertIn('if [ -n "${hostonly-}" ]; then', check)
@@ -993,7 +1000,7 @@ class Units(unittest.TestCase):
     def test_the_service_is_given_the_local_half_by_systemd_and_can_do_nothing_else(self):
         service = self.unit("regalia-unlock.service")["Service"]
         values = dict(service)
-        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -config %d/regalia.unlock-config")
+        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -config /run/regalia-boot/regalia.unlock-config")
         # the one place it may write: root's, 0755, kept after the unit ends (the lease service and the daemon use it)
         self.assertEqual((values["RuntimeDirectory"], values["RuntimeDirectoryMode"], values["RuntimeDirectoryPreserve"]), ("regalia", "0755", "yes"))
         self.assertNotIn("ReadWritePaths", values)
@@ -1010,7 +1017,8 @@ class Units(unittest.TestCase):
             self.assertIn(line.split("=", 1)[1], (values | unit)[line.split("=", 1)[0]])
         self.assertEqual([k for k, _ in service if k.startswith("Exec")], ["ExecStart"])      # one program, no shell around it
         self.assertEqual(values["LoadCredentialEncrypted"], "%s:/.extra/global_credentials/%s.cred" % ((unlock.LOCAL_NAME,) * 2))   # decrypted: never in plain
-        self.assertEqual([v for k, v in service if k == "LoadCredential"], ["regalia.unlock-config:/.extra/global_credentials/regalia.unlock-config.cred"])
+        # its configuration is rendered from the verified chain into /run/regalia-boot (#66 B3), not read from the ESP
+        self.assertEqual([v for k, v in service if k == "LoadCredential"], [])
         self.assertEqual((values["CapabilityBoundingSet"], values["NoNewPrivileges"], values["ProtectSystem"]), ("", "yes", "strict"))
         self.assertEqual(values["RestrictAddressFamilies"], "AF_UNIX AF_INET AF_INET6")
         self.assertEqual((values["DevicePolicy"], sorted(v for k, v in service if k == "DeviceAllow")), ("closed", ["/dev/tpmrm0 rw", "block-* r"]))
@@ -1408,7 +1416,9 @@ class OnSwtpm(unittest.TestCase):
         binary = "/usr/local/bin/regalia-unlock-e2e-%d" % os.getpid()
         inside = "/run/regalia-e2e-%d" % os.getpid()                  # where the unit sees the test's directory
         request = "cryptsetup:" + self.device                         # systemd-cryptsetup's Id= for this source device
-        installed = [binary, units + "/regalia-unlock.service", units + "/regalia-unlock.service.d", inside]
+        # (with a stand-in for the render unit the client requires, #66 B3: this test gives the client its configuration
+        # directly, as the render would have rendered it)
+        installed = [binary, units + "/regalia-unlock.service", units + "/regalia-unlock.service.d", inside, units + "/regalia-boot-render.service"]
 
         def remove():
             run(["systemctl", "stop", "regalia-unlock.service"], capture_output=True)
@@ -1423,6 +1433,9 @@ class OnSwtpm(unittest.TestCase):
         shutil.copy(self.client, binary)
         os.chmod(binary, 0o700)
         shutil.copy(os.path.join(source, "regalia-unlock.service"), units)
+        with open(installed[4], "w") as f:
+            f.write("[Unit]\nDescription=stand-in for the render (the test writes the configuration itself)\n"
+                    "[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n")
         os.mkdir(installed[2])
         config, local = self.d + "/unlock.json", self.d + "/local"
         with open(installed[2] + "/e2e.conf", "w") as f:

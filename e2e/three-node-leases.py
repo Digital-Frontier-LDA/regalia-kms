@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""#74 (Phase 14), tier N: runtime leases on three nodes and the revocation authority (e2e/lib/threenode.py with
-authority=True): the real regalia-admission asking the real peers' sync, leases of at most 300 s
-(lease.MAX_LIFETIME) renewed at a third of their life, and a running node revoked.
+"""#74 (Phase 14), tier N: runtime leases on three nodes (e2e/lib/threenode.py, v4 since #199: the nodes sign their own
+heartbeats; no authority host): the real regalia-admission asking the real peers' sync, leases of at most 300 s
+(lease.MAX_LIFETIME) renewed at a third of their life, and a running node revoked by two nodes (revoke.py).
 
     REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-leases.py
 
@@ -9,12 +9,12 @@ IT CHANGES THE MACHINE (namespaces, interfaces, loop devices, dm-crypt mappings,
 inside one node's namespace, never the host's), so it runs only on a GitHub-hosted runner, or on a throwaway host
 whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
 
-  1  three nodes and the authority, every node leased
+  1  three nodes, every node leased
   2  14.1: a's lease is renewed: a newer lease in its admission state, its issuer's sync-lease ALLOW in its trail
   3  14.2: a's issuer crashes; a's next renewal comes from the other peer, and a never stops serving meanwhile
-  4  the authority down: renewals go on while the peers' heartbeats are fresh
+  4  renewals go on, on the heartbeats the nodes sign themselves
   5  a cut off from one peer (its service mesh): it renews through the other
-  6  14.3: running a revoked; both peers refuse its renewals (it is off their service tunnels; by name through a
+  6  14.3: running a revoked by b and c, each at its own console (revoke.py); both peers refuse its renewals (it is off their service tunnels; by name through a
      tunnel forced open), and a's admission stops serving by itself when its lease ends (measured against 300 s)
 
 The KMS daemon's own refusal at the lease's end and on revocation is e2e/runtime-admission.py's (two nodes, the
@@ -86,13 +86,12 @@ def scenario(cluster):
     # third of MAX_LIFETIME; the slack covers a round that has to go to its second peer
     renewal = lease.MAX_LIFETIME / 3 + 30
 
-    header("1  three nodes and the authority, every node leased")
+    header("1  three nodes, every node leased")
     cluster.build()
     for name in names:
         cluster.disk(name)
     for name in names:
         cluster.enrol(name)
-    cluster.start(AUTH)
     for name in names:
         cluster.start(name, SERVICES)
     for name in names:
@@ -123,13 +122,13 @@ def scenario(cluster):
     cluster.start(issuer, SERVICES)
     until(lambda: cluster.lease(issuer), 150, 3)
 
-    header("4  the authority down: renewals go on while the heartbeats are fresh")
-    cluster.stop(AUTH, power=None)
+    header("4  #199, no authority: renewals go on on the heartbeats the nodes sign themselves")
     current, _, _ = held(cluster, "a")
     got = until(lambda: renewed(cluster, "a", current), renewal + 60, 3)
-    ok(bool(got) and all(cluster.lease(n) for n in names), "with the authority stopped, a is renewed (%s) and every node serves" % (got and got[0]),
+    fresh = cluster.fresh(names, timeout=60)
+    ok(bool(got) and all(cluster.lease(n) for n in names) and all(fresh.values()),
+       "a is renewed (%s) and every node serves, each holding a heartbeat the nodes signed (%s)" % (got and got[0], fresh),
        {n: held(cluster, n) for n in names})
-    cluster.start(AUTH)
 
     header("5  a cut off from b: it renews through c")
     cluster.partition("a", ["b"])
@@ -145,7 +144,8 @@ def scenario(cluster):
     header("6  14.3: running a revoked; nobody renews it, and it stops serving by itself")
     service_a = base64.b64encode(bytes.fromhex(cluster.keys["a"]["service"][1])).decode()
     revoked_at = time.time()
-    cluster.revoke("a", "REVOKED_STOLEN", "e2e: revoked while running")
+    # #199: by two nodes, each at its own console (revoke.py propose on b, cosign on c, which commits it)
+    cluster.revoke_by_nodes("b", "c", "a", "REVOKED_STOLEN", "e2e: revoked while running")
     off = until(lambda: all(service_a not in cluster.wg_peers(p, "wg-svc") for p in ("b", "c")), 90, 2)
     ok(off is True, "b's and c's service tunnels drop a: its renewals cannot reach them")
     a_address = threenode.wgsvc.address(cluster.keys["a"]["service"][1])
@@ -195,7 +195,7 @@ def main():
         print("three-node-leases: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work, authority=True)
+    cluster = threenode.Cluster(work)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once
@@ -203,7 +203,7 @@ def main():
         ok(False, "the scenario ran to its end", traceback.format_exc()[-1500:])
         for name in list(cluster.nodes):
             print("----- %s sync\n%s\n----- %s admission\n%s" % (name, cluster.journal(name, "sync"), name, cluster.journal(name, "admission")))
-        print("----- authority serve\n%s" % cluster.journal(AUTH, "serve"))
+        print("----- heartbeat events\n%s" % cluster.beat_events(list(cluster.nodes), last=8))
     finally:
         cluster.close()
         sh("rm", "-rf", "--", str(work), check=False)

@@ -15,12 +15,18 @@ host's TPM high-water anchor (`anchor`, its membership.HighWater), as Store.load
 validly signed chain that is stale (below the anchor: a restored disk, a withheld update) or that forks from
 the manifest the TPM recorded is refused. A stale chain would render an older manifest's peers, a node
 revoked since among them, and a PCR 12 the peers no longer expect. It returns
-what the ESP must hold FOR THE CURRENT STAGE of #66's B3, so that its callers do not change between stages:
-today the credentials render() gives, from the chain's current manifest, under loader/credentials/ (each
-measured into PCR 12 by systemd-stub). Once the initrd verifies the chain and renders these itself (B3's
-wiring), the ESP holds the measured site configuration and the signed chain instead, and a membership
-change no longer moves PCR 12. The sealed credentials (the local half, the WG-BOOT key) are not here: they
-are made once, at enrolment, by whoever holds the TPM.
+what the ESP must hold at #66's B3 (the initrd verifies the chain and renders the four credentials itself:
+cmd/regalia-unlock -render, regalia-boot-render.service):
+  * loader/credentials/regalia.site.cred: the site document (site_document), measured into PCR 12 by
+    systemd-stub: it changes only when the site does;
+  * EFI/regalia/membership.json: the signed chain, canonical JSON, NOT measured: a membership change no
+    longer moves PCR 12, since the initrd verifies the chain from the root the image pins and against the
+    TPM anchor, as here;
+  * None for each of the four credentials an earlier stage rendered onto the ESP (RENDERED): a file the
+    caller must remove, so that nothing stale is measured beside the site document.
+It still renders the four from the chain (and refuses as render() does, e.g. a host left with no peer), so
+that nothing is written for a chain the initrd would then refuse. The sealed credentials (the local half,
+the WG-BOOT key) are not here: they are made once, at enrolment, by whoever holds the TPM.
 """
 import re
 
@@ -32,6 +38,8 @@ Refused, require = membership.Refused, membership.require
 # PCR 11, and the ESP credentials (espcreds).
 UNLOCK_PCRS = (7, 11, 12)
 CREDENTIALS_DIR = "loader/credentials"
+# the signed chain on the ESP, read by the initrd (cmd/regalia-unlock/render.go, chainOnESP); not measured
+CHAIN_ON_ESP = "EFI/regalia/membership.json"
 # the credentials render() gives, by name (each is <name>.cred on the ESP)
 RENDERED = ("regalia.unlock-config", "regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env")
 
@@ -131,8 +139,15 @@ def anchored(envelopes, root_key, anchor):
 
 
 def esp_files(site, envelopes, root_key, device, anchor):
-    """{path on the ESP: bytes} for the host `site` describes, under the chain `envelopes` (a list of signed
-    envelopes from epoch 1) verified against `root_key` and this host's TPM anchor (`anchored`). Refused
-    when the chain does not verify, is not the anchored one, or leaves the host no peer."""
+    """{path on the ESP: bytes, or None for a file to remove} for the host `site` describes, under the chain
+    `envelopes` (a list of signed envelopes from epoch 1) verified against `root_key` and this host's TPM
+    anchor (`anchored`): the site document, the chain, and the earlier stage's four credentials removed.
+    Refused when the chain does not verify, is not the anchored one, or leaves the host no peer."""
     manifest = anchored(envelopes, root_key, anchor)
-    return {"%s/%s.cred" % (CREDENTIALS_DIR, name): body for name, body in sorted(render(manifest, site, device).items())}
+    render(manifest, site, device)                    # what the initrd will render must render: refused here, not at boot
+    chain = membership.canonical(envelopes)
+    require(len(chain) <= membership.MAX_CHAIN_BYTES, "the membership chain is over %d bytes" % membership.MAX_CHAIN_BYTES)
+    files = {"%s/%s.cred" % (CREDENTIALS_DIR, name): None for name in RENDERED}
+    files["%s/regalia.site.cred" % CREDENTIALS_DIR] = site_document(site, device)
+    files[CHAIN_ON_ESP] = chain
+    return dict(sorted(files.items()))
