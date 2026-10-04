@@ -63,7 +63,10 @@ a fresh epoch-1 manifest of the current schema (v4) with no prev_digest, passing
 first-manifest rule; --chain and --expected-epoch are refused; only the offline root (--key-fd) signs it. At this
 one moment the pin vouches for itself (nothing earlier names the root), so before the epoch and digest the operator
 types the root key's FULL SHA-256 fingerprint, 64 hex, read from the ceremony's own record of the generated key and
-never from this screen (the format `enrol check` takes, #243). The key must be --root-key's and have that
+never from this screen: the line `ROOT-FINGERPRINT <64 hex>  (sha256 of the raw 32-byte Ed25519 key, as enrol check and
+manifest sign --genesis take it)` that offline-keys.py generate prints and records as `root_fingerprint`, which the
+operator copied onto the ceremony sheet (regalia-ceremony#119; the format `enrol check` takes, #243). NOT its
+`spki-sha256`, which is another hash of the same key. The key must be --root-key's and have that
 fingerprint. The finished envelope must pass membership.accept(None, ...); the record line carries "genesis": true.
 
 A key in a file is not a signing backend here: the root signs on its token, or from the offline session's
@@ -332,7 +335,7 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
     if genesis:
         # the pin vouches for itself here: the operator types the full fingerprint from the ceremony record, never shown
         fingerprint = hashlib.sha256(bytes.fromhex(public)).hexdigest()
-        typed_fp = confirm("GENESIS: type the root key's SHA-256 fingerprint from the ceremony record (64 hex): ").strip().lower()
+        typed_fp = confirm("GENESIS: type the root key's ROOT-FINGERPRINT from the ceremony sheet (64 hex, not the spki-sha256): ").strip().lower()
         require(hmac.compare_digest(typed_fp.encode(), fingerprint.encode()), "the fingerprint typed is not this key's: nothing was signed")
     digest = membership.digest(candidate)                                                      # 5
     for line in diff(current or {"nodes": []}, candidate):

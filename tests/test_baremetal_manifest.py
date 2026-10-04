@@ -761,7 +761,7 @@ class Genesis(unittest.TestCase):
         with open(self.paths["chain.json"]) as f:
             chain = json.load(f)
         self.assertEqual(m.accept_chain(None, chain, self.root)["epoch"], 1)
-        self.assertIn("fingerprint", self.asked[0])
+        self.assertIn("ROOT-FINGERPRINT", self.asked[0])                        # the ceremony sheet's line, by its name
         self.assertNotIn(self.fingerprint, self.out + "".join(self.asked))       # read from the ceremony record, never shown
         line = self.record()[-1]
         self.assertEqual((line["genesis"], line["verified"], line["provenance"]), (True, True, "offline-keys session " + self.SESSION))
@@ -783,16 +783,21 @@ class Genesis(unittest.TestCase):
         self.assertEqual((self.asked, self.record()), ([], []))
 
     def test_only_a_fresh_epoch_1_v4_manifest_is_a_genesis(self):
-        import copy
-        older = {k: v for k, v in copy.deepcopy(self.first).items()}
-        for proposal, reason in ((self.manifest4(2, "", self.nodes4()), "fresh epoch-1"),
-                                 (self.manifest4(1, "ab" * 32, self.nodes4()), "fresh epoch-1"),
-                                 (dict(older, schema=m.SCHEMA_V3), "")):
-            with self.subTest(reason or "v3"):
+        """Refused by THIS rule, by its message: a well-formed v3 epoch 1, and a well-formed v4 epoch 2."""
+        from tests.test_baremetal_membership_v4 import manifest3
+        v3 = manifest3(1, "", [{k: v for k, v in n.items() if k != "signing_key"} for n in self.nodes4()])
+        m.validate(v3)                                                    # a well-formed manifest: only the schema is wrong
+        later = self.manifest4(2, "cd" * 32, self.nodes4())
+        m.validate(later)                                                 # a well-formed epoch 2: only "fresh" is wrong
+        for proposal in (v3, later):
+            with self.subTest(schema=proposal["schema"], epoch=proposal["epoch"]):
                 self.write(proposal)
                 code, err = self.run_genesis()
                 self.assertEqual(code, 2, err)
-                self.assertTrue(err, "refused with a reason")
+                self.assertIn("the genesis is a fresh epoch-1 %s manifest with no prev_digest" % m.SCHEMA_V4, err)
+        # an epoch 1 naming a previous manifest is not even well-formed: validate's own rule refuses it first
+        self.write(self.manifest4(1, "ab" * 32, self.nodes4()))
+        self.assertIn("epoch 1 has no previous manifest", self.run_genesis()[1])
         self.assertEqual(self.record(), [])
 
     def test_genesis_takes_no_chain_no_expected_epoch_and_no_token(self):
