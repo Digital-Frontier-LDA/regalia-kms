@@ -46,13 +46,19 @@ v3's fields without `revocation_keys`, and:
     before v4 keeps the fields it had;
   * `owner_keys`: one to eight typed keys, {"alg": "ed25519", "key": <64 hex>} (the approval YubiKeys'
     OpenPGP applet, #126) or ecdsa-p256, together ONE party named "owner". The key's touch policy is
-    "always" (#156), so an owner signature comes from a present human, never a daemon: a setting of the
-    token, which no signature shows, and which the token's set-up checks;
-  * `owner_heartbeat_lifetime_s`: the longest life of a heartbeat the owner signed, with or without nodes
-    (an emergency credential): from 300 s to heartbeat_max_lifetime_s;
+    "fixed" (D26, rc#111: always required, and unchangeable without deleting the key), so an owner
+    signature comes from a present human, never a daemon: a setting of the token, which no signature
+    shows, and which the ceremony enforces. No owner key (nor any signing_key) may be a pinned root key
+    (accept() refuses it): one device is never both the payload root and a quorum party;
+  * `owner_heartbeat_lifetime_s`: the longest life of a heartbeat whose counting signatures include the
+    owner's (an emergency credential), from 300 s to heartbeat_max_lifetime_s. Such a heartbeat is always
+    the owner AND at least one node: the heartbeat threshold is at least 2 and the owner is one party
+    however many of its keys sign, so no rule admits the owner alone;
   * `heartbeat_signers`: {"threshold", "parties"}, the parties node IDs or "owner";
+  * `activation_signers`: the same form, for activation leases (#199: a node quorum, signed by the nodes
+    once the lease side lands; in the format now so that it needs no further schema);
   * `revocation_signers`: one to four such rules, any one of which signs a restrictive change.
-  THE FLOORS ARE THE FORMAT'S: the heartbeat threshold is at least 2, a revocation rule that names a node
+  THE FLOORS ARE THE FORMAT'S: the heartbeat and activation thresholds are at least 2, a revocation rule that names a node
   needs at least 2, and only a rule naming the owner alone may be 1; no threshold exceeds its parties.
   A quorum-signed envelope is {"manifest", "signatures": [{"party", "key", "sig"}, ...]}: every signature
   over the same DOMAIN + canonical(manifest), by the key the CURRENT manifest gives that party and verified
@@ -141,7 +147,8 @@ IDENTITY_KEYS = ("ek_name", "ak_name", "wg_boot_pub", "wg_service_pub")
 V2_MANIFEST_KEYS = MANIFEST_KEYS + ("heartbeat_max_lifetime_s",)
 V2_NODE_KEYS = NODE_KEYS + ("ssh_host_pub",)
 V2_IDENTITY_KEYS = IDENTITY_KEYS + ("ssh_host_pub",)
-SIGNER_FIELDS = ("owner_heartbeat_lifetime_s", "owner_keys", "heartbeat_signers", "revocation_signers")
+SIGNER_FIELDS = ("owner_heartbeat_lifetime_s", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers")
+SINGLE_RULES = ("heartbeat_signers", "activation_signers")       # one rule each; revocation_signers is a list of them
 V4_MANIFEST_KEYS = tuple(k for k in V2_MANIFEST_KEYS if k != "revocation_keys") + SIGNER_FIELDS
 V4_NODE_KEYS = V2_NODE_KEYS + ("signing_key",)
 # What only the root may change: a quorum (or a v1-v3 revocation key) leaves every one as it was.
@@ -370,7 +377,8 @@ def _signer_rules(manifest, by_id, seen):
         least = 1 if owner_alone and parties == [OWNER] else (NODE_RULE_FLOOR if owner_alone else HEARTBEAT_FLOOR)
         require(least <= t <= len(parties), "%s.threshold must be from %d to the number of its parties (%d)" % (label, least, len(parties)))
 
-    rule(manifest["heartbeat_signers"], "heartbeat_signers", owner_alone=False)
+    for name in SINGLE_RULES:
+        rule(manifest[name], name, owner_alone=False)
     rules = manifest["revocation_signers"]
     require(isinstance(rules, list) and 1 <= len(rules) <= MAX_RULES, "revocation_signers must be a list of one to %d rules" % MAX_RULES)
     for i, r in enumerate(rules):
@@ -491,6 +499,18 @@ def validate(manifest):
     return by_id
 
 
+def _apart_from_root(manifest, root_key):
+    """A v4 manifest's party keys (owner_keys, every signing_key) are none of the pinned root's: one device is
+    never both the payload root and a quorum party (D28). Only accept() knows the root, so it is checked here."""
+    if manifest["schema"] != SCHEMA_V4:
+        return
+    roots = {key for _, key in root_entries(root_key)}
+    keys = [("owner_keys[%d]" % i, e["key"]) for i, e in enumerate(manifest["owner_keys"])]
+    keys += [("signing_key of %s" % n["node_id"], n["signing_key"]["key"]) for n in manifest["nodes"] if "signing_key" in n]
+    for label, key in keys:
+        require(key not in roots, "%s is a pinned root key: the payload root is never a quorum party" % label)
+
+
 def verify_envelope(envelope, root_key, current=None):
     """The manifest inside an envelope, if its signature is by the pinned root key or by a revocation key
     named in the CURRENT manifest (never one named by the candidate itself), or, under v4, by a quorum of the
@@ -500,6 +520,7 @@ def verify_envelope(envelope, root_key, current=None):
         exact(envelope, ("manifest", "signatures"), "envelope")
         manifest = envelope["manifest"]
         validate(manifest)
+        _apart_from_root(manifest, root_key)
         parties = counting_parties(current, DOMAIN + canonical(manifest), envelope["signatures"], "manifest")
         require(any(meets(rule, parties) for rule in current["revocation_signers"]),
                 "the manifest's signatures meet no revocation_signers rule of the current manifest (counting: %s)" % (", ".join(sorted(parties)) or "none"))
@@ -520,6 +541,7 @@ def verify_envelope(envelope, root_key, current=None):
         require(alg is not None, "the signing revocation key is not named by the current manifest")
     manifest = envelope["manifest"]
     validate(manifest)
+    _apart_from_root(manifest, root_key)
     require(alg == "ed25519" or manifest["schema"] in (SCHEMA_V3, SCHEMA_V4), "a manifest signed by a typed (%s) key needs schema %s"
             % (alg, " or ".join((SCHEMA_V3, SCHEMA_V4))))
     try:

@@ -117,7 +117,7 @@ def _check_replacement(current, candidate, old_id, new_id, policy_version_may_ch
     for k in membership.ROOT_FIELDS:
         if k == "policy_version" and policy_version_may_change:
             continue
-        if k in ("heartbeat_signers", "revocation_signers"):
+        if k in membership.SINGLE_RULES + ("revocation_signers",):
             # v4: the new node takes the old one's place in the signer rules, and nothing else there changes
             require(candidate.get(k) == membership.rename_party(current.get(k), old_id, new_id),
                     "a replacement names %s in place of %s in %s and changes nothing else there" % (new_id, old_id, k))
