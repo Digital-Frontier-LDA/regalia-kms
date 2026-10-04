@@ -179,7 +179,8 @@ class Epoch(Case):
             rc, out, err = self.run_cli(*mine)
             self.assertEqual((rc, err), (0, ""))
             self.assertTrue(self.as_json(*mine)[1]["checked_against_tpm"])
-            built.assert_called_with("0x1500016", tcti="device:/dev/tpmrm0")
+            self.assertEqual((built.call_args.args, built.call_args.kwargs["tcti"], callable(built.call_args.kwargs["policy"])),
+                             (("0x1500016",), "device:/dev/tpmrm0", True))       # the node's policy, asked for only if needed (#242)
             for argv in (["epoch", *substituted], ["propose", *substituted, "--old", self.write("o.json", BOTH), "--new", self.write("n.json", NEXT)]):
                 with self.subTest(argv[0]):
                     rc, out, err = self.run_cli(*argv, "--tpm-index", "0x1500016")
@@ -233,7 +234,7 @@ class Epoch(Case):
                     simulator = tcti.startswith("swtpm:")
                     self.assertEqual("WARNING: that is a TPM SIMULATOR, not this host's TPM" in out, simulator)
                     self.assertEqual(report.get("tpm_is_a_simulator", False), simulator)
-                    built.assert_called_with("0x1500016", tcti=tcti)
+                    self.assertEqual((built.call_args.args, built.call_args.kwargs["tcti"]), (("0x1500016",), tcti))
             built.reset_mock()
             with mock.patch.dict(os.environ, TPM2TOOLS_TCTI="swtpm:path=/tmp/other.sock"):
                 for extra in ([], ["--tcti", "device:/dev/tpmrm0"]):
