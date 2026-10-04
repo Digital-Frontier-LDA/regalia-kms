@@ -204,6 +204,28 @@ func TestTheAnswerIsAPlusAndThePassphraseOnly(t *testing.T) {
 	}
 }
 
+// A request file reached through a link is not read: nothing follows a link in the protocol's directory.
+func TestARequestThroughALinkIsNotRead(t *testing.T) {
+	dir, err := os.MkdirTemp("", "ask")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	target := filepath.Join(dir, "elsewhere")
+	if err := os.WriteFile(target, []byte("[Ask]\nSocket=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "ask.1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := System().ReadFile(filepath.Join(dir, "ask.1")); err == nil {
+		t.Error("a request read through a link")
+	}
+	if raw, err := System().ReadFile(target); err != nil || len(raw) == 0 {
+		t.Errorf("a plain request is not read: %v", err)
+	}
+}
+
 // Over a real datagram socket, as systemd-cryptsetup's requester binds one: the bytes it receives.
 func TestTheAnswerOverARealSocket(t *testing.T) {
 	dir, err := os.MkdirTemp("", "ask")

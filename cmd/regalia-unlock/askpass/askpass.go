@@ -127,7 +127,8 @@ func System() FS {
 			return names, err
 		},
 		ReadFile: func(path string) ([]byte, error) {
-			f, err := os.Open(path)
+			// never through a link: only root can make one there, and still nothing follows it (48's read)
+			f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -215,7 +216,9 @@ func Find(fsys FS, dir, id string) (*Request, error) {
 }
 
 // Pending is whether the request is still open: its file is there. When it is gone, it was answered (by the
-// console, or by this agent) or withdrawn.
+// console, or by this agent) or withdrawn. ANY failure to read it counts as gone (a permission or an I/O
+// error too): the agent then stands down, which leaves the console prompt, the safe side. Standing down
+// zeroes the agent's secrets whatever the cause, so nothing depends on telling the causes apart.
 func Pending(fsys FS, r Request) bool {
 	_, err := fsys.ReadFile(r.Path)
 	return err == nil
