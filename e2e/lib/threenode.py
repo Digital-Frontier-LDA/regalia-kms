@@ -35,6 +35,7 @@ the others' underlay addresses, its boot mesh (wg-unlock) and its service mesh (
 Root only; it changes the machine (namespaces, interfaces, transient units), so its callers run only on a
 throwaway machine (a GitHub-hosted runner)."""
 import configparser
+import contextlib
 import grp
 import json
 import os
@@ -101,11 +102,20 @@ class NodeHere:
         return sh("ip", "netns", "exec", self.ns, *argv, check=check, **kw)
 
 
+AUTH = "auth"                                     # the revocation authority's member name here (its own host, #199)
+
+
 class Cluster:
-    def __init__(self, work, names=NAMES):
+    def __init__(self, work, names=NAMES, authority=False):
         self.work = pathlib.Path(work)
         self.nodes = {n: NodeHere(self.work, n, i + 1) for i, n in enumerate(names)}
-        self.time = {n: True for n in names}          # authenticated time, per node (the stand-in's switch)
+        # the revocation authority, when asked for: its own namespace, TPM, clock and WireGuard key, and its real
+        # `serve` signing the heartbeats (then nothing here writes one)
+        self.auth = NodeHere(self.work, AUTH, len(names) + 1) if authority else None
+        if self.auth:                                 # authority.json's run_dir is /run/regalia, validated (#323): the real one
+            self.auth.run = pathlib.Path(authtime.RUN_DIR)
+            self.made_run = not self.auth.run.exists()
+        self.time = {n: True for n in list(names) + ([AUTH] if authority else [])}   # authenticated time, per member
         self.stop_threads = False
         self.threads = []
         self.chain = []                               # the signed envelopes, epoch 1 first
@@ -118,6 +128,13 @@ class Cluster:
         self.client = os.environ.get("REGALIA_UNLOCK_BIN", "")
         self.code = self.work / "src"                 # the package as a host installs it: root's, readable by the services
 
+    def members(self):
+        """The nodes, and the authority when there is one: everything with a namespace, a TPM and a clock."""
+        return list(self.nodes.values()) + ([self.auth] if self.auth else [])
+
+    def member(self, name):
+        return self.auth if name == AUTH and self.auth else self.nodes[name]
+
     # ---- building ----
 
     def build(self):
@@ -129,19 +146,25 @@ class Cluster:
         sh("chown", "-R", "root:root", str(self.code))
         sh("chmod", "-R", "u=rwX,go=rX", str(self.code))
         self._network()
-        for n in self.nodes.values():
+        for n in self.members():
             for d in (n.dir / "etc", n.state, n.admission, n.run):
-                d.mkdir(parents=True)
+                d.mkdir(parents=True, exist_ok=(d == n.run and n is self.auth))     # /run/regalia may be there already
             os.chmod(n.dir, 0o711)
             self._tpm(n)
-            self._wg_keys(n)
+            if n is not self.auth:                    # the authority's is made by its own `wg-key`
+                self._wg_keys(n)
+        if self.auth:
+            self._authority_config()
         self._identities_and_chain()
         for n in self.nodes.values():
             self._configure(n)
             self._anchor_and_store(n)
         self._authtime()
+        if self.auth:
+            self._authority()
         for n in self.nodes.values():
-            self.beat(n.name, 1)
+            if not self.auth:                         # with the authority, its heartbeats are the only ones
+                self.beat(n.name, 1)
             # owned as the units' StateDirectory= would make them: the services are not root
             sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
             os.chmod(n.state, 0o755)
@@ -152,7 +175,7 @@ class Cluster:
         sh("ip", "netns", "add", SWITCH)
         sh("ip", "netns", "exec", SWITCH, "ip", "link", "add", "br0", "type", "bridge")
         sh("ip", "netns", "exec", SWITCH, "ip", "link", "set", "br0", "up")
-        for n in self.nodes.values():
+        for n in self.members():
             sh("ip", "netns", "add", n.ns)
             port = "sw-" + n.name
             sh("ip", "link", "add", port, "netns", SWITCH, "type", "veth", "peer", "name", "eth0", "netns", n.ns)
@@ -186,7 +209,7 @@ class Cluster:
         started again on the same state, which sends TPM2_Startup(CLEAR): resetCount one higher, the PCRs back to
         their reset values, every transient object and session gone, as on a host. Without `orderly`, a cut: no
         Shutdown, which a TPM counts against its dictionary-attack limit (#57)."""
-        n = self.nodes[name]
+        n = self.member(name)
         if orderly:
             sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False)
         pid = int((n.dir / "tpm.pid").read_text())
@@ -197,7 +220,7 @@ class Cluster:
 
     def reset_count(self, name):
         """The TPM's resetCount (TPM2_ReadClock): one higher after each power cycle."""
-        out = sh("tpm2_readclock", "-T", self.nodes[name].tcti).stdout
+        out = sh("tpm2_readclock", "-T", self.member(name).tcti).stdout
         return int(next(line.split(":", 1)[1] for line in out.splitlines() if "reset_count" in line))
 
     def _wg_keys(self, n):
@@ -263,7 +286,9 @@ class Cluster:
                 "boot_mesh": {"node_id": n.name, "interface": "wg-unlock", "listen_port": 51820, "address": n.boot_address, "unlock_port": 7443,
                               "nic_mac": "52:54:00:12:34:%02x" % (0x50 + n.index), "prefix": 24, "gateway": None,
                               "peers": [{"node_id": o.name, "underlay": o.underlay, "address": o.boot_address} for o in others]},
-                "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444, "authority": None}}
+                "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444,
+                                 "authority": {"key": self.keys[AUTH]["service"][1], "underlay": self.auth.underlay, "port": 51821}
+                                 if self.auth else None}}
         (n.dir / "etc" / "site.json").write_text(json.dumps(site))
         (n.dir / "etc" / "measurements.json").write_text(json.dumps(self.document))
         cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=n.tcti,
@@ -288,7 +313,7 @@ class Cluster:
     def _authtime(self):
         """Authenticated time, per node: authtime's own Service and status file, with a reading that says chrony
         is synchronised to two NTS sources, or (cluster.time[n] False) that no source answers."""
-        for n in self.nodes.values():
+        for n in self.members():
             def reading(name=n.name):
                 now = time.time()
                 answering = self.time[name]
@@ -303,7 +328,10 @@ class Cluster:
             self.threads.append(thread)
 
     def beat(self, name, sequence, manifest=None):
-        """A heartbeat signed by the test revocation key, delivered into the node's freshness state."""
+        """A heartbeat signed by the test revocation key, delivered into the node's freshness state. Refused with the
+        real authority (authority=True): its heartbeats are then the only ones (regalia-kms-51)."""
+        if self.auth:
+            raise RuntimeError("with the authority, heartbeats come from its serve, never from the fixture")
         manifest = manifest or self.manifest
         self.node(name).freshness().accept(hbt.beat(manifest, sequence, issued=int(time.time())), manifest)
 
@@ -324,17 +352,21 @@ class Cluster:
         return {key: unit[key] for key in Cluster.IDENTITY if key in unit}
 
     def properties(self, name, service):
-        """systemd-run -p for one service of one node: its namespace, the installed unit's identity, and no view of
-        the other nodes' directories."""
-        n = self.nodes[name]
+        """systemd-run -p for one service of one member: its namespace, the installed unit's identity, and no view
+        of the other members' directories."""
+        n = self.member(name)
         props = ["NetworkNamespacePath=/run/netns/" + n.ns, "WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1"]
         props += ["%s=%s" % (key, value) for key, value in self.identity(service).items()]
-        props += ["InaccessiblePaths=" + str(o.dir) for o in self.nodes.values() if o is not n]
+        props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
         return props
+
+    AUTH_SERVICES = ("wg-apply", "serve")
 
     def start(self, name, services=("sync", "wg-apply")):
         """The node's services, each a transient unit in its namespace, as a host runs them: sync first (it
         publishes the chain the others verify), wg-apply once the chain is published."""
+        if name == AUTH:
+            return self._start_authority()
         n = self.nodes[name]
         admission_run = n.run / "admission"                # as regalia.tmpfiles.conf makes it at every boot
         if not admission_run.exists():
@@ -361,13 +393,87 @@ class Cluster:
                           extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
         self.services[name] = tuple(dict.fromkeys(self.services[name] + tuple(services)))   # stop() clears it
 
-    def _run(self, n, service, oneshot=False, unit=None, extra=()):
+    def _run(self, n, service, oneshot=False, unit=None, extra=(), args=()):
         argv = ["systemd-run", "--unit", unit or self.unit(n.name, service), "--collect"] + list(extra)
-        for prop in self.properties(n.name, service):
+        # the authority's own commands run as regalia-authority.service does; its wg-apply as the nodes' (root)
+        identity = "authority" if n is self.auth and service != "wg-apply" else service
+        for prop in self.properties(n.name, identity):
             argv += ["-p", prop]
         if oneshot:
             argv += ["--wait", "-p", "Type=oneshot"]
-        sh(*(argv + ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.node", "--config", str(n.cfg_path), service]))
+        module = "deploy.baremetal.authority" if n is self.auth else "deploy.baremetal.node"
+        done = sh(*(argv + ["/usr/bin/python3", "-Es", "-m", module, "--config", str(n.cfg_path), service] + list(args)), check=False)
+        if done.returncode != 0:                      # what the unit itself said: a oneshot's own output is in its journal
+            said = sh("journalctl", "-u", unit or self.unit(n.name, service), "-n", "30", "--no-pager", "-o", "cat", check=False).stdout
+            raise RuntimeError("%s's %s failed (%d): %s | %s" % (n.name, service, done.returncode, done.stderr.strip()[-300:], said[-1500:]))
+
+    def _authority_config(self):
+        """The revocation authority's host, before the chain: its users, its signing key (the test revocation key,
+        a file signer), its configuration and directories, and its WireGuard key made by `authority wg-key` (as
+        root: root:regalia-authority 0640), whose public key the nodes' site configurations take."""
+        from cryptography.hazmat.primitives import serialization
+        a = self.auth
+        sh("systemd-sysusers", str(ROOT / "deploy" / "baremetal" / "units" / "regalia-authority.sysusers.conf"))
+        etc = a.dir / "etc"
+        key = etc / "revocation.pem"
+        key.write_bytes(hbt.REVOKE.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        shutil.chown(key, "regalia-authority", "regalia-authority")
+        os.chmod(key, 0o600)
+        a.cfg_path = etc / "authority.json"
+        a.cfg_path.write_text(json.dumps({
+            "schema": "regalia.authority/v1", "root_key": hbt.pub(hbt.ROOT), "tcti": a.tcti, "nv_epoch": "0x01500016",
+            "nv_sequence": "0x01500020", "state_dir": str(a.state), "run_dir": str(a.run), "signer": {"kind": "file", "path": str(key)},
+            "time_servers": ["nts1.e2e3.invalid", "nts2.e2e3.invalid"],
+            "interval_s": 600, "lifetime_s": None, "sequence_offset": 0, "sequence_stride": 1, "revoke_requesters": ["local-root"],
+            "wg_service_key": str(etc / "wg-service.key"), "underlays": {n.name: n.underlay for n in self.nodes.values()},
+            "listen_port": 51821, "sync_port": 7444, "control_socket": str(a.dir / "control" / "control.sock")}))
+        # run_dir is where regalia-authtime (root) publishes authtime.json, which is believed only from a root-owned
+        # file in a root-owned directory (/run/regalia on a host); the control socket is in the unit's own
+        # RuntimeDirectory (/run/regalia-authority, 0700)
+        (a.dir / "control").mkdir(exist_ok=True)
+        for d, mode in ((a.state, 0o751), (a.dir / "control", 0o700)):      # StateDirectoryMode= and RuntimeDirectoryMode=
+            shutil.chown(d, "regalia-authority", "regalia-authority")
+            os.chmod(d, mode)
+        said = self.authority_command("wg-key").stdout
+        self.keys[AUTH] = {"service": (None, said.strip().rsplit(" ", 1)[-1])}
+
+    def authority_command(self, *argv):
+        """`authority.py` as root on its host (wg-key, revoke, status)."""
+        return sh("/usr/bin/python3", "-Es", "-m", "deploy.baremetal.authority", "--config", str(self.auth.cfg_path), *argv, cwd=str(self.code))
+
+    def _authority(self):
+        """Its store and counters initialised from the chain (`init`, as its own user)."""
+        a = self.auth
+        chain = a.dir / "etc" / "chain.json"
+        chain.write_text(json.dumps(self.chain))
+        self._run(a, "init", oneshot=True, unit=self.unit(AUTH, "init"), args=("--chain", str(chain)))
+
+    def revoke(self, name, state, reason):
+        """The authority revokes a node: `authority revoke`, as root on its host, asked of the running serve (once
+        serve has made its control socket: a started unit is not yet a listening one)."""
+        if not until(lambda: (self.auth.dir / "control" / "control.sock").exists(), 60, 1):
+            raise RuntimeError("the authority's control socket did not appear: %s" % self.journal(AUTH, "serve")[-600:])
+        return self.authority_command("revoke", "--node", name, "--state", state, "--reason", reason)
+
+    def _start_authority(self):
+        """The authority's host booted: its time checked again, its wg-svc applied, then `serve` (which signs a
+        heartbeat as soon as its time is authenticated)."""
+        a = self.auth
+        if not self.time[AUTH]:
+            self.time[AUTH] = True
+            self.authtimes[AUTH].step()
+        control = a.dir / "control"                   # its RuntimeDirectory: made again, empty, at every start
+        control.mkdir(exist_ok=True)
+        for entry in control.iterdir():
+            entry.unlink()
+        shutil.chown(control, "regalia-authority", "regalia-authority")
+        os.chmod(control, 0o700)
+        self._run(a, "wg-apply", oneshot=True)
+        # and again at every chain it publishes, as regalia-authority-wg-apply.path runs it
+        self._run(a, "wg-apply", unit=self.unit(AUTH, "wg-watch"),
+                  extra=["--path-property=PathChanged=%s" % (a.state / node.PUBLISHED), "-p", "Type=oneshot"])
+        self._run(a, "serve")
+        self.services[AUTH] = self.AUTH_SERVICES
 
     def running(self, name):
         return sh("systemctl", "is-active", self.unit(name, "sync"), check=False).stdout.strip() == "active"
@@ -396,17 +502,25 @@ class Cluster:
         """The node's services stopped. power="cycle" (an orderly power-off and on) or "cut" (power lost): its /run
         emptied (tmpfs on a host), its tunnels gone, its TPM through the power loss (power_cycle) and its time no
         longer authenticated until it starts again. power=None: the services only, as a crash."""
-        n = self.nodes[name]
-        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply")] + [self.unit(name, "wg-watch") + t for t in (".path", ".service")]:
+        n = self.member(name)
+        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply", "serve")] + [self.unit(name, "wg-watch") + t for t in (".path", ".service")]:
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
         self.services[name] = ()
+        if name == AUTH and self.auth:                # its RuntimeDirectory, which systemd removes when the service stops
+            control = self.auth.dir / "control"
+            for entry in (control.iterdir() if control.exists() else ()):
+                entry.unlink()
         if os.path.exists("/dev/mapper/e2e3-" + name):
             sh("cryptsetup", "close", "e2e3-" + name, check=False)
         if power:
             self.time[name] = False
-            for entry in n.run.iterdir():
-                shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+            if n is self.auth:                        # the host's /run/regalia: only what the authority's time stand-in wrote
+                with contextlib.suppress(FileNotFoundError):
+                    (n.run / "authtime.json").unlink()
+            else:
+                for entry in n.run.iterdir():
+                    shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
             for interface in ("wg-svc", "wg-unlock", "wg-boot"):
                 n.in_ns("ip", "link", "del", interface, check=False)
             self.power_cycle(name, orderly=(power == "cycle"))
@@ -465,6 +579,30 @@ class Cluster:
                 leftover.unlink()
             sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[peer].state))
         del local, secret
+
+    def recover(self, name):
+        """#71's manual recovery: the node's volume opened by hand with its recovery key (the systemd-recovery
+        keyslot, S1's one exception), its filesystem read back, closed again for the boot to open. Returns
+        {rc, slot, peer, marker}: `peer` None for the recovery keyslot."""
+        loop, mapped, mnt = self.loops[name], "e2e3-" + name, self.nodes[name].dir / "mnt"
+        result = {"rc": None, "slot": None, "peer": "?", "marker": False}
+        mounted = False
+        try:
+            opened = subprocess.run(["cryptsetup", "open", "--key-file", "-", "-v", loop, mapped], input=RECOVERY, capture_output=True)
+            result["rc"] = opened.returncode
+            found = re.search(rb"Key slot (\d+) unlocked", opened.stdout)
+            if opened.returncode == 0 and found:
+                result["slot"] = int(found.group(1))
+                result["peer"] = self.keyslot_peer(name, result["slot"])
+                sh("mount", "-o", "ro", "/dev/mapper/" + mapped, str(mnt))
+                mounted = True
+                result["marker"] = (mnt / "marker").read_bytes() == MARKER
+        finally:
+            if mounted:
+                sh("umount", str(mnt), check=False)
+            if os.path.exists("/dev/mapper/" + mapped):
+                sh("cryptsetup", "close", mapped, check=False)
+        return result
 
     def keyslot_peer(self, name, slot):
         """The peer whose path token names `slot` on the node's volume (None for the recovery keyslot)."""
@@ -569,7 +707,7 @@ class Cluster:
 
     def wg_peers(self, name, interface):
         """The public keys `interface` in the node's namespace has as peers."""
-        return set(self.nodes[name].in_ns("wg", "show", interface, "peers", check=False).stdout.split())
+        return set(self.member(name).in_ns("wg", "show", interface, "peers", check=False).stdout.split())
 
     # The epoch's heartbeat, unless the node holds it already: sync delivers it from the seed with the epoch, and a
     # second delivery of the same sequence is a REPLAY (sequence == the TPM counter), which here means "already in".
@@ -593,6 +731,8 @@ class Cluster:
         nodes are left to pull it from the seed with their real sync (their trails say from whom); each then gets
         the epoch's heartbeat, written under its sync unit's identity. Returns (the new manifest, when the seed
         started again)."""
+        if self.auth:
+            raise RuntimeError("with the authority, epochs come from `authority revoke` (cluster.revoke), never from advance()")
         current = self.manifest
         nodes = [dict(n, state=states.get(n["node_id"], n["state"])) for n in current["nodes"]]
         manifest = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
@@ -628,17 +768,17 @@ class Cluster:
         return sh("journalctl", "-u", self.unit(name, service), "-n", str(lines), "--no-pager", "-o", "cat", check=False).stdout
 
     def trail(self, name):
-        """The node's sync trail, parsed."""
-        path = self.nodes[name].state / "sync-audit.jsonl"
+        """The node's sync trail (the authority's own trail for AUTH), parsed."""
+        path = (self.auth.state / "audit.jsonl") if name == AUTH and self.auth else self.nodes[name].state / "sync-audit.jsonl"
         if not path.exists():
             return []
         return [json.loads(line) for line in path.read_text().splitlines() if line.startswith("{")]
 
     def close(self):
         self.stop_threads = True
-        for name in self.nodes:
-            self.stop(name, power=None)
-        for n in self.nodes.values():
+        for n in self.members():
+            self.stop(n.name, power=None)
+        for n in self.members():
             try:
                 pid = int((n.dir / "tpm.pid").read_text())
                 os.kill(pid, 15)
@@ -649,3 +789,9 @@ class Cluster:
         sh("ip", "netns", "del", SWITCH, check=False)
         for loop in self.loops.values():
             sh("losetup", "-d", loop, check=False)
+        if self.auth:                                 # the host's /run/regalia: what this made there, by exact name
+            with contextlib.suppress(FileNotFoundError):
+                (self.auth.run / "authtime.json").unlink()
+            if self.made_run:
+                with contextlib.suppress(OSError):
+                    self.auth.run.rmdir()
