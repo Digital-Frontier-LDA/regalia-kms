@@ -197,6 +197,19 @@ class Verification(unittest.TestCase):
     def verifier(self):
         return attest.Verifier(self.policy, os.path.join(self.d, "state.json"), now=lambda: self.clock[0], run=self.run_tool)
 
+    def test_the_state_holds_no_float_whatever_the_clock_reads(self):
+        """update.Host.own_state reads this file with the strict document loader, which refuses floats: an outstanding
+        nonce or enrolment challenge timed by a wall clock with a fraction made a node refuse its own state (#369's
+        rolling run: "floats are not allowed")."""
+        from deploy.baremetal import membership
+        self.clock[0] = 1791137837.396
+        self.v.nonce("site-a")
+        self.v.challenge("site-a", EK_PUB, self.ak_pub, replace=True)
+        with open(os.path.join(self.d, "state.json"), "rb") as f:
+            state = membership.load(f.read())
+        self.assertTrue(state["nonces"] and all(isinstance(v["expires"], int) for v in state["nonces"].values()))
+        self.assertIsInstance(state["nodes"]["site-a"]["pending"]["expires"], int)
+
     def run_tool(self, argv, **kw):
         """tpm2_makecredential, faked: it records the secret it was asked to wrap. OpenSSL is real."""
         if argv[0] != "tpm2_makecredential":
