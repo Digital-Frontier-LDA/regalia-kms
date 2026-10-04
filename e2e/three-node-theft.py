@@ -11,10 +11,10 @@ inside one node's namespace, never the host's), so it runs only on a GitHub-host
 whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
 
   1  three nodes and the authority, every node leased
-  2  c partitioned from b and the authority (its service mesh only); the window it is left with measured: the
-     remaining life of the heartbeat it holds
-  3  a powered off (stolen); `authority revoke a REVOKED_STOLEN`; b takes the new epoch by sync (timed); c, cut off,
-     does not
+  2  c partitioned from b and the authority (its service mesh only; the boot mesh stays up); the window it is left
+     with measured: the remaining life of the heartbeat it holds, beside that heartbeat's lifetime
+  3  a powered off (stolen); `authority revoke a REVOKED_STOLEN`; b takes the new epoch by sync (timed from the
+     revoke command); c, cut off, tries (its pulls do not answer) and does not
   4  9.4, THE WINDOW, shown and not hidden: the stolen a boots with its genuine TPM, keys and paths; b refuses it
      (b's unlock tunnel no longer admits it), and the stale c gives it its key: a partitioned node trusts a stolen
      one until its heartbeat expires or the new epoch reaches it (the bound is heartbeat_max_lifetime_s: 6 h in
@@ -87,11 +87,17 @@ def scenario(cluster):
 
     header("2  c partitioned from b and the authority; the window it is left with")
     cluster.partition("c", ["b", AUTH])
+    cut_at = time.time()
     left = cluster.heartbeat_left("c")
-    lifetime = cluster.node("c").freshness().held()
-    ok(left is not None and left > 0, "c holds a heartbeat with %.0f s left at the cut: the longest a stale c can trust a stolen node"
-       % (left or 0), lifetime)
-    print("  MEASURED: c's heartbeat window at the cut: %.0f s (%.1f h)" % (left or 0, (left or 0) / 3600))
+    held = cluster.node("c").freshness().held()
+    import calendar
+    stamp = lambda text: calendar.timegm(time.strptime(text, "%Y-%m-%dT%H:%M:%SZ"))         # noqa: E731
+    life = stamp(held["heartbeat"]["expires_at"]) - stamp(held["heartbeat"]["issued_at"]) if held else None
+    ok(left is not None and life is not None and 0 < left <= life,
+       "c holds a heartbeat with %.0f s left of its %.0f s at the cut: the longest a stale c can trust a stolen node" % (left or 0, life or 0), held)
+    print("  MEASURED: c's heartbeat window at the cut: %.0f s (%.1f h), of a heartbeat lifetime of %.0f s. FIXTURE manifest: schema v1, "
+          "which has no heartbeat_max_lifetime_s (its bound is 24 h); PRODUCTION: v2/v3 with 21600 s, so at most 6 h (#69)"
+          % (left or 0, (left or 0) / 3600, life or 0))
 
     header("3  a stolen: powered off and revoked; b takes the epoch, c does not")
     cluster.stop("a")
@@ -101,8 +107,10 @@ def scenario(cluster):
     b_after = time.time() - revoked_at
     ok(took is True, "b took epoch 2 (a REVOKED_STOLEN) from the authority by sync, %.0f s after the revocation" % b_after)
     print("  MEASURED: dissemination to b: %.0f s" % b_after)
-    time.sleep(60)
-    ok(took_epoch(cluster, "c", 1), "c, cut off, still holds epoch 1 a minute later")
+    tried = until(lambda: [e.get("reason") for e in cluster.trail("c") if e.get("event") == "sync-apply" and e.get("outcome") == "DENY"
+                           and e.get("peer") in ("b", "@authority") and "did not answer" in e.get("reason", "") and e.get("at", 0) >= cut_at], 90, 3)
+    ok(bool(tried) and took_epoch(cluster, "c", 1),
+       "c, cut off, tried (its pulls from b and the authority did not answer) and still holds epoch 1", tried)
 
     header("4  9.4, the window: the stolen a boots; b refuses it, the stale c gives it its key")
     boot_a = as_wg(cluster.keys["a"]["boot"][1])
@@ -129,10 +137,20 @@ def scenario(cluster):
     since = time.time()
     cluster.start("a", SERVICES)
     off = until(lambda: all(service_a not in cluster.wg_peers(p, "wg-svc") for p in ("b", "c")), 60, 2)
-    time.sleep(20)
-    ok(off is True and not cluster.lease("a") and not any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW"
-                                                         and e.get("at", 0) >= since for p in ("b", "c") for e in cluster.trail(p)),
-       "N: and no lease: a is off every service tunnel, and nobody issued it one")
+    admission = cluster.nodes["a"].run / "admission" / "admission.json"
+    import json
+
+    def asked_and_refused():                         # a's own admission tried, and holds no lease (its reason says why)
+        try:
+            doc = json.loads(admission.read_text())
+        except (OSError, ValueError):
+            return None
+        return doc if doc.get("reason") and not doc.get("serve_until_boottime_ms") else None
+    tried = until(asked_and_refused, 120, 3)
+    ok(off is True and bool(tried) and not any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW"
+                                               and e.get("at", 0) >= since for p in ("b", "c") for e in cluster.trail(p)),
+       "N: and no lease: a's admission asked and was refused (%s); a is off every service tunnel, and nobody issued it one"
+       % ((tried or {}).get("reason", "")[:80]), tried)
 
     header("6  9.2: a's old ACTIVE chain, through a tunnel forced open on b, moves nothing")
     since = time.time()
@@ -149,8 +167,10 @@ def scenario(cluster):
     cluster.stop("b")
     got = cluster.unlock("b", timeout=150, rounds=2)
     asked_a = "a (path" in got.get("stderr", "")
-    ok(got["rc"] != 0 and got["peer"] is None and not asked_a,
-       "N: b, with only the revoked a up, gets no key, and its client never asked a (not in its boot configuration)", got)
+    import json
+    peers = [p.get("node_id") for p in json.loads((cluster.nodes["b"].dir / "unlock.json").read_text()).get("peers", [])]
+    ok(got["rc"] != 0 and got["peer"] is None and not asked_a and "a" not in peers and peers,
+       "N: b, with only the revoked a up, gets no key; its boot configuration names %s, not a, and its client never asked a" % peers, got)
     cluster.start("c", SERVICES)
     got = cluster.unlock("b")
     ok(got["rc"] == 0 and got["peer"] == "c" and got["marker"], "control: with c back, b opens its volume through c's keyslot", got)

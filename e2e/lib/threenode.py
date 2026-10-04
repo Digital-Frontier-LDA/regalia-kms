@@ -813,7 +813,9 @@ class Cluster:
 
     def partition(self, name, from_):
         """`name` cut off from the members `from_` on the service mesh (wg-svc's underlay port, both ways): an nftables
-        table in `name`'s namespace ONLY, never on the host. heal() removes it."""
+        table in `name`'s namespace ONLY, never on the host. heal() removes it. Deliberately not a full cut: the boot
+        mesh (wg-unlock, 51820) stays up, because the window #69 measures is a node that cannot learn the new epoch
+        yet can still be asked for a key (regalia-kms-3e)."""
         hosts = ", ".join(self.member(m).underlay for m in from_)
         rules = ("table inet e2e3cut {\n"
                  " chain out { type filter hook output priority 0; policy accept; ip daddr { %s } udp dport 51821 drop; }\n"
