@@ -163,9 +163,10 @@ def anchor_lock(membership_path):
 def hand_back(membership_path, euid=os.geteuid, chown=os.fchown):
     """The membership file and the locks a re-anchor run as root may have made, given back to the owner of the directory
     that holds them (regalia-sync's state directory, enrol._hand_over): written by root, mkstemp's 0600 would leave the
-    node's own sync unable to read its chain (#388). Each is opened without following a link and must be a regular file;
-    only one whose owner is not the directory's is changed, and only when root runs this and the directory is not
-    root's. Returns the paths changed."""
+    node's own sync unable to read its chain (#388). Each is opened without following a link and must be a regular file
+    with one name (a hard link could name another file: regalia-sync controls the directory's entries), owned by root or
+    by the directory's owner already, never a third user's; only one whose owner is not the directory's is changed, and
+    only when root runs this and the directory is not root's. Returns the paths changed."""
     directory = os.path.dirname(os.path.abspath(membership_path))
     owner = os.stat(directory)
     if euid() != 0 or owner.st_uid == 0:
@@ -178,7 +179,9 @@ def hand_back(membership_path, euid=os.geteuid, chown=os.fchown):
             continue
         try:
             held = os.fstat(fd)
-            require(stat.S_ISREG(held.st_mode), "%s is not a regular file: it is not given back" % path)
+            require(stat.S_ISREG(held.st_mode) and held.st_nlink == 1, "%s is not a regular file with one name: it is not given back" % path)
+            require(held.st_uid in (0, owner.st_uid), "%s belongs to uid %d, neither root nor the owner of %s: it is not given back"
+                    % (path, held.st_uid, directory))
             if (held.st_uid, held.st_gid) != (owner.st_uid, owner.st_gid):
                 chown(fd, owner.st_uid, owner.st_gid)
                 changed.append(path)

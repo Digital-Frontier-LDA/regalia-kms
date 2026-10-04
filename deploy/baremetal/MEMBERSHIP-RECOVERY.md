@@ -115,20 +115,22 @@ above). There is no authority host to give a chain, so the two chains come from 
 they are opened by hand too. Rehearsed end to end on three nodes by `e2e/three-node-reanchor.py` (CI job
 `three-node-reanchor`).
 
-1. **The damaged server (here b): leave its services stopped.** Its sync refuses its membership anyway; stop
-   `regalia-sync` and `regalia-admission` if they started (`systemctl stop`), so nothing else touches the anchor.
+1. **The damaged server (here b): start nothing on it yet.** It is opened last (step 5).
 2. **Open the two other servers (a and c) by hand**, each at its own console with its own recovery key
    (the PIN card and the host cards, [PIN-CUSTODY.md](../../PIN-CUSTODY.md)): the outage runbook's first step, done on both. Once
    both run, they sign each other's heartbeats; the owner's hand recovery (`owner.py beat`) is needed only if
    one of them runs alone.
 3. **Take each one's chain from it:** `/var/lib/regalia-sync/chain.json` (`node.PUBLISHED`: the chain its
-   sync verified and published), copied from a over SSH to a and from c over SSH to c, under each one's
-   manifest-pinned host key. Never both from one place, never from b. Both must end at the same epoch; if
+   sync verified and published), copied from a, and from c, over SSH under each one's manifest-pinned host
+   key. Never both from one place, never from b. Both must end at the same epoch; if
    one is behind, let them sync and take both again.
 4. **Check the sources** ("Deciding that the sources are right", above): each peer's own `rollout epoch`,
    the last signing record, and why b's anchor is unusable.
-5. **Open b by hand** with its own recovery key, and run the command above at b's console as root, with
-   `--peer a=a-chain.json --peer c=c-chain.json`. Read what it prints, then type the phrase.
+5. **Open b by hand** with its own recovery key. It boots, and its services start by themselves: its sync
+   refuses its membership (the reason above). **Stop them before anything else**:
+   `systemctl stop regalia-sync regalia-admission`, and check with `systemctl is-active` that both are
+   inactive, so that nothing but the command touches the anchor. Then run the command above at b's console
+   as root, with `--peer a=a-chain.json --peer c=c-chain.json`. Read what it prints, then type the phrase.
 6. **Status 0: start b's services** (`systemctl start regalia-sync regalia-admission`). b loads its membership
    at the chain's epoch under the new anchor, takes the heartbeat a and c signed, asks them for a lease and
    serves again; it issues leases to them in turn. Any other status: the table above.

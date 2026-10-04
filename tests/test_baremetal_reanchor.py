@@ -760,10 +760,27 @@ class HandBack(unittest.TestCase):
         return reanchor.hand_back(self.path, euid=lambda: euid, chown=lambda fd, uid, gid: self.chowned.append((os.fstat(fd).st_ino, uid, gid)))
 
     def test_root_gives_the_file_and_its_locks_back_to_the_owner_of_the_state_directory(self):
-        with self.owned_by(4242, 4343):
+        # the files are this test's user's, standing for the directory's owner; the directory's group is another one
+        with self.owned_by(os.getuid(), 4343):
             changed = self.hand_back()
         self.assertEqual(sorted(changed), sorted(os.path.join(self.d, n) for n in ("membership.json", "membership.json.lock", "highwater.lock")))
-        self.assertEqual(sorted(self.chowned), sorted((os.stat(p).st_ino, 4242, 4343) for p in changed))
+        self.assertEqual(sorted(self.chowned), sorted((os.stat(p).st_ino, os.getuid(), 4343) for p in changed))
+
+    def test_a_third_users_file_is_never_given_away(self):
+        # owned neither by root nor by the directory's owner (4242): not root's to give
+        with self.owned_by(4242, 4343), self.assertRaisesRegex(m.Refused, "neither root nor the owner"):
+            self.hand_back()
+        self.assertEqual(self.chowned, [])
+
+    def test_a_hard_link_in_place_of_the_file_is_refused(self):
+        other = os.path.join(self.d, "elsewhere")
+        with open(other, "w") as f:
+            f.write("not the chain")
+        os.unlink(self.path)
+        os.link(other, self.path)                    # regalia-sync controls the directory's entries
+        with self.owned_by(os.getuid(), 4343), self.assertRaisesRegex(m.Refused, "one name"):
+            self.hand_back()
+        self.assertEqual(self.chowned, [])
 
     def test_nothing_is_changed_when_not_root_when_the_directory_is_roots_or_the_owner_is_already_right(self):
         with self.owned_by(4242, 4343):
@@ -777,9 +794,24 @@ class HandBack(unittest.TestCase):
     def test_a_link_in_place_of_the_file_is_never_followed(self):
         os.unlink(self.path)
         os.symlink(os.path.join(self.d, "highwater.lock"), self.path)
-        with self.owned_by(4242, 4343), self.assertRaises(OSError):
+        with self.owned_by(os.getuid(), 4343), self.assertRaises(OSError):
             self.hand_back()
         self.assertEqual(self.chowned, [])
+
+    def test_a_lock_is_never_opened_or_created_through_a_link(self):
+        # #388 (regalia-kms-1e): root takes the anchor's lock in regalia-sync's directory; a link planted there must not
+        # make root open, or create, its target
+        target = os.path.join(self.d, "target-not-created")
+        os.unlink(os.path.join(self.d, "highwater.lock"))
+        os.symlink(target, os.path.join(self.d, "highwater.lock"))
+        with self.assertRaisesRegex(m.Refused, "symbolic link"):
+            with m._exclusive(os.path.join(self.d, "highwater.lock")):
+                pass
+        self.assertFalse(os.path.lexists(target))
+        os.link(self.path, os.path.join(self.d, "linked.lock"))
+        with self.assertRaisesRegex(m.Refused, "one name"):
+            with m._exclusive(os.path.join(self.d, "linked.lock")):
+                pass
 
     def test_main_says_the_command_to_run_when_the_file_cannot_be_given_back(self):
         err = io.StringIO()

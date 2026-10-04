@@ -18,7 +18,9 @@ start and b serves again. A server whose two peers are both destroyed has no suc
   3  b's anchor made unusable: its epoch counter undefined in its TPM (a record slot still holds epoch 2): b's own
      membership no longer loads, and says why
   4  a and c opened by hand with their recovery keys; their chain.json taken, one from each
-  5  b opened by hand; the refusals, each changing nothing: one peer only; b's own chain as a peer; the phrase mistyped
+  5  b opened by hand; its services, started by its boot, refuse its membership and are stopped; the refusals, each
+     changing nothing (b's files, its TPM's NV indices, their public areas and contents): one peer only; b's own chain
+     as a peer; the phrase mistyped
   6  the re-anchor from a's and c's chains: typed at the terminal, done, recorded ALLOW; b's membership loads at epoch 2
      under the new anchor, and the file is regalia-sync's again (#388: written by root, given back); run again, it is
      refused, since the anchor is usable
@@ -31,6 +33,7 @@ import pty
 import pwd
 import select
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -98,7 +101,9 @@ def at_console(cluster, name, argv, answer=None, timeout=180):
             os.write(fd, (phrase if answer is True else answer.encode()) + b"\n")
             typed = True
     else:
-        os.kill(pid, 9)
+        os.kill(pid, 9)                                                # the client only: the unit is stopped below, so that
+        sh("systemctl", "stop", unit, check=False)                     # no next step races it in the node's namespace
+        sh("systemctl", "reset-failed", unit, check=False)
     _, status = os.waitpid(pid, 0)
     os.close(fd)
     return os.waitstatus_to_exitcode(status), shown.decode(errors="replace").replace("\r", "")
@@ -153,9 +158,19 @@ def scenario(cluster, work):
        "a's and c's published chains both end at epoch 2, at one manifest",
        {n: [e["manifest"]["epoch"] for e in held[n]] for n in (a, c)})
 
-    header("5  b opened by hand; what is refused, changing nothing")
+    header("5  b opened by hand, its services stopped; what is refused, changing nothing")
     got = cluster.recover(b)
     ok(got["rc"] == 0 and got["peer"] is None and got["marker"], "b's volume opened by hand with its recovery key", got)
+    # it boots, and its services start by themselves; they are stopped before anything touches the anchor (the procedure's
+    # step 5): its sync refuses its membership first, for the reason above
+    cluster.start(b, SERVICES)
+    reason = "not defined" if "not defined" in (said or "") else (said or "")[:40]
+    seen = until(lambda: reason in cluster.journal(b, "sync"), 60, 2)
+    cluster.stop(b, power=None)
+    states = {u: sh("systemctl", "is-active", cluster.unit(b, u), check=False).stdout.strip() for u in ("sync", "admission")}
+    ok(seen is True and all(v != "active" for v in states.values()),
+       "b's services, started by its boot, refuse its membership (%r); stopped, and inactive (%s), before the re-anchor" % (reason, states),
+       cluster.journal(b, "sync")[-400:])
     shutil.copyfile(cluster.nodes[b].state / node.PUBLISHED, d / "b-chain.json")
     trail = d / "b-reanchor.jsonl"
 
@@ -167,8 +182,27 @@ def scenario(cluster, work):
             argv += ["--peer", "%s=%s" % (peer, path)]
         return at_console(cluster, b, argv, answer)
 
+    def snapshot():
+        """What a refusal must leave as it was: b's membership file (its bytes) and locks (their metadata), the NV indices
+        its TPM holds and their public areas, and what each index of its anchor holds (read with the owner's authorization)."""
+        tcti = cluster.nodes[b].tcti
+        files = {}
+        for name in ("membership.json", "membership.json.lock", "highwater.lock"):
+            path = cluster.node(b).path(name)
+            if os.path.lexists(path):
+                st = os.lstat(path)
+                files[name] = (pathlib.Path(path).read_bytes() if name == "membership.json" else None,
+                               st.st_mode, st.st_uid, st.st_gid, st.st_size, st.st_mtime_ns, st.st_ino)
+        contents = {}
+        for i in sorted(cluster.node(b).anchor().indices()):
+            done = subprocess.run(["tpm2_nvread", "-T", tcti, "-C", "o", "0x%x" % i], capture_output=True)
+            contents[i] = (done.returncode, done.stdout)
+        return (files, sh("tpm2_getcap", "-T", tcti, "handles-nv-index", check=False).stdout,
+                sh("tpm2_nvreadpublic", "-T", tcti, check=False).stdout, contents)
+    before = snapshot()
+
     def unchanged():
-        return refusal(lambda: cluster.node(b).store().load()) is not None
+        return snapshot() == before and refusal(lambda: cluster.node(b).store().load()) is not None
     rc, shown = reanchor([(a, chains[a])])
     ok(rc == 1 and "at least two other nodes" in shown and unchanged(), "one peer's chain only: refused (status %s), nothing changed" % rc, shown[-400:])
     rc, shown = reanchor([(a, chains[a]), (b, d / "b-chain.json")])
