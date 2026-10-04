@@ -29,7 +29,22 @@ permissions:
 
 jobs:
   real-server:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.check_name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            machine: x86_64
+            check_name: real-server
+            bao_sha256: 0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            machine: aarch64
+            check_name: real-server-arm64
+            bao_sha256: 2b3807d90f224df05d4fe1fdede7f052d2227596c648a56bd291381f8fd01840
     timeout-minutes: 10
     defaults:
       run:
@@ -40,13 +55,23 @@ jobs:
         with:
           go-version-file: adapters/openbao/go.mod
           cache-dependency-path: adapters/openbao/go.sum
+      - name: Require native Linux runner and Go architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: |
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = "$EXPECTED_MACHINE"
+          test "$(go env GOHOSTARCH)" = "$EXPECTED_ARCH"
+          test "$(go env GOARCH)" = "$EXPECTED_ARCH"
       - name: Install checksum-pinned OpenBao 2.7.1
         env:
-          OPENBAO_SHA256: 0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243
+          OPENBAO_SHA256: ${{ matrix.bao_sha256 }}
+          OPENBAO_ARCH: ${{ matrix.arch }}
         run: |
           curl --fail --location --proto '=https' --tlsv1.2 \
             --output "$RUNNER_TEMP/openbao.tar.gz" \
-            https://github.com/openbao/openbao/releases/download/v2.7.1/openbao_2.7.1_linux_amd64.tar.gz
+            "https://github.com/openbao/openbao/releases/download/v2.7.1/openbao_2.7.1_linux_${OPENBAO_ARCH}.tar.gz"
           echo "$OPENBAO_SHA256  $RUNNER_TEMP/openbao.tar.gz" | sha256sum --check --strict
           tar --extract --gzip --file "$RUNNER_TEMP/openbao.tar.gz" --directory "$RUNNER_TEMP" bao
           "$RUNNER_TEMP/bao" version
@@ -74,7 +99,7 @@ jobs:
       - name: Upload development packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: openbao-regalia-development-${{ github.sha }}
+          name: openbao-regalia-development-${{ github.sha }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/openbao-packages/
           if-no-files-found: error
           retention-days: 14
