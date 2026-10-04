@@ -764,7 +764,8 @@ class Cluster:
         the ask-password protocol (#70: the client is a password agent), in an ask directory of the node's own.
         The volume is opened with the answer (cryptsetup open -v), and the client, seeing it open, stands down.
         `rounds` is the client's -attempts. Returns {rc, peer, marker, stderr}: `peer` the one whose keyslot
-        opened it, `marker` whether the filesystem reads back; rc "timeout" when it was still asking."""
+        opened it, `marker` whether the filesystem reads back; rc "timeout" when it was still asking. rc 0 with
+        no peer is NOT an unlock: an earlier session of this boot was on record, and the client asked nobody."""
         n, loop, mapped = self.nodes[name], self.loops[name], "e2e3-" + name
         manifest = self.node(name).store().load()          # the chain the node holds: its initrd's credentials say the same
         site = sitecfg.load(str(n.dir / "etc" / "site.json"))
@@ -784,7 +785,9 @@ class Cluster:
             f.write(local)
         del local
         # systemd-cryptsetup's request, as it writes one: ask.1 naming its reply socket and the volume's Id
-        asks = pathlib.Path(tempfile.mkdtemp(prefix="ask-"))           # short: a UNIX socket path holds 108 bytes
+        # in /tmp, and short: a UNIX socket path holds 108 bytes (not under the node's directory, whose paths are
+        # longer); askpass.Find takes only a socket root owns inside this directory, and the fixture runs as root
+        asks = pathlib.Path(tempfile.mkdtemp(prefix="ask-"))
         request = "cryptsetup:" + loop
         reply = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         reply.bind(str(asks / "sck.1"))
@@ -803,9 +806,9 @@ class Cluster:
                     "ip", "netns", "exec", n.ns, self.client, "-config", str(config), "-tpm", "unix:" + str(n.tpm_sock),
                     "-session-dir", str(n.run), "-ask-dir", str(asks), "-request", request, "-volume", volume, "-attempts", str(rounds)]
             client = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL)
-            key, until = b"", time.monotonic() + timeout
+            key, deadline = b"", time.monotonic() + timeout
             reply.settimeout(0.2)
-            while time.monotonic() < until and client.poll() is None and not key:
+            while time.monotonic() < deadline and client.poll() is None and not key:
                 try:
                     datagram = reply.recv(4096)
                 except socket.timeout:
@@ -822,7 +825,7 @@ class Cluster:
                     mounted = True
                     result["marker"] = (mnt / "marker").read_bytes() == MARKER
             try:
-                _, err = client.communicate(timeout=max(5.0, until - time.monotonic()) if not key else 30)
+                _, err = client.communicate(timeout=max(5.0, deadline - time.monotonic()) if not key else 30)
                 result["rc"], result["stderr"] = client.returncode, err[-1500:]
             except subprocess.TimeoutExpired:                         # still asking when the time ran out: no key
                 client.kill()

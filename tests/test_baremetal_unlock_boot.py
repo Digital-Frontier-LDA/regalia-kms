@@ -545,10 +545,13 @@ class OnQemu(tub.OnSwtpm):
         # and past its cap (attempt 6), and the console, which asked from the start, still takes the recovery key after
         # 150 s: neither systemd-cryptsetup (timeout=0) nor the root's device wait (rootflags=x-systemd.device-timeout=0;
         # 90 s by default) gave up meanwhile. A WRONG key typed first only brings the prompt back (tries=0): no
-        # emergency, no reboot. Nothing ends in a shell. Under TCG the long boots 8 and 9 would outlast the job: KVM only.
+        # emergency, no reboot. Nothing ends in a shell. Under TCG the long boots 8 and 9 would outlast the job, so they
+        # need KVM; with REGALIA_EXPECT_KVM=1 (CI) its absence FAILS. The skip RETURNS: boots 8 and 9 stay the last ones,
+        # and a boot added after them goes before this line, or it would be skipped with them.
         kvm = os.access("/dev/kvm", os.R_OK | os.W_OK)
         if not kvm:
-            print("boots 8 and 9 skipped: they wait 150 s each, which needs KVM", file=sys.stderr)
+            self.assertNotEqual(os.environ.get("REGALIA_EXPECT_KVM"), "1", "REGALIA_EXPECT_KVM=1 and no usable /dev/kvm: boots 8 and 9 cannot run")
+            print("boots 8 and 9 SKIPPED: they wait 150 s each, which needs KVM", file=sys.stderr)
             return
         for peer in ("b", "c"):
             self.ip("ip", "link", "set", "eth0", "down", ns=self.peer_ns[peer])
