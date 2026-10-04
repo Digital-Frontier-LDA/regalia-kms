@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -129,6 +130,70 @@ func crashBao(t *testing.T, p *baoProcess) {
 	_ = p.log.Close()
 }
 
+func crashHAPlugin(t *testing.T, n *baoHANode) {
+	t.Helper()
+	executable := filepath.Join(n.dir, "openbao-plugin-kms-regalia-poc")
+	children := pluginChildren(t, n.process, executable)
+	if len(children) == 0 {
+		t.Fatal("no live plugin on the active HA node")
+	}
+	old := make(map[int]bool, len(children))
+	for _, pid := range children {
+		old[pid] = true
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, pid := range pluginChildren(t, n.process, executable) {
+			if !old[pid] {
+				n.waitMember(t)
+				n.api.assertValue(t)
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("HA node did not respawn its killed plugin")
+}
+
+func assertHAValue(t *testing.T, api baoAPI, name string) {
+	t.Helper()
+	var result struct {
+		Data struct {
+			Data struct {
+				Value string `json:"value"`
+			} `json:"data"`
+		} `json:"data"`
+	}
+	// A successful commit does not mean every follower has applied the new
+	// entry. Poll only a missing read, never the write or an authorization error.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		status, body, err := api.call(http.MethodGet, "/v1/poc/data/"+name, nil)
+		if err != nil || (status != 200 && status != 404) {
+			t.Fatalf("HA value read failed (status %d); response omitted", status)
+		}
+		if status == 200 {
+			if json.Unmarshal(body, &result) != nil || result.Data.Data.Value != syntheticValue {
+				t.Fatal("HA value read returned an invalid response or different value")
+			}
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("HA write did not become readable within the replication deadline")
+}
+
+func writeHAValue(t *testing.T, api baoAPI, name string) {
+	t.Helper()
+	// Write once, with CAS=0, to a new path at every stage. Polling/retrying a
+	// mutation could hide ambiguity or an unavailable Raft write quorum.
+	api.must(t, http.MethodPost, "/v1/poc/data/"+name, map[string]any{"data": map[string]string{"value": syntheticValue}, "options": map[string]int{"cas": 0}})
+	assertHAValue(t, api, name)
+}
+
 func TestOpenBao271NativeThreeNodeHA(t *testing.T) {
 	binary, dir, plugin, sum := baoTestEnvironmentFor(t, "openbao-plugin-kms-regalia")
 	f := newKMSFixtureMode(t, true)
@@ -167,11 +232,53 @@ func TestOpenBao271NativeThreeNodeHA(t *testing.T) {
 		t.Fatal("failed node remained the active leader")
 	}
 	nodes[newLeader].api.assertValue(t)
+	writeHAValue(t, nodes[newLeader].api, "after-failover")
 	t.Logf("three-voter cluster elected a replacement leader after SIGKILL in %s", time.Since(started).Round(time.Millisecond))
 	nodes[leader].process = startBao(t, binary, nodes[leader].config, nodes[leader].dir)
 	nodes[leader].waitMember(t)
+	leader = waitHALeader(t, nodes)
+	waitHAPeers(t, nodes[leader].api, nodes)
+	crashHAPlugin(t, nodes[leader])
+	if waitHALeader(t, nodes) != leader {
+		t.Fatal("plugin crash unexpectedly changed the active OpenBao node")
+	}
+
+	f.server.Close()
+	seals, releases := f.audit.successful("seal-envelope"), f.audit.successful("release-secret")
+	writeHAValue(t, nodes[(leader+1)%len(nodes)].api, "kms-offline")
+	for _, n := range nodes {
+		n.waitMember(t)
+		n.api.assertValue(t)
+		assertHAValue(t, n.api, "after-failover")
+		assertHAValue(t, n.api, "kms-offline")
+	}
+	started = time.Now()
+	crashBao(t, nodes[leader].process)
+	newLeader = waitHALeader(t, nodes)
+	nodes[newLeader].api.assertValue(t)
+	writeHAValue(t, nodes[newLeader].api, "after-offline-election")
+	t.Logf("already-unsealed quorum elected and committed a new write with KMS offline in %s", time.Since(started).Round(time.Millisecond))
+	for _, n := range nodes {
+		if !n.process.stopped {
+			assertHAValue(t, n.api, "after-offline-election")
+		}
+	}
+	// A new process has no in-memory barrier key. Existing quorum members can
+	// serve KV, but the stopped node must not recover through a local fallback.
+	nodes[leader].process = startBao(t, binary, nodes[leader].config, nodes[leader].dir)
+	nodes[leader].api.assertBlocked(t, nodes[leader].process)
+	if f.audit.successful("seal-envelope") != seals || f.audit.successful("release-secret") != releases {
+		t.Fatal("KMS success was recorded while its listener was unavailable")
+	}
+	f.start()
+	nodes[leader].process = startBao(t, binary, nodes[leader].config, nodes[leader].dir)
+	nodes[leader].waitMember(t)
+	waitHAPeers(t, nodes[waitHALeader(t, nodes)].api, nodes)
 	for _, n := range nodes {
 		n.api.assertValue(t)
+		for _, name := range []string{"after-failover", "kms-offline", "after-offline-election"} {
+			assertHAValue(t, n.api, name)
+		}
 	}
 	for _, n := range nodes {
 		n.process.stop(t)
@@ -179,4 +286,5 @@ func TestOpenBao271NativeThreeNodeHA(t *testing.T) {
 	for _, n := range nodes {
 		assertBaoArtifactsClean(t, n.dir, filepath.Join(n.dir, "openbao-plugin-kms-regalia-poc"), nodes[0].api.token, share)
 	}
+	t.Log("three-node software HA passed: leader/plugin crashes, standby forwarding, committed KV writes and leader replacement during KMS outage, refused offline restart, and recovered member. No hardware, partition, upgrade or production qualification is implied.")
 }

@@ -60,8 +60,15 @@ The native entrypoint also serves the separate External Keys factory described
 in [EXTERNAL-KEYS.md](EXTERNAL-KEYS.md). Versioned development packages and
 checksums are described in [PACKAGING.md](PACKAGING.md). The
 [hardware qualification procedure](HARDWARE-QUALIFICATION.md) requires an
-operator and witness. Physical custody, fencing, HA, supported upgrades and
-migration from the experimental outer frames remain unqualified.
+operator and witness. Physical custody, fencing, production HA, supported
+upgrades and migration from the experimental outer frames remain unqualified.
+
+The [three-node software HA drill](HA-QUALIFICATION.md) now exercises actual Raft
+voting membership, active-node SIGKILL, plugin respawn, standby forwarding and
+committed KV writes during a KMS listener outage. Already-unsealed survivors can
+elect a leader and write while a restarted node cannot unseal until KMS returns.
+This same-host, pinned-version evidence does not qualify partitions, quorum-loss
+recovery, production topology or physical custody.
 
 ## Contract
 
@@ -91,8 +98,9 @@ timeouts, reusing the existing SOPS transport/client.
 The plugin field is `kms_purpose`, because OpenBao consumes the reserved seal
 field `purpose` before forwarding configuration to the plugin. Unknown plugin
 fields fail configuration. Plugin registration is declarative and checksum-bound,
-so it is available before OpenBao unseals. The fixture uses single-node Raft,
-independently issued synthetic mTLS identities, and an HTTP API bound to loopback
+so it is available before OpenBao unseals. Lifecycle/recovery fixtures use
+single-node Raft; the separate HA drill uses three voters. All use independently
+issued synthetic mTLS identities, and an HTTP API bound to loopback
 only. This HTTP listener configuration is for disposable tests only.
 
 ## Scope of evidence
@@ -157,7 +165,8 @@ a KMS listener outage, refuses offline and unauthorized restarts, then restores
 authorized access and checks that plaintext and the root token are absent from
 Raft storage and captured logs. It also exercises fresh-node snapshot restore,
 restored-node identity enforcement and rejection with different KMS key material.
-The frame-2 and native generation drills are also mandatory when the real-server executable is set.
+The frame-2/native generation, ambiguous-response crash, External Keys/Transit
+and three-node HA drills are also mandatory when the real-server executable is set.
 All fixture identities/state are temporary.
 `OPENBAO_POC_KEEP_FAILURE=1` optionally retains **synthetic** private debug
 artifacts on failure; remove the reported directory after inspection.

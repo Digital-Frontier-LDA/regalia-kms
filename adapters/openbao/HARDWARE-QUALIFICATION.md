@@ -57,6 +57,12 @@ substitute CI for either attestation.
 The release stays blocked on any failed/unrun row, unresolved provenance or
 fencing issue, missing recovery generation, missing off-host audit evidence or
 missing witness. Keep the adapter development-only and the PR in draft. A future
-production release also needs HA, supported upgrade/migration drills and its
-reviewed rollout/rollback procedure under #123. PKI has the separate inspected
+production release also needs qualification of its actual HA topology,
+supported upgrade/migration drills and its reviewed rollout/rollback procedure
+under #123. PKI has the separate inspected
 certificate/CRL signing prerequisites in #122 and is not qualified here.
+
+[The three-node software drill](HA-QUALIFICATION.md) supplies same-host CI
+evidence for leader/plugin crashes and KV availability during a KMS listener
+outage. It does not replace production topology, partition or witnessed
+physical acceptance.
