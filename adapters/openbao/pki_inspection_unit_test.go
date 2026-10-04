@@ -96,6 +96,24 @@ func TestPOCCRLInspection(t *testing.T) {
 			if _, err = pocInspectCRL(append(parsed.RawTBSRevocationList, 0), issuer, now); err == nil {
 				t.Fatal("CRL trailing DER accepted")
 			}
+			if tc.ok {
+				fields, err := pocTBSFields(parsed.RawTBSRevocationList)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Keep valid DER while making nextUpdate earlier than thisUpdate.
+				thisDER, _ := asn1.Marshal(now.UTC().Add(5 * time.Second))
+				nextDER, _ := asn1.Marshal(now.UTC().Add(time.Second))
+				fields[3], fields[4] = asn1.RawValue{FullBytes: thisDER}, asn1.RawValue{FullBytes: nextDER}
+				inverted, err := asn1.Marshal(fields)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = pocInspectCRL(inverted, issuer, now); err == nil {
+					t.Fatal("inverted CRL validity accepted")
+				}
+			}
+
 		})
 	}
 }
@@ -111,6 +129,7 @@ func TestPOCCertificateInspection(t *testing.T) {
 	}{
 		{"valid", func(*x509.Certificate) {}, true},
 		{"outside-name", func(c *x509.Certificate) { c.DNSNames = []string{"outside.invalid"} }, false},
+		{"inverted-validity", func(c *x509.Certificate) { c.NotBefore = now.Add(5 * time.Second); c.NotAfter = now.Add(time.Second) }, false},
 		{"long-lived", func(c *x509.Certificate) { c.NotAfter = now.Add(20 * time.Minute) }, false},
 		{"CA", func(c *x509.Certificate) { c.IsCA = true; c.KeyUsage |= x509.KeyUsageCertSign }, false},
 		{"client-usage", func(c *x509.Certificate) { c.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth} }, false},

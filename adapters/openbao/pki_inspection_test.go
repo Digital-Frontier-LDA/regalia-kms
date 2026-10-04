@@ -104,7 +104,7 @@ func pocInspectCertificate(data []byte, issuer *x509.Certificate, now time.Time)
 		!bytes.Equal(cert.RawIssuer, issuer.RawSubject) || !bytes.Equal(cert.AuthorityKeyId, issuer.SubjectKeyId) || cert.SerialNumber.Sign() <= 0 || cert.SerialNumber.BitLen() > 160 ||
 		cert.IsCA || !cert.BasicConstraintsValid || cert.KeyUsage != x509.KeyUsageDigitalSignature || len(cert.ExtKeyUsage) != 1 || cert.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth ||
 		len(cert.UnknownExtKeyUsage) != 0 || len(cert.UnhandledCriticalExtensions) != 0 || len(cert.DNSNames) == 0 || len(cert.DNSNames) > 8 || len(cert.IPAddresses)+len(cert.URIs)+len(cert.EmailAddresses) != 0 ||
-		cert.NotBefore.Before(now.Add(-time.Minute)) || cert.NotBefore.After(now.Add(10*time.Second)) || !cert.NotAfter.After(now) || cert.NotAfter.Sub(cert.NotBefore) > 10*time.Minute || cert.NotAfter.After(issuer.NotAfter) {
+		cert.NotBefore.Before(now.Add(-time.Minute)) || cert.NotBefore.After(now.Add(10*time.Second)) || !cert.NotAfter.After(now) || !cert.NotAfter.After(cert.NotBefore) || cert.NotBefore.Before(issuer.NotBefore) || cert.NotAfter.Sub(cert.NotBefore) > 10*time.Minute || cert.NotAfter.After(issuer.NotAfter) {
 		return nil, errPOCProfile
 	}
 	key, ok := cert.PublicKey.(*ecdsa.PublicKey)
