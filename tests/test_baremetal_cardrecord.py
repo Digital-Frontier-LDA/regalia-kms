@@ -120,5 +120,34 @@ class Content(Case):
         self.refused("at is not YYYY-MM-DDTHH:MM:SSZ", self.changed(lambda r: r.update(at="2026-10-04")))
 
 
+class ProducersVectors(unittest.TestCase):
+    """regalia-ceremony's own signed vectors (regalia-ceremony#121, copied into tests/vectors/card-ceremony-record/):
+    valid.json accepted under the pinned root.hex, every other one refused. expect.json carries the producer's reasons;
+    this verifier's words may differ, and its refusal must be about the same thing."""
+
+    # the producer's refusal, and the words this verifier refuses the same record with
+    SAME = {"bad-signature.json": "signature is not the pinned root's", "wrong-domain.json": "signature is not the pinned root's",
+            "other-root.json": "names another root than the pinned one", "release-is-owner.json": "the release key is an owner key",
+            "missing-dev-backup.json": "owner_keys is not exactly two keys", "unknown-field.json": "owner_keys[0] fields mismatch"}
+
+    def test_every_vector_as_the_producer_judges_it(self):
+        import json
+        import pathlib
+        here = pathlib.Path(__file__).parent / "vectors" / "card-ceremony-record"
+        root = (here / "root.hex").read_text().strip()
+        expect = json.loads((here / "expect.json").read_text())
+        self.assertEqual(sorted(expect), sorted(list(self.SAME) + ["valid.json"]))
+        for name, want in sorted(expect.items()):
+            with self.subTest(vector=name):
+                envelope = json.loads((here / name).read_text())
+                if want == "ok":
+                    got = cr.verify(envelope, root)
+                    self.assertEqual(sorted(got["roles"]), sorted(cr.ROLES))
+                    continue
+                with self.assertRaises(m.Refused) as caught:
+                    cr.verify(envelope, root)
+                self.assertIn(self.SAME[name], str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
