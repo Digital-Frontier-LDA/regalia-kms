@@ -392,7 +392,10 @@ class Cluster:
         if oneshot:
             argv += ["--wait", "-p", "Type=oneshot"]
         module = "deploy.baremetal.authority" if n is self.auth else "deploy.baremetal.node"
-        sh(*(argv + ["/usr/bin/python3", "-Es", "-m", module, "--config", str(n.cfg_path), service] + list(args)))
+        done = sh(*(argv + ["/usr/bin/python3", "-Es", "-m", module, "--config", str(n.cfg_path), service] + list(args)), check=False)
+        if done.returncode != 0:                      # what the unit itself said: a oneshot's own output is in its journal
+            said = sh("journalctl", "-u", unit or self.unit(n.name, service), "-n", "30", "--no-pager", "-o", "cat", check=False).stdout
+            raise RuntimeError("%s's %s failed (%d): %s | %s" % (n.name, service, done.returncode, done.stderr.strip()[-300:], said[-1500:]))
 
     def _authority(self):
         """The revocation authority's host: its users, its key (the test revocation key, a file signer), its
