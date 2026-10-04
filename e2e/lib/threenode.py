@@ -441,7 +441,10 @@ class Cluster:
         self._run(a, "init", oneshot=True, unit=self.unit(AUTH, "init"), args=("--chain", str(chain)))
 
     def revoke(self, name, state, reason):
-        """The authority revokes a node: `authority revoke`, as root on its host, asked of the running serve."""
+        """The authority revokes a node: `authority revoke`, as root on its host, asked of the running serve (once
+        serve has made its control socket: a started unit is not yet a listening one)."""
+        if not until(lambda: (self.auth.dir / "control" / "control.sock").exists(), 60, 1):
+            raise RuntimeError("the authority's control socket did not appear: %s" % self.journal(AUTH, "serve")[-600:])
         return self.authority_command("revoke", "--node", name, "--state", state, "--reason", reason)
 
     def _start_authority(self):
