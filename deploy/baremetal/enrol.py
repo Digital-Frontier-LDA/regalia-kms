@@ -835,6 +835,225 @@ def store_documents(state, document, chown=True):
     return store.put(document)
 
 
+# ---- design steps 6 and 7: the peers' AKs, and this node's LUKS path from each peer (#190) ----
+
+ROOT_DEVICE = "/dev/disk/by-partlabel/regalia-root"      # the root volume, as the image's crypttab names it
+
+
+def _ask_for(node, manifest, peer):
+    """`ask(op, **fields)` to `peer` over the service tunnel (sync's transport and answer rules)."""
+    from deploy.baremetal import sync
+    transports = node.sources(manifest)
+    require(peer in transports, "%s is not reachable over the service tunnel by this node's manifest" % peer)
+    client = sync.Client(node.node_id, None, None, transports, lambda event: None)
+    return lambda op, **fields: client._ask(peer, op, **fields)
+
+
+def peers_to_enrol(manifest, node_id):
+    """Every other node that may authorize: each must give this node a path before local.bin goes."""
+    return sorted(n["node_id"] for n in manifest["nodes"] if n["node_id"] != node_id and membership.may(manifest, n["node_id"], "authorize"))
+
+
+def enrol_aks(config_path, run=subprocess.run):
+    """As regalia-sync (it owns the verifier's state): this node's AK into every peer's verifier, and theirs into
+    its own. Returns {peer: "ok" or the refusal}; a peer that is down is named, the others go on."""
+    from deploy.baremetal import enrolpeer, node as node_module
+    node = node_module.Node(node_module.load(config_path), run)
+    manifest = node.manifest()
+    verifier = node.attester_for(manifest)
+    identity, activate = enrolpeer.tpm_identity(node.tcti, run), enrolpeer.tpm_activate(node.tcti, run)
+    out = {}
+    for peer in peers_to_enrol(manifest, node.node_id):
+        try:
+            enrolpeer.enrol_aks(manifest, node.node_id, peer, _ask_for(node, manifest, peer), identity, activate, verifier)
+            out[peer] = "ok"
+        except (Refused, membership.Refused, attest.Refused, OSError) as refusal:
+            out[peer] = str(refusal)
+    return out
+
+
+def run_aks_as_sync(config_path, run=subprocess.run):
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_aks", "--config", config_path],
+               cwd=PACKAGE_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    require(done.returncode == 0, "the AK step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
+    found = re.findall(r"^AK (\S+) (.*)$", done.stdout, re.M)
+    require(found, "the AK step did not report")
+    return dict(found)
+
+
+def _quote_with(node):
+    """request_path's `quote`: this node's TPM quote over its boot session, binding the enrolment key."""
+    def quote(epoch, session_id, session_key, nonce, binding):
+        env = dict(os.environ, TPM2TOOLS_TCTI=node.tcti) if node.tcti else None
+        with tempfile.TemporaryDirectory(prefix="enrol-quote-") as d:
+            paths = (os.path.join(d, "quote"), os.path.join(d, "signature"))
+            attest.node_quote(node.node_id, epoch, bytes.fromhex(session_id), session_key, nonce, node.cfg["pcrs"], *paths,
+                              run=lambda argv, **kw: node.run(argv, **dict(kw, **({"env": env} if env else {}))), binding=binding)
+            quote_bytes, signature = (open(p, "rb").read() for p in paths)
+        return {"ephemeral_public": session_key.hex(), "nonce": nonce.hex(), "quote": quote_bytes.hex(), "signature": signature.hex()}
+    return quote
+
+
+def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run, aks=None, out=sys.stdout, config_path=None):
+    """Design steps 6 and 7 of #190, after `commit` (resumable, run again until it finishes):
+      1. the AKs both ways, as regalia-sync (`aks`, default run_aks_as_sync);
+      2. as root, this node's LUKS path from every peer that may authorize (enrolpeer.request_path), each
+         journalled ("path:<peer>") once its keyslot opens and its token is written;
+      3. only when EVERY such peer has a path IN THE HEADER (read again, not the journal's word): "paths" done in
+         the journal, then local.bin overwritten and unlinked, then "local_removed" journalled. Nothing else
+         removes it.
+    A path the journal holds but the header no longer has (a reseal, a killed keyslot) is asked for again.
+    `recovery()` returns the recovery key (typed at the console) as a bytearray, zeroed here once used.
+    Returns the peers still without a path."""
+    from deploy.baremetal import enrolpeer, node as node_module, unlock
+    node_id = _bundle(directory)["node_id"]
+    journal = Journal(directory, node_id)
+    require(journal.state("seal") == "done", "the boot credentials are not sealed yet: run `enrol commit` first")
+    sealed_file = os.path.join(esp, "loader", "credentials", SEALED[0][0] + espcreds.SUFFIX)
+    with open(sealed_file, "rb") as f:
+        sealed = f.read(1 << 20)
+    require(hashlib.sha256(sealed).hexdigest() == journal.get("seal")["files"][os.path.basename(sealed_file)]["sha256"],
+            "%s is not the credential this enrolment sealed" % sealed_file)
+    sealed_local = "".join(sealed.decode("ascii").split())
+
+    def without_path(peers):
+        return _without_path(unlock.luks_meta(device, run), node_id, peers, sealed_local)
+
+    if journal.state("paths") == "done" and not without_path(journal.get("paths").get("peers") or []):
+        _remove_local(journal, directory, without_path)
+        return []
+    config_path = config_path or NODE_JSON
+    node = node_module.Node(node_module.load(config_path), run)
+    manifest = node.manifest()
+    peers = peers_to_enrol(manifest, node.node_id)
+    require(peers, "no other node may authorize under epoch %d: no path can be made" % manifest["epoch"])
+    ak_results = (aks or run_aks_as_sync)(config_path)
+    local = local_contribution(journal, directory)
+    session = node_module.boot_session(node.runtime)      # (ID hex, key): the one this boot presents to everyone
+    lost = set(without_path(peers))
+    key, missing = None, []
+    try:
+        for peer in peers:
+            if journal.state("path:" + peer) == "done":
+                if peer not in lost:
+                    continue
+                print("PATH from %s: journalled, but no longer in the header: asked for again" % peer, file=out)
+            if ak_results.get(peer) != "ok":
+                missing.append("%s (AK step: %s)" % (peer, ak_results.get(peer, "not reached")))
+                continue
+            if key is None:
+                key = recovery()
+            try:
+                result = enrolpeer.request_path(manifest, node.node_id, peer, _ask_for(node, manifest, peer), session, _quote_with(node),
+                                                local, sealed_local, device, key, run)
+            except (Refused, membership.Refused, attest.Refused, OSError) as refusal:
+                missing.append("%s (%s)" % (peer, refusal))
+                continue
+            journal.done("path:" + peer, **{k: v for k, v in result.items() if v is not None})
+            print("PATH from %s: %s" % (peer, "already in the header" if result.get("existing") else
+                                        "path epoch %d, keyslot %d" % (result["path_epoch"], result["keyslot"])), file=out)
+    finally:
+        _zero(key)
+        del key, local
+    if not missing:
+        missing = ["%s (journalled, but the header has no path from it)" % peer for peer in without_path(peers)]
+    if missing:
+        print("NOT FINISHED: no path yet from %s. local.bin stays; run `enrol paths` again once they answer" % "; ".join(missing), file=out)
+        return missing
+    journal.done("paths", peers=peers)
+    _remove_local(journal, directory, without_path)
+    print("ENROLLED: a path from every peer (%s); the local contribution is only sealed now" % ", ".join(peers), file=out)
+    return []
+
+
+def _without_path(meta, node_id, peers, sealed_local):
+    """The peers of `peers` the LUKS2 header `meta` holds no live path from: a well-formed token for this node
+    from that peer, naming a keyslot that exists, over the local half this enrolment sealed."""
+    from deploy.baremetal import unlock
+    keyslots = set(meta.get("keyslots") or {})
+    live = set()
+    for _, token in unlock.path_tokens(meta):
+        try:
+            unlock.validate_token(token)
+        except (Refused, membership.Refused):
+            continue
+        if token["target"] == node_id and token["keyslots"][0] in keyslots and token["local"] == sealed_local:
+            live.add(token["peer"])
+    return [peer for peer in peers if peer not in live]
+
+
+def _zero(buffer):
+    """Overwrite a bytearray in place. Python may have copied it before (a slice, a subprocess pipe): this
+    clears the one buffer this module holds, no more."""
+    if isinstance(buffer, bytearray):
+        buffer[:] = bytes(len(buffer))
+
+
+def _remove_local(journal, directory, without_path):
+    """The last step: local.bin goes only after "paths" is journalled done AND the header, read again now, holds
+    a path from every journalled peer (`without_path(peers)` is empty). It is overwritten with zeros, synced,
+    unlinked, and the directory synced; then that is journalled. On an SSD the overwrite is best effort (the
+    flash translation layer may keep the old blocks); what protects them is that the root volume is encrypted."""
+    require(journal.state("paths") == "done", "local.bin is removed only once every peer's path is journalled")
+    gone = without_path(journal.get("paths").get("peers") or [])
+    require(not gone, "local.bin stays: the header has no path from %s" % ", ".join(gone))
+    path = os.path.join(directory, LOCAL_FILE)
+    if os.path.lexists(path):
+        fd = os.open(path, os.O_WRONLY | os.O_NOFOLLOW)
+        try:
+            size = os.fstat(fd).st_size
+            os.pwrite(fd, bytes(size), 0)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.unlink(path)
+        dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    if journal.state("local_removed") != "done":
+        journal.done("local_removed")
+
+
+def console_key(prompt, tty="/dev/tty"):
+    """A secret typed at the console, as a bytearray: only when standard input is a terminal AND this process
+    has a controlling terminal it reads from directly, with echo off. Never a pipe, a here-string or a script
+    (getpass would fall back to standard input when /dev/tty cannot be opened)."""
+    import termios
+    require(sys.stdin.isatty(), "the recovery key is typed at the console: standard input is not a terminal")
+    try:
+        fd = os.open(tty, os.O_RDWR | os.O_NOCTTY)
+    except OSError as error:
+        raise Refused("the recovery key is typed at the console: no controlling terminal (%s)" % error.strerror) from None
+    typed = bytearray()
+    try:
+        require(os.isatty(fd), "the recovery key is typed at the console: %s is not a terminal" % tty)
+        old = termios.tcgetattr(fd)
+        new = list(old)
+        new[3] &= ~(termios.ECHO | termios.ECHONL)
+        termios.tcsetattr(fd, termios.TCSAFLUSH, new)      # echo off and typeahead dropped, THEN the prompt
+        try:
+            os.write(fd, prompt.encode())
+            while len(typed) <= 1024:
+                chunk = os.read(fd, 1)
+                if not chunk or chunk in (b"\n", b"\r"):
+                    break
+                typed += chunk
+        finally:
+            termios.tcsetattr(fd, termios.TCSAFLUSH, old)
+            os.write(fd, b"\n")
+        require(len(typed) <= 1024, "the recovery key is longer than 1024 bytes")
+        require(typed, "no recovery key was typed")
+        return typed
+    except BaseException:
+        _zero(typed)
+        raise
+    finally:
+        os.close(fd)
+
+
 def _hand_over(state, chown=True):
     """The state directory, made regalia-sync's: every directory above it trusted and made one level at a time
     (_open_trusted), then the directory itself opened without following a link and judged by descriptor, so what
@@ -1257,10 +1476,39 @@ def main(argv=None):
     h = sub.add_parser("_first-heartbeat", help=argparse.SUPPRESS)
     h.add_argument("--config", required=True)
     h.add_argument("--bootstrap", action="store_true")
+    q = sub.add_parser("paths", help="the peers' AKs and this node's LUKS path from each peer; then local.bin goes")
+    q.add_argument("--esp", required=True, help="the ESP's mount point (the sealed unlock-local credential is read from it)")
+    q.add_argument("--device", default=ROOT_DEVICE)
+    q.add_argument("--enrol-dir", default=ENROL_DIR)
+    x = sub.add_parser("_aks", help=argparse.SUPPRESS)
+    x.add_argument("--config", required=True)
     a = sub.add_parser("_anchor", help=argparse.SUPPRESS)
     a.add_argument("--config", required=True)
     a.add_argument("--chain", required=True, choices=["-"], help="always -: the chain comes on standard input")
     args = ap.parse_args(argv)
+    if args.command == "_aks":                       # run by paths, as regalia-sync
+        try:
+            results = enrol_aks(args.config)
+        except (Refused, membership.Refused, attest.Refused, OSError, ValueError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        for peer, result in sorted(results.items()):
+            print("AK %s %s" % (peer, " ".join(str(result).split())))
+        return 0
+    if args.command == "paths":
+        if os.geteuid() != 0:
+            print("REFUSED: enrolment runs as root, at the host's console", file=sys.stderr)
+            return 2
+
+        def recovery():
+            # the recovery key from the console only: never argv, the environment, a pipe, a file or the journal
+            return console_key("The recovery key of this host's root volume (from its card; not shown): ")
+        try:
+            missing = enrol_paths(args.enrol_dir, args.esp, recovery, args.device)
+        except (Refused, membership.Refused, attest.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        return 3 if missing else 0
     if args.command == "_first-heartbeat":           # run by commit, as regalia-sync
         try:
             sequence, left = first_heartbeat(args.config, bootstrap=args.bootstrap)

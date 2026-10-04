@@ -936,6 +936,28 @@ class RecordWrites(unittest.TestCase):
         self.assertEqual([index for tool, index in self.calls if tool == "nvundefine"][:2], ["0x150001b", "0x150001a"])
         self.assertEqual((hw.value(), hw.slots()), (13, [(13, "13" * 32)] * 2))
 
+    def test_a_counter_or_base_of_another_size_is_an_unusable_anchor_that_re_anchoring_replaces(self):
+        """regalia-kms-ed, porting the reader to Go: a base smaller than 8 bytes was a plain Refused ("cannot read
+        8 bytes"), which re-anchoring treats as a TPM that failed, so the node had no way back."""
+        for index, size in (("0x1500017", 4), ("0x1500017", 16), ("0x1500016", 16)):
+            with self.subTest(index=index, size=size):
+                self.tpm = FakeTpm()
+                hw = self.defined()
+                hw.anchor(3, lambda epoch: "%02x" % epoch * 32)
+                self.tpm(["tpm2_nvundefine", index, "-C", "o"])
+                if index == "0x1500017":
+                    self.tpm(["tpm2_nvdefine", index, "-C", "o", "-s", str(size), "-a", "ownerread|ownerwrite|authread|writedefine"])
+                    self.tpm(["tpm2_nvwrite", index, "-C", "o", "-i", "-"], input=b"\0" * size)
+                    self.tpm(["tpm2_nvwritelock", index, "-C", "o"])
+                else:
+                    self.tpm(["tpm2_nvdefine", index, "-C", "o", "-s", str(size), "-a", "nt=counter|ownerread|ownerwrite|authread"])
+                    self.tpm(["tpm2_nvincrement", index, "-C", "o"])
+                self.assertEqual(hw.unusable(), "NV index %s is %d bytes, not 8" % (index, size))
+                with self.assertRaises(m.Unusable):
+                    hw.value()
+                hw.redefine(3, "03" * 32)                                     # and a re-anchor's TPM half replaces it
+                self.assertEqual((hw.value(), hw.unusable()), (3, None))
+
     def test_two_valid_slots_that_disagree_at_one_epoch_are_refused(self):
         hw = self.defined()
         hw.anchor(1, lambda epoch: "01" * 32 if epoch else "00" * 32)

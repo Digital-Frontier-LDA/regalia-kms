@@ -52,6 +52,16 @@ EXTRA = [
       ("regalia_heartbeat_lifetime_seconds", {}, "3600+0x5")], []),
     # the held heartbeat's age, whatever its lifetime: a one-hour heartbeat is never two hours old; a 24-hour one, 2 h 10 min
     # after it was issued, is (and is nowhere near half its life: the age alert is the earlier one there)
+    # the boundary at the production lifetime (6 h): over two hours, strictly (regalia-kms-d9 on #329)
+    ("RegaliaHeartbeatNotRenewed", "6 h lifetime, exactly 2 h old", 120,
+     [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "14400+0x5"),
+      ("regalia_heartbeat_lifetime_seconds", {}, "21600+0x5")], []),
+    ("RegaliaHeartbeatNotRenewed", "6 h lifetime, one second under 2 h old", 120,
+     [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "14401+0x5"),
+      ("regalia_heartbeat_lifetime_seconds", {}, "21600+0x5")], []),
+    ("RegaliaHeartbeatNotRenewed", "6 h lifetime, one second over 2 h old", 120,
+     [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "14399+0x5"),
+      ("regalia_heartbeat_lifetime_seconds", {}, "21600+0x5")], [{}]),
     ("RegaliaHeartbeatNotRenewed", "a one-hour lifetime, 10 minutes left", 120,
      [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "600+0x5"),
       ("regalia_heartbeat_lifetime_seconds", {}, "3600+0x5")], []),
