@@ -16,7 +16,7 @@
 #   REPO=/path/to/checkout; . repo-git.sh; repo_git_check || exit; repo_git rev-parse HEAD
 
 # what a clone writes into its own configuration, and nothing else (uki.py CLONE_CONFIG; names as git prints them)
-REPO_GIT_ALLOWED='core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)|extensions\.(objectformat|worktreeconfig)|user\.(name|email)|remote\.[^[:space:]]+\.(url|pushurl|fetch|tagopt|prune|promisor|partialclonefilter)|branch\.[^[:space:]]+\.(remote|merge|rebase|pushremote)'
+REPO_GIT_ALLOWED='core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)|extensions\.(objectformat|worktreeconfig)|user\.(name|email)|gc\.auto|remote\.[^[:space:]]+\.(url|pushurl|fetch|tagopt|prune|promisor|partialclonefilter)|branch\.[^[:space:]]+\.(remote|merge|rebase|pushremote)'
 
 repo_git_uid(){
   # the uid git runs as: the checkout's owner when root reads another user's checkout, else this process's

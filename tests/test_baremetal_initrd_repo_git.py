@@ -98,7 +98,7 @@ class RepoGit(unittest.TestCase):
         self.assertIn("core.pager", err)
 
     def test_what_a_clone_writes_is_read(self):
-        for key, value in (("user.name", "x"), ("remote.origin.url", "https://example.invalid/r.git"),
+        for key, value in (("user.name", "x"), ("gc.auto", "0"), ("remote.origin.url", "https://example.invalid/r.git"),
                            ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"), ("branch.main.remote", "origin")):
             self.config(key, value)
         with open(os.path.join(self.repo, ".gitattributes"), "w") as f:
