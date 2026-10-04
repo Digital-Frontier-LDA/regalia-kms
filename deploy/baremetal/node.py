@@ -352,14 +352,14 @@ def _chain_tip(cfg):
     return membership.accept_chain(None, envelopes, cfg["root_key"])
 
 
-def heartbeat_counter(cfg, run=subprocess.run):
+def heartbeat_counter(cfg, run=subprocess.run, owner_auth=None):
     """This node's heartbeat sequence counter, with the lock its users take: the one construction the
     services and the recovery command (recount.py) share. Written by policy like the anchor (#242)."""
     return heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "heartbeat-counter.lock"),
                              policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg),
                              # its one definition, define_at (a first heartbeat, a replacement's, recount's floor), is
                              # laid down under the node's policy when its signed images name one (define_policy)
-                             define_policy=lambda: define_policy(cfg))
+                             define_policy=lambda: define_policy(cfg), owner_auth=owner_auth)
 
 
 # ---- the node ----
@@ -421,8 +421,9 @@ class Node:
         # an epoch is committed only with the measurements it commits to held (#332)
         return membership.Store(self.path("membership.json"), self.cfg["root_key"], self.anchor(), documents=self.documents().require_for)
 
-    def freshness(self):
-        counter = heartbeat_counter(self.cfg, self.run)
+    def freshness(self, owner_auth=None):
+        """`owner_auth`: for a definition of the counter (enrolment's first heartbeat); the services give none."""
+        counter = heartbeat_counter(self.cfg, self.run, owner_auth)
         return heartbeat.Freshness(counter, self.clock(), self.tpm_clock(), self.path("freshness.json"))
 
     def attester_for(self, manifest):

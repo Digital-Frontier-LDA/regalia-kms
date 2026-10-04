@@ -40,11 +40,10 @@ CURRENT LIMITATIONS (#242):
   * set() takes the owner authorization from EMPTY only. A TPM whose owner authorization is already set is refused,
     with the way on (its value is this envelope's: nothing to do, `check` proves it; otherwise the TPM's owner
     hierarchy must be cleared by its owner first). Changing a set value to a new one (a rotation) is not built;
-  * systemd's TPM credentials (systemd-creds, the unlock contribution's seal) use the storage root key at 0x81000001,
-    which systemd-tpm2-setup persists at boot; creating it later needs the owner authorization, which systemd does
-    not have. Nothing here checks that the SRK is persistent before the owner authorization is set (#242 C2);
-  * enrolment, re-anchoring, recount and seal-hsm-pin.sh do not yet take the value from the envelope (#242 C2): on a
-    TPM whose owner authorization is set, their owner-authorized steps fail closed until then.
+  * a child process (enrolment's steps as regalia-sync) takes the value from its root parent through an inherited
+    memfd (child_fd, --ownerauth-fd) and does not re-verify the record: the parent verified it;
+  * enrol commit reads the value (standard input) before the operator types the root's fingerprint (at the terminal),
+    and checks it against the record (confirm) only once that fingerprint has confirmed the root key;
 """
 import contextlib
 import hashlib
@@ -174,11 +173,105 @@ def from_envelope(stream, envelope, root, node_id):
     """The node's Auth: the value on `stream` (read_value), refused unless the record verified under the pinned root
     names it for `node_id` (its check value). Nothing touches the TPM before this returns."""
     entry = verify(envelope, root, node_id)
-    auth = read_value(stream)
+    return confirm(read_value(stream), envelope, root, node_id, entry)
+
+
+def confirm(auth, envelope, root, node_id, entry=None):
+    """`auth`, read before its record could be judged (a command that must read the value before the operator types
+    the root's fingerprint), refused unless the record verified under the pinned root names it for `node_id`."""
+    entry = entry or verify(envelope, root, node_id)
     require(hmac.compare_digest(auth.check(node_id), entry["check"]),
             "the owner authorization given is not %s's (its check value is not the record's): the wrong envelope, or "
             "another node's" % node_id)
     return auth
+
+
+def read_fd(fd):
+    """The value from the descriptor `fd` (read_value's form): the memfd a root parent hands its child process
+    (child_fd, enrolment's steps as regalia-sync). Refused if `fd` is a terminal. The descriptor is closed once read."""
+    require(isinstance(fd, int) and fd >= 0, "--ownerauth-fd takes a descriptor number")
+    try:
+        require(not os.isatty(fd), "descriptor %d is a terminal: the owner authorization comes from its envelope (e.g. "
+                "on standard input), never typed" % fd)
+        with os.fdopen(fd, "rb", closefd=True) as stream:
+            return read_value(stream)
+    except OSError as error:
+        raise Refused("descriptor %d cannot be read: %s" % (fd, error.strerror)) from None
+
+
+def child_fd(auth):
+    """A sealed memfd holding the value in read_value's form, inheritable, for ONE child process given `--ownerauth-fd N`
+    (enrolment's steps run as regalia-sync): the caller passes it with pass_fds and closes it after."""
+    import fcntl
+    fd = os.memfd_create("regalia-ownerauth", os.MFD_ALLOW_SEALING)
+    try:
+        os.write(fd, auth._raw.hex().encode() + b"\n")
+        os.lseek(fd, 0, os.SEEK_SET)
+        fcntl.fcntl(fd, fcntl.F_ADD_SEALS, fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def add_arguments(parser):
+    """--ownerauth RECORD, the same on every tool that makes owner-authorized TPM calls (#242 C2): the value comes on
+    STANDARD INPUT, `gpg --decrypt ownerauth-<node>.yk.gpg | sudo <tool> ... --ownerauth ownerauth.record.json`. Not
+    on another descriptor: sudo closes every descriptor above 2 (sudoers' closefrom). What the operator types (a
+    fingerprint, a confirmation phrase) is then read from the controlling terminal (console)."""
+    parser.add_argument("--ownerauth", metavar="RECORD.json", help="the ceremony's ownerauth.record.json: the TPM's owner "
+                        "authorization is set, and this node's comes from its envelope on standard input "
+                        "(gpg --decrypt ownerauth-<node>.yk.gpg | ...), never typed and never an argument (#242)")
+
+
+def read_arguments(args, stream=None):
+    """(Auth, record) from --ownerauth and standard input, read but NOT yet judged (confirm), or None without
+    --ownerauth: for a command that must read the value before the operator types (enrol commit)."""
+    if getattr(args, "ownerauth", None) is None:
+        return None
+    import sys
+    stream = stream or sys.stdin.buffer
+    with open(args.ownerauth, "rb") as f:
+        envelope = membership.load(f.read(membership.MAX_BYTES + 1), membership.MAX_BYTES)
+    require(not (hasattr(stream, "isatty") and stream.isatty()), "standard input is a terminal: with --ownerauth it carries "
+            "the decrypted envelope (gpg --decrypt ownerauth-<node>.yk.gpg | ...), which is never typed")
+    return read_value(stream), envelope
+
+
+def from_arguments(args, root, node_id, stream=None):
+    """The node's Auth from --ownerauth and standard input, judged against the record under the pinned root; None
+    without --ownerauth (the owner authorization is empty)."""
+    pending = read_arguments(args, stream)
+    return None if pending is None else confirm(pending[0], pending[1], root, node_id)
+
+
+def console(prompt, tty="/dev/tty"):
+    """A line typed at the controlling terminal, for a command whose standard input carries the owner authorization:
+    what it asks (a fingerprint, a phrase) is still typed by a person, never piped. None at end of input."""
+    try:
+        fd = os.open(tty, os.O_RDWR | os.O_NOCTTY)
+    except OSError as error:
+        raise Refused("there is no terminal to type at (%s): this is typed at the host's console" % error.strerror) from None
+    try:
+        require(os.isatty(fd), "%s is not a terminal: this is typed at the host's console" % tty)
+        os.write(fd, prompt.encode())
+        with os.fdopen(os.dup(fd), "r", encoding="utf-8", errors="replace") as t:   # read-only: a tty does not seek
+            line = t.readline()
+    finally:
+        os.close(fd)
+    return line.rstrip("\n") if line else None
+
+
+SRK = "0x81000001"                     # systemd's storage root key (systemd-tpm2-setup), persisted at boot
+
+
+def srk_persistent(tcti=None, run=subprocess.run):
+    """Whether systemd's SRK is persistent: its TPM credentials (systemd-creds, the unlock contribution's seal) use it,
+    and once the owner authorization is set systemd can no longer create it (it does not hold the authorization)."""
+    r = run(["tpm2_getcap", "handles-persistent"], capture_output=True, env=_env(tcti))
+    require(r.returncode == 0, "cannot list the TPM's persistent handles")
+    text = r.stdout.decode("utf-8", "replace") if isinstance(r.stdout, bytes) else r.stdout
+    return SRK in {h.lower() for h in re.findall(r"0x[0-9a-fA-F]{8}", text)}
 
 
 def _value_fd(auth):
@@ -245,6 +338,9 @@ def set_owner(auth, tcti=None, run=subprocess.run):
     """The TPM's owner authorization set to `auth`, from EMPTY only: one already set is refused, never overwritten
     and never guessed at (its way on is in the message). Then proven by an owner-authorized call with it."""
     require(isinstance(auth, Auth), "the owner authorization is not an ownerauth.Auth")
+    require(srk_persistent(tcti, run), "systemd's storage root key (%s) is not persistent: systemd-tpm2-setup makes it at "
+            "boot, and once the owner authorization is set systemd cannot. Boot the node once with systemd-tpm2-setup "
+            "enabled (or run /usr/lib/systemd/systemd-tpm2-setup), then this again. Nothing was changed" % SRK)
     require(not posture(tcti, run)["owner"],
             "the TPM's owner authorization is already set. If it is this envelope's value, there is nothing to do (`enrol "
             "ownerauth --check` proves it, in one try). If not, this TPM was provisioned by someone else: its owner "
