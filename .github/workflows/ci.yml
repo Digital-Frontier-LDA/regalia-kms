@@ -757,6 +757,10 @@ jobs:
       image: debian:13
       options: --privileged
     steps:
+      # git first, so actions/checkout makes a git checkout and not a tarball: uki.py build and sign hold the build
+      # record's commit and files to the checkout they run from (#266)
+      - name: Install git
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
