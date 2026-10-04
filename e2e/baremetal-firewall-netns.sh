@@ -21,6 +21,12 @@ pass=0; fail=0
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; pass=$((pass+1)); }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; fail=$((fail+1)); }
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; }
+# IT CHANGES THE MACHINE (network namespaces, veth pairs, a bridge; the ruleset itself only inside a namespace,
+# never the host's tables), so it runs in CI (GITHUB_ACTIONS) or with REGALIA_NETNS_HOST_OK=1 on a throwaway host.
+if [ "${GITHUB_ACTIONS:-}" != true ] && [ "${REGALIA_NETNS_HOST_OK:-}" != 1 ]; then
+  echo "baremetal-firewall-netns: refused: it adds namespaces, veths and a bridge to this machine. Run it in CI, or on a throwaway host with REGALIA_NETNS_HOST_OK=1."
+  exit 2
+fi
 [ "$(id -u)" = 0 ] || { echo "baremetal-firewall-netns: run as root (sudo)"; exit 2; }
 for t in ip nft python3 wg; do command -v "$t" >/dev/null || { echo "baremetal-firewall-netns: $t is required (iproute2, nftables, wireguard-tools)"; exit 2; }; done
 

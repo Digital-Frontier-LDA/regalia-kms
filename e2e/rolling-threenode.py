@@ -192,7 +192,7 @@ def scenario(cluster):
 
     header("2  NEXT before the root approved it (a power cycle onto it, not an update): no key for a; b and c serve on")
     r = refused_next = reboot(cluster, a, NEXT_IMAGE)
-    quoted = cluster.image_set(a, NEXT_IMAGE)["pcrs"]["11"]
+    quoted = threenode.unlock_pcr11(cluster.image_set(a, NEXT_IMAGE))
     ok(not opened(r["got"]) and all(refused_for_pcr11(cluster, p, a, r["since"], quoted) for p in (b, c)),
        "a, booted onto %s under epoch 1, gets no key: both peers refuse it for its PCR 11 (their trails)" % NEXT_IMAGE,
        {"unlock": r["got"], "denials": [e for p in (b, c) for e in cluster.trail(p) if e.get("event") == "unlock" and e.get("at", 0) >= r["since"]]})
@@ -260,7 +260,7 @@ def scenario(cluster):
        {name: bool(cluster.lease(name)) for name in names})
     # not updates: a power cycle onto the retired image (a stale BootOrder, KERNEL-UPDATE 3.8), then onto NEXT again
     r = refused_retired = reboot(cluster, c, None)
-    quoted = cluster.image_set(c)["pcrs"]["11"]
+    quoted = threenode.unlock_pcr11(cluster.image_set(c))
     ok(not opened(r["got"]) and all(refused_for_pcr11(cluster, p, c, r["since"], quoted) for p in (a, b)),
        "c, booted onto the retired CURRENT, gets no key: both peers refuse it for its PCR 11 (their trails)",
        {"unlock": r["got"], "denials": [e for p in (a, b) for e in cluster.trail(p) if e.get("event") == "unlock" and e.get("at", 0) >= r["since"]]})
@@ -279,10 +279,10 @@ def scenario(cluster):
     def pcr11(value):
         return lambda r: bool(r) and ("PCR 11 is %s" % value) in r
     ok(all(cluster.audit_has(p, "sync", since=refused_next["since"], event="unlock", subject=a, outcome="DENY",
-                             reason=pcr11(cluster.image_set(a, NEXT_IMAGE)["pcrs"]["11"])) for p in (b, c)),
+                             reason=pcr11(threenode.unlock_pcr11(cluster.image_set(a, NEXT_IMAGE)))) for p in (b, c)),
        "b's and c's refusals of a on the unapproved %s, for its PCR 11 (step 2), are in their streams" % NEXT_IMAGE)
     ok(all(cluster.audit_has(p, "sync", since=refused_retired["since"], event="unlock", subject=c, outcome="DENY",
-                             reason=pcr11(cluster.image_set(c)["pcrs"]["11"])) for p in (a, b)),
+                             reason=pcr11(threenode.unlock_pcr11(cluster.image_set(c)))) for p in (a, b)),
        "a's and b's refusals of c on the retired CURRENT, for its PCR 11 (step 8), are in their streams")
     ok(all(cluster.audit_has(a, "sync", since=on_next["since"], event="sync-lease", subject=s, outcome="ALLOW") for s in (b, c)),
        "the leases a issued to b and c from %s (step 5) are in a's stream" % NEXT_IMAGE)

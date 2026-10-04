@@ -819,3 +819,137 @@ class Genesis(unittest.TestCase):
                                         "--key-fd", "3", "--offline-session", self.SESSION, "--state-dir", self.state,
                                         "--out", self.paths["e1.json"]]), 2)
         self.assertIn("give --chain and --expected-epoch (or --genesis)", err.getvalue())
+
+
+class ProposeGenesis(unittest.TestCase):
+    """`propose --genesis` (regalia-kms-24's decisions, 2026-10-04): epoch 1 from the nodes' `enrol entry` outputs, the
+    measurements document, the owner's two card keys and the release card's (refused as an owner), with the default
+    policy printed for review; written only after the operator types the two cards' serials at the console. Each
+    refusal below is the one guard's own."""
+
+    def setUp(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from tests.test_baremetal_membership_v4 import nodes4, OWNER_KEYS, typed
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.root_key = Ed25519PrivateKey.generate()
+        self.root = OfflineRoot.raw(self.root_key).hex()
+        self.entries = [{k: v for k, v in n.items() if k != "state"} for n in nodes4()]
+        self.document = {"schema": measurements.SCHEMA, "name": "genesis", "nodes": {
+            e["node_id"]: {"accepted": [{"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32}}]} for e in self.entries}}
+        self.owner_a, self.owner_b = typed(OWNER_KEYS[0])["key"], typed(OWNER_KEYS[1])["key"]
+        self.release = typed(OWNER_KEYS[2])["key"]
+
+    def owner_args(self):
+        return ["CARD-A=" + self.owner_a, "CARD-B=" + self.owner_b]
+
+    def propose(self, entries=None, owners=None, release=None, policy=None, document=None):
+        return tool.propose_genesis(self.entries if entries is None else entries, document or self.document,
+                                    tool.owner_keys_from(owners or self.owner_args()), release or self.release, self.root,
+                                    "2026-10-04T12:00:00Z", policy)
+
+    def refused(self, reason, fn, *args, **kw):
+        with self.assertRaises(m.Refused) as caught:
+            fn(*args, **kw)
+        self.assertIn(reason, str(caught.exception))
+
+    def test_a_genesis_a_node_accepts_from_the_root(self):
+        candidate = self.propose()
+        self.assertEqual((candidate["schema"], candidate["epoch"], candidate["prev_digest"]), (m.SCHEMA_V4, 1, ""))
+        self.assertEqual(candidate["policy_version"], measurements.version(self.document))
+        self.assertEqual([n["state"] for n in candidate["nodes"]], ["ACTIVE"] * 3)
+        self.assertEqual(candidate["owner_keys"], [{"alg": "ed25519", "key": self.owner_a}, {"alg": "ed25519", "key": self.owner_b}])
+        self.assertEqual((candidate["heartbeat_max_lifetime_s"], candidate["owner_heartbeat_lifetime_s"]), (21600, 3600))
+        self.assertEqual(candidate["heartbeat_signers"], {"threshold": 2, "parties": ["a", "b", "c", "owner"]})
+        self.assertEqual(candidate["revocation_signers"], [{"threshold": 2, "parties": ["a", "b", "c"]}, {"threshold": 1, "parties": ["owner"]}])
+        envelope = {"manifest": candidate, "signature": {"signer": "root", "key": self.root,
+                                                         "sig": self.root_key.sign(m.DOMAIN + m.canonical(candidate)).hex()}}
+        self.assertEqual(m.accept(None, envelope, self.root)["epoch"], 1)
+
+    def test_owner_keys_exactly_two_cards_two_keys(self):
+        self.refused("--owner-key is given exactly twice", tool.owner_keys_from, ["CARD-A=" + self.owner_a])
+        self.refused("names the card CARD-A twice", tool.owner_keys_from, ["CARD-A=" + self.owner_a, "CARD-A=" + self.owner_b])
+        self.refused("the two owner cards have the same key: they are one card", tool.owner_keys_from,
+                     ["CARD-A=" + self.owner_a, "CARD-B=" + self.owner_a])
+        self.refused("is not a raw Ed25519 public key", tool.owner_keys_from, ["CARD-A=" + self.owner_a, "CARD-B=" + "AB" * 32])
+        self.refused("--owner-key takes SERIAL=HEX", tool.owner_keys_from, ["CARD-A" + self.owner_a, "CARD-B=" + self.owner_b])
+
+    def test_the_release_card_root_and_signing_keys_are_never_owner_keys(self):
+        self.refused("--release-key is one of the owner keys: the release card is never an owner key", self.propose, release=self.owner_b)
+        self.refused("the owner card CARD-A's key is the pinned root's", self.propose, owners=["CARD-A=" + self.root, "CARD-B=" + self.owner_b])
+        reused = [dict(e, signing_key={"alg": "ed25519", "key": self.owner_b}) if e["node_id"] == "b" else e for e in self.entries]
+        self.refused("the owner card CARD-B's key is b's signing key", self.propose, entries=reused)
+
+    def test_the_release_card_is_neither_the_root_nor_a_node(self):
+        """regalia-kms-d9's read: the release key was compared with the owner keys only."""
+        self.refused("the release card's key is the pinned root's", self.propose, release=self.root)
+        reused = [dict(e, signing_key={"alg": "ed25519", "key": self.release}) if e["node_id"] == "c" else e for e in self.entries]
+        self.refused("the release card's key is c's signing key", self.propose, entries=reused)
+
+    def test_a_bench_token_is_never_a_production_node_s(self):
+        """regalia-kms-d9's read: D28.5, never a bench serial; genesis is where the root first vouches for the tokens."""
+        bench = [dict(e, hsm_serials=e["hsm_serials"] + ["denk0404380"]) if e["node_id"] == "b" else e for e in self.entries]
+        self.refused("the entry of b names a bench token (denk0404380)", self.propose, entries=bench)
+        for token in ("35718625", "000635718625", "ESP41D722E2"):        # YubiKey decimal and OpenPGP forms, a Pico HSM
+            with self.subTest(token=token):
+                bench = [dict(e, hsm_serials=e["hsm_serials"] + [token]) if e["node_id"] == "a" else e for e in self.entries]
+                self.refused("the entry of a names a bench token (%s)" % token, self.propose, entries=bench)
+
+    def test_an_entry_from_an_older_enrolment_or_with_no_serial_is_refused(self):
+        older = [{k: v for k, v in e.items() if k != "ssh_host_pub"} if e["node_id"] == "c" else e for e in self.entries]
+        self.refused("the entry of c lacks ssh_host_pub", self.propose, entries=older)
+        none = [dict(e, hsm_serials=[]) if e["node_id"] == "a" else e for e in self.entries]
+        self.refused("the entry of a names no token serial", self.propose, entries=none)
+        self.refused("no node entry given", self.propose, entries=[])
+
+    def test_the_measurements_must_cover_every_node(self):
+        partial = dict(self.document, nodes={k: v for k, v in self.document["nodes"].items() if k != "c"})
+        self.refused("the measurements have no entry for c", self.propose, document=partial)
+
+    def test_a_policy_override_below_its_floor_is_refused(self):
+        self.refused("owner_heartbeat_lifetime_s must be an integer from 300", self.propose, policy={"owner_heartbeat_lifetime_s": 100})
+        self.assertEqual(self.propose(policy={"heartbeat_max_lifetime_s": 7200})["heartbeat_max_lifetime_s"], 7200)
+
+    def run_cli(self, *extra, typed="CARD-A CARD-B"):
+        paths = {}
+        for e in self.entries:
+            paths[e["node_id"]] = os.path.join(self.d, "entry-%s.json" % e["node_id"])
+            with open(paths[e["node_id"]], "w") as f:
+                json.dump(e, f)
+        doc = os.path.join(self.d, "doc.json")
+        with open(doc, "w") as f:
+            json.dump(self.document, f)
+        out = os.path.join(self.d, "e1.json")
+        args = ["propose", "--genesis", "--root-key", self.root, "--measurements", doc, "--release-key", self.release, "--out", out,
+                "--issued-at", "2026-10-04T12:00:00Z"]
+        for p in paths.values():
+            args += ["--entry", p]
+        for o in self.owner_args():
+            args += ["--owner-key", o]
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with unittest.mock.patch("sys.stdout", stdout), unittest.mock.patch("sys.stderr", stderr), \
+                unittest.mock.patch.object(tool.keyfd, "tty_line", lambda prompt: typed):
+            code = tool.main(args + list(extra))
+        return code, stdout.getvalue(), stderr.getvalue(), out
+
+    def test_the_command_prints_every_field_and_writes_only_after_the_serials_are_typed(self):
+        code, out, err, path = self.run_cli(typed="CARD-B CARD-A")
+        self.assertEqual(code, 2)
+        self.assertIn("the serials typed are not the owner cards above: nothing was written", err)
+        self.assertFalse(os.path.exists(path))
+        code, out, err, path = self.run_cli()
+        self.assertEqual(code, 0, err)
+        for shown in ("owner card CARD-A: key " + self.owner_a, "heartbeat_max_lifetime_s", "revocation_signers", "node c: ADDED"):
+            self.assertIn(shown, out)
+        self.assertEqual(json.load(open(path))["epoch"], 1)
+
+    def test_genesis_takes_no_chain_and_the_other_proposals_still_need_one(self):
+        chain = os.path.join(self.d, "c.json")
+        with open(chain, "w") as f:
+            json.dump([], f)
+        code, _, err, _ = self.run_cli("--chain", chain)
+        self.assertIn("--genesis takes no --chain", err)
+        stderr = io.StringIO()
+        with unittest.mock.patch("sys.stderr", stderr):
+            self.assertEqual(tool.main(["propose", "--root-key", self.root, "--set-state", "c=MAINTENANCE", "--out", os.path.join(self.d, "x")]), 2)
+        self.assertIn("give --chain (or --genesis)", stderr.getvalue())

@@ -261,8 +261,10 @@ class Trail:
 def signing_counter(cfg, run=subprocess.run):
     """This node's signing counter (#199): the highest heartbeat sequence it has signed, as proposer or co-signer
     (beat.Signer). Its own index, never the heartbeat counter's: a node's co-signature must not make the heartbeat a
-    replay to itself."""
-    return heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "signing-counter.lock"))
+    replay to itself. Written by policy like the heartbeat counter (#242): the service advances it with no owner
+    authorization; enrolment defines it."""
+    return heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "signing-counter.lock"),
+                             policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg))
 
 
 def node_beat_signer(node, pem_path=None):
@@ -280,7 +282,7 @@ def node_beat_signer(node, pem_path=None):
     return beat.Signer(node.node_id, signing_counter(node.cfg, run), lambda message: signkey.sign(message, pem, tcti, run), point)
 
 
-def image_policy(cfg, pem_path=None):
+def image_policy(cfg, pem_path=None, manifest=None):
     """This node's approved-image write policy (#242), from root-signed sources only: the chain in the state
     directory (sync's store, else the chain it publishes for the other services), verified under the pinned
     root; the measurements document its newest manifest commits to, from the node's store by digest
@@ -290,7 +292,53 @@ def image_policy(cfg, pem_path=None):
     Anything missing is a refusal, never a fallback to an unsigned value.
     The chain is NOT checked against the TPM here, and need not be: a restored older chain yields at most a key
     the root once approved for this node, and the anchor's own verify refuses the rollback itself. This names
-    only the key the anchor's indices must have been defined under."""
+    only the key the anchor's indices must have been defined under.
+    `manifest`: an already verified manifest to judge by instead of the state directory's chain (enrolment, which
+    defines the anchor before its first commit)."""
+    return _image(cfg, pem_path, manifest)[0]
+
+
+def define_policy(cfg, manifest=None, pem_path=None):
+    """The policy a DEFINER (enrolment, a re-anchor, a recount) lays this node's anchor and heartbeat counter indices
+    down under (#242): the node's approved-image write policy when the signed measurements its manifest commits to name
+    a system-phase PCR key for it (its images are signed UKIs), and then the running image's key must be one of them
+    (image_policy refuses otherwise); None when they name none: a node whose approved images are not signed has no
+    policy to write by, and its indices are owner-written. The signed document decides, never a missing file."""
+    if manifest is None:
+        manifest = _chain_tip(cfg)
+    document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
+    if not measurements.system_keys(manifest, document, cfg["node_id"]):
+        # Owner-written is for unsigned LAB images only. Production is a v4 manifest (#199): there a definer never lays
+        # down the weaker layout; measurements that name no system key for the node fail loudly here (24, #242)
+        require(manifest["schema"] != membership.SCHEMA_V4, "the measurements epoch %d commits to name no system-phase PCR key "
+                "for %s: under %s the anchor is defined only in the policy-written layout, and the owner-written one is "
+                "refused (a lab image under v1-v3 may have it)" % (manifest["epoch"], cfg["node_id"], membership.SCHEMA_V4))
+        return None
+    return image_policy(cfg, pem_path, manifest)
+
+
+def image_key(cfg, pem_path=None, manifest=None):
+    """The running image's system-phase PCR public key (PEM), once the same check as image_policy has approved it:
+    the key the anchor's and the heartbeat counter's run-time writes open their policy sessions with (#242)."""
+    return _image(cfg, pem_path, manifest)[1]
+
+
+def _image(cfg, pem_path=None, manifest=None):
+    """(policy hex, PEM): image_policy and image_key."""
+    try:
+        with open(pem_path or signkey.PCR_PUBLIC_KEY_PATH, "rb") as f:
+            pem = f.read(65536)
+    except OSError as error:
+        raise Refused("this node's approved-image write policy cannot be established: %s" % error) from None
+    if manifest is None:
+        manifest = _chain_tip(cfg)
+    document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
+    return measurements.approved_image_policy(manifest, document, cfg["node_id"], pem), pem
+
+
+def _chain_tip(cfg):
+    """The newest manifest of the chain in the state directory (sync's store, else the published chain), verified
+    under the pinned root."""
     envelopes = None
     for name in ("membership.json", PUBLISHED):
         try:
@@ -301,21 +349,17 @@ def image_policy(cfg, pem_path=None):
             continue
     require(isinstance(envelopes, list) and envelopes, "this node's approved-image write policy cannot be established: no verified "
             "chain in %s" % cfg["state_dir"])
-    try:
-        with open(pem_path or signkey.PCR_PUBLIC_KEY_PATH, "rb") as f:
-            pem = f.read(65536)
-    except OSError as error:
-        raise Refused("this node's approved-image write policy cannot be established: %s" % error) from None
-    manifest = membership.accept_chain(None, envelopes, cfg["root_key"])
-    document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
-    return measurements.approved_image_policy(manifest, document, cfg["node_id"], pem)
+    return membership.accept_chain(None, envelopes, cfg["root_key"])
 
 
 def heartbeat_counter(cfg, run=subprocess.run):
     """This node's heartbeat sequence counter, with the lock its users take: the one construction the
     services and the recovery command (recount.py) share. Written by policy like the anchor (#242)."""
     return heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "heartbeat-counter.lock"),
-                             policy=lambda: image_policy(cfg))
+                             policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg),
+                             # its one definition, define_at (a first heartbeat, a replacement's, recount's floor), is
+                             # laid down under the node's policy when its signed images name one (define_policy)
+                             define_policy=lambda: define_policy(cfg))
 
 
 # ---- the node ----
@@ -351,7 +395,7 @@ class Node:
         """The membership epoch anchor: membership.HighWater on its own index (and the pair and slots after it),
         with this node's approved-image write policy (image_policy) for an index written by policy (#242)."""
         return membership.HighWater(self.cfg["nv_epoch"], self.tcti, self.run, lock_path=self.path("highwater.lock"),
-                                    policy=lambda: image_policy(self.cfg))
+                                    policy=lambda: image_policy(self.cfg), image_key=lambda: image_key(self.cfg))
 
     def manifest(self, patience=2.0, step=0.25):
         """The current manifest, by the published chain, verified (the root services' view).
