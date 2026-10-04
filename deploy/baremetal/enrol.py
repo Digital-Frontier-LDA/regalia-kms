@@ -12,6 +12,10 @@ WHAT IT MAKES, each on the host and never imported (ADR-0002 D5's rule, applied 
     PolicyAuthorize of the system-phase PCR key given with --system-pub, and certified by the AK;
   * the WG-SERVICE key, /etc/regalia/wg-service.key, root 0600;
   * the WG-BOOT key, kept root 0600 in the enrolment directory until `commit` seals it to this TPM.
+It READS, and records in the bundle, the serial of every hardware token the node serves from (#363), in each form a
+backend pins it: its SmartCard-HSM's PKCS#11 serial, and its YubiKey's decimal serial (PIV) and OpenPGP-applet PKCS#11
+serial (yubikey-openpgp), for the manifest's hsm_serials. It reads the host's SSH host key the same way, from
+/etc/ssh/ssh_host_ed25519_key.pub, for ssh_host_pub (refused when missing or not Ed25519).
 The local unlock contribution is NOT made here: `commit` makes it and seals it in one step, so it is never
 on disk in the clear between the two phases. It then stays root 0600 in the enrolment directory (local.bin)
 only until the peers' LUKS paths are enrolled, which need it; its sealed copy opens only in the initrd.
@@ -47,11 +51,14 @@ before that object or file existed. Anything else at its handle or path is refus
 """
 import argparse
 import base64
+import glob
 import hashlib
 import json
 import os
 import re
+import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -274,6 +281,124 @@ def signing_key(journal, directory, system_pub, ids, run):
     return facts
 
 
+TOKEN_SERIAL = re.compile(r"[A-Za-z0-9]{1,32}")     # membership's hsm_serials entry
+CARDCONTACT = "CardContact"                       # the SmartCard-HSM's PKCS#11 manufacturer (Nitrokey HSM 2, Pico HSM)
+YUBICO_VENDOR = "1050"
+# OpenSC told to use its OpenPGP card driver only: how the yubikey-openpgp backend (D26, regalia#541) sees a YubiKey
+OPENPGP_ONLY = "app default {\n  card_drivers = openpgp;\n}\n"
+
+
+def _pkcs11_tokens(module, run, env=None):
+    """pkcs11-tool's slot listing as one dict per slot, each field taken from its own slot's block (a slot with no
+    token prints no serial)."""
+    done = run(["pkcs11-tool", "--module", module, "--list-token-slots"], capture_output=True, text=True, env=env)
+    require(done.returncode == 0, "pkcs11-tool could not list the token slots: %s" % (done.stderr or "").strip()[-200:])
+    slots, slot = [], None
+    for line in done.stdout.splitlines():
+        if line.startswith("Slot "):
+            slot = {}
+            slots.append(slot)
+        elif slot is not None and ":" in line:
+            key, _, value = line.partition(":")
+            slot[key.strip()] = value.strip()
+    return [slot for slot in slots if slot.get("serial num")]
+
+
+def token_serials(module, run=subprocess.run, usb_root="/sys/bus/usb/devices"):
+    """The serials of the hardware tokens this host serves from, in every form a backend pins them (#363, #72 G1), all
+    read from the devices, never typed:
+      * the SmartCard-HSM's PKCS#11 token serial (TokenInfo.serialNumber, trimmed): nitrokey-pkcs11. Exactly one.
+      * each YubiKey's decimal serial (ykman): yubikey-piv.
+      * each YubiKey's OpenPGP-applet PKCS#11 serial, as OpenSC's openpgp driver presents it: yubikey-openpgp. Measured
+        2026-10-04 on YubiKey 35718625 (OpenSC 0.26, ykman 5.6.1): 000635718625, Yubico's manufacturer 0006 then the
+        decimal serial, on two tokens (User PIN, User PIN (sig)). Each must be an attached YubiKey's, or it is refused.
+    A YubiKey attached with no ykman to read it, or whose serial ykman cannot read, is refused rather than left out."""
+    hsm = [slot["serial num"] for slot in _pkcs11_tokens(module, run) if CARDCONTACT in slot.get("token manufacturer", "")]
+    require(len(hsm) == 1, "%d SmartCard-HSM tokens are attached; a node serves from exactly one (attach only its own)" % len(hsm))
+    attached = 0
+    for vendor in glob.glob(os.path.join(usb_root, "*", "idVendor")):
+        with open(vendor) as f:
+            attached += f.read().strip() == YUBICO_VENDOR
+    yubikeys = []
+    if shutil.which("ykman"):
+        done = run(["ykman", "list", "--serials"], capture_output=True, text=True)
+        require(done.returncode == 0, "ykman could not list the YubiKeys")
+        yubikeys = [line.strip() for line in done.stdout.splitlines() if line.strip()]
+    else:
+        require(not attached, "a YubiKey is attached and ykman is not installed to read its serial: install yubikey-manager")
+    # a YubiKey whose serial is hidden from USB (serial-api-visible off) lists nothing: refused, never left out (ed)
+    require(len(yubikeys) == attached, "%d YubiKeys are attached and ykman read %d serials: a YubiKey's serial is not readable "
+            "over USB (serial-api-visible), and it is not left out" % (attached, len(yubikeys)))
+    require(all(re.fullmatch(r"[0-9]{1,8}", s) for s in yubikeys), "ykman listed a serial that is not a YubiKey's: %s" % yubikeys)
+    openpgp = []
+    if yubikeys:
+        with tempfile.TemporaryDirectory() as conf_dir:
+            conf = os.path.join(conf_dir, "opensc.conf")
+            with open(conf, "w") as f:
+                f.write(OPENPGP_ONLY)
+            env = dict(os.environ, OPENSC_CONF=conf)
+            for slot in _pkcs11_tokens(module, run, env):
+                if slot["serial num"] not in openpgp:
+                    openpgp.append(slot["serial num"])
+        expected = {"0006%08d" % int(s) for s in yubikeys}
+        require(set(openpgp) <= expected, "an OpenPGP card is attached that is not one of this host's YubiKeys (%s): attach only "
+                "the node's own tokens" % ", ".join(sorted(set(openpgp) - expected)))
+    serials = hsm + yubikeys + openpgp
+    require(all(TOKEN_SERIAL.fullmatch(s) for s in serials), "a token serial is not one the manifest can list: %s" % serials)
+    require(len(set(serials)) == len(serials), "a token serial appears twice: %s" % serials)
+    return serials
+
+
+def tokens(journal, module, run):
+    """The token serials, journalled: read once at init, and the same tokens required at every later init."""
+    serials = token_serials(module, run)
+    if journal.state("tokens") == "done":
+        require(journal.get("tokens")["hsm_serials"] == serials, "the tokens attached (%s) are not the ones this enrolment recorded (%s)"
+                % (", ".join(serials), ", ".join(journal.get("tokens")["hsm_serials"])))
+        return serials
+    journal.done("tokens", hsm_serials=serials)
+    return serials
+
+
+SSH_HOST_KEY = "/etc/ssh/ssh_host_ed25519_key.pub"
+
+
+def ssh_host_pub(path=SSH_HOST_KEY):
+    """This host's SSH host key, as the manifest's ssh_host_pub carries it (membership v2: the raw Ed25519 public key,
+    64 lowercase hex), read from the host's own public key file. Missing, or not ssh-ed25519, is refused."""
+    try:
+        with open(path) as f:
+            line = f.read(4096).strip()
+    except FileNotFoundError:
+        raise Refused("%s is missing: this host has no Ed25519 SSH host key (ssh-keygen -A makes one)" % path)
+    fields = line.split()
+    require(len(fields) >= 2 and fields[0] == "ssh-ed25519", "%s is not an ssh-ed25519 public key" % path)
+    try:
+        blob = base64.b64decode(fields[1], validate=True)
+    except ValueError:
+        raise Refused("%s does not hold a base64 key" % path)
+    parts, at = [], 0
+    while at < len(blob) and len(parts) < 3:
+        require(at + 4 <= len(blob), "%s holds a malformed key" % path)
+        (size,) = struct.unpack(">I", blob[at:at + 4])
+        parts.append(blob[at + 4:at + 4 + size])
+        at += 4 + size
+    require(at == len(blob) and len(parts) == 2 and parts[0] == b"ssh-ed25519" and len(parts[1]) == 32,
+            "%s does not hold exactly one 32-byte Ed25519 key" % path)
+    return parts[1].hex()
+
+
+def ssh_host(journal, path):
+    """The SSH host key, journalled as the tokens are: read at init, and the same key required at every later init."""
+    key = ssh_host_pub(path)
+    if journal.state("ssh_host") == "done":
+        require(journal.get("ssh_host")["ssh_host_pub"] == key, "this host's SSH host key (%s) is not the one this enrolment "
+                "recorded (%s)" % (key, journal.get("ssh_host")["ssh_host_pub"]))
+        return key
+    journal.done("ssh_host", ssh_host_pub=key)
+    return key
+
+
 def recheck_signing_key(journal, directory, run):
     """Before `commit` writes anything: the signing key this enrolment made is still the object at its handle (its Name
     the journal recorded), and it is the one the bundle names. A key removed or replaced after `init` would otherwise
@@ -287,7 +412,7 @@ def recheck_signing_key(journal, directory, run):
             "enrolment made: nothing was written")
 
 
-ENTRY_KEYS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key")
+ENTRY_KEYS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key", "hsm_serials", "ssh_host_pub")
 CHALLENGE_SCHEMA = "regalia.enrol-challenge/v1"
 
 
@@ -356,7 +481,13 @@ def entry(bundle, system_pub, keep, answer, run=subprocess.run):
                                            bytes.fromhex(bundle["signing_sig"]), ak_public, bundle["ek_name"], system_pub, run=run)
     wg = {k: base64.b64decode(bundle[k], validate=True).hex() for k in ("wg_service_pub", "wg_boot_pub")}
     require(all(len(v) == 64 for v in wg.values()), "a WireGuard public key is 32 bytes")
-    return dict(zip(ENTRY_KEYS, (bundle["node_id"], bundle["ek_name"], bundle["ak_name"], wg["wg_service_pub"], wg["wg_boot_pub"], signing)))
+    serials = bundle.get("hsm_serials")
+    require(isinstance(serials, list) and serials and all(isinstance(x, str) and TOKEN_SERIAL.fullmatch(x) for x in serials)
+            and len(set(serials)) == len(serials), "the bundle has no hsm_serials, or a malformed list: it was made before #363")
+    require(isinstance(bundle.get("ssh_host_pub"), str) and re.fullmatch(r"[0-9a-f]{64}", bundle["ssh_host_pub"]) is not None,
+            "the bundle has no ssh_host_pub (64 hex): it was made before #371")
+    return dict(zip(ENTRY_KEYS, (bundle["node_id"], bundle["ek_name"], bundle["ak_name"], wg["wg_service_pub"], wg["wg_boot_pub"], signing,
+                                 list(serials), bundle["ssh_host_pub"])))
 
 
 def _der_exact(raw, index):
@@ -560,7 +691,11 @@ def _safe_directory(directory):
         os.close(parent)
 
 
-def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout):
+OPENSC_MODULE = "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so"
+
+
+def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout, module=OPENSC_MODULE,
+         ssh_host_key=SSH_HOST_KEY):
     """`system_pub`: the system-phase PCR public key (PEM bytes) the signing key's policy names."""
     require(NODE_ID.fullmatch(node_id or ""), "a node ID is a lower-case name, such as a")
     signkey.pcr_key_name(system_pub)                 # an RSA-2048 PEM, before anything is made
@@ -569,6 +704,8 @@ def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY
     ids = identity(journal, directory, run)
     cert = ek_certificate(journal, directory, run)
     signing = signing_key(journal, directory, system_pub, ids, run)     # after the EK checks: nothing more is made on a refusal
+    hsm_serials = tokens(journal, module, run)
+    ssh_key = ssh_host(journal, ssh_host_key)
     service = wg_key(journal, "wg_service", wg_service_key, run)
     boot = wg_key(journal, "wg_boot", os.path.join(directory, "wg-boot.key"), run)
     bundle = {"schema": SCHEMA_BUNDLE, "node_id": node_id,
@@ -578,7 +715,7 @@ def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY
               "wg_service_pub": service, "wg_boot_pub": boot,
               "signing_public": signing["signing_public"], "signing_certify": signing["signing_certify"],
               "signing_sig": signing["signing_sig"], "signing_key": signing["signing_key"],
-              "tpm_firmware_version": firmware_version(run)}
+              "hsm_serials": hsm_serials, "ssh_host_pub": ssh_key, "tpm_firmware_version": firmware_version(run)}
     _atomic_json(os.path.join(directory, "bundle.json"), bundle)
     os.chmod(os.path.join(directory, "bundle.json"), 0o644)
     print("ENROL INIT: node %s, identity bundle %s (public values only; take it to the manifest ceremony)"
@@ -669,9 +806,17 @@ def check_manifest(directory, chain, root_key, typed, document, replace=None):
     if "signing_key" in node:                        # v4 (#199): the key this host made and its AK certified
         require(isinstance(bundle.get("signing_key"), str), "this host's bundle has no signing key: it was made before #199")
         mine_all.append(("signing_key", {"alg": "ecdsa-p256", "key": bundle["signing_key"]}))
+    if "ssh_host_pub" in node:                       # v2 on: the host key init read from this host
+        require(isinstance(bundle.get("ssh_host_pub"), str), "this host's bundle has no ssh_host_pub: it was made before #371")
+        mine_all.append(("ssh_host_pub", bundle["ssh_host_pub"]))
     for field, mine in mine_all:
         require(node[field] == mine, "the manifest's %s for %s is not this host's: it was made from another bundle, or "
                 "for another host. Nothing was written" % (field, node_id))
+    # the tokens this host read at init (#363): the manifest lists exactly them, so the daemon serves from them and no other
+    require(isinstance(bundle.get("hsm_serials"), list), "this host's bundle has no hsm_serials: it was made before #363")
+    require(sorted(node["hsm_serials"]) == sorted(bundle["hsm_serials"]),
+            "the manifest's hsm_serials for %s (%s) are not this host's tokens (%s): the daemon would refuse to serve. Nothing was written"
+            % (node_id, ", ".join(node["hsm_serials"]), ", ".join(bundle["hsm_serials"])))
     try:
         measurements.bind(manifest, document)
     except membership.Refused as refusal:            # measurements raises the same class
@@ -1724,6 +1869,7 @@ def main(argv=None):
     p.add_argument("--node-id", required=True)
     p.add_argument("--enrol-dir", default=ENROL_DIR)
     p.add_argument("--wg-service-key", default=WG_SERVICE_KEY)
+    p.add_argument("--pkcs11-module", default=OPENSC_MODULE, help="the PKCS#11 module that reads the SmartCard-HSM's serial")
     p.add_argument("--system-pub", required=True, help="the system-phase PCR key's public half (PEM): the signing key is usable "
                    "only under PCR 11 policies it signed")
     g = sub.add_parser("challenge", help="(the root's side, no TPM) a credential to the bundle's EK and AK, for `activate`")
@@ -1914,7 +2060,7 @@ def main(argv=None):
         return 2
     try:
         with open(args.system_pub, "rb") as f:
-            init(args.node_id, f.read(65536), args.enrol_dir, args.wg_service_key)
+            init(args.node_id, f.read(65536), args.enrol_dir, args.wg_service_key, module=args.pkcs11_module)
     except (Refused, attest.Refused, OSError, ValueError) as error:       # json.JSONDecodeError is a ValueError
         print("REFUSED: %s" % error, file=sys.stderr)
         return 1

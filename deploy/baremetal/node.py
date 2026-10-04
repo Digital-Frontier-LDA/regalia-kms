@@ -22,7 +22,9 @@ them parses what a peer sends except `sync` and `admission`, which hold no capab
                                         answers peers on wg-svc (sync.py) and booting nodes on
                                         wg-unlock (unlock.py), pulls manifests and heartbeats from the
                                         peers and the revocation authority, keeps the membership store,
-                                        and runs the heartbeat watch (heartbeat_watch.py)
+                                        and runs the heartbeat watch (heartbeat_watch.py); under a v4
+                                        manifest it also proposes and co-signs the heartbeats with the
+                                        TPM signing key and its signing counter (beat.py, #199)
 
 ONE WRITER OF THE MEMBERSHIP CHAIN. `sync` owns the store (membership.Store: its files are its own, 0600).
 After every change it PUBLISHES the verified chain, 0644, beside it (publish()). The other services read
@@ -62,14 +64,14 @@ import tempfile
 import threading
 import time
 
-from deploy.baremetal import (admission, trails, attest, authtime, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
+from deploy.baremetal import (admission, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
                               measurements, membership, metrics, signkey, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
 
 SCHEMA = "regalia.node/v1"
-KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "state_dir", "admission_dir", "run_dir",
-        "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval")
+KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "nv_signing", "state_dir", "admission_dir", "run_dir",
+        "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval", "beat_interval_s")
 PUBLISHED = "chain.json"        # in the state directory: the verified chain, for the root services
 MAX_BYTES = 64 * 1024
 
@@ -95,13 +97,18 @@ def validate(doc):
     membership.root_entries(doc["root_key"], "root_key")
     require(doc["tcti"] is None or (isinstance(doc["tcti"], str) and re.fullmatch(r"[a-z]+(:[A-Za-z0-9/_.,=-]{1,200})?", doc["tcti"]) is not None),
             "tcti must be null (the kernel's resource manager) or a TCTI string")
-    epoch, beat = _index(doc["nv_epoch"], "nv_epoch"), _index(doc["nv_heartbeat"], "nv_heartbeat")
     # what each really occupies, from the classes that define them (the anchor: counter, base and two record
-    # slots; the heartbeat counter: counter and base), never retyped here
-    overlap = membership.HighWater(epoch).indices() & heartbeat.Counter(beat).indices()
-    require(not overlap, "nv_epoch and nv_heartbeat must not overlap (both take %s): the anchor takes %s, the heartbeat counter %s" % (
-        ", ".join("0x%x" % i for i in sorted(overlap)), ", ".join("0x%x" % i for i in sorted(membership.HighWater(epoch).indices())),
-        ", ".join("0x%x" % i for i in sorted(heartbeat.Counter(beat).indices()))))
+    # slots; the heartbeat counter and the signing counter (#199): counter and base each), never retyped here
+    taken = {"nv_epoch": membership.HighWater(_index(doc["nv_epoch"], "nv_epoch")).indices(),
+             "nv_heartbeat": heartbeat.Counter(_index(doc["nv_heartbeat"], "nv_heartbeat")).indices(),
+             "nv_signing": heartbeat.Counter(_index(doc["nv_signing"], "nv_signing")).indices()}
+    names = list(taken)
+    for i, one in enumerate(names):
+        for other in names[i + 1:]:
+            overlap = taken[one] & taken[other]
+            require(not overlap, "%s and %s must not overlap (both take %s): %s takes %s, %s takes %s" % (
+                one, other, ", ".join("0x%x" % i for i in sorted(overlap)), one, ", ".join("0x%x" % i for i in sorted(taken[one])),
+                other, ", ".join("0x%x" % i for i in sorted(taken[other]))))
     for key in ("site", "state_dir", "admission_dir", "run_dir", "wg_service_key", "measurements"):
         _absolute(doc[key], key)
     # each directory has ONE writer: sync's, admission's (regalia-admission, #191), and the run directory (root)
@@ -112,6 +119,12 @@ def validate(doc):
     authtime.servers(doc["time_servers"])
     interval = doc["pull_interval"]
     require(isinstance(interval, int) and not isinstance(interval, bool) and 10 <= interval <= 3600, "pull_interval must be 10 to 3600 seconds")
+    # #199: how often the nodes sign a heartbeat (beat.Proposer); 900 in production (#69). Never below
+    # heartbeat.MIN_INTERVAL_S: a node's jump allowance grows by one per MIN_INTERVAL_S of issue time, so beating faster
+    # would leave a node that was off for about a day refusing every heartbeat as an anomaly (regalia-kms-1e's read)
+    beat_every = doc["beat_interval_s"]
+    require(isinstance(beat_every, int) and not isinstance(beat_every, bool) and heartbeat.MIN_INTERVAL_S <= beat_every <= 3600,
+            "beat_interval_s must be %d to 3600 seconds" % heartbeat.MIN_INTERVAL_S)
     return doc
 
 
@@ -243,6 +256,28 @@ class Trail:
     def __call__(self, event):
         with self.lock:
             trails.append(self.path, dict(event, at=int(time.time())), group=self.group)
+
+
+def signing_counter(cfg, run=subprocess.run):
+    """This node's signing counter (#199): the highest heartbeat sequence it has signed, as proposer or co-signer
+    (beat.Signer). Its own index, never the heartbeat counter's: a node's co-signature must not make the heartbeat a
+    replay to itself."""
+    return heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "signing-counter.lock"))
+
+
+def node_beat_signer(node, pem_path=None):
+    """`node`'s beat.Signer (#199): its signing counter, and its TPM signing key under the running image's system-phase
+    PCR key (systemd-stub's copy of the image's .pcrpkey, signkey.PCR_PUBLIC_KEY_PATH: a key the signing key's policy
+    does not name signs nothing, and identity() says so before any number is reserved)."""
+    path = pem_path or signkey.PCR_PUBLIC_KEY_PATH
+    try:
+        with open(path, "rb") as f:
+            pem = f.read(65536)
+    except FileNotFoundError:
+        raise Refused("no system-phase PCR public key at %s: this boot is not a UKI with a signed PCR policy" % path) from None
+    tcti, run = node.tcti, node.run
+    point = signkey.identity(signkey.public(tcti, run), pem)[1]
+    return beat.Signer(node.node_id, signing_counter(node.cfg, run), lambda message: signkey.sign(message, pem, tcti, run), point)
 
 
 def image_policy(cfg, pem_path=None):
@@ -535,6 +570,7 @@ class Sync:
         self.node, self.store, self.freshness = node, node.store(), node.freshness()
         self.trail = Trail(node.path("sync-audit.jsonl"), "sync")
         self.signer = lease.TpmSigner(node.tcti, node.run)
+        self._beat_signer = None        # beat.Signer, made at the first heartbeat signed (beat_signer())
         self.published = None
         # the unlock listener's refusals, by cause (#317), in regalia-sync's metrics directory
         self.refusals = metrics.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", metrics.UNLOCK_CAUSES)
@@ -548,7 +584,35 @@ class Sync:
                                enrolpeer.tpm_identity(self.node.tcti, self.node.run), enrolpeer.tpm_activate(self.node.tcti, self.node.run))
         # attester_for itself: each request is judged under the manifest held then, by that manifest's document (#332)
         return sync.Server(self.node.node_id, self.store, self.freshness, self.node.attester_for, self.signer,
-                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents())
+                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents(), cosigner=self.cosign)
+
+    # ---- heartbeats signed by the nodes (#199, beat.py) ----
+
+    def beat_signer(self):
+        """This node's beat.Signer (node_beat_signer), made once."""
+        if self._beat_signer is None:
+            self._beat_signer = node_beat_signer(self.node)
+        return self._beat_signer
+
+    def cosign(self, manifest, caller, body, signature):
+        """sync.Server's cosigner: beat.cosign with this node's parts."""
+        return beat.cosign(manifest, self.node.node_id, caller, body, signature, self.freshness, self.node.clock(), self.beat_signer())
+
+    def proposer(self):
+        def ask(peer, body, signature):
+            sources = self.node.sources(self.manifest())
+            return sync.Client(self.node.node_id, self.store, self.freshness, sources, self.trail).beat_sign(peer, body, signature)
+        sync_ = self
+
+        class Lazy:
+            """The Signer, made when a heartbeat is first signed: a node that is not under v4 (or not a UKI) still starts."""
+            def signed(self):
+                return sync_.beat_signer().signed()
+
+            def __call__(self, body, manifest):
+                return sync_.beat_signer()(body, manifest)
+        return beat.Proposer(self.node.node_id, self.manifest, self.freshness, self.node.clock(), Lazy(), ask, self.trail,
+                             interval=self.node.cfg["beat_interval_s"])
 
     def unlock_peer(self):
         return unlock.Peer(self.node.node_id, self.store, self.freshness, self.node.attester_for,
@@ -602,11 +666,25 @@ class Sync:
                    threading.Thread(target=unlock.serve, args=(self.unlock_peer(), unlocking), kwargs={"caller": self.caller}, daemon=True)]
         for thread in threads:
             thread.start()
-        watch = self.watch()
+        watch, proposer = self.watch(), self.proposer()
+        unable = None                           # the last refusal the proposer could not even start under
         self.refusals.flush()                   # its zeros from the start, then every round (refusals only count)
         try:
             while not stop():
                 self.pull_round()
+                # #199: under v4 the nodes sign the heartbeats; this node proposes when it is its turn (beat.Proposer).
+                # A refusal before any proposal (no authenticated time, not a UKI boot: no PCR key to sign under) is
+                # written once per cause, so a node that can never sign is not silent (regalia-kms-1e's read)
+                try:
+                    if self.manifest()["schema"] == membership.SCHEMA_V4:
+                        proposer.step()
+                except (Refused, OSError) as refused:
+                    if str(refused) != unable:
+                        unable = str(refused)
+                        with contextlib.suppress(Exception):
+                            self.trail({"event": "beat-propose", "outcome": "DENY", "reason": unable[:240]})
+                else:
+                    unable = None
                 with contextlib.suppress(Refused, OSError):
                     watch.step()
                 self.refusals.flush()

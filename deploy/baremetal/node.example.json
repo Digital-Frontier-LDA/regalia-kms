@@ -6,6 +6,7 @@
   "tcti": "device:/dev/tpmrm0",
   "nv_epoch": "0x01500016",
   "nv_heartbeat": "0x01500018",
+  "nv_signing": "0x0150001c",
   "state_dir": "/var/lib/regalia-sync",
   "admission_dir": "/var/lib/regalia-admission",
   "run_dir": "/run/regalia",
@@ -13,5 +14,6 @@
   "measurements": "/etc/regalia/measurements.json",
   "pcrs": [7, 11],
   "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"],
-  "pull_interval": 60
+  "pull_interval": 60,
+  "beat_interval_s": 900
 }
