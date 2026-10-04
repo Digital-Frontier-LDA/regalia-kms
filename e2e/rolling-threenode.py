@@ -26,6 +26,20 @@ set it runs read from its TPM (update.running_set). The retire is judged as `rol
   7  b's turn once b itself has seen a on NEXT: b onto NEXT; the retire still refused, naming c; then c onto NEXT
   8  the retire, once every node is seen on NEXT by every peer: accepted; the root signs NEXT alone; c, booted onto
      CURRENT again, gets no key from either peer; onto NEXT, it is unlocked and leased
+Every move to NEXT is an update: may_reboot first. A boot onto an image that is not approved (step 2), back onto
+CURRENT (step 6) or onto the retired image (step 8) is a power cycle, not an update. During every reboot the two
+other nodes must be given FRESH leases (their peers' trails), not merely hold old ones.
+
+LIMITS (tier N; tier Q is #75's PR 4):
+  * PCR 11 is the fixture's one tpm2_pcrextend of SHA-256(image) after the power cycle, not systemd-stub's
+    measurement of a real UKI's sections and systemd-pcrphase's phases (unlock-boot-qemu does that).
+  * `update apply` itself (BootNext, the trial boot, the reset fallback; #325, #326) is not run: only the may_reboot
+    question it asks, as it asks it.
+  * The epochs and their heartbeats come from the fixture (advance), not from the revocation authority.
+  * The local half is sealed to PCR 7, so no image touches it (as on a host, PIN-CUSTODY.md).
+  * The document and its epoch are taken together because the fixture stops every node's services across the
+    change (Cluster.accept). A host has no such step yet: delivering the document with the epoch that names it is
+    regalia-kms-24's decision on #75 (d9), and until it lands a host refuses attestations in between (KERNEL-UPDATE 2.7).
 """
 import json
 import os
@@ -115,16 +129,36 @@ def everyone_saw(cluster, subject, label, epoch):
     return all(seen(cluster, p, subject) == (label, epoch) for p in cluster.nodes if p != subject)
 
 
+def served_while_down(cluster, name, since):
+    """Whether each of the two other nodes was given a FRESH lease after `since` (when `name` went down): issued by
+    a peer's sync (its trail), not one held from before that has not run out yet. The cluster serves on two."""
+    others = [o for o in cluster.nodes if o != name]
+    return bool(until(lambda: all(any(leased_by(cluster, p, o, since) for p in cluster.nodes if p != o) for o in others), 240, 5))
+
+
 def reboot(cluster, name, image):
-    """`name` power-cycled onto `image` (None: CURRENT), asks for its disk, and if it gets it, starts and is leased.
-    Returns (the unlock's result, whether it is leased)."""
+    """`name` power-cycled onto `image` (None: CURRENT): asks for its disk, and if it gets it, starts and is leased.
+    Returns {"got": the unlock's result, "leased": whether it is, "served": whether the two others were freshly
+    leased while it was down}."""
+    since = time.time()
     cluster.stop(name)
     cluster.boot(name, image)
     got = cluster.unlock(name, timeout=120, rounds=3)
-    if not opened(got):
-        return got, False
-    cluster.start(name, SERVICES)
-    return got, bool(until(lambda: cluster.lease(name), 120, 2))
+    leased = False
+    if opened(got):
+        cluster.start(name, SERVICES)
+        leased = bool(until(lambda: cluster.lease(name), 120, 2))
+    return {"got": got, "leased": leased, "served": served_while_down(cluster, name, since), "since": since}
+
+
+def moved(cluster, name, image, what):
+    """An update step: may_reboot first (as `update apply` asks it), then the reboot. Three checks."""
+    verdict = decide(cluster, name)
+    ok(verdict["ok"], "%s: may_reboot says %s may reboot now" % (what, name), verdict)
+    r = reboot(cluster, name, image)
+    ok(opened(r["got"]) and r["leased"], "%s: %s on %s is unlocked through %s and leased" % (what, name, image or "CURRENT", r["got"].get("peer")), r["got"])
+    ok(r["served"], "%s: the two others were freshly leased while %s was down" % (what, name))
+    return r
 
 
 def retire_check(cluster, manifest, both, nxt):
@@ -149,18 +183,17 @@ def scenario(cluster):
     for name in names:
         ok(bool(until(lambda: cluster.lease(name), 120, 2)), "%s holds a runtime lease on CURRENT" % name, cluster.journal(name, "admission")[-600:])
 
-    header("2  NEXT before the root approved it: no key for a; b and c serve on")
-    since = time.time()
-    got, leased = reboot(cluster, a, NEXT_IMAGE)
+    header("2  NEXT before the root approved it (a power cycle onto it, not an update): no key for a; b and c serve on")
+    r = reboot(cluster, a, NEXT_IMAGE)
     quoted = cluster.image_set(a, NEXT_IMAGE)["pcrs"]["11"]
-    ok(not opened(got) and all(refused_for_pcr11(cluster, p, a, since, quoted) for p in (b, c)),
+    ok(not opened(r["got"]) and all(refused_for_pcr11(cluster, p, a, r["since"], quoted) for p in (b, c)),
        "a, booted onto %s under epoch 1, gets no key: both peers refuse it for its PCR 11 (their trails)" % NEXT_IMAGE,
-       {"unlock": got, "denials": [e for p in (b, c) for e in cluster.trail(p) if e.get("event") == "unlock" and e.get("at", 0) >= since]})
-    ok(bool(cluster.lease(b)) and bool(cluster.lease(c)), "b and c still hold leases (the cluster serves on two)")
-    got, leased = reboot(cluster, a, None)
-    ok(opened(got) and leased, "a, power-cycled onto CURRENT, is unlocked through %s and leased again" % got.get("peer"), got)
+       {"unlock": r["got"], "denials": [e for p in (b, c) for e in cluster.trail(p) if e.get("event") == "unlock" and e.get("at", 0) >= r["since"]]})
+    ok(r["served"], "b and c were freshly leased while a was refused")
+    r = reboot(cluster, a, None)
+    ok(opened(r["got"]) and r["leased"], "a, power-cycled onto CURRENT, is unlocked through %s and leased again" % r["got"].get("peer"), r["got"])
 
-    header("3  the root approves CURRENT and NEXT in one epoch")
+    header("3  the root approves CURRENT and NEXT in one epoch (the document and the epoch taken together: Cluster.accept)")
     both = {n: [None, NEXT_IMAGE] for n in names}
     manifest, _ = cluster.accept(c, both, "v2")
     doc_both = cluster.document
@@ -168,6 +201,8 @@ def scenario(cluster):
         held = cluster.node(name).store().load()
         ok(held["epoch"] == 2 and held["policy_version"] == measurements.version(doc_both),
            "%s holds epoch 2, committed to the document that accepts both (from its TPM-anchored store)" % name, held.get("epoch"))
+    for name in names:
+        until(lambda: cluster.lease(name), 120, 2)
 
     header("4  one at a time: may_reboot asked on each node at once")
     verdicts = {name: decide(cluster, name) for name in names}
@@ -177,56 +212,55 @@ def scenario(cluster):
         ok(not verdicts[name]["ok"] and "a updates first" in verdicts[name].get("reason", ""), "%s is told to wait: a goes first" % name, verdicts[name])
 
     header("5  a onto NEXT: unlocked, leased, seen on NEXT, and vouching for b and c")
-    since = time.time()
-    got, leased = reboot(cluster, a, NEXT_IMAGE)
-    ok(opened(got) and leased, "a, on %s under epoch 2, is unlocked through %s and leased" % (NEXT_IMAGE, got.get("peer")), got)
+    r = moved(cluster, a, NEXT_IMAGE, "5")
     ok(bool(until(lambda: everyone_saw(cluster, a, NEXT_IMAGE, 2), 300, 5)), "both peers have verified a on %s under epoch 2" % NEXT_IMAGE,
        {p: seen(cluster, p, a) for p in (b, c)})
-    ok(bool(until(lambda: leased_by(cluster, a, b, since) and leased_by(cluster, a, c, since), 420, 5)),
+    ok(bool(until(lambda: leased_by(cluster, a, b, r["since"]) and leased_by(cluster, a, c, r["since"]), 420, 5)),
        "a, on NEXT, issues leases to b and c, still on CURRENT")
 
-    header("6  a rolls back to CURRENT under epoch 2, and the retire waits for it")
-    got, leased = reboot(cluster, a, None)
-    ok(opened(got) and leased, "a, back on CURRENT, is still unlocked (through %s) and leased: both are approved" % got.get("peer"), got)
-    until(lambda: everyone_saw(cluster, a, cluster.image_set(a)["label"], 2), 300, 5)
-    nxt = {n: [NEXT_IMAGE] for n in names}
+    header("6  a rolls back to CURRENT under epoch 2 (a power cycle onto it), and the retire waits for it")
+    r = reboot(cluster, a, None)
+    ok(opened(r["got"]) and r["leased"], "a, back on CURRENT, is still unlocked (through %s) and leased: both are approved" % r["got"].get("peer"), r["got"])
+    ok(r["served"], "b and c were freshly leased while a was down")
+    current = cluster.image_set(a)["label"]
+    ok(bool(until(lambda: everyone_saw(cluster, a, current, 2), 300, 5)), "both peers have verified a on CURRENT again under epoch 2",
+       {p: seen(cluster, p, a) for p in (b, c)})
     doc_next = {"schema": measurements.SCHEMA, "name": "v3", "nodes": {n: {"accepted": [cluster.image_set(n, NEXT_IMAGE)]} for n in names}}
     verdict = retire_check(cluster, manifest, doc_both, doc_next)
     ok(isinstance(verdict, str) and "NOT YET" in verdict and "lock out a" in verdict, "the retire is refused, naming a", verdict)
-    got, leased = reboot(cluster, a, NEXT_IMAGE)
-    ok(opened(got) and leased, "a is on %s again" % NEXT_IMAGE, got)
+    moved(cluster, a, NEXT_IMAGE, "6, a again")
 
     header("7  b once it has seen a on NEXT itself, then c")
     ok(bool(until(lambda: seen(cluster, b, a) == (NEXT_IMAGE, 2), 300, 5)), "b's own verifier has seen a on %s" % NEXT_IMAGE, seen(cluster, b, a))
-    verdict = decide(cluster, b)
-    ok(verdict["ok"], "b may reboot now", verdict)
-    got, leased = reboot(cluster, b, NEXT_IMAGE)
-    ok(opened(got) and leased, "b, on %s, is unlocked through %s and leased" % (NEXT_IMAGE, got.get("peer")), got)
-    until(lambda: everyone_saw(cluster, b, NEXT_IMAGE, 2), 300, 5)
+    moved(cluster, b, NEXT_IMAGE, "7, b")
+    ok(bool(until(lambda: everyone_saw(cluster, b, NEXT_IMAGE, 2), 300, 5)), "both peers have verified b on %s under epoch 2" % NEXT_IMAGE,
+       {p: seen(cluster, p, b) for p in (a, c)})
     verdict = retire_check(cluster, manifest, doc_both, doc_next)
-    ok(isinstance(verdict, str) and "lock out c" in verdict and "lock out a" not in verdict, "the retire is refused while c is on CURRENT, naming c", verdict)
+    ok(isinstance(verdict, str) and "lock out c" in verdict and "lock out a" not in verdict and "lock out b" not in verdict,
+       "the retire is refused while c is on CURRENT, naming c alone", verdict)
     ok(bool(until(lambda: seen(cluster, c, a) == (NEXT_IMAGE, 2) and seen(cluster, c, b) == (NEXT_IMAGE, 2), 300, 5)),
        "c's own verifier has seen a and b on %s" % NEXT_IMAGE, {s: seen(cluster, c, s) for s in (a, b)})
-    verdict = decide(cluster, c)
-    ok(verdict["ok"], "c may reboot now", verdict)
-    got, leased = reboot(cluster, c, NEXT_IMAGE)
-    ok(opened(got) and leased, "c, on %s, is unlocked through %s and leased" % (NEXT_IMAGE, got.get("peer")), got)
+    moved(cluster, c, NEXT_IMAGE, "7, c")
 
     header("8  the retire: accepted once every node is seen on NEXT; CURRENT then gets nothing")
     ok(bool(until(lambda: all(everyone_saw(cluster, n, NEXT_IMAGE, 2) for n in names), 300, 5)), "every node is seen on %s by both peers" % NEXT_IMAGE,
        {n: {p: seen(cluster, p, n) for p in names if p != n} for n in names})
     verdict = retire_check(cluster, manifest, doc_both, doc_next)
     ok(verdict == [], "the retire locks out nobody (rollout.check_lockout, the peers' real state files)", verdict)
-    manifest, _ = cluster.accept(a, nxt, "v3")
+    manifest, _ = cluster.accept(a, {n: [NEXT_IMAGE] for n in names}, "v3")
     ok(all(cluster.node(n).store().load()["epoch"] == 3 for n in names), "every node holds epoch 3, NEXT alone")
-    since = time.time()
-    got, leased = reboot(cluster, c, None)
+    for name in names:
+        until(lambda: cluster.lease(name), 120, 2)
+    # not updates: a power cycle onto the retired image (a stale BootOrder, KERNEL-UPDATE 3.8), then onto NEXT again
+    r = reboot(cluster, c, None)
     quoted = cluster.image_set(c)["pcrs"]["11"]
-    ok(not opened(got) and all(refused_for_pcr11(cluster, p, c, since, quoted) for p in (a, b)),
+    ok(not opened(r["got"]) and all(refused_for_pcr11(cluster, p, c, r["since"], quoted) for p in (a, b)),
        "c, booted onto the retired CURRENT, gets no key: both peers refuse it for its PCR 11 (their trails)",
-       {"unlock": got, "denials": [e for p in (a, b) for e in cluster.trail(p) if e.get("event") == "unlock" and e.get("at", 0) >= since]})
-    got, leased = reboot(cluster, c, NEXT_IMAGE)
-    ok(opened(got) and leased, "c, onto %s, is unlocked through %s and leased" % (NEXT_IMAGE, got.get("peer")), got)
+       {"unlock": r["got"], "denials": [e for p in (a, b) for e in cluster.trail(p) if e.get("event") == "unlock" and e.get("at", 0) >= r["since"]]})
+    ok(r["served"], "a and b were freshly leased while c was refused")
+    r = reboot(cluster, c, NEXT_IMAGE)
+    ok(opened(r["got"]) and r["leased"], "c, onto %s, is unlocked through %s and leased" % (NEXT_IMAGE, r["got"].get("peer")), r["got"])
+    ok(r["served"], "a and b were freshly leased while c was down")
 
 
 def main():
