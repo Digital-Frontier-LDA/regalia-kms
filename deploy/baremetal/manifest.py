@@ -12,6 +12,8 @@ envelope, so nothing a node would refuse is ever signed.
     python3 -Es -m deploy.baremetal.manifest propose --chain CHAIN.json --root-key ROOT (--from-rollout R.json | --set-state NODE=STATE ...)
                                                      [--issued-at YYYY-MM-DDTHH:MM:SSZ] --out PROPOSAL.json
                                                      [--old OLD.json --new NEW.json [--state NODE=STATE.json]...]
+    python3 -Es -m deploy.baremetal.manifest propose --genesis --root-key ROOT --card-record CARDS.json --measurements DOC.json
+                                                     --entry A.json --entry B.json --entry C.json --out EPOCH1.json
     python3 -Es -m deploy.baremetal.manifest diff    --chain CHAIN.json --root-key ROOT --proposal PROPOSAL.json
     python3 -Es -m deploy.baremetal.manifest sign    --chain CHAIN.json --root-key ROOT --expected-epoch N --proposal PROPOSAL.json
                                                      --signer root|revocation --key 'pkcs11:serial=…;token=…;id=%01;type=private'
@@ -70,7 +72,21 @@ operator copied onto the ceremony sheet (regalia-ceremony#119; the format `enrol
 fingerprint. The finished envelope must pass membership.accept(None, ...); the record line carries "genesis": true.
 
 A key in a file is not a signing backend here: the root signs on its token, or from the offline session's
-descriptor, and every step above runs either way."""
+descriptor, and every step above runs either way.
+
+CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
+  * The node entries `propose --genesis` takes are UNSIGNED files (#399). It checks their shape, the bench serials and
+    that no key is reused, but cannot tell an entry from the node from one edited on the way. Each node's `enrol check`
+    compares its entry field by field with its own bundle and refuses a mismatch, but only AFTER the root signed: a
+    tampered entry costs a redone genesis, not a silently accepted node. Until #399, the operator carries each entry
+    from the node's console and reads every field of the printed proposal.
+  * The owner's and the release card's keys come only from the card ceremony's record, verified under the pinned root
+    (cardrecord.py); its attestation certificates are checked by digest only on this side (#400).
+  * The bench tokens refused are a hand-kept list (membership.BENCH_TOKENS): a new bench token must be added there.
+  * The genesis policy is GENESIS_POLICY's defaults plus two lifetime flags; the proposed D31 director party is not
+    modelled.
+  * Run only with software keys, software TPMs and CI: no ceremony has run, and nothing here has signed on the
+    production hardware yet (#297)."""
 import argparse
 import datetime
 import getpass
@@ -82,7 +98,7 @@ import re
 import sys
 import time
 
-from deploy.baremetal import attest, keyfd, measurements, membership, p11uri, rollout
+from deploy.baremetal import attest, cardrecord, keyfd, measurements, membership, p11uri, rollout
 from deploy.baremetal.membership import Refused, require
 
 RECORD = "signing-record.jsonl"
@@ -129,6 +145,86 @@ def propose_states(current, changes, issued_at):
         nodes[nid]["state"] = state
     candidate.update(epoch=current["epoch"] + 1, prev_digest=membership.digest(current), issued_at=issued_at)
     membership.validate(candidate)
+    return candidate
+
+
+# ---- the genesis: epoch 1, built from recorded facts (the first ceremony) ----
+
+# The policy of a genesis manifest (regalia-kms-24, 2026-10-04), printed in full in every proposal for the owner to
+# review before `sign --genesis`. Overridden only by explicit flags (--heartbeat-max-lifetime-s,
+# --owner-heartbeat-lifetime-s); membership.validate still refuses a value below its floors. The owner is ONE party,
+# so "2 of {a, b, c, owner}" already means at least one node signs every heartbeat and activation lease. The proposed
+# D31 director party (not decided) would make that floor explicit; there is deliberately no director field here.
+GENESIS_POLICY = {"heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600}
+OWNER_PARTY = membership.OWNER
+# what `enrol entry` prints for a node (#358, #371 and its ssh_host_pub): the v4 entry is these and state ACTIVE
+ENTRY_FIELDS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key", "hsm_serials", "ssh_host_pub")
+# the bench's tokens (membership.BENCH_TOKENS: its Nitrokeys and YubiKeys, in every form hsm_serials pins): never a
+# production node's (ADR-0002 D28.5, D30). Genesis is where the root first vouches for a node's tokens, so refused here.
+BENCH_SERIALS = membership.BENCH_TOKENS
+
+
+def _raw_ed25519(value, what):
+    require(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None, "%s is not a raw Ed25519 public key (64 lowercase hex)" % what)
+    return value
+
+
+def card_record_keys(envelope, root):
+    """The owner's two keys and the release card's, from the card ceremony's record (regalia-ceremony#111, ADR-0002 D30)
+    and nowhere else: verified by cardrecord.verify under the PINNED root first, so a key is never typed. The genesis
+    root is one Ed25519 key (D28); a pin naming anything else is refused here. Returns cardrecord.verify's result."""
+    entries = membership.root_entries(root)
+    require(len(entries) == 1 and entries[0][0] == "ed25519",
+            "the genesis root is one Ed25519 key (D28): a card record is verified under that key only, not %s"
+            % ", ".join(alg for alg, _ in entries))
+    return cardrecord.verify(envelope, entries[0][1])
+
+
+def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None):
+    """Epoch 1 (v4), unsigned: every node from its `enrol entry` output (state ACTIVE), the measurements `document` it
+    commits to, the owner's two keys, and GENESIS_POLICY (with `policy` overrides). Refused unless it is a manifest a
+    node would accept from the root at genesis (validate, transition(None, ..., "root"), measurements.bind), and unless
+    the release card's key, the root's and every node's signing key are each other than the owner keys. `owners`
+    ({card serial: key}) and `release_key` come from the card record (card_record_keys); checked here again, as a
+    library caller may give them otherwise."""
+    require(isinstance(owners, dict) and len(owners) == 2, "the owner's keys are exactly two cards' (D30), not %r" % (owners,))
+    for serial, key in sorted(owners.items()):
+        _raw_ed25519(key, "the owner card %s's key" % serial)
+        require(isinstance(serial, str) and serial.upper() not in membership.BENCH_TOKENS,
+                "the owner card %s is a bench token: the ceremony never uses a bench serial (D28.5, D30)" % serial)
+    require(len(set(owners.values())) == 2, "the two owner cards have the same key: they are one card")
+    require(isinstance(entries, list) and entries, "no node entry given (--entry, one per node, as `enrol entry` printed it)")
+    nodes = []
+    for i, entry in enumerate(entries):
+        require(isinstance(entry, dict), "entry %d is not an object" % i)
+        missing = [k for k in ENTRY_FIELDS if k not in entry]
+        require(not missing, "the entry of %s lacks %s: re-run `enrol entry` on a bundle made by this release's enrol init"
+                % (entry.get("node_id", "entry %d" % i), ", ".join(missing)))
+        membership.exact(entry, ENTRY_FIELDS, "entry of %s" % entry["node_id"])
+        require(isinstance(entry["hsm_serials"], list) and entry["hsm_serials"], "the entry of %s names no token serial" % entry["node_id"])
+        bench = sorted(s for s in entry["hsm_serials"] if isinstance(s, str) and s.upper() in BENCH_SERIALS)
+        require(not bench, "the entry of %s names a bench token (%s): never a production node's (D28.5)" % (entry["node_id"], ", ".join(bench)))
+        nodes.append(dict(entry, state="ACTIVE"))
+    nodes.sort(key=lambda n: n["node_id"])
+    release_key = _raw_ed25519(release_key, "the release key")
+    require(release_key not in owners.values(), "the release key is one of the owner keys: the release card is never an owner key")
+    roots = {key for _, key in membership.root_entries(root)}
+    for name, key in [("owner card %s" % s, k) for s, k in sorted(owners.items())] + [("release card", release_key)]:
+        require(key not in roots, "the %s's key is the pinned root's" % name)
+        for node in nodes:
+            require(key != node["signing_key"].get("key"), "the %s's key is %s's signing key" % (name, node["node_id"]))
+    ids = [n["node_id"] for n in nodes]
+    candidate = dict(GENESIS_POLICY, **(policy or {}))
+    candidate.update({
+        "schema": membership.SCHEMA_V4, "epoch": 1, "prev_digest": "", "policy_version": measurements.version(document), "issued_at": issued_at,
+        "owner_keys": [{"alg": "ed25519", "key": owners[serial]} for serial in sorted(owners)],
+        "heartbeat_signers": {"threshold": 2, "parties": ids + [OWNER_PARTY]},
+        "activation_signers": {"threshold": 2, "parties": ids + [OWNER_PARTY]},
+        "revocation_signers": [{"threshold": 2, "parties": ids}, {"threshold": 1, "parties": [OWNER_PARTY]}],
+        "nodes": nodes})
+    membership.validate(candidate)
+    membership.transition(None, candidate, "root")
+    measurements.bind(candidate, document)
     return candidate
 
 
@@ -387,6 +483,40 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
 
 # ---- the command ----
 
+def _propose_genesis(args, root, confirm=None, say=print):
+    """`propose --genesis`: epoch 1 written after the operator types the two owner cards' serials, as printed on the
+    cards, at the console (never on the command line), having read every field of it. Nothing is written otherwise.
+    The owner's keys and the release card's come from the card ceremony's record (--card-record), verified under the
+    pinned root before anything else is read: never typed, so there is no second way to give them."""
+    require(args.chain is None and not args.from_rollout and not args.set_state and not (args.old or args.new or args.state),
+            "--genesis takes no --chain, --from-rollout, --set-state or measurements step: nothing comes before it")
+    require(args.measurements and args.card_record, "--genesis needs --measurements and --card-record")
+    cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root)
+    owners, release_key = cards["owners"], cards["release_key"]
+    entries = [read_json(path, membership.MAX_BYTES) for path in args.entry]
+    document = measurements.load(_raw(args.measurements, measurements.MAX_BYTES))
+    policy = {k: v for k, v in (("heartbeat_max_lifetime_s", args.heartbeat_max_lifetime_s),
+                                ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s)) if v is not None}
+    candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy)
+    require(not os.path.lexists(args.out), "%s exists: nothing is overwritten" % args.out)
+    for line in diff({"nodes": []}, candidate):
+        say("  " + line)
+    say("measurements: %s (%s)" % (candidate["policy_version"], document["name"]))
+    say("card record: session %s, made %s, signed by the pinned root" % (cards["session"], cards["at"]))
+    roles = {serial: role for role, serial in cards["roles"].items()}
+    order = sorted(owners)
+    for serial in order:
+        say("owner card %s (%s): key %s, SHA-256 %s" % (serial, roles[serial], owners[serial],
+                                                        hashlib.sha256(bytes.fromhex(owners[serial])).hexdigest()))
+    say("release card key (not in the manifest; refused as an owner, root or node key): %s" % release_key)
+    typed = (confirm or keyfd.tty_line)("type the two owner cards' serials, as printed ON THE CARDS, in the order above: ").split()
+    require(typed == order, "the serials typed are not the owner cards above: nothing was written")
+    _write_new(args.out, json.dumps(candidate, indent=2, sort_keys=True).encode() + b"\n")
+    say("UNSIGNED genesis (epoch 1, %s) written to %s, digest %s: `sign --genesis` it on the offline laptop"
+        % (membership.SCHEMA_V4, args.out, membership.digest(candidate)))
+    return 0
+
+
 def _step(args):
     """--old/--new/--state (and for sign --emergency/--locked-out) as measurement_step's `step`, or None if none was given."""
     given = args.old or args.new or args.state or getattr(args, "emergency", False) or getattr(args, "locked_out", [])
@@ -451,8 +581,17 @@ def main(argv=None):
             c.add_argument("--locked-out", action="append", default=[], metavar="NODE",
                            help="a node this step locks out; repeat, name each (as `rollout propose` listed them)")
     chain(sub.add_parser("verify", help="verify a chain from the pinned root"))
-    c = sub.add_parser("propose", help="write the UNSIGNED next manifest")
-    chain(c)
+    c = sub.add_parser("propose", help="write the UNSIGNED next manifest (or, with --genesis, epoch 1)")
+    c.add_argument("--chain", metavar="CHAIN.json", help="the signed chain (a JSON list of envelopes); not with --genesis")
+    c.add_argument("--root-key", required=True, metavar="ROOT", help="the pinned root: 64 hex, or a typed entry or list as JSON")
+    c.add_argument("--genesis", action="store_true", help="the first ceremony: epoch 1 from the nodes' entries, the measurements and the owner's two keys")
+    c.add_argument("--entry", action="append", default=[], metavar="ENTRY.json", help="--genesis: a node's `enrol entry` output; one per node")
+    c.add_argument("--measurements", metavar="DOC.json", help="--genesis: the measurements document epoch 1 commits to")
+    c.add_argument("--card-record", metavar="CARDS.json",
+                   help="--genesis: the card ceremony's record (regalia-ceremony#111, cards.record.json), signed by the pinned "
+                        "root: the owner's two keys and the release card's, from it and never typed")
+    c.add_argument("--heartbeat-max-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["heartbeat_max_lifetime_s"])
+    c.add_argument("--owner-heartbeat-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["owner_heartbeat_lifetime_s"])
     c.add_argument("--from-rollout", metavar="R.json", help="the output of `rollout propose --json`")
     c.add_argument("--set-state", action="append", default=[], metavar="NODE=STATE", help="change a node's state; repeat")
     c.add_argument("--issued-at", metavar="YYYY-MM-DDTHH:MM:SSZ")
@@ -491,6 +630,13 @@ def main(argv=None):
             print("PIN latch cleared; the token's counter may still be low: one correct login resets it")
             return 0
         root = root_key(args.root_key)
+        if args.command == "propose" and args.genesis:
+            return _propose_genesis(args, root)
+        if args.command == "propose":
+            require(args.chain is not None, "give --chain (or --genesis)")
+            require(not (args.entry or args.measurements or args.card_record or args.heartbeat_max_lifetime_s
+                         or args.owner_heartbeat_lifetime_s), "--entry, --measurements, --card-record and the "
+                    "lifetimes are for --genesis only")
         if args.command == "sign" and args.genesis:
             # the first ceremony: no chain at all, the offline root only (see GENESIS above)
             require(args.chain is None and args.expected_epoch is None, "--genesis takes no --chain and no --expected-epoch")

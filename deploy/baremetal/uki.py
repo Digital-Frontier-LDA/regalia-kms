@@ -329,17 +329,24 @@ def cmdline_text(raw):
 #   build machine's dpkg database). `uki initrd-inventory` writes it from a build; a dracut or distribution
 #   update is a pull request whose diff is read. (Checking every "package" file against the archive-signed
 #   .deb is a follow-up, required before the first production image.)
-INITRD_REVIEW = "regalia.initrd-review/v4"
+INITRD_REVIEW = "regalia.initrd-review/v5"
 INITRD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "initrd")
 INVENTORY = os.path.join(INITRD_DIR, "initrd-inventory.txt")
 UNIT_DIR = "usr/lib/systemd/system"
-UNLOCK_UNITS = ("regalia-unlock.service", "regalia-wg-boot.service")
+UNLOCK_UNITS = ("regalia-boot-render.service", "regalia-unlock.service", "regalia-wg-boot.service")
 UNLOCK_SCRIPTS = {"usr/lib/regalia/wg-boot": "wg-boot"}
 UNLOCK_BINARIES = ("usr/bin/regalia-unlock",)
 # The client's line in the inventory says "the binary this commit compiles", not a hash: its source is what is
 # reviewed, and `build --unlock-client` (required) holds the image's client to the binary the build compiled.
 # sign and verify hold it to the hash the record states, which two builders compiled alike.
 COMPILED = "=compiled"
+# The membership root the initrd trusts (#156, read by the client with membership.LoadRoot): canonical JSON, one
+# key or, during a root rotation, a list. Its line in the inventory says "the root this build was given", not a
+# hash: a deployment's root is not this repository's to pin. build --root-key gives it, and every review holds
+# the initrd's file to it byte for byte; sign and verify hold it to the hash the record states.
+ROOT_KEY_PATH = "usr/lib/regalia/root-key.json"
+ROOT_KEY_MARK = "=root-key"
+BOUND = {UNLOCK_BINARIES[0]: COMPILED, ROOT_KEY_PATH: ROOT_KEY_MARK}
 # the client, a password agent beside systemd-cryptsetup (#70): enabled under cryptsetup.target
 UNLOCK_ENABLED = {"etc/systemd/system/cryptsetup.target.wants/regalia-unlock.service": "/usr/lib/systemd/system/regalia-unlock.service"}
 # the module's drop-in (module-setup.sh writes exactly these bytes): the credential reset on every unit that
@@ -770,7 +777,7 @@ DRACUT_OVER.update({UNIT_DIR + "/" + unit: ("dracut-core", ("dracut-core", _DRAC
 
 def _ours_path(path, files):
     """Whether an entry of the image is this repository's (for the inventory's CLASS column)."""
-    if path in ours() or path in UNLOCK_BINARIES or path == "etc/crypttab":
+    if path in ours() or path in BOUND or path == "etc/crypttab":
         return True
     entry = files.get(path)
     return os.path.basename(path) == RESET_DROPIN[0] and entry is not None and entry[1] == RESET_DROPIN[1]
@@ -805,8 +812,8 @@ def initrd_inventory_lines(data, run=subprocess.run, tools=TOOLS, root=None):
     owners = _owners(root) if root else None
     rows = []
     for path, state in entries(files).items():
-        if path in UNLOCK_BINARIES:          # bound to the binary the build compiled, not to a hash here
-            state = " ".join(state.split(" ")[:3] + [COMPILED])
+        if path in BOUND:                    # bound to the build's input (the compiled client, the root), not a hash here
+            state = " ".join(state.split(" ")[:3] + [BOUND[path]])
         raw = path
         if _ours_path(raw, files):
             cls, origin = "ours", "regalia-kms"
@@ -849,15 +856,15 @@ def _instructions(files, findings):
                     findings.append("%s: %r acts at the unlock client's paths" % (path, line))
 
 
-def review_initrd(path, run=subprocess.run, tools=TOOLS, inventory=None, client_sha256=None):
+def review_initrd(path, run=subprocess.run, tools=TOOLS, inventory=None, client_sha256=None, root_key_sha256=None):
     """The review of the initrd at `path` (see above)."""
-    return review_initrd_data(read(path), run, tools, inventory, client_sha256)
+    return review_initrd_data(read(path), run, tools, inventory, client_sha256, root_key_sha256)
 
 
-def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, client_sha256=None):
+def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, client_sha256=None, root_key_sha256=None):
     """The same review, of an initrd's bytes (an image's .initrd section). `client_sha256`: the unlock client
     the build compiled, when it is given."""
-    empty = {"schema": INITRD_REVIEW, "passed": False, "findings": [], "crypttab": None, "units": {}, "clients": {}, "inventory_sha256": None}
+    empty = {"schema": INITRD_REVIEW, "passed": False, "findings": [], "crypttab": None, "units": {}, "clients": {}, "root_key": None, "inventory_sha256": None}
     try:
         files = _Files(initrd_files(data, run, tools))
     except Refused as refused:
@@ -926,6 +933,19 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, cl
             findings.append("%s cannot be held to the client the build compiled: it was not given (build --unlock-client)" % path)
         elif clients[path] != client_sha256:
             findings.append("%s is not the client this build compiled (%s, not %s)" % (path, clients[path], client_sha256))
+    root_key = None
+    try:
+        root_body = _regular(files, ROOT_KEY_PATH)
+    except Refused as refused:
+        root_body, findings = None, findings + ["%s: %s" % (ROOT_KEY_PATH, refused)]
+    if root_body is None:
+        findings.append("%s, the membership root the client trusts, is not in the image" % ROOT_KEY_PATH)
+    else:
+        root_key = sha256(root_body)
+        if root_key_sha256 is None:
+            findings.append("%s cannot be held to the root this build was given: it was not given (--root-key)" % ROOT_KEY_PATH)
+        elif root_key != root_key_sha256:
+            findings.append("%s is not the root this build was given (%s, not %s)" % (ROOT_KEY_PATH, root_key, root_key_sha256))
     units, scripts, seen = {}, set(), set()
     for name in UNLOCK_UNITS:
         body = _regular(files, UNIT_DIR + "/" + name)
@@ -946,18 +966,18 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, cl
                 findings.append("inventory: + %s %s (not in the inventory)" % (path, state[path]))
             elif path not in state:
                 findings.append("inventory: - %s %s (in the inventory, not in the image)" % (path, expected[path]))
-            elif state[path] != expected[path] and not (path in UNLOCK_BINARIES and expected[path].endswith(" " + COMPILED)
+            elif state[path] != expected[path] and not (path in BOUND and expected[path].endswith(" " + BOUND[path])
                                                         and state[path].split(" ")[:3] == expected[path].split(" ")[:3]):
                 findings.append("inventory: ~ %s %s, the inventory says %s" % (path, state[path], expected[path]))
     canonical = "".join("%s %s\n" % (p, state[p]) for p in sorted(state))
     return {"schema": INITRD_REVIEW, "passed": not findings, "findings": sorted(set(findings))[:200],
-            "crypttab": got[0] if got and len(got) == 1 else None, "units": units, "clients": clients,
+            "crypttab": got[0] if got and len(got) == 1 else None, "units": units, "clients": clients, "root_key": root_key,
             "inventory_sha256": sha256(canonical.encode())}
 
 
 def check_review(review):
     """A record's initrd review, checked for shape: the fields, and passed only with no finding."""
-    membership.exact(review, ("schema", "passed", "findings", "crypttab", "units", "clients", "inventory_sha256"), "record.initrd_review")
+    membership.exact(review, ("schema", "passed", "findings", "crypttab", "units", "clients", "root_key", "inventory_sha256"), "record.initrd_review")
     require(review["schema"] == INITRD_REVIEW, "record.initrd_review is not a %s" % INITRD_REVIEW)
     require(isinstance(review["passed"], bool) and isinstance(review["findings"], list)
             and all(isinstance(f, str) for f in review["findings"]) and review["passed"] == (not review["findings"]),
@@ -968,8 +988,9 @@ def check_review(review):
     require(isinstance(review["clients"], dict) and set(review["clients"]) <= set(UNLOCK_BINARIES)
             and all(attest.is_hex(v, 64) for v in review["clients"].values()), "record.initrd_review.clients is not a map of the client binaries")
     require(review["inventory_sha256"] is None or attest.is_hex(review["inventory_sha256"], 64), "record.initrd_review.inventory_sha256 is not a sha256")
+    require(review["root_key"] is None or attest.is_hex(review["root_key"], 64), "record.initrd_review.root_key is not a sha256")
 
-INPUTS = ("linux", "initrd", "microcode", "cmdline", "os_release", "stub", "pcrpkey", "initrd_build")
+INPUTS = ("linux", "initrd", "microcode", "cmdline", "os_release", "stub", "pcrpkey", "initrd_build", "root_key")
 OPTIONAL_INPUTS = ("microcode",)
 # The initrd's build record (deploy/baremetal/initrd/build-initrd.sh, #248). Every builder builds the initrd
 # itself, from pinned inputs, and gets the same bytes and the same record; the record names what the initrd
@@ -978,7 +999,7 @@ OPTIONAL_INPUTS = ("microcode",)
 # initrd and THIS client, or the image is not built and not signed.
 INITRD_BUILD_SCHEMA = "regalia.initrd-build/v1"
 INITRD_BUILD_KEYS = ("schema", "commit", "go", "snapshot", "source_date_epoch", "suite", "kernel", "dracut", "packages_requested",
-                     "client_sha256", "repository_files", "packages_sha256", "packages", "initrd_sha256", "initrd_size", "initrd_entries",
+                     "client_sha256", "root_key_sha256", "repository_files", "packages_sha256", "packages", "initrd_sha256", "initrd_size", "initrd_entries",
                      "verified_packages")
 VERIFIED_SCHEMA = "regalia.initrd-packages/v1"
 
@@ -986,6 +1007,21 @@ VERIFIED_SCHEMA = "regalia.initrd-packages/v1"
 def inventory_package_origins(path=None):
     """{"name=version"} of the inventory's "package" entries: what the build record's verified_packages must name."""
     return set(_inventory_counts(path)[0])
+
+
+
+def check_root_key(inputs):
+    """The membership root given (--root-key): the canonical bytes of one root, or of a list of one to eight for a
+    rotation's overlap (membership.root_entries). Returns [(alg, key hex), ...]; None when none was given (a
+    library caller's fixture: the build and sign commands require one)."""
+    if not inputs.get("root_key"):
+        return None
+    raw = read(inputs["root_key"], 65536)
+    value = membership.load(raw, 65536)
+    entries = membership.root_entries(value, "--root-key")
+    require(membership.canonical(value) == raw, "--root-key is not canonical JSON (sorted keys, no whitespace, no newline): "
+            "the image's file must be the ceremony record's bytes, and nothing rewrites them")
+    return entries
 
 
 def _inventory_counts(path=None):
@@ -997,7 +1033,129 @@ def _inventory_counts(path=None):
     return {origin: len(lines) for origin, lines in owned.items()}, len(over), sha256(raw)
 
 
-def check_initrd_build(inputs, client_sha256, inventory=None):
+# #266: the build record's PROVENANCE, checked against the checkout uki.py runs from (the signer's own clone at the agreed
+# commit), in build and in sign: the record's commit is that checkout's HEAD, the tree is clean, and the record names
+# exactly the files build-initrd.sh records (its REPO_FILES, read from that checkout's script), each with that checkout's
+# SHA-256. A record written by hand, or by a builder at another commit or with another script, is refused by name.
+# CURRENT LIMITATIONS (the cross-cutting list is LIMITATIONS.md):
+#   * Only REPO_FILES are hashed. Every other file of the build is held by "commit == HEAD and the tree is clean", i.e. by
+#     git's object ids, SHA-1 in this repository's object format.
+#   * The Go release is compared by NAME with go.mod's; the toolchain binary itself is the builder's to verify (the Go
+#     checksum database, build-initrd.sh's limitations).
+#   * The build record is unsigned: nothing authenticates which builder wrote it; two builders' records must agree.
+#   * Git runs with no global, system or environment configuration and no file under the signer's HOME (Checkout._env),
+#     but as the signer: a signer's checkout owned by someone else is read with that user's rights over the files.
+#   * "Clean" allows untracked Python bytecode (__pycache__/*.pyc, which running this tool writes). Python runs a .pyc
+#     whose recorded source mtime and size match, so the signer's clone must be writable by the signer alone: a .pyc
+#     planted by another writer would run in place of the reviewed source.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BUILDER = "deploy/baremetal/initrd/build-initrd.sh"
+BYTECODE = re.compile(r"(?:[^\0]*/)?__pycache__/[^/\0]+\.pyc")       # the one untracked file a clean checkout may hold
+# what `git clone`/`git init` + fetch, actions/checkout (gc.auto) and a developer write into a checkout's own config,
+# none naming a command: any other key there (a filter or textconv driver, core.pager/editor/sshCommand/worktree, an
+# include) is refused (Checkout.check_config)
+CLONE_CONFIG = re.compile(r"core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)"
+                          r"|extensions\.(objectformat|worktreeconfig)|user\.(name|email)|gc\.auto"
+                          r"|remote\.[^\0\n]+\.(url|pushurl|fetch|tagopt|prune|promisor|partialclonefilter)"
+                          r"|branch\.[^\0\n]+\.(remote|merge|rebase|pushremote)")
+
+
+class Checkout:
+    """The repository at `root` (default: the one this file is in), read with git as build-initrd.sh reads it: trusted
+    at exactly this path (safe.directory), no index lock taken, and no fsmonitor or hook of the tree's own run. Git
+    runs in the environment build-initrd.sh's repo_git gives it (repo-git.sh): PATH, LC_ALL=C, HOME=/nonexistent, no
+    global or system configuration, and nothing else of the caller's. So no GIT_* variable reaches it (GIT_DIR,
+    GIT_WORK_TREE, GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT/KEY_n/VALUE_n would redirect it or add configuration), nor
+    any file under the signer's HOME or XDG_CONFIG_HOME (git/ignore would hide untracked files from status,
+    regalia-kms-d9's read of #404): only the checkout's own configuration, which check_config holds to CLONE_CONFIG."""
+
+    def __init__(self, root=REPO_ROOT, run=subprocess.run):
+        self.root, self.run = root, run
+
+    @staticmethod
+    def _env():
+        return {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "HOME": "/nonexistent", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def _git(self, *argv):
+        try:
+            done = self.run(["git", "-c", "safe.directory=" + self.root, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+                             "--no-optional-locks", "-C", self.root] + list(argv), capture_output=True, env=self._env())
+        except OSError as error:
+            raise Refused("this checkout cannot be read with git (%s): sign from a clone at the build's commit" % error.strerror)
+        require(done.returncode == 0, "%s is not a git checkout git can read: sign from a clone at the build's commit" % self.root)
+        return done.stdout.decode("utf-8", "replace")
+
+    def check_config(self):
+        """Refused unless the checkout's own configuration (local and worktree, includes followed) holds only what a
+        clone writes (CLONE_CONFIG). Trusting the path (safe.directory) also trusts its .git/config, and `git status`
+        runs a clean filter that config defines (regalia-kms-d9's read): a checkout another user owns would run its
+        commands as the signer. A .gitattributes alone names no command; only a driver defined in config does."""
+        listed = self._git("config", "--list", "--includes", "--name-only", "--show-scope", "-z").split("\0")
+        foreign = sorted({name for scope, name in zip(listed[0::2], listed[1::2])
+                          if scope in ("local", "worktree") and CLONE_CONFIG.fullmatch(name) is None})
+        require(not foreign, "this checkout's git configuration sets %s, which a clone does not: sign from a fresh clone at the "
+                "build's commit" % ", ".join(foreign))
+
+    def go_release(self):
+        """The Go release build-initrd.sh builds the client with: go.mod's toolchain line, else its go line."""
+        text = read(os.path.join(self.root, "go.mod"), 1024 * 1024).decode("utf-8", "replace")
+        release = "\n".join(re.findall(r"^toolchain (go[0-9][0-9.]*)$", text, re.M)) or \
+            "\n".join("go" + v for v in re.findall(r"^go ([0-9][0-9.]*)$", text, re.M))
+        require(re.fullmatch(r"go1\.[0-9]+\.[0-9]+", release) is not None, "this checkout's go.mod names no exact Go release")
+        return release
+
+    def head(self):
+        head = self._git("rev-parse", "--verify", "HEAD").strip()
+        require(re.fullmatch(r"[0-9a-f]{40}", head) is not None, "this checkout's HEAD is not a commit")
+        return head
+
+    def clean(self):
+        """No change to a tracked file, and no untracked file but Python bytecode (__pycache__/*.pyc). Untracked files are
+        listed with NO exclude rule (ls-files --others): a .gitignore, .git/info/exclude or the signer's own ignore file
+        must not hide a file the build reads, e.g. an untracked .go file `go build` would compile (24, d9 on #404)."""
+        if self._git("status", "--porcelain", "--untracked-files=all") != "":
+            return False
+        return all(BYTECODE.fullmatch(path) for path in self._git("ls-files", "-z", "--others").split("\0") if path)
+
+    def sha256(self, path):
+        full = os.path.join(self.root, path)
+        require(os.path.normpath(path) == path and not path.startswith(("/", "..")) and os.path.isfile(full) and not os.path.islink(full),
+                "%s is not a file of this checkout" % path)
+        return sha256(read(full))
+
+    def builder_files(self):
+        """The files build-initrd.sh records, from this checkout's own copy of it: its REPO_FILES array."""
+        text = read(os.path.join(self.root, BUILDER), 1024 * 1024).decode("utf-8", "replace")
+        found = re.search(r"^REPO_FILES=\((.*?)\)", text, re.M | re.S)
+        require(found is not None, "%s names no REPO_FILES" % BUILDER)
+        words = found.group(1).replace("\\\n", " ").split()
+        return sorted(BUILDER if w == '"$SCRIPT"' else w for w in words)
+
+
+def check_provenance(built, checkout):
+    """The build record's commit and repository files against `checkout` (Checkout): refused, naming what differs."""
+    checkout.check_config()                       # first: before any `git status`, nothing of the checkout's own runs
+    files = built["repository_files"]
+    require(isinstance(files, dict) and files, "the initrd's build record names no repository files: it was not written by build-initrd.sh")
+    expected = checkout.builder_files()
+    require(sorted(files) == expected, "the initrd's build record names other repository files than this checkout's %s records "
+            "(missing: %s; not recorded by it: %s)" % (BUILDER, ", ".join(sorted(set(expected) - set(files))) or "none",
+                                                        ", ".join(sorted(set(files) - set(expected))) or "none"))
+    for path in expected:
+        require(attest.is_hex(files[path], 64), "the initrd's build record's %s is not a SHA-256" % path)
+        mine = checkout.sha256(path)
+        require(mine == files[path], "the initrd was built with another %s than this checkout's (%s, not %s): nothing is built or signed"
+                % (path, files[path][:16], mine[:16]))
+    head = checkout.head()
+    require(built["commit"] == head, "the initrd was built from commit %s; this checkout is at %s: sign from a clone at the build's commit"
+            % (built["commit"], head))
+    require(checkout.clean(), "this checkout has changes or untracked files (ignored ones too, but for __pycache__ bytecode): sign "
+            "from a clean clone at commit %s" % head)
+    release = checkout.go_release()
+    require(built["go"] == release, "the initrd's client was built with %s; this checkout's go.mod names %s" % (built["go"], release))
+
+
+def check_initrd_build(inputs, client_sha256, inventory=None, checkout=None):
     """The initrd's build record, read and held to the initrd and the client given; None when there is none
     (a library caller's test fixture: the build and sign commands require one)."""
     if not inputs.get("initrd_build"):
@@ -1011,8 +1169,12 @@ def check_initrd_build(inputs, client_sha256, inventory=None):
             "the initrd's build record names no exact Go release")
     require(isinstance(built["snapshot"], str) and re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", built["snapshot"]) is not None,
             "the initrd's build record names no archive snapshot")
-    for field in ("client_sha256", "initrd_sha256", "packages_sha256"):
+    for field in ("client_sha256", "root_key_sha256", "initrd_sha256", "packages_sha256"):
         require(attest.is_hex(built[field], 64), "the initrd's build record has no %s" % field)
+    for field in ("source_date_epoch", "initrd_size", "initrd_entries"):
+        require(type(built[field]) is int and built[field] >= 0, "the initrd's build record's %s is not a count" % field)
+    require(isinstance(built["packages"], list) and all(isinstance(p, str) and p for p in built["packages"]),
+            "the initrd's build record's packages is not a list of names")
     require(built["initrd_sha256"] == sha256(read(inputs["initrd"])),
             "the initrd's build record is for another initrd (%s, not --initrd's %s)" % (built["initrd_sha256"], sha256(read(inputs["initrd"]))))
     require(client_sha256 is not None and built["client_sha256"] == client_sha256,
@@ -1042,6 +1204,10 @@ def check_initrd_build(inputs, client_sha256, inventory=None):
     require((verified["entries"], verified["dracut_over"]) == (sum(owned.values()), over),
             "the initrd's build record verified %d package and %d dracut-over lines, the inventory has %d and %d"
             % (verified["entries"], verified["dracut_over"], sum(owned.values()), over))
+    if inputs.get("root_key"):
+        require(built["root_key_sha256"] == sha256(read(inputs["root_key"], 65536)),
+                "the initrd's build record names another membership root (%s, not --root-key's)" % built["root_key_sha256"])
+    check_provenance(built, checkout or Checkout())                # #266: the record is this checkout's build
     return built
 
 
@@ -1143,7 +1309,9 @@ def build(inputs, uname, name, out_dir, run=subprocess.run, tools=TOOLS, invento
         _check_sections(parts, inputs, uname)
         values, _ = _predict(parts, run, tools, work)
         # the staged copy: the bytes just measured
-        review = review_initrd(inputs["initrd"], run, tools, inventory, sha256(read(unlock_client)) if unlock_client else None)
+        check_root_key(inputs)
+        review = review_initrd(inputs["initrd"], run, tools, inventory, sha256(read(unlock_client)) if unlock_client else None,
+                               sha256(read(inputs["root_key"], 65536)) if inputs.get("root_key") else None)
         check_initrd_build(inputs, sha256(read(unlock_client)) if unlock_client else None, inventory)
         record = {
             "schema": SCHEMA, "name": name, "uname": uname,
@@ -1367,8 +1535,9 @@ def _signed(inputs, record, keys, source, out_dir, run, tools, second_record, re
         require(not os.path.lexists(path), "%s already exists: nothing is overwritten" % path)
     # what is about to be signed, shown before any key is touched
     (report or (lambda line: print(line, file=sys.stderr)))(
-        "signing %s: unsigned image %s; inputs %s" % (name, record["unsigned_sha256"],
-                                                       ", ".join("%s %s" % (k, e["sha256"][:16]) for k, e in sorted(record["inputs"].items()))))
+        "signing %s: unsigned image %s; inputs %s; the initrd trusts membership root %s" % (name, record["unsigned_sha256"],
+            ", ".join("%s %s" % (k, e["sha256"][:16]) for k, e in sorted(record["inputs"].items())),
+            ", ".join("%s %s" % (alg, key[:16]) for alg, key in (check_root_key(inputs) or [])) or "NONE GIVEN"))
     opened = []                                   # the offline keys' memfds: closed whatever happens
     with tempfile.TemporaryDirectory(dir=out_dir) as work, _closing(opened):
         inputs = _stage(inputs, work)
@@ -1376,7 +1545,8 @@ def _signed(inputs, record, keys, source, out_dir, run, tools, second_record, re
             require(sha256(read(inputs[key])) == entry["sha256"], "the input --%s changed while it was copied" % key.replace("_", "-"))
         # the review again, here, on the copy that is about to be built and signed: not taken on the record's word
         # the client held to the hash the record states: the one both builders compiled
-        mine = review_initrd(inputs["initrd"], run, tools, inventory, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]))
+        mine = review_initrd(inputs["initrd"], run, tools, inventory, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]),
+                             record["initrd_review"]["root_key"])
         require(mine == record["initrd_review"],
                 "this machine's review of the initrd is not the record's: nothing is signed")
         check_initrd_build(inputs, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]), inventory)
@@ -1456,7 +1626,8 @@ def verify(image, record, public_keys, secure_boot_cert, run=subprocess.run, too
     # and the initrd it carries reviewed again, here, on the operator's machine (#198): the signatures say
     # the reviewed record was signed, this says the bytes still pass the same rules
     require(record["initrd_review"]["passed"] and review_initrd_data(parts["initrd"], run, tools, inventory,
-                                                                     record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0])) == record["initrd_review"],
+                                                                     record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]),
+                                                                     record["initrd_review"]["root_key"]) == record["initrd_review"],
             "the image's initrd does not pass the review its record states")
     return dict(record["pcr11"])
 
@@ -1587,18 +1758,28 @@ def main(argv=None):
     c = sub.add_parser("initrd-review", help="review an initrd as build does, and print the findings")
     c.add_argument("--initrd", required=True)
     c.add_argument("--unlock-client", required=True, help="the unlock client the build compiled")
+    c.add_argument("--root-key", required=True, help="the membership root the build was given (#156)")
     c.add_argument("--initrd-inventory", default=None)
     c = sub.add_parser("initrd-inventory", help="print an initrd's inventory (every entry, classed), to read in a pull request")
     c.add_argument("--initrd", required=True)
     c.add_argument("--root", help="the root of the machine that built it, whose dpkg database names each file's package")
+    sub.add_parser("provenance", help="this checkout's commit and the files build-initrd.sh records, with their SHA-256 (#266): "
+                   "what a build record made here must name")
     args = parser.parse_args(argv)
     try:
         if args.command == "initrd-review":
-            review = review_initrd(args.initrd, inventory=args.initrd_inventory, client_sha256=sha256(read(args.unlock_client)))
+            check_root_key({"root_key": args.root_key})
+            review = review_initrd(args.initrd, inventory=args.initrd_inventory, client_sha256=sha256(read(args.unlock_client)),
+                                   root_key_sha256=sha256(read(args.root_key, 65536)))
             print(json.dumps(review, indent=2, sort_keys=True))
             return 0 if review["passed"] else 1
         if args.command == "initrd-inventory":
             print("\n".join(initrd_inventory_lines(read(args.initrd), root=args.root)))
+            return 0
+        if args.command == "provenance":
+            checkout = Checkout()
+            print(json.dumps({"commit": checkout.head(), "clean": checkout.clean(),
+                              "repository_files": {path: checkout.sha256(path) for path in checkout.builder_files()}}, indent=1, sort_keys=True))
             return 0
         if args.command == "build":
             record = build(_inputs(args), args.uname, args.name, args.out, inventory=args.initrd_inventory, unlock_client=args.unlock_client)

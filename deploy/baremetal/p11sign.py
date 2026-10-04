@@ -19,7 +19,7 @@ Refused, require = membership.Refused, membership.require
 
 
 class Pkcs11Signer:
-    """A key on a token, in process: the membership root on its Nitrokey (manifest.py, #156: ECDSA P-256, the
+    """A key on a token, in process: manifest.py's token path for the membership root (#156: ECDSA P-256, the
     token's PKCS#11 offers no EdDSA) and the owner's approval YubiKeys (owner.py, #199: Ed25519 through OpenSC).
     First written for the revocation authority (#262), retired with it (#199); its rules are unchanged.
 
@@ -46,14 +46,14 @@ class Pkcs11Signer:
       * The token refuses the PIN (CKR_PIN_INCORRECT, CKR_PIN_INVALID, CKR_PIN_LEN_RANGE,
         CKR_PIN_LOCKED from C_Login): the signer LATCHES. It never calls C_Login again, writes
         <state_dir>/pin-latch.json (0600, read at every start), and the event goes to the trail once.
-        Only the tool's `clear-pin-latch` (manifest.py's), run as root, removes it. Fix the credential first.
+        Only the tool's `clear-pin-latch` (manifest.py's) removes it. Fix the credential first.
       * Before every C_Login the token's flags are read, and a token with CKF_USER_PIN_COUNT_LOW,
         FINAL_TRY or LOCKED set is refused with no login: its last tries are kept for a human.
       * Nothing else latches. A token pulled out, a session ended, or any other error refuses that
         signature and the next one tries again.
     `pkcs11` is the PyKCS11 module (Debian: python3-pykcs11); a test passes a stand-in.
 
-    FOR AN OPERATOR'S TOOL (manifest.py, #156: the membership root on its offline Nitrokey; owner.py, #199), each
+    FOR AN OPERATOR'S TOOL (manifest.py's token path for the membership root, kept beside D28's offline Shamir software key, --key-fd; owner.py, #199), each
     opt-in, the behaviour unchanged without them:
       * `label`: the token's label is asserted beside its serial, in the same places: in the listing, and
         again from the session's own slot before C_Login.
@@ -231,7 +231,7 @@ PIN_LATCH = "pin-latch.json"
 # The way out of a PIN latch. The refusal left the token's counter low (CKF_USER_PIN_COUNT_LOW), which
 # the signer also refuses, and only a correct login resets it (regalia-kms-d9).
 WAY_OUT = ("fix the credential, reset the token's counter with one correct login (`pkcs11-tool --login --test` with the "
-           "right PIN), then the tool's `clear-pin-latch` as root, and try again")
+           "right PIN), then the tool's `clear-pin-latch`, and try again")
 
 
 def _read_latch(path):

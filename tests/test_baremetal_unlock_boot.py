@@ -23,7 +23,9 @@ import threading
 import time
 import unittest
 
-from deploy.baremetal import attest, bootcreds, bootnet, espcreds, firewall, sitecfg, uki, unlock
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from deploy.baremetal import attest, bootcreds, bootnet, espcreds, firewall, membership, sitecfg, uki, unlock
 import tests.test_baremetal_unlock as tub
 
 BOOT = os.environ.get("REGALIA_BOOT_DIR", "")
@@ -80,8 +82,23 @@ class OnQemu(tub.OnSwtpm):
     test_tpm_plus_one_peer_opens_the_disk_and_a_retired_image_a_stolen_disk_or_a_revoked_node_does_not = None
     test_systemd_cryptsetup_asks_the_client_answers_and_the_console_is_never_taken_away = None
 
+    # The membership root the image trusts (#156): e2e/unlock-boot-qemu.sh builds the initrd with the TEST root of
+    # tests/vectors/highwater-v1.json, whose private key is fixed there (make-highwater-v1.py); the chain on the
+    # guest's ESP is signed with it (#66 B3)
+    ROOT = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+
+    def signed(self, manifest):
+        """An envelope of `manifest`, signed by the root the image trusts."""
+        from cryptography.hazmat.primitives import serialization
+        public = self.ROOT.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+        return {"manifest": manifest, "signature": {"signer": "root", "key": public,
+                                                    "sig": self.ROOT.sign(membership.DOMAIN + membership.canonical(manifest)).hex()}}
+
     def setUp(self):
         self.assertTrue(os.path.exists(BOOT + "/disk.img"), "REGALIA_BOOT_DIR must hold the guest e2e/unlock-boot-qemu.sh built")
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors", "highwater-v1.json")) as f:
+            vector_root = json.load(f)["root_public"]
+        self.assertEqual(self.signed({})["signature"]["key"], vector_root, "the test root is not the vector's: the image would refuse the chain")
         self.keys = {}
         for node in "abc":                                  # a WG-BOOT and a WG-SERVICE pair each, as the manifest lists them
             for kind in ("boot", "service"):
@@ -91,6 +108,13 @@ class OnQemu(tub.OnSwtpm):
         super().setUp()                                     # the three TPMs with their AKs, the manifest, the peers b and c
         self.image = BOOT + "/disk.img"
         self.disk = None                                    # the LUKS2 partition, through a loop device while the guest is off
+        # #66 B3: the chain the guest's ESP carries, signed by the root the image trusts, and the guest's TPM anchored
+        # to it (as enrolment leaves a host: the high-water at the chain's epoch, its manifest recorded), so the
+        # initrd's render verifies it against the TPM and refuses any other chain, however well signed
+        self.chain = [self.signed(self.m1)]
+        anchor = membership.HighWater("0x1500016", tcti=self.tcti["a"], lock_path=self.d + "/a-hw.lock")
+        anchor.define()
+        anchor.anchor(1, membership.Store._digests([membership.accept_chain(None, self.chain, self.signed({})["signature"]["key"])]))
         # the guest's TPM is `a`: provisioned above through its socket, from here on QEMU's
         self.on("a", attest.tpm2, "shutdown", "-c")
         os.kill(self.pids.pop("a"), 15)
@@ -203,7 +227,8 @@ class OnQemu(tub.OnSwtpm):
     def esp(self, named, image="e2e"):
         """Puts exactly these credentials ({name: bytes}) in the ESP's loader/credentials, as <name>.cred, and
         `image` (<image>.efi of REGALIA_BOOT_DIR, signed by e2e/unlock-boot-qemu.sh) as the one boot image, and
-        returns the credential files as systemd-stub will read them. Nothing else changes on the ESP."""
+        the membership chain (self.chain, #66 B3) at EFI/regalia/membership.json, and returns the credential
+        files as systemd-stub will read them. Nothing else changes on the ESP."""
         loop, part = self.partition(1)
         mnt = self.d + "/esp"
         os.makedirs(mnt, exist_ok=True)
@@ -218,6 +243,9 @@ class OnQemu(tub.OnSwtpm):
                 with open(os.path.join(where, name), "wb") as f:
                     f.write(content)
             shutil.copyfile("%s/%s.efi" % (BOOT, image), mnt + "/EFI/BOOT/BOOTX64.EFI")
+            os.makedirs(mnt + "/EFI/regalia", exist_ok=True)
+            with open(mnt + "/" + bootcreds.CHAIN_ON_ESP, "wb") as f:
+                f.write(membership.canonical(self.chain))
         finally:
             unmounted = not mounted or run(["umount", mnt], capture_output=True).returncode == 0
             run(["losetup", "-d", loop], capture_output=True)
@@ -390,8 +418,8 @@ class OnQemu(tub.OnSwtpm):
         device = "/dev/disk/by-partlabel/regalia-root"
         credentials = {
             "regalia.unlock-local": sealed["unlock-local.cred"].encode() + b"\n", "regalia.wg-boot-key": sealed["wg-boot.cred"].encode() + b"\n",
-            # the four a host renders after each accepted manifest (bootcreds.render), the guest's card by its MAC
-            **bootcreds.render(self.m1, cfg, device)}
+            # the one measured file of the host's own (#66 B3): its site; the rest the initrd renders from the chain
+            "regalia.site": bootcreds.site_document(cfg, device)}
 
         expected = espcreds.record({name + ".cred": content for name, content in credentials.items()})
 
@@ -414,6 +442,8 @@ class OnQemu(tub.OnSwtpm):
         gave = re.search(r"regalia-unlock: gave the key of %s for keyslot ([12]), through ([bc])" % re.escape(device), said)
         self.assertIsNotNone(gave, "the client did not give the key")
         slot, through = gave.group(1), gave.group(2)
+        # #66 B3: the boot configuration was rendered in the initrd, from the chain on the ESP, verified against the TPM
+        self.assertIn("regalia-unlock: rendered the boot configuration of a under manifest epoch 1 (TPM high-water 1)", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
         self.assertIn("REGALIA-E2E-IMPORT credentials-imported=no", said)      # the first layer, seen working
         allowed = [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:] if e["event"] == "unlock"]
@@ -441,6 +471,21 @@ class OnQemu(tub.OnSwtpm):
         self.assertIsNotNone(booted)
         self.assertEqual([v.lower() for v in booted.groups()], [pcrs["7"], record["pcr11"]["system"], expected["pcr12"]])
         print("PCR 12 with the host's six credentials: %s, as espcreds computes it" % expected["pcr12"], file=sys.stderr)
+
+        # boot 2e, A FORKED CHAIN (#66 B3): another epoch 1, validly signed by the root the image trusts, in place of the
+        # one the TPM recorded (a substituted ESP). The render verifies it against the TPM's anchor and refuses it:
+        # nothing is rendered, no peer is asked, and the console's prompt takes the recovery key. PCR 12 is unchanged
+        # (the chain is not measured): it is the anchor, not the peers, that refuses it.
+        good = self.chain
+        self.chain = [self.signed(dict(self.m1, policy_version="forked"))]
+        since = len(self.events)
+        said = self.boot("2e-forked-chain", credentials, recovery=True)
+        self.chain = good
+        self.assertRegex(said, r"regalia-unlock: the boot configuration cannot be rendered: CONFLICT")
+        self.assertNotIn("regalia-unlock: gave the key", said)
+        self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+        no_shell(self, said)
+        self.assertEqual([e for e in self.events[since:] if e.get("event") == "unlock"], [])
 
         # boot 2c, AN OLDER SIGNED IMAGE, APPROVED (#135): the same build with one word more on its command line, so
         # another PCR 11, signed by the same keys. The peers' document lists both images; it boots unattended.
