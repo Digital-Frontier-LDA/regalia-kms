@@ -301,7 +301,7 @@ class Cluster:
                                  "authority": {"key": self.keys[AUTH]["service"][1], "underlay": self.auth.underlay, "port": 51821}
                                  if self.auth else None}}
         _replace(n.dir / "etc" / "site.json", json.dumps(site))            # whole, never torn: running services read them
-        _replace(n.dir / "etc" / "measurements.json", json.dumps(self.document))
+        # no measurements.json: the document is in the node's store by digest, and later ones come by sync (#332)
         cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=n.tcti,
                    state_dir=str(n.state), admission_dir=str(n.admission), run_dir=str(n.run),
                    wg_service_key=str(n.dir / "etc" / "wg-service.key"), measurements=str(n.dir / "etc" / "measurements.json"),
@@ -316,6 +316,7 @@ class Cluster:
         here = self.node(n.name)
         anchor = here.anchor()
         anchor.define()
+        here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
         here.store().commit(self.chain[0])
         node.heartbeat_counter(here.cfg).define()
 
@@ -460,7 +461,9 @@ class Cluster:
         a = self.auth
         chain = a.dir / "etc" / "chain.json"
         chain.write_text(json.dumps(self.chain))
-        self._run(a, "init", oneshot=True, unit=self.unit(AUTH, "init"), args=("--chain", str(chain)))
+        document = a.dir / "etc" / "measurements-1.json"
+        document.write_text(json.dumps(self.document))
+        self._run(a, "init", oneshot=True, unit=self.unit(AUTH, "init"), args=("--chain", str(chain), "--documents", str(document)))
 
     def revoke(self, name, state, reason):
         """The authority revokes a node: `authority revoke`, as root on its host, asked of the running serve (once
@@ -524,8 +527,11 @@ class Cluster:
         a.cfg_path.write_text(json.dumps(cfg))
         accepted = a.dir / "etc" / ("accept-%d.json" % candidate["epoch"])
         accepted.write_text(json.dumps([envelope]))
+        # the document goes to the authority with the epoch, and from it to every node by sync (#332)
+        documented = a.dir / "etc" / ("measurements-%d.json" % candidate["epoch"])
+        documented.write_text(json.dumps(document))
         self.stop(AUTH, power=None)                   # accept runs between runs of serve (one writer)
-        self._run(a, "accept", oneshot=True, unit=self.unit(AUTH, "accept"), args=("--chain", str(accepted)))
+        self._run(a, "accept", oneshot=True, unit=self.unit(AUTH, "accept"), args=("--chain", str(accepted), "--documents", str(documented)))
         self.start(AUTH)
         self.chain.append(envelope)
         self.manifest, self.document = candidate, document
@@ -535,8 +541,9 @@ class Cluster:
         n = self.nodes[new]
         here = self.node(new)
         here.anchor().define()
-        for held in self.chain:
-            here.store().commit(held)
+        here.documents().put(document)               # the new node's own: the document of the epoch it starts at
+        for i, held in enumerate(self.chain):
+            here.store().commit(held, final=i == len(self.chain) - 1)
         if not until(lambda: (a.dir / "control" / "control.sock").exists(), 60, 1):
             raise RuntimeError("the authority's control socket did not appear")
         # one below the authority's current sequence: the heartbeat it holds now is then new to this node, which takes
