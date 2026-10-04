@@ -527,8 +527,11 @@ class Cluster:
             here.store().commit(held)
         if not until(lambda: (a.dir / "control" / "control.sock").exists(), 60, 1):
             raise RuntimeError("the authority's control socket did not appear")
+        # one below the authority's current sequence: the heartbeat it holds now is then new to this node, which takes
+        # it by sync (#279 defines the counter AT the verified sequence and keeps that heartbeat as held; the fixture
+        # writes no heartbeat beside the authority's)
         sequence = json.loads(self.authority_command("status").stdout)["sequence"]
-        node.heartbeat_counter(here.cfg).define_at(sequence)
+        node.heartbeat_counter(here.cfg).define_at(max(sequence - 1, 0))
         sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))

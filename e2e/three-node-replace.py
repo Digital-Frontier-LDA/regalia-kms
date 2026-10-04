@@ -92,7 +92,8 @@ def scenario(cluster):
     ok(said is not None, "the same replacement signed by the revocation key is refused: only the root enrolls (%s)" % (said or "accepted")[:90])
     reusing, reuse_document = cluster.replacement("c", "c2", reuse=("c", ("ek_name",)))
     said = refused(measurements.check_replacement, current, reusing, current_document, reuse_document, "c", "c2")
-    ok(said is not None and "reuses" in said, "one that gives c2 the retired c's EK is refused (%s)" % (said or "accepted")[:90])
+    ok(said is not None and "ek_name" in said and ("reuses" in said or "already used" in said),
+       "one that gives c2 the retired c's EK is refused (%s)" % (said or "accepted")[:90])
     since = time.time()
     cluster.replace("c", "c2")
     published = until(lambda: membership.load((cluster.auth.state / "chain.json").read_bytes(), 1 << 20)[-1]["manifest"]["epoch"] == 2, 60, 2)
@@ -128,7 +129,9 @@ def scenario(cluster):
     cluster.stop("b")
     cluster.start("c2", SERVICES)
     got = cluster.unlock("b")
-    ok(got["rc"] == 0 and got["peer"] == "c2" and got["marker"], "U: b, with only c2 up, opened its volume through c2's keyslot", got)
+    ok(got["rc"] == 0 and got["peer"] == "c2" and got["marker"], "U: b, with only c2 up, opened its volume through c2's keyslot",
+       {"client": got, "c2 decided": [{k: e.get(k) for k in ("event", "subject", "outcome", "reason")} for e in cluster.trail("c2")
+                                      if e.get("event", "").startswith(("unlock", "sync-heartbeat"))][-6:]})
     for name in ("a", "b"):
         cluster.start(name, SERVICES)
 
