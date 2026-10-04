@@ -890,6 +890,10 @@ class ProposeGenesis(unittest.TestCase):
         """regalia-kms-d9's read: D28.5, never a bench serial; genesis is where the root first vouches for the tokens."""
         bench = [dict(e, hsm_serials=e["hsm_serials"] + ["denk0404380"]) if e["node_id"] == "b" else e for e in self.entries]
         self.refused("the entry of b names a bench token (denk0404380)", self.propose, entries=bench)
+        for yubikey in ("35718625", "000635718625"):                     # decimal and OpenPGP forms, from membership's one list
+            with self.subTest(yubikey=yubikey):
+                bench = [dict(e, hsm_serials=e["hsm_serials"] + [yubikey]) if e["node_id"] == "a" else e for e in self.entries]
+                self.refused("the entry of a names a bench token (%s)" % yubikey, self.propose, entries=bench)
 
     def test_an_entry_from_an_older_enrolment_or_with_no_serial_is_refused(self):
         older = [{k: v for k, v in e.items() if k != "ssh_host_pub"} if e["node_id"] == "c" else e for e in self.entries]
