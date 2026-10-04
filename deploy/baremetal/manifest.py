@@ -9,11 +9,13 @@ envelope, so nothing a node would refuse is ever signed.
     python3 -Es -m deploy.baremetal.manifest verify  --chain CHAIN.json --root-key ROOT
     python3 -Es -m deploy.baremetal.manifest propose --chain CHAIN.json --root-key ROOT (--from-rollout R.json | --set-state NODE=STATE ...)
                                                      [--issued-at YYYY-MM-DDTHH:MM:SSZ] --out PROPOSAL.json
+                                                     [--old OLD.json --new NEW.json [--state NODE=STATE.json]...]
     python3 -Es -m deploy.baremetal.manifest diff    --chain CHAIN.json --root-key ROOT --proposal PROPOSAL.json
     python3 -Es -m deploy.baremetal.manifest sign    --chain CHAIN.json --root-key ROOT --expected-epoch N --proposal PROPOSAL.json
                                                      --signer root|revocation --key 'pkcs11:serial=…;token=…;id=%01;type=private'
                                                      --module /usr/lib/x86_64-linux-gnu/opensc-pkcs11.so [--opensc-conf FILE]
                                                      [--pin-env NAME] --state-dir DIR --out ENVELOPE.json [--chain-out NEXT.json]
+                                                     [--old OLD.json --new NEW.json [--state NODE=STATE.json]... [--emergency] [--locked-out NODE]...]
     python3 -Es -m deploy.baremetal.manifest clear-pin-latch --state-dir DIR
 
 ROOT is the pinned root as rollout.py takes it: 64 hex (an Ed25519 root), or JSON (a typed entry
@@ -24,6 +26,9 @@ envelopes), verified from ROOT every time.
   1. the chain verifies from ROOT and ends at --expected-epoch (the signing machine has no TPM anchor: the
      operator states which epoch the fleet is at, and a shorter or longer chain is refused);
   2. the proposal passes membership.transition() from the chain's last manifest, for --signer;
+  2a. a proposal that changes the measurements is judged from --old, --new and --state, never from its own word:
+     one step measurements.transition allows, and none that locks out a node still running the set that goes
+     except an --emergency naming exactly the nodes it locks out with --locked-out (rollout.check_lockout, #75);
   3. --key is a PKCS#11 URI naming the card by serial= and token= and the key by object= or id=, with
      type=private and nothing else (p11uri.parse, the UKI build's rule);
   4. the token is opened in process (authority.Pkcs11Signer, #262): exactly one token attached, its serial
@@ -51,7 +56,7 @@ import re
 import sys
 import time
 
-from deploy.baremetal import membership, p11uri
+from deploy.baremetal import attest, measurements, membership, p11uri, rollout
 from deploy.baremetal.membership import Refused, require
 
 RECORD = "signing-record.jsonl"
@@ -101,13 +106,52 @@ def propose_states(current, changes, issued_at):
     return candidate
 
 
-def propose_from_rollout(current, output):
-    """rollout.py `propose --json`'s unsigned manifest, taken as it is, if it follows `current`."""
+def measurement_step(current, candidate, step=None):
+    """A proposal that changes the measurements (another policy_version) is judged HERE, from the documents
+    and the peers' state files, never from what a proposal says of itself: `step` is {"old": the document
+    `current` commits to, "new": the one `candidate` commits to, "states": {node: verifier state},
+    "emergency": bool, "locked_out": [node, ...]}. The step must be one measurements.transition allows, and
+    if it takes a set away, rollout.check_lockout's rule holds: no node that may still run the set that goes
+    is locked out except in an emergency, and every node locked out is named. Returns {"transition",
+    "locked_out"}, or None when the measurements do not change (and then `step` must be absent)."""
+    if candidate.get("policy_version") == current.get("policy_version"):
+        require(step is None, "the proposal keeps the measurements (policy_version unchanged): --old, --new, --state, "
+                "--emergency and --locked-out are not read")
+        return None
+    require(step is not None and step.get("old") is not None and step.get("new") is not None,
+            "the proposal changes the measurements (policy_version %s -> %s): give --old (the document the chain commits to), "
+            "--new (the one the proposal commits to) and, if it takes a set away, --state for every authorizing node, so that "
+            "this tool judges the step itself" % (current.get("policy_version"), candidate.get("policy_version")))
+    old, new = step["old"], step["new"]
+    measurements.bind(current, old)
+    measurements.bind(candidate, new)
+    gone = sorted(set(measurements.validate(old)) - set(measurements.validate(new)))
+    kind = measurements.transition(old, new, emergency=bool(step.get("emergency")), dropped=gone)
+    require(kind != "unchanged", "the two documents differ only in name: there is no step to sign")
+    locked = rollout.check_lockout(current, old, new, kind, step.get("states") or {}, bool(step.get("emergency")),
+                                   list(step.get("locked_out") or []))
+    return {"transition": kind, "locked_out": locked}
+
+
+def propose_from_rollout(current, output, step=None):
+    """rollout.py `propose --json`'s unsigned manifest, if it follows `current` AND this tool, judging the
+    step itself (measurement_step, with the output's own emergency and locked-out list as the operator's
+    words), finds the same transition and the same nodes locked out. An edited output is refused."""
     require(isinstance(output, dict) and "unsigned_manifest" in output, "not the output of `rollout propose --json`")
     candidate = output["unsigned_manifest"]
     membership.validate(candidate)
     require(candidate["epoch"] == current["epoch"] + 1 and candidate["prev_digest"] == membership.digest(current),
             "the proposal does not follow epoch %d of this chain (it was made from another chain or epoch)" % current["epoch"])
+    if candidate.get("policy_version") != current.get("policy_version"):
+        require(step is not None, "the proposal changes the measurements: give --old, --new and --state so that this tool judges "
+                "the step itself")
+        step = dict(step, emergency=output.get("emergency") is True, locked_out=output.get("locked_out") or [])
+    judged = measurement_step(current, candidate, step)
+    if judged is not None:
+        require(output.get("transition") == judged["transition"], "the proposal says %r, but the documents make it %r: it was "
+                "edited, or made from other documents" % (output.get("transition"), judged["transition"]))
+        require(output.get("locked_out") == judged["locked_out"], "the proposal says it locks out %s, but it locks out %s: it "
+                "was edited, or made from other state files" % (output.get("locked_out"), judged["locked_out"]))
     return candidate
 
 
@@ -200,7 +244,7 @@ def check_signer_key(current, root, signer_role, public):
 
 
 def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confirm, out, state, chain_out=None, say=print,
-         pin_source="terminal"):
+         pin_source="terminal", step=None):
     """Steps 1 to 7 of the module's docstring. `open_signer()` gives the token's signer (step 4's opening);
     `confirm(prompt)` returns what the operator typed. Returns the envelope written."""
     require(signer_role in ("root", "revocation"), "--signer must be root or revocation")
@@ -212,6 +256,7 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
             % membership.SCHEMA_V3)
     membership.transition(current, candidate, signer_role)
     require(candidate["epoch"] == current["epoch"] + 1, "the proposal is epoch %d, already in the chain" % candidate["epoch"])
+    judged = measurement_step(current, candidate, step)                                         # 2a
     for path in (out,) + ((chain_out,) if chain_out else ()):
         require(not os.path.lexists(path), "%s exists: nothing is overwritten" % path)
     signer = open_signer()                                                                     # 3, 4
@@ -222,6 +267,9 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
         say("  " + line)
     say("signer %s, key %s…, token serial %s" % (signer_role, public[:16], signer.serial))
     say("epoch %d -> %d, manifest digest %s" % (current["epoch"], candidate["epoch"], digest))
+    if judged is not None:
+        say("measurements: %s%s" % (judged["transition"], "; LOCKS OUT %s (each refused its next unlock and lease until it boots an "
+            "approved image)" % ", ".join(judged["locked_out"]) if judged["locked_out"] else ""))
     typed = confirm("type the new epoch and the first 8 hex digits of the digest (e.g. %d abcd1234): " % candidate["epoch"]).split()
     require(typed == [str(candidate["epoch"]), digest[:8]], "the confirmation does not match: nothing was signed")
     message = membership.DOMAIN + membership.canonical(candidate)                              # 6
@@ -241,6 +289,27 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
 
 
 # ---- the command ----
+
+def _step(args):
+    """--old/--new/--state (and for sign --emergency/--locked-out) as measurement_step's `step`, or None if none was given."""
+    given = args.old or args.new or args.state or getattr(args, "emergency", False) or getattr(args, "locked_out", [])
+    if not given:
+        return None
+    states = {}
+    for item in args.state:
+        node_id, sep, path = item.partition("=")
+        require(sep and node_id and path, "--state takes NODE=FILE, not %r" % item)
+        require(node_id not in states, "--state names %s twice" % node_id)
+        states[node_id] = read_json(path, 4 * 1024 * 1024)
+    return {"old": measurements.load(_raw(args.old, measurements.MAX_BYTES)) if args.old else None,
+            "new": measurements.load(_raw(args.new, measurements.MAX_BYTES)) if args.new else None,
+            "states": states, "emergency": getattr(args, "emergency", False), "locked_out": getattr(args, "locked_out", [])}
+
+
+def _raw(path, limit):
+    with open(path, "rb") as f:
+        return f.read(limit + 1)
+
 
 def _states(pairs):
     changes = {}
@@ -274,6 +343,16 @@ def main(argv=None):
     def chain(c):
         c.add_argument("--chain", required=True, metavar="CHAIN.json", help="the signed chain (a JSON list of envelopes)")
         c.add_argument("--root-key", required=True, metavar="ROOT", help="the pinned root: 64 hex, or a typed entry or list as JSON")
+
+    def step_args(c, acknowledge):
+        c.add_argument("--old", metavar="OLD.json", help="a measurements change: the document the chain's last manifest commits to")
+        c.add_argument("--new", metavar="NEW.json", help="a measurements change: the document the proposal commits to")
+        c.add_argument("--state", action="append", default=[], metavar="NODE=STATE.json",
+                       help="a step that takes a set away: an authorizing node's attestation verifier state; one per node")
+        if acknowledge:
+            c.add_argument("--emergency", action="store_true", help="the step drops a set some node may still run (an emergency)")
+            c.add_argument("--locked-out", action="append", default=[], metavar="NODE",
+                           help="a node this step locks out; repeat, name each (as `rollout propose` listed them)")
     chain(sub.add_parser("verify", help="verify a chain from the pinned root"))
     c = sub.add_parser("propose", help="write the UNSIGNED next manifest")
     chain(c)
@@ -281,6 +360,7 @@ def main(argv=None):
     c.add_argument("--set-state", action="append", default=[], metavar="NODE=STATE", help="change a node's state; repeat")
     c.add_argument("--issued-at", metavar="YYYY-MM-DDTHH:MM:SSZ")
     c.add_argument("--out", required=True)
+    step_args(c, acknowledge=False)
     c = sub.add_parser("diff", help="the proposal against the chain's last manifest, field by field")
     chain(c)
     c.add_argument("--proposal", required=True)
@@ -297,6 +377,7 @@ def main(argv=None):
     c.add_argument("--state-dir", required=True, help="this user's 0700 directory: the signing record and the PIN latch")
     c.add_argument("--out", required=True, help="the signed envelope (a new file)")
     c.add_argument("--chain-out", help="the chain with the new envelope appended (a new file), for the next proposal")
+    step_args(c, acknowledge=True)
     c = sub.add_parser("clear-pin-latch", help="after fixing the PIN: allow the token to be tried again")
     c.add_argument("--state-dir", required=True)
     args = parser.parse_args(argv)
@@ -316,7 +397,7 @@ def main(argv=None):
         if args.command == "propose":
             require(bool(args.from_rollout) != bool(args.set_state), "give --from-rollout or --set-state, not both")
             if args.from_rollout:
-                candidate = propose_from_rollout(current, read_json(args.from_rollout, membership.MAX_BYTES))
+                candidate = propose_from_rollout(current, read_json(args.from_rollout, membership.MAX_BYTES), _step(args))
             else:
                 candidate = propose_states(current, _states(args.set_state), args.issued_at or utc_now())
             _write_new(args.out, json.dumps(candidate, indent=2, sort_keys=True).encode() + b"\n")
@@ -331,9 +412,9 @@ def main(argv=None):
         pin = _pin_reader(args.pin_env)                  # before any token is opened
         sign(chain_doc, root, args.expected_epoch, candidate, args.signer,
              lambda: token_signer(args.key, args.module, args.opensc_conf, pin, os.path.join(state, LATCH)),
-             input, args.out, state, args.chain_out, pin_source="env (test)" if args.pin_env else "terminal")
+             input, args.out, state, args.chain_out, pin_source="env (test)" if args.pin_env else "terminal", step=_step(args))
         return 0
-    except (Refused, OSError, ValueError) as error:
+    except (Refused, attest.Refused, OSError, ValueError) as error:
         print("regalia-manifest: refused: %s" % error, file=sys.stderr)
         return 2
 
