@@ -114,6 +114,7 @@ class Cluster:
         self.authtimes = {}
         self.loops = {}
         self.services = {n: () for n in names}        # what start() last started on each node, until stop()
+        self.pending = {}                             # node -> the heartbeat it gets when it runs again (its time is off now)
         self.client = os.environ.get("REGALIA_UNLOCK_BIN", "")
         self.code = self.work / "src"                 # the package as a host installs it: root's, readable by the services
 
@@ -343,6 +344,12 @@ class Cluster:
         if not self.time[name]:                       # booted again: its time is checked again (chrony, on a host)
             self.time[name] = True
             self.authtimes[name].step()
+        if name in self.pending and not self.running(name):   # the authority's heartbeat, which it pulls once it runs
+            try:
+                self.beat(name, *self.pending.pop(name))
+            except membership.Refused as refused:     # e.g. a node the epoch revoked: it runs without, and says so
+                print("  (%s took no heartbeat: %s)" % (name, refused))
+            sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         for service in services:
             if service == "wg-apply" and not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
                 raise RuntimeError("%s's sync published no chain" % name)
@@ -565,14 +572,18 @@ class Cluster:
         manifest = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
                         issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
         envelope = self.signed(manifest, signer=signer)
-        running = [name for name in self.nodes if name != seed and self.running(name)]
+        others = [name for name in self.nodes if name != seed and self.running(name)]
+        running = [name for name in others if membership.may(manifest, name, "authorize")]   # they pull it from the seed
         services = self.services[seed]
         self.stop(seed, power=None)
         for name in self.nodes:
-            if name in running:
+            if name in others:                        # running: its store is its sync's (one that may not authorize is left be)
                 continue
             self.node(name).store().commit(envelope)
-            self.beat(name, manifest["epoch"] + 1, manifest)
+            if self.time[name]:
+                self.beat(name, manifest["epoch"] + 1, manifest)
+            else:                                     # powered off: no authenticated time to judge a heartbeat by, yet
+                self.pending[name] = (manifest["epoch"] + 1, manifest)
             sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[name].state))
         self.chain.append(envelope)
         self.manifest = manifest

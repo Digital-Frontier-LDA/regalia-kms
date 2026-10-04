@@ -82,6 +82,14 @@ def may(manifest, name, action):
         next(m for m in manifest["nodes"] if m["node_id"] == name)["state"], ())
 
 
+def attempt(cluster, results, name, **kw):
+    """cluster.unlock in a thread: its result, or what stopped it, into `results`."""
+    try:
+        results[name] = cluster.unlock(name, **kw)
+    except Exception as failure:                     # noqa: BLE001 - reported by the check that reads it
+        results[name] = {"error": repr(failure)}
+
+
 def scenario(cluster):
     names = list(cluster.nodes)
 
@@ -131,7 +139,7 @@ def scenario(cluster):
     for name in down:
         cluster.stop(name)
     results = {}
-    workers = [threading.Thread(target=lambda name=name: results.__setitem__(name, cluster.unlock(name))) for name in down]
+    workers = [threading.Thread(target=attempt, args=(cluster, results, name)) for name in down]
     for worker in workers:
         worker.start()
     for worker in workers:
@@ -150,11 +158,13 @@ def scenario(cluster):
     survivor, crashed, rebooted = "a", "b", "c"
     cluster.stop(rebooted)
     cluster.stop(crashed, power=None)
+    for interface in ("wg-unlock", "wg-svc"):                 # its running system's tunnels down (wg-boot takes wg-unlock's port);
+        cluster.nodes[crashed].in_ns("ip", "link", "del", interface, check=False)   # the TPM untouched: the same boot
     before = cluster.reset_count(crashed)
     (cluster.nodes[crashed].run / "boot-session").unlink()   # what the client before it left: gone, so it asks again
     asked = time.time()
     results = {}
-    workers = [threading.Thread(target=lambda name=name, rounds=rounds: results.__setitem__(name, cluster.unlock(name, timeout=150, rounds=rounds)))
+    workers = [threading.Thread(target=attempt, args=(cluster, results, name), kwargs={"timeout": 150, "rounds": rounds})
                for name, rounds in ((rebooted, 5), (crashed, 2))]
     for worker in workers:
         worker.start()
@@ -166,7 +176,8 @@ def scenario(cluster):
     second = "a second boot session in the same boot"           # attest.Verifier's refusal, in the survivor's unlock trail
     denied = [e.get("reason") for e in cluster.trail(survivor) if e.get("event") == "unlock" and e.get("subject") == crashed
               and e.get("outcome") == "DENY" and e.get("at", 0) >= asked - 1]
-    ok(got.get("rc") != 0 and got.get("peer") is None and cluster.reset_count(crashed) == before and any(second in r for r in denied),
+    ok("error" not in got and got.get("rc") != 0 and got.get("peer") is None and cluster.reset_count(crashed) == before
+       and any(second in r for r in denied),
        "N: %s, in the same TPM boot (resetCount %d) with a second session, gets no key from %s, which says why: %s"
        % (crashed, before, survivor, second), {"client": got, "denied": denied})
     cluster.stop(crashed)                                       # the power cycle: a new boot
@@ -224,6 +235,7 @@ def scenario(cluster):
         reason = until(why, 90, 3)
         ok(bool(reason) and not cluster.lease(victim) and not any(leased_by(cluster, s, victim, since) for s in survivors),
            "N: and no lease, because %s" % reason, cluster.journal(victim, "admission")[-400:])
+        cluster.stop(victim)
 
 
 def main():
