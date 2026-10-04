@@ -32,7 +32,6 @@ key alone meets no rule that adds, restores or re-keys a node; that is the root'
 --pin-env exists for tests only and is refused unless REGALIA_OWNER_TEST=1 is also set, as manifest.py's.
 """
 import argparse
-import getpass
 import hashlib
 import json
 import os
@@ -40,7 +39,7 @@ import re
 import subprocess
 import sys
 
-from deploy.baremetal import beat, heartbeat, membership
+from deploy.baremetal import beat, heartbeat, keyfd, membership
 
 Refused, require = membership.Refused, membership.require
 
@@ -108,6 +107,17 @@ def sign_manifest(current, proposal, open_signer, confirm, say=print):
     enough, _ = revoke.met(current, {"manifest": manifest, "signatures": envelope["signatures"]})
     require(enough, "the owner's signature meets no revocation rule of the current manifest")
     return envelope
+
+
+# The marks of a KMS node: its configuration and its installed services. The owner's revocation signature is made off
+# the nodes, so that no node's root can watch the token session (regalia-kms-24, 51's read).
+NODE_MARKS = ("/etc/regalia/node.json", "/usr/lib/systemd/system/regalia-sync.service", "/etc/systemd/system/regalia-sync.service")
+
+
+def off_the_nodes(marks=NODE_MARKS):
+    found = [p for p in marks if os.path.exists(p)]
+    require(not found, "this is a KMS node (%s): the owner signs a revocation off the nodes, on the owner's machine or the "
+            "offline laptop" % ", ".join(found))
 
 
 # ---- root's half ----
@@ -210,7 +220,13 @@ def main(argv=None):
             require(os.environ.get("REGALIA_OWNER_TEST") == "1", "--pin-env is for tests only (REGALIA_OWNER_TEST=1)")
             pin = lambda: os.environ[args.pin_env]      # noqa: E731
         else:
-            pin = lambda: getpass.getpass("The approval key's PIN (not shown): ")      # noqa: E731
+            def pin():
+                # the console's terminal only, echo off; never standard input (getpass's fallback echoes) (51's read)
+                typed = keyfd.tty_secret("The approval key's PIN (not shown): ", "the PIN", limit=64)
+                try:
+                    return typed.decode("ascii")
+                finally:
+                    keyfd.zero(typed)
 
         def open_signer():
             return authority.Pkcs11Signer(args.module, args.serial, args.key_id, None, opensc_conf=args.opensc_conf, key_label=args.key_label,
@@ -218,9 +234,9 @@ def main(argv=None):
 
         def confirm(text):
             print(text)
-            require(sys.stdin.isatty() or args.pin_env, "the confirmation is typed at the console; standard input is not a terminal")
-            return input("Type the epoch and the first 8 hex digits of the SHA-256, e.g. '%s 1a2b3c4d': " % "N")
+            return keyfd.tty_line("Type the epoch and the first 8 hex digits of the SHA-256: ")   # never standard input
         if args.op == "sign-manifest":
+            off_the_nodes()
             from deploy.baremetal import manifest as manifest_tool
             root = manifest_tool.root_key(args.root_key)
             current = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), root)

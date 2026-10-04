@@ -34,11 +34,14 @@ import os
 import subprocess
 import sys
 
-from deploy.baremetal import beat, membership
+from deploy.baremetal import beat, keyfd, membership
 
 Refused, require = membership.Refused, membership.require
 
 RESTRICTIVE = ("QUARANTINED", "REVOKED_STOLEN")
+# Typed at the node's console, read from its controlling terminal (keyfd.tty_line), never from standard input: a pipe,
+# a script or a cron job cannot confirm a revocation (regalia-kms-51's read)
+PROMPT = "Type the epoch and the first 8 hex digits of the SHA-256: "
 SYNC_USER = "regalia-sync"
 PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -177,7 +180,7 @@ def main(argv=None):
                 signer = node_module.node_beat_signer(node)
                 text, digest = shown(current, nxt, args.reason)
                 print(text)
-                require(confirmed(nxt, digest, input("Type the epoch and the first 8 hex digits of the SHA-256: ")),
+                require(confirmed(nxt, digest, keyfd.tty_line(PROMPT)),
                         "the epoch and digest typed are not this revocation's: nothing is signed")
                 out["signatures"].append(dict(node_signature(node.node_id, signer._sign, nxt), key=signer.key))
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
@@ -190,8 +193,7 @@ def main(argv=None):
             envelope = membership.load(f.read(membership.MAX_BYTES + 1))
         if args.op == "cosign":
             signer = node_module.node_beat_signer(node)
-            envelope = cosign(current, envelope, node.node_id, signer.key, signer._sign, lambda text: (print(text), input(
-                "Type the epoch and the first 8 hex digits of the SHA-256: "))[1])
+            envelope = cosign(current, envelope, node.node_id, signer.key, signer._sign, lambda text: (print(text), keyfd.tty_line(PROMPT))[1])
         full = {"manifest": envelope["manifest"], "signatures": envelope["signatures"]}
         enough, parties = met(current, full)
         require(enough, "the signatures (%s) meet no revocation rule of the current manifest: nothing is committed"
