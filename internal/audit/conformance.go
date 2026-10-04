@@ -20,8 +20,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 )
+
+// ConformanceAlarmReason is the reason the conformance run's one alarm carries: a test, never a tampered trail.
+const ConformanceAlarmReason = "CONFORMANCE RUN (regalia-audit-ship conformance): a test alarm on a conformance stream, not a tampered trail"
 
 // ConformanceCheck is one rule of the contract and whether the collector met it.
 type ConformanceCheck struct {
@@ -113,6 +115,15 @@ func CheckConformance(ctx context.Context, target ConformanceTarget) ([]Conforma
 	check("an event out of order (a gap) is refused", len(five) == 5 && sink.Send(ctx, five[4]) != nil, "sequence 5 after 3")
 	head, hash, err = sink.CommittedHead(ctx, stream)
 	check("refusals leave the head where it was", err == nil && head == 3 && hash == events[2].Hash, "%d %s, %v", head, hash, err)
+	// the positive control: the RIGHT next event is still taken, so the two refusals above were about their content,
+	// not a collector that fails every request after the first three (regalia-kms-3e on #365)
+	sendErr := errors.New("no fourth event")
+	if len(five) == 5 {
+		sendErr = sink.Send(ctx, five[3])
+	}
+	head, hash, err = sink.CommittedHead(ctx, stream)
+	check("the correct next event is still committed after the refusals (they were about content)",
+		sendErr == nil && err == nil && head == 4 && hash == five[3].Hash, "sequence 4: %v; head %d %s, %v", sendErr, head, hash, err)
 
 	// 4. signs receipts with a pinned key, over exactly what it holds
 	receipt, err := sink.Receipt(ctx, 3)
@@ -130,8 +141,8 @@ func CheckConformance(ctx context.Context, target ConformanceTarget) ([]Conforma
 	check("GET /v1/receipt: a receipt for the committed head, signed ("+ReceiptDomain+") by a pinned receipt key, over this "+
 		"identity, stream, event, line and line chain", err == nil && receipt.Sequence == 3 && receipt.EventHash == events[2].Hash &&
 		receipt.LineChain == chain && signed, "%+v, %v", receipt, err)
-	_, err = sink.Receipt(ctx, 4)
-	check("no receipt for a position it does not hold", err != nil, "sequence 4")
+	_, err = sink.Receipt(ctx, 5)
+	check("no receipt for a position it does not hold", err != nil, "sequence 5")
 
 	// 5. only an identified client
 	if target.Anonymous != nil {
@@ -139,10 +150,10 @@ func CheckConformance(ctx context.Context, target ConformanceTarget) ([]Conforma
 		check("a client with no certificate is refused", err != nil, "%v", err)
 	}
 
-	// 6. a client's alarm is taken: a trail that no longer holds what was committed stops the shipper and alarms
-	_, _, err = ShipTrail(ctx, sink, stream, name, data[:bytes.Index(data, []byte("\n"))+1])
-	check("POST /v1/alarms: a cut-short trail is reported and accepted (the shipper stops with ErrTrailTampered)",
-		errors.Is(err, ErrTrailTampered) && strings.Contains(err.Error(), "alarm raised"), "%v", err)
+	// 6. a client's alarm is taken. Said to be a conformance run, on the conformance stream, so whoever receives it does
+	// not take it for a tampered trail (regalia-kms-3e on #365); a real one comes from ShipTrail with its own reason.
+	err = sink.ReportAlarm(ctx, 4, five[3].Hash, ConformanceAlarmReason)
+	check("POST /v1/alarms: a client's alarm is accepted", err == nil, "%v", err)
 	return checks, nil
 }
 

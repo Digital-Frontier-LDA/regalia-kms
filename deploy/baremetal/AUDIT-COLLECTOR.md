@@ -34,8 +34,9 @@ sections (#364).
 - An event's `hash` must bind its content, and its `previous_hash` must be the committed hash before it.
 - **The same event sent again** at a committed sequence is acknowledged, not appended: the node's ack was lost
   and it retries.
-- **A different event at a committed sequence** (a rewrite) is refused, as is **an event out of order** (a gap).
-  Each refusal is an alarm the service keeps, and the head does not move.
+- **A different event at a committed sequence** (a rewrite) is refused, as is **an event out of order** (a gap),
+  and the head does not move. It SHOULD also keep each refusal as an alarm for its operator; conformance cannot
+  verify that, since the contract has no endpoint that reads alarms back.
 - It never deletes or rewrites what it committed. There is no endpoint that returns events, only positions.
 
 **Signed receipts.** Each receipt is Ed25519 over the bytes `ReceiptPreimage`, one field a line:
@@ -80,6 +81,8 @@ All of it lives under `/etc/regalia/audit-ship/` and `/etc/regalia/audit-ship.en
   it together: the https origin (no path, query, fragment or user), the site, the certificate and key as a pair
   valid now, a usable CA, and at least one well-formed receipt key. A broken configuration fails the start by
   name.
+- **On an update that brings this check, install `collector-receipt.pub` first, then the new unit.** Without the
+  pin, every shipper refuses to start, by name, until it is there.
 - `regalia-audit-ship check … -probe -trail sync` also reaches the collector, read-only (readiness and each named
   stream's head), and says which step failed: unreachable, a certificate not from the CA given, or this client
   refused.
@@ -112,12 +115,18 @@ It runs the contract's rules through the shippers' own client, on a fresh stream
 - three chained events committed and acknowledged, and the head reported;
 - the same event re-sent is acknowledged;
 - a rewrite and a gap are each refused, and the head does not move;
+- the correct fourth event is still taken afterwards, so the two refusals were about content, not a service that
+  fails every request;
 - a receipt signed by a pinned key over exactly the identity, stream, event, line and line chain;
 - no receipt for a position it does not hold;
 - a client with no certificate is refused;
 - an alarm is taken.
 
-It writes three synthetic lines and one alarm to that stream, and nothing of a real trail. CI runs it against
+It writes four synthetic events and ONE alarm to that stream, and nothing of a real trail.
+- **The alarm is a test.** Its reason begins `CONFORMANCE RUN (regalia-audit-ship conformance)`, and it comes from
+  the node's certificate on the `<site>.conformance-<random>` stream. The service's alarm handling should not page
+  on that stream; its operator should expect exactly one such alarm per run.
+- **The stream stays.** The contract has no delete, so each run leaves its small stream in the service for good. CI runs it against
 `regalia-audit-collector` (`e2e/audit-ship-systemd.py`, step 5; `internal/audit/conformance_test.go`).
 
 ## 6. What it never receives

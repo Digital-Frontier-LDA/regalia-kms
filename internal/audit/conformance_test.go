@@ -80,7 +80,7 @@ func TestOurCollectorMeetsTheContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !Conforms(checks) || len(checks) != 12 {
+	if !Conforms(checks) || len(checks) != 13 {
 		t.Fatalf("%d checks; failed: %q", len(checks), failed(checks))
 	}
 }
@@ -113,6 +113,41 @@ func TestACollectorThatAcceptsRewritesOrGapsDoesNotConform(t *testing.T) {
 	if Conforms(checks) || !strings.Contains(got, "a DIFFERENT event at a committed sequence is refused") ||
 		!strings.Contains(got, "an event out of order (a gap) is refused") {
 		t.Fatalf("a collector that takes rewrites and gaps passed; failed: %q", failed(checks))
+	}
+}
+
+// breaksAfterThree is a collector that commits the first three events and then answers every request with 500: a
+// crashing, overloaded or rate-limited service. Its "refusals" of a rewrite and a gap are not judgements of content,
+// and the positive control (the correct fourth event) must expose that (regalia-kms-3e on #365).
+func breaksAfterThree(next http.Handler) http.Handler {
+	posted := 0
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/events" {
+			posted++
+			if posted > 3 {
+				http.Error(w, "unavailable", http.StatusInternalServerError)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func TestACollectorThatFailsEveryRequestAfterThreeDoesNotConform(t *testing.T) {
+	rig := newConformanceRig(t, breaksAfterThree)
+	checks, err := CheckConformance(context.Background(), rig.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(failed(checks), "\n")
+	if Conforms(checks) || !strings.Contains(got, "the correct next event is still committed after the refusals") {
+		t.Fatalf("a collector that fails after three passed; failed: %q", failed(checks))
+	}
+}
+
+func TestTheConformanceAlarmSaysItIsATest(t *testing.T) {
+	if !strings.HasPrefix(ConformanceAlarmReason, "CONFORMANCE RUN") || len(ConformanceAlarmReason) > 512 {
+		t.Fatalf("%q", ConformanceAlarmReason)
 	}
 }
 

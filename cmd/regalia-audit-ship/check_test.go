@@ -162,7 +162,7 @@ func TestCheckProbeReachesTheCollectorReadOnlyAndNamesWhatFailed(t *testing.T) {
 func TestConformanceAgainstOurCollectorAndAgainstTheWrongReceiptKey(t *testing.T) {
 	c := newExternalCollector(t)
 	out, err := runCommand(append([]string{"conformance"}, c.args(nil)...)...)
-	if err != nil || !strings.Contains(out, "meets the audit collector contract: 12 rules") || strings.Contains(out, "FAIL") {
+	if err != nil || !strings.Contains(out, "meets the audit collector contract: 13 rules") || strings.Contains(out, "FAIL") {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	_, otherPublic, _ := ed25519.GenerateKey(rand.Reader)

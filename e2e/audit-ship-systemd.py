@@ -281,7 +281,7 @@ def scenario(work, binaries):
     done = subprocess.run([str(BIN), "conformance", "-collector", "https://127.0.0.1:%d" % PORT, "-site", "sitea",
                            "-tls-cert", str(ETC / "client.crt"), "-tls-key", str(ETC / "client.key"), "-server-ca", str(ETC / "collector-ca.pem"),
                            "-receipt-keys", str(ETC / "collector-receipt.pub")], capture_output=True, text=True)
-    ok(done.returncode == 0 and "meets the audit collector contract: 12 rules" in done.stdout and "FAIL" not in done.stdout,
+    ok(done.returncode == 0 and "meets the audit collector contract: 13 rules" in done.stdout and "FAIL" not in done.stdout,
        "regalia-audit-ship conformance: every rule of the contract holds", done.stdout[-1500:] + done.stderr[-500:])
     if failed:
         print(journal(INSTANCE))
