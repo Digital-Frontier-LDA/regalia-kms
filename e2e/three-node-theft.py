@@ -25,9 +25,12 @@ whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
      refuses it by name, and b's store stays at the current epoch
   7  9.3: b power-cycled with only a (revoked) and nobody else up: b's chain is current, its boot configuration does
      not list a, and it gets no key (it never asks a); with c back, b opens through c
-  8  #340, audit completeness: the real trail shippers and collector ran throughout (Cluster(audit=True)); every node's
-     sync and admission trail is in the collector line for line, chained, each DENY a deny, and the scenario's own
-     security events are there by name, for the node that recorded them
+  8  #340, audit completeness: the real trail shippers and collector (with its receipt key) ran throughout
+     (Cluster(audit=True)); every node's sync and admission trail is written and in the collector line for line, chained
+     from genesis, each DENY a deny, its head as the signed receipt and the shipper's head file state it; and the
+     scenario's own security events are there by name, for the node that recorded them. Not here: the time trail (the
+     fixture's time stand-in writes none; a time loss shows as the sync refusals it causes, which are covered) and the
+     authority's own trail (it goes away with #199)
 
 Not here: the expiry itself (a heartbeat lifetime is at least 40 minutes: freshness's unit tests show the refusal at
 expiry, and step 2 measures the window); a stale b asking a (the same window as 4, stated on #69); the physical
@@ -178,9 +181,11 @@ def scenario(cluster):
     got = cluster.unlock("b")
     ok(got["rc"] == 0 and got["peer"] == "c" and got["marker"], "control: with c back, b opens its volume through c's keyslot", got)
 
-    header("8  #340: every event the scenario caused is in the audit collector's chained stream, for the node that recorded it")
+    header("8  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
     wrong = cluster.audit_complete()
-    ok(wrong == {}, "every node trail (sync, admission) is in the collector line for line, in order, its chain unbroken, each DENY a deny",
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t in ("sync", "admission")}
+    ok(wrong == {}, "every node's sync and admission trail is written and in the collector line for line: sequence from 1, chained from "
+       "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
        {"%s.%s" % k: v for k, v in wrong.items()})
     named = cluster.audit_has("b", "sync", outcome="DENY", reason=lambda r: bool(r) and "a is REVOKED_STOLEN under epoch 2" in r)
     ok(bool(named), "b's refusal of the stolen a by name (9.2) is in b's stream", len(named))
