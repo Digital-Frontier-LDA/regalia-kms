@@ -638,7 +638,10 @@ class Cluster:
                 result["rc"], result["stderr"] = "timeout", (late.stderr or b"")[-1500:].decode(errors="replace")
             listener.close()
             asker.settimeout(5)
-            key = asker.recv(4096)
+            try:
+                key = asker.recv(4096)
+            except OSError as failure:                # a client that gave no key and closed with data unread: a reset
+                key, result["asker"] = b"", repr(failure)
             if key:
                 opened = subprocess.run(["cryptsetup", "open", "--key-file", "-", "-v", loop, mapped], input=key, capture_output=True)
                 found = re.search(rb"Key slot (\d+) unlocked", opened.stdout)
@@ -679,8 +682,19 @@ class Cluster:
         """The public keys `interface` in the node's namespace has as peers."""
         return set(self.nodes[name].in_ns("wg", "show", interface, "peers", check=False).stdout.split())
 
-    BEAT = ("import json, sys\nfrom deploy.baremetal import node\nd = json.load(sys.stdin)\n"
-            "node.Node(node.load(d['cfg'])).freshness().accept(d['beat'], d['manifest'])\n")
+    # The epoch's heartbeat, unless the node holds it already: sync delivers it from the seed with the epoch, and a
+    # second delivery of the same sequence is a REPLAY (sequence == the TPM counter), which here means "already in".
+    BEAT = ("import json, sys\nfrom deploy.baremetal import membership, node\nd = json.load(sys.stdin)\n"
+            "f = node.Node(node.load(d['cfg'])).freshness()\nwant = d['beat']['heartbeat']\n"
+            "def holds():\n    held = f.held()\n"
+            "    return bool(held) and held['heartbeat']['epoch'] == want['epoch'] and held['heartbeat']['sequence'] >= want['sequence']\n"
+            "if not holds():\n    try:\n        f.accept(d['beat'], d['manifest'])\n"
+            "    except membership.Refused:\n        if not holds():\n            raise\n")
+
+    def holds_heartbeat(self, name, epoch):
+        """Whether the node holds a heartbeat for `epoch` (its freshness state, read as root)."""
+        held = self.node(name).freshness().held()
+        return bool(held) and held["heartbeat"]["epoch"] == epoch
 
     def advance(self, seed, signer="root", **states):
         """A new epoch with nodes' states changed ({node: state}), signed by the root or the revocation key. The
@@ -715,6 +729,8 @@ class Cluster:
         for name in running:
             if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
                 raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], seed))
+            if until(lambda: self.holds_heartbeat(name, manifest["epoch"]), 30, 2):
+                continue                              # sync brought it from the seed with the epoch: the real path
             self._as_sync(name, self.BEAT, {"cfg": str(self.nodes[name].cfg_path), "manifest": manifest,
                                             "beat": hbt.beat(manifest, manifest["epoch"] + 1, issued=int(time.time()))})
         return manifest, since
