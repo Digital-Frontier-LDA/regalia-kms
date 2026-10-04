@@ -144,32 +144,35 @@ def path(writer, name=None, run_dir=RUN_DIR):
 
 
 class Counter:
-    """A counter by cause, published whole on every change (metrics.publish): thread-safe, and never raising,
-    so a broken metrics directory can never stop what counts (the unlock listener, #317)."""
+    """A counter by cause (the unlock listener's refusals, #317). Counting is an increment under a lock and
+    nothing else: a refusal flood must not become a disk-write flood on the refusing thread (the accept loop,
+    for "connections"; regalia-kms-48). flush() publishes it whole, at start and on the owner's round, and
+    never raises; one lock spans the snapshot and the write, so two flushes cannot publish out of order and
+    make the counter go backwards (which Prometheus would read as a reset)."""
 
     def __init__(self, writer, name, file, causes, publish=None):
         import threading
         self.writer, self.name, self.file = writer, name, file
-        self.counts, self.lock = {cause: 0 for cause in causes}, threading.Lock()
+        self.counts, self.lock, self.publishing = {cause: 0 for cause in causes}, threading.Lock(), threading.Lock()
         self.publish = publish or (lambda samples: globals()["publish"](writer, samples, path(writer, file)))
 
     def samples(self):
         return [(self.name, {"cause": cause}, count) for cause, count in sorted(self.counts.items())]
 
     def flush(self):
-        with self.lock:
-            samples = self.samples()
-        try:
-            self.publish(samples)
-        except Exception:                 # noqa: BLE001 - metrics never stop what counts
-            pass
+        with self.publishing:
+            with self.lock:
+                samples = self.samples()
+            try:
+                self.publish(samples)
+            except Exception:             # noqa: BLE001 - metrics never stop what counts
+                pass
 
     def __call__(self, cause):
+        """One refusal of `cause`: counted, not written (flush() writes, from the owner's round)."""
         with self.lock:
-            if cause not in self.counts:
-                return
-            self.counts[cause] += 1
-        self.flush()
+            if cause in self.counts:
+                self.counts[cause] += 1
 
 
 def write(target, text):

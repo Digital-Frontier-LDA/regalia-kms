@@ -136,13 +136,44 @@ class Counting(unittest.TestCase):
         counter("rate")
         counter("connections")
         counter("something else")                                      # not a cause: ignored, not raised
-        self.assertEqual(published[0], [("regalia_unlock_refused_total", {"cause": "connections"}, 0),
-                                        ("regalia_unlock_refused_total", {"cause": "rate"}, 0)])
-        self.assertEqual(published[-1], [("regalia_unlock_refused_total", {"cause": "connections"}, 1),
-                                         ("regalia_unlock_refused_total", {"cause": "rate"}, 2)])
-        self.assertEqual(len(published), 4)
+        counter.flush()
+        self.assertEqual(published, [[("regalia_unlock_refused_total", {"cause": "connections"}, 0),
+                                      ("regalia_unlock_refused_total", {"cause": "rate"}, 0)],
+                                     [("regalia_unlock_refused_total", {"cause": "connections"}, 1),
+                                      ("regalia_unlock_refused_total", {"cause": "rate"}, 2)]])
         for samples in published:
             m.render("sync", samples)
+
+    def test_a_refusal_flood_writes_nothing_until_the_round(self):
+        """regalia-kms-48: counting is an increment; the refusing thread (the accept loop) never writes."""
+        published = []
+        counter = m.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", m.UNLOCK_CAUSES, publish=published.append)
+        for _ in range(1000):
+            counter("connections")
+        self.assertEqual(published, [])
+        counter.flush()
+        self.assertEqual(len(published), 1)
+        self.assertIn(("regalia_unlock_refused_total", {"cause": "connections"}, 1000), published[0])
+
+    def test_two_flushes_never_publish_out_of_order(self):
+        """One lock spans the snapshot and the write: a slower flush cannot publish an older count after a newer."""
+        import threading
+        published, started = [], threading.Event()
+        counter = m.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", m.UNLOCK_CAUSES)
+
+        def slow(samples):
+            started.set()
+            threading.Event().wait(0.2)                                 # the first write is slow
+            published.append(dict((labels["cause"], value) for _, labels, value in samples)["rate"])
+        counter.publish = slow
+        counter("rate")
+        first = threading.Thread(target=counter.flush)
+        first.start()
+        started.wait(5)
+        counter("rate")
+        counter.flush()                                                 # waits for the first write, then publishes 2
+        first.join()
+        self.assertEqual(published, sorted(published))
 
     def test_a_publish_that_fails_never_stops_what_counts(self):
         def broken(samples):

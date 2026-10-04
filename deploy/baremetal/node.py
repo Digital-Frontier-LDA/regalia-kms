@@ -494,7 +494,7 @@ class Sync:
         for thread in threads:
             thread.start()
         watch = self.watch()
-        self.refusals.flush()                   # its zeros from the start, then on every refusal and every round
+        self.refusals.flush()                   # its zeros from the start, then every round (refusals only count)
         try:
             while not stop():
                 self.pull_round()

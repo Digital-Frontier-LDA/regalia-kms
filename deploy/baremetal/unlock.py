@@ -712,7 +712,7 @@ def serve(peer, listener, count=None, caller=None, connections=MAX_CONNECTIONS, 
                 conn.close()
                 refusal = getattr(peer, "refusal", None)
                 if refusal is not None:
-                    refusal("connections")          # counted every time; the trail line below once a minute
+                    refusal("connections")          # counted every time (an increment, no write); the trail line once a minute
                 now = time.monotonic()
                 with lock:
                     due = key not in reported or now - reported[key] >= 60.0
