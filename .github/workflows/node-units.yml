@@ -18,6 +18,7 @@ on:
       - e2e/audit-ship-systemd.py
       - e2e/three-node-netns.py
       - e2e/three-node-recovery.py
+      - e2e/three-node-outage.py
       - cmd/regalia-unlock/**
       - e2e/lib/threenode.py
   push:
@@ -35,6 +36,7 @@ on:
       - e2e/audit-ship-systemd.py
       - e2e/three-node-netns.py
       - e2e/three-node-recovery.py
+      - e2e/three-node-outage.py
       - cmd/regalia-unlock/**
       - e2e/lib/threenode.py
 
@@ -156,3 +158,30 @@ jobs:
             python3 -Es e2e/three-node-recovery.py | tee "$RUNNER_TEMP/recovery.log"
           grep -q '^three-node-recovery: 55 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
             echo "::error::the three-node recovery test did not pass all 55 checks" >&2; exit 1; }
+
+  # #71 (Phase 11): a total outage of the three nodes and the revocation authority, restored by one manual
+  # recovery (the authority's host first; then one node by hand; then the other two through it).
+  three-node-outage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs
+      - name: Build the pre-root client
+        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+      - name: A total outage, the authority first, one node by hand, the rest through it
+        run: |
+          set -o pipefail
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+            python3 -Es e2e/three-node-outage.py | tee "$RUNNER_TEMP/outage.log"
+          grep -q '^three-node-outage: 34 passed, 0 failed$' "$RUNNER_TEMP/outage.log" || {
+            echo "::error::the three-node outage test did not pass all 34 checks" >&2; exit 1; }
