@@ -100,11 +100,16 @@ def classify(meta):
             'pair': list(pair) if pair else [], 'all': sorted(present, key=_order), 'why': why}
 
 
+def device_id(device):
+    """The device's identity, whatever name it was given (/dev/nvme0n1p3, /dev/disk/by-partlabel/...): a block
+    device's number, or a file's device and inode. The lock and the audit trail's request matching use it."""
+    identity = os.stat(device)
+    return 'block-%d' % identity.st_rdev if stat.S_ISBLK(identity.st_mode) else 'file-%d-%d' % (identity.st_dev, identity.st_ino)
+
+
 def lock_path(device, lockdir=LOCKDIR):
     """The lock recovery-key.sh and recovery-reconcile.py both take for one device."""
-    identity = os.stat(device)
-    key = 'block-%d' % identity.st_rdev if stat.S_ISBLK(identity.st_mode) else 'file-%d-%d' % (identity.st_dev, identity.st_ino)
-    return os.path.join(lockdir, 'regalia-recovery-%s.lock' % key)
+    return os.path.join(lockdir, 'regalia-recovery-%s.lock' % device_id(device))
 
 
 def lock_unsafe(info):
@@ -124,6 +129,9 @@ def main(argv):
         c = classify(meta)
         print('|'.join([c['state'], ' '.join(c['recovery']), ' '.join(c['unnamed']), ' '.join(c['empty']),
                         ' '.join(c['pair']), ' '.join(c['all']), '; '.join(c['why'])]))
+        return 0
+    if argv[:1] == ['device-id'] and len(argv) == 2:
+        print(device_id(argv[1]))
         return 0
     if argv[:1] == ['lock'] and len(argv) == 2:
         path = lock_path(argv[1])

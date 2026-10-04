@@ -95,6 +95,9 @@ Commissioning has two halves:
   anywhere, killed included, is finished by the same command with the same keys; `unknown` is left
   to the custodian (`recovery-reconcile.py`, RECOVERY-RECONCILIATION.md). The key is always the
   ceremony's (#175): there is no host-generated mode.
+  Every --enrol, --check and --replace is on the audit trail /var/log/regalia/recovery-key.jsonl (#278):
+  the request before a key is asked for (no trail, no run), then its outcome (ALLOW, DENY, INCOMPLETE) with
+  the header's state. Never a key.
 - **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`).
   This is for **attestation**: TPM quotes over PCR 10 and the IMA log let another host or an
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
@@ -200,13 +203,53 @@ Commissioning has two halves:
   as authenticated only while chrony is synchronised to **NTS** sources, **at least two of which agree**
   (declare servers of independent operators, so that no single operator can move the clock; with
   exactly two, one operator's outage stops the nodes, so declare **three**), with no source that was not
-  declared or is not NTS, an update within the last hour, and no correction pending. `authtime.conf()`
-  renders the **whole** `chrony.conf`: no `pool`, no `sourcedir` (the distribution's default takes
-  servers from DHCP that way), no `refclock`; and chronyd must be the only thing on the host that sets
-  the clock (no systemd-timesyncd beside it). A host whose RTC is far off never authenticates, because
+  declared or is not NTS, an update within the last hour, and no correction pending. The servers are the
+  site config's `time.nts` (#303): each by the name its certificate carries and the networks (/24 or
+  narrower) it answers from, at least two, three recommended. From that one list `enrol commit` writes
+  node.json's `time_servers` (what authtime judges) and `/etc/chrony/regalia.conf` (`authtime.conf()`,
+  the **whole** configuration: every server with NTS, `authselectmode require`, `minsources 2`, no
+  `pool`, no `sourcedir` (the distribution's default takes servers from DHCP that way), no `refclock`;
+  the clock stepped only during the first three updates, and after them chronyd **exits** on an offset
+  over a second, `maxchange 1 3 0`, which only two sources agreeing on a jump can cause: it stays down,
+  time stops being authenticated and the node stops serving until an operator looks. NOTHING STARTS IT
+  AGAIN BY ITSELF: a fresh chronyd steps during its first updates and would take the jumped time. So any
+  unclean stop of chronyd (that exit, a crash, a kill) leaves a LATCH, `/var/lib/regalia-time/chrony-latch`
+  (root's 0700 directory, made by `regalia.tmpfiles.conf`, never chrony's), written by the drop-in's
+  `ExecStopPost`, and its `ExecStartPre` refuses to start chronyd while it is there: the package upgrade's
+  restart, a manual start and a reboot all leave it stopped. `regalia-authtime` is ordered `After=`
+  chrony and never `Wants=` it. The signal: the node goes unready (the KMS readiness alert), the time trail
+  records `time-unauthenticated` with the reason (below), and chrony's journal says "Adjustment of … seconds
+  exceeds the allowed maximum". The operator compares the declared servers with an independent clock
+  (another site's, a GNSS receiver), runs `python3 -Es -m deploy.baremetal.node time-clear --reason TEXT`
+  as root (recorded in the time trail FIRST, with what the latch held and chrony's line), then
+  `systemctl start chrony`. The systemd e2e kills chronyd and checks: the latch is written; restarting
+  `regalia-authtime`, an upgrade-style restart and a boot-style start leave chronyd down; the clear is
+  recorded; then it starts. A backward jump is refused where expiries are judged anyway
+  (`heartbeat.authenticated_now`: the last reading plus the TPM time since, a floor kept across reboots);
+  what no node can refuse is two declared servers agreeing on a wrong time at the first boot, which is why
+  they must belong to independent operators. Mask the package's other ways of running chronyd at install:
+  `systemctl mask chronyd-restricted.service chrony-dnssrv@.timer`. Leap seconds come from the
+  `right/UTC` zone (`leapsectz`): **on Debian 13 install `tzdata-legacy`**, where `right/` now lives (a host
+  without it is refused by `regalia-authtime`, which publishes "…/right/UTC is missing: chronyd has no
+  leap-second data (install tzdata-legacy)" and records it in the time trail, so the node goes unready
+  visibly instead of chronyd quietly ignoring the directive; `leapseclist` with tzdata's
+  `leap-seconds.list` needs chrony 4.6, and the units are also run under 4.5), and the
+  firewall
+  opens NTS-KE (TCP 4460) and NTP (UDP 123) to those networks and nowhere else; an `outbound` entry for
+  either port is refused, so there is no plain-NTP fallback. `units/chrony.service.d/regalia.conf`
+  (installed in `/etc/systemd/system/chrony.service.d/`) starts chronyd with `-f /etc/chrony/regalia.conf`
+  (Debian's own `chrony.conf`, a package conffile, is never touched; `/etc/chrony` is where the
+  distribution's AppArmor profile lets chronyd read) and conflicts with systemd-timesyncd: chronyd must be
+  the only thing on the host that sets the clock. NTS cookies stay in chrony's own state directory
+  (`/var/lib/chrony`, 0750, `_chrony`'s). DNS for the servers' names is an `outbound` entry of the
+  site's; an NTS-KE server that hands out an NTP address outside its declared networks is dropped by the
+  firewall and refused by authtime, so declare every network an operator uses. A host whose RTC is far off never authenticates, because
   NTS checks certificates against the clock: set the RTC by hand; `nocerttimecheck` is not used. A small root
   service asks chrony every 15 s and publishes the answer in `/run/regalia/authtime.json`; the other
-  services believe it for 60 s.
+  services believe it for 60 s. Each change of that answer (and the first after the service starts) is
+  appended to the **time trail** (`/var/log/regalia-time/time.jsonl`, `trails.py`, shipped by
+  `regalia-audit-ship@time`) before it is published, as `time-authenticated` or `time-unauthenticated`
+  with the reason; a transition that cannot be recorded is published as not authenticated.
   **If time is not authenticated, nothing is served:** peers authorize no unlock and issue no lease, a
   node's own lease is not renewed, and within the lease bound (300 s) the KMS daemon stops. That is
   intended. So NTS must get out of each site: TCP 4460 to each server for the key exchange and UDP 123
@@ -765,9 +808,124 @@ removing only what it can prove it made.
 **Still NOT BUILT** (placed by hand, as the end-to-end test does):
 - each peer's AK in the attestation state (`attest.Verifier`);
 - the LUKS paths with the peers' contributions (`unlock.enrol_path`);
-- `chrony.conf` as `authtime.conf()` renders it;
 - the enrolment record signed by the AK's quote;
 - `commit --replace` (#76).
+
+### Shipping the audit trails (#278)
+
+Every trail in `deploy/baremetal/trails.py`'s registry is hash-chained line by line and shipped to the
+audit collector by one instance of `units/regalia-audit-ship@.service` per trail
+(`systemctl enable --now regalia-audit-ship@sync`; `cmd/regalia-audit-ship`, `internal/audit/trail.go`).
+Each line becomes one audit event on the stream `<site>.<trail>`.
+- **No local state.** Each pass rebuilds the events from the file and goes on only if the collector's
+  committed head is one of them. A file cut short, rewritten or removed under what was shipped raises an
+  alarm in the collector's `alarms.jsonl`, and the instance exits 3. The unit does not restart it, and
+  starting it by hand repeats the same check. Investigate first. Then restore the file from a backup
+  (each shipped line's SHA-256 is in its event's detail, to check the copy against), and start the unit
+  again.
+- **Metrics** are in `/var/lib/regalia-audit-ship/<trail>.prom`: lines, committed, backlog, tampered.
+- **Its own user, no capability.** `regalia-audit-ship` (`units/regalia-audit-ship.sysusers.conf`) reads
+  each trail through that trail's group only, given per instance by
+  `units/regalia-audit-ship@<trail>.service.d/reader.conf`. Each service trail has a reader group of its own
+  (`regalia-audit-sync`, `-admission`, `-authority`; #286). Its writer belongs to it and gives the trail that
+  group, and its shipper belongs to it and to nothing of the writer's, so the shipper reads the trail and no
+  other file the writer makes. The operator tools' trails use `regalia-audit`. Trails are 0640, and
+  `/var/log/regalia` is root:regalia-audit 2750 (`trails.py` makes both so). The authority's state directory
+  is 0751: its shipper passes through to the trail, and every other file there is 0600.
+  The client key in `/etc/regalia/audit-ship/` is 0640 root:regalia-audit-ship.
+- **Rotation.** A trail past 16 MiB is archived as `<trail>.<last seq>` (20 digits) and a new file begun.
+  Its first line continues the chain (seq and prev), so the archives and the current file verify as one
+  chain (`trails.py verify <trail>`), and a writer killed at any step of a rotation leaves it so. The
+  shipper streams them in order, line by line, so a trail of any size ships after an outage.
+- **Pruning only on the collector's signed word.** The collector, started with `-receipt-key` (Ed25519,
+  root 0600, on its host; THREE-SITE-SECRETS), signs receipts. A receipt says "this collector holds, in
+  this client's stream, at this position, this event and this line". It checks every trail event's
+  content against the line hash it names (`regalia.trail/v2` carries the exact line), so a receipt is
+  for the line itself. After each pass the shipper fetches a receipt for each archive the collector
+  holds wholly, into `/var/lib/regalia-audit-ship/<trail>.head.json`. Each receipt also signs the
+  collector's running digest of every line of the stream up to that one (the line chain), so a receipt
+  for an archive's last line commits to every line before it.
+  `regalia-audit-prune@<trail>.timer` (daily, as the trail directory's owner, no capability) removes an
+  archive only if its receipt verifies against `/etc/regalia/audit-ship/collector-receipt.pub` (one
+  key a line, so the collector's key can rotate with an overlap), names this host's client certificate
+  and `<site>.<trail>`, names the position prune counts itself, and names the archive's last line on
+  disk. A compromised shipper therefore cannot get a line removed that the collector does not hold.
+  `<trail>.pruned` is written first; the shipper goes on from that marker and still checks the
+  collector's head, and a marker ahead of the collector raises the tamper alarm. Without a receipt key
+  nothing is pruned, and archives wait.
+- **Rotating the audit client certificate (#291).** The collector keys a host's streams by its client
+  certificate, so a new certificate takes them over only by a hand-over. Rotate **before** the old
+  certificate's NotAfter (the collector checks it against the client CA), in this order:
+  1. issue the new certificate;
+  2. `regalia-audit-ship handover -collector … -old-cert … -old-key … -tls-cert <new> -tls-key <new>
+     -server-ca …` (the old key signs, the new certificate presents it);
+  3. swap `client.crt`/`client.key` and restart **every** `regalia-audit-ship@` instance at once.
+
+  The streams, prune markers and receipts carry on; the old certificate is refused from then on (one
+  403 alarm a pass from any instance still on it). A shipper started on the new certificate before the
+  hand-over refuses to send ("hand-over pending"), and prune waits on a head file of the old one.
+  **A 409 from `handover` means another certificate already took these streams: treat it as a
+  compromise of the old key.** If the old key is lost: stop the collector, `regalia-audit-collector
+  handover -state … -old <fingerprint> -new <fingerprint> -reason …`, start it again. If the new
+  certificate shipped before its hand-over anyway (no head file to stop it), add
+  `-discard-new-streams`: allowed only when its streams are a prefix of the old one's, moved to
+  `discarded/`, kept. Every hand-over is a record in the collector's alarm log.
+- **Client-reported alarms are capped:** 20 an hour per client certificate. Past that the collector
+  records one "alarm flood" alarm of its own and answers 429.
+
+### Node metrics and alerts (#305)
+
+Each service on a node writes a Prometheus textfile for **node_exporter's textfile collector**: no listener of
+ours. The names live in one registry, `deploy/baremetal/metrics.py` (`METRICS`, the way `trails.py` lists the
+trails), and `metrics.render()` refuses any series, label or value it does not list. Labels are enums and
+values are numbers, never a key, a node secret or a peer's text: authtime's reason becomes a `cause` enum, and
+the reason itself goes to the time trail.
+
+| writer | file | series |
+|---|---|---|
+| `regalia-authtime` | `/run/regalia-metrics/authtime/authtime.prom` | `regalia_time_authenticated{cause}`, `regalia_chrony_latch_set` |
+| `regalia-sync` | `/run/regalia-metrics/sync/heartbeat.prom`, `unlock.prom` | the heartbeat watch's `regalia_heartbeat_*`; the unlock listener's `regalia_unlock_refused_total{cause=rate\|connections}`, each refusal counted (the trail records the first of a window) |
+| `regalia-admission` | `/run/regalia-metrics/admission/lease.prom` | `regalia_admission_serving`, `regalia_admission_lease_seconds_left` |
+| `regalia-audit-ship@<trail>` | `/run/regalia-metrics/audit-ship/<trail>.prom` | `regalia_audit_trail_*{trail}` |
+
+- **Who can read the files.** Each directory is its writer's, group `regalia-metrics`, setgid, 2750
+  (`regalia.tmpfiles.conf`, and `regalia-audit-ship.tmpfiles.conf` on the authority host too). The directory is
+  the control: nobody outside the group can reach a file in it. The Python writers make files 0640; the Go
+  shipper makes them 0644. A host upgraded from before #305 keeps a stale
+  `/var/lib/regalia-audit-ship/<trail>.prom` that nothing reads any more: remove it by its exact name.
+  node_exporter is the group's only other member, through its unit
+  (`units/prometheus-node-exporter.service.d/regalia.conf`: `SupplementaryGroups=regalia-metrics`, so the
+  package keeps its own user), so it reads them all and writes none, and no writer can replace another's
+  file. No two writers' files share a name.
+- **When a directory is missing.** A unit's metrics directory is `-`-prefixed in its sandbox. A missing one
+  never stops the service; the file's age raises the alert instead.
+
+**node_exporter on a node.**
+- **Package:** Debian's `prometheus-node-exporter`, 1.9 (it reads several textfile directories from one glob).
+- **Configuration:** `/etc/default/prometheus-node-exporter` takes the line printed by
+  `python3 -Es -m deploy.baremetal.metrics node-exporter-args /etc/regalia/site.json`. That listens on
+  `host_ipv4:9100` only and reads `/run/regalia-metrics/*`.
+- **TLS:** `/etc/regalia/node-exporter/web.yml` comes from `deploy/baremetal/node-exporter/web.yml`. It sets
+  mutual TLS 1.3 and requires a client certificate from the monitoring CA (`monitoring-ca.pem`, beside the
+  server's certificate and key).
+- **Firewall:** `firewall.py` opens TCP 9100 from `monitoring_cidrs` only, the zone that already scrapes the
+  KMS daemon's `/metrics`. The service mesh is not widened (decided on #305). The netns firewall e2e checks it
+  is reachable from the monitoring host and from no other zone.
+
+**Alerts.**
+- **Rules file:** `deploy/monitoring/regalia-node.rules.yml`. Load it beside `regalia-kms.rules.yml`, and
+  scrape the nodes as job `regalia-node`. Each threshold is stated in the file's header.
+- **Pages:** time not authenticated for a minute; the chrony latch set; the heartbeat under a quarter of its
+  lifetime, or none usable; the node not serving for five minutes; a tampered audit trail; an expected file
+  (`authtime.prom`, `heartbeat.prom`, `lease.prom`) absent for five minutes on a node that is scraped (`/run` is
+  empty after a boot, so a writer that never wrote leaves no series for the other rules); node_exporter down.
+- **Warnings:** the heartbeat under half its lifetime (both heartbeat thresholds are relative to the heartbeat
+  held, whose lifetime a manifest sets); an audit trail behind for fifteen minutes, or never shipped; unlock
+  refusals; a textfile that stopped moving (two minutes, five for a shipper's); a textfile node_exporter cannot
+  read (`node_textfile_scrape_error`).
+- **Matching:** every rule comparing two series of a node matches on all their labels, never on `trail` alone.
+- **Tests:** `tests/test_node_alert_firing.py` holds every rule to the registry and drives a fault at each one
+  under `promtool test rules`. Each must fire, and stay silent when healthy.
 
 ### The revocation authority (#199)
 
@@ -783,7 +941,8 @@ it (`service_mesh.authority`).
 | `serve` | the one process that signs: publishes, a heartbeat every `interval_s`, and answers the control socket |
 | `revoke --node N --state QUARANTINED\|REVOKED_STOLEN --reason R` | as root on this host, asks the running `serve` (control socket, root peers only): it signs and commits the restrictive manifest, then a heartbeat for it at once |
 | `status` | the same way: epoch, sequence, last heartbeat, pending, signer kind |
-| `wg-apply` | its `wg-svc`, every node a peer |
+| `wg-apply` | as root (`units/regalia-authority-wg-apply.service`, CAP_NET_ADMIN only): its `wg-svc`, every node of the published chain a peer; run again by `regalia-authority-wg-apply.path` at every new chain, so a revoked node leaves this tunnel too |
+| `wg-key [--replace]` | as root: makes its WireGuard service key (`wg_service_key`), `root:regalia-authority` 0640, and prints the public key for every node's `service_mesh.authority.key`. `--replace` rotates it the same way (then every node's site configuration takes the new key). Made only this way, so its ownership holds |
 
 - **Sequence, signed once:** a number is reserved on its own TPM counter before signing (a crash loses it,
   never reuses it; a restored disk cannot move the counter back; no TPM, no authority). It is signed at
@@ -791,7 +950,25 @@ it (`service_mesh.authority`).
   republishes the same bytes (kept in the state directory), and bytes that expire unpublished are
   dropped with their number. The key
   is checked against the manifest before reserving, and failures back off from 60 s to `interval_s`.
-- **Time:** it signs only while `authtime` says the clock is authenticated.
+- **Time:** it signs only while `authtime` says the clock is authenticated: `<run_dir>/authtime.json`, believed only
+  from a root-owned file in a root-owned directory (`run_dir` is `/run/regalia`, as on a node). On the authority
+  host `units/regalia-authority-authtime.service` publishes it: regalia-authtime's unit in all but its command,
+  `python3 -Es -m deploy.baremetal.authtime serve --config /etc/regalia/authority.json`, which reads that
+  configuration's `run_dir` and `time_servers` alone (the same entry point a node's `node.py authtime` calls).
+  chrony there is NTS-only as on a node, in this order, as root: install `units/chrony.service.d/regalia.conf`
+  (chronyd `-f /etc/chrony/regalia.conf`, and the latch on `/var/lib/regalia-time`, #303); run
+  `python3 -Es -m deploy.baremetal.authtime chrony-conf --config /etc/regalia/authority.json --install`, which writes
+  `/etc/chrony/regalia.conf` as enrolment does on a node (refused, and left, if a different file is there; Debian's
+  own `chrony.conf` is never touched); then `systemctl daemon-reload && systemctl restart chrony`. `authority.json`'s
+  `run_dir` must be `/run/regalia` (validated: the unit's only writable directory, root's);
+  `units/regalia-authority.tmpfiles.conf` and `regalia-authority.sysusers.conf` make its directories and groups.
+  Without authenticated time the authority signs nothing (fail closed; each transition on the time trail, #303).
+  **Not yet on the authority host:** an egress firewall behind chrony's NTS-only sources (a node's comes from
+  `firewall.py`; there is no authority-host ruleset yet), and node_exporter scraping its metrics. Both are follow-ups.
+- **What root reads:** the store (`membership.json`) is the service user's alone, 0600. `serve` publishes the
+  verified chain as `chain.json` (0644) after `init`, `accept` and every revocation's commit, at its start and at
+  every beat; `wg-apply` reads that, verifying it from the root key and against the TPM anchor, as a node's
+  `wg-apply` reads regalia-sync's (#71, found by the three-node outage test).
 - **Interval:** at least `heartbeat.MIN_INTERVAL_S` (600 s) times the number of authorities, and at most a
   quarter of the heartbeat's lifetime. A node accepts a sequence jump that grows by one per 600 s since
   the last heartbeat it accepted, so a node back from a month's repair catches up, while a sequence
@@ -810,7 +987,14 @@ it (`service_mesh.authority`).
   heartbeat first.
 - **The owner's decisions are settings in `/etc/regalia/authority.json`:**
   - `signer.kind`: `file` now, a stopgap recorded on every trail line and in `status`; `pkcs11` once a
-    token is chosen (a Nitrokey, key generated on the token, ADR-0002 D19);
+    token is chosen (a Nitrokey, key generated on the token, ADR-0002 D19). The `pkcs11` signer signs in
+    process with PyKCS11 (Debian `python3-pykcs11`), choosing the token by serial and reading that serial in
+    the very session that logs in, so its PIN reaches no other card (#262). A PIN the token refuses is
+    never presented again: the signer latches (`<state_dir>/pin-latch.json`, read at every start, one
+    `pin-latch` line in the trail), and logs in to no token whose PIN tries are running low. The way out:
+    fix the credential; reset the token's counter with one correct login (`pkcs11-tool --login --test`
+    with the right PIN), since the refusal left it low; then `authority.py clear-pin-latch` as root; then
+    restart the service;
   - `sequence_offset`/`sequence_stride`: kept for several authorities, refused above one until a second can
     take over (#231);
   - `interval_s`, `lifetime_s`;

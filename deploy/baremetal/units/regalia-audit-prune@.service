@@ -1,0 +1,51 @@
+# Removes the archived files of the audit trail %i that the audit collector has committed
+# (deploy/baremetal/trails.py prune; #278). A trail rotates into <trail>.<last seq> files as it grows.
+# An archive is removed only with the collector's SIGNED RECEIPT for its last line (fetched by
+# regalia-audit-ship@%i into its head file), verified against the pinned receipt keys
+# (collector-receipt.pub, one a line, so the collector's key can rotate), for this host's client
+# certificate and this trail's stream, at the position prune counts itself. The prune marker
+# (<trail>.pruned) is written first, so the shipper goes on from it and still checks the collector's
+# head. Run daily by regalia-audit-prune@%i.timer.
+#
+# As the trail directory's owner, with no capability: each writer owns its trail's directory, so it may
+# remove its own archives and write the marker; the operator tools' directory is root's. The owner comes
+# from regalia-audit-prune@%i.service.d/owner.conf (trails.py's registry). Without it the unit runs as
+# root with no capability, which can write no service's directory: it fails, it does not widen. It may
+# write only the trail directories (the ones a host has; the others are skipped).
+[Unit]
+Description=Regalia KMS: remove the committed archives of the %i audit trail
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/regalia/audit-ship.env
+EnvironmentFile=/etc/regalia/audit-ship/%i.env
+ExecStart=/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune ${TRAIL_PATH} /var/lib/regalia-audit-ship/%i.head.json \
+    --trail %i --site ${SITE} --client-cert /etc/regalia/audit-ship/client.crt --receipt-keys /etc/regalia/audit-ship/collector-receipt.pub
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=-/var/lib/regalia-sync -/run/regalia/admission -/var/lib/regalia-authority -/var/log/regalia -/var/log/regalia-time
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0022
+LimitCORE=0

@@ -6,6 +6,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 from deploy.baremetal import node
@@ -19,6 +20,40 @@ def unit(name):
     parser.optionxform = str
     parser.read(UNITS / name)
     return parser
+
+
+class ChronyDropIn(unittest.TestCase):
+    """#303: chronyd from enrolment's configuration, the package's own file untouched."""
+
+    def test_chronyd_runs_from_the_rendered_configuration_alone(self):
+        from deploy.baremetal import enrol
+        lines = (UNITS / "chrony.service.d" / "regalia.conf").read_text().splitlines()
+        execs = [line for line in lines if line.startswith("ExecStart=")]
+        # an empty ExecStart= first: a drop-in otherwise ADDS a second command instead of replacing the package's
+        self.assertEqual(execs, ["ExecStart=", "ExecStart=!/usr/sbin/chronyd -f %s $DAEMON_OPTS" % enrol.CHRONY_CONF])
+        self.assertTrue(enrol.CHRONY_CONF.startswith("/etc/chrony/") and enrol.CHRONY_CONF != "/etc/chrony/chrony.conf")
+        self.assertIn("Conflicts=systemd-timesyncd.service", lines)
+        self.assertIn("ConditionPathExists=%s" % enrol.CHRONY_CONF, lines)        # skipped, not latched, before enrolment
+        # the latch (#303): any unclean stop recorded in root's directory, and no start while it is there
+        from deploy.baremetal import authtime
+        pre = [line for line in lines if line.startswith("ExecStartPre=")]
+        post = [line for line in lines if line.startswith("ExecStopPost=")]
+        self.assertEqual((len(pre), len(post)), (1, 1))
+        self.assertTrue(pre[0].startswith("ExecStartPre=!/bin/sh -c ") and "[ -e %s ]" % authtime.LATCH in pre[0] and "exit 1" in pre[0])
+        self.assertIn("[ ! -d %s ]" % authtime.LATCH_DIR, pre[0])                 # no directory: not started either
+        self.assertTrue(post[0].startswith("ExecStopPost=!/bin/sh -c ") and '"$$SERVICE_RESULT" != success' in post[0])
+        self.assertIn("set -C", post[0])                                         # the first record is kept
+        self.assertIn("> %s;" % authtime.LATCH, post[0])
+        self.assertIn("ReadWritePaths=%s" % authtime.LATCH_DIR, lines)
+        tmpfiles = (UNITS / "regalia.tmpfiles.conf").read_text()
+        self.assertIn("d %s 0700 root root -" % authtime.LATCH_DIR, tmpfiles)
+        self.assertFalse([line for line in lines if line.startswith("Restart")])     # an exit on maxchange stays down
+        # and nothing of ours starts it again: regalia-authtime orders itself after chrony, never Wants= or Requires= it
+        authtime_unit = unit("regalia-authtime.service")["Unit"]
+        self.assertIn("chrony.service", authtime_unit["After"])
+        self.assertFalse({"Wants", "Requires", "BindsTo", "Requisite", "Upholds"} & set(authtime_unit))
+        for name in UNITS.glob("*.service"):
+            self.assertNotRegex(name.read_text(), r"(?m)^(Wants|Requires|BindsTo|Upholds|OnFailure)=.*chrony", name.name)
 
 
 class Units(unittest.TestCase):
@@ -54,12 +89,14 @@ class Units(unittest.TestCase):
             self.assertEqual(self.service(name)["User"], "root")
 
     def test_what_each_unit_may_write_and_reach(self):
-        self.assertEqual(self.service("regalia-authtime")["ReadWritePaths"], "/run/regalia /run/chrony")
+        self.assertEqual(self.service("regalia-authtime")["ReadWritePaths"],
+                         "/run/regalia /run/chrony /var/log/regalia-time -/run/regalia-metrics/authtime")   # + the time trail (#303), its metrics (#305)
         self.assertEqual(self.service("regalia-authtime")["SupplementaryGroups"], "_chrony")
         authtime_unit = self.service("regalia-authtime")
         # the one capability it holds could read any file: it is shown almost none
         self.assertEqual((authtime_unit["TemporaryFileSystem"], authtime_unit["ProtectProc"]), ("/etc:ro /var:ro /run:ro", "invisible"))
-        self.assertEqual(authtime_unit["BindPaths"], "/run/regalia /run/chrony")
+        self.assertEqual(authtime_unit["BindPaths"], "/run/regalia /run/chrony /var/log/regalia-time -/run/regalia-metrics/authtime")
+        self.assertEqual(authtime_unit["BindReadOnlyPaths"].split()[-1], "-/var/lib/regalia-time")      # the latch, read only (#305)
         self.assertEqual(authtime_unit["BindReadOnlyPaths"].split()[0], "/etc/regalia/node.json")
         self.assertNotIn("site.json", authtime_unit["BindReadOnlyPaths"])
         self.assertNotIn("wg-service", authtime_unit["BindReadOnlyPaths"])
@@ -68,7 +105,7 @@ class Units(unittest.TestCase):
         admission = self.service("regalia-admission")
         # its own directory only, inside root's /run/regalia; the boot session beside it is not its to write
         self.assertEqual((admission["ReadWritePaths"], admission["StateDirectory"], admission["StateDirectoryMode"]),
-                         ("/run/regalia/admission", "regalia-admission", "0700"))
+                         ("/run/regalia/admission -/run/regalia-metrics/admission", "regalia-admission", "0700"))
         admission_unit = unit("regalia-admission.service")["Unit"]
         self.assertEqual(admission_unit["Requires"], "regalia-boot-session.service")
         self.assertIn("regalia-boot-session.service", admission_unit["After"].split())
@@ -91,8 +128,8 @@ class Units(unittest.TestCase):
         self.assertEqual((wg_apply["Restart"], wg_apply["RestartSec"]), ("on-failure", "15s"))   # a failed run is retried
         self.assertEqual(unit("regalia-wg-apply.service")["Unit"]["StartLimitIntervalSec"], "0")
         sync = self.service("regalia-sync")
-        self.assertEqual((sync["StateDirectory"], sync["SupplementaryGroups"]), ("regalia-sync", "tss"))
-        self.assertNotIn("ReadWritePaths", sync)
+        self.assertEqual((sync["StateDirectory"], sync["SupplementaryGroups"]), ("regalia-sync", "tss regalia-audit-sync"))
+        self.assertEqual(sync["ReadWritePaths"], "-/run/regalia-metrics/sync")      # its metrics only (#305); the rest is StateDirectory
         for name in SERVICES:
             service = self.service(name)
             with self.subTest(name):
@@ -100,9 +137,11 @@ class Units(unittest.TestCase):
                 # which systemd removes (boot-session included) when that unit stops
                 self.assertNotIn("RuntimeDirectory", service)
                 if name not in ("regalia-authtime", "regalia-boot-session"):
-                    # the device cgroup lets it through; the file's mode (tss, 0660) needs the group
+                    # the device cgroup lets it through; the file's mode (tss, 0660) needs the group; and a
+                    # trail's writer, the trail's reader group (#286)
+                    trail_group = {"regalia-sync": " regalia-audit-sync", "regalia-admission": " regalia-audit-admission"}.get(name, "")
                     self.assertEqual((service.get("DevicePolicy"), service.get("DeviceAllow"), service.get("SupplementaryGroups")),
-                                     ("closed", "/dev/tpmrm0 rw", "tss"))
+                                     ("closed", "/dev/tpmrm0 rw", "tss" + trail_group))
 
     def test_the_node_configuration_s_directories_are_the_units(self):
         """The example configuration names the directories the units give each service, and the published
@@ -111,7 +150,7 @@ class Units(unittest.TestCase):
         example = node.validate(json.loads((UNITS.parent / "node.example.json").read_text()))
         self.assertEqual(example["state_dir"], "/var/lib/" + self.service("regalia-sync")["StateDirectory"])
         self.assertEqual(example["admission_dir"], "/var/lib/" + self.service("regalia-admission")["StateDirectory"])
-        self.assertEqual(os.path.dirname(node.admission_file(example["run_dir"])), self.service("regalia-admission")["ReadWritePaths"])
+        self.assertEqual(os.path.dirname(node.admission_file(example["run_dir"])), self.service("regalia-admission")["ReadWritePaths"].split()[0])
         self.assertEqual(unit("regalia-wg-apply.path")["Path"]["PathChanged"], "/var/lib/regalia-sync/" + node.PUBLISHED)
         tmpfiles = (UNITS / "regalia.tmpfiles.conf").read_text()
         self.assertIn("d /run/regalia 0755 root root -", tmpfiles)
@@ -121,9 +160,38 @@ class Units(unittest.TestCase):
         self.assertIn("u regalia-sync - ", users)
         self.assertIn("u regalia-admission - ", users)
 
+    def test_the_authority_s_tunnel_is_applied_as_a_node_s_from_the_chain_it_publishes(self):
+        """#71: the authority host's wg-apply is the node's unit in all but its command (root, CAP_NET_ADMIN only,
+        the same sandbox), and its path unit watches the chain the authority publishes in its StateDirectory."""
+        node_unit, authority_unit = unit("regalia-wg-apply.service"), unit("regalia-authority-wg-apply.service")
+        self.assertEqual({k: v for k, v in authority_unit["Service"].items() if k != "ExecStart"},
+                         {k: v for k, v in node_unit["Service"].items() if k != "ExecStart"})
+        self.assertIn("-m deploy.baremetal.authority --config /etc/regalia/authority.json wg-apply", authority_unit["Service"]["ExecStart"])
+        self.assertEqual(unit("regalia-authority-wg-apply.path")["Path"]["PathChanged"],
+                         "/var/lib/%s/%s" % (unit("regalia-authority.service")["Service"]["StateDirectory"], node.PUBLISHED))
+        self.assertEqual(unit("regalia-authority-wg-apply.path")["Path"]["Unit"], "regalia-authority-wg-apply.service")
+
+    def test_the_authority_host_s_authtime_is_a_node_s_from_its_own_configuration(self):
+        """#71: the authority signs only under authenticated time, so its host runs regalia-authtime's unit in all
+        but its command and configuration file, and makes the same directories (root's /run/regalia)."""
+        node_unit, authority_unit = unit("regalia-authtime.service")["Service"], unit("regalia-authority-authtime.service")["Service"]
+        differ = ("ExecStart", "BindReadOnlyPaths")
+        self.assertEqual({k: v for k, v in authority_unit.items() if k not in differ}, {k: v for k, v in node_unit.items() if k not in differ})
+        self.assertIn("-m deploy.baremetal.authtime serve --config /etc/regalia/authority.json", authority_unit["ExecStart"])
+        self.assertEqual(authority_unit["BindReadOnlyPaths"], node_unit["BindReadOnlyPaths"].replace("/etc/regalia/node.json", "/etc/regalia/authority.json"))
+        self.assertEqual(unit("regalia-authority.service")["Unit"]["Wants"], "regalia-authority-authtime.service")
+        node_dirs = {line for line in (UNITS / "regalia.tmpfiles.conf").read_text().splitlines() if line.startswith("d ")}
+        authority_dirs = {line for line in (UNITS / "regalia-authority.tmpfiles.conf").read_text().splitlines() if line.startswith("d ")}
+        self.assertLessEqual(authority_dirs, node_dirs)
+        self.assertIn("d /run/regalia 0755 root root -", authority_dirs)
+        groups = (UNITS / "regalia-authority.sysusers.conf").read_text()
+        self.assertIn("g regalia-audit-time -", groups)
+        self.assertIn("g regalia-metrics -", groups)
+
     @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
     def test_systemd_accepts_the_units_and_scores_them_well_exposed_at_most_a_little(self):
-        paths = [str(UNITS / (name + ".service")) for name in SERVICES] + [str(UNITS / "regalia-wg-apply.path")]
+        paths = [str(UNITS / (name + ".service")) for name in SERVICES + ("regalia-authority-wg-apply", "regalia-authority-authtime")] + \
+            [str(UNITS / "regalia-wg-apply.path"), str(UNITS / "regalia-authority-wg-apply.path")]
         done = subprocess.run(["systemd-analyze", "verify", "--man=no", "--recursive-errors=no"] + paths, capture_output=True, text=True)
         problems = [line for line in done.stderr.splitlines() if "chrony.service" not in line and "network-online" not in line and line.strip()]
         self.assertEqual(problems, [])
@@ -149,8 +217,8 @@ class AuthorityUnit(unittest.TestCase):
         self.assertEqual(service["ExecStart"], "/usr/bin/python3 -Es -m deploy.baremetal.authority --config /etc/regalia/authority.json serve")
         self.assertEqual((service["User"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
                          ("regalia-authority", "", "", "yes"))
-        self.assertEqual((service["SupplementaryGroups"], service["DevicePolicy"], service["DeviceAllow"]), ("tss", "closed", "/dev/tpmrm0 rw"))
-        self.assertEqual((service["StateDirectory"], service["StateDirectoryMode"], service["UMask"]), ("regalia-authority", "0700", "0077"))
+        self.assertEqual((service["SupplementaryGroups"], service["DevicePolicy"], service["DeviceAllow"]), ("tss regalia-audit-authority", "closed", "/dev/tpmrm0 rw"))
+        self.assertEqual((service["StateDirectory"], service["StateDirectoryMode"], service["UMask"]), ("regalia-authority", "0751", "0077"))   # its shipper passes through, no group (#286)
         self.assertEqual((service["RuntimeDirectory"], service["RuntimeDirectoryMode"]), ("regalia-authority", "0700"))   # the control socket
         users = (UNITS / "regalia-authority.sysusers.conf").read_text()
         self.assertIn("u regalia-authority - ", users)
@@ -168,3 +236,145 @@ class AuthorityUnit(unittest.TestCase):
             self.skipTest("this systemd-analyze has no offline security scoring")
         score = float(re.search(r"exposure level for \S+: (\d+\.\d+)", done.stdout).group(1))
         self.assertLessEqual(score, 3.0)
+
+
+class AuditShipUnit(unittest.TestCase):
+    """regalia-audit-ship@.service, one instance a trail (#278)."""
+
+    def test_a_tampered_trail_stays_stopped_and_it_holds_no_capability(self):
+        service = unit("regalia-audit-ship@.service")["Service"]
+        self.assertTrue(service["ExecStart"].startswith("/usr/bin/regalia-audit-ship -trail %i -path ${TRAIL_PATH} "))
+        self.assertEqual((service["Restart"], service["RestartPreventExitStatus"]), ("on-failure", "3"))   # cmd/regalia-audit-ship exitTampered
+        self.assertEqual((service["User"], service["Group"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
+                         ("regalia-audit-ship", "regalia-audit-ship", "", "", "yes"))
+        self.assertNotIn("SupplementaryGroups", service)                           # each instance's, from its drop-in
+        users = (UNITS / "regalia-audit-ship.sysusers.conf").read_text()
+        self.assertIn("u regalia-audit-ship - ", users)
+        self.assertIn("g regalia-audit -", users)
+        self.assertEqual((service["ProtectSystem"], service["StateDirectory"]), ("strict", "regalia-audit-ship"))
+        self.assertEqual(service["ReadWritePaths"], "-/run/regalia-metrics/audit-ship")      # its metrics only (#305)
+
+    def test_each_service_trail_has_a_reader_group_its_writer_gives_it_and_nothing_else_has(self):
+        """#286: a service trail's reader group is its own. The writer's unit belongs to it (so the writer can
+        give the file that group) and the sysusers file of the writer's host creates it; the shipper's drop-in
+        names it, and no other unit does, so the shipper reads the trail and nothing else of the writer's."""
+        from deploy.baremetal import trails
+        writers = {"sync": ("regalia-sync.service", "regalia.sysusers.conf"), "admission": ("regalia-admission.service", "regalia.sysusers.conf"),
+                   "authority": ("regalia-authority.service", "regalia-authority.sysusers.conf")}
+        for name, (unit_file, sysusers) in writers.items():
+            with self.subTest(name):
+                group = trails.TRAILS[name][3]
+                self.assertEqual(group, "regalia-audit-" + name)
+                self.assertIn(group, unit(unit_file)["Service"]["SupplementaryGroups"].split())
+                self.assertIn("g %s -" % group, (UNITS / sysusers).read_text())
+                holders = [p.name for p in UNITS.rglob("*") if p.is_file() and re.search(r"^SupplementaryGroups=.*\b%s\b" % re.escape(group), p.read_text(errors="replace"), re.M)]
+                self.assertEqual(sorted(holders), sorted([unit_file, "reader.conf"]))
+
+    def test_each_trail_s_instance_reads_through_the_registry_s_group_and_only_that(self):
+        """#283 (regalia-kms-24): one drop-in per trail in trails.py's registry, naming its group: the
+        writer's own for a service's trail, regalia-audit for the operator tools'. No other drop-in."""
+        from deploy.baremetal import trails
+        dropins = sorted(p.name for p in UNITS.glob("regalia-audit-ship@*.service.d"))
+        self.assertEqual(dropins, sorted("regalia-audit-ship@%s.service.d" % name for name in trails.TRAILS))
+        for name, (_, _, _, group) in trails.TRAILS.items():
+            with self.subTest(name):
+                parser = configparser.ConfigParser(strict=False, interpolation=None, delimiters=("=",))
+                parser.optionxform = str
+                parser.read(UNITS / ("regalia-audit-ship@%s.service.d" % name) / "reader.conf")
+                self.assertEqual(dict(parser["Service"]), {"SupplementaryGroups": group})
+
+    @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
+    def test_systemd_accepts_an_instance_and_scores_it_well_exposed_at_most_a_little(self):
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copy(UNITS / "regalia-audit-ship@.service", d)
+            instance = os.path.join(d, "regalia-audit-ship@sync.service")
+            done = subprocess.run(["systemd-analyze", "verify", "--man=no", "--recursive-errors=no", instance], capture_output=True, text=True)
+            complaints = [line for line in done.stderr.splitlines() if "regalia-audit-ship" in line and "/usr/bin/regalia-audit-ship is not executable" not in line]
+            self.assertEqual(complaints, [])
+            done = subprocess.run(["systemd-analyze", "security", "--offline=yes", "--no-pager", instance], capture_output=True, text=True)
+            if done.returncode != 0 and "offline" in done.stderr:
+                self.skipTest("this systemd-analyze has no offline security scoring")
+            score = float(re.search(r"exposure level for \S+: (\d+\.\d+)", done.stdout).group(1))
+            self.assertLessEqual(score, 3.0)
+
+
+class AuditPruneUnit(unittest.TestCase):
+    """regalia-audit-prune@.service and .timer: archives removed only behind the collector (#278)."""
+
+    def test_it_prunes_from_the_shipper_s_head_file_with_no_capability(self):
+        service = unit("regalia-audit-prune@.service")["Service"]
+        ship = unit("regalia-audit-ship@.service")["Service"]
+        self.assertEqual(" ".join(service["ExecStart"].replace("\\\n", " ").split()),
+                         "/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune ${TRAIL_PATH} "
+                         "/var/lib/regalia-audit-ship/%i.head.json --trail %i --site ${SITE} --client-cert "
+                         "/etc/regalia/audit-ship/client.crt --receipt-keys /etc/regalia/audit-ship/collector-receipt.pub")
+        self.assertIn("-head /var/lib/regalia-audit-ship/%i.head.json", ship["ExecStart"])   # the file the shipper writes
+        self.assertIn("/etc/regalia/audit-ship/%i.env", open(UNITS / "regalia-audit-prune@.service").read())  # TRAIL_PATH
+        self.assertIn("EnvironmentFile=/etc/regalia/audit-ship.env", open(UNITS / "regalia-audit-prune@.service").read())  # SITE
+        self.assertEqual((service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]), ("", "", "yes"))
+        self.assertNotIn("User", service)                                          # each instance's owner, from its drop-in
+        self.assertEqual((service["ProtectSystem"], service["PrivateNetwork"]), ("strict", "yes"))
+        from deploy.baremetal import trails
+        writable = service["ReadWritePaths"].split()
+        for name, (where, _, _, _) in trails.TRAILS.items():                   # every trail's directory, and nothing else
+            base = where.partition("/")[0]
+            directory = os.path.dirname(where) if where.startswith("/") else {"state_dir": None, "admission_dir": "/run/regalia/admission"}[base]
+            if directory:
+                self.assertIn("-" + directory, writable, name)
+        self.assertEqual(unit("regalia-audit-prune@.timer")["Timer"]["OnCalendar"], "daily")
+
+    def test_each_trail_s_prune_runs_as_its_directory_s_owner(self):
+        """#288 (regalia-kms-24): no DAC override. A service's trail is pruned by its writer, which owns the
+        directory; the operator tools' by root, which owns /var/log/regalia. One drop-in per trail."""
+        from deploy.baremetal import trails
+        dropins = sorted(p.name for p in UNITS.glob("regalia-audit-prune@*.service.d"))
+        self.assertEqual(dropins, sorted("regalia-audit-prune@%s.service.d" % name for name in trails.TRAILS))
+        for name, (where, _, _, group) in trails.TRAILS.items():
+            with self.subTest(name):
+                parser = configparser.ConfigParser(strict=False, interpolation=None, delimiters=("=",))
+                parser.optionxform = str
+                parser.read(UNITS / ("regalia-audit-prune@%s.service.d" % name) / "owner.conf")
+                owner = {"sync": "regalia-sync", "admission": "regalia-admission", "authority": "regalia-authority"}.get(name, "root")
+                self.assertEqual(dict(parser["Service"]), {"User": owner})
+
+    @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
+    def test_systemd_accepts_it_and_scores_it_well_exposed_at_most_a_little(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name in ("regalia-audit-prune@.service", "regalia-audit-prune@.timer"):
+                shutil.copy(UNITS / name, d)
+            instance = os.path.join(d, "regalia-audit-prune@sync.service")
+            done = subprocess.run(["systemd-analyze", "verify", "--man=no", "--recursive-errors=no", instance, os.path.join(d, "regalia-audit-prune@sync.timer")],
+                                  capture_output=True, text=True)
+            self.assertEqual([line for line in done.stderr.splitlines() if "regalia-audit-prune" in line], [])
+            done = subprocess.run(["systemd-analyze", "security", "--offline=yes", "--no-pager", instance], capture_output=True, text=True)
+            if done.returncode != 0 and "offline" in done.stderr:
+                self.skipTest("this systemd-analyze has no offline security scoring")
+            self.assertLessEqual(float(re.search(r"exposure level for \S+: (\d+\.\d+)", done.stdout).group(1)), 3.0)
+
+
+class NodeMetricsDirectories(unittest.TestCase):
+    """#305: each writer's node_exporter textfile directory is its own (owner), group regalia-metrics, setgid 2750,
+    made by tmpfiles; its unit may write there and nowhere new; node_exporter's user is the group's member."""
+    OWNERS = {"authtime": ("regalia-authtime.service", "root"), "sync": ("regalia-sync.service", "regalia-sync"),
+              "admission": ("regalia-admission.service", "regalia-admission"),
+              "audit-ship": ("regalia-audit-ship@.service", "regalia-audit-ship")}
+
+    def test_each_writer_s_directory_is_its_own_and_its_unit_may_write_there(self):
+        from deploy.baremetal import metrics
+        self.assertEqual(set(self.OWNERS), set(metrics.WRITERS))
+        tmpfiles = (UNITS / "regalia.tmpfiles.conf").read_text() + (UNITS / "regalia-audit-ship.tmpfiles.conf").read_text()
+        for writer, (unit_name, owner) in self.OWNERS.items():
+            with self.subTest(writer):
+                directory = os.path.join(metrics.RUN_DIR, metrics.WRITERS[writer][0])
+                self.assertIn("d %s 2750 %s %s -" % (directory, owner, metrics.GROUP), tmpfiles)
+                self.assertIn("-" + directory, unit(unit_name)["Service"]["ReadWritePaths"].split())
+        for name in ("regalia.sysusers.conf", "regalia-audit-ship.sysusers.conf"):
+            text = (UNITS / name).read_text()
+            self.assertIn("g %s -" % metrics.GROUP, text)
+            self.assertNotIn("m prometheus", text)                 # the package owns its user (regalia-kms-24)
+        dropin = unit("prometheus-node-exporter.service.d/regalia.conf")["Service"]
+        self.assertEqual(dropin["SupplementaryGroups"], metrics.GROUP)
+        names = [name for _, files in metrics.WRITERS.values() for name in (files or ())]
+        from deploy.baremetal import trails
+        self.assertFalse(set(names) & {name + ".prom" for name in trails.TRAILS})     # no basename shared with a shipper's file
+        self.assertEqual(unit("regalia-audit-ship@.service")["Service"]["ExecStart"].count("-metrics /run/regalia-metrics/audit-ship/%i.prom"), 1)

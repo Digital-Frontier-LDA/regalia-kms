@@ -97,8 +97,11 @@ jobs:
           # tests/test_shell_locale.py runs the shell validators under en_US.UTF-8, generated below,
           # so a missing locale is a failure here, not a skip.
           REGALIA_EXPECT_UTF8_LOCALE: "1"
+          # The revocation authority signs on a token in process (PyKCS11), tested against SoftHSM:
+          # installed below, so a missing one is a failure here, not a skip (#262).
+          REGALIA_EXPECT_PYKCS11: "1"
         run: |
-          sudo apt-get install -y -qq --no-install-recommends locales >/dev/null
+          sudo apt-get install -y -qq --no-install-recommends locales softhsm2 opensc python3-pykcs11 >/dev/null
           sudo locale-gen en_US.UTF-8 >/dev/null
           python3 -Es -m unittest discover -s tests -p 'test_*.py'
 
@@ -112,6 +115,9 @@ jobs:
           REGALIA_EXPECT_SWTPM: "1"
           # internal/pin's ACL guard needs a filesystem that takes POSIX ACLs; the runner's does.
           REGALIA_EXPECT_ACL_GUARD_ENFORCED: "1"
+          # internal/audit maps a trail the real deploy/baremetal/trails.py writes (#278): python3 is on
+          # the runner, so with this set a missing one fails instead of skipping.
+          REGALIA_EXPECT_PYTHON: "1"
         run: |
           umask 002
           go test -race ./...
@@ -250,17 +256,29 @@ jobs:
             -test.run '^TestACredentialOwnedByAThirdUserIsRefused$' || status=$?
           exit $status
 
+      # #308: each target runs a COUNT of executions, not a duration. A duration budget let the fuzz
+      # coordinator's minimize and teardown race the deadline ("context deadline exceeded", no crasher) and
+      # fail the job at random. No minimization (a crasher is saved as found), a test timeout far above the
+      # run, and every corpus entry the run added is uploaded on failure, so a real finding is never lost.
       - name: Fuzz the unauthenticated and malformed operation boundary
-        run: go test ./internal/api -run='^$' -fuzz=FuzzOperationBoundaryNeverPanicsOrEchoesInput -fuzztime=20s
+        run: go test ./internal/api -run='^$' -fuzz=FuzzOperationBoundaryNeverPanicsOrEchoesInput -fuzztime=1000000x -fuzzminimizetime=0 -timeout=10m
 
       # The two parsers that read client bytes before anything is verified. The SignDoc target
       # fuzzes the INNER parser: the exported one recovers panics into a refusal, which would hide
       # every crash a fuzzer finds.
       - name: Fuzz the Cosmos SignDoc parser (panics and refusal class)
-        run: go test ./internal/policy -run='^$' -fuzz=FuzzParseSignDocNeverPanicsAndRefusesAsSignDocErrors -fuzztime=20s
+        run: go test ./internal/policy -run='^$' -fuzz=FuzzParseSignDocNeverPanicsAndRefusesAsSignDocErrors -fuzztime=1000000x -fuzzminimizetime=0 -timeout=10m
 
       - name: Fuzz envelope parsing (refusal class and round-trip stability)
-        run: go test ./internal/envelope -run='^$' -fuzz=FuzzParseAcceptsOnlyWhatItCanReproduce -fuzztime=20s
+        run: go test ./internal/envelope -run='^$' -fuzz=FuzzParseAcceptsOnlyWhatItCanReproduce -fuzztime=1000000x -fuzzminimizetime=0 -timeout=10m
+
+      - name: Keep what the fuzzers found
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashers
+          path: internal/*/testdata/fuzz/
+          if-no-files-found: ignore
 
   # #61, PoC 1.2: the KMS unit's sandbox by behaviour. A dummy service under the shipped unit and
   # hardening drop-in is refused writes outside its state directory, home directories, the kernel,
@@ -618,8 +636,8 @@ jobs:
         run: |
           set -o pipefail
           python3 -Es e2e/authtime-chrony-nts.py | tee "$RUNNER_TEMP/authtime.log"
-          grep -q '^authtime-chrony-nts: 18 passed, 0 failed$' "$RUNNER_TEMP/authtime.log" || {
-            echo "::error::the authenticated-time test did not run all 18 checks" >&2; exit 1; }
+          grep -q '^authtime-chrony-nts: 26 passed, 0 failed$' "$RUNNER_TEMP/authtime.log" || {
+            echo "::error::the authenticated-time test did not run all 26 checks" >&2; exit 1; }
 
   # regalia-kms#80: regalia-sync over real WireGuard, in network namespaces. Three nodes and the
   # revocation authority, each with a wg-svc interface configured from the manifest and read back from

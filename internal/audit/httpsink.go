@@ -188,3 +188,78 @@ func (sink *HTTPSink) Ready(ctx context.Context) bool {
 	}
 	return response.StatusCode == http.StatusNoContent
 }
+
+// ReportAlarm raises an alarm at the collector about this sink's own stream (its site), for
+// what the collector cannot see itself (handleReportedAlarm). Success is the 204 and nothing
+// less: an alarm that may not have landed is reported to the caller as not raised.
+func (sink *HTTPSink) ReportAlarm(ctx context.Context, sequence uint64, hash, reason string) error {
+	if sink == nil || sink.client == nil {
+		return ErrSinkUnavailable
+	}
+	body, err := json.Marshal(struct {
+		Sequence uint64 `json:"sequence"`
+		Hash     string `json:"hash"`
+		Reason   string `json:"reason"`
+	}{sequence, hash, reason})
+	if err != nil {
+		return ErrSinkUnavailable
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, sink.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, sink.baseURL+"/v1/alarms", bytes.NewReader(body))
+	if err != nil {
+		return ErrSinkUnavailable
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if sink.site != "" {
+		request.Header.Set("X-Regalia-Site", sink.site)
+	}
+	response, err := sink.client.Do(request)
+	if err != nil {
+		return ErrSinkUnavailable
+	}
+	if response.Body != nil {
+		defer response.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	}
+	if response.StatusCode != http.StatusNoContent {
+		return ErrSinkUnavailable
+	}
+	return nil
+}
+
+// Receipt asks the collector for its signed receipt of the event at sequence in this sink's stream
+// (handleReceipt). The signature is not checked here: the receipt is evidence for a third party,
+// deploy/baremetal/trails.py prune, which verifies it against the keys it pins.
+func (sink *HTTPSink) Receipt(ctx context.Context, sequence uint64) (Receipt, error) {
+	if sink == nil || sink.client == nil {
+		return Receipt{}, ErrSinkUnavailable
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, sink.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, fmt.Sprintf("%s/v1/receipt?sequence=%d", sink.baseURL, sequence), nil)
+	if err != nil {
+		return Receipt{}, ErrSinkUnavailable
+	}
+	if sink.site != "" {
+		request.Header.Set("X-Regalia-Site", sink.site)
+	}
+	response, err := sink.client.Do(request)
+	if err != nil {
+		return Receipt{}, ErrSinkUnavailable
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		response.Body.Close()
+	}()
+	if response.StatusCode != http.StatusOK {
+		return Receipt{}, ErrSinkUnavailable
+	}
+	var receipt Receipt
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil || receipt.Sequence != sequence {
+		return Receipt{}, ErrSinkUnavailable
+	}
+	return receipt, nil
+}

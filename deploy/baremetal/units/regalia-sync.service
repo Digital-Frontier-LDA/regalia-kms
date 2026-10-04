@@ -20,14 +20,17 @@ Restart=always
 RestartSec=5s
 User=regalia-sync
 Group=regalia-sync
-SupplementaryGroups=tss
+# regalia-audit-sync: the reader group of this service's audit trail, which it gives the file (#286)
+SupplementaryGroups=tss regalia-audit-sync
 CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
 ProtectSystem=strict
 StateDirectory=regalia-sync
+# its node_exporter textfile directory (#305, deploy/baremetal/metrics.py): the heartbeat watch's metrics
+ReadWritePaths=-/run/regalia-metrics/sync
 # 0755: the directory is traversable so the root services can read the published chain; every file in
-# it but chain.json and heartbeat.prom is 0600.
+# it but chain.json is 0600 (heartbeat.prom moved to /run/regalia-metrics/sync, #305).
 StateDirectoryMode=0755
 ProtectHome=yes
 PrivateTmp=yes

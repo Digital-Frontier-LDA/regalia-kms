@@ -259,4 +259,4 @@ func TestUnwrapRefusesAFormatOutsideTheAllowlist(t *testing.T) {
 //
 // Two of the old residuals survived re-measurement and are recorded there:
 // provider.go:137 op0 (masked by the final err/len backstop) and
-// piv_driver.go:31 op1 (masked by strconv.ParseUint). Four did not.
+// piv_driver.go:NewPIVDriver{deviceID == "" || serial == ""}[1] (masked by strconv.ParseUint). Four did not.

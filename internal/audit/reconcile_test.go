@@ -219,7 +219,7 @@ func TestCommittedHeadRefusesShapesTheCollectorCannotEmit(t *testing.T) {
 		"hash without a sequence":  `{"sequence":0,"hash":"sha256:` + strings.Repeat("ab", 32) + `"}`,
 		"trailing second document": `{"sequence":5,"hash":"sha256:` + strings.Repeat("ab", 32) + `"}{"sequence":9}`,
 		// A position whose hash is present but is not a chained hash. The coupling above is
-		// satisfied, so only the pattern check refuses it (httpsink.go:165[1] and [2], each forced
+		// satisfied, so only the pattern check refuses it (httpsink.go:(*HTTPSink).CommittedHead{auditHashPattern.MatchString}[1] and [2], each forced
 		// false, survived until this row).
 		"a hash that is not a chained hash": `{"sequence":5,"hash":"sha256:` + strings.Repeat("AB", 32) + `"}`,
 	} {

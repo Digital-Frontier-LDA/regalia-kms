@@ -147,8 +147,9 @@ class Service:
     """One node's holder loop. `holder` is its lease.Holder; `manifest()` returns its current manifest (its
     membership.Store.load); `renew(request)` asks a peer and returns the lease envelope, or raises."""
 
-    def __init__(self, holder, manifest, renew, path, boottime=boottime_ms, boot=boot_id, daemon_started=None):
+    def __init__(self, holder, manifest, renew, path, boottime=boottime_ms, boot=boot_id, daemon_started=None, metrics=None):
         self.holder, self.manifest, self.renew, self.path, self.boottime = holder, manifest, renew, path, boottime
+        self.metrics = metrics                    # #305: metrics(samples) after every round (metrics.publish)
         self.daemon_started = daemon_started      # () -> the daemon's start on the boot clock (ms), or None
         self.boot = boot()
         self.requests_path = path + ".requests"   # nonce -> when it was asked for; survives a restart of this service
@@ -192,7 +193,7 @@ class Service:
 
     def step(self):
         """One round: renew if due, check, write. Returns the document written."""
-        manifest, envelope, serve_until, reason = None, None, 0, ""
+        manifest, envelope, serve_until, reason, left = None, None, 0, "", 0
         try:
             manifest = self.manifest()
             require(manifest is not None, "this node holds no manifest")
@@ -218,6 +219,9 @@ class Service:
             reason = (reason + "; " if reason else "") + str(refusal)
         document = self._document(manifest, envelope, serve_until, reason)
         write(self.path, document)
+        if self.metrics is not None:
+            self.metrics([("regalia_admission_serving", {}, 1 if serve_until else 0),
+                          ("regalia_admission_lease_seconds_left", {}, max(0, int(left)) if serve_until else 0)])
         return document
 
     def run(self, stop, interval=5):

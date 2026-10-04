@@ -20,6 +20,7 @@ s=importlib.util.spec_from_file_location('reconcile',p);m=importlib.util.module_
 m.CRYPTSETUP=c
 m.ENV=dict(m.os.environ,LC_ALL='C')
 m.LOCKDIR=m.Path(sys.argv[1]).parent
+m.TRAIL=str(m.Path(sys.argv[1]).parent/'trail.jsonl')
 raise SystemExit(m.main())
 '''
 
@@ -41,6 +42,8 @@ def run(script, output):
             # the classifier it imports from beside itself (recovery_state.py), frozen with it
             shared = (source_dir / 'recovery_state.py').read_bytes()
             (directory / 'recovery_state.py').write_bytes(shared)
+            # and the trail writer (#278), whose real path is root's: the worker points TRAIL at the trial's own file
+            (directory / 'trails.py').write_bytes((source_dir / 'trails.py').read_bytes())
             report['recovery_state_sha256'] = hashlib.sha256(shared).hexdigest()
             shim=directory/'bin/cryptsetup'; shim.write_text(observer.SHIM);shim.chmod(0o700)
             calls=directory/'calls.jsonl'

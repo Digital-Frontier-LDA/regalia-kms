@@ -87,6 +87,9 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	if len(arguments) > 0 && arguments[0] == "-relay" {
 		return runRelay(arguments, out, diagnostics)
 	}
+	if len(arguments) > 0 && arguments[0] == "-render" {
+		return runRender(arguments, out, diagnostics)
+	}
 	// The socket first, before anything that can fail. A start that cannot serve still answers whoever
 	// waits on it, with nothing: systemd-cryptsetup then asks at the console, and systemd does not start
 	// this program again for a connection left waiting. That holds for a bad flag or a bad configuration too.

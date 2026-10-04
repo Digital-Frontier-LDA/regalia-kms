@@ -13,6 +13,13 @@ on:
       - internal/config/**
       - cmd/regalia-kms/**
       - cmd/regalia-audit-collector/**
+      - cmd/regalia-audit-ship/**
+      - internal/audit/**
+      - e2e/audit-ship-systemd.py
+      - e2e/three-node-netns.py
+      - e2e/three-node-recovery.py
+      - cmd/regalia-unlock/**
+      - e2e/lib/threenode.py
   push:
     branches: [main]
     paths:
@@ -23,6 +30,13 @@ on:
       - internal/config/**
       - cmd/regalia-kms/**
       - cmd/regalia-audit-collector/**
+      - cmd/regalia-audit-ship/**
+      - internal/audit/**
+      - e2e/audit-ship-systemd.py
+      - e2e/three-node-netns.py
+      - e2e/three-node-recovery.py
+      - cmd/regalia-unlock/**
+      - e2e/lib/threenode.py
 
 permissions:
   contents: read
@@ -69,5 +83,76 @@ jobs:
         run: |
           set -o pipefail
           REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/node-units-systemd.py | tee "$RUNNER_TEMP/units.log"
-          grep -q '^node-units-systemd: 49 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
-            echo "::error::the units test did not pass all 49 checks" >&2; exit 1; }
+          grep -q '^node-units-systemd: 66 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
+            echo "::error::the units test did not pass all 66 checks" >&2; exit 1; }
+
+  # #278: the trail shipper's unit, as shipped, against the real collector: as its own user with no
+  # capability it reads a trail only through its instance's group, and a trail cut short under what was
+  # shipped stops it with an alarm and no restart.
+  audit-ship-systemd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build the shipper and the audit collector
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/bin/$name" "./cmd/$name"; done
+      - name: The shipper's unit under systemd, against the collector
+        run: |
+          set -o pipefail
+          REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/audit-ship-systemd.py | tee "$RUNNER_TEMP/ship.log"
+          grep -q '^audit-ship-systemd: 18 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
+            echo "::error::the shipper test did not pass all 18 checks" >&2; exit 1; }
+
+  # #70 (Phase 10), PR 1: three nodes on one machine, each its real services in its own namespace against
+  # its own software TPM, the fixture the recovery rehearsals build on (e2e/lib/threenode.py).
+  three-node-netns:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The software TPM, tpm2-tools, WireGuard
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 python3-cryptography
+      - name: Three nodes, their sync and wg-apply, the service mesh, a power cut
+        run: |
+          set -o pipefail
+          sudo --preserve-env=RUNNER_ENVIRONMENT python3 -Es e2e/three-node-netns.py | tee "$RUNNER_TEMP/three.log"
+          grep -q '^three-node-netns: 26 passed, 0 failed$' "$RUNNER_TEMP/three.log" || {
+            echo "::error::the three-node test did not pass all 26 checks" >&2; exit 1; }
+
+  # #70 (Phase 10), PR 2: every directed peer recovery path (PoC 10.1) and the nodes that must not be
+  # restored, on the three-node fixture: real disks (LUKS2 on loop devices), the real pre-root client.
+  three-node-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs
+      - name: Build the pre-root client
+        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+      - name: Every directed recovery path, and the nodes that must not be restored
+        run: |
+          set -o pipefail
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+            python3 -Es e2e/three-node-recovery.py | tee "$RUNNER_TEMP/recovery.log"
+          grep -q '^three-node-recovery: 52 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
+            echo "::error::the three-node recovery test did not pass all 52 checks" >&2; exit 1; }

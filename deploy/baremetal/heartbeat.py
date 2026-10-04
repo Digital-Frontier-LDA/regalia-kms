@@ -6,7 +6,7 @@ A newer manifest proves ordering, not that nothing restrictive happened since. A
 revocation authority would go on helping a node that was revoked an hour ago. So the authority signs a
 short-lived statement that a manifest is still the current one, and a peer without a live one refuses.
 
-    envelope  = {"heartbeat": {...}, "signature": {"key": "<hex Ed25519 public key>", "sig": "<hex signature>"}}
+    envelope  = {"heartbeat": {...}, "signature": {"key": "<hex revocation key, as the manifest names it>", "sig": "<hex signature>"}}
 
     heartbeat = {"schema": "regalia.heartbeat/v1", "epoch": <the manifest's epoch>, "sequence": <int >= 1>,
                  "issued_at": "YYYY-MM-DDTHH:MM:SSZ", "expires_at": "YYYY-MM-DDTHH:MM:SSZ",
@@ -64,8 +64,6 @@ import subprocess
 import tempfile
 import time
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from deploy.baremetal import membership
 
@@ -161,17 +159,18 @@ def signed(envelope, manifest):
     membership.exact(envelope, ("heartbeat", "signature"), "envelope")
     sig = envelope["signature"]
     membership.exact(sig, ("key", "sig"), "signature")
-    membership.hex_field(sig["key"], 64, "signature.key")
+    require(isinstance(sig["key"], str) and re.fullmatch(r"[0-9a-f]{64}|[0-9a-f]{130}", sig["key"]) is not None,
+            "signature.key must be 64 or 130 lowercase hex")
     membership.hex_field(sig["sig"], 128, "signature.sig")
     heartbeat = envelope["heartbeat"]
     issued, expires = validate(heartbeat)
     membership.validate(manifest)
-    require(sig["key"] in manifest["revocation_keys"], "the signing key is not a revocation key named by the current manifest")
+    alg = membership.revocation_alg(manifest, sig["key"])      # the manifest's entry says how, never the signature
+    require(alg is not None, "the signing key is not a revocation key named by the current manifest")
     try:
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(sig["key"])).verify(
-            bytes.fromhex(sig["sig"]), DOMAIN + membership.canonical(heartbeat))
-    except (InvalidSignature, ValueError):
-        raise Refused("the heartbeat signature does not verify")
+        membership.verify_revocation(alg, sig["key"], DOMAIN + membership.canonical(heartbeat), sig["sig"], "heartbeat")
+    except Refused:
+        raise Refused("the heartbeat signature does not verify") from None
     return heartbeat, issued, expires
 
 
@@ -424,7 +423,8 @@ class Freshness:
         """A replacement node's FIRST heartbeat (#190 --replace, decided by regalia-kms-24): its counter is
         defined AT the heartbeat's sequence (Counter.define_at, no increment loop), and the heartbeat becomes
         the held one, so the time-derived rule applies from its issue time on. Only for a node that holds no
-        heartbeat and whose counter is not defined yet: the same checks as accept() (signed by a revocation
+        heartbeat and whose counter's indices do not exist at all (neither the counter nor its base: a damaged
+        counter is recount.py's case): the same checks as accept() (signed by a revocation
         key the manifest names, for this manifest, live by authenticated time, issued no later than now +
         FUTURE_SKEW). Disk first, then the counter: a cut between leaves a held heartbeat over a counter
         that is missing, which recount.py redefines at that floor. Returns the seconds it has left."""
@@ -432,6 +432,12 @@ class Freshness:
             heartbeat = verify(envelope, manifest)
             state = self._read()
             require(state["envelope"] is None, "a heartbeat is already held: the first one is taken only by a node that holds none")
+            # a genuinely new counter only: a damaged one (a base gone or unlocked) is recount's case, with its
+            # floor, its typed phrase, its audit and its proof of the TPM and the chain (a wiped disk also holds
+            # no heartbeat, which is exactly what the TPM counter defends against)
+            defined = self.counter._defined()
+            require(not {int(i, 16) for i in self.counter._indices()} & defined,
+                    "the counter %s exists (complete or not): a first heartbeat defines only a new one; use recount" % self.counter.index)
             now = self._now(state)
             left = self._live(heartbeat, now)
             state["envelope"], state["allowance"] = envelope, None

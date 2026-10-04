@@ -1,0 +1,11 @@
+# Daily: remove the committed archives of the %i audit trail (regalia-audit-prune@%i.service; #278).
+[Unit]
+Description=Regalia KMS: daily removal of the committed archives of the %i audit trail
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

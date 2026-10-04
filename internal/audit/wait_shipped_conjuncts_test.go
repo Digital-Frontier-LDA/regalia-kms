@@ -13,7 +13,7 @@ import (
 
 // waitShipped's early fail-closed is `failures != failures0 && shipped < sequence`. Until #458
 // the suite pinned that condition only as a whole: forcing EITHER conjunct true survived, and
-// only forcing both together was caught (ledger rows shipper.go:115[0] and [1]). The two tests
+// only forcing both together was caught (ledger rows shipper.go:(*shipper).waitShipped{shipper.failures != failures}[0] and [1]). The two tests
 // here pin each conjunct on its own.
 
 // gatedSink holds each gated sequence's Send until the test releases it, and records the moment

@@ -7,7 +7,7 @@ import unittest
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from deploy.baremetal import heartbeat as hb, membership as m, recount
+from deploy.baremetal import heartbeat as hb, membership as m, recount, trails
 import tests.test_baremetal_heartbeat as hbt
 
 T0 = hbt.T0
@@ -147,6 +147,16 @@ class AcrossACut(Case):
         with open(self.floor, "w") as f:
             f.write("{")
         self.refused("not valid JSON", recount.recount, self.counter, self.m1, [self.state()], lambda p: "", self.events.append, self.floor)
+        self.assertEqual(self.events[-1]["outcome"], "DENY")
+
+    def test_a_floor_file_that_cannot_be_read_is_recorded_as_a_refusal(self):
+        """#261 (CodeRabbit): an OSError on the floor file is recorded as DENY before it propagates."""
+        self.break_counter()
+        os.mkdir(self.floor)                                                      # a directory where the floor goes
+        with self.assertRaises(OSError):
+            recount.recount(self.counter, self.m1, [self.state()], lambda p: "", self.events.append, self.floor)
+        self.assertEqual([(e["event"], e["outcome"]) for e in self.events], [("recount", "DENY")])
+        self.assertNotIn(self.counter.index, self.tpm.nv)                        # untouched
 
 
 def counter_unusable(counter):
@@ -236,6 +246,7 @@ class CommandLine(TheHostsTpmAndChain):
         with open(self.d + "/audit.jsonl") as f:
             self.assertEqual([json.loads(line)["event"] for line in f], ["recount-requested", "recount"])
         self.assertEqual(recount.main(argv, ask=lambda prompt: "", run=run), 1)             # usable now: refused
+        self.assertEqual(trails.verify(self.d + "/audit.jsonl")["chained"], 3)            # #278: a hash-chained trail
 
     def test_refused_unless_regalia_sync_is_stopped(self):
         for state in ("active", "activating", "deactivating", "reloading", ""):
