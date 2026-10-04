@@ -1,0 +1,10 @@
+# node_exporter's web configuration on a node (#305; installed as /etc/regalia/node-exporter/web.yml, read by
+# --web.config.file, see deploy/baremetal/metrics.py node_exporter_args). Mutual TLS: the scraper in the site's
+# monitoring zone presents a certificate from the monitoring CA, and nothing else is answered. The firewall
+# (firewall.py) admits TCP 9100 from monitoring_cidrs only; this is the second lock, not the first.
+tls_server_config:
+  cert_file: /etc/regalia/node-exporter/server.pem
+  key_file: /etc/regalia/node-exporter/server.key
+  client_ca_file: /etc/regalia/node-exporter/monitoring-ca.pem
+  client_auth_type: RequireAndVerifyClientCert
+  min_version: TLS13

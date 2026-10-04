@@ -223,7 +223,7 @@ class Watch:
         except Refused:
             manifest = None
         current, now = reading(self.freshness, manifest), self.clock()
-        _replace(self.metrics_path, metrics(current, now).encode(), 0o644)
+        _replace(self.metrics_path, metrics(current, now).encode(), 0o640)      # read through its directory's group (#305)
         event, remembered = decide(current, self._remembered(), now, self.thresholds, self.repeat)
         if event is not None:
             self.sink(event)
