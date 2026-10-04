@@ -152,6 +152,7 @@ def scenario(cluster):
     cluster.stop(crashed, power=None)
     before = cluster.reset_count(crashed)
     (cluster.nodes[crashed].run / "boot-session").unlink()   # what the client before it left: gone, so it asks again
+    asked = time.time()
     results = {}
     workers = [threading.Thread(target=lambda name=name, rounds=rounds: results.__setitem__(name, cluster.unlock(name, timeout=150, rounds=rounds)))
                for name, rounds in ((rebooted, 5), (crashed, 2))]
@@ -162,8 +163,12 @@ def scenario(cluster):
     ok(unlocked(results.get(rebooted, {}), survivor),
        "U: %s, in a new boot, opened its volume through %s's keyslot while %s asked too" % (rebooted, survivor, crashed), results.get(rebooted))
     got = results.get(crashed, {})
-    ok(got.get("rc") != 0 and got.get("peer") is None and cluster.reset_count(crashed) == before,
-       "N: %s, in the same TPM boot (resetCount %d) with a second session, gets no key from %s" % (crashed, before, survivor), got)
+    second = "a second boot session in the same boot"           # attest.Verifier's refusal, in the survivor's unlock trail
+    denied = [e.get("reason") for e in cluster.trail(survivor) if e.get("event") == "unlock" and e.get("subject") == crashed
+              and e.get("outcome") == "DENY" and e.get("at", 0) >= asked - 1]
+    ok(got.get("rc") != 0 and got.get("peer") is None and cluster.reset_count(crashed) == before and any(second in r for r in denied),
+       "N: %s, in the same TPM boot (resetCount %d) with a second session, gets no key from %s, which says why: %s"
+       % (crashed, before, survivor, second), {"client": got, "denied": denied})
     cluster.stop(crashed)                                       # the power cycle: a new boot
     ok(cluster.reset_count(crashed) == before + 1, "%s power-cycled: resetCount %d -> %d" % (crashed, before, cluster.reset_count(crashed)))
     since = time.time()
