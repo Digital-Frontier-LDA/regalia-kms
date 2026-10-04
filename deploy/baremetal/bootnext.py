@@ -19,11 +19,16 @@ item for the DL360s (#65), not something this module claims.
 
 state(run)            the entries, BootCurrent, BootNext and BootOrder, as efibootmgr reports them, parsed
                       strictly (anything it cannot read is a refusal, never a guess)
-set_next(entry, run)  BootNext := entry, then read back
+trial(entry, esp, accepted, run)
+                      THE way a trial boot is set: the entry's image is read from the booted ESP and must
+                      measure the accepted set (NEXT) before BootNext := entry is written, then read back;
+                      nothing writes BootNext otherwise
 promote(entry, run)   BootOrder := entry first, the rest in their order, then read back
 remove(entry, run)    delete an entry that is not the one booted, nor first in BootOrder, nor BootNext
-image(esp, entry)     the file an entry boots, on the ESP this host booted from (its partition GUID must
-                      be BootCurrent's): read, never followed through a link
+image(esp, entry)     the file an entry boots, on the ESP this host booted from: the entry's GPT partition
+                      must be BootCurrent's, and `esp` must BE that partition (a vfat mount whose device is
+                      /dev/disk/by-partuuid/<GUID>, the partition systemd-stub names in LoaderDevicePartUUID);
+                      every component opened relative to its directory, never through a link
 measures(data, set)   whether that image measures into PCR 11, in each phase, what an accepted set says
 
 Every efibootmgr call is `run` (subprocess.run or a fake), by absolute path, with a clean environment.
@@ -58,18 +63,18 @@ def parse(text):
     """efibootmgr -v's report as {"current", "next" (None if unset), "order": [...], "entries": {id: {"label",
     "active", "partition" (GPT partition GUID, lower case, or None), "path" (or None)}}}."""
     require(isinstance(text, str), "efibootmgr printed nothing")
-    found = {"current": None, "next": None, "order": None, "entries": {}}
+    found, seen = {"current": None, "next": None, "order": None, "entries": {}}, set()
     for line in text.splitlines():
         line = line.rstrip("\r")
         if line[:1].isspace():           # efibootmgr 18's -v continuation lines (dp: …, data: …): the hex of what is above
             continue
-        if line.startswith("BootCurrent: "):
-            found["current"] = line.split(": ", 1)[1].strip()
-        elif line.startswith("BootNext: "):
-            found["next"] = line.split(": ", 1)[1].strip()
-        elif line.startswith("BootOrder: "):
-            order = line.split(": ", 1)[1].strip()
-            found["order"] = order.split(",") if order else []
+        header = next((k for k, name in (("current", "BootCurrent: "), ("next", "BootNext: "), ("order", "BootOrder: "))
+                       if line.startswith(name)), None)
+        if header is not None:
+            require(header not in seen, "efibootmgr reports %s twice" % line.split(":")[0])
+            seen.add(header)
+            value = line.split(": ", 1)[1].strip()
+            found[header] = (value.split(",") if value else []) if header == "order" else value
         elif re.match(r"Boot[0-9A-F]{4}", line):
             match = LINE.fullmatch(line)
             require(match is not None, "an efibootmgr entry line cannot be read: %r" % line[:120])
@@ -97,7 +102,16 @@ def _entry(value):
     return value
 
 
-def set_next(entry, run=subprocess.run):
+def trial(entry, esp, accepted, run=subprocess.run, **where):
+    """Set the trial boot of Boot`entry`: its image, read from the ESP this host booted from (image), must
+    measure `accepted` (NEXT's set, measures) BEFORE BootNext is written. The only caller of _set_next, so no
+    image is ever tried unchecked. Returns {"state": after, "measured": {phase: PCR 11}}."""
+    entry = _entry(entry)
+    measured_now = measures(image(esp, entry, state(run), **where), accepted)
+    return {"state": _set_next(entry, run), "measured": measured_now}
+
+
+def _set_next(entry, run=subprocess.run):
     """BootNext := `entry` (an active entry other than the one booted), then read back. Returns the state."""
     entry, before = _entry(entry), state(run)
     require(entry in before["entries"], "there is no Boot%s" % entry)
@@ -137,10 +151,50 @@ def remove(entry, run=subprocess.run):
     return after
 
 
-def image(esp, entry, boot):
+MOUNTINFO = "/proc/self/mountinfo"
+EFIVARS = "/sys/firmware/efi/efivars"
+LOADER_VENDOR = "4a67b082-0a4c-41cf-b6c7-440b29bb8c4f"         # systemd's loader vendor GUID (LoaderDevicePartUUID)
+
+
+def _mount(path, mountinfo=MOUNTINFO):
+    """(device number, filesystem type) of the mount AT `path` (it must be a mount point), from mountinfo."""
+    target = os.path.realpath(path)
+    with open(mountinfo, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.read(4 << 20).splitlines()
+    found = None
+    for line in lines:
+        before, sep, after = line.partition(" - ")
+        fields = before.split()
+        if sep and len(fields) >= 5 and fields[4].replace("\\040", " ") == target:
+            major, minor = (int(x) for x in fields[2].split(":"))
+            found = (os.makedev(major, minor), after.split()[0])       # the last mount at the point is the visible one
+    require(found is not None, "%s is not a mount point: the ESP must be mounted there" % path)
+    return found
+
+
+def _partition_device(guid, by_partuuid="/dev/disk/by-partuuid"):
+    return os.stat(os.path.join(by_partuuid, guid.lower())).st_rdev
+
+
+def _loader_partition(efivars=EFIVARS):
+    """LoaderDevicePartUUID, which systemd-stub sets to the GPT partition it was loaded from (lower case), or
+    None if the variable is absent."""
+    try:
+        with open(os.path.join(efivars, "LoaderDevicePartUUID-" + LOADER_VENDOR), "rb") as f:
+            raw = f.read(4096)
+    except FileNotFoundError:
+        return None
+    text = raw[4:].decode("utf-16-le", "replace").rstrip("\0").strip()       # 4 bytes of attributes, then UTF-16
+    require(re.fullmatch(GUID, text) is not None, "LoaderDevicePartUUID is not a GUID: %r" % text[:60])
+    return text.lower()
+
+
+def image(esp, entry, boot, mount=_mount, partition_device=_partition_device, loader_partition=_loader_partition):
     """The bytes of the image Boot`entry` loads, from the ESP mounted at `esp`, given `boot` (state()). The
-    entry must name a file on the GPT partition BootCurrent's entry is on: the image read here is then the
-    one the firmware will load (another disk's ESP would not be the file checked)."""
+    entry must name a file on the GPT partition BootCurrent's entry is on, and `esp` must BE that partition:
+    a vfat mount whose device is that partition's, the one systemd-stub says it was loaded from. Only then is
+    the file read here the one the firmware will load (another disk's ESP, mounted where this one usually is,
+    would not be)."""
     entry = _entry(entry)
     require(entry in boot["entries"], "there is no Boot%s" % entry)
     this, here = boot["entries"][entry], boot["entries"][boot["current"]]
@@ -150,15 +204,28 @@ def image(esp, entry, boot):
     require(this["partition"] == here["partition"], "Boot%s is on partition %s, not on the ESP this host booted from (%s)"
             % (entry, this["partition"], here["partition"]))
     require(isinstance(esp, str) and os.path.isabs(esp), "the ESP mount point must be an absolute path")
-    # FAT is case-insensitive and the firmware's path may differ in case from the directory listing
-    current = esp
-    for part in this["path"].split("\\")[1:]:
-        names = {n.lower(): n for n in os.listdir(current)}
-        require(part.lower() in names, "%s has no %s (Boot%s loads %s)" % (current, part, entry, this["path"]))
-        current = os.path.join(current, names[part.lower()])
-    fd = os.open(current, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    device, fstype = mount(esp)
+    require(fstype == "vfat", "%s is a %s file system, not the ESP's vfat" % (esp, fstype))
+    require(device == partition_device(here["partition"]), "%s is not the partition this host booted from (%s): another ESP is "
+            "mounted there, and its files are not the ones the firmware loads" % (esp, here["partition"]))
+    stub = loader_partition()
+    require(stub is not None, "LoaderDevicePartUUID is not set: this host was not booted through systemd-stub, so the ESP "
+            "it booted from cannot be confirmed")
+    require(stub == here["partition"], "systemd-stub says this host booted from partition %s, but BootCurrent's entry is on %s"
+            % (stub, here["partition"]))
+    # every component opened relative to the directory before it, none through a link; FAT is case-insensitive
+    # and the firmware's path may differ in case from the directory listing
+    parts = this["path"].split("\\")[1:]
+    fd = os.open(esp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        require(stat.S_ISREG(os.fstat(fd).st_mode), "%s is not a regular file" % current)
+        for k, part in enumerate(parts):
+            names = {n.lower(): n for n in os.listdir(fd)}
+            require(part.lower() in names, "%s has no %s (Boot%s loads %s)" % (esp, part, entry, this["path"]))
+            last = k == len(parts) - 1
+            nfd = os.open(names[part.lower()], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | (0 if last else os.O_DIRECTORY), dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        require(stat.S_ISREG(os.fstat(fd).st_mode), "Boot%s's %s is not a regular file" % (entry, this["path"]))
         data = bytearray()
         while len(data) <= uki.MAX_IMAGE:
             chunk = os.read(fd, 1 << 20)
@@ -167,7 +234,7 @@ def image(esp, entry, boot):
             data += chunk
     finally:
         os.close(fd)
-    require(len(data) <= uki.MAX_IMAGE, "%s is larger than %d bytes" % (current, uki.MAX_IMAGE))
+    require(len(data) <= uki.MAX_IMAGE, "Boot%s's image is larger than %d bytes" % (entry, uki.MAX_IMAGE))
     return bytes(data)
 
 
@@ -181,10 +248,10 @@ def measures(data, accepted):
     """Refuses unless the image measures, in each boot phase, the PCR 11 the accepted set records (a UKI
     host's set has per-phase values: measurements.py)."""
     require(isinstance(accepted, dict) and isinstance(accepted.get("phases"), dict),
-            "the set %r has no per-phase PCR 11: it is not a UKI host's set" % (accepted.get("label") if isinstance(accepted, dict) else accepted))
+            "the set %r has no per-phase PCR 11: it is not a UKI host's set" % (accepted.get("label") if isinstance(accepted, dict) else None))
     got = measured(data)
     for phase in attest.PHASES:
         want = accepted["phases"].get(phase, {}).get("11")
         require(want == got[phase], "the image measures PCR 11 %s in its %s phase; %s records %s: it is not that image"
-                % (got[phase], phase, accepted["label"], want))
+                % (got[phase], phase, accepted.get("label"), want))
     return got

@@ -102,6 +102,9 @@ class Reading(Case):
                 ("no BootOrder", good.replace("BootOrder: 0001,0000\n", ""), "no readable BootOrder"),
                 ("BootNext not listed", good.replace("Timeout: 0 seconds", "BootNext: 0009"), "BootNext 0009 is not among"),
                 ("an entry listed twice", good + good.splitlines()[-1] + "\n", "lists Boot0001 twice"),
+                ("BootCurrent twice", good + "BootCurrent: 0000\n", "reports BootCurrent twice"),
+                ("BootOrder twice", good + "BootOrder: 0000\n", "reports BootOrder twice"),
+                ("BootNext twice", good.replace("Timeout: 0 seconds", "BootNext: 0000\nBootNext: 0001"), "reports BootNext twice"),
                 ("an entry line that is not one", good + "Boot0003 \n".replace(" \n", "") + "\n", "cannot be read")):
             with self.subTest(label):
                 self.refused(reason, bootnext.parse, text)
@@ -112,21 +115,48 @@ class Reading(Case):
         self.refused("efibootmgr -v failed (exit 5): EFI variables are not supported", bootnext.state, fake)
 
 
-class TrialBoot(Case):
+class OnAnEsp(Case):
+    """A temporary directory standing for the ESP this host booted from: mounted vfat, from the partition
+    BootCurrent's entry is on, the one systemd-stub names."""
     def setUp(self):
+        self.esp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.esp, True)
+        os.makedirs(os.path.join(self.esp, "EFI", "Linux"))
+        self.one, self.two = image(b"one"), image(b"two")
+        for name, data in (("image-1.efi", self.one), ("image-2.efi", self.two)):
+            with open(os.path.join(self.esp, "EFI", "Linux", name), "wb") as f:
+                f.write(data)
         self.fake = FakeEfibootmgr()
+        self.devices = {ESP_GUID: 0x0801, OTHER_GUID: 0x0811}
+        self.mounts = {self.esp: (0x0801, "vfat")}
+        self.stub = ESP_GUID
+        self.where = {"mount": lambda path: self.mounts[path] if path in self.mounts else bootnext.require(False, "%s is not a mount point" % path),
+                      "partition_device": lambda guid: self.devices[guid], "loader_partition": lambda: self.stub}
+
+    def image(self, entry):
+        return bootnext.image(self.esp, entry, bootnext.state(self.fake), **self.where)
+
+
+class TrialBoot(OnAnEsp):
+    def setUp(self):
+        super().setUp()
         self.fake.add("0002", "regalia-kms image-2", r"\EFI\Linux\image-2.efi")
+        self.next = accepted("image-2", self.two)
+
+    def trial(self, entry, accepted_set=None, run=None):
+        return bootnext.trial(entry, self.esp, accepted_set or self.next, run or self.fake, **self.where)
 
     def test_bootnext_boots_the_new_image_once_and_every_later_boot_is_the_current_one(self):
-        state = bootnext.set_next("0002", self.fake)
-        self.assertEqual((state["next"], state["order"]), ("0002", ["0001", "0000"]))
+        done = self.trial("0002")
+        self.assertEqual((done["state"]["next"], done["state"]["order"]), ("0002", ["0001", "0000"]))
+        self.assertEqual(done["measured"], bootnext.measured(self.two))
         self.fake.reboot()
         self.assertEqual((self.fake.current, self.fake.next), ("0002", None))      # the trial boot
         self.fake.reboot()
         self.assertEqual(self.fake.current, "0001")                                 # hung and reset: CURRENT again
 
     def test_promotion_only_of_the_image_this_host_is_running(self):
-        bootnext.set_next("0002", self.fake)
+        self.trial("0002")
         self.refused("Boot0002 is not the entry this host booted (Boot0001): only the running image is promoted", bootnext.promote, "0002", self.fake)
         self.fake.reboot()
         state = bootnext.promote("0002", self.fake)
@@ -138,12 +168,22 @@ class TrialBoot(Case):
         self.assertNotIn("--bootorder", sum(self.fake.calls[calls:], []))
 
     def test_what_bootnext_refuses(self):
+        with open(os.path.join(self.esp, "EFI", "Linux", "image-3.efi"), "wb") as f:
+            f.write(self.two)
         self.fake.add("0003", "inactive", r"\EFI\Linux\image-3.efi", active=False)
-        for entry, reason in (("0001", "is the entry this host booted"), ("0009", "there is no Boot0009"),
-                              ("0003", "is not active"), ("2", "four upper-case hex digits"), ("000a", "four upper-case hex digits")):
+        one = accepted("image-1", self.one)
+        for entry, accepted_set, reason in (("0001", one, "is the entry this host booted"), ("0009", None, "there is no Boot0009"),
+                                            ("0003", None, "is not active"), ("2", None, "four upper-case hex digits"),
+                                            ("000a", None, "four upper-case hex digits")):
             with self.subTest(entry):
-                self.refused(reason, bootnext.set_next, entry, self.fake)
+                self.refused(reason, self.trial, entry, accepted_set)
         self.assertFalse(any("--bootnext" in call for call in self.fake.calls))
+
+    def test_an_image_that_does_not_measure_next_is_never_tried(self):
+        """d9 on #325: measuring before BootNext is structural. trial() is the only writer of BootNext."""
+        self.refused("it is not that image", self.trial, "0002", accepted("image-1", self.one))
+        self.assertFalse(any("--bootnext" in call for call in self.fake.calls))
+        self.assertFalse(hasattr(bootnext, "set_next"))
 
     def test_a_bootnext_that_does_not_read_back_is_a_refusal(self):
         real = self.fake.__call__
@@ -152,12 +192,12 @@ class TrialBoot(Case):
             if "--bootnext" in argv:
                 return subprocess.CompletedProcess(argv, 0, self.fake.report(), "")
             return real(argv, **kw)
-        self.refused("BootNext reads None after setting it to 0002: nothing is rebooted on that", bootnext.set_next, "0002", ignores)
+        self.refused("BootNext reads None after setting it to 0002: nothing is rebooted on that", self.trial, "0002", None, ignores)
 
     def test_removing_the_retired_entry(self):
         for entry, prep, reason in (("0001", None, "is the entry this host booted"),):
             self.refused(reason, bootnext.remove, entry, self.fake)
-        bootnext.set_next("0002", self.fake)
+        self.trial("0002")
         self.refused("Boot0002 is BootNext", bootnext.remove, "0002", self.fake)
         self.fake.reboot()
         self.refused("Boot0001 is first in BootOrder: promote the running image first", bootnext.remove, "0001", self.fake)
@@ -167,21 +207,13 @@ class TrialBoot(Case):
         self.assertEqual(state["order"], ["0002", "0000"])
 
 
-class TheImage(Case):
+class TheImage(OnAnEsp):
     def setUp(self):
-        self.esp = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.esp, True)
-        os.makedirs(os.path.join(self.esp, "EFI", "Linux"))
-        self.one, self.two = image(b"one"), image(b"two")
-        for name, data in (("image-1.efi", self.one), ("image-2.efi", self.two)):
-            with open(os.path.join(self.esp, "EFI", "Linux", name), "wb") as f:
-                f.write(data)
-        self.fake = FakeEfibootmgr()
+        super().setUp()
         self.fake.add("0002", "regalia-kms image-2", r"\efi\LINUX\Image-2.EFI")       # FAT: the firmware's case may differ
 
     def test_the_entry_s_image_is_read_from_this_esp_and_measured_against_the_set(self):
-        boot = bootnext.state(self.fake)
-        data = bootnext.image(self.esp, "0002", boot)
+        data = self.image("0002")
         self.assertEqual(data, self.two)
         got = bootnext.measures(data, accepted("image-2", self.two))
         parts = uki.measured(self.two)
@@ -193,20 +225,87 @@ class TheImage(Case):
         self.fake.add("0003", "elsewhere", r"\EFI\Linux\image-2.efi", guid=OTHER_GUID)
         self.fake.add("0004", "climbs", r"\EFI\..\image-2.efi")
         self.fake.add("0005", "missing", r"\EFI\Linux\image-9.efi")
-        boot = bootnext.state(self.fake)
-        self.refused("is on partition %s, not on the ESP this host booted from (%s)" % (OTHER_GUID, ESP_GUID), bootnext.image, self.esp, "0003", boot)
-        self.refused("does not load a file", bootnext.image, self.esp, "0004", boot)
-        self.refused("does not load a file", bootnext.image, self.esp, "0000", boot)
-        self.refused("has no image-9.efi", bootnext.image, self.esp, "0005", boot)
-        self.refused("must be an absolute path", bootnext.image, "esp", "0002", boot)
+        self.refused("is on partition %s, not on the ESP this host booted from (%s)" % (OTHER_GUID, ESP_GUID), self.image, "0003")
+        self.refused("does not load a file", self.image, "0004")
+        self.refused("does not load a file", self.image, "0000")
+        self.refused("has no image-9.efi", self.image, "0005")
+        self.refused("must be an absolute path", bootnext.image, "esp", "0002", bootnext.state(self.fake), **self.where)
+
+    def test_the_directory_read_must_be_the_esp_this_host_booted_from(self):
+        """d9 on #325: two ESPs. The entry is on the booted partition, but the directory given is the OTHER
+        disk's ESP, mounted where this one usually is: its file is not the one the firmware loads."""
+        self.mounts[self.esp] = (self.devices[OTHER_GUID], "vfat")
+        self.refused("is not the partition this host booted from (%s): another ESP is mounted there" % ESP_GUID, self.image, "0002")
+        self.mounts[self.esp] = (self.devices[ESP_GUID], "ext4")
+        self.refused("is a ext4 file system, not the ESP's vfat", self.image, "0002")
+        del self.mounts[self.esp]
+        self.refused("is not a mount point", self.image, "0002")
+        self.mounts[self.esp] = (self.devices[ESP_GUID], "vfat")
+        self.stub = OTHER_GUID
+        self.refused("systemd-stub says this host booted from partition %s, but BootCurrent's entry is on %s" % (OTHER_GUID, ESP_GUID),
+                     self.image, "0002")
+        self.stub = None
+        self.refused("LoaderDevicePartUUID is not set", self.image, "0002")
 
     def test_a_link_on_the_esp_is_not_followed(self):
         link = os.path.join(self.esp, "EFI", "Linux", "image-3.efi")
         os.symlink(os.path.join(self.esp, "EFI", "Linux", "image-2.efi"), link)
         self.fake.add("0003", "link", r"\EFI\Linux\image-3.efi")
         with self.assertRaises(OSError):
-            bootnext.image(self.esp, "0003", bootnext.state(self.fake))
+            self.image("0003")
+        # ... nor a link to a directory on the way (d9: every component, not only the last)
+        os.symlink(os.path.join(self.esp, "EFI", "Linux"), os.path.join(self.esp, "EFI", "Elsewhere"))
+        self.fake.add("0004", "dir link", r"\EFI\Elsewhere\image-2.efi")
+        with self.assertRaises(OSError):
+            self.image("0004")
 
+
+
+class TheHostsOwnRecords(Case):
+    """The helpers image() reads the host through: /proc/self/mountinfo and systemd-stub's EFI variable."""
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def test_mountinfo_gives_the_visible_mount_at_the_point(self):
+        esp = os.path.join(self.d, "e s p")
+        os.mkdir(esp)
+        info = os.path.join(self.d, "mountinfo")
+        with open(info, "w") as f:
+            f.write("22 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw\n"
+                    "30 22 8:17 / %s rw - vfat /dev/sdb1 rw\n"          # another disk's ESP, mounted first
+                    "31 22 8:1 / %s rw shared:7 - vfat /dev/sda1 rw,fmask=0077\n" % ((esp.replace(" ", "\\040"),) * 2))
+        self.assertEqual(bootnext._mount(esp, info), (os.makedev(8, 1), "vfat"))
+        self.refused("is not a mount point", bootnext._mount, self.d, info)
+
+    def test_loader_device_part_uuid_is_read_as_systemd_stub_writes_it(self):
+        name = os.path.join(self.d, "LoaderDevicePartUUID-" + bootnext.LOADER_VENDOR)
+        with open(name, "wb") as f:
+            f.write(b"\x06\0\0\0" + (ESP_GUID.upper() + "\0").encode("utf-16-le"))
+        self.assertEqual(bootnext._loader_partition(self.d), ESP_GUID)
+        with open(name, "wb") as f:
+            f.write(b"\x06\0\0\0" + "not-a-guid\0".encode("utf-16-le"))
+        self.refused("LoaderDevicePartUUID is not a GUID", bootnext._loader_partition, self.d)
+        os.unlink(name)
+        self.assertIsNone(bootnext._loader_partition(self.d))
+
+
+class NothingElseWritesBootVariables(unittest.TestCase):
+    def test_only_bootnext_py_calls_efibootmgr_or_writes_efi_variables(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        found = []
+        for top in ("deploy", "e2e", "cmd"):
+            for dirpath, _, files in os.walk(os.path.join(root, top)):
+                for name in files:
+                    path = os.path.join(dirpath, name)
+                    if path.endswith(os.path.join("deploy", "baremetal", "bootnext.py")) or not name.endswith((".py", ".sh", ".go")):
+                        continue
+                    with open(path, encoding="utf-8", errors="replace") as f:
+                        text = f.read()
+                    # writing an EFI variable by hand needs its immutable bit cleared first (efivarfs): chattr -i
+                    if "efibootmgr" in text or ("efivars" in text and "chattr -i" in text):
+                        found.append(os.path.relpath(path, root))
+        self.assertEqual(found, [], "only deploy/baremetal/bootnext.py may change the firmware's boot variables")
 
 if __name__ == "__main__":
     unittest.main()
