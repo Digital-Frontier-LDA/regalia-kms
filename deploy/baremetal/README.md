@@ -184,6 +184,17 @@ Commissioning has two halves:
   must be that user's or root's, with no group or other write, and nothing above them may let anyone
   else swap them; the boot session (`/run/regalia/boot-session`) must be root's, in root's
   `/run/regalia` (0755).
+  **A pull nobody saw is seen too (#72, G2).** The daemon watches every PC/SC reader for as long as it runs.
+  A Nitrokey HSM 2, a Pico HSM and a YubiKey are each a USB reader with its card, so pulling one takes
+  the reader away and replugging makes a new one. A token whose reader moved between two operations is
+  treated as having been away, though no operation saw it go, and waits for a fresh lease like any
+  returned token. Where admission is required, a token on a removable slot is served only while its
+  reader is watched. The watcher is in the `-tags piv` build, so **a production host runs the piv
+  build**: a build without it refuses every removable token, and so does a daemon that has lost pcscd
+  (until it reconnects, and then the tokens wait for a fresh lease). A warm card reset with no removal
+  is deliberately not an absence: the sealed PIN is presented on every operation under the current
+  lease, so the card's own login state never authorized anything. SoftHSM slots are not removable and
+  are not watched.
   `python3 -Es -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
   lease service to a peer is not shipped yet (#80). Where admission is required, a token that was
   absent (removed and returned, or the daemon restarted) serves again only once the node holds a lease

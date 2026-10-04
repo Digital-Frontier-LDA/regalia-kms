@@ -42,6 +42,9 @@ type Session interface {
 	Sign(context.Context, string, string, []byte) ([]byte, error)
 	Unwrap(context.Context, string, string, []byte, []byte) ([]byte, error)
 	PublicKey(context.Context, string) ([]byte, error)
+	// Reader is the PC/SC reader the card was opened in. A YubiKey is a USB reader and its card in one
+	// device, so it is always removable (regalia-kms#72, G2).
+	Reader() string
 	Close() error
 }
 
@@ -60,6 +63,9 @@ type Provider struct {
 	waiting atomic.Int32
 	// returned makes a card that was gone wait for a fresh runtime lease. See RequireReauthorization.
 	returned reauth.Tracker
+	// presence notices a card pulled and put back between two operations, from the PC/SC reader
+	// watcher (regalia-kms#72, G2). Asked only where reauthorization is required.
+	presence reauth.Presence
 	// lockoutLooked is when nameLockout last looked at the readers.
 	lockoutLooked time.Time
 }
@@ -89,6 +95,29 @@ func New(driver Driver, pins PINSource) (*Provider, error) {
 // payload of the wrong size, a key the slot does not hold) still does. The distinction matters:
 // counting every failed operation as an absence would let any caller who may use a key take the
 // card out of service, for every key on it, with one malformed request, and again at will.
+// WatchReaders gives the provider the PC/SC reader watcher (regalia-kms#72, G2). Without one, where
+// reauthorization is required, no card is served: every YubiKey is removable.
+func (provider *Provider) WatchReaders(readers reauth.Readers) {
+	provider.presence.Watch(readers)
+}
+
+// present reports whether a card that has proved to be the bound one may go on, as far as its reader
+// says: always where reauthorization is not required; otherwise only while its reader is watched. A
+// reader whose generation moved since the card was last let through means it was away, though no
+// operation saw it: it is recorded as gone and waits for a lease asked for after this moment. A warm
+// reset moves no generation and is let through: the PIN is presented under the current lease anyway,
+// and the card's own verification state is cleared on every open (pivClearVerified).
+func (provider *Provider) present(session Session, deviceID string) bool {
+	if !provider.returned.Required() {
+		return true
+	}
+	serve, away := provider.presence.Check(deviceID, session.Reader(), true)
+	if away {
+		provider.returned.Gone(deviceID)
+	}
+	return serve
+}
+
 func (provider *Provider) RequireReauthorization(gate reauth.Gate, boottime func() (int64, error), sinceMs int64) error {
 	return provider.returned.Require(gate, boottime, sinceMs)
 }
@@ -299,7 +328,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	// A CARD THAT WAS GONE WAITS FOR A FRESH LEASE. Asked once the card has proved to be the bound
 	// one, with the key and policies the binding names, and before anything is done with it, the
 	// PIN included.
-	if !provider.returned.Serves(ctx, binding.DeviceID) {
+	if !provider.present(session, binding.DeviceID) || !provider.returned.Serves(ctx, binding.DeviceID) {
 		return nil, "", ErrUnavailable
 	}
 	if operation == "public-key" {
@@ -437,7 +466,7 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	}
 	// Present, the right card, and not yet vouched for again: not healthy, so routing and readiness
 	// say so. This is also where a card's return is first noticed.
-	if !provider.returned.Serves(ctx, binding.DeviceID) {
+	if !provider.present(session, binding.DeviceID) || !provider.returned.Serves(ctx, binding.DeviceID) {
 		return false
 	}
 	retries, err := provider.pinRetries(ctx, binding, session)

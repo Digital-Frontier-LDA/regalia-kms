@@ -53,6 +53,7 @@ func (driver *PIVDriver) Open(ctx context.Context, deviceID string) (Session, er
 		return nil, ErrUnavailable
 	}
 	var selected *piv.YubiKey
+	var reader string
 	for _, card := range cards {
 		if ctx.Err() != nil {
 			if selected != nil {
@@ -74,7 +75,7 @@ func (driver *PIVDriver) Open(ctx context.Context, deviceID string) (Session, er
 			_ = selected.Close()
 			return nil, ErrUnavailable
 		}
-		selected = candidate
+		selected, reader = candidate, card
 	}
 	if selected == nil {
 		return nil, ErrUnavailable
@@ -89,7 +90,7 @@ func (driver *PIVDriver) Open(ctx context.Context, deviceID string) (Session, er
 		_ = selected.Close()
 		return nil, ErrUnavailable
 	}
-	return &pivSession{card: selected, serial: target}, nil
+	return &pivSession{card: selected, serial: target, reader: reader}, nil
 }
 
 func (driver *PIVDriver) Ready(ctx context.Context) bool {
@@ -104,9 +105,12 @@ type pivSession struct {
 	mu     sync.Mutex
 	card   *piv.YubiKey
 	serial string
+	reader string // the PC/SC reader it was opened in (regalia-kms#72, G2)
 	pin    string
 	closed bool
 }
+
+func (session *pivSession) Reader() string { return session.reader }
 
 func (session *pivSession) Identity(ctx context.Context) (string, error) {
 	if err := session.usable(ctx); err != nil {

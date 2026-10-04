@@ -136,6 +136,7 @@ type reauthWorld struct {
 	gate     *leaseGate
 	now      int64
 	provider *Provider
+	readers  readerGenerations
 }
 
 // newReauthWorld is a daemon started at boot-clock 1000 on a node whose lease was asked for at
@@ -151,8 +152,39 @@ func newReauthWorld(t *testing.T) *reauthWorld {
 	if err := provider.RequireReauthorization(w.gate, func() (int64, error) { return w.now, nil }, w.now); err != nil {
 		t.Fatal(err)
 	}
+	w.readers = readerGenerations{testReader: 1} // the PC/SC watcher (G2): the card's reader, watched
+	provider.WatchReaders(w.readers)
 	w.provider = provider
 	return w
+}
+
+// readerGenerations stands for the PC/SC watcher (internal/backend/pcscwatch).
+type readerGenerations map[string]uint64
+
+func (readers readerGenerations) Generation(name string) (uint64, bool) {
+	generation, ok := readers[name]
+	return generation, ok
+}
+
+// A CARD PULLED AND PUT BACK BETWEEN TWO OPERATIONS WAITS FOR A FRESH LEASE (regalia-kms#72, G2), and a
+// card whose reader is not watched is refused before the PIN.
+func TestACardAwayBetweenTwoOperationsWaitsForAFreshLease(t *testing.T) {
+	w := newReauthWorld(t)
+	w.requireServing("watched, under a lease asked for since the daemon started")
+	w.readers[testReader], w.now = 4, 2_000 // pulled and back between two operations
+	w.requireWaiting("its reader moved", 2_000)
+	w.gate.requestedMs = 2_001
+	w.requireServing("under a lease asked for after it")
+	delete(w.readers, testReader) // pcscd lost
+	logins := w.card.loginCalls
+	if err := w.sign(); err == nil || w.card.loginCalls != logins || w.healthy() {
+		t.Fatalf("a card whose reader is not watched signed, presented its PIN or reported healthy: %v", err)
+	}
+	unwatched := newReauthWorld(t)
+	unwatched.provider.WatchReaders(nil)
+	if err := unwatched.sign(); err == nil {
+		t.Fatal("a card was served with no watcher")
+	}
 }
 
 func (w *reauthWorld) sign() error {
