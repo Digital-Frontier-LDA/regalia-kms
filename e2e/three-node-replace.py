@@ -155,7 +155,8 @@ def scenario(cluster):
                                                          and e.get("at", 0) >= since for p in peers for e in cluster.trail(p)),
        "N: and no lease: c is off every peer's service tunnel, and nobody issued it one", cluster.journal("c", "admission")[-400:])
     # Beneath the tunnels, membership itself: c's service key put back into a's wg-svc by hand (as if a's tunnel had not
-    # followed the chain), c's admission asks a for a lease, and a's sync refuses it by name. (On the unlock side a's
+    # followed the chain); whatever c then asks of a (its sync's pulls, its admission's lease) a's sync refuses by name,
+    # before any operation (sync.peer_of). (On the unlock side a's
     # listener answers no address of a node that may not request: closed unanswered, by design, with nothing to record.)
     since = time.time()
     c_address = threenode.wgsvc.address(service_key)
@@ -163,7 +164,7 @@ def scenario(cluster):
                              "endpoint", "%s:51821" % cluster.nodes["c"].underlay)
     named = until(lambda: [e.get("reason") for e in cluster.trail("a") if e.get("event", "").startswith("sync") and e.get("outcome") == "DENY"
                            and "c is RETIRED under epoch 2" in e.get("reason", "") and e.get("at", 0) >= since], 120, 3)
-    ok(bool(named) and not cluster.lease("c"), "and through a tunnel forced open by hand, a's sync refuses c by name: c is RETIRED under epoch 2",
+    ok(bool(named) and not cluster.lease("c"), "and through a tunnel forced open by hand, a's sync refuses c's requests by name: c is RETIRED under epoch 2",
        {"a denied": named, "c": cluster.journal("c", "admission")[-300:]})
 
 
