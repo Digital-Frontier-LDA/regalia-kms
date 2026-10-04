@@ -18,8 +18,8 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
   3  PoC 10.2-10.4: for each survivor, the two others power-cycled and both unlocked through the survivor
      before either starts (the survivor the only source); both then hold leases the survivor issued
   4  PoC 10.5: two returners ask one survivor at the same time: both get their key from it
-  5  PoC 10.5, the session binding: b crashed (the same TPM boot) presents a second session and a gives it
-     nothing, while c, in a new boot, unlocks through a at the same time; b power-cycled then unlocks through a
+  5  PoC 10.5, the session binding: b's initrd, unlocked once, runs its client again in the same TPM boot with a
+     second session and a gives it nothing, while c, in a new boot, unlocks through a at the same time; b power-cycled then unlocks through a
   6  PoC 10.5, the rate limits: b's lease requests to a, its admission stopped and its bucket full: the
      first 6 in a minute answered, the 7th refused and recorded; c, beside it, answered
   7  N: a QUARANTINED (by the owner's key, #199), then RETIRED (by the root), then b REVOKED_STOLEN (c is then the only
@@ -194,13 +194,15 @@ def scenario(cluster):
         until(lambda: cluster.lease(name), 120, 2)
 
     header("5  PoC 10.5: one boot, one session: a second session in the same boot is refused, and only it")
-    # b crashes (its services stop, its TPM does not: the same boot) and a new client of b's presents a new session;
-    # c, power-cycled (a new boot), asks the same survivor at the same time
+    # b's initrd, having unlocked once in this boot, runs its client again (the TPM untouched: the same boot) and presents
+    # a new session; c, power-cycled (a new boot), asks the same survivor at the same time. In its initrd: an unlock is
+    # judged in the initrd phase (#396), so a booted system that crashed is refused for its phase before its session
     survivor, crashed, rebooted = "a", "b", "c"
     cluster.stop(rebooted)
-    cluster.stop(crashed, power=None)
-    for interface in ("wg-unlock", "wg-svc"):                 # its running system's tunnels down (wg-boot takes wg-unlock's port);
-        cluster.nodes[crashed].in_ns("ip", "link", "del", interface, check=False)   # the TPM untouched: the same boot
+    cluster.stop(crashed)                                       # a new boot, never started: PCR 11 in the initrd phase
+    first = cluster.unlock(crashed)
+    if not unlocked(first, survivor):
+        raise RuntimeError("%s's first session of the boot was not unlocked through %s: %s" % (crashed, survivor, first))
     before = cluster.reset_count(crashed)
     (cluster.nodes[crashed].run / "boot-session").unlink()   # what the client before it left: gone, so it asks again
     asked = time.time()
