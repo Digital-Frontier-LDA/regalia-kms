@@ -1001,6 +1001,14 @@ def _inventory_counts(path=None):
 # commit), in build and in sign: the record's commit is that checkout's HEAD, the tree is clean, and the record names
 # exactly the files build-initrd.sh records (its REPO_FILES, read from that checkout's script), each with that checkout's
 # SHA-256. A record written by hand, or by a builder at another commit or with another script, is refused by name.
+# CURRENT LIMITATIONS (the cross-cutting list is LIMITATIONS.md):
+#   * Only REPO_FILES are hashed. Every other file of the build is held by "commit == HEAD and the tree is clean", i.e. by
+#     git's object ids, SHA-1 in this repository's object format.
+#   * The Go release is compared by NAME with go.mod's; the toolchain binary itself is the builder's to verify (the Go
+#     checksum database, build-initrd.sh's limitations).
+#   * The build record is unsigned: nothing authenticates which builder wrote it; two builders' records must agree.
+#   * Git runs with no global, system or environment configuration (Checkout._env), but as the signer: a signer's
+#     checkout owned by someone else is read with that user's rights over the files, as any read is.
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BUILDER = "deploy/baremetal/initrd/build-initrd.sh"
 # what `git clone`/`git init` + fetch, actions/checkout (gc.auto) and a developer write into a checkout's own config,
