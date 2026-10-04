@@ -10,6 +10,11 @@
 //   - a card inserted or removed, or the reader's event counter moved (the high 16 bits of its
 //     event state, which pcsc-lite advances on each insertion and removal);
 //   - the reader appearing (a new generation) or disappearing (no generation: Generation says no);
+//   - ANY change to the set of readers (the PnP reader): every reader gets a new generation. A pull and
+//     a replug can both happen before the watcher sees the reader go, and pcscd gives the new reader the
+//     same name and, often, the same counter: nothing short of renewing them all would catch that (3e's
+//     read of #368). The cost is that plugging any reader into a KMS host makes every removable token
+//     wait for a fresh lease, which is right: someone had the host's ports in hand;
 //   - the watcher itself (re)starting, after pcscd restarted or the context was lost: every reader
 //     gets a new generation, since nothing was watched meanwhile.
 //
@@ -193,21 +198,17 @@ func (watcher *Watcher) watch(ctx context.Context, api API) error {
 	return nil
 }
 
-// listed records the readers present now. A reader seen before keeps its generation only if the
-// watcher has been running since and its state is the one last seen; one that is new, or back, or
-// changed, gets a new generation; one no longer listed has none.
+// listed records the readers present now, each with a NEW generation: a listing follows a start, a
+// restart or a change to the set of readers, and after any of those no reader is taken to be the one it
+// was (a pull and a replug may both have happened unseen, under the same name and counter). One no
+// longer listed has none.
 func (watcher *Watcher) listed(names []string, events []uint32) {
 	watcher.mu.Lock()
 	defer watcher.mu.Unlock()
 	fresh := map[string]reader{}
 	for i, name := range names {
-		event := events[i] &^ stateChanged
-		if old, ok := watcher.readers[name]; ok && watcher.running && same(old.event, event) {
-			fresh[name] = old
-			continue
-		}
 		watcher.next++
-		fresh[name] = reader{generation: watcher.next, event: event}
+		fresh[name] = reader{generation: watcher.next, event: events[i] &^ stateChanged}
 	}
 	watcher.readers, watcher.running = fresh, true
 }

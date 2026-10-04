@@ -187,8 +187,25 @@ func TestAReaderUnpluggedAndBackIsNeverItsOldGeneration(t *testing.T) {
 	if !ok || back == first {
 		t.Fatalf("plugged back: generation %d (ok %v), was %d", back, ok, first)
 	}
-	if now, _ := w.generation(yubikey); now != other {
-		t.Fatal("another reader's generation moved when one was plugged")
+	// and every other reader's moved too: any change to the set of readers renews them all
+	if now, _ := w.generation(yubikey); now == other {
+		t.Fatal("another reader kept its generation across a change to the set of readers")
+	}
+}
+
+// 3e's read of #368: pulled and replugged before the watcher saw the reader go, so it never shows the
+// reader as unknown; pcscd gives the new one the same name and counter. The relist must still be a new
+// generation, or the pull is missed.
+func TestAPullAndReplugInOneWakeIsStillAnAbsence(t *testing.T) {
+	w := newWorld(t, map[string]uint32{nitrokey: statePresent | 1<<16})
+	first, _ := w.generation(nitrokey)
+	w.apply(func(f *fakePCSC) {
+		delete(f.states, nitrokey)
+		f.states[nitrokey] = statePresent | 1<<16 // back already, the same name and counter
+		f.plugged = true
+	})
+	if now, ok := w.generation(nitrokey); !ok || now == first {
+		t.Fatalf("pulled and replugged in one wake: generation %d (ok %v), was %d", now, ok, first)
 	}
 }
 
