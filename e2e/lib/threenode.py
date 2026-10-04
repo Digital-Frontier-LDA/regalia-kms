@@ -418,8 +418,12 @@ class Cluster:
             "nv_sequence": "0x01500020", "state_dir": str(a.state), "run_dir": str(a.run), "signer": {"kind": "file", "path": str(key)},
             "interval_s": 600, "lifetime_s": None, "sequence_offset": 0, "sequence_stride": 1, "revoke_requesters": ["local-root"],
             "wg_service_key": str(etc / "wg-service.key"), "underlays": {n.name: n.underlay for n in self.nodes.values()},
-            "listen_port": 51821, "sync_port": 7444, "control_socket": str(a.run / "control.sock")}))
-        for d, mode in ((a.state, 0o751), (a.run, 0o700)):      # StateDirectoryMode= and RuntimeDirectoryMode= of its unit
+            "listen_port": 51821, "sync_port": 7444, "control_socket": str(a.dir / "control" / "control.sock")}))
+        # run_dir is where regalia-authtime (root) publishes authtime.json, which is believed only from a root-owned
+        # file in a root-owned directory (/run/regalia on a host); the control socket is in the unit's own
+        # RuntimeDirectory (/run/regalia-authority, 0700)
+        (a.dir / "control").mkdir(exist_ok=True)
+        for d, mode in ((a.state, 0o751), (a.dir / "control", 0o700)):      # StateDirectoryMode= and RuntimeDirectoryMode=
             shutil.chown(d, "regalia-authority", "regalia-authority")
             os.chmod(d, mode)
         said = self.authority_command("wg-key").stdout
@@ -447,8 +451,10 @@ class Cluster:
         if not self.time[AUTH]:
             self.time[AUTH] = True
             self.authtimes[AUTH].step()
-        shutil.chown(a.run, "regalia-authority", "regalia-authority")
-        os.chmod(a.run, 0o700)
+        control = a.dir / "control"                   # its RuntimeDirectory: made again at every start
+        control.mkdir(exist_ok=True)
+        shutil.chown(control, "regalia-authority", "regalia-authority")
+        os.chmod(control, 0o700)
         self._run(a, "wg-apply", oneshot=True)
         # and again at every chain it publishes, as regalia-authority-wg-apply.path runs it
         self._run(a, "wg-apply", unit=self.unit(AUTH, "wg-watch"),
@@ -680,7 +686,7 @@ class Cluster:
 
     def wg_peers(self, name, interface):
         """The public keys `interface` in the node's namespace has as peers."""
-        return set(self.nodes[name].in_ns("wg", "show", interface, "peers", check=False).stdout.split())
+        return set(self.member(name).in_ns("wg", "show", interface, "peers", check=False).stdout.split())
 
     # The epoch's heartbeat, unless the node holds it already: sync delivers it from the seed with the epoch, and a
     # second delivery of the same sequence is a REPLAY (sequence == the TPM counter), which here means "already in".
