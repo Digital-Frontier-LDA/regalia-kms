@@ -94,7 +94,7 @@ def scenario(cluster):
     ok(said is not None and "cannot add or remove nodes" in said,
        "the same replacement signed by the owner (a revocation quorum, #199) is refused: only the root enrolls (%s)" % (said or "accepted")[:90])
     # (the same refusal for a two-node quorum, a's and b's signing keys: membership's own unit test,
-    # tests/test_baremetal_membership_v4.py, test_a_quorum_only_restricts_and_never_touches_the_signers, its "a node added" case, signed by b and c)
+    # tests/test_baremetal_membership_v4.py, test_a_quorum_only_restricts_and_never_touches_the_signers, its "a node added" case, signed by a and b)
     reusing, _ = cluster.replacement("c", "c2", reuse=("c", ("ek_name",)))
     said = refused(membership.accept_chain, None, cluster.chain + [cluster.signed(reusing)], root)
     ok(said is not None and "ek_name of c2 is already used (ek_name of c)" in said,
