@@ -182,6 +182,17 @@ class Format(Case):
             with self.subTest(name):
                 self.invalid(reason, change)
 
+    def test_the_root_is_never_a_party(self):
+        """d9: one device is never both the payload root and a quorum party (D28)."""
+        self.invalid("owner_keys[3] is a pinned root key: the payload root is never a quorum party",
+                     lambda x: x["owner_keys"].append({"alg": "ed25519", "key": ROOT_PUB}))
+        # a P-256 root (#156) that is also a node's signing key
+        root = p256(50)
+        man = copy.deepcopy(self.first)
+        man["nodes"][0]["signing_key"] = typed(root)
+        envelope = {"manifest": man, "signature": {"signer": "root", "key": pub(root), "sig": p256_sig(root, m.DOMAIN + m.canonical(man))}}
+        self.refused("signing_key of a is a pinned root key", m.accept, None, envelope, [ROOT_PUB, typed(root)])
+
     def test_a_tombstone_keeps_the_fields_it_had(self):
         retired = copy.deepcopy(self.first)
         retired["nodes"][2]["state"] = "RETIRED"
@@ -355,7 +366,7 @@ class Vectors(unittest.TestCase):
         for case in cases:
             with self.subTest(case["name"]):
                 try:
-                    outcome = {"accepted": m.digest(m.accept(restored(case["current"]), restored(case["envelope"]), case["root_public"]))}
+                    outcome = {"accepted": m.digest(m.accept(restored(case["current"]), restored(case["envelope"]), restored(case["root_public"])))}
                 except m.Refused as refusal:
                     outcome = {"refused": str(refusal)}
                 want = {k: case[k] for k in ("accepted", "refused") if k in case}

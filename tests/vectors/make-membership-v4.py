@@ -7,7 +7,7 @@ the root's move from v3. A drift on either side fails CI: the Python test replay
 
     python3 -Es tests/vectors/make-membership-v4.py > tests/vectors/membership-v4.json
 
-Every "key" field (a typed key's, a signature's) is written "public": a public key written as
+Every "key" field (a typed key's, a signature's, a typed root's) is written "public": a public key written as
 `"key": "<hex>"` reads as a credential to the secret scanner, and the repository fixes such findings by
 composition, never by an allowlist. A reader renames every "public" back to "key"; no membership document
 has a field of its own named "public". The reasons are Python's words; the Go test compares the outcome
@@ -43,7 +43,7 @@ def recording(current, envelope, root_key):
         outcome = {"refused": str(refusal)}
     else:
         outcome = {"accepted": membership.digest(result)}
-    record = {"current": composed(current), "envelope": composed(envelope), "root_public": root_key, **outcome}
+    record = {"current": composed(current), "envelope": composed(envelope), "root_public": composed(root_key), **outcome}
     key = json.dumps(record, sort_keys=True)
     if key not in seen:
         seen.add(key)
