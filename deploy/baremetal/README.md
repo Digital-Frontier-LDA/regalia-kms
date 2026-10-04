@@ -228,8 +228,10 @@ Commissioning has two halves:
   (`heartbeat.authenticated_now`: the last reading plus the TPM time since, a floor kept across reboots);
   what no node can refuse is two declared servers agreeing on a wrong time at the first boot, which is why
   they must belong to independent operators. Mask the package's other ways of running chronyd at install:
-  `systemctl mask chronyd-restricted.service chrony-dnssrv@.timer`. Leap seconds come from tzdata's
-  `leap-seconds.list` (`leapseclist`; Debian 13 ships `right/UTC` only in tzdata-legacy), and the
+  `systemctl mask chronyd-restricted.service chrony-dnssrv@.timer`. Leap seconds come from the
+  `right/UTC` zone (`leapsectz`): **on Debian 13 install `tzdata-legacy`**, where `right/` now lives (without
+  it chronyd ignores the directive and takes leap seconds from its sources only; `leapseclist` with tzdata's
+  `leap-seconds.list` needs chrony 4.6, and the units are also run under 4.5), and the
   firewall
   opens NTS-KE (TCP 4460) and NTP (UDP 123) to those networks and nowhere else; an `outbound` entry for
   either port is refused, so there is no plain-NTP fallback. `units/chrony.service.d/regalia.conf`

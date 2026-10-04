@@ -228,7 +228,7 @@ def scenario(work, daemons, stop):
         "driftfile /var/lib/chrony/chrony.drift\n", "driftfile %s/client.drift\n" % work).replace("cmdport 0\n", "")
     for name in ("one", "two"):
         lab = lab.replace("server %s nts iburst\n" % servers[name][0], nts(name))
-    ok(all(line in lab.splitlines() for line in ("authselectmode require", "minsources 2", "makestep 1 3", "maxchange 1 3 0", "leapseclist /usr/share/zoneinfo/leap-seconds.list")),
+    ok(all(line in lab.splitlines() for line in ("authselectmode require", "minsources 2", "makestep 1 3", "maxchange 1 3 0", "leapsectz right/UTC")),
        "the lab client keeps every rendered directive but the servers' ports and the state paths")
 
     def rendered_client(text):
@@ -237,8 +237,8 @@ def scenario(work, daemons, stop):
     rendered_client(lab)
     said = until(lambda v: v == "", 90)
     ok(said == "", "chrony configured as rendered: two agreeing NTS sources, authenticated", said)
-    ok("Using leap second list /usr/share/zoneinfo/leap-seconds.list" in open(os.path.join(work, "client.log")).read(),
-       "and it loads tzdata's leap second list (no tzdata-legacy needed)")
+    ok("Using right/UTC timezone to obtain leap second data" in open(os.path.join(work, "client.log")).read(),
+       "and it reads leap seconds from the right/UTC zone (on Debian 13: tzdata-legacy, a node requirement)")
 
     header("8  both sources agree on a jump after boot: chronyd exits (maxchange), nothing is served")
     time.sleep(8)                                    # past the first three clock updates (minpoll 0): steps are over

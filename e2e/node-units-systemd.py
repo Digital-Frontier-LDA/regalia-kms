@@ -331,8 +331,8 @@ def chrony(work):
        "the package's /etc/chrony/chrony.conf is untouched")
     masked = [show(name, "UnitFileState")["UnitFileState"] for name in ("chronyd-restricted.service", "chrony-dnssrv@.timer")]
     ok(masked == ["masked", "masked"], "the package's chronyd-restricted and chrony-dnssrv timer are masked", masked)
-    leap = until(lambda: "Using leap second list" in journal("chrony.service"), 20)
-    ok(leap, "chronyd loads tzdata's leap second list under the distribution's AppArmor profile", journal("chrony.service")[-400:])
+    leap = until(lambda: "Using right/UTC timezone to obtain leap second data" in journal("chrony.service"), 20)
+    ok(leap, "chronyd reads leap seconds from right/UTC under the distribution's AppArmor profile", journal("chrony.service")[-400:])
     state = os.stat("/var/lib/chrony")
     ok(stat.S_IMODE(state.st_mode) & 0o007 == 0 and pwd.getpwuid(state.st_uid).pw_name == "_chrony",
        "the NTS cookies' directory (ntsdumpdir /var/lib/chrony) is chrony's user's, and others cannot read it (%s %s)"

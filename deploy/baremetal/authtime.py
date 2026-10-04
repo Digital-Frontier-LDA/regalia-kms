@@ -96,9 +96,11 @@ MAX_STALE = 60         # seconds a status file is believed, on the boot clock
 INTERVAL = 15          # seconds between two checks by the root service
 ACCEPTABLE = ("*", "+", "-")   # selected, combined, and agreeing but not combined
 SERVER = sitecfg.NTS_SERVER      # a host name, or an IPv4 address: the site config's rule
-# tzdata's list (Debian 13 ships right/UTC only in tzdata-legacy, which the nodes do not install): chronyd logs
-# "Using leap second list" when it loads it, and the distribution's AppArmor profile reads the zoneinfo tree
-LEAP_SECONDS = "/usr/share/zoneinfo/leap-seconds.list"
+# Leap seconds from the right/UTC zone. NOT tzdata's leap-seconds.list (`leapseclist`): that directive is chrony
+# 4.6's, and chrony 4.5 (Ubuntu 24.04, where CI runs the units) refuses the whole configuration for it. On Debian 13
+# right/ is in tzdata-legacy, which a node must install (README); chronyd logs "Using right/UTC timezone to obtain
+# leap second data" when it has it, and the distribution's AppArmor profile reads the zoneinfo tree.
+LEAP_ZONE = "right/UTC"
 # THE LATCH (#303, regalia-kms-d9 and -24): chronyd that stopped abnormally (maxchange: two sources agreeing on a
 # jump; or any other unclean exit) is recorded here by the chrony drop-in's ExecStopPost, and its ExecStartPre
 # refuses to start chronyd while the file exists: a package upgrade's restart, a manual start and a reboot all
@@ -211,7 +213,7 @@ def conf(names):
             + "".join("server %s nts iburst\n" % name for name in servers(names))
             + "authselectmode require\nminsources %d\n" % MINIMUM
             + "makestep 1 3\nmaxchange 1 3 0\n"
-            + "ntsdumpdir /var/lib/chrony\ndriftfile /var/lib/chrony/chrony.drift\nleapseclist %s\nrtcsync\ncmdport 0\n" % LEAP_SECONDS)
+            + "ntsdumpdir /var/lib/chrony\ndriftfile /var/lib/chrony/chrony.drift\nleapsectz %s\nrtcsync\ncmdport 0\n" % LEAP_ZONE)
 
 
 # ---- the one fact, for the services that are not root ----
