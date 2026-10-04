@@ -365,6 +365,25 @@ class Auditing(Publishing):
                          (False, "the transition could not be recorded in the time trail (OSError)"))
         self.assertEqual(self.clock()(), (NOW, False))
 
+    def test_after_a_failed_record_the_next_verdict_is_recorded_again(self):
+        """authenticated recorded; the switch to not authenticated fails to record; when time is authenticated again,
+        that is recorded, so the trail never runs straight from one authenticated to the next over an unrecorded gap."""
+        self.answer_value = reading()
+        events, failing = [], [False]
+
+        def record(event):
+            if failing[0]:
+                raise OSError(28, "No space left on device")
+            events.append(event)
+        service = authtime.Service(self.path, DECLARED, self.reading_now, wall=lambda: self.now, boottime=lambda: self.ticks,
+                                   boot=lambda: BOOT, record=record, leap=lambda: __file__)
+        service.step()
+        self.answer_value, failing[0] = m.Refused("chrony could not be asked for tracking"), True
+        self.assertFalse(service.step()["authenticated"])
+        self.answer_value, failing[0] = reading(), False
+        self.assertTrue(service.step()["authenticated"])
+        self.assertEqual([e["event"] for e in events], ["time-authenticated", "time-authenticated"])
+
     def test_the_latch_is_cleared_only_with_a_reason_recorded_first(self):
         latch = os.path.join(self.d, "chrony-latch")
         self.refused("no latch", authtime.clear_latch, "compared with an independent clock", lambda e: None, latch)

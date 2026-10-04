@@ -279,6 +279,9 @@ class Service:
                 self.record(event)
                 self.recorded = authenticated
             except Exception as failure:      # noqa: BLE001 - unrecorded, it is not vouched for
+                # the trail no longer shows what is published: the next verdict, whatever it is, is recorded again
+                # (CodeRabbit on #304: recorded=True would skip it, hiding that time was not authenticated meanwhile)
+                self.recorded = None
                 authenticated, reason = False, "the transition could not be recorded in the time trail (%s)" % type(failure).__name__
         document = {"schema": SCHEMA, "boot_id": self.boot, "checked_boottime_ms": checked, "authenticated": authenticated, "reason": reason}
         try:

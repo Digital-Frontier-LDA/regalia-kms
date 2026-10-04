@@ -240,10 +240,18 @@ def scenario(work, daemons, stop):
     ok("Using right/UTC timezone to obtain leap second data" in open(os.path.join(work, "client.log")).read(),
        "and it reads leap seconds from the right/UTC zone (on Debian 13: tzdata-legacy, a node requirement)")
 
+    def jump(name, seconds):
+        """The source `name` now reads `seconds` ahead: removed and added again with that offset, in the RUNNING
+        client, so its count of clock updates goes on (`chronyc offset` would do it in place, but is chrony 4.6's;
+        CI runs 4.5). The added source keeps its NTS (the certificates are in the configuration)."""
+        address = servers[name][0]
+        subprocess.run([CHRONYC, "-h", sock, "delete", address], capture_output=True, check=False)
+        subprocess.run([CHRONYC, "-h", sock, "add"] + nts(name).split() + ["offset", str(seconds)], capture_output=True, check=False)
+
     header("8  both sources agree on a jump after boot: chronyd exits (maxchange), nothing is served")
     time.sleep(8)                                    # past the first three clock updates (minpoll 0): steps are over
     for name in ("one", "two"):
-        subprocess.run([CHRONYC, "-h", sock, "offset", servers[name][0], "2"], capture_output=True, check=False)
+        jump(name, 2)
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline and daemons["client"].poll() is None:
         time.sleep(1)
@@ -278,14 +286,16 @@ def scenario(work, daemons, stop):
         time.sleep(1)
     ok(verdict3() == "", "three declared NTS sources agree: authenticated", verdict3())
     time.sleep(8)
-    subprocess.run([CHRONYC, "-h", sock, "offset", servers["one"][0], "2"], capture_output=True, check=False)
-    deadline, states = time.monotonic() + 60, {}
+    jump("one", 2)
+    # "x", a falseticker: chrony has samples from it and the other two outvote it. "?" (no samples yet, as
+    # just after it is added again) would show nothing.
+    deadline, states = time.monotonic() + 90, {}
     while time.monotonic() < deadline:
         states = {s["name"]: s["state"] for s in ask()["sources"]}
-        if states.get(servers["one"][0]) not in authtime.ACCEPTABLE:
+        if states.get(servers["one"][0]) == "x":
             break
         time.sleep(1)
-    ok(states.get(servers["one"][0]) not in authtime.ACCEPTABLE, "the source that jumped is outvoted (state %r)" % states.get(servers["one"][0]), states)
+    ok(states.get(servers["one"][0]) == "x", "the source that jumped is outvoted: a falseticker (state %r)" % states.get(servers["one"][0]), states)
     ok(daemons["client"].poll() is None and verdict3() == "", "chronyd keeps running and time stays authenticated on the two that agree",
        verdict3())
 

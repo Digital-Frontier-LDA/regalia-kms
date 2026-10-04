@@ -329,8 +329,9 @@ def chrony(work):
     ok("systemd-timesyncd.service" in started["Conflicts"], "systemd-timesyncd conflicts with it: one thing sets the clock", started["Conflicts"])
     ok(hashlib.sha256(pathlib.Path("/etc/chrony/chrony.conf").read_bytes()).hexdigest() == package_conf,
        "the package's /etc/chrony/chrony.conf is untouched")
-    masked = [show(name, "UnitFileState")["UnitFileState"] for name in ("chronyd-restricted.service", "chrony-dnssrv@.timer")]
-    ok(masked == ["masked", "masked"], "the package's chronyd-restricted and chrony-dnssrv timer are masked", masked)
+    # a template (chrony-dnssrv@.timer) has no UnitFileState to show: a mask is the link to /dev/null
+    masked = [os.path.realpath("/etc/systemd/system/" + name) for name in ("chronyd-restricted.service", "chrony-dnssrv@.timer")]
+    ok(masked == ["/dev/null", "/dev/null"], "the package's chronyd-restricted and chrony-dnssrv timer are masked", masked)
     leap = until(lambda: "Using right/UTC timezone to obtain leap second data" in journal("chrony.service"), 20)
     ok(leap, "chronyd reads leap seconds from right/UTC under the distribution's AppArmor profile", journal("chrony.service")[-400:])
     state = os.stat("/var/lib/chrony")
