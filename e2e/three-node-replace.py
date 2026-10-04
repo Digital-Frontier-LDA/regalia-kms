@@ -21,12 +21,13 @@ with new identities and keeps c as RETIRED, a tombstone whose identities are nev
   4  c2 provides bootstrap: b, with only c2 up, opens its volume through c2's keyslot
   5  PoC 16.5: old c powered back, with every credential it ever held (its disk, its sealed local half, its
      paths, its WireGuard keys): no peer's unlock tunnel admits it, it gets no key; off every service tunnel, no
-     lease. (Its TPM posing as c2 is refused on the EK the manifest pins for c2: replacement.py's unit tests,
-     test_poc_16_5_the_old_hardware_is_refused_by_every_decision.)
+     lease; and through a service tunnel forced open by hand, a's sync refuses it by name (RETIRED). Its TPM posing
+     as c2 (refused on the EK and AK the manifest pins for c2) is NOT covered here: replacement.py's unit tests
+     cover it (test_poc_16_5_the_old_hardware_is_refused_by_every_decision).
 
 Not here: restoring the service keys onto c2's HSM (the DKEK domain, #64); `enrol --replace` as the operator's
-command (#279: the fixture enrolls c2 as it enrolls every node, and starts its heartbeat counter at the
-authority's verified sequence, as #279 does); the physical rehearsal.
+command (#279, merged: the fixture enrolls c2 as it enrolls every node, and starts its heartbeat counter one below
+the sequence `authority status` reports, not at a heartbeat c2 verified as #279 does); the physical rehearsal.
 """
 import os
 import pathlib
@@ -37,7 +38,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
 import threenode                                     # noqa: E402
 from threenode import AUTH, sh, until                # noqa: E402
-from deploy.baremetal import authtime, measurements, membership   # noqa: E402
+from deploy.baremetal import authtime, membership   # noqa: E402
 
 passed, failed = 0, 0
 SERVICES = ("sync", "wg-apply", "admission")
@@ -87,13 +88,16 @@ def scenario(cluster):
     cluster.stop("c")                                 # gone: it stays off
     cluster.add_node("c2")
     current, current_document = cluster.manifest, cluster.document
-    by_revocation, document = cluster.replacement("c", "c2")
-    said = refused(membership.accept_chain, None, cluster.chain + [cluster.signed(by_revocation, signer="revocation")], cluster.signed(current)["signature"]["key"])
-    ok(said is not None, "the same replacement signed by the revocation key is refused: only the root enrolls (%s)" % (said or "accepted")[:90])
-    reusing, reuse_document = cluster.replacement("c", "c2", reuse=("c", ("ek_name",)))
-    said = refused(measurements.check_replacement, current, reusing, current_document, reuse_document, "c", "c2")
-    ok(said is not None and "ek_name" in said and ("reuses" in said or "already used" in said),
-       "one that gives c2 the retired c's EK is refused (%s)" % (said or "accepted")[:90])
+    root = cluster.signed(current)["signature"]["key"]
+    # through the gate that decides (membership.accept_chain, as every Store and the authority's accept run it)
+    by_revocation, _ = cluster.replacement("c", "c2", same_policy=True)       # all a revocation may not change, but the nodes
+    said = refused(membership.accept_chain, None, cluster.chain + [cluster.signed(by_revocation, signer="revocation")], root)
+    ok(said is not None and "cannot add or remove nodes" in said,
+       "the same replacement signed by the revocation key is refused: only the root enrolls (%s)" % (said or "accepted")[:90])
+    reusing, _ = cluster.replacement("c", "c2", reuse=("c", ("ek_name",)))
+    said = refused(membership.accept_chain, None, cluster.chain + [cluster.signed(reusing)], root)
+    ok(said is not None and "ek_name of c2 is already used (ek_name of c)" in said,
+       "root-signed, one giving c2 the retired c's EK is refused: the tombstone keeps it (%s)" % (said or "accepted")[:90])
     since = time.time()
     cluster.replace("c", "c2")
     published = until(lambda: membership.load((cluster.auth.state / "chain.json").read_bytes(), 1 << 20)[-1]["manifest"]["epoch"] == 2, 60, 2)
@@ -112,7 +116,6 @@ def scenario(cluster):
         cluster.start(name, SERVICES)
     for alone, other in (("a", "b"), ("b", "a")):
         cluster.stop(other)
-        since = time.time()
         got = cluster.unlock("c2")
         ok(got["rc"] == 0 and got["peer"] == alone and got["marker"],
            "U: c2, with only %s up, opened its volume through %s's keyslot" % (alone, alone), got)
@@ -151,6 +154,17 @@ def scenario(cluster):
     ok(off is True and not cluster.lease("c") and not any(e.get("event") == "sync-lease" and e.get("subject") == "c" and e.get("outcome") == "ALLOW"
                                                          and e.get("at", 0) >= since for p in peers for e in cluster.trail(p)),
        "N: and no lease: c is off every peer's service tunnel, and nobody issued it one", cluster.journal("c", "admission")[-400:])
+    # Beneath the tunnels, membership itself: c's service key put back into a's wg-svc by hand (as if a's tunnel had not
+    # followed the chain), c's admission asks a for a lease, and a's sync refuses it by name. (On the unlock side a's
+    # listener answers no address of a node that may not request: closed unanswered, by design, with nothing to record.)
+    since = time.time()
+    c_address = threenode.wgsvc.address(service_key)
+    cluster.nodes["a"].in_ns("wg", "set", "wg-svc", "peer", as_wg(service_key), "allowed-ips", c_address + "/128",
+                             "endpoint", "%s:51821" % cluster.nodes["c"].underlay)
+    named = until(lambda: [e.get("reason") for e in cluster.trail("a") if e.get("event", "").startswith("sync") and e.get("outcome") == "DENY"
+                           and "c is RETIRED under epoch 2" in e.get("reason", "") and e.get("at", 0) >= since], 120, 3)
+    ok(bool(named) and not cluster.lease("c"), "and through a tunnel forced open by hand, a's sync refuses c by name: c is RETIRED under epoch 2",
+       {"a denied": named, "c": cluster.journal("c", "admission")[-300:]})
 
 
 def main():

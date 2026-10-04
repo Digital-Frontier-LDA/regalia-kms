@@ -84,6 +84,13 @@ def until(what, seconds, interval=1.0):
     return last
 
 
+def _replace(path, text):
+    """`path` written whole: a temporary file beside it, then renamed over it."""
+    tmp = pathlib.Path(str(path) + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
 class NodeHere:
     """One node's paths, keys and identity."""
 
@@ -293,13 +300,13 @@ class Cluster:
                 "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444,
                                  "authority": {"key": self.keys[AUTH]["service"][1], "underlay": self.auth.underlay, "port": 51821}
                                  if self.auth else None}}
-        (n.dir / "etc" / "site.json").write_text(json.dumps(site))
-        (n.dir / "etc" / "measurements.json").write_text(json.dumps(self.document))
+        _replace(n.dir / "etc" / "site.json", json.dumps(site))            # whole, never torn: running services read them
+        _replace(n.dir / "etc" / "measurements.json", json.dumps(self.document))
         cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=n.tcti,
                    state_dir=str(n.state), admission_dir=str(n.admission), run_dir=str(n.run),
                    wg_service_key=str(n.dir / "etc" / "wg-service.key"), measurements=str(n.dir / "etc" / "measurements.json"),
                    time_servers=["nts1.e2e3.invalid", "nts2.e2e3.invalid"], pull_interval=10)
-        n.cfg_path.write_text(json.dumps(cfg))
+        _replace(n.cfg_path, json.dumps(cfg))
 
     def node(self, name):
         """The node as its services see it (deploy/baremetal/node.Node), from its configuration."""
@@ -479,13 +486,14 @@ class Cluster:
         self._authtime_for(n)
         return n
 
-    def replacement(self, old, new, reuse=None):
+    def replacement(self, old, new, reuse=None, same_policy=False):
         """The manifest replacing `old` by `new` (one root-signed step, replacement.py), and the measurements
         document it binds: `new` enrolled ACTIVE with its own identities (or, for a refusal test, `reuse` of them
         taken from another node), `old` kept as RETIRED. Returns (candidate, document)."""
         example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
         n = self.nodes[new]
-        document = dict(self.document, nodes=dict(self.document["nodes"], **{new: {"accepted": [self._reference(n, example["pcrs"])]}}))
+        document = self.document if same_policy else \
+            dict(self.document, nodes=dict(self.document["nodes"], **{new: {"accepted": [self._reference(n, example["pcrs"])]}}))
         entry = {"node_id": new, "state": "ACTIVE", "ek_name": self.ids[new][0], "ak_name": self.ids[new][1],
                  "wg_boot_pub": self.keys[new]["boot"][1], "wg_service_pub": self.keys[new]["service"][1], "hsm_serials": ["E2E3%s" % new.upper()]}
         if reuse:
@@ -502,8 +510,11 @@ class Cluster:
         operator checks it (measurements.check_replacement) and signed by the root; the authority takes it between
         runs of its serve (`accept`, as its own user) and publishes it; every node's site configuration and
         measurements document follow (an operator's change); the new node's store holds the chain, and its
-        heartbeat counter starts at the authority's verified sequence (what #279's `enrol --replace` does). The
-        running nodes take the epoch from the authority by sync. Returns the envelope."""
+        heartbeat counter starts one below the sequence `authority status` reports (read as root, not verified by
+        the new node), so the authority's current heartbeat is new to it and sync delivers it. #279's
+        `enrol --replace` instead defines the counter AT a heartbeat the node verifies (Freshness.accept_first).
+        The old node keeps the configuration it had, as the hardware left. The running nodes take the epoch from
+        the authority by sync. Returns the envelope."""
         candidate, document = self.replacement(old, new)
         measurements.check_replacement(self.manifest, candidate, self.document, document, old, new)
         envelope = self.signed(candidate)
@@ -519,7 +530,8 @@ class Cluster:
         self.chain.append(envelope)
         self.manifest, self.document = candidate, document
         for n in self.nodes.values():
-            self._configure(n)
+            if n.name != old:
+                self._configure(n)
         n = self.nodes[new]
         here = self.node(new)
         here.anchor().define()
