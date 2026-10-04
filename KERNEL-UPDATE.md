@@ -170,6 +170,18 @@ ceremony (a ceremony prerequisite).
   falls back and is still unlocked; retirement is refused until every node is on the new image; after
   it, the old image gets no unlock and no lease; a peer's membership restored from before the
   retirement refuses to load.
+- **On three nodes with their real services, in CI** (`e2e/rolling-threenode.py`, #75's tier N; an image is
+  PCR 11, extended after a power cycle). It shows the whole sequence:
+  - CURRENT, then NEXT before it is approved: no key from either peer while the other two serve;
+  - CURRENT and NEXT approved in one epoch, which every node holds;
+  - `may_reboot`, asked as `update apply` asks it (as root in the node's namespace, on leases asked for at that
+    moment, the running set read from the TPM), says yes to one node and WAIT to the others;
+  - each node onto NEXT, unlocked by the real pre-root client through a peer and leased by the real admission
+    service, and vouching for the nodes still on CURRENT;
+  - a rollback to CURRENT under the same epoch, still unlocked;
+  - the retire judged from the peers' real attestation state: refused naming the node still on CURRENT, accepted
+    once every node is seen on NEXT;
+  - after the retire, CURRENT gets no key.
 - **On one software TPM** (`e2e/pcr-signed-policy-swtpm.sh`): a PIN sealed once opens under the new
   image with no reseal, and does not open without the host key.
 - **On no physical machine.** Nothing here has run on a DL360, a physical TPM, a real UKI or a real
