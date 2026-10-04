@@ -19,7 +19,8 @@ What it changes, and puts back: ONE temporary P-256 key is generated on the toke
 deleted at the end; the objects on the token are listed before and after, and must be the same. The PIN is
 read from the terminal (never an argument, never logged), checked once before anything else (a wrong PIN
 costs one try of the token's counter, and the drill stops there), and held only in a 0600 file in a 0700
-directory under /tmp for the daemon, removed at the end. The evidence log records every step, the daemon's
+directory on a tmpfs ($XDG_RUNTIME_DIR, or /dev/shm; refused when neither is one: never on a disk) for the
+daemon, which reads it on every operation; it is the first thing removed when the drill ends, whatever happened. The evidence log records every step, the daemon's
 log and its audit journal, and no PIN.
 """
 import argparse
@@ -84,6 +85,18 @@ def objects(serial, pin):
                env=dict(os.environ, P=pin))
 
 
+def on_tmpfs(path):
+    """Whether `path` is on a tmpfs (its longest mount point in /proc/mounts): the PIN file is never on a disk."""
+    real, best = os.path.realpath(path), ("", "")
+    with open("/proc/mounts") as f:
+        for line in f:
+            fields = line.split()
+            point = fields[1].replace("\\040", " ")
+            if (real == point or real.startswith(point.rstrip("/") + "/")) and len(point) > len(best[0]):
+                best = (point, fields[2])
+    return best[1] == "tmpfs"
+
+
 def token_label(serial):
     slots = [block for block in run(["pkcs11-tool", "--module", MODULE, "-L"]).split("Slot ")[1:] if "serial num         : %s\n" % serial in block]
     if len(slots) != 1:
@@ -123,12 +136,19 @@ def main():
     key_id = os.urandom(4).hex()
     if re.search(r"ID:\s+%s\b" % key_id, before):
         raise SystemExit("hsm-gate-drill: an object with id %s is on the token already: run again" % key_id)
-    w = Path(tempfile.mkdtemp(dir="/tmp"))
-    runtime = Path("/tmp") / ("regalia-run-" + w.name)
+    base = next((d for d in (os.environ.get("XDG_RUNTIME_DIR"), "/dev/shm") if d and os.path.isdir(d) and on_tmpfs(d)), None)
+    if base is None:
+        raise SystemExit("hsm-gate-drill: neither $XDG_RUNTIME_DIR nor /dev/shm is a tmpfs: the PIN file would be on a disk; refused")
+    w = Path(tempfile.mkdtemp(dir=base))            # 0700: the PIN file for the daemon, on a tmpfs
+    runtime = Path("/tmp") / ("regalia-run-" + w.name)   # root's admission directory (no secret): directly under /tmp, as the daemon wants
     processes = []
     try:
         drill(args.serial, label, pin, w, runtime, key_id, processes)
     finally:
+        try:                                         # the PIN file first, whatever else fails after
+            (w / "etc" / "card.pin").unlink(missing_ok=True)
+        except OSError as failure:
+            say("ATTENTION: the PIN file %s could not be removed (%s): remove it now" % (w / "etc" / "card.pin", failure))
         for process in processes:
             if process.poll() is None:
                 process.send_signal(signal.SIGTERM)
