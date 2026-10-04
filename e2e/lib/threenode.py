@@ -103,6 +103,12 @@ def until(what, seconds, interval=1.0):
     return last
 
 
+def beat_stamp(seconds):
+    """A heartbeat's time field (beat.stamp)."""
+    from deploy.baremetal import beat
+    return beat.stamp(int(seconds))
+
+
 def _replace(path, text):
     """`path` written whole: a temporary file beside it, then renamed over it."""
     tmp = pathlib.Path(str(path) + ".tmp")
