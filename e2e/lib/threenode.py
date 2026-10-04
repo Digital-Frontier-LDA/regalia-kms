@@ -32,7 +32,9 @@ import grp
 import json
 import os
 import pathlib
+import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -42,10 +44,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import attest, authtime, heartbeat, measurements, membership, node, wgsvc   # noqa: E402
+from deploy.baremetal import attest, authtime, bootnet, heartbeat, measurements, membership, node, sitecfg, unlock, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
 NAMES = ("a", "b", "c")
+RECOVERY = b"cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuuvvcb"     # the TEST recovery key (as the unlock tests')
+MARKER = b"regalia-kms root volume marker"
 SWITCH = "e2e3-sw"
 UNIT_PREFIX = "e2e3-"
 
@@ -100,6 +104,8 @@ class Cluster:
         self.manifest = None
         self.keys = {}
         self.authtimes = {}
+        self.loops = {}
+        self.client = os.environ.get("REGALIA_UNLOCK_BIN", "")
         self.code = self.work / "src"                 # the package as a host installs it: root's, readable by the services
 
     # ---- building ----
@@ -317,6 +323,11 @@ class Cluster:
         """The node's services, each a transient unit in its namespace, as a host runs them: sync first (it
         publishes the chain the others verify), wg-apply once the chain is published."""
         n = self.nodes[name]
+        admission_run = n.run / "admission"                # as regalia.tmpfiles.conf makes it at every boot
+        if not admission_run.exists():
+            admission_run.mkdir()
+            shutil.chown(admission_run, "regalia-admission", "regalia-admission")
+            os.chmod(admission_run, 0o755)
         if not self.time[name]:                       # booted again: its time is checked again (chrony, on a host)
             self.time[name] = True
             self.authtimes[name].step()
@@ -338,6 +349,8 @@ class Cluster:
         for service in ("admission", "sync", "wg-apply"):
             sh("systemctl", "stop", self.unit(name, service), check=False)
             sh("systemctl", "reset-failed", self.unit(name, service), check=False)
+        if os.path.exists("/dev/mapper/e2e3-" + name):
+            sh("cryptsetup", "close", "e2e3-" + name, check=False)
         if power:
             self.time[name] = False
             for entry in n.run.iterdir():
@@ -345,6 +358,168 @@ class Cluster:
             for interface in ("wg-svc", "wg-unlock", "wg-boot"):
                 n.in_ns("ip", "link", "del", interface, check=False)
             self.power_cycle(name, orderly=(power == "cycle"))
+
+    # ---- the disks, the peer paths, the unlock (#70 PR 2) ----
+
+    def disk(self, name):
+        """The node's root volume: LUKS2 on a loop device, the recovery key in keyslot 0 (and its systemd-recovery
+        token), a filesystem holding the marker."""
+        n = self.nodes[name]
+        image = n.dir / "disk.img"
+        with open(image, "wb") as f:
+            f.truncate(32 * 1024 * 1024)
+        loop = sh("losetup", "--find", "--show", str(image)).stdout.strip()
+        self.loops[name] = loop
+        sh("cryptsetup", "luksFormat", "--type", "luks2", "--batch-mode", *unlock.PBKDF, "--key-file", "-", loop, input=RECOVERY.decode())
+        sh("cryptsetup", "token", "import", "--json-file", "-", loop, input='{"type":"systemd-recovery","keyslots":["0"]}')
+        mapped = "e2e3-" + name
+        sh("cryptsetup", "open", "--key-file", "-", loop, mapped, input=RECOVERY.decode())
+        mnt = n.dir / "mnt"
+        mnt.mkdir(exist_ok=True)
+        sh("mkfs.ext4", "-q", "/dev/mapper/" + mapped)
+        sh("mount", "/dev/mapper/" + mapped, str(mnt))
+        (mnt / "marker").write_bytes(MARKER)
+        sh("umount", str(mnt))
+        sh("cryptsetup", "close", mapped)
+        return loop
+
+    def enrol(self, name):
+        """One peer path from each other node (enrolment, as unlock's tests and #190 do it): the local half sealed
+        to the node's own TPM under PCR 7; each peer mints a contribution in its real contributions file and wraps
+        it to the node's one-time key; a keyslot and token per peer. And the node's AK enrolled in each peer's
+        verifier (the credential challenge, activated by the node's TPM). Run before the peers' services start."""
+        n, loop = self.nodes[name], self.loops[name]
+        local = os.urandom(32)
+        sealed = unlock.seal_local(local, pcrs="7", tpm2_device=n.tcti)
+        ek, ak = (n.dir / "ids" / "ek.pub").read_bytes(), (n.dir / "ids" / "ak.pub").read_bytes()
+        for peer in [p for p in self.nodes if p != name]:
+            here = self.node(peer)
+            enrolment = unlock.Enrolment(name)
+            wrapped = unlock.contribute(unlock.Contributions(here.path("contributions.json")), self.manifest, peer, name, enrolment.public, enrolment.fingerprint)
+            epoch, secret = enrolment.open(wrapped, peer)
+            unlock.enrol_path(loop, name, peer, epoch, local, sealed, secret, RECOVERY)
+            attester = here.attester_for(self.manifest)
+            credential, activated = n.dir / ("cred-" + peer), n.dir / ("secret-" + peer)
+            credential.write_bytes(attester.challenge(name, ek, ak))
+            before = os.environ.get("TPM2TOOLS_TCTI")
+            os.environ["TPM2TOOLS_TCTI"] = n.tcti
+            try:
+                attest.node_activate(str(credential), str(activated))
+                sh("tpm2_flushcontext", "-t", check=False)
+            finally:
+                os.environ.pop("TPM2TOOLS_TCTI") if before is None else os.environ.__setitem__("TPM2TOOLS_TCTI", before)
+            attester.enroll(name, activated.read_bytes())
+            for leftover in (credential, activated):
+                leftover.unlink()
+            sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[peer].state))
+        del local, secret
+
+    def keyslot_peer(self, name, slot):
+        """The peer whose path token names `slot` on the node's volume (None for the recovery keyslot)."""
+        for _, token in unlock.path_tokens(unlock.luks_meta(self.loops[name])):
+            if str(slot) in token["keyslots"]:
+                return token["peer"]
+        return None
+
+    def unlock(self, name, timeout=180, rounds=5):
+        """What the node's initrd does, less the boot: its WG-BOOT tunnel up in its namespace (bootnet's
+        configuration, from the chain it holds), then the pre-root client (cmd/regalia-unlock, the real binary)
+        with this fixture in systemd's two roles: the local half unsealed from the node's TPM and given as a
+        credential (LoadCredentialEncrypted=), the key socket passed (socket activation), and the volume opened
+        with the key that comes back (systemd-cryptsetup). Returns {rc, peer, marker, stderr}: `peer` the one
+        whose keyslot opened it, `marker` whether the filesystem reads back."""
+        n, loop, mapped = self.nodes[name], self.loops[name], "e2e3-" + name
+        manifest = self.node(name).store().load()          # the chain the node holds: its initrd's credentials say the same
+        site = sitecfg.load(str(n.dir / "etc" / "site.json"))
+        n.in_ns("ip", "link", "add", "wg-boot", "type", "wireguard")
+        n.in_ns("wg", "setconf", "wg-boot", "/dev/stdin", input=bootnet.with_key(bootnet.boot_wg_conf(site, manifest), self.keys[name]["boot"][0]))
+        n.in_ns("wg", "set", "wg-boot", "listen-port", str(site["boot_mesh"]["listen_port"]))
+        n.in_ns("ip", "address", "add", "%s/%d" % (n.boot_address, site["boot_mesh"]["prefix"]), "dev", "wg-boot")
+        n.in_ns("ip", "link", "set", "wg-boot", "up")
+        config = n.dir / "unlock.json"
+        config.write_text(json.dumps(unlock.boot_config(manifest, name, loop, [7, 11], bootnet.unlock_endpoints(site, manifest))))
+        creds = n.dir / "creds"
+        shutil.rmtree(creds, True)
+        creds.mkdir(mode=0o700)
+        tokens = [t for _, t in unlock.path_tokens(unlock.luks_meta(loop))]
+        local = unlock.unseal_local(tokens[0]["local"], tpm2_device=n.tcti)
+        with open(os.open(str(creds / unlock.LOCAL_NAME), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400), "wb") as f:
+            f.write(local)
+        del local
+        path = str(n.dir / "key.sock")
+        if os.path.exists(path):
+            os.unlink(path)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(path)
+        listener.listen(1)
+        asker = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        asker.connect(path)                                        # systemd-cryptsetup, waiting for its key
+
+        def activated():                                           # sd_listen_fds: descriptor 3
+            os.dup2(listener.fileno(), 3)
+            os.set_inheritable(3, True)
+        result = {"rc": None, "peer": None, "marker": False, "stderr": ""}
+        try:
+            # LISTEN_PID is the client's own: the shell's, which execs ip, which execs the client in the namespace
+            env = dict(os.environ, LISTEN_FDS="1", CREDENTIALS_DIRECTORY=str(creds))
+            argv = ["sh", "-c", 'LISTEN_PID=$$ exec "$@"', "sh", "ip", "netns", "exec", n.ns, self.client, "-once", "-config", str(config),
+                    "-tpm", "unix:" + str(n.tpm_sock), "-session-dir", str(n.run), "-wait", "1s", "-rounds", str(rounds)]
+            try:
+                done = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                                      preexec_fn=activated, close_fds=False)
+                result["rc"], result["stderr"] = done.returncode, done.stderr[-1500:]
+            except subprocess.TimeoutExpired as late:            # still asking when the time ran out: no key
+                result["rc"], result["stderr"] = "timeout", (late.stderr or b"")[-1500:].decode(errors="replace")
+            listener.close()
+            asker.settimeout(5)
+            key = asker.recv(4096)
+            if key:
+                opened = subprocess.run(["cryptsetup", "open", "--key-file", "-", "-v", loop, mapped], input=key, capture_output=True)
+                found = re.search(rb"Key slot (\d+) unlocked", opened.stdout)
+                if opened.returncode == 0 and found:
+                    result["peer"] = self.keyslot_peer(name, int(found.group(1)))
+                    mnt = n.dir / "mnt"
+                    sh("mount", "-o", "ro", "/dev/mapper/" + mapped, str(mnt))
+                    result["marker"] = (mnt / "marker").read_bytes() == MARKER
+                    sh("umount", str(mnt))
+                    sh("cryptsetup", "close", mapped)
+        finally:
+            asker.close()
+            listener.close()
+            shutil.rmtree(creds, True)
+            n.in_ns("ip", "link", "del", "wg-boot", check=False)
+        return result
+
+    def lease(self, name):
+        """The node's admission file, if it holds a lease that has not run out: {epoch, ...}; else None."""
+        from deploy.baremetal import admission
+        path = self.nodes[name].run / "admission" / "admission.json"
+        try:
+            document = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        return document if document.get("serve_until_boottime_ms", 0) > admission.boottime_ms() else None
+
+    def advance(self, signer="root", **states):
+        """A new epoch with nodes' states changed ({node: state}), signed by the root or the revocation key, committed
+        into every node's store whose services are stopped, and given to the running ones by their peers' sync.
+        Returns the new manifest."""
+        current = self.manifest
+        nodes = [dict(n, state=states.get(n["node_id"], n["state"])) for n in current["nodes"]]
+        manifest = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
+                        issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
+        envelope = self.signed(manifest, signer=signer)
+        for name in self.nodes:
+            store = self.node(name).store()
+            if store.load()["epoch"] < manifest["epoch"]:           # a running sync may have taken it from a peer already
+                store.commit(envelope)
+            sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[name].state))
+        self.chain.append(envelope)
+        self.manifest = manifest
+        for name in self.nodes:
+            self.beat(name, manifest["epoch"] + 1, manifest)
+            sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[name].state))
+        return manifest
 
     def journal(self, name, service, lines=40):
         return sh("journalctl", "-u", self.unit(name, service), "-n", str(lines), "--no-pager", "-o", "cat", check=False).stdout
@@ -369,3 +544,5 @@ class Cluster:
                 pass
             sh("ip", "netns", "del", n.ns, check=False)
         sh("ip", "netns", "del", SWITCH, check=False)
+        for loop in self.loops.values():
+            sh("losetup", "-d", loop, check=False)
