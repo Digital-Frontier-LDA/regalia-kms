@@ -25,6 +25,17 @@ def point(key):
     return key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
 
 
+def marked(state, root):
+    """The ceremony laptop's state directory as the card ceremony, run first, leaves it: its marker naming the root (#403)."""
+    from deploy.baremetal import cardrecord
+    key = m.root_entries(root)[0][1]
+    path = os.path.join(state, cardrecord.SIGNING_STATE)
+    with open(path, "w") as f:
+        json.dump({"schema": cardrecord.SIGNING_STATE_SCHEMA, "root": key}, f)
+    os.chmod(path, 0o600)
+    return state
+
+
 class Case(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
@@ -35,6 +46,7 @@ class Case(unittest.TestCase):
         self.fake.labels = {0: LABEL}
         self.fake.point = b"\x04\x41" + point(self.fake.key)
         self.root = {"alg": "ecdsa-p256", "key": point(self.fake.key).hex()}
+        marked(self.state, self.root)
         first = tk.v3(manifest(1, "", three()))
         self.chain = [{"manifest": first, "signature": {"signer": "root", "key": self.root["key"],
                                                          "sig": tk.sign_p256(self.fake.key, m.DOMAIN + m.canonical(first))}}]
@@ -563,6 +575,7 @@ class OfflineRoot(unittest.TestCase):
         os.mkdir(self.state, 0o700)
         self.key = Ed25519PrivateKey.generate()
         self.root = self.raw(self.key).hex()
+        marked(self.state, self.root)
         first = manifest(1, "", three())
         self.chain = [{"manifest": first, "signature": {"signer": "root", "key": self.root,
                                                          "sig": self.key.sign(m.DOMAIN + m.canonical(first)).hex()}}]
@@ -616,6 +629,15 @@ class OfflineRoot(unittest.TestCase):
         self.assertEqual((line["provenance"], line["verified"], line["key"]), ("offline-keys session " + self.SESSION, True, self.root))
         self.assertEqual(line["pin_source"], "none (offline key)")
         self.assertNotIn("PRIVATE", json.dumps(line))
+
+    def test_a_later_epoch_is_signed_only_on_the_root_s_signing_state(self):
+        """#403: past the genesis there is no --new-state-dir; a directory without the root's marker signs nothing."""
+        from deploy.baremetal import cardrecord
+        os.unlink(os.path.join(self.state, cardrecord.SIGNING_STATE))
+        code, err = self.run_sign()
+        self.assertEqual(code, 2)
+        self.assertIn("has no regalia-signing-state.json: it is not the root's signing state", err)
+        self.assertEqual((self.record(), os.path.exists(self.paths["e2.json"])), ([], False))
 
     def test_a_key_that_is_not_the_pinned_root_is_refused_before_anything_is_signed(self):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -720,6 +742,7 @@ class Genesis(unittest.TestCase):
         os.mkdir(self.state, 0o700)
         self.key = Ed25519PrivateKey.generate()
         self.root = OfflineRoot.raw(self.key).hex()
+        marked(self.state, self.root)
         self.fingerprint = hashlib.sha256(bytes.fromhex(self.root)).hexdigest()
         self.manifest4, self.nodes4 = manifest4, nodes4
         self.first = manifest4(1, "", nodes4())
@@ -754,6 +777,52 @@ class Genesis(unittest.TestCase):
             return []
         with open(path) as f:
             return [json.loads(line) for line in f]
+
+    def test_the_state_dir_must_be_the_root_s_signing_state(self):
+        """#403, regalia-kms-d9's read of #408: one log of the root's uses. A directory without the marker, or another
+        root's, signs nothing; only --new-state-dir, at the genesis, makes a new one."""
+        from deploy.baremetal import cardrecord
+        self.write(self.first)
+        marker = os.path.join(self.state, cardrecord.SIGNING_STATE)
+        os.unlink(marker)
+        code, err = self.run_genesis()
+        self.assertEqual(code, 2)
+        self.assertIn("has no regalia-signing-state.json: it is not the root's signing state", err)
+        self.assertEqual((self.record(), os.path.exists(self.paths["e1.json"])), ([], False))
+        marked(self.state, "9b" * 32)
+        code, err = self.run_genesis()
+        self.assertIn("is another root's signing state: nothing is signed", err)
+        self.assertEqual((self.record(), os.path.exists(self.paths["e1.json"])), ([], False))
+        marked(self.state, self.root)                                   # the root's own state: --new-state-dir is not for it
+        code, err = self.run_genesis("--new-state-dir")
+        self.assertIn("--new-state-dir: %s is already a signing state" % self.state, err)
+        os.unlink(marker)
+        code, err = self.run_genesis("--new-state-dir")
+        self.assertEqual(code, 0, err)
+        with open(marker) as f:
+            self.assertEqual(json.load(f), {"schema": cardrecord.SIGNING_STATE_SCHEMA, "root": self.root})
+        self.assertEqual(os.stat(marker).st_mode & 0o777, 0o600)
+        self.assertEqual([line["kind"] for line in self.record()], ["manifest"])
+        self.assertEqual(cardrecord.read_signing_state(self.state, self.root)[0]["kind"], "manifest")   # the card reader takes it whole
+
+    def test_new_state_dir_never_starts_a_log_beside_one(self):
+        from deploy.baremetal import cardrecord
+        self.write(self.first)
+        os.unlink(os.path.join(self.state, cardrecord.SIGNING_STATE))
+        with open(os.path.join(self.state, tool.RECORD), "w") as f:
+            f.write('{"kind": "manifest", "epoch": 1}\n')
+        code, err = self.run_genesis("--new-state-dir")
+        self.assertIn("--new-state-dir: %s already holds a signing record: nothing is signed" % self.state, err)
+        self.assertFalse(os.path.exists(self.paths["e1.json"]))
+
+    def test_new_state_dir_is_for_the_genesis_only(self):
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stderr", err):
+            code = tool.main(["sign", "--chain", os.path.join(self.d, "none.json"), "--root-key", self.root, "--expected-epoch", "1",
+                              "--proposal", self.paths["p.json"], "--signer", "root", "--state-dir", self.state,
+                              "--out", self.paths["e1.json"], "--new-state-dir"])
+        self.assertEqual(code, 2)
+        self.assertIn("--new-state-dir is for the genesis only", err.getvalue())
 
     def test_the_offline_root_signs_epoch_1_after_the_fingerprint_and_the_digest_are_typed(self):
         code, err = self.run_genesis("--chain-out", self.paths["chain.json"])

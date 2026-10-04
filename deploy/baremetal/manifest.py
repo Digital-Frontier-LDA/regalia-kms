@@ -87,7 +87,7 @@ import time
 from deploy.baremetal import attest, cardrecord, keyfd, measurements, membership, p11uri, rollout
 from deploy.baremetal.membership import Refused, require
 
-RECORD = "signing-record.jsonl"
+RECORD = cardrecord.SIGNING_RECORD              # the laptop's one ordered record of the root's uses (#403)
 LATCH = "pin-latch.json"
 
 
@@ -328,6 +328,41 @@ def state_dir(path):
     info = os.stat(path)
     require(os.path.isdir(path) and info.st_uid == os.geteuid() and info.st_mode & 0o077 == 0,
             "--state-dir %s must be a directory of this user's, mode 0700" % path)
+    return path
+
+
+def signing_state(path, root, new=False):
+    """state_dir, and the marker saying whose root's signing record it holds (cardrecord.SIGNING_STATE, #403, agreed with
+    regalia-kms-51 and d9): checked before anything is signed. A marker naming another root is refused, and so is a
+    directory with NO marker (a second, separate log of the root's uses would each look gapless): the card ceremony,
+    which runs first, writes it. Only `new` (--new-state-dir, for the genesis alone) writes it here, and only in a
+    directory holding no signing record, naming the pinned root."""
+    state_dir(path)
+    entries = membership.root_entries(root)
+    require(len(entries) == 1, "a signing state directory is one root's: the pinned root names %d keys" % len(entries))
+    pinned = entries[0][1]
+    marker = os.path.join(path, cardrecord.SIGNING_STATE)
+    if os.path.lexists(marker):
+        held = cardrecord._read_own(path, cardrecord.SIGNING_STATE, 4096, "the state directory's marker %s" % cardrecord.SIGNING_STATE)
+        try:
+            state = json.loads(held.decode("ascii"))
+        except (UnicodeDecodeError, ValueError):
+            raise Refused("the state directory's marker %s is not JSON" % cardrecord.SIGNING_STATE) from None
+        require(isinstance(state, dict), "the state directory's marker is not an object")
+        membership.exact(state, ("schema", "root"), "the state directory's marker")
+        require(state["schema"] == cardrecord.SIGNING_STATE_SCHEMA, "the state directory's marker is not a %s" % cardrecord.SIGNING_STATE_SCHEMA)
+        require(state["root"] == pinned, "--state-dir %s is another root's signing state: nothing is signed" % path)
+        require(not new, "--new-state-dir: %s is already a signing state (it has %s): nothing is signed" % (path, cardrecord.SIGNING_STATE))
+        return path
+    require(new, "--state-dir %s has no %s: it is not the root's signing state (the card ceremony makes it; wrong --state-dir?), and "
+            "nothing is signed" % (path, cardrecord.SIGNING_STATE))
+    require(not os.path.lexists(os.path.join(path, RECORD)), "--new-state-dir: %s already holds a signing record: nothing is signed" % path)
+    fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        _write_all(fd, json.dumps({"schema": cardrecord.SIGNING_STATE_SCHEMA, "root": pinned}, sort_keys=True).encode() + b"\n")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
     return path
 
 
@@ -597,6 +632,8 @@ def main(argv=None):
     c.add_argument("--chain", metavar="CHAIN.json", help="the signed chain (a JSON list of envelopes); not with --genesis")
     c.add_argument("--root-key", required=True, metavar="ROOT", help="the pinned root: 64 hex, or a typed entry or list as JSON")
     c.add_argument("--genesis", action="store_true", help="the first ceremony: sign epoch 1, with no chain (the offline root only)")
+    c.add_argument("--new-state-dir", action="store_true", help="--genesis only: --state-dir is a new, empty directory, and its "
+                   "regalia-signing-state.json is written here (normally the card ceremony, run first, writes it; #403)")
     c.add_argument("--expected-epoch", type=int, help="the epoch the fleet is at; the chain must end there (not with --genesis)")
     c.add_argument("--proposal", required=True)
     c.add_argument("--signer", required=True, choices=("root", "revocation"))
@@ -638,11 +675,12 @@ def main(argv=None):
             require(not (args.old or args.new or args.state or args.emergency or args.locked_out), "--genesis takes no measurements step")
             provenance = keyfd.session(args.offline_session)
             sign([], root, None, read_json(args.proposal, membership.MAX_BYTES), args.signer, lambda: OfflineSigner(args.key_fd, provenance),
-                 keyfd.tty_line, args.out, state_dir(args.state_dir), args.chain_out, pin_source="none (offline key)", offline=True,
+                 keyfd.tty_line, args.out, signing_state(args.state_dir, root, args.new_state_dir), args.chain_out, pin_source="none (offline key)", offline=True,
                  genesis=True)
             return 0
         if args.command == "sign":
             require(args.chain is not None and args.expected_epoch is not None, "give --chain and --expected-epoch (or --genesis)")
+            require(not args.new_state_dir, "--new-state-dir is for the genesis only: every later signature goes on the existing signing state")
         chain_doc = read_json(args.chain, membership.MAX_CHAIN_BYTES)
         current = verify_chain(chain_doc, root)
         if args.command == "verify":
@@ -662,7 +700,7 @@ def main(argv=None):
         if args.command == "diff":
             print("\n".join(diff(current, candidate)))
             return 0
-        state = state_dir(args.state_dir)
+        state = signing_state(args.state_dir, root)
         if args.key_fd is not None:                      # the offline root: no token, no PIN; the descriptor and the session
             require(args.key is None and args.module is None and args.pin_env is None and args.opensc_conf is None,
                     "--key-fd is not given with --key, --module, --pin-env or --opensc-conf")
