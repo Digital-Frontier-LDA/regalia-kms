@@ -319,7 +319,8 @@ def main():
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
         for path in (DROPIN / "reader.conf", ADM_DROPIN / "reader.conf", ETC / "admission.env", ADM_HEAD, METRICS.with_name("admission.prom"),
-                     INSTALLED, BIN, ENV, ETC / "sync.env", ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem", METRICS, HEAD):
+                     INSTALLED, BIN, ENV, ETC / "sync.env", ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem",
+                     ETC / "collector-receipt.pub", METRICS, HEAD):
             if path.exists():
                 path.unlink()
         for directory in (DROPIN, ADM_DROPIN, ETC, METRICS.parent):

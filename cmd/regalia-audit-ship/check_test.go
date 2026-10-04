@@ -149,7 +149,7 @@ func TestCheckValidatesTheWholeEndpointBeforeAnythingRuns(t *testing.T) {
 
 func TestCheckProbeReachesTheCollectorReadOnlyAndNamesWhatFailed(t *testing.T) {
 	c := newExternalCollector(t)
-	out, err := runCommand(append(append([]string{"check", "-probe", "-trail", "sync"}, c.args(nil)...))...)
+	out, err := runCommand(append([]string{"check", "-probe", "-trail", "sync"}, c.args(nil)...)...)
 	if err != nil || !strings.Contains(out, "collector: ready") || !strings.Contains(out, "sitea.sync: committed 0") {
 		t.Fatalf("%v\n%s", err, out)
 	}
