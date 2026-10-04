@@ -1697,6 +1697,52 @@ class RealCheckout(unittest.TestCase):
             self.assertEqual(self.checkout.head(), head)                         # this checkout's, not GIT_DIR's (which has none)
         self.assertFalse(os.path.exists(marker), "a filter from the global configuration or GIT_CONFIG_* ran")
 
+    def test_an_untracked_file_an_ignore_rule_hides_is_not_clean(self):
+        """24 and d9 on #404: status hides ignored files, and `go build` compiles an untracked .go file all the same."""
+        stray = os.path.join(self.d, "deploy", "x.go")
+        with open(stray, "w") as f:
+            f.write("package deploy\n")
+        with open(os.path.join(self.d, ".git", "info", "exclude"), "a") as f:
+            f.write("*.go\n")
+        self.assertEqual(subprocess.run(["git", "-C", self.d, "status", "--porcelain"], capture_output=True, text=True).stdout, "",
+                         "the premise: the exclude rule hides x.go from status")
+        self.assertFalse(self.checkout.clean())
+        with open(os.path.join(self.d, ".git", "info", "exclude"), "w") as f:
+            f.write("")
+        home = tempfile.mkdtemp()                                           # the signer's own ignore file (XDG git/ignore)
+        self.addCleanup(shutil.rmtree, home, True)
+        os.makedirs(os.path.join(home, ".config", "git"))
+        with open(os.path.join(home, ".config", "git", "ignore"), "w") as f:
+            f.write("*.go\n")
+        with mock.patch.dict(os.environ, {"HOME": home, "XDG_CONFIG_HOME": os.path.join(home, ".config")}):
+            self.assertFalse(self.checkout.clean())
+
+    def test_git_gets_nothing_of_the_caller_s_environment(self):
+        """repo-git.sh's environment exactly: no HOME or XDG file (ignore, attributes), no GIT_*, nothing else of the caller's."""
+        seen = []
+
+        def run(argv, **kw):
+            seen.append(kw["env"])
+            return subprocess.CompletedProcess(argv, 0, stdout=b"ab" * 20 + b"\n", stderr=b"")
+        with mock.patch.dict(os.environ, {"HOME": "/home/signer", "XDG_CONFIG_HOME": "/home/signer/.config", "GIT_DIR": "/elsewhere",
+                                          "CREDENTIALS_DIRECTORY": "/run/credentials/x"}):
+            uki.Checkout(self.d, run=run).head()
+        self.assertEqual(seen, [{"PATH": "/usr/bin:/bin", "LC_ALL": "C", "HOME": "/nonexistent",
+                                 "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}])
+
+    def test_bytecode_in_pycache_is_the_one_untracked_file_allowed(self):
+        with open(os.path.join(self.d, ".gitignore"), "w") as f:
+            f.write("__pycache__/\n*.py[cod]\n")                            # this repository's .gitignore
+        subprocess.run(["git", "-C", self.d, "add", ".gitignore"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", self.d, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "ignore"], check=True, capture_output=True)
+        os.makedirs(os.path.join(self.d, "deploy", "__pycache__"))
+        with open(os.path.join(self.d, "deploy", "__pycache__", "uki.cpython-313.pyc"), "wb") as f:
+            f.write(b"\0")
+        self.assertTrue(self.checkout.clean())
+        with open(os.path.join(self.d, "deploy", "stray.pyc"), "wb") as f:           # ignored by *.py[cod], but not bytecode's place
+            f.write(b"\0")
+        self.assertFalse(self.checkout.clean())
+
     def test_go_release_is_the_toolchain_line_else_the_go_line(self):
         def release(text):
             with open(os.path.join(self.d, "go.mod"), "w") as f:
