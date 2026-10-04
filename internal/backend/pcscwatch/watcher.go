@@ -99,6 +99,11 @@ func (watcher *Watcher) Generation(name string) (uint64, bool) {
 	return current.generation, ok
 }
 
+// Built reports whether this build can watch PC/SC at all (-tags piv). The daemon refuses to start
+// without it where admission is required and a token is configured (cmd/regalia-kms,
+// requirePCSCWatch): every removable token would otherwise be refused, and the host would look broken.
+func Built() bool { return System() != nil }
+
 // Start runs the watcher until ctx ends. With a nil API (a build without PC/SC) it never runs, and
 // every Generation says no.
 func Start(ctx context.Context, api API, failed func(error)) *Watcher {

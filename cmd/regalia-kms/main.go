@@ -377,6 +377,9 @@ func run() error {
 		// daemon's life. In a build without PC/SC (no -tags piv) it never runs, and no removable token is served
 		// where admission is required.
 		var readers reauth.Readers
+		if err := requirePCSCWatch(manager, admissionGate, pcscwatch.Built()); err != nil {
+			return err
+		}
 		if admissionGate != nil {
 			readers = pcscwatch.Start(ctx, pcscwatch.System(), func(err error) {
 				slog.Warn("KMS reader watcher lost PC/SC: removable tokens are refused until it runs again, then wait for a fresh lease", "error", err)
@@ -871,6 +874,19 @@ var lookupAdmissionOwner = func(name string) (uint32, error) {
 //
 // It is empty: the PKCS#11 provider (the HSM and the OpenPGP applet) and the PIV provider all wait.
 var awaitingReauthorization = map[string]string{}
+
+// requirePCSCWatch refuses to start a daemon that could not see a token pulled between two operations
+// (regalia-kms#72, G2): runtime admission required, a token configured, and a build without PC/SC (no
+// -tags piv). Such a daemon would refuse every removable token on every operation and look broken; it is
+// stopped here, at start, with the reason. The production build is the piv build.
+func requirePCSCWatch(manager *backend.Manager, gate *admission.Gate, built bool) error {
+	if manager == nil || gate == nil || built || len(manager.Providers()) == 0 {
+		return nil
+	}
+	return errors.New("runtime admission is required and a token is configured, but this daemon was built without PC/SC " +
+		"(-tags piv): it could not see a token pulled and put back between two operations, and would refuse every " +
+		"removable token. Build it with -tags piv, the production build (regalia-kms#72)")
+}
 
 // requireReauthorization makes EVERY key provider wait, after a token's absence and after a start of
 // this daemon, for a runtime lease asked for since (regalia-kms#72, PoC 12.4). The rule is for every

@@ -2,7 +2,7 @@
 """The node's four units under a real systemd (#80, step 3b): they start, reach what their sandboxes let
 them reach, and do their jobs, up to a peer's lease, the KMS daemon serving on it, and a revocation ending it.
 
-    REGALIA_E2E_BIN=<dir with regalia-kms, regalia-audit-collector> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/node-units-systemd.py
+    REGALIA_E2E_BIN=<dir with regalia-kms (-tags piv), regalia-audit-collector> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/node-units-systemd.py
 
 IT CHANGES THE MACHINE, so it runs only on a GitHub-hosted runner (RUNNER_ENVIRONMENT=github-hosted: not
 a self-hosted one, where GITHUB_ACTIONS is set too), or where REGALIA_NODE_HOST_OK equals the machine's
@@ -235,7 +235,7 @@ def main():
         return 2
     binaries = pathlib.Path(os.environ.get("REGALIA_E2E_BIN", "/nonexistent"))
     if not all((binaries / name).is_file() for name in ("regalia-kms", "regalia-audit-collector")) or not os.environ.get("SUDO_USER"):
-        print("node-units-systemd: REGALIA_E2E_BIN must name a directory with regalia-kms and regalia-audit-collector built, "
+        print("node-units-systemd: REGALIA_E2E_BIN must name a directory with regalia-kms (built with -tags piv) and regalia-audit-collector built, "
               "and it must run under sudo (the daemon runs as the invoking user)")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="node-units-"))

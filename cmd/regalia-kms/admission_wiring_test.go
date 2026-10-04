@@ -592,3 +592,28 @@ func TestEveryGatedProviderIsGivenTheReaderWatcher(t *testing.T) {
 		t.Fatalf("a provider that cannot take the watcher: %v", err)
 	}
 }
+
+// A DAEMON THAT COULD NOT WATCH THE READERS DOES NOT START where admission is required and a token is
+// configured (regalia-kms#72, G2): it says why at start, instead of refusing every removable token later.
+func TestADaemonWithoutPCSCRefusesToStartUnderRequiredAdmission(t *testing.T) {
+	directory := t.TempDir()
+	gate, err := admission.Open(admission.Options{Path: filepath.Join(directory, "admission.json"), NodeID: "site-a",
+		SessionPath: filepath.Join(directory, "boot-session")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := managing(t, "nitrokey-pkcs11", &countingProvider{})
+	err = requirePCSCWatch(tokens, gate, false)
+	if err == nil || !strings.Contains(err.Error(), "built without PC/SC (-tags piv)") {
+		t.Fatalf("a build without PC/SC, admission required, a token configured: %v", err)
+	}
+	for name, err := range map[string]error{
+		"the piv build":          requirePCSCWatch(tokens, gate, true),
+		"admission not required": requirePCSCWatch(tokens, nil, false),
+		"no token":               requirePCSCWatch(nil, gate, false),
+	} {
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

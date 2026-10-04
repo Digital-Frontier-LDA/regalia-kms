@@ -119,7 +119,9 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     # ---- build ---------------------------------------------------------------------------------------
     env = dict(os.environ, GOFLAGS=os.environ.get("GOFLAGS", ""))
     for name in ("regalia-kms", "regalia-audit-collector"):
-        run(["go", "-C", ROOT, "build", "-o", w / name, "./cmd/" + name], env=env)
+        # the production build: with admission required, a daemon without PC/SC refuses to start (#72, G2)
+        tags = ["-tags", "piv"] if name == "regalia-kms" else []
+        run(["go", "-C", ROOT, "build", *tags, "-o", w / name, "./cmd/" + name], env=env)
 
     # ---- the token: SoftHSM, in the temporary state directory ------------------------------------------
     softhsm = dict(os.environ, SOFTHSM2_CONF=str(etc / "softhsm2.conf"))

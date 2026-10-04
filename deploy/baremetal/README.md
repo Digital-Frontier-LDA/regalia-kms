@@ -189,9 +189,10 @@ Commissioning has two halves:
   the reader away and replugging makes a new one. A token whose reader moved between two operations is
   treated as having been away, though no operation saw it go, and waits for a fresh lease like any
   returned token. Where admission is required, a token on a removable slot is served only while its
-  reader is watched. The watcher is in the `-tags piv` build, so **a production host runs the piv
-  build**: a build without it refuses every removable token, and so does a daemon that has lost pcscd
-  (until it reconnects, and then the tokens wait for a fresh lease). A warm card reset with no removal
+  reader is watched, and a daemon that has lost pcscd refuses them until it reconnects (then they
+  wait for a fresh lease). The watcher is in the `-tags piv` build, so **the production daemon is the
+  piv build** (`go build -tags piv -trimpath ./cmd/regalia-kms`, which needs libpcsclite). A daemon built
+  without it refuses to START where admission is required and a token is configured, and says why. A warm card reset with no removal
   is deliberately not an absence: the sealed PIN is presented on every operation under the current
   lease, so the card's own login state never authorized anything. SoftHSM slots are not removable and
   are not watched.
