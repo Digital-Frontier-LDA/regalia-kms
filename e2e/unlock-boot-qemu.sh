@@ -185,7 +185,7 @@ mkdir -p "$ROOT/tmp/uki/src" "$ROOT/tmp/uki/out"
 # #266: uki.py builds and signs only from a clean checkout at the commit the initrd was built from, and holds the
 # build record's files to it: the guest gets a clone of this checkout's HEAD (git in the guest root), never a copy
 git -C "$ROOT/tmp/uki/src" init --quiet
-git -c safe.directory="$PWD" -C "$ROOT/tmp/uki/src" fetch --quiet "$PWD" HEAD
+git -c safe.directory="$PWD" -C "$ROOT/tmp/uki/src" fetch --quiet --depth=1 "$PWD" HEAD     # CI's checkout is shallow
 git -C "$ROOT/tmp/uki/src" checkout --quiet --detach FETCH_HEAD
 [ "$(git -C "$ROOT/tmp/uki/src" rev-parse HEAD)" = "$(git -c safe.directory="$PWD" rev-parse HEAD)" ] || { echo "the guest's clone is not at HEAD"; exit 1; }
 cp -r "$W/keys" "$ROOT/tmp/uki/"
