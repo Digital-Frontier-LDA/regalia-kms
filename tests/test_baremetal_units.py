@@ -24,8 +24,10 @@ def unit(name):
 
 class TrailsReachTheirShipper(unittest.TestCase):
     """#340: a node service's audit trail lives in that service's StateDirectory, and regalia-audit-ship@<trail> reads
-    it as its own user with the trail's reader group and NO capability. So the directory must let it pass (others'
-    execute bit): with the admission service's at 0700 its trail never reached the collector."""
+    it as its own user with the trail's reader group and NO capability. It opens the file and LISTS the directory (for
+    the trail's rotated archives), so the directory must be readable and searchable by others: with the admission
+    service's at 0700, and then 0711 (searchable, not listable: the CI run of e2e/audit-ship-systemd.py showed
+    "open .../regalia-admission: permission denied"), its trail never reached the collector."""
 
     def test_every_node_trail_s_directory_is_traversable_by_its_shipper(self):
         from deploy.baremetal import trails
@@ -36,14 +38,15 @@ class TrailsReachTheirShipper(unittest.TestCase):
             writer = re.search(r"regalia-[a-z-]+\.service", entry[1]).group(0)      # the registry names the unit that writes it
             mode = int(unit(writer)["Service"]["StateDirectoryMode"], 8)
             with self.subTest(trail=name):
-                self.assertTrue(mode & 0o001, "%s's StateDirectoryMode %s: regalia-audit-ship@%s cannot reach %s" % (writer, oct(mode), name, entry[0]))
+                self.assertEqual(mode & 0o005, 0o005, "%s's StateDirectoryMode %s: regalia-audit-ship@%s cannot list and reach %s"
+                                 % (writer, oct(mode), name, entry[0]))
             checked.append((name, writer, oct(mode)))
-        self.assertEqual(sorted(checked), [("admission", "regalia-admission.service", "0o711"), ("authority", "regalia-authority.service", "0o751"),
+        self.assertEqual(sorted(checked), [("admission", "regalia-admission.service", "0o755"), ("authority", "regalia-authority.service", "0o755"),
                                            ("sync", "regalia-sync.service", "0o755")])
         self.assertEqual(unit("regalia-audit-ship@.service")["Service"]["CapabilityBoundingSet"], "")    # the reason: no way around it
 
     def test_traversal_exposes_no_file_the_admission_service_writes_there(self):
-        """24 on #345: 0711 lets anyone pass, so nothing the service keeps there may be readable by others. The files it
+        """24 on #345: 0755 lets anyone pass and list, so nothing the service keeps there may be readable by others. The files it
         writes there (node.admission_service: lease.Holder's lease.json and its lock, the trail audit.jsonl), written
         as it writes them, under the most permissive umask."""
         from deploy.baremetal import lease, trails
@@ -147,7 +150,7 @@ class Units(unittest.TestCase):
         admission = self.service("regalia-admission")
         # its own directory only, inside root's /run/regalia; the boot session beside it is not its to write
         self.assertEqual((admission["ReadWritePaths"], admission["StateDirectory"], admission["StateDirectoryMode"]),
-                         ("/run/regalia/admission -/run/regalia-metrics/admission", "regalia-admission", "0711"))   # traversable for its trail's shipper (#340)
+                         ("/run/regalia/admission -/run/regalia-metrics/admission", "regalia-admission", "0755"))   # listable by its trail's shipper (#340)
         admission_unit = unit("regalia-admission.service")["Unit"]
         self.assertEqual(admission_unit["Requires"], "regalia-boot-session.service")
         self.assertIn("regalia-boot-session.service", admission_unit["After"].split())
@@ -260,7 +263,7 @@ class AuthorityUnit(unittest.TestCase):
         self.assertEqual((service["User"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
                          ("regalia-authority", "", "", "yes"))
         self.assertEqual((service["SupplementaryGroups"], service["DevicePolicy"], service["DeviceAllow"]), ("tss regalia-audit-authority", "closed", "/dev/tpmrm0 rw"))
-        self.assertEqual((service["StateDirectory"], service["StateDirectoryMode"], service["UMask"]), ("regalia-authority", "0751", "0077"))   # its shipper passes through, no group (#286)
+        self.assertEqual((service["StateDirectory"], service["StateDirectoryMode"], service["UMask"]), ("regalia-authority", "0755", "0077"))   # its shipper lists it (its trail's archives), no group (#286, #340)
         self.assertEqual((service["RuntimeDirectory"], service["RuntimeDirectoryMode"]), ("regalia-authority", "0700"))   # the control socket
         users = (UNITS / "regalia-authority.sysusers.conf").read_text()
         self.assertIn("u regalia-authority - ", users)
