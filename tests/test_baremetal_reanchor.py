@@ -9,10 +9,12 @@ import glob
 import io
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 from unittest import mock
 
 from deploy.baremetal import convergence, reanchor, trails
@@ -533,6 +535,75 @@ class Command(Case):
         self.assertEqual(os.stat(self.d + "/audit.jsonl").st_mode & 0o777, 0o640)           # #283: its shipper reads it through the group
         self.assertEqual(trails.verify(self.d + "/audit.jsonl")["chained"], 2)            # #278: a hash-chained trail
         self.assertEqual(trails.where("reanchor"), "/var/log/regalia/reanchor.jsonl")     # --audit-log's default
+
+    def node_configs(self):
+        example = json.loads((pathlib.Path(__file__).resolve().parent.parent / "deploy" / "baremetal" / "node.example.json").read_text())
+        another = self.d + "/node-a.json"
+        with open(another, "w") as f:
+            json.dump(dict(example, node_id="a", state_dir=self.d + "/state-a"), f)
+        mine = self.d + "/node-b.json"                        # this node's: its state directory holds no chain, no document
+        os.makedirs(self.d + "/state-b", exist_ok=True)
+        with open(mine, "w") as f:
+            json.dump(dict(example, node_id="b", state_dir=self.d + "/state-b"), f)
+        return another, mine
+
+    def test_a_node_config_that_cannot_give_the_policies_refuses_before_anything_changes(self):
+        """regalia-kms-48: --node-config was resolved lazily, inside the redefinition, so a config that could not be read
+        left the anchor INCOMPLETE. Now refused with nothing changed: a config that cannot be loaded or is another
+        node's, up front; a define policy the MANIFEST BEING ANCHORED cannot give (its document not held), after the plan
+        and before anything is asked (a DENY)."""
+        another, mine = self.node_configs()
+        for config, reason, asked_for in ((self.d + "/missing-node.json", "cannot be loaded", None),
+                                          (another, "--node-config is a's, not b's", None),
+                                          (mine, "epoch 3 commits to measurements", "DENY")):
+            with self.subTest(config=config):
+                self.lose_record()
+                before = self.state()
+                rc, asked = self.program("--node-config", config)
+                self.assertEqual((rc, asked), (1, []), self.said.getvalue())
+                self.assertIn("reanchor: NOT DONE, nothing was changed", self.said.getvalue())
+                self.assertIn(reason, self.said.getvalue())
+                self.assertEqual(self.state(), before)
+                log = self.audit() if os.path.exists(self.d + "/audit.jsonl") else []
+                self.assertNotIn("INCOMPLETE", [e.get("outcome") for e in log])
+                if asked_for:
+                    self.assertEqual(log[-1]["outcome"], asked_for)
+                    self.assertNotIn("reanchor-requested", [e["event"] for e in log[-1:]])
+
+    def test_any_failure_to_establish_the_define_policy_is_a_recorded_deny(self):
+        """regalia-kms-48: rc 1 is a DENY in the audit log (MEMBERSHIP-RECOVERY.md), whatever prepare raised."""
+        from deploy.baremetal import node
+        _, mine = self.node_configs()
+        for failure in (OSError(13, "Permission denied"), KeyError("signing")):
+            with self.subTest(failure=failure):
+                def define_policy(cfg, manifest=None, pem_path=None, failure=failure):
+                    raise failure
+                self.lose_record()
+                before = self.state()
+                with unittest.mock.patch.object(node, "define_policy", define_policy):
+                    rc, asked = self.program("--node-config", mine)
+                self.assertEqual((rc, asked, self.state()), (1, [], before))
+                self.assertEqual(self.audit()[-1]["outcome"], "DENY")
+                self.assertIn("the re-anchor's define policy cannot be established", self.said.getvalue())
+
+    def test_the_define_policy_is_the_manifest_being_anchored_s_not_the_disk_s(self):
+        """regalia-kms-48 (#416): a node whose state was lost holds no chain, and an old chain on disk may commit to
+        another document: the define policy comes from the planned tip (here epoch 4, the disk at 3), and with no chain
+        on disk at all the re-anchor still completes."""
+        from deploy.baremetal import node
+        _, mine = self.node_configs()
+        given = []
+
+        def define_policy(cfg, manifest=None, pem_path=None):
+            given.append(manifest)
+            return None                                       # a lab node: owner-written new indices
+        self.lose_record()
+        with unittest.mock.patch.object(node, "define_policy", define_policy):
+            rc, asked = self.program("--node-config", mine, upto=4)
+        self.assertEqual(rc, 0, self.said.getvalue())
+        self.assertEqual([g["epoch"] for g in given], [4])
+        self.assertEqual(m.digest(given[0]), self.digest(4))
+        self.assertEqual((self.hw.value(), self.hw.record()[0]), (4, 4))
 
     def test_the_program_refuses_and_records_the_refusal(self):
         self.lose_record()

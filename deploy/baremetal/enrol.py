@@ -5,6 +5,8 @@ manifest ceremony needs to name it (#190).
     python3 -Es -m deploy.baremetal.enrol challenge --bundle bundle.json --out CRED.bin --keep KEEP.json   (the root's side, no TPM)
     sudo python3 -Es -m deploy.baremetal.enrol activate --credential CRED.bin                      (on the node: prints the answer)
     python3 -Es -m deploy.baremetal.enrol entry --bundle bundle.json --system-pub SYSTEM-PCR-KEY.pem --keep KEEP.json --answer HEX
+    gpg --decrypt ownerauth-a.yk.gpg | sudo python3 -Es -m deploy.baremetal.enrol ownerauth --node-id a --root-key ROOT \
+        --record ownerauth.record.json [--check]    (after `init`, before `commit`: the TPM owner authorization, #242)
 
 WHAT IT MAKES, each on the host and never imported (ADR-0002 D5's rule, applied to node keys):
   * the EK and a restricted signing AK, persistent in the TPM (attest.node_init, 0x81010001/0x81010002);
@@ -64,7 +66,7 @@ import sys
 import tempfile
 import time
 
-from deploy.baremetal import attest, espcreds, measurements, membership, signkey
+from deploy.baremetal import attest, espcreds, measurements, membership, ownerauth, signkey
 
 SCHEMA_JOURNAL = "regalia.enrol-journal/v1"
 SCHEMA_BUNDLE = "regalia.enrol-bundle/v1"
@@ -153,8 +155,9 @@ def persistent_handles(run):
     return {h.lower() for h in re.findall(r"0x[0-9a-fA-F]{8}", out)}
 
 
-def _evict(handle, run):
-    _run(["tpm2_evictcontrol", "-C", "o", "-c", handle], run, text=True)
+def _evict(handle, run, owner_auth=None):
+    with ownerauth.owner_call(owner_auth) as (owner, kw):
+        _run(["tpm2_evictcontrol", *owner, "-c", handle], run, text=True, **kw)
 
 
 def _name_at(handle, directory, run):
@@ -186,7 +189,7 @@ def _this_tpms_ek(directory, run):
                 os.unlink(p)
 
 
-def identity(journal, directory, run):
+def identity(journal, directory, run, owner_auth=None):
     """The EK and AK, persistent; their public areas in the enrolment directory.
 
     RESUME EVICTS ONLY WHAT IT CAN PROVE IT MADE. The EK is derived from the TPM's seed: an object at the EK
@@ -220,7 +223,7 @@ def identity(journal, directory, run):
         require(recorded is not None and _name_at(attest.AK_HANDLE, directory, run) == recorded,
                 "the TPM already holds a persistent object at %s, which this enrolment did not make. A host that "
                 "was enrolled is re-enrolled only as a new node, through replacement (#76)" % attest.AK_HANDLE)
-        _evict(attest.AK_HANDLE, run)            # recorded right after it was created: ours, unseen
+        _evict(attest.AK_HANDLE, run, owner_auth)  # recorded right after it was created: ours, unseen
     journal.started("identity")
     with tempfile.TemporaryDirectory(prefix="enrol-") as d:
         if ek_h not in persistent_handles(run):
@@ -233,7 +236,8 @@ def identity(journal, directory, run):
         ak_name = attest.name_of(attest.public_area(ak_blob, "the AK")).hex()
         journal.doc["steps"]["identity"]["ak_name"] = ak_name       # recorded BEFORE it is made persistent
         _atomic_json(journal.path, journal.doc)
-        _run(["tpm2_evictcontrol", "-C", "o", "-c", ctx, attest.AK_HANDLE], run, text=True)
+        with ownerauth.owner_call(owner_auth) as (owner, kw):
+            _run(["tpm2_evictcontrol", *owner, "-c", ctx, attest.AK_HANDLE], run, text=True, **kw)
         if os.environ.get("TPM2TOOLS_TCTI", "").startswith(("swtpm", "mssim")):
             _run(["tpm2_flushcontext", "-t"], run, check=False, text=True)   # no resource manager (see attest.node_init)
     for k, blob in (("ek", ek_blob), ("ak", ak_blob)):
@@ -247,7 +251,7 @@ def identity(journal, directory, run):
     return facts
 
 
-def signing_key(journal, directory, system_pub, ids, run):
+def signing_key(journal, directory, system_pub, ids, run, owner_auth=None):
     """The signing key (signkey.py) at signkey.HANDLE, made once and certified by the AK. #234's rules: an object at
     the handle is removed only when the journal recorded its Name before it was made persistent (a crash between the
     two); anything else there is refused, never evicted."""
@@ -265,14 +269,14 @@ def signing_key(journal, directory, system_pub, ids, run):
         require(recorded is not None and _name_at(signkey.HANDLE, directory, run) == recorded,
                 "the TPM already holds a persistent object at %s, which this enrolment did not make. A host that was "
                 "enrolled is re-enrolled only as a new node, through replacement (#76)" % signkey.HANDLE)
-        _evict(signkey.HANDLE, run)              # recorded right after it was created: ours, unseen
+        _evict(signkey.HANDLE, run, owner_auth)  # recorded right after it was created: ours, unseen
 
     def record(name):
         journal.doc["steps"]["signing_key"]["signing_name"] = name         # BEFORE it is made persistent
         _atomic_json(journal.path, journal.doc)
 
     journal.started("signing_key")
-    blob = signkey.create(system_pub, run=run, record=record)
+    blob = signkey.create(system_pub, run=run, record=record, owner_auth=owner_auth)
     info, sig = signkey.certify(run=run)
     entry = signkey.verify_certification(blob, info, sig, bytes.fromhex(ids["ak_public"]), ids["ek_name"], system_pub, run=run)
     facts = {"signing_public": blob.hex(), "signing_certify": info.hex(), "signing_sig": sig.hex(), "signing_key": entry["key"],
@@ -1881,6 +1885,25 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     return epoch, digest
 
 
+def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None, run=subprocess.run):
+    """`enrol ownerauth` (#242 step C): this TPM's owner authorization from the node's envelope, the value on `stream`
+    (gpg --decrypt ownerauth-<node>.yk.gpg | ...), checked against ownerauth.record.json verified under the pinned
+    root BEFORE the TPM is touched. Sets it from EMPTY only (ownerauth.set_owner refuses one already set, never
+    overwriting it). `check`: changes nothing, and proves in ONE owner-authorized call that the TPM's owner
+    authorization is this node's envelope value. Returns what to print."""
+    with open(record_path, "rb") as f:
+        envelope = membership.load(f.read(membership.MAX_BYTES + 1), membership.MAX_BYTES)
+    auth = ownerauth.from_envelope(stream, envelope, root_key, node_id)
+    if check:
+        require(ownerauth.posture(tcti, run)["owner"], "the TPM's owner authorization is empty: nothing to check; set it "
+                "(this command without --check)")
+        require(ownerauth.holds(auth, tcti, run), "the TPM's owner authorization is NOT %s's envelope value: this TPM was "
+                "provisioned otherwise, or the envelope is another node's. Nothing was changed" % node_id)
+        return "the TPM's owner authorization is %s's envelope value" % node_id
+    ownerauth.set_owner(auth, tcti, run)
+    return "the TPM's owner authorization is set to %s's envelope value, and answers to it; keep the envelope, never the value" % node_id
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.enrol", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="command", required=True)
@@ -1891,6 +1914,11 @@ def main(argv=None):
     p.add_argument("--pkcs11-module", default=OPENSC_MODULE, help="the PKCS#11 module that reads the SmartCard-HSM's serial")
     p.add_argument("--system-pub", required=True, help="the system-phase PCR key's public half (PEM): the signing key is usable "
                    "only under PCR 11 policies it signed")
+    o = sub.add_parser("ownerauth", help="set this TPM's owner authorization from the node's envelope, on standard input (#242)")
+    o.add_argument("--node-id", required=True)
+    o.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex: the record is verified under it")
+    o.add_argument("--record", required=True, help="the ceremony's ownerauth.record.json")
+    o.add_argument("--check", action="store_true", help="change nothing: prove the TPM's owner authorization is this envelope's")
     g = sub.add_parser("challenge", help="(the root's side, no TPM) a credential to the bundle's EK and AK, for `activate`")
     g.add_argument("--bundle", required=True)
     g.add_argument("--out", required=True, help="the credential, to carry to the node")
@@ -1943,6 +1971,13 @@ def main(argv=None):
     a.add_argument("--config", required=True)
     a.add_argument("--chain", required=True, choices=["-"], help="always -: the chain comes on standard input")
     args = ap.parse_args(argv)
+    if args.command == "ownerauth":
+        try:
+            print(set_ownerauth(args.node_id, args.root_key, args.record, sys.stdin.buffer, check=args.check))
+        except (Refused, membership.Refused, OSError, ValueError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        return 0
     if args.command == "verify-record":
         try:
             with open(args.record, "rb") as f:
