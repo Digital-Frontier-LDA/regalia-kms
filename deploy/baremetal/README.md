@@ -638,8 +638,10 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   client read: the boot configuration (`unlock.boot_config`), the WireGuard configuration, the ruleset and
   boot.env, byte for byte what **`deploy/baremetal/bootcreds.py`**'s `render(manifest, site, device)` gives
   (`cmd/regalia-unlock/bootcfg`, held to it by a shared vector). So **a membership change does not move PCR
-  12**: only a change to the site does. Any refusal ends the render with one line; the boot mesh and the
-  client do not start, no peer is asked, and the console's prompt takes the recovery key. `esp_files(site,
+  12**: only a change to the site does. Any refusal ends the render with one line, on the console as well as
+  the initrd's journal (the unit's `StandardOutput=`/`StandardError=journal+console`, #413: a production command
+  line does not forward the journal); the boot mesh and the client do not start, no peer is asked, and the
+  console's prompt takes the recovery key. `esp_files(site,
   envelopes, root_key, device, anchor)` is the one call enrolment and the update path make: it verifies the
   chain the same way, renders what the initrd will render (refusing, e.g., a host left with no peer), and
   writes the site document and the chain, and removes the four files an earlier stage rendered onto the ESP.

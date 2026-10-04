@@ -20,7 +20,7 @@ ours regalia-kms l 0777 0:0 etc/systemd/system/cryptsetup.target.wants/regalia-u
 ours regalia-kms f 0755 0:0 usr/bin/regalia-unlock =compiled
 ours regalia-kms f 0644 0:0 usr/lib/regalia/root-key.json =root-key
 ours regalia-kms f 0755 0:0 usr/lib/regalia/wg-boot 46bba2722bf515a57754d72efdb89c5fe7b354e80a2414c69de277525899e275
-ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-boot-render.service 705169eb9e35c6aad599f9571478cb2c013ca52830c1540443d299771dd39eb5
+ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-boot-render.service 9cfcd77e7c47768668045dd7bd02281d070e551fdc4dfe0001d2f146a1e25967
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-unlock.service 5519c79e8db4b6273785ec5d9b247eeec6cb9449c4a6266c9fa4b1db6f38135b
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-wg-boot.service 6da6c3409c49e2b98a50212edd0df32041264d297538be04b1e18423cd8d4b5f
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/systemd-cryptsetup@.service.d/99-regalia-no-credentials.conf dd201bf4c2811719633fd27a1134f32d17a74430f4f7dbcb2360fb90a1f72900
