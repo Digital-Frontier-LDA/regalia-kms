@@ -882,6 +882,10 @@ Every trail in `deploy/baremetal/trails.py`'s registry is hash-chained line by l
 audit collector by one instance of `units/regalia-audit-ship@.service` per trail
 (`systemctl enable --now regalia-audit-ship@sync`; `cmd/regalia-audit-ship`, `internal/audit/trail.go`).
 Each line becomes one audit event on the stream `<site>.<trail>`.
+
+The collector is an **external service** the owner chooses (#351). `AUDIT-COLLECTOR.md` is the contract it must
+meet and what each node gives it. `regalia-audit-ship check` validates a node's endpoint configuration (and the
+unit runs it before each start); `regalia-audit-ship conformance` checks a candidate service against the contract.
 - **No local state.** Each pass rebuilds the events from the file and goes on only if the collector's
   committed head is one of them. A file cut short, rewritten or removed under what was shipped raises an
   alarm in the collector's `alarms.jsonl`, and the instance exits 3. The unit does not restart it, and

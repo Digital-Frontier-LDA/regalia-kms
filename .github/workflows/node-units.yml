@@ -117,7 +117,7 @@ jobs:
         run: |
           set -o pipefail
           REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/audit-ship-systemd.py | tee "$RUNNER_TEMP/ship.log"
-          grep -q '^audit-ship-systemd: 20 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
+          grep -q '^audit-ship-systemd: 21 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
             echo "::error::the shipper test did not pass all 20 checks" >&2; exit 1; }
 
   # #70 (Phase 10), PR 1: three nodes on one machine, each its real services in its own namespace against
