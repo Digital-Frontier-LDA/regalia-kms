@@ -30,9 +30,11 @@
 #   boot 2c AN OLDER SIGNED IMAGE, APPROVED (#135): a second image of the same build (one word more on its
 #           command line, so another PCR 11, signed by the same keys). The peers' document lists both: it boots
 #           unattended, as boot 2.
-#   boot 2k #75 TIER Q, Q1: AN IMAGE WHOSE KERNEL DIFFERS (the same kernel with bytes appended): its predicted PCR 11
-#           differs in both phases, it boots unattended once approved, and the client's console line gives the
-#           initrd-phase PCR 11 its own build record predicts. Its command line has no journald forwarding (#413).
+#   boot 2k #75 TIER Q, Q1: AN IMAGE WHOSE KERNEL DIFFERS (the same kernel with bytes appended). Before booting: its
+#           measured .linux is the first image's plus the bytes, and they alone change its predicted PCR 11. Not
+#           approved, both peers refuse it naming PCR 11; approved, it boots unattended. Each time the client's console
+#           line gives the initrd-phase PCR 11 its own build record predicts. No journald forwarding on its command
+#           line (#413): the client's lines reach the console through its unit.
 #   boot 2d THE SAME IMAGE, RETIRED: the document lists the current image only. The TPM releases the local
 #           half all the same (its signed PCR 11 policy has no counter), both peers refuse the quote naming
 #           PCR 11, nothing is given; the client keeps asking, and the recovery key typed at the console opens.

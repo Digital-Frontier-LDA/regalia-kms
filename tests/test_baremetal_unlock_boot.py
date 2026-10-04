@@ -513,25 +513,57 @@ class OnQemu(tub.OnSwtpm):
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
 
         # boot 2k, #75 TIER Q, Q1: AN IMAGE WHOSE KERNEL DIFFERS (the same kernel with bytes appended: it boots
-        # identically, and only its measurement differs). Its predicted PCR 11 differs from the first image's in both
-        # phases, asserted BEFORE it boots (a stand-in that changed nothing in .linux cannot pass vacuously). Approved
-        # beside the others, it boots unattended; the client says the initrd-phase PCR 11 its OWN record predicts, and
+        # identically, and only its measurement differs). Before it boots: its .linux is e2e's plus the bytes, and they
+        # alone change its predicted PCR 11 (not only its command line). Not approved, both peers refuse it for PCR 11;
+        # approved beside the others, it boots unattended; the client says the initrd-phase PCR 11 its OWN record predicts, and
         # it is booted on the system-phase one. Its signed command line has no journald forwarding (#413): the
         # client's lines reach the console through its unit alone (#412), as on a production console.
         with open(BOOT + "/e2e-k2.record.json") as f:
             other_kernel = json.load(f)
-        for phase in attest.PHASES:
-            self.assertNotEqual(other_kernel["pcr11"][phase], record["pcr11"][phase], "Q1's image predicts the first image's PCR 11 (%s)" % phase)
+        with open(BOOT + "/e2e.efi", "rb") as f:
+            first_parts = uki.measured(f.read())
         with open(BOOT + "/e2e-k2.efi", "rb") as f:
-            k2_cmdline = dict(uki.sections(f.read()))[".cmdline"].decode().split()
-        self.assertNotIn("systemd.journald.forward_to_console=1", k2_cmdline)
+            k2_parts = uki.measured(f.read())
+        # e2e-k2 differs from e2e in its kernel AND its command line (no journald forwarding), and PCR 11 measures both. So
+        # that the kernel's change is what is under test (regalia-kms-d9 on #415): the appended bytes ARE in the measured
+        # .linux section, and they alone change the prediction: with e2e's kernel put back, e2e-k2's PCR 11 is another
+        self.assertEqual(k2_parts["linux"], first_parts["linux"] + b"R" * 4096, "the Q1 image's .linux is not e2e's kernel with the 4096 bytes")
+        for phase, path in uki.PHASE_PATHS.items():
+            self.assertEqual(uki.pcr11(k2_parts, path), other_kernel["pcr11"][phase])           # computed here as uki.py does
+            self.assertNotEqual(uki.pcr11(dict(k2_parts, linux=first_parts["linux"]), path), other_kernel["pcr11"][phase],
+                                "the kernel's bytes do not change the Q1 image's PCR 11 (%s)" % phase)
+            self.assertNotEqual(other_kernel["pcr11"][phase], record["pcr11"][phase], "Q1's image predicts the first image's PCR 11 (%s)" % phase)
+        self.assertNotIn("systemd.journald.forward_to_console=1", k2_parts["cmdline"].decode().split())
+
+        # first NOT approved: the document lists the current image only. Both peers refuse it, naming PCR 11 (the
+        # security half: a different kernel is refused until the root approves it; 2d refuses a RETIRED image)
+        self.reference = reference(expected["pcr12"])
+        since = len(self.events)
+        said = self.boot("2k-other-kernel-unapproved", credentials, recovery=after_attempt(1), image="e2e-k2")
+        self.assertEqual(initrd_pcr11(said), other_kernel["pcr11"]["initrd"])
+        self.assertRegex(said, r"regalia-unlock: attempt 1: .*; asking again in ")
+        self.assertRegex(said, PROMPT.pattern.decode())
+        no_shell(self, said)
+        events = self.events[since:]
+        self.assertNotIn(("unlock", "ALLOW"), {(e["event"], e["outcome"]) for e in events})
+        refused = {e["peer"]: e["reason"] for e in events if e["event"] == "unlock" and e["outcome"] == "DENY"}
+        self.assertEqual(sorted(refused), ["b", "c"], events)
+        for peer, reason in refused.items():
+            self.assertIn("PCR 11 is %s, expected %s" % (other_kernel["pcr11"]["initrd"], record["pcr11"]["initrd"]), reason)
+            self.assertNotRegex(reason, r"PCR (7|12) is")
+
+        # then approved beside the others: it boots unattended
         self.reference = reference(expected["pcr12"], (("e2e", record), ("e2e-old", older), ("e2e-k2", other_kernel)))
         since = len(self.events)
         said = self.boot("2k-other-kernel", credentials, image="e2e-k2")
         unattended(self, said)                                      # the client's "gave the key" line, through its unit only
         self.assertEqual(initrd_pcr11(said), other_kernel["pcr11"]["initrd"])
-        self.assertNotIn("systemd.journald.forward_to_console=1", re.search(r"REGALIA-E2E-CMDLINE (.*)", said).group(1).split())
+        # the test's report lines go to /dev/console themselves (e2e/lib/boot-guest/e2e-report), with no forwarding (#413)
+        reported = re.search(r"REGALIA-E2E-CMDLINE (.*)", said)
+        self.assertIsNotNone(reported, "no REGALIA-E2E-CMDLINE on the console (the report writes to /dev/console, #413)")
+        self.assertNotIn("systemd.journald.forward_to_console=1", reported.group(1).split())
         shown = booted_pcrs(said)
+        self.assertIsNotNone(shown, "no REGALIA-E2E-PCRS on the console (#413)")
         self.assertEqual([v.lower() for v in shown.groups()], [pcrs["7"], other_kernel["pcr11"]["system"], expected["pcr12"]])
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
 
