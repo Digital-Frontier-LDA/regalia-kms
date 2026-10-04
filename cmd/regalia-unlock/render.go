@@ -207,7 +207,7 @@ func render(dir string, env renderEnv) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("the TPM does not answer: %v", err)
 	}
-	high, err := membership.Anchored(nv, manifests)
+	high, err := membership.Anchored(nv, manifests, nil) // TODO(#242 B2): this node's approved-image policy, from the site configuration
 	closeNV()
 	if err != nil {
 		return "", err

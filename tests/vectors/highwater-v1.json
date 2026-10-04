@@ -1,32 +1,37 @@
 {
- "about": "The TPM high-water anchor as the initrd reads it, decided by the Python: each case is the NV indices a\nTPM holds (as membership.HighWater laid them out, driven through tests.test_baremetal_heartbeat.FakeTpm),\na chain from the ESP, and what Store.load decides before it writes anything.",
+ "about": "The TPM high-water anchor as the initrd reads it, decided by the Python: each case is the NV indices a\nTPM holds (as membership.HighWater laid them out, driven through tests.test_baremetal_heartbeat.FakeTpm),\neach with its authPolicy (\"policy\", null for none), the node's configured approved-image policy (the case's\n\"policy\", null for none; #242), a chain from the ESP, and what Store.load decides before it writes anything.",
  "cases": [
   {
    "chain": "main",
    "high_water": 3,
    "length": 3,
    "name": "anchored at 3, the chain at 3",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -39,27 +44,32 @@
    "high_water": 3,
    "length": 6,
    "name": "anchored at 3, the chain ahead at 6",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -72,27 +82,32 @@
    "high_water": 3,
    "length": 3,
    "name": "a TPM that never held a counter",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "0000000000000004",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "0000000000000001",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -105,27 +120,32 @@
    "high_water": 0,
    "length": 1,
    "name": "defined only (epoch 0, a zero digest), the chain at 1",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000000000000000000000000000000000000000000000000000000000000000000000072c485cd52dca84b",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000000000000000000000000000000000000000000000000000000000000000000000072c485cd52dca84b",
+      "policy": null,
       "size": 48
      }
     },
@@ -137,6 +157,7 @@
    "chain": "main",
    "length": 3,
    "name": "anchored at 5, the chain at 3: a restored disk",
+   "policy": null,
    "refused": "ROLLBACK: the membership on disk is epoch 3 but the TPM high-water is 5; fetch the chain from a peer",
    "tpm": {
     "broken": false,
@@ -144,21 +165,25 @@
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002f",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "00000000000000057ac3c7a557030113e38b81696367985f14e12e2b51623635f0d9c070979a3b67281c4dfe75b8d1b5",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000004dc75111444c367b6e3929967bfe1517ddaf14ac7d53987d83a894071adbe8e100db9fd6bcd7c6f33",
+      "policy": null,
       "size": 48
      }
     },
@@ -170,6 +195,7 @@
    "chain": "fork at 3",
    "length": 3,
    "name": "anchored at 3, another chain at 3",
+   "policy": null,
    "refused": "CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded: a substituted chain is never anchored; record an incident",
    "tpm": {
     "broken": false,
@@ -177,21 +203,25 @@
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -204,27 +234,32 @@
    "high_water": 3,
    "length": 5,
    "name": "anchored at 3, another chain from epoch 4",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -237,27 +272,32 @@
    "high_water": 4,
    "length": 4,
    "name": "the crash window: counter at 4, record at 3, the chain at 4",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002e",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -270,27 +310,32 @@
    "high_water": 4,
    "length": 4,
    "name": "the crash window, another manifest at 4 (only 3 is pinned)",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002e",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -302,6 +347,7 @@
    "chain": "fork at 3",
    "length": 4,
    "name": "the crash window, another chain from 3",
+   "policy": null,
    "refused": "CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded: a substituted chain is never anchored; record an incident",
    "tpm": {
     "broken": false,
@@ -309,21 +355,25 @@
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002e",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -335,27 +385,32 @@
    "chain": "main",
    "length": 5,
    "name": "the record two epochs behind the counter",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002f",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -369,27 +424,32 @@
    "high_water": 4,
    "length": 4,
    "name": "a record write cut after 0 bytes",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002e",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -402,27 +462,32 @@
    "high_water": 4,
    "length": 4,
    "name": "a record write cut after 1 bytes",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002e",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -435,27 +500,32 @@
    "high_water": 4,
    "length": 4,
    "name": "a record write cut after 7 bytes",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002e",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -468,27 +538,32 @@
    "high_water": 4,
    "length": 4,
    "name": "a record write cut after 8 bytes",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002e",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000004d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -501,27 +576,32 @@
    "high_water": 4,
    "length": 4,
    "name": "a record write cut after 20 bytes",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002e",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000004dc75111444c367b6e3929967f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -534,27 +614,32 @@
    "high_water": 4,
    "length": 4,
    "name": "a record write cut after 39 bytes",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002e",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000004dc75111444c367b6e3929967bfe1517ddaf14ac7d53987d83a894071adbe8e597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -567,27 +652,32 @@
    "high_water": 4,
    "length": 4,
    "name": "a record write cut after 40 bytes",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002e",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000004dc75111444c367b6e3929967bfe1517ddaf14ac7d53987d83a894071adbe8e107d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -600,27 +690,32 @@
    "high_water": 4,
    "length": 4,
    "name": "a record write cut after 47 bytes",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002e",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000004dc75111444c367b6e3929967bfe1517ddaf14ac7d53987d83a894071adbe8e100db9fd6bcd7c6f2d",
+      "policy": null,
       "size": 48
      }
     },
@@ -632,27 +727,32 @@
    "chain": "main",
    "length": 3,
    "name": "both slots holding no valid record",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "policy": null,
       "size": 48
      }
     },
@@ -666,27 +766,32 @@
    "high_water": 3,
    "length": 3,
    "name": "one slot never written",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 393218,
       "data": null,
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -698,27 +803,32 @@
    "chain": "main",
    "length": 3,
    "name": "both slots never written",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 393218,
       "data": null,
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 393218,
       "data": null,
+      "policy": null,
       "size": 48
      }
     },
@@ -732,27 +842,32 @@
    "high_water": 3,
    "length": 3,
    "name": "one slot holding garbage",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+      "policy": null,
       "size": 48
      }
     },
@@ -764,22 +879,26 @@
    "chain": "main",
    "length": 3,
    "name": "a record slot that is gone",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      }
     },
@@ -792,22 +911,26 @@
    "chain": "main",
    "length": 3,
    "name": "the counter is gone",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -820,22 +943,26 @@
    "chain": "main",
    "length": 3,
    "name": "the base is gone",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -848,27 +975,32 @@
    "chain": "main",
    "length": 3,
    "name": "a slot others may write (authwrite)",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264134,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -880,61 +1012,71 @@
   {
    "chain": "main",
    "length": 3,
-   "name": "a slot under a policy (policywrite)",
+   "name": "a slot under a policy (policywrite) with no authPolicy, on a node with none",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264138,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
     "public_fails": [],
     "unreadable": []
    },
-   "unusable": "NV index 0x150001b does not have this anchor's attributes (0x6000a, not 0x60002): it can be written or read otherwise than this software defines"
+   "unusable": "the anchor's write policy is not this node's approved-image policy: NV index 0x150001b is written by policy (none), and this node has none configured"
   },
   {
    "chain": "main",
    "length": 3,
    "name": "a slot the owner cannot read",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537133058,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -947,27 +1089,32 @@
    "chain": "main",
    "length": 3,
    "name": "a write-locked slot",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537266178,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -980,27 +1127,32 @@
    "chain": "main",
    "length": 3,
    "name": "a slot of 40 bytes",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 393218,
       "data": null,
+      "policy": null,
       "size": 40
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1013,27 +1165,32 @@
    "chain": "main",
    "length": 3,
    "name": "a slot that is a counter",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 393234,
       "data": null,
+      "policy": null,
       "size": 8
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1046,27 +1203,32 @@
    "chain": "main",
    "length": 3,
    "name": "a counter others may write",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264150,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1079,27 +1241,32 @@
    "chain": "main",
    "length": 3,
    "name": "a counter that clears at startup",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 671481874,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1112,27 +1279,32 @@
    "chain": "main",
    "length": 3,
    "name": "a counter never incremented",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 393234,
       "data": null,
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1145,27 +1317,32 @@
    "chain": "main",
    "length": 3,
    "name": "a base that is not write-locked",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537272322,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1178,27 +1355,32 @@
    "chain": "main",
    "length": 3,
    "name": "a base others may write",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274374,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1211,27 +1393,32 @@
    "chain": "main",
    "length": 3,
    "name": "a base of 4 bytes",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "00000000",
+      "policy": null,
       "size": 4
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1244,27 +1431,32 @@
    "chain": "main",
    "length": 3,
    "name": "a base of 16 bytes",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "00000000000000000000000000000000",
+      "policy": null,
       "size": 16
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1277,27 +1469,32 @@
    "chain": "main",
    "length": 3,
    "name": "a counter of 16 bytes (FakeTpm only: a TPM refuses it)",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002e",
+      "policy": null,
       "size": 16
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1310,27 +1507,32 @@
    "chain": "main",
    "length": 3,
    "name": "the counter below its base",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "00000000000f4240",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1343,27 +1545,32 @@
    "chain": "main",
    "length": 3,
    "name": "two slots at one epoch naming different manifests",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7836d6b5e32657fe",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000003bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb26483669d4386636",
+      "policy": null,
       "size": 48
      }
     },
@@ -1376,27 +1583,32 @@
    "chain": "main",
    "length": 1,
    "name": "a planted record at the highest epoch beside a high-water of 0",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "ffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000fd59bdcb88f7146a",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000000000000000000000000000000000000000000000000000000000000000000000072c485cd52dca84b",
+      "policy": null,
       "size": 48
      }
     },
@@ -1409,27 +1621,32 @@
    "chain": "main",
    "length": 3,
    "name": "a planted record at the highest epoch beside a high-water of 3",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "ffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000fd59bdcb88f7146a",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1442,6 +1659,7 @@
    "chain": "main",
    "length": 3,
    "name": "a slot the TPM describes and does not read",
+   "policy": null,
    "refused": "cannot read 48 bytes from the record index 0x150001b: the anchor is unavailable (fail closed)",
    "tpm": {
     "broken": false,
@@ -1449,21 +1667,25 @@
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1477,6 +1699,7 @@
    "chain": "main",
    "length": 3,
    "name": "a base the TPM does not read",
+   "policy": null,
    "refused": "cannot read 8 bytes from NV index 0x1500017",
    "tpm": {
     "broken": false,
@@ -1484,21 +1707,25 @@
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1512,6 +1739,7 @@
    "chain": "main",
    "length": 3,
    "name": "an index the TPM lists and does not describe",
+   "policy": null,
    "refused": "cannot read NV index 0x150001a: the high-water anchor is unavailable (fail closed): the TPM lists it and did not give it",
    "tpm": {
     "broken": false,
@@ -1519,21 +1747,25 @@
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },
@@ -1547,6 +1779,7 @@
    "chain": "main",
    "length": 3,
    "name": "a TPM that does not answer",
+   "policy": null,
    "refused": "the TPM does not answer (tpm2_getcap handles-nv-index failed): the high-water anchor is unavailable (fail closed)",
    "tpm": {
     "broken": true,
@@ -1554,21 +1787,443 @@
      "0x1500016": {
       "attributes": 537264146,
       "data": "000000000000002d",
+      "policy": null,
       "size": 8
      },
      "0x1500017": {
       "attributes": 537274370,
       "data": "000000000000002a",
+      "policy": null,
       "size": 8
      },
      "0x150001a": {
       "attributes": 537264130,
       "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
       "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 3,
+   "length": 3,
+   "name": "a policy-written anchor, this node's policy",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 3,
+   "length": 5,
+   "name": "a policy-written anchor, the chain ahead",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "length": 2,
+   "name": "a policy-written anchor, a restored disk",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "refused": "ROLLBACK: the membership on disk is epoch 2 but the TPM high-water is 3; fetch the chain from a peer",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a policy-written anchor read by a node of another policy",
+   "policy": "b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "the anchor's write policy is not this node's approved-image policy: NV index 0x1500016 is written by policy a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7, not b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a policy-written anchor read by a node with no policy",
+   "policy": null,
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "the anchor's write policy is not this node's approved-image policy: NV index 0x1500016 is written by policy a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7, and this node has none configured"
+  },
+  {
+   "chain": "main",
+   "high_water": 3,
+   "length": 3,
+   "name": "a policy-written slot beside an owner-written one",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "policy": null,
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 3,
+   "length": 3,
+   "name": "a policy-written counter, owner-written slots",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a policy-written slot of another policy",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": "b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "the anchor's write policy is not this node's approved-image policy: NV index 0x150001b is written by policy b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8, not a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a policy-written slot with an empty authPolicy",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": "",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "the anchor's write policy is not this node's approved-image policy: NV index 0x150001b is written by policy (none), not a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a policy-written base",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "policy": null,
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274378,
+      "data": "000000000000002a",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x1500017 does not have this anchor's attributes (0x6200a, not 0x62002): it can be written or read otherwise than this software defines"
+  },
+  {
+   "chain": "main",
+   "high_water": 3,
+   "length": 3,
+   "name": "an owner-written anchor read by a node with a policy",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "policy": null,
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "policy": null,
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "policy": null,
       "size": 48
      }
     },

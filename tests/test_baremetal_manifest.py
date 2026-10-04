@@ -547,3 +547,157 @@ class OnSoftHsm(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OfflineRoot(unittest.TestCase):
+    """ADR-0002 D28: the root is an Ed25519 software key, reconstructed by regalia-ceremony's offline-keys.py and
+    handed down on a sealed memfd (`--key-fd`), never a file on disk. Every step of `sign` runs as for a token."""
+
+    SESSION = "0123456789abcdef0123456789abcdef"
+
+    def setUp(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.state = os.path.join(self.d, "state")
+        os.mkdir(self.state, 0o700)
+        self.key = Ed25519PrivateKey.generate()
+        self.root = self.raw(self.key).hex()
+        first = manifest(1, "", three())
+        self.chain = [{"manifest": first, "signature": {"signer": "root", "key": self.root,
+                                                         "sig": self.key.sign(m.DOMAIN + m.canonical(first)).hex()}}]
+        self.current = m.accept_chain(None, self.chain, self.root)
+        self.paths = {name: os.path.join(self.d, name) for name in ("chain.json", "p.json", "e2.json")}
+        with open(self.paths["chain.json"], "w") as f:
+            json.dump(self.chain, f)
+        self.candidate = tool.propose_states(self.current, {"c": "MAINTENANCE"}, "2026-10-04T12:00:00Z")
+        with open(self.paths["p.json"], "w") as f:
+            json.dump(self.candidate, f)
+        self.typed = "%d %s" % (self.candidate["epoch"], m.digest(self.candidate)[:8])
+
+    @staticmethod
+    def raw(key):
+        return key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+
+    @staticmethod
+    def pem(key):
+        return bytearray(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+
+    def memfd(self, key=None):
+        """The key as offline-keys.py passes it: a sealed memfd."""
+        from deploy.baremetal import keyfd
+        return keyfd.sealed_memfd(self.pem(key or self.key))
+
+    def run_sign(self, *extra, fd=None, typed=None, signer="root"):
+        fd = self.memfd() if fd is None else fd
+        args = ["sign", "--chain", self.paths["chain.json"], "--root-key", self.root, "--expected-epoch", "1",
+                "--proposal", self.paths["p.json"], "--signer", signer, "--state-dir", self.state, "--out", self.paths["e2.json"],
+                "--key-fd", str(fd), "--offline-session", self.SESSION] + list(extra)
+        out, err = io.StringIO(), io.StringIO()
+        with unittest.mock.patch("sys.stdout", out), unittest.mock.patch("sys.stderr", err), \
+                unittest.mock.patch.object(tool.keyfd, "tty_line", lambda prompt: self.typed if typed is None else typed):
+            code = tool.main(args)
+        return code, err.getvalue()
+
+    def record(self):
+        path = os.path.join(self.state, tool.RECORD)
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return [json.loads(line) for line in f]
+
+    def test_a_valid_session_signs_and_the_record_names_it(self):
+        code, err = self.run_sign()
+        self.assertEqual(code, 0, err)
+        with open(self.paths["e2.json"]) as f:
+            envelope = json.load(f)
+        self.assertEqual(m.accept(self.current, envelope, self.root)["epoch"], 2)
+        line = self.record()[-1]
+        self.assertEqual((line["provenance"], line["verified"], line["key"]), ("offline-keys session " + self.SESSION, True, self.root))
+        self.assertEqual(line["pin_source"], "none (offline key)")
+        self.assertNotIn("PRIVATE", json.dumps(line))
+
+    def test_a_key_that_is_not_the_pinned_root_is_refused_before_anything_is_signed(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        code, err = self.run_sign(fd=self.memfd(Ed25519PrivateKey.generate()))
+        self.assertEqual(code, 2)
+        self.assertIn("is not the pinned root", err)
+        self.assertFalse(os.path.exists(self.paths["e2.json"]))
+        self.assertEqual(self.record(), [])                         # nothing was signed, so nothing to record
+
+    def test_a_key_on_disk_is_refused(self):
+        path = os.path.join(self.d, "root.pem")
+        with open(path, "wb") as f:
+            f.write(self.pem(self.key))
+        fd = os.open(path, os.O_RDONLY)
+        code, err = self.run_sign(fd=fd)
+        self.assertEqual(code, 2)
+        self.assertIn("a key is never read from a file on disk", err)
+        self.assertFalse(os.path.exists(self.paths["e2.json"]))
+        with self.assertRaises(OSError):
+            os.fstat(fd)                                             # closed all the same
+        with self.assertRaises(SystemExit), unittest.mock.patch("sys.stderr", io.StringIO()):
+            tool.main(["sign", "--chain", self.paths["chain.json"], "--root-key", self.root, "--expected-epoch", "1",
+                       "--proposal", self.paths["p.json"], "--signer", "root", "--state-dir", self.state, "--out", self.paths["e2.json"],
+                       "--key-fd", path, "--offline-session", self.SESSION])          # a path is not a descriptor
+
+    def test_an_unsealed_memfd_is_refused_and_a_pipe_is_taken(self):
+        fd = os.memfd_create("k", os.MFD_CLOEXEC)
+        os.write(fd, self.pem(self.key))
+        os.lseek(fd, 0, os.SEEK_SET)
+        code, err = self.run_sign(fd=fd)
+        self.assertEqual(code, 2)
+        self.assertIn("not sealed against writing", err)
+        r, w = os.pipe()
+        os.write(w, self.pem(self.key))
+        os.close(w)
+        code, err = self.run_sign(fd=r)
+        self.assertEqual(code, 0, err)
+
+    def test_the_buffer_is_zeroed_once_the_key_is_loaded(self):
+        seen = []
+        real = tool.keyfd.read
+
+        def kept(fd, what):
+            seen.append(real(fd, what))
+            return seen[-1]
+        with unittest.mock.patch.object(tool.keyfd, "read", kept):
+            code, err = self.run_sign()
+        self.assertEqual(code, 0, err)
+        self.assertTrue(seen and not any(seen[0]), "the key's buffer still holds the key")
+
+    def test_every_other_step_still_runs(self):
+        code, err = self.run_sign(typed="2 00000000")
+        self.assertEqual(code, 2)
+        self.assertIn("the confirmation does not match: nothing was signed", err)
+        self.assertEqual(self.record(), [])
+        code, err = self.run_sign("--expected-epoch", "2")[0], None
+        self.assertEqual(code, 2)                                    # the chain ends at 1, not the epoch the operator said
+
+    def test_the_offline_path_takes_nothing_of_a_token_and_only_the_root(self):
+        for extra, reason in ((("--module", "/usr/lib/opensc-pkcs11.so"), "is not given with --key, --module"),
+                              (("--key", URI), "is not given with --key, --module")):
+            with self.subTest(reason):
+                code, err = self.run_sign(*extra)
+                self.assertEqual(code, 2)
+                self.assertIn(reason, err)
+        code, err = self.run_sign(signer="revocation")
+        self.assertIn("a revocation key signs on its token", err)
+        args = ["sign", "--chain", self.paths["chain.json"], "--root-key", self.root, "--expected-epoch", "1", "--proposal", self.paths["p.json"],
+                "--signer", "root", "--state-dir", self.state, "--out", self.paths["e2.json"], "--key-fd", str(self.memfd())]
+        for session, reason in ((None, "--offline-session is 32 lowercase hex"), ("ABC", "--offline-session is 32 lowercase hex")):
+            err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", err):
+                self.assertEqual(tool.main(args + ([] if session is None else ["--offline-session", session])), 2)
+            self.assertIn(reason, err.getvalue())
+
+    def test_the_confirmation_needs_a_terminal(self):
+        from deploy.baremetal import keyfd
+        import errno
+
+        def no_tty(path, flags, *a):
+            raise OSError(errno.ENXIO, "No such device or address")
+        with unittest.mock.patch.object(keyfd.os, "open", no_tty):
+            with self.assertRaises(m.Refused) as caught:
+                keyfd.tty_line("type: ")
+        self.assertIn("no controlling terminal", str(caught.exception))

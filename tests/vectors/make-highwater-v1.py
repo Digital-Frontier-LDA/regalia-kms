@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The TPM high-water anchor as the initrd reads it, decided by the Python: each case is the NV indices a
 TPM holds (as membership.HighWater laid them out, driven through tests.test_baremetal_heartbeat.FakeTpm),
-a chain from the ESP, and what Store.load decides before it writes anything.
+each with its authPolicy ("policy", null for none), the node's configured approved-image policy (the case's
+"policy", null for none; #242), a chain from the ESP, and what Store.load decides before it writes anything.
 
     python3 -Es tests/vectors/make-highwater-v1.py > tests/vectors/highwater-v1.json
 
@@ -90,7 +91,7 @@ class Tpm:
         for index, (bits, data, size) in sorted(self.tpm.nv.items()):
             if isinstance(data, int):
                 data = data.to_bytes(8, "big")
-            nv[index] = {"attributes": bits, "size": size, "data": None if data is None else data.hex()}
+            nv[index] = {"attributes": bits, "size": size, "data": None if data is None else data.hex(), "policy": self.tpm.policies.get(index)}
         return {"nv": nv, "broken": self.tpm.broken, "public_fails": sorted(self.public_fails), "unreadable": sorted(self.unreadable)}
 
 
@@ -114,12 +115,13 @@ cases = []
 scratch = tempfile.mkdtemp()
 
 
-def case(name, anchored, chain_name, length, change=None, highest=41, then=None):
+def case(name, anchored, chain_name, length, change=None, highest=41, then=None, policy=None):
     """A TPM anchored through `anchored` epochs of the main chain (define, then anchor() each), changed by
-    `change(tpm, hw)`, read against the first `length` epochs of `chain_name`."""
+    `change(tpm, hw)`, read against the first `length` epochs of `chain_name` by a node whose approved-image
+    policy is `policy`."""
     lock = os.path.join(scratch, "%d.lock" % len(cases))
     tpm = Tpm(highest)
-    hw = m.HighWater(INDEX, run=tpm, lock_path=lock)
+    hw = m.HighWater(INDEX, run=tpm, lock_path=lock, policy=policy)
     hw.define()
     digests = m.Store._digests(manifests_of(CHAINS["main"]))
     for epoch in range(1, anchored + 1):
@@ -130,7 +132,7 @@ def case(name, anchored, chain_name, length, change=None, highest=41, then=None)
     outcome = decide(hw, manifests_of(envelopes))
     if then:
         assert then in json.dumps(outcome), (name, outcome)
-    cases.append({"name": name, "tpm": tpm.state(), "chain": chain_name, "length": length, **outcome})
+    cases.append({"name": name, "tpm": tpm.state(), "chain": chain_name, "length": length, "policy": policy, **outcome})
 
 
 def nv(tpm, index):
@@ -193,7 +195,8 @@ case("a record slot that is gone", 3, "main", 3, lambda t, hw: t.tpm(["tpm2_nvun
 case("the counter is gone", 3, "main", 3, lambda t, hw: t.tpm(["tpm2_nvundefine", INDEX, "-C", "o"]), then="not defined")
 case("the base is gone", 3, "main", 3, lambda t, hw: t.tpm(["tpm2_nvundefine", "0x1500017", "-C", "o"]), then="not defined")
 case("a slot others may write (authwrite)", 3, "main", 3, set_bits(SLOTS[0], add=FakeTpm.BITS["authwrite"]), then="attributes")
-case("a slot under a policy (policywrite)", 3, "main", 3, set_bits(SLOTS[1], add=FakeTpm.BITS["policywrite"]), then="attributes")
+case("a slot under a policy (policywrite) with no authPolicy, on a node with none", 3, "main", 3,
+     set_bits(SLOTS[1], add=FakeTpm.BITS["policywrite"]), then="approved-image policy")
 case("a slot the owner cannot read", 3, "main", 3, set_bits(SLOTS[0], remove=FakeTpm.BITS["ownerread"]), then="attributes")
 case("a write-locked slot", 3, "main", 3, set_bits(SLOTS[0], add=FakeTpm.LOCKED), then="write-locked")
 case("a slot of 40 bytes", 3, "main", 3, redefine(SLOTS[0], size=40), then="40 bytes")
@@ -232,6 +235,33 @@ case("a slot the TPM describes and does not read", 3, "main", 3, lambda t, hw: t
 case("a base the TPM does not read", 3, "main", 3, lambda t, hw: t.unreadable.add("0x1500017"), then="cannot read 8 bytes")
 case("an index the TPM lists and does not describe", 3, "main", 3, lambda t, hw: t.public_fails.add(SLOTS[0]), then="did not give it")
 case("a TPM that does not answer", 3, "main", 3, lambda t, hw: setattr(t.tpm, "broken", True), then="does not answer")
+
+# #242: the policy-written layout, index by index (B2's definers lay it out; here it is set by hand)
+POLICY, OTHER = "a7" * 32, "b8" * 32
+
+
+def by_policy(*indices, policy=POLICY):
+    def change(tpm, hw):
+        for index in indices:
+            nv(tpm, index)[0] |= FakeTpm.BITS["policywrite"]
+            tpm.tpm.policies[index] = policy
+    return change
+
+
+ALL = (INDEX,) + SLOTS
+case("a policy-written anchor, this node's policy", 3, "main", 3, by_policy(*ALL), policy=POLICY, then="high_water")
+case("a policy-written anchor, the chain ahead", 3, "main", 5, by_policy(*ALL), policy=POLICY, then="high_water")
+case("a policy-written anchor, a restored disk", 3, "main", 2, by_policy(*ALL), policy=POLICY, then="ROLLBACK")
+case("a policy-written anchor read by a node of another policy", 3, "main", 3, by_policy(*ALL), policy=OTHER, then="approved-image policy")
+case("a policy-written anchor read by a node with no policy", 3, "main", 3, by_policy(*ALL), then="none configured")
+case("a policy-written slot beside an owner-written one", 3, "main", 3, by_policy(SLOTS[0]), policy=POLICY, then="high_water")
+case("a policy-written counter, owner-written slots", 3, "main", 3, by_policy(INDEX), policy=POLICY, then="high_water")
+case("a policy-written slot of another policy", 3, "main", 3, both(by_policy(*ALL), by_policy(SLOTS[1], policy=OTHER)), policy=POLICY,
+     then="0x150001b is written by policy")
+case("a policy-written slot with an empty authPolicy", 3, "main", 3, both(by_policy(*ALL), by_policy(SLOTS[1], policy="")), policy=POLICY,
+     then="(none)")
+case("a policy-written base", 3, "main", 3, by_policy("0x1500017"), policy=POLICY, then="attributes")
+case("an owner-written anchor read by a node with a policy", 3, "main", 3, policy=POLICY, then="high_water")
 
 shutil.rmtree(scratch)
 print(json.dumps({"about": __doc__.strip().split("\n\n")[0], "root_public": root_pub,
