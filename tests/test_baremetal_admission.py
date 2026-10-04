@@ -158,11 +158,31 @@ class Admission(Case):
         self.assertEqual(document, self.on_disk())
         self.assertEqual(list(document), list(admission.FIELDS))
         self.assertEqual(document, {
-            "schema": "regalia.admission/v1", "node_id": "a", "session_id": lt.SESSION, "boot_id": BOOT, "epoch": 1,
-            "manifest_digest": m.digest(self.m1), "lease_issued_at": hbt.stamp(self.now), "requested_boottime_ms": asked_at,
+            "schema": "regalia.admission/v2", "node_id": "a", "session_id": lt.SESSION, "boot_id": BOOT, "epoch": 1,
+            "manifest_digest": m.digest(self.m1), "hsm_serials": " ".join(self.m1["nodes"][0]["hsm_serials"]), "lease_issued_at": hbt.stamp(self.now), "requested_boottime_ms": asked_at,
             "serve_until_boottime_ms": self.ticks + (lease.MAX_LIFETIME - admission.MARGIN) * 1000, "reason": ""})
         self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o644)       # the daemon, another user, reads it
         self.assertEqual([n for n in os.listdir(self.d) if n.startswith(".admission-")], [])
+
+    def test_the_tokens_listed_are_this_node_s_in_the_current_manifest(self):
+        """#72 G1: hsm_serials is this node's entry in the manifest the step ran under, so the root replacing a
+        token in the manifest changes what the daemon may serve from at the next step."""
+        self.assertEqual(self.service.step()["hsm_serials"], "DENK0404100")
+        m2 = self.manifest(epoch=2, prev=m.digest(self.m1))
+        m2["nodes"][0]["hsm_serials"] = ["DENK0404547", "36345471"]       # the HSM replaced, and the node's YubiKey
+        self.beat(m2)
+        self.manifest_now = m2
+        self.assertEqual(self.service.step()["hsm_serials"], "DENK0404547 36345471")
+        self.manifest_now = None                                          # no manifest: nothing is listed
+        self.assertEqual(self.service.step()["hsm_serials"], "")
+
+    def test_more_tokens_than_the_daemon_reads_is_not_admitted(self):
+        many = self.manifest()
+        many["nodes"][0]["hsm_serials"] = ["T%02d" % i for i in range(admission.MAX_SERIALS + 1)]
+        self.manifest_now = many
+        document = self.service.step()
+        self.assertEqual((document["serve_until_boottime_ms"], document["hsm_serials"]), (0, ""))
+        self.assertIn("this node lists 17 hardware tokens in the manifest; the daemon serves from at most 16", document["reason"])
 
     def test_the_bound_is_in_boottime_and_does_not_move_between_renewals(self):
         first = self.service.step()["serve_until_boottime_ms"]
@@ -239,7 +259,8 @@ class Admission(Case):
         self.service.manifest = lambda: (_ for _ in ()).throw(m.Refused("y" * 10000))
         self.assertEqual(len(self.service.step()["reason"]), admission.ADMISSION_REASON_LIMIT)
         widest = {"schema": admission.SCHEMA, "node_id": "n" * 32, "session_id": "f" * 64, "boot_id": "b" * 36,
-                  "epoch": 2 ** 63 - 1, "manifest_digest": "d" * 64, "lease_issued_at": "9999-12-31T23:59:59Z",
+                  "epoch": 2 ** 63 - 1, "manifest_digest": "d" * 64, "hsm_serials": " ".join(["S" * 32] * admission.MAX_SERIALS),
+                  "lease_issued_at": "9999-12-31T23:59:59Z",
                   "requested_boottime_ms": 2 ** 63 - 1, "serve_until_boottime_ms": 2 ** 63 - 1,
                   "reason": "\\" * admission.ADMISSION_REASON_LIMIT}            # every character escaped: the worst case
         self.assertEqual(set(widest), set(self.service.step()))                     # the same fields the service writes

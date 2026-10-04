@@ -268,15 +268,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs nftables
-      - name: Build the pre-root client
-        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
-      - name: A stolen node revoked, its spread, and a partition's window
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: A stolen node revoked, its spread, and a partition's window; every event it caused in the audit collector
         run: |
           set -o pipefail
-          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-theft.py | tee "$RUNNER_TEMP/theft.log"
-          grep -q '^three-node-theft: 16 passed, 0 failed$' "$RUNNER_TEMP/theft.log" || {
-            echo "::error::the three-node theft test did not pass all 16 checks" >&2; exit 1; }
+          grep -q '^three-node-theft: 23 passed, 0 failed$' "$RUNNER_TEMP/theft.log" || {
+            echo "::error::the three-node theft test did not pass all 23 checks" >&2; exit 1; }
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, through the
   # real authority), and its retired hardware refused.

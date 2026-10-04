@@ -118,8 +118,9 @@ type Provider struct {
 	absences map[string]tokenAbsence
 }
 
-// Reauthorizer says whether the node holds a runtime lease it asked for after a moment, given in
-// this host's CLOCK_BOOTTIME milliseconds (internal/admission.Gate.RequestedAfter). It is the gate
+// Reauthorizer says whether a token may serve: the node holds a runtime lease it asked for after a
+// moment, given in this host's CLOCK_BOOTTIME milliseconds, and the manifest lists the token's serial
+// (internal/admission.Gate.Admits). It is the gate
 // every provider takes (internal/backend/reauth), under the name this package has always used.
 type Reauthorizer = reauth.Gate
 
@@ -277,9 +278,10 @@ func (provider *Provider) tokenGone(deviceID string) {
 }
 
 // reauthorized reports whether a token that has just been opened, and has proved to be the right
-// one, may serve. The first time it is seen back, that moment is recorded; it serves once the node
-// holds a lease asked for after it.
-func (provider *Provider) reauthorized(ctx context.Context, deviceID string) bool {
+// one (its serial is `serial`), may serve. The first time it is seen back, that moment is recorded;
+// it serves once the node holds a lease asked for after it, and while the manifest lists the serial
+// as one of the node's tokens (G1: asked on every operation, before the PIN).
+func (provider *Provider) reauthorized(ctx context.Context, deviceID, serial string) bool {
 	provider.mu.Lock()
 	gate := provider.reauthorizer
 	if gate == nil {
@@ -305,7 +307,7 @@ func (provider *Provider) reauthorized(ctx context.Context, deviceID string) boo
 	}
 	provider.absences[deviceID] = absence
 	provider.mu.Unlock()
-	if !gate.RequestedAfter(ctx, absence.returnedAtMs) {
+	if !gate.Admits(ctx, serial, absence.returnedAtMs) {
 		return false
 	}
 	provider.mu.Lock()
@@ -397,7 +399,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	// A TOKEN THAT WAS GONE WAITS FOR A FRESH LEASE (#72 PoC 12.4). Checked after the identity and
 	// the pinned key, so that a different card in the slot is still quarantined as a swap and only
 	// the RIGHT token, back, is what waits; and before anything is done with it, the PIN included.
-	if !provider.present(ctx, session, binding.DeviceID) || !provider.reauthorized(ctx, binding.DeviceID) {
+	if !provider.present(ctx, session, binding.DeviceID) || !provider.reauthorized(ctx, binding.DeviceID, binding.DeviceSerial) {
 		return nil, "", ErrUnavailable
 	}
 	gated = provider.gates()
@@ -615,7 +617,7 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	}
 	// Present, the right token, and not yet vouched for again: not healthy, so routing and
 	// readiness say so, and this is also where its return is first noticed.
-	if !provider.present(ctx, session, binding.DeviceID) || !provider.reauthorized(ctx, binding.DeviceID) {
+	if !provider.present(ctx, session, binding.DeviceID) || !provider.reauthorized(ctx, binding.DeviceID, binding.DeviceSerial) {
 		return false
 	}
 	gated = provider.gates()

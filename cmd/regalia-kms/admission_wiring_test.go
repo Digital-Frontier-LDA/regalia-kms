@@ -86,7 +86,7 @@ func TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted(t *testing.T) {
 	session := strings.Repeat("5e", 32)
 	document, _ := json.Marshal(map[string]any{
 		"schema": admission.Schema, "node_id": "site-a", "session_id": session, "boot_id": boot, "epoch": 3,
-		"manifest_digest": strings.Repeat("d1", 32), "lease_issued_at": "2026-10-02T09:00:00Z",
+		"manifest_digest": strings.Repeat("d1", 32), "hsm_serials": "DENK0404144", "lease_issued_at": "2026-10-02T09:00:00Z",
 		"requested_boottime_ms": now - 1000, "serve_until_boottime_ms": now + 60_000, "reason": "",
 	})
 	if err := os.Chmod(directory, 0o755); err != nil {
