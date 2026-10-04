@@ -599,8 +599,9 @@ class OnQemu(tub.OnSwtpm):
         def back(said, elapsed):
             if self.watched or elapsed <= 150 or "regalia-unlock: attempt 6: " not in said:
                 return False
-            for peer in ("b", "c"):
+            for peer in ("b", "c"):            # the link back, and its route: setting eth0 down deleted the default route
                 self.ip("ip", "link", "set", "eth0", "up", ns=self.peer_ns[peer])
+                self.ip("ip", "route", "replace", "default", "dev", "eth0", ns=self.peer_ns[peer])
             return True
         since = len(self.events)
         said = self.boot("9-peers-return", credentials, watch=back, timeout=1200)
