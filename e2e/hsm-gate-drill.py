@@ -157,6 +157,7 @@ def cleanup(serial, pin, key_id, before):
     deleted is reported loudly, with its id and the command, and the drill fails."""
     left = "the drill's key (id %s) may be LEFT on token %s: delete it with  pkcs11-tool --module %s --token-label <its label> " \
            "--login --delete-object --type privkey --id %s  (and --type pubkey)" % (key_id, serial, MODULE, key_id)
+    mark = len(results)
     try:
         label = token_label(serial)
         for kind in ("privkey", "pubkey"):
@@ -167,7 +168,7 @@ def cleanup(serial, pin, key_id, before):
         check(after == before, "the token's objects, private keys included, are as they were", after)
     except (SystemExit, OSError) as failure:
         check(False, "cleanup could not reach the token (%s); %s" % (failure, left))
-    if not all(results[-3:]):
+    if not all(results[mark:]):
         say("ATTENTION: " + left)
 
 
