@@ -102,6 +102,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   accepted, so after a card replacement an older record would bring back the retired cards' keys. Until
   then the operator checks the printed session and time against the ceremony sheet. It must be closed
   before any card is replaced.
+- **The laptop's signing record is not hash-chained** (#405), and a lost signing-record directory has
+  no recovery path yet (#406). Freshness checks built on the record (#403, #408) are only as strong as
+  the laptop it lives on.
 - **The bench-token lists are kept by hand** (`membership.BENCH_NITROKEYS`, `BENCH_PICOS`,
   `BENCH_YUBIKEYS`). A new bench token must be added there. A test keeps the drills' staging list equal
   to it, and nothing ties it to the operators' staging registry.
