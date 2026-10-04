@@ -342,5 +342,10 @@ class NodeMetricsDirectories(unittest.TestCase):
         for name in ("regalia.sysusers.conf", "regalia-audit-ship.sysusers.conf"):
             text = (UNITS / name).read_text()
             self.assertIn("g %s -" % metrics.GROUP, text)
-            self.assertIn("m prometheus %s" % metrics.GROUP, text)
+            self.assertNotIn("m prometheus", text)                 # the package owns its user (regalia-kms-24)
+        dropin = unit("prometheus-node-exporter.service.d/regalia.conf")["Service"]
+        self.assertEqual(dropin["SupplementaryGroups"], metrics.GROUP)
+        names = [filename for _, filename in metrics.WRITERS.values() if filename]
+        from deploy.baremetal import trails
+        self.assertFalse(set(names) & {name + ".prom" for name in trails.TRAILS})     # no basename shared with a shipper's file
         self.assertEqual(unit("regalia-audit-ship@.service")["Service"]["ExecStart"].count("-metrics /run/regalia-metrics/audit-ship/%i.prom"), 1)

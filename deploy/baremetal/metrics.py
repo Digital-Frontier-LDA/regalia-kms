@@ -7,9 +7,10 @@ and the alert rules (deploy/monitoring/regalia-node.rules.yml, held to this regi
 from what is written.
 
 WHERE. Each writer has a directory of its own under RUN_DIR, made by regalia.tmpfiles.conf: owned by the
-writer, group GROUP, mode 2750: the directory is the control, nobody outside the group reaches a file in it (the
+writer, group GROUP, mode 2750 (no two writers' files share a name, should node_exporter label them by basename): the directory is the control, nobody outside the group reaches a file in it (the
 Go shipper's are 0644, these 0640). The setgid bit gives every file the group, so a writer needs no membership;
-node_exporter's user is the group's only other member (regalia.sysusers.conf) and can read, not write. No
+node_exporter is the group's only other member, through its unit (units/prometheus-node-exporter.service.d:
+SupplementaryGroups=regalia-metrics; the package keeps its own user) and can read, not write. No
 writer can replace another's file, and node_exporter sees nothing of a writer's state directory. node_exporter
 reads them all with one flag, `--collector.textfile.directory=/run/regalia-metrics/*` (a glob, node_exporter
 1.9), and it is scraped from the site's monitoring zone over mutual TLS (node_exporter_args, firewall.py).
@@ -51,7 +52,7 @@ UNLOCK_CAUSES = ("rate", "connections")     # regalia-kms-48's #70 PR 3: refusal
 WRITERS = {
     "authtime": ("authtime", "authtime.prom"),
     "sync": ("sync", "heartbeat.prom"),
-    "admission": ("admission", "admission.prom"),
+    "admission": ("admission", "lease.prom"),      # not admission.prom: a trail is called admission (its shipper's file)
     "audit-ship": ("audit-ship", None),     # one file per trail: <trail>.prom (cmd/regalia-audit-ship -metrics)
 }
 
@@ -72,7 +73,8 @@ METRICS = {
     "regalia_admission_serving": ("gauge", "1 while this node holds a runtime lease that lets the KMS daemon serve, else 0.",
                                   {}, "admission"),
     "regalia_admission_lease_seconds_left": ("gauge", "Seconds left on the runtime lease held; 0 with none.", {}, "admission"),
-    # cmd/regalia-audit-ship's writeMetrics (regalia-kms-48; a test holds the Go source to these names)
+    # cmd/regalia-audit-ship's writeMetrics (regalia-kms-48; a test holds the Go source to these names). Its `trail`
+    # label never passes through render(): it is the unit instance's name (%i), one of trails.TRAILS
     "regalia_audit_trail_lines": ("gauge", "Complete lines in the trail file.", {"trail": None}, "audit-ship"),
     "regalia_audit_trail_committed": ("gauge", "Lines the collector has committed.", {"trail": None}, "audit-ship"),
     "regalia_audit_trail_backlog": ("gauge", "Lines not yet committed at the collector.", {"trail": None}, "audit-ship"),
@@ -163,8 +165,8 @@ def publish(writer, samples, target=None, run_dir=RUN_DIR):
 
 def node_exporter_args(cfg, port=None, web_config="/etc/regalia/node-exporter/web.yml"):
     """ARGS for node_exporter (Debian's /etc/default/prometheus-node-exporter), from the validated site config: it
-    listens on host_ipv4 only, behind mutual TLS (web.yml), reads the writers' directories, and leaves out the
-    collectors that would expose more than the node's health (none that read process command lines)."""
+    listens on host_ipv4 only, behind mutual TLS (web.yml), and reads the writers' directories. Its default
+    collectors are kept (the processes collector, which would read command lines, is off by default)."""
     from deploy.baremetal import sitecfg
     port = sitecfg.NODE_EXPORTER_PORT if port is None else port
     return ("--web.listen-address=%s:%d --web.config.file=%s --collector.textfile.directory=%s/*"

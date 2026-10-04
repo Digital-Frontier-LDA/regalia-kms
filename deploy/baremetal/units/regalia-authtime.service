@@ -42,7 +42,9 @@ TemporaryFileSystem=/etc:ro /var:ro /run:ro
 # of sight; only the two directories it writes are bound back
 # and the time trail's directory (#303): each transition is recorded there before it is published
 BindPaths=/run/regalia /run/chrony /var/log/regalia-time -/run/regalia-metrics/authtime
-# and its metrics directory (#305; "-": a missing one never stops the time service, the file's age alerts), and, read only, the chrony latch's directory, for regalia_chrony_latch_set
+# and its metrics directory (#305; "-": a missing one never stops the time service, the file's age alerts), and, read only,
+# the latch's whole directory: it holds the latch and nothing else (regalia.tmpfiles.conf, 0700 root), and "-" because a
+# directory that is missing holds no latch either; the chrony latch's directory, for regalia_chrony_latch_set
 BindReadOnlyPaths=/etc/regalia/node.json /etc/passwd /etc/group /etc/nsswitch.conf /etc/ld.so.cache -/etc/localtime -/var/lib/regalia-time
 ProtectProc=invisible
 ProtectHome=yes
