@@ -146,6 +146,8 @@ def extended(value, data):
 def unlock_pcr11(entry):
     """The PCR 11 a node on measurement set `entry` quotes for an unlock: its initrd phase's under v4, else its only one."""
     return entry["phases"]["initrd"]["11"] if "phases" in entry else entry["pcrs"]["11"]
+
+
 SOFTHSM = next((c for c in ("/usr/lib/softhsm/libsofthsm2.so", "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so") if os.path.exists(c)), None)
 OWNER_PIN = "246813"                              # the SoftHSM owner token's TEST PIN
 
@@ -284,7 +286,9 @@ class Cluster:
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import ec, rsa
         from cryptography.x509.oid import NameOID
-        public = lambda key: key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+
+        def public(key):
+            return key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         self.pcr_private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         self.pcr_pem = public(self.pcr_private)
         self.pcr_sigs = {}                            # PCR 11 value -> its signature entry
