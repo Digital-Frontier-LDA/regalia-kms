@@ -18,7 +18,7 @@ T0 = hbt.T0
 
 def config(d, **override):
     cfg = {"schema": authority.SCHEMA, "root_key": hbt.pub(hbt.ROOT), "tcti": None, "nv_epoch": "0x01500016", "nv_sequence": "0x01500020",
-           "state_dir": d, "run_dir": d, "signer": {"kind": "file", "path": d + "/revocation.pem"}, "interval_s": 900, "lifetime_s": None,
+           "state_dir": d, "run_dir": "/run/regalia", "signer": {"kind": "file", "path": d + "/revocation.pem"}, "interval_s": 900, "lifetime_s": None,
            "sequence_offset": 0, "sequence_stride": 1, "revoke_requesters": ["local-root"], "wg_service_key": d + "/wg.key",
            "underlays": {"a": "192.0.2.11", "b": "192.0.2.12", "c": "192.0.2.13"}, "listen_port": 51821, "sync_port": 7444,
            "control_socket": d + "/control.sock", "time_servers": ["nts.netnod.se", "time.cloudflare.com"]}
@@ -470,6 +470,15 @@ class TunnelApply(Case):
         self.assertEqual(stat.S_IMODE(os.stat(published).st_mode), 0o644)
         self.a.revoke("c", "QUARANTINED", "a change", "local-root")
         self.assertNotEqual(os.stat(published).st_ino, after.st_ino)
+
+
+class TimeDirectory(unittest.TestCase):
+    def test_run_dir_is_where_its_authtime_unit_publishes(self):
+        """regalia-kms-3e on #323: any run_dir but /run/regalia would never hold an authtime.json the authority believes."""
+        authority.validate(config("/x"))
+        with self.assertRaises(m.Refused) as caught:
+            authority.validate(config("/x", run_dir="/run/regalia-authority"))
+        self.assertIn("run_dir must be /run/regalia", str(caught.exception))
 
 
 class TunnelKey(Case):

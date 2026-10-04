@@ -955,9 +955,12 @@ it (`service_mesh.authority`).
   host `units/regalia-authority-authtime.service` publishes it: regalia-authtime's unit in all but its command,
   `python3 -Es -m deploy.baremetal.authtime serve --config /etc/regalia/authority.json`, which reads that
   configuration's `run_dir` and `time_servers` alone (the same entry point a node's `node.py authtime` calls).
-  chrony there is NTS-only as on a node: `python3 -Es -m deploy.baremetal.authtime chrony-conf --config
-  /etc/regalia/authority.json --install` (root) installs `/etc/chrony/regalia.conf` as enrolment does on a node (never
-  replacing a different file), with `units/chrony.service.d/regalia.conf` (its `-f` and the chrony latch, #303);
+  chrony there is NTS-only as on a node, in this order, as root: install `units/chrony.service.d/regalia.conf`
+  (chronyd `-f /etc/chrony/regalia.conf`, and the latch on `/var/lib/regalia-time`, #303); run
+  `python3 -Es -m deploy.baremetal.authtime chrony-conf --config /etc/regalia/authority.json --install`, which writes
+  `/etc/chrony/regalia.conf` as enrolment does on a node (refused, and left, if a different file is there; Debian's
+  own `chrony.conf` is never touched); then `systemctl daemon-reload && systemctl restart chrony`. `authority.json`'s
+  `run_dir` must be `/run/regalia` (validated: the unit's only writable directory, root's);
   `units/regalia-authority.tmpfiles.conf` and `regalia-authority.sysusers.conf` make its directories and groups.
   Without authenticated time the authority signs nothing (fail closed; each transition on the time trail, #303).
   **Not yet on the authority host:** an egress firewall behind chrony's NTS-only sources (a node's comes from

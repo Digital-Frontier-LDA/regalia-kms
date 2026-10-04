@@ -415,6 +415,7 @@ def service(run_dir, names, **how):
 
 
 CHRONY_CONF = "/etc/chrony/regalia.conf"   # as enrol.CHRONY_CONF: chronyd -f, by units/chrony.service.d/regalia.conf
+RUN_DIR = "/run/regalia"                   # where regalia-authtime and regalia-authority-authtime publish: their units' only writable /run
 
 
 def install_chrony_conf(names, path=CHRONY_CONF):
