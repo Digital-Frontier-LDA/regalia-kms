@@ -86,16 +86,39 @@ class EspFiles(unittest.TestCase):
         for epoch in range(1, len(envelopes) + 1):
             self.anchor.anchor(epoch, digests)
 
-    def test_the_files_of_the_chain_current_manifest_under_loader_credentials(self):
+    def test_the_site_document_the_chain_and_the_earlier_stage_removed(self):
+        """#66 B3: the ESP holds the measured site document and the signed chain (not measured), and the four
+        credentials an earlier stage rendered are removed (None): the initrd renders them from the chain."""
         envelopes = chain(hbt.manifest(), hbt.manifest(c="QUARANTINED"))
         self.anchor_to(envelopes)
         files = bootcreds.esp_files(self.cfg, envelopes, self.root, DEVICE, self.anchor)
-        current = m.accept_chain(None, envelopes, self.root)
-        self.assertEqual(files, {"loader/credentials/%s.cred" % n: b for n, b in bootcreds.render(current, self.cfg, DEVICE).items()})
-        self.assertNotIn("# c", files["loader/credentials/regalia.wg-boot-conf.cred"].decode())        # the current manifest's, not epoch 1's
-        # what espcreds measures from the ESP is what a peer computes from esp_files
-        self.assertEqual(espcreds.pcr12({k.rsplit("/", 1)[1]: v for k, v in files.items()}),
-                         espcreds.pcr12({n + ".cred": b for n, b in bootcreds.render(current, self.cfg, DEVICE).items()}))
+        self.assertEqual(files, {**{"loader/credentials/%s.cred" % n: None for n in bootcreds.RENDERED},
+                                 "loader/credentials/regalia.site.cred": bootcreds.site_document(self.cfg, DEVICE),
+                                 "EFI/regalia/membership.json": m.canonical(envelopes)})
+        self.assertEqual(list(files), sorted(files))
+        # what the initrd reads back: the same chain (from the root, against the anchor), the same site
+        self.assertEqual(bootcreds.anchored(m.load(files["EFI/regalia/membership.json"], m.MAX_CHAIN_BYTES), self.root, self.anchor),
+                         m.accept_chain(None, envelopes, self.root))
+        self.assertEqual(bootcreds.read_site(files["loader/credentials/regalia.site.cred"]), (self.cfg_site(), DEVICE))
+        # PCR 12 measures the site document only: a membership change does not move it
+        moved = chain(hbt.manifest(), hbt.manifest(c="QUARANTINED"), hbt.manifest())   # c back, by the root
+        self.anchor.anchor(3, m.Store._digests([m.accept_chain(None, moved[:i], self.root) for i in range(1, 4)]))
+        later = bootcreds.esp_files(self.cfg, moved, self.root, DEVICE, self.anchor)
+        measured = lambda f: espcreds.pcr12({k.rsplit("/", 1)[1]: v for k, v in f.items() if k.startswith("loader/credentials/") and v is not None})
+        self.assertEqual(measured(later), measured(files))
+        self.assertNotEqual(later["EFI/regalia/membership.json"], files["EFI/regalia/membership.json"])
+
+    def cfg_site(self):
+        """The site read_site gives back for self.cfg: host_ipv4 and boot_mesh."""
+        return {"host_ipv4": self.cfg["host_ipv4"], "boot_mesh": self.cfg["boot_mesh"]}
+
+    def test_a_chain_that_leaves_the_host_no_peer_writes_nothing(self):
+        """esp_files renders what the initrd will render, and refuses as it would: nothing is written for a chain
+        the host would boot to the recovery prompt under."""
+        envelopes = chain(hbt.manifest(), hbt.manifest(b="RETIRED", c="REVOKED_STOLEN"))
+        self.anchor_to(envelopes)
+        with self.assertRaises(m.Refused):
+            bootcreds.esp_files(self.cfg, envelopes, self.root, DEVICE, self.anchor)
 
     def test_nothing_for_a_chain_that_does_not_verify(self):
         good = chain(hbt.manifest(), hbt.manifest(c="QUARANTINED"))
@@ -127,7 +150,8 @@ class EspFiles(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, "CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded"):
             bootcreds.esp_files(self.cfg, fork, self.root, DEVICE, self.anchor)
         ahead = chain(hbt.manifest(), hbt.manifest(a="MAINTENANCE"), hbt.manifest(a="MAINTENANCE", c="REVOKED_STOLEN"), hbt.manifest(c="REVOKED_STOLEN"))
-        self.assertNotIn("# c", bootcreds.esp_files(self.cfg, ahead, self.root, DEVICE, self.anchor)["loader/credentials/regalia.wg-boot-conf.cred"].decode())
+        written = bootcreds.esp_files(self.cfg, ahead, self.root, DEVICE, self.anchor)["EFI/regalia/membership.json"]
+        self.assertNotIn("# c", bootcreds.render(m.accept_chain(None, m.load(written, m.MAX_CHAIN_BYTES), self.root), self.cfg, DEVICE)["regalia.wg-boot-conf"].decode())
         # a commit between the floor and the verify (value() read before the TPM moved on): a ROLLBACK, not a crash
         stale_value, self.anchor.value = self.anchor.value, lambda: 2
         with self.assertRaisesRegex(m.Refused, "ROLLBACK: the chain ends at epoch 2 but the TPM recorded epoch 3"):

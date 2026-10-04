@@ -286,7 +286,9 @@ printf 'BOOT_NIC_MAC=%s\nBOOT_ADDRESS=%s/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=%s\nLD_P
 R="$T/run-wg-boot"; mkdir "$R"
 # the script runs with only the programs the dracut module puts in the image on its PATH, as in the initrd
 mkdir "$T/initrd-bin"; for t in ip wg nft sed cat sleep; do ln -s "$(command -v "$t")" "$T/initrd-bin/$t"; done
-initrd(){ x lisbon env PATH="$T/initrd-bin" CREDENTIALS_DIRECTORY="$C" RUNTIME_DIRECTORY="$R" /bin/sh "$HERE/deploy/baremetal/initrd/wg-boot" "$1"; }
+# (the rendered files and the sealed key in one directory here: in the initrd they are /run/regalia-boot and the
+# unit's credentials, #66 B3)
+initrd(){ x lisbon env PATH="$T/initrd-bin" CREDENTIALS_DIRECTORY="$C" REGALIA_BOOT_DIR="$C" RUNTIME_DIRECTORY="$R" /bin/sh "$HERE/deploy/baremetal/initrd/wg-boot" "$1"; }
 initrd up && P "the initrd's script brings the boot mesh up" || F "deploy/baremetal/initrd/wg-boot up failed"
 [ "$(x lisbon wg show wg-boot private-key)" = "$(cat "$T/lisbon.boot.key")" ] && [ "$(x lisbon wg show wg-boot peers | wc -l)" = 2 ] \
   && P "wg-boot has the node's key and its two peers" || F "wg-boot is not configured as rendered"
