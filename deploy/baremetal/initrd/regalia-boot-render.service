@@ -1,0 +1,57 @@
+# The boot configuration, rendered in the initrd from the signed membership chain (regalia-kms#66, B3).
+#
+# The ESP holds one measured file of the host's own, regalia.site (its boot_mesh, host address and root
+# device: measured into PCR 12 by systemd-stub, and changing only when the site does), and the membership
+# chain, EFI/regalia/membership.json, which is NOT measured: it is verified here instead, from the root
+# the image pins (/usr/lib/regalia/root-key.json, in PCR 11 with the image) and against this TPM's
+# high-water anchor, so a validly signed but stale or forked chain is refused. A membership change
+# therefore no longer moves PCR 12.
+#
+# `regalia-unlock -render` (the same static binary as the client) finds the ESP by the LoaderDevicePartUUID
+# EFI variable, mounts it read-only, nosuid, nodev and noexec on a private directory, reads the chain and
+# unmounts it at once; then renders the four files the boot mesh and the client read into
+# /run/regalia-boot (bootcfg, held byte for byte to deploy/baremetal/bootcreds.render). Any refusal ends
+# the start with one line: the two units that require this one do not start, no peer is asked, and the
+# console's prompt (which asks from the start, #70) takes the recovery key.
+
+[Unit]
+Description=Render the boot configuration from the signed membership chain
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+DefaultDependencies=no
+# the anchor is read from the TPM (its NV indices, with their own authorization), and, where an index is
+# written under a policy, the image's PCR key is read beside it (#242 B2a): not before the device is there
+Wants=tpm2.target
+After=tpm2.target systemd-pcrphase-initrd.service
+# the EFI variable that names the ESP
+After=sys-firmware-efi-efivars.mount
+# its two consumers only: nothing orders systemd-cryptsetup after it, so the console asks from the start
+# whatever this unit does (#70)
+Before=regalia-wg-boot.service regalia-unlock.service
+# what it renders is for the initrd only: the directory goes with it, before the root takes over
+Conflicts=initrd-switch-root.target shutdown.target
+Before=initrd-switch-root.target shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/regalia-unlock -render /run/regalia-boot
+# The one credential it reads, by fixed path, as data: the measured site document. The image's command line
+# carries systemd.import_credentials=no; nothing else is taken from the ESP but the chain, which is verified.
+LoadCredential=regalia.site:/.extra/global_credentials/regalia.site.cred
+# where the four rendered files go, root's and private; removed when this unit stops (at switch-root)
+RuntimeDirectory=regalia-boot
+RuntimeDirectoryMode=0700
+# the ESP is mounted in this unit's own mount namespace: a mount that could not be undone dies with it
+PrivateMounts=yes
+PrivateTmp=yes
+# mounting the ESP needs CAP_SYS_ADMIN, and nothing else does
+CapabilityBoundingSet=CAP_SYS_ADMIN
+NoNewPrivileges=yes
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+DeviceAllow=block-* r
+LimitCORE=0
+UMask=0077
+TimeoutStartSec=90

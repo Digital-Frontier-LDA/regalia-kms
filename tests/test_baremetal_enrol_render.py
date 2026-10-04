@@ -109,9 +109,17 @@ class WithTheRealRenderer(unittest.TestCase):
             self.anchor.anchor(epoch, digests)
 
     def test_the_anchored_chain_is_rendered_onto_the_esp(self):
+        """#66 B3: the measured site document and the signed chain are written; a credential an earlier stage
+        rendered is removed, so only the site document is measured beside the sealed ones."""
+        from deploy.baremetal import membership as m
+        os.makedirs(self.esp + "/loader/credentials")
+        with open(self.esp + "/loader/credentials/regalia.wg-boot-conf.cred", "wb") as f:
+            f.write(b"[Interface]\n")                                          # left by the earlier stage
         record = enrol.render_credentials(self.journal, self.esp, self.site, self.envelopes, self.root, self.anchor)
-        self.assertEqual(sorted(c["file"] for c in record["credentials"]),
-                         sorted("%s.cred" % n for n in __import__("deploy.baremetal.bootcreds", fromlist=["x"]).RENDERED))
+        self.assertEqual(sorted(c["file"] for c in record["credentials"]), ["regalia.site.cred"])
+        self.assertFalse(os.path.exists(self.esp + "/loader/credentials/regalia.wg-boot-conf.cred"))
+        with open(self.esp + "/EFI/regalia/membership.json", "rb") as f:
+            self.assertEqual(f.read(), m.canonical(self.envelopes))
 
     def test_a_stale_chain_writes_nothing(self):
         with self.assertRaisesRegex(Exception, "ROLLBACK|below"):

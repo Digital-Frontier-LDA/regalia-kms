@@ -1,15 +1,15 @@
 #!/bin/sh
 # wg-boot up|down — the boot mesh of an initrd (regalia-kms#66), run by regalia-wg-boot.service.
 #
-# From the system credentials systemd passes to the unit ($CREDENTIALS_DIRECTORY), all per host and
-# written after each accepted manifest; the image holds none of them. regalia.boot-env:
+# From what regalia-boot-render.service rendered from the verified membership chain into /run/regalia-boot
+# (#66 B3), per host; the image holds none of it. regalia.boot-env:
 #   BOOT_NIC_MAC   the network interface's MAC address, lower case, e.g. 52:54:00:12:34:56: an interface name
 #                  can differ between the installed system and the initrd, the card's address does not
 #   BOOT_ADDRESS   this node's declared address with its prefix, e.g. 198.51.100.4/24
 #   BOOT_GATEWAY   the gateway to the peers' declared addresses; empty or absent when they are on the link
 #   BOOT_TUNNEL    this node's address inside the tunnel, e.g. 10.89.0.1
 # and beside it regalia.boot-nft (bootnet.boot_ruleset) and regalia.wg-boot-conf (bootnet.boot_wg_conf).
-# The private key is regalia.wg-boot-key, unsealed by systemd.
+# The private key is regalia.wg-boot-key, unsealed by systemd into $CREDENTIALS_DIRECTORY.
 #
 # The ruleset is loaded BEFORE the interface has an address: there is no moment in which the node is
 # on the network without it. `up` either ends with the mesh up or leaves nothing behind: a ruleset
@@ -34,8 +34,9 @@ nic_name() { case "$1" in ""|*[!A-Za-z0-9._-]*|????????????????*) return 1 ;; es
 mac_form() { case "$1" in [0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) return 0 ;; *) return 1 ;; esac; }
 # the interfaces whose address is $1, one per line (the kernel writes it lower case, colon-separated)
 nics_of() { for d in /sys/class/net/*; do [ -r "$d/address" ] && [ "$(cat "$d/address")" = "$1" ] && printf '%s\n' "${d##*/}"; done; return 0; }
-ENV="$C/regalia.boot-env" NFT="$C/regalia.boot-nft" CONF="$C/regalia.wg-boot-conf" KEY="$C/regalia.wg-boot-key"
-setting() { [ -n "$C" ] && [ -r "$ENV" ] && sed -n "s/^$1=\([A-Za-z0-9.:/_-]*\)\$/\1/p" "$ENV" | sed -n 1p; }
+B=/run/regalia-boot
+ENV="$B/regalia.boot-env" NFT="$B/regalia.boot-nft" CONF="$B/regalia.wg-boot-conf" KEY="$C/regalia.wg-boot-key"
+setting() { [ -r "$ENV" ] && sed -n "s/^$1=\([A-Za-z0-9.:/_-]*\)\$/\1/p" "$ENV" | sed -n 1p; }
 BOOT_NIC_MAC="$(setting BOOT_NIC_MAC || true)"; BOOT_NIC=""; BOOT_ADDRESS="$(setting BOOT_ADDRESS || true)"
 BOOT_GATEWAY="$(setting BOOT_GATEWAY || true)"; BOOT_TUNNEL="$(setting BOOT_TUNNEL || true)"
 if [ "${1:-}" = down ] && [ -n "$R" ] && [ -r "$R/boot-nic" ]; then BOOT_NIC="$(sed -n 1p "$R/boot-nic")"; fi
@@ -54,8 +55,8 @@ case "${1:-}" in
     [ -n "$C" ] || fail "no credentials directory: run by regalia-wg-boot.service"
     mac_form "$BOOT_NIC_MAC" || fail "regalia.boot-env: BOOT_NIC_MAC must be a MAC address, lower case and colon-separated"
     if [ -z "$BOOT_ADDRESS" ] || [ -z "$BOOT_TUNNEL" ]; then fail "regalia.boot-env: BOOT_ADDRESS and BOOT_TUNNEL are needed"; fi
-    [ -s "$NFT" ] || fail "the credential regalia.boot-nft is missing"
-    [ -s "$CONF" ] || fail "the credential regalia.wg-boot-conf is missing"
+    [ -s "$NFT" ] || fail "regalia.boot-nft was not rendered"
+    [ -s "$CONF" ] || fail "regalia.wg-boot-conf was not rendered"
     [ "$(sed -n 1p "$CONF")" = "[Interface]" ] || fail "regalia.wg-boot-conf does not begin with [Interface]: it was not rendered by bootnet.py"
     key="$(cat "$KEY")" || fail "the credential regalia.wg-boot-key is missing"
     case "$key" in *[!A-Za-z0-9+/=]*) fail "the credential regalia.wg-boot-key is not a WireGuard key" ;; esac

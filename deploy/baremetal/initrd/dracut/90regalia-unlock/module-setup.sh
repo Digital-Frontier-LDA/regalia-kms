@@ -2,11 +2,11 @@
 # dracut module: the pre-root disk unlock of a KMS host (regalia-kms#66, #67, #70).
 #
 # What it puts in the initrd: the unlock client (a password agent, enabled beside systemd-cryptsetup) and
-# its unit, the boot mesh unit and
-# its script, the three tools the script runs (ip, wg, nft), and one crypttab line. The image is the
-# same for every host: what differs per host and per manifest (the boot configuration, the two
-# TPM-sealed credentials, the WireGuard configuration, the ruleset, boot.env) comes at boot as system
-# credentials, from the ESP through systemd-stub.
+# its unit, the unit that renders the boot configuration from the signed membership chain (the same
+# binary, -render; #66 B3), the boot mesh unit and its script, the three tools the script runs (ip, wg,
+# nft), the FAT driver the ESP is read with, and one crypttab line. The image is the same for every host:
+# what differs per host comes at boot from the ESP: the measured site document and the two TPM-sealed
+# credentials as system credentials through systemd-stub, and the signed membership chain, verified here.
 #
 # Not included by default: add it with `dracut --add regalia-unlock` (or add_dracutmodules+=).
 #
@@ -64,6 +64,8 @@ depends() {
 
 installkernel() {
     hostonly='' instmods wireguard nf_tables nft_ct nf_conntrack tpm_tis tpm_crb
+    # the ESP, mounted read-only to read the membership chain (#66 B3): FAT, and the code pages its names use
+    hostonly='' instmods vfat nls_cp437 nls_ascii nls_utf8 nls_iso8859-1
     # The network card's driver. Nothing else in the initrd asks for the network, so nothing else brings
     # it; dracut's own kernel-network-modules is in a separate package (dracut-network) on Debian.
     hostonly='' instmods virtio_net '=drivers/net/ethernet' '=drivers/net/phy' '=drivers/net/mdio'
@@ -73,7 +75,7 @@ installkernel() {
 install() {
     inst_multiple regalia-unlock wg nft ip sed cat sleep
     inst_simple /usr/lib/regalia/wg-boot
-    for unit in regalia-unlock.service regalia-wg-boot.service; do
+    for unit in regalia-boot-render.service regalia-unlock.service regalia-wg-boot.service; do
         inst_simple "${systemdsystemunitdir:?}/$unit"
     done
     # The one crypttab line, the same on every host: the root partition is found by its GPT label. Nothing

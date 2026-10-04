@@ -65,7 +65,7 @@ if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
   printf '#!/bin/sh\n' > "$I/init"; printf 'stand-in\n' | tee "$I/usr/bin/regalia-unlock" > "$I/usr/bin/sh"; chmod 0755 "$I/init" "$I/usr/bin/regalia-unlock" "$I/usr/bin/sh"
   ln -s usr/bin "$I/bin"; ln -s usr/lib "$I/lib"
   cp deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$I/etc/crypttab"
-  cp deploy/baremetal/initrd/regalia-unlock.service deploy/baremetal/initrd/regalia-wg-boot.service "$U/"
+  cp deploy/baremetal/initrd/regalia-boot-render.service deploy/baremetal/initrd/regalia-unlock.service deploy/baremetal/initrd/regalia-wg-boot.service "$U/"
   install -m 0755 deploy/baremetal/initrd/wg-boot "$I/usr/lib/regalia/wg-boot"
   ln -s /usr/lib/systemd/system/regalia-unlock.service "$E/cryptsetup.target.wants/regalia-unlock.service"
   (cd "$I" && find . -mindepth 1 | LC_ALL=C sort | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi

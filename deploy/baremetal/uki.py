@@ -333,7 +333,7 @@ INITRD_REVIEW = "regalia.initrd-review/v4"
 INITRD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "initrd")
 INVENTORY = os.path.join(INITRD_DIR, "initrd-inventory.txt")
 UNIT_DIR = "usr/lib/systemd/system"
-UNLOCK_UNITS = ("regalia-unlock.service", "regalia-wg-boot.service")
+UNLOCK_UNITS = ("regalia-boot-render.service", "regalia-unlock.service", "regalia-wg-boot.service")
 UNLOCK_SCRIPTS = {"usr/lib/regalia/wg-boot": "wg-boot"}
 UNLOCK_BINARIES = ("usr/bin/regalia-unlock",)
 # The client's line in the inventory says "the binary this commit compiles", not a hash: its source is what is
