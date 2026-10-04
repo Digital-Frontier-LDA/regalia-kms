@@ -259,6 +259,21 @@ def signing_counter(cfg, run=subprocess.run):
     return heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "signing-counter.lock"))
 
 
+def node_beat_signer(node, pem_path=None):
+    """`node`'s beat.Signer (#199): its signing counter, and its TPM signing key under the running image's system-phase
+    PCR key (systemd-stub's copy of the image's .pcrpkey, signkey.PCR_PUBLIC_KEY_PATH: a key the signing key's policy
+    does not name signs nothing, and identity() says so before any number is reserved)."""
+    path = pem_path or signkey.PCR_PUBLIC_KEY_PATH
+    try:
+        with open(path, "rb") as f:
+            pem = f.read(65536)
+    except FileNotFoundError:
+        raise Refused("no system-phase PCR public key at %s: this boot is not a UKI with a signed PCR policy" % path) from None
+    tcti, run = node.tcti, node.run
+    point = signkey.identity(signkey.public(tcti, run), pem)[1]
+    return beat.Signer(node.node_id, signing_counter(node.cfg, run), lambda message: signkey.sign(message, pem, tcti, run), point)
+
+
 def heartbeat_counter(cfg, run=subprocess.run):
     """This node's heartbeat sequence counter, with the lock its users take: the one construction the
     services and the recovery command (recount.py) share."""
@@ -527,19 +542,9 @@ class Sync:
     # ---- heartbeats signed by the nodes (#199, beat.py) ----
 
     def beat_signer(self):
-        """This node's beat.Signer: the signing counter, and the TPM signing key under the running image's system-phase PCR
-        key (systemd-stub's copy of the image's .pcrpkey: a key the signing key's policy does not name signs nothing)."""
+        """This node's beat.Signer (node_beat_signer), made once."""
         if self._beat_signer is None:
-            try:
-                with open(signkey.PCR_PUBLIC_KEY_PATH, "rb") as f:
-                    pem = f.read(65536)
-            except FileNotFoundError:
-                raise Refused("no system-phase PCR public key at %s: this boot is not a UKI with a signed PCR policy"
-                              % signkey.PCR_PUBLIC_KEY_PATH) from None
-            tcti, run = self.node.tcti, self.node.run
-            point = signkey.identity(signkey.public(tcti, run), pem)[1]
-            self._beat_signer = beat.Signer(self.node.node_id, signing_counter(self.node.cfg, run),
-                                            lambda message: signkey.sign(message, pem, tcti, run), point)
+            self._beat_signer = node_beat_signer(self.node)
         return self._beat_signer
 
     def cosign(self, manifest, caller, body, signature):
