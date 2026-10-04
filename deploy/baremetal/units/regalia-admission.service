@@ -34,7 +34,10 @@ ProtectSystem=strict
 # stand until it runs out by itself (admission.py).
 ReadWritePaths=/run/regalia/admission -/run/regalia-metrics/admission
 StateDirectory=regalia-admission
-StateDirectoryMode=0700
+# 0711: traversable, not listable. Its audit trail (audit.jsonl, 0640 to regalia-audit-admission, #286) is read by
+# regalia-audit-ship@admission, which holds that group and no capability: under 0700 it could not reach the file,
+# and the admission trail never reached the collector (#340). Every other file here keeps its own mode.
+StateDirectoryMode=0711
 ProtectHome=yes
 PrivateTmp=yes
 DevicePolicy=closed

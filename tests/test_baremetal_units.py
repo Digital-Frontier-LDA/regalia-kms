@@ -22,6 +22,27 @@ def unit(name):
     return parser
 
 
+class TrailsReachTheirShipper(unittest.TestCase):
+    """#340: a node service's audit trail lives in that service's StateDirectory, and regalia-audit-ship@<trail> reads
+    it as its own user with the trail's reader group and NO capability. So the directory must let it pass (others'
+    execute bit): with the admission service's at 0700 its trail never reached the collector."""
+
+    def test_every_node_trail_s_directory_is_traversable_by_its_shipper(self):
+        from deploy.baremetal import trails
+        checked = []
+        for name, entry in trails.TRAILS.items():
+            if not entry[0].startswith(("state_dir/", "admission_dir/")):      # in a service's StateDirectory (the others: root's tools)
+                continue
+            writer = re.search(r"regalia-[a-z-]+\.service", entry[1]).group(0)      # the registry names the unit that writes it
+            mode = int(unit(writer)["Service"]["StateDirectoryMode"], 8)
+            with self.subTest(trail=name):
+                self.assertTrue(mode & 0o001, "%s's StateDirectoryMode %s: regalia-audit-ship@%s cannot reach %s" % (writer, oct(mode), name, entry[0]))
+            checked.append((name, writer, oct(mode)))
+        self.assertEqual(sorted(checked), [("admission", "regalia-admission.service", "0o711"), ("authority", "regalia-authority.service", "0o751"),
+                                           ("sync", "regalia-sync.service", "0o755")])
+        self.assertEqual(unit("regalia-audit-ship@.service")["Service"]["CapabilityBoundingSet"], "")    # the reason: no way around it
+
+
 class ChronyDropIn(unittest.TestCase):
     """#303: chronyd from enrolment's configuration, the package's own file untouched."""
 
@@ -105,7 +126,7 @@ class Units(unittest.TestCase):
         admission = self.service("regalia-admission")
         # its own directory only, inside root's /run/regalia; the boot session beside it is not its to write
         self.assertEqual((admission["ReadWritePaths"], admission["StateDirectory"], admission["StateDirectoryMode"]),
-                         ("/run/regalia/admission -/run/regalia-metrics/admission", "regalia-admission", "0700"))
+                         ("/run/regalia/admission -/run/regalia-metrics/admission", "regalia-admission", "0711"))   # traversable for its trail's shipper (#340)
         admission_unit = unit("regalia-admission.service")["Unit"]
         self.assertEqual(admission_unit["Requires"], "regalia-boot-session.service")
         self.assertIn("regalia-boot-session.service", admission_unit["After"].split())
