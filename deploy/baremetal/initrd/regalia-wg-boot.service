@@ -20,6 +20,9 @@ DefaultDependencies=no
 # initrd-phase signature opens only from then on, and an unseal that ran first would fail by a race
 Wants=tpm2.target
 After=tpm2.target systemd-pcrphase-initrd.service
+# its configuration, rendered from the verified membership chain (#66 B3): without it, nothing is brought up
+Requires=regalia-boot-render.service
+After=regalia-boot-render.service
 Before=regalia-unlock.service cryptsetup-pre.target
 Conflicts=initrd-switch-root.target shutdown.target
 Before=initrd-switch-root.target shutdown.target
@@ -29,13 +32,10 @@ Type=oneshot
 RemainAfterExit=yes
 # No EnvironmentFile=: boot.env is read by the script as data. A file that may come from
 # storage others can write must not be able to set this process's environment (LD_PRELOAD, PATH).
-# Four files from the ESP, by fixed paths, as for regalia-unlock.service: the key sealed to this TPM, and
-# three that are not secret (bootnet.boot_wg_conf, bootnet.boot_ruleset, and boot.env). A missing one
-# keeps the unit from starting, and nothing is left behind.
+# The key sealed to this TPM, from the ESP by its fixed path; a missing one keeps the unit from starting, and
+# nothing is left behind. The three files that are not secret (the WireGuard configuration, the ruleset and
+# boot.env) are rendered from the verified chain by regalia-boot-render.service into /run/regalia-boot (#66 B3).
 LoadCredentialEncrypted=regalia.wg-boot-key:/.extra/global_credentials/regalia.wg-boot-key.cred
-LoadCredential=regalia.wg-boot-conf:/.extra/global_credentials/regalia.wg-boot-conf.cred
-LoadCredential=regalia.boot-nft:/.extra/global_credentials/regalia.boot-nft.cred
-LoadCredential=regalia.boot-env:/.extra/global_credentials/regalia.boot-env.cred
 # where `up` notes the interface for `down`, which may run without the credentials; removed after it
 RuntimeDirectory=regalia-wg-boot
 RuntimeDirectoryMode=0700
