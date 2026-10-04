@@ -86,7 +86,7 @@ import subprocess
 import sys
 import tempfile
 
-from deploy.baremetal import attest, espcreds, membership
+from deploy.baremetal import attest, espcreds, membership, p11uri
 
 Refused, require = membership.Refused, membership.require
 
@@ -1134,32 +1134,16 @@ def check_pcrsig(raw, record, keys, run=subprocess.run, tools=TOOLS):
     return out
 
 
-URI_ATTRIBUTES = ("token", "serial", "object", "id", "type", "manufacturer", "model")
+URI_ATTRIBUTES = p11uri.ATTRIBUTES
 
 
 def _key_argument(value, source, what):
     """A key option: a file, or with engine:pkcs11 a PKCS#11 URI that names the card by serial and token
-    label and the key by label or id, and carries nothing else: parsed, every attribute name on an
-    allow-list (so no PIN, PIN file or module path in any spelling), no query part."""
+    label and the key by label or id, and carries nothing else (p11uri.parse, shared with manifest.py)."""
     if source == "file":
         require(os.path.isfile(value), "%s: %s is not a file (with a token, pass --key-source engine:pkcs11 and a PKCS#11 URI)" % (what, value))
         return value
-    require(isinstance(value, str) and value.startswith("pkcs11:") and len(value) <= 400, "%s must be a PKCS#11 URI" % what)
-    require("?" not in value, "%s has a query part: a PKCS#11 URI here names a card and a key, nothing else (no PIN, no module)" % what)
-    attributes = {}
-    for part in value[len("pkcs11:"):].split(";"):
-        name, sep, val = part.partition("=")
-        require(sep and name in URI_ATTRIBUTES, "%s names %r, which is not one of %s (no PIN, no PIN file, no module path)"
-                % (what, name, ", ".join(URI_ATTRIBUTES)))
-        require(name not in attributes, "%s gives %s twice" % (what, name))
-        # percent-encoding only in id (bytes); everywhere else plain printable text, so nothing hides behind an escape
-        allowed = r"(%[0-9a-fA-F]{2})+" if name == "id" else r"[A-Za-z0-9 ._()-]+"
-        require(re.fullmatch(allowed, val) is not None, "%s: %s=%r is not allowed" % (what, name, val))
-        attributes[name] = val
-    require("serial" in attributes and "token" in attributes, "%s must name the card by serial= and token=: the engine would "
-            "otherwise take the first token that holds a matching key" % what)
-    require("object" in attributes or "id" in attributes, "%s must name the key by object= or id=" % what)
-    require(attributes.get("type") == "private", "%s must say type=private" % what)
+    p11uri.parse(value, what)
     return value
 
 

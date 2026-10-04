@@ -102,7 +102,7 @@ func TestStoppedVerifierStopsAdvancing(t *testing.T) {
 	// end of the test would leave it open, and the trailing Close() was on the success path only.
 	//
 	// BUT THE CLEANUP MUST NOT RUN WHEN THE VERIFIER IS STUCK. Close() waits on the same
-	// WaitGroup, unbounded (audit.go:426). If the goroutine is not exiting, a cleanup that closes
+	// WaitGroup, unbounded (audit.go:(*Recorder).Ready{recorder.shipper != nil}). If the goroutine is not exiting, a cleanup that closes
 	// hangs the package -- turning the bounded failure below into exactly the ten-minute timeout
 	// the bound exists to prevent. Measured, with cancellation mutated away: the package timed out
 	// at 40s and the 5s message never printed at all, so the failure reported as infrastructure
@@ -191,9 +191,9 @@ func TestVerifierClassifiesAReadFailureAsUnreadableNotBroken(t *testing.T) {
 
 // A DELETED JOURNAL MUST NOT PANIC VERIFYNOW.
 //
-// os.Open returns *os.File or an error; the if-check at verifier.go:74 catches
+// os.Open returns *os.File or an error; the if-check at verifier.go:(*Recorder).VerifyNow{os.Open(path) then err != nil} catches
 // the error and returns before the deferred file.Close runs on a nil *os.File,
-// which would panic. The bug at verifier.go:74[0] is exactly that bypass: pass
+// which would panic. The bug at verifier.go:(*Recorder).VerifyNow{os.Open(path) then err != nil}[0] is exactly that bypass: pass
 // the err, proceed to defer file.Close(), panic on close. Measured: with the
 // check removed, this test panics inside VerifyNow and the package reports an
 // infrastructure failure instead of the missing check.
@@ -225,7 +225,7 @@ func TestVerifyNowOnAMissingJournalReturnsUnreadableRatherThanPanicking(t *testi
 
 // STARTING THE VERIFIER TWICE MUST BE A NO-OP.
 //
-// verifier.go:127's guard refuses a second StartVerifier on the same recorder:
+// verifier.go:(*Recorder).StartVerifier{recorder.closed || recorder.verifyStarted}'s guard refuses a second StartVerifier on the same recorder:
 // one verifier per recorder. Two loops means two reads on every tick, and the
 // loop contexts are siblings — recorder.verifyStop is the second stop, so on
 // Close the first loopCtx outlives shutdown and verifyWg.Wait() blocks on the
@@ -260,6 +260,6 @@ func TestStartVerifierTwiceIsANoOp(t *testing.T) {
 			t.Fatalf("Close: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("Close did not return 5s after the second StartVerifier — the first verifier loop outlived recorder.verifyStop, which is exactly what the guard at verifier.go:127 is supposed to prevent")
+		t.Fatal("Close did not return 5s after the second StartVerifier — the first verifier loop outlived recorder.verifyStop, which is exactly what the guard at verifier.go:(*Recorder).StartVerifier{recorder.closed || recorder.verifyStarted} is supposed to prevent")
 	}
 }

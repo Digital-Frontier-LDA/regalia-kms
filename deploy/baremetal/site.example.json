@@ -9,8 +9,13 @@
   "admin_cidrs": ["203.0.113.0/28"],
   "outbound": [
     {"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514},
-    {"name": "ntp", "cidr": "203.0.113.193/32", "proto": "udp", "port": 123}
+    {"name": "dns", "cidr": "203.0.113.194/32", "proto": "udp", "port": 53}
   ],
+  "time": {"nts": [
+    {"name": "nts.netnod.se", "cidrs": ["194.58.200.0/24"]},
+    {"name": "ptbtime1.ptb.de", "cidrs": ["192.53.103.0/24"]},
+    {"name": "time.cloudflare.com", "cidrs": ["162.159.200.0/24"]}
+  ]},
   "boot_mesh": null,
   "service_mesh": null
 }

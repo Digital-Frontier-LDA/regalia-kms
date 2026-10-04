@@ -1,0 +1,145 @@
+# Alert rules for a Regalia KMS node's own services (#305), from node_exporter's textfile collector.
+#
+# The series are deploy/baremetal/metrics.py's registry: tests/test_node_alert_firing.py holds every name
+# here to it (Structure), and drives a fault at every rule (Firing) (promtool test rules) and
+# requires it to fire, and a healthy state that must not. The KMS daemon's own series are in
+# regalia-kms.rules.yml.
+#
+# Severity reads as: critical pages, warning investigates in hours. Thresholds, and why:
+#   * authenticated time: the node stops serving within the 300 s lease bound when it is lost, so one
+#     minute (four authtime checks) pages;
+#   * heartbeat: RELATIVE to the lifetime of the heartbeat held (a manifest sets it, from an hour to seven
+#     days): under half left warns, under a quarter pages (the heartbeat watch's own 50 and 25 % warnings);
+#     none usable for five minutes pages (the node authorizes nothing on it);
+#   * not serving for five minutes pages (a lease round is 5 s; a renewal blip is not a page);
+#   * audit: fifteen minutes without the collector committing a pending line warns; a tampered trail pages;
+#   * a textfile that stops moving (its writer died) for two minutes warns: authtime writes every 15 s,
+#     admission every 5 s, the heartbeat watch every pull (60 s in the example); a shipper's, written every
+#     30 s pass, after five minutes;
+#   * A FILE THAT IS NOT THERE MUST ALERT TOO (regalia-kms-d9): /run is empty after a boot, so a writer that
+#     dies before its first write, or a file node_exporter cannot parse, leaves no series for any rule above
+#     to see. Each expected file has a rule that fires while the node is scraped and the file's mtime is
+#     absent, and a parse error fires on node_exporter's own node_textfile_scrape_error;
+#   * every comparison between two series of a node matches on ALL their labels (instance, job, trail):
+#     matching on trail alone would pair one node's backlog with another node's last success.
+groups:
+  - name: regalia-node
+    rules:
+      - alert: RegaliaTimeNotAuthenticated
+        expr: regalia_time_authenticated == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Time is not authenticated on this node ({{ $labels.cause }}): it stops serving within the 300 s lease bound."
+      - alert: RegaliaChronyLatched
+        expr: regalia_chrony_latch_set == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: chronyd stopped abnormally and the latch keeps it stopped; compare the servers with an independent clock, then regalia-node time-clear.
+      - alert: RegaliaHeartbeatRunningOut
+        expr: regalia_heartbeat_live == 1 and regalia_heartbeat_seconds_left < 0.5 * regalia_heartbeat_lifetime_seconds
+        labels:
+          severity: warning
+        annotations:
+          summary: The freshness heartbeat has under half its lifetime left; the revocation authority has not renewed it.
+      # The held heartbeat's AGE, not a fraction of its life (#69): with the production lifetime (6 h, renewed every 15 min)
+      # "under half left" would wait 3 h; two hours without a renewal is already eight missed rounds of the authority.
+      - alert: RegaliaHeartbeatNotRenewed
+        expr: regalia_heartbeat_live == 1 and (regalia_heartbeat_lifetime_seconds - regalia_heartbeat_seconds_left) > 7200
+        labels:
+          severity: warning
+        annotations:
+          summary: The freshness heartbeat this peer holds was issued over two hours ago; the revocation authority has not renewed it.
+      - alert: RegaliaHeartbeatAboutToExpire
+        expr: regalia_heartbeat_live == 1 and regalia_heartbeat_seconds_left < 0.25 * regalia_heartbeat_lifetime_seconds
+        labels:
+          severity: critical
+        annotations:
+          summary: The freshness heartbeat has under a quarter of its lifetime left; when it ends this peer authorizes nothing.
+      - alert: RegaliaHeartbeatNotLive
+        expr: regalia_heartbeat_live == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: This peer holds no usable heartbeat and authorizes nothing.
+      - alert: RegaliaNotServing
+        expr: regalia_admission_serving == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: This node holds no runtime lease; the KMS daemon does not serve.
+      - alert: RegaliaAuditTrailBehind
+        expr: regalia_audit_trail_backlog > 0 and (time() - regalia_audit_trail_last_success_seconds) > 900
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.trail }} trail has had lines waiting for fifteen minutes without the collector committing them."
+      - alert: RegaliaAuditTrailNeverShipped
+        expr: regalia_audit_trail_backlog > 0 unless regalia_audit_trail_last_success_seconds
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.trail }} trail has lines and no pass has ever committed them."
+      - alert: RegaliaAuditTrailTampered
+        expr: regalia_audit_trail_tampered == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "The {{ $labels.trail }} trail no longer holds what the collector committed; shipping has stopped."
+      - alert: RegaliaUnlockRefused
+        expr: increase(regalia_unlock_refused_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "The unlock listener refused requests before any work ({{ $labels.cause }}): something is hammering it."
+      - alert: RegaliaNodeMetricsStale
+        expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?(authtime|heartbeat|lease)\\.prom"} > 120
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.file }} has not been written for two minutes: its service has stopped."
+      - alert: RegaliaAuditShipMetricsStale
+        expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?audit-ship/[a-z0-9_.-]+\\.prom"} > 300
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.file }} has not been written for five minutes: that trail's shipper has stopped or is wedged."
+      - alert: RegaliaAuthtimeMetricsMissing
+        expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?authtime\\.prom"}
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but has no authtime.prom: regalia-authtime never wrote it, so time is not watched."
+      - alert: RegaliaHeartbeatMetricsMissing
+        expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?heartbeat\\.prom"}
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but has no heartbeat.prom: regalia-sync's heartbeat watch never wrote it."
+      - alert: RegaliaLeaseMetricsMissing
+        expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?lease\\.prom"}
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but has no lease.prom: regalia-admission never wrote it."
+      - alert: RegaliaNodeTextfileUnreadable
+        expr: node_textfile_scrape_error > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "node_exporter on {{ $labels.instance }} could not read a textfile: its series are missing, and the rules above go blind for it."
+      - alert: RegaliaNodeExporterDown
+        expr: up{job="regalia-node"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The node's metrics cannot be scraped; every rule here is blind for it.
