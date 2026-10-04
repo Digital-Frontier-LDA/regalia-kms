@@ -112,13 +112,14 @@ import re
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from deploy.baremetal import attest, convergence, heartbeat, membership, replacement
+from deploy.baremetal import attest, convergence, heartbeat, membership, replacement, sync
 
 Refused, require = membership.Refused, membership.require
 
@@ -146,6 +147,12 @@ BOOT_KEYS = ("schema", "node_id", "device", "pcrs", "peers")
 PIN_KEYS = ("node_id", "endpoint", "ek_name", "ak_name")
 MAX_BYTES = 64 * 1024          # one message, either way
 IO_TIMEOUT = 10                # seconds for one connection, from accept to the last byte
+# hellos per requesting node: a burst of 10, one more every 6 s. A booting node's client asks each peer once
+# per attempt, at most 6 times in its first minute and about 1.25 a minute after (its backoff: 2 s doubling
+# to 60 s, -20% jitter, never reset within a boot): never refused. A refusal is "not now": nothing is kept.
+HELLO_RATE = (10, 60)
+# connections answered at once, in all and from one node (two: a retry beside one that is still ending)
+MAX_CONNECTIONS, MAX_PER_CALLER = 8, 2
 # a host name or IPv4 address, or an IPv6 address in brackets; then a port
 ENDPOINT = r"(\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9.-]{1,253}):([0-9]{1,5})"
 MAX_PATHS = 4                  # contributions a peer keeps per target (the current one, and one in rotation)
@@ -364,9 +371,24 @@ class Peer:
     heartbeat.Freshness, `attester_for(manifest)` its attest.Verifier under the policy that manifest
     commits to, `signer(digest)` its lease.TpmSigner, `audit(event)` the audit sink (S6)."""
 
-    def __init__(self, peer_id, store, freshness, attester_for, contributions, signer, audit, run=subprocess.run):
+    def __init__(self, peer_id, store, freshness, attester_for, contributions, signer, audit, run=subprocess.run, clock=time.monotonic,
+                 hello_rate=HELLO_RATE, refused=None):
         self.peer_id, self.store, self.freshness, self.attester_for = node_id(peer_id, "peer_id"), store, freshness, attester_for
         self.contributions, self.signer, self.audit, self.run = contributions, signer, audit, run
+        # per requesting node, in memory: keyed only by nodes the manifest names (bounded by it)
+        self.rate = sync.Buckets({"hello": hello_rate}, clock)
+        # refused(cause): counts each refusal made before any work ("rate", "connections"), for the node's metrics
+        # (#317, metrics.Counter). Every refusal counts, the quiet ones too, while the trail stays rate-limited.
+        self._refused = refused
+
+    def refusal(self, cause):
+        """Count one refusal; never raises (a broken metrics write must never stop the listener)."""
+        if self._refused is None:
+            return
+        try:
+            self._refused(cause)
+        except Exception:                 # noqa: BLE001 - as serve's audit(): the listener goes on
+            pass
 
     def handle(self, raw, caller=None):
         """One request (bytes) to one reply (a dict). A refusal tells the requester nothing but its kind.
@@ -402,6 +424,7 @@ class Peer:
         membership.exact(message, ("v", "op", "node_id"), "hello")
         requester = node_id(message["node_id"], "node_id")
         manifest = self._manifest()
+        self._spend(manifest, requester)          # first: a node over its rate costs this peer no lock, no write
         self.contributions.drop_retired(manifest)
         # A nonce only for a node this peer would unlock now: the refusal here is the one it would get with
         # a quote, and asking for nonces is not a way to learn anything.
@@ -412,6 +435,26 @@ class Peer:
         except attest.Refused as refusal:
             raise Refused("no nonce for %s: %s" % (requester, refusal))
         return {"v": message["v"], "peer_id": self.peer_id, "epoch": manifest["epoch"], "nonce": nonce.hex()}
+
+    def _spend(self, manifest, requester):
+        """One hello for `requester`, a node the manifest names (any other is refused by the decision after
+        this, and makes no bucket), or Refused. The first refusal of a window is recorded; the rest are
+        answered the same and counted, and the count is recorded with the next hello that passes."""
+        if requester not in {n["node_id"] for n in manifest["nodes"]}:
+            return
+        event = {"event": "unlock-challenge", "epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest),
+                 "subject": convergence._printable(requester), "peer": self.peer_id, "outcome": "DENY"}
+        try:
+            refused = self.rate.take(requester, "hello")
+        except sync.Quiet:
+            self.refusal("rate")
+            raise
+        except Refused as refusal:
+            self.refusal("rate")
+            self.audit(dict(event, reason=convergence._printable(refusal, membership.REASON_LIMIT)))
+            raise
+        if refused > 1:
+            self.audit(dict(event, reason="RATE: %d more hello requests from %s were refused after that one" % (refused - 1, requester)))
 
     def unlock(self, message):
         membership.exact(message, ("v", "op", "node_id", "session_id", "path_epoch", "evidence"), "unlock")
@@ -596,46 +639,108 @@ def _read_all(conn, deadline):
     return data            # too long: the caller's parser refuses it
 
 
-def serve(peer, listener, count=None, caller=None):
+def serve(peer, listener, count=None, caller=None, connections=MAX_CONNECTIONS, per_caller=MAX_PER_CALLER):
     """Answer unlock requests on `listener`, a bound and listening socket: one request per connection (the
-    sender closes its side to end it), one at a time, each bounded in size and in time from accept to the
-    last byte. A connection that breaks, stalls, sends too much, or makes the handler fail in a way nobody
-    foresaw costs only itself: the failure goes to the peer's audit sink by its kind, and the next
-    connection is served. The loop ends when the listener is closed, or after `count` connections.
+    sender closes its side to end it), each answered in its own thread and bounded in size and in time from
+    accept to the reply (IO_TIMEOUT for the whole of it). At most `connections` are answered at once, and at
+    most `per_caller` from one node: a node that connects and stalls holds its own places only, never the
+    listener, and the nodes that reboot next are answered beside it. A connection over those limits is
+    closed unanswered, recorded at most once a minute per node; the client asks again on its next attempt.
+    A connection that breaks, stalls, sends too much, or makes the handler fail in a way nobody foresaw
+    costs only itself: the failure goes to the peer's audit sink by its kind. IO_TIMEOUT bounds the
+    connection's I/O, not peer.handle()'s own work (the quote's verification, the TPM, the signer): a hung
+    TPM call holds that connection's place, and so at most one node's `per_caller` places. The loop ends when the
+    listener is closed, or after `count` connections (whose answers are then waited for).
     `caller(source address)` names the node that address belongs to, or None (bootnet.caller_of): with it,
     a connection from an address of no node is closed unanswered, and a request must name that node."""
-    served = 0
-    while count is None or served < count:
+    active, lock, workers, reported = [], threading.Lock(), [], {}
+
+    def audit(event):
         try:
-            conn, source = listener.accept()
-        except OSError:
-            if listener.fileno() == -1:
-                return
-            continue
-        served += 1
-        with conn:
-            try:
-                node = None
-                if caller is not None:
-                    address = source[0]
-                    if address.startswith("::ffff:"):       # an IPv4 connection on a dual-stack listener
-                        address = address[len("::ffff:"):]
-                    node = caller(address)
-                    if node is None:
-                        continue
-                deadline = time.monotonic() + IO_TIMEOUT
-                reply = membership.canonical(peer.handle(_read_all(conn, deadline), caller=node) if caller is not None
-                                             else peer.handle(_read_all(conn, deadline)))
-                conn.settimeout(max(deadline - time.monotonic(), 0.001))
-                conn.sendall(reply)
-            except OSError:
-                continue
-            except Exception as error:      # never a reason to stop answering the nodes that reboot next
+            peer.audit(event)
+        except Exception:           # the sink itself failed: the loop goes on
+            pass
+
+    def failed(error):
+        audit({"event": "unlock-server-error", "epoch": 0, "manifest_digest": "", "subject": "", "peer": peer.peer_id,
+               "outcome": "ERROR", "reason": type(error).__name__})
+
+    def answer(conn, node, key):
+        try:
+            with conn:                      # closed only after a failure is recorded: no caller sees the end first
                 try:
-                    peer.audit({"event": "unlock-server-error", "epoch": 0, "manifest_digest": "", "subject": "", "peer": peer.peer_id,
-                                "outcome": "ERROR", "reason": type(error).__name__})
-                except Exception:           # the sink itself failed: the request was not answered, and the loop goes on
+                    deadline = time.monotonic() + IO_TIMEOUT
+                    reply = membership.canonical(peer.handle(_read_all(conn, deadline), caller=node) if caller is not None
+                                                 else peer.handle(_read_all(conn, deadline)))
+                    conn.settimeout(max(deadline - time.monotonic(), 0.001))
+                    conn.sendall(reply)
+                except OSError:
                     pass
+                except Exception as error:  # never a reason to stop answering the nodes that reboot next
+                    failed(error)
+        except OSError:                     # the close itself
+            pass
+        finally:
+            with lock:
+                active.remove(key)
+
+    served = 0
+    try:
+        while count is None or served < count:
+            try:
+                conn, source = listener.accept()
+            except OSError:
+                if listener.fileno() == -1:
+                    return
+                continue
+            served += 1
+            address = source[0]
+            if address.startswith("::ffff:"):       # an IPv4 connection on a dual-stack listener
+                address = address[len("::ffff:"):]
+            node = None
+            if caller is not None:
+                try:
+                    node = caller(address)
+                except Exception as error:          # noqa: BLE001 - as a handler's failure: recorded, and the loop goes on
+                    failed(error)
+                if node is None:
+                    conn.close()
+                    continue
+            key = node if caller is not None else address
+            with lock:
+                admitted = len(active) < connections and active.count(key) < per_caller
+                if admitted:
+                    active.append(key)
+            if not admitted:
+                conn.close()
+                refusal = getattr(peer, "refusal", None)
+                if refusal is not None:
+                    refusal("connections")          # counted every time (an increment, no write); the trail line once a minute
+                now = time.monotonic()
+                with lock:
+                    due = key not in reported or now - reported[key] >= 60.0
+                    if due:
+                        if len(reported) >= 1024:   # keys are nodes (or, with no `caller`, addresses): bounded anyway
+                            reported.clear()
+                        reported[key] = now
+                if due:
+                    audit({"event": "unlock-caller", "epoch": 0, "manifest_digest": "", "subject": convergence._printable(key),
+                           "peer": peer.peer_id, "outcome": "DENY",
+                           "reason": "over the connection limit (%d at once in all, %d from one node)" % (connections, per_caller)})
+                continue
+            worker = threading.Thread(target=answer, args=(conn, node, key), daemon=True)
+            try:
+                worker.start()
+            except RuntimeError as error:           # no thread could be started: give the place back
+                conn.close()
+                with lock:
+                    active.remove(key)
+                failed(error)
+                continue
+            workers[:] = [w for w in workers if w.is_alive()] + [worker]
+    finally:
+        for worker in workers:
+            worker.join(IO_TIMEOUT + 5)
 
 
 def tcp_transport(endpoint):

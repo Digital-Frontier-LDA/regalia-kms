@@ -22,8 +22,8 @@ import tests.test_baremetal_replacement as rt
 ROOT = hbt.pub(hbt.ROOT)
 SITE = {"schema": sitecfg.SCHEMA, "site": "site-a", "host_ipv4": "192.0.2.10", "kms_port": 8443, "ssh_port": 22,
         "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["203.0.113.128/32"], "admin_cidrs": ["203.0.113.0/28"],
-        "outbound": [{"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514},
-                     {"name": "ntp", "cidr": "203.0.113.193/32", "proto": "udp", "port": 123}],
+        "outbound": [{"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514}],
+        "time": {"nts": [{"name": "nts.netnod.se", "cidrs": ["194.58.200.0/24"]}, {"name": "ptbtime1.ptb.de", "cidrs": ["192.53.103.0/24"]}]},
         "boot_mesh": {"node_id": "a", "interface": "wg-unlock", "listen_port": 51820, "address": "10.89.0.1", "unlock_port": 7443,
                       "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                       "peers": [{"node_id": "b", "underlay": "192.0.2.20", "address": "10.89.0.2"},
@@ -222,6 +222,10 @@ class Publishing(Case):
         store.commit(self.e1)
         node.publish(store, n.path(node.PUBLISHED))
         before = open(n.path(node.PUBLISHED), "rb").read()
+        inode = os.stat(n.path(node.PUBLISHED)).st_ino
+        node.publish(store, n.path(node.PUBLISHED))                       # the same chain: the file is left as it is
+        self.assertEqual(os.stat(n.path(node.PUBLISHED)).st_ino, inode)
+        os.chmod(n.path(node.PUBLISHED), 0o600)                           # not as it must be: it is written again
         with unittest.mock.patch.object(node.os, "replace", side_effect=OSError("no rename")):
             with self.assertRaises(OSError):
                 node.publish(store, n.path(node.PUBLISHED))
@@ -418,7 +422,7 @@ class Trail(Case):
         lines = [json.loads(line) for line in open(self.cfg["state_dir"] + "/audit.jsonl")]
         self.assertEqual([(e["event"], e["outcome"]) for e in lines], [("sync-pull", "ALLOW"), ("sync-pull", "DENY")])
         self.assertTrue(all(isinstance(e["at"], int) for e in lines))
-        self.assertEqual(stat.S_IMODE(os.stat(self.cfg["state_dir"] + "/audit.jsonl").st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(self.cfg["state_dir"] + "/audit.jsonl").st_mode), 0o640)              # #283: its shipper reads it through the group
         with self.assertRaises(OSError):
             node.Trail(self.d + "/nowhere/audit.jsonl")({"event": "x"})              # a trail that cannot be written raises
 

@@ -32,7 +32,8 @@ hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; }
 MEASURE="$(command -v systemd-measure || echo /usr/lib/systemd/systemd-measure)"
 STUB="${STUB:-/usr/lib/systemd/boot/efi/linuxx64.efi.stub}"
 ENGINE="${ENGINE:-$(ls /usr/lib/x86_64-linux-gnu/engines-3/pkcs11.so 2>/dev/null)}"
-SOFTHSM="${SOFTHSM:-$(ls /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so 2>/dev/null | head -1)}"
+# SoftHSM only, from its fixed install paths: no variable may point this script at another module (#225)
+SOFTHSM="$(ls /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so 2>/dev/null | head -1)"
 for t in ukify sbsign sbverify openssl softhsm2-util swtpm tpm2_pcrextend tpm2_pcrread systemd-creds "$MEASURE" python3; do
   command -v "$t" >/dev/null || { echo "uki-build: $t is required (systemd-ukify, sbsigntool, softhsm2, swtpm, tpm2-tools, systemd)"; exit 2; }
 done
@@ -75,13 +76,18 @@ if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
 python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/initrd" > "$W/initrd-inventory.txt"
 # the initrd's build record (#248), as deploy/baremetal/initrd/build-initrd.sh writes one: here a stand-in that
 # names this initrd and this client, which is all uki.py holds it to (the real one is e2e/unlock-boot-qemu.sh's)
-python3 -I - "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/initrd-build.json" <<'PY'
+PINNED_KEYRING="$(sed -n 's/^KEYRING_SHA256 = "\([0-9a-f]\{64\}\)"$/\1/p' deploy/baremetal/debverify.py)"
+python3 -I - "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/initrd-build.json" "$W/initrd-inventory.txt" "$PINNED_KEYRING" <<'PY'
 import hashlib, json, sys
 digest = lambda path: hashlib.sha256(open(path, "rb").read()).hexdigest()
 json.dump({"schema": "regalia.initrd-build/v1", "commit": "0" * 40, "go": "go1.26.6", "snapshot": "20261003T121500Z",
            "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "stand-in", "dracut": "stand-in", "packages_requested": [],
            "client_sha256": digest(sys.argv[2]), "repository_files": {}, "packages_sha256": "0" * 64, "packages": [],
-           "initrd_sha256": digest(sys.argv[1]), "initrd_size": 0, "initrd_entries": 0}, open(sys.argv[3], "w"))
+           "initrd_sha256": digest(sys.argv[1]), "initrd_size": 0, "initrd_entries": 0,
+           # the stand-in's inventory names no package: the builder verified none of it, with the pinned keyring (#246)
+           "verified_packages": {"schema": "regalia.initrd-packages/v1", "packages": {}, "releases": {},
+                                 "keyring_sha256": sys.argv[5], "inventory_sha256": digest(sys.argv[4]),
+                                 "entries": 0, "dracut_over": 0}}, open(sys.argv[3], "w"))
 PY
 printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n' > "$W/cmdline"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"

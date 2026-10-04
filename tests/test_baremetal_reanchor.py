@@ -529,7 +529,7 @@ class Command(Case):
         for entry in log:
             self.assertEqual((entry["epoch"], entry["manifest_digest"], entry["sources"], entry["subject"]), (3, self.digest(3), [AUTHORITY, "c"], "b"))
             self.assertRegex(entry["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
-        self.assertEqual(os.stat(self.d + "/audit.jsonl").st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(self.d + "/audit.jsonl").st_mode & 0o777, 0o640)           # #283: its shipper reads it through the group
         self.assertEqual(trails.verify(self.d + "/audit.jsonl")["chained"], 2)            # #278: a hash-chained trail
         self.assertEqual(trails.where("reanchor"), "/var/log/regalia/reanchor.jsonl")     # --audit-log's default
 

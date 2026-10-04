@@ -54,6 +54,7 @@ NOT HERE: where the authority runs, the root key's ceremony, and a networked rev
 """
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -66,6 +67,7 @@ import threading
 import time
 
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deploy.baremetal import authtime, convergence, heartbeat, membership, node, sitecfg, sync, wgsvc
@@ -74,7 +76,8 @@ Refused, require = membership.Refused, membership.require
 
 SCHEMA = "regalia.authority/v1"
 KEYS = ("schema", "root_key", "tcti", "nv_epoch", "nv_sequence", "state_dir", "run_dir", "signer", "interval_s", "lifetime_s",
-        "sequence_offset", "sequence_stride", "revoke_requesters", "wg_service_key", "underlays", "listen_port", "sync_port", "control_socket")
+        "sequence_offset", "sequence_stride", "revoke_requesters", "wg_service_key", "underlays", "listen_port", "sync_port", "control_socket",
+        "time_servers")
 SIGNER_KINDS = ("file", "pkcs11")
 REQUESTERS = ("local-root",)
 RESTRICTIVE = ("QUARANTINED", "REVOKED_STOLEN")
@@ -94,7 +97,7 @@ def validate(doc):
     """The configuration. Refused names the first thing wrong."""
     membership.exact(doc, KEYS, "authority configuration")
     require(doc["schema"] == SCHEMA, "schema must be %s" % SCHEMA)
-    membership.hex_field(doc["root_key"], 64, "root_key")
+    membership.root_entries(doc["root_key"], "root_key")
     require(doc["tcti"] is None or (isinstance(doc["tcti"], str) and re.fullmatch(r"[a-z]+(:[A-Za-z0-9/_.,=-]{1,200})?", doc["tcti"]) is not None),
             "tcti must be null (the kernel's resource manager) or a TCTI string")
     for k in ("nv_epoch", "nv_sequence"):
@@ -104,6 +107,11 @@ def validate(doc):
     anchor = {int(i, 16) for i in membership.HighWater(doc["nv_epoch"])._indices()}
     sequence = {int(i, 16) for i in heartbeat.Counter(doc["nv_sequence"])._indices()}
     require(not anchor & sequence, "nv_epoch and nv_sequence must not overlap (both take %s)" % ", ".join("0x%x" % i for i in sorted(anchor & sequence)))
+    authtime.servers(doc["time_servers"])          # chrony's NTS sources here, as a node's (units/regalia-authority-authtime.service)
+    # where it believes authtime.json: the one directory its authtime unit can write, root's (regalia-kms-3e on #323); any
+    # other would be refused by authtime.read every time, and the authority would never sign, with nothing to say why
+    require(doc["run_dir"] == authtime.RUN_DIR, "run_dir must be %s: where regalia-authority-authtime publishes authtime.json "
+            "(its unit's only writable directory, root's, as authtime requires)" % authtime.RUN_DIR)
     for k in ("state_dir", "run_dir", "wg_service_key", "control_socket"):
         require(isinstance(doc[k], str) and doc[k].startswith("/"), "%s must be an absolute path" % k)
     signer = doc["signer"]
@@ -111,6 +119,15 @@ def validate(doc):
     if signer["kind"] == "file":
         membership.exact(signer, ("kind", "path"), "signer")
         require(isinstance(signer["path"], str) and signer["path"].startswith("/"), "signer.path must be an absolute path")
+    else:
+        membership.exact(signer, ("kind", "module", "serial", "key_id", "pin_credential", "opensc_conf"), "signer")
+        require(isinstance(signer["module"], str) and signer["module"].startswith("/"), "signer.module must be an absolute path")
+        require(isinstance(signer["serial"], str) and re.fullmatch(r"[A-Za-z0-9]{1,32}", signer["serial"]) is not None, "signer.serial is a token serial")
+        require(isinstance(signer["key_id"], str) and re.fullmatch(r"([0-9a-f]{2}){1,20}", signer["key_id"]) is not None, "signer.key_id is lowercase hex")
+        require(isinstance(signer["pin_credential"], str) and re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", signer["pin_credential"]) is not None,
+                "signer.pin_credential is the name of a systemd credential")
+        require(signer["opensc_conf"] is None or (isinstance(signer["opensc_conf"], str) and signer["opensc_conf"].startswith("/")),
+                "signer.opensc_conf is null or an absolute path")
     _int(doc["interval_s"], heartbeat.MIN_INTERVAL_S, 7 * 86400, "interval_s")
     if doc["lifetime_s"] is not None:
         _int(doc["lifetime_s"], 3600, heartbeat.HARD_MAX_LIFETIME, "lifetime_s")
@@ -144,7 +161,7 @@ def load(path):
 class FileSigner:
     """The revocation key in a file: Ed25519, PEM (PKCS#8), owned by this process's user and readable by no
     one else. A STOPGAP until the owner chooses a token (#199): `kind` is recorded on every signature."""
-    kind = "file"
+    kind, alg = "file", "ed25519"
 
     def __init__(self, path):
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -166,10 +183,240 @@ class FileSigner:
         return self._key.sign(message)
 
 
+class Pkcs11Signer:
+    """The revocation key on a token (owner, 2026-10-03: a Nitrokey HSM 2, the key generated on the token,
+    recovered by a DKEK-share ceremony under ADR-0002 D19). ECDSA P-256: the token's PKCS#11 offers no
+    EdDSA (measured on the bench).
+
+    IN PROCESS, ONE SESSION (regalia-kms-d9's read of #262, decided by regalia-kms-24). The token is
+    chosen by SERIAL, never by label or slot number, and the serial is read in the very session that
+    logs in: the one slot whose token has it is found, a session opened on it, the serial read again
+    from that session's slot, and only then C_Login and C_Sign. A token removed or swapped after that
+    read ends the session (CKR_DEVICE_REMOVED, CKR_SESSION_HANDLE_INVALID), so the PIN can reach only
+    the token whose serial was read: a slot renumbered by a hot-plugged reader, or another card in the
+    same reader, never receives it. (Two pkcs11-tool runs, one to find the slot and one to log in, could
+    not promise that.) The serial is read once more after signing, and a difference is refused.
+      * The PIN comes from a systemd credential ($CREDENTIALS_DIRECTORY/<pin_credential>), alphanumeric,
+        4 to 64 characters (what the ceremony issues). It stays in this process: no argv, no child's
+        environment.
+      * `opensc_conf` (e.g. deploy/opensc/ignore-yubikey.conf) keeps OpenSC off every other reader; set
+        before the module is loaded.
+      * The signature is CKM_ECDSA over SHA-256 of the message, r || s, normalised to low-S (the
+        verifiers refuse high-S), and verified against the token's public key before it is returned.
+
+    THE PIN IS NEVER SPENT BY RETRYING (regalia-kms-d9, decided by regalia-kms-24; the Go daemon's PIN
+    latch, request-context-is-not-token-evidence). The beat loop retries a failed signature, and a
+    restart retries too, so a wrong PIN credential would lock the token within three tries, and the
+    revocation key with it until an SO-PIN ceremony.
+      * The token refuses the PIN (CKR_PIN_INCORRECT, CKR_PIN_INVALID, CKR_PIN_LEN_RANGE,
+        CKR_PIN_LOCKED from C_Login): the signer LATCHES. It never calls C_Login again, writes
+        <state_dir>/pin-latch.json (0600, read at every start), and the event goes to the trail once.
+        Only `authority.py clear-pin-latch`, run as root, removes it. Fix the credential first.
+      * Before every C_Login the token's flags are read, and a token with CKF_USER_PIN_COUNT_LOW,
+        FINAL_TRY or LOCKED set is refused with no login: its last tries are kept for a human.
+      * Nothing else latches. A token pulled out, a session ended, or any other error refuses that
+        signature and the next one tries again.
+    `pkcs11` is the PyKCS11 module (Debian: python3-pykcs11); a test passes a stand-in.
+
+    FOR AN OPERATOR'S TOOL (manifest.py, #156: the membership root on its offline Nitrokey), each opt-in, the
+    authority's behaviour unchanged without them:
+      * `label`: the token's label is asserted beside its serial, in the same places: in the listing, and
+        again from the session's own slot before C_Login.
+      * `only_token`: exactly one initialised token is attached (CKF_TOKEN_INITIALIZED: a module's spare
+        empty slot or a blank card can take no PIN), counted in the same listing that finds the serial.
+      * `key_label`: the key is found by CKA_LABEL as well as (or instead of) CKA_ID; still exactly one
+        object of the class must match, so a label two keys share is refused rather than one picked.
+      * `pin`: a callable returning the PIN (the tool reads an environment variable or the terminal, no
+        echo). The latch and the low-tries refusal apply to it exactly as to the credential."""
+    kind, alg = "pkcs11", "ecdsa-p256"
+    P256_PARAMS = bytes.fromhex("06082a8648ce3d030107")   # DER OID prime256v1
+    PIN_REFUSALS = ("CKR_PIN_INCORRECT", "CKR_PIN_INVALID", "CKR_PIN_LEN_RANGE", "CKR_PIN_LOCKED")
+    PIN_LOW = ("CKF_USER_PIN_COUNT_LOW", "CKF_USER_PIN_FINAL_TRY", "CKF_USER_PIN_LOCKED")
+
+    def __init__(self, module, serial, key_id, pin_credential, opensc_conf=None, credentials=None, pkcs11=None, latch_path=None,
+                 label=None, only_token=False, key_label=None, pin=None):
+        if pkcs11 is None:
+            import PyKCS11 as pkcs11
+        require(key_id is not None or key_label is not None, "the key is named by its id, its label, or both")
+        require((pin_credential is None) != (pin is None), "the PIN comes from one source: a credential or the caller")
+        self.pkcs11, self.serial, self.key_id = pkcs11, serial, bytes.fromhex(key_id) if key_id is not None else None
+        self.label, self.only_token, self.key_label, self.pin_source = label, only_token, key_label, pin
+        self.credentials = credentials or os.environ.get("CREDENTIALS_DIRECTORY")
+        self.pin_credential = pin_credential
+        self.latch_path, self.on_latch = latch_path, None
+        self.latched = _read_latch(latch_path)
+        if opensc_conf:
+            os.environ["OPENSC_CONF"] = opensc_conf         # read by OpenSC when the module loads, below
+        self.lib = pkcs11.PyKCS11Lib()
+        self.lib.load(module)
+        session, _ = self._session()
+        try:
+            self._public = self._read_public(session)
+        finally:
+            session.closeSession()
+
+    def _serial_of(self, slot):
+        return str(self.lib.getTokenInfo(slot).serialNumber).strip()
+
+    def _is_ours(self, slot):
+        """The token in `slot` has our serial, and our label when one is asserted."""
+        info = self.lib.getTokenInfo(slot)
+        return str(info.serialNumber).strip() == self.serial and (self.label is None or str(info.label).strip() == self.label)
+
+    def _named(self):
+        return "serial %s" % self.serial + ("" if self.label is None else " and label %r" % self.label)
+
+    def _session(self):
+        """A session on the one token with this serial (and label), both read again from the session's slot."""
+        present = self.lib.getSlotList(tokenPresent=True)
+        if self.only_token:
+            # initialised tokens: a module's spare empty slot (SoftHSM always lists one) or a blank card can take no PIN
+            initialised = [slot for slot in present if int(self.lib.getTokenInfo(slot).flags) & self.pkcs11.CKF_TOKEN_INITIALIZED]
+            require(len(initialised) == 1, "%d initialised tokens are attached: attach only the one with %s"
+                    % (len(initialised), self._named()))
+        slots = [slot for slot in present if self._is_ours(slot)]
+        require(len(slots) == 1, "%s token with %s is present" % ("no" if not slots else "more than one", self._named()))
+        session = self.lib.openSession(slots[0])
+        try:
+            slot = session.getSessionInfo().slotID
+            require(slot == slots[0] and self._is_ours(slot),
+                    "the token in the session's slot is not %s: refused before the PIN" % self._named())
+        except BaseException:
+            session.closeSession()
+            raise
+        return session, slot
+
+    def _object(self, session, cls):
+        template = [(self.pkcs11.CKA_CLASS, cls)]
+        if self.key_id is not None:
+            template.append((self.pkcs11.CKA_ID, self.key_id))
+        if self.key_label is not None:
+            template.append((self.pkcs11.CKA_LABEL, self.key_label))
+        found = session.findObjects(template)
+        require(len(found) == 1, "the token holds %d objects of that class with %s, not one" % (len(found), self._key_named()))
+        return found[0]
+
+    def _key_named(self):
+        return " and ".join(([] if self.key_id is None else ["id %s" % self.key_id.hex()]) +
+                            ([] if self.key_label is None else ["label %r" % self.key_label]))
+
+    def _read_public(self, session):
+        point, params = session.getAttributeValue(self._object(session, self.pkcs11.CKO_PUBLIC_KEY),
+                                                  [self.pkcs11.CKA_EC_POINT, self.pkcs11.CKA_EC_PARAMS])
+        point, params = bytes(point), bytes(params)
+        if len(point) == 67 and point[:2] == b"\x04\x41":     # DER OCTET STRING around the point
+            point = point[2:]
+        require(params == self.P256_PARAMS and len(point) == 65 and point[0] == 4, "the token's key %s is not a P-256 key" % self._key_named())
+        ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), point)   # on the curve
+        return point.hex()
+
+    def _pin(self):
+        if self.pin_source is not None:
+            pin = self.pin_source()
+            require(isinstance(pin, str) and re.fullmatch(r"[0-9A-Za-z]{4,64}", pin) is not None, "the PIN given is not a PIN (alphanumeric, 4 to 64)")
+            return pin
+        require(self.credentials, "no systemd credentials directory: the PIN comes from LoadCredentialEncrypted=")
+        path = os.path.join(self.credentials, self.pin_credential)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            pin = os.read(fd, 256).decode().strip()
+        finally:
+            os.close(fd)
+        require(re.fullmatch(r"[0-9A-Za-z]{4,64}", pin) is not None, "the PIN credential is not a PIN (alphanumeric, 4 to 64)")
+        return pin
+
+    def public(self):
+        return self._public
+
+    def _latch(self, reason):
+        self.latched = {"reason": reason, "serial": self.serial, "at": int(time.time())}
+        if self.latch_path:
+            _write_latch(self.latch_path, self.latched)
+        if self.on_latch:
+            self.on_latch(self.latched)
+
+    def _login(self, session, slot, pin):
+        flags = int(self.lib.getTokenInfo(slot).flags)
+        low = [name for name in self.PIN_LOW if flags & getattr(self.pkcs11, name)]
+        require(not low, "the token reports %s: no login is tried, its last tries are kept for a human. One correct login "
+                "(`pkcs11-tool --login --test` with the right PIN) resets the counter; then restart" % ", ".join(low))
+        try:
+            session.login(pin)
+        except self.pkcs11.PyKCS11Error as error:
+            refused = [name for name in self.PIN_REFUSALS if getattr(error, "value", None) == getattr(self.pkcs11, name)]
+            if refused:
+                self._latch(refused[0])
+                raise Refused("the token refused the PIN (%s): latched, no further attempt is made; %s" % (refused[0], WAY_OUT)) from error
+            raise
+
+    def sign(self, message):
+        require(not self.latched, "the token refused the PIN (%s) and the signer is latched, no further attempt is made: %s"
+                % ((self.latched or {}).get("reason"), WAY_OUT))
+        pin = self._pin()                                # before any session: a missing PIN touches no token
+        session, slot = self._session()
+        try:
+            self._login(session, slot, pin)
+            try:
+                raw = bytes(session.sign(self._object(session, self.pkcs11.CKO_PRIVATE_KEY), hashlib.sha256(message).digest(),
+                                         self.pkcs11.Mechanism(self.pkcs11.CKM_ECDSA)))
+                require(self._serial_of(slot) == self.serial, "the token's serial changed while it signed: refused")
+            finally:
+                session.logout()
+        finally:
+            session.closeSession()
+        require(len(raw) == 64, "the token returned a %d-byte ECDSA signature, not r || s" % len(raw))
+        r, s = int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big")
+        s = min(s, membership.P256_ORDER - s)            # low-S: the verifiers refuse the other form
+        signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+        membership.verify_revocation(self.alg, self._public, message, signature.hex(), "token")
+        return signature
+
+
+PIN_LATCH = "pin-latch.json"
+# The way out of a PIN latch. The refusal left the token's counter low (CKF_USER_PIN_COUNT_LOW), which
+# the signer also refuses, and only a correct login resets it (regalia-kms-d9).
+WAY_OUT = ("fix the credential, reset the token's counter with one correct login (`pkcs11-tool --login --test` with the "
+           "right PIN), then `authority.py clear-pin-latch` as root and restart the service")
+
+
+def _read_latch(path):
+    """The persisted PIN latch, or None. One that cannot be read as a latch is treated as one: a damaged
+    file never re-opens the way to the PIN."""
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as f:
+            latch = json.loads(f.read(4096))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {"reason": "an unreadable pin-latch.json"}
+    return latch if isinstance(latch, dict) else {"reason": "an unreadable pin-latch.json"}
+
+
+def _write_latch(path, latch):
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".pin-latch-")
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, json.dumps(latch, sort_keys=True).encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.rename(tmp, path)
+    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
 def signer_for(cfg):
-    if cfg["signer"]["kind"] == "file":
-        return FileSigner(cfg["signer"]["path"])
-    raise Refused("signer kind pkcs11 is not built yet: the owner's choice of token comes first (#199)")
+    signer = cfg["signer"]
+    if signer["kind"] == "file":
+        return FileSigner(signer["path"])
+    return Pkcs11Signer(signer["module"], signer["serial"], signer["key_id"], signer["pin_credential"], signer["opensc_conf"],
+                        latch_path=os.path.join(cfg["state_dir"], PIN_LATCH))
 
 
 # ---- the authority ----
@@ -188,7 +435,10 @@ class Authority:
         self.cfg, self.run = cfg, run or subprocess.run
         self.signer = signer or signer_for(cfg)
         self.clock = clock or authtime.clock(os.path.join(cfg["run_dir"], "authtime.json"))
-        self.trail = trail or node.Trail(self.path("audit.jsonl"))
+        self.trail = trail or node.Trail(self.path("audit.jsonl"), "authority")
+        if getattr(self.signer, "on_latch", "none") is None:   # a PIN latch is recorded once, when it is set
+            self.signer.on_latch = lambda latch: self.trail({"event": "pin-latch", "outcome": "DENY", "reason": latch["reason"],
+                                                             "serial": latch["serial"], "signer": self.signer.kind})
         tcti = cfg["tcti"]
         self.anchor = membership.HighWater(cfg["nv_epoch"], tcti, self.run, lock_path=self.path("highwater.lock"))
         self.counter = sequence_counter(cfg, self.run)
@@ -296,8 +546,9 @@ class Authority:
                     return pending
             lifetime = self.lifetime(manifest)
             # checked BEFORE a number is reserved: a key the manifest does not name would burn one per retry
-            require(self.signer.public() in manifest["revocation_keys"], "the revocation key %s... is not named by the manifest at epoch %d: "
-                    "no heartbeat is signed" % (self.signer.public()[:16], manifest["epoch"]))
+            require(membership.revocation_alg(manifest, self.signer.public()) == self.signer.alg,
+                    "the revocation key %s... (%s) is not named by the manifest at epoch %d: "
+                    "no heartbeat is signed" % (self.signer.public()[:16], self.signer.alg, manifest["epoch"]))
             sequence = self.next_sequence()
             body = {"schema": heartbeat.SCHEMA, "epoch": manifest["epoch"], "sequence": sequence, "issued_at": stamp(seconds),
                     "expires_at": stamp(seconds + lifetime), "manifest_digest": membership.digest(manifest)}
@@ -347,9 +598,11 @@ class Authority:
                                                              "sig": self.signer.sign(membership.DOMAIN + membership.canonical(candidate)).hex()}}
             self.store.commit(envelope)                                         # membership's revocation rule, anchored in the TPM
             try:                                                                # from here the revocation is committed, whatever fails
+                # the record of what was signed first: nothing after it (the publication, the heartbeat) can lose it
                 self.trail({"event": "authority-revoke", "outcome": "SIGNED", "epoch": candidate["epoch"], "node": node_id, "state": state,
                             "digest": membership.digest(candidate), "key": self.signer.public(), "signer": self.signer.kind,
                             "requester": requester, "reason": reason})
+                self.publish_or_record()                                        # the tunnel drops the node with it (wg-apply.path)
                 return envelope, self.beat("revocation of %s" % node_id)       # the pending old-epoch bytes are dropped there
             except Exception as failure:      # noqa: BLE001 - committed is committed, whatever the heartbeat did
                 self.wake.set()                                         # serve retries at once, not an interval later
@@ -368,7 +621,24 @@ class Authority:
                 self.store.commit(envelope)
                 self.trail({"event": "authority-accept", "outcome": "ALLOW", "epoch": envelope["manifest"]["epoch"],
                             "digest": membership.digest(envelope["manifest"]), "signer": envelope["signature"]["signer"]})
+            self.publish()
             return self.store.load()["epoch"]
+
+    def publish(self):
+        """The verified chain where root's wg-apply reads it (chain.json, 0644, as a node's regalia-sync publishes
+        it): the store itself is this user's alone. Published after every commit, at serve's start, and at
+        every beat, so a publication that failed is made good; the file is rewritten only when the chain
+        changed (node.publish), so regalia-authority-wg-apply.path fires on a real change only."""
+        return node.publish(self.store, self.path(node.PUBLISHED))
+
+    def publish_or_record(self):
+        """publish(), and a failure recorded as its own event instead of raised: the commit stands, the next beat
+        (serve is woken) or start publishes again."""
+        try:
+            self.publish()
+        except Exception as failure:      # noqa: BLE001 - recorded; retried at the next beat
+            self.wake.set()
+            self.trail({"event": "authority-publish", "outcome": "FAILED", "reason": "%s: %s" % (type(failure).__name__, str(failure)[:220])})
 
     def status(self):
         manifest, held = self.store.load(), self.held()
@@ -444,6 +714,7 @@ class Authority:
         own = wgsvc.address(self.signer_tunnel_key())
         listener = node.bind_when_up((own, self.cfg["sync_port"]), stop, family=socket.AF_INET6)
         listener.settimeout(1)
+        self.publish_or_record()                      # a host upgraded from before chain.json, or a publication that failed
         server = sync.Server(convergence.AUTHORITY, self.store, self, None, None, wgsvc.key_at, self.trail)
         threading.Thread(target=sync.serve, args=(server, listener, stop), daemon=True).start()
         self.control_listener(stop)
@@ -460,6 +731,7 @@ class Authority:
                 due = 0.0
             if clock() >= due:
                 try:
+                    self.publish_or_record()                  # never in the way of a heartbeat
                     self.catch_up() or self.beat()
                     due, failures = clock() + self.cfg["interval_s"], 0
                 except Exception as failure:      # noqa: BLE001 - a beat that fails is retried, never the end of serve
@@ -521,33 +793,41 @@ def ask(path, request):
 
 
 def held_chain(cfg, run):
-    """The manifest the authority holds, read as a reader that is not the writer (wg-apply runs as root):
-    the store's file opened without following a link, verified from the root key and against the TPM
-    record with the lock-free check (#182). Nothing is created or locked in the service's state directory,
-    and the revocation key is not touched."""
-    path = os.path.join(cfg["state_dir"], "membership.json")
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-    try:
-        require(stat.S_ISREG(os.fstat(fd).st_mode), "the authority's membership file is not a regular file")
-        raw = os.read(fd, membership.MAX_CHAIN_BYTES + 1)
-    finally:
-        os.close(fd)
-    envelopes = membership.load(raw, membership.MAX_CHAIN_BYTES)
-    require(isinstance(envelopes, list) and envelopes, "the authority holds no membership chain")
-    manifest = membership.accept_chain(None, envelopes, cfg["root_key"])
-    manifests = [e["manifest"] for e in envelopes]
-
-    def digest_of(epoch):
-        require(epoch <= len(manifests), "ROLLBACK: the chain ends at epoch %d, below the TPM anchor %d" % (len(manifests), epoch))
-        return membership.digest(manifests[epoch - 1]) if epoch else membership.HighWater.ZERO
+    """The manifest the authority holds, read as root's wg-apply reads it: the chain serve publishes
+    (chain.json, 0644), verified here from the root key and against the TPM anchor, lock-free (node.published,
+    as a node's wg-apply reads regalia-sync's). Root without CAP_DAC_OVERRIDE cannot read the store, which is
+    the service user's alone, and needs nothing else from the state directory."""
     anchor = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "highwater.lock"))
+    return node.published(os.path.join(cfg["state_dir"], node.PUBLISHED), cfg["root_key"], anchor)
+
+
+def wg_key(cfg, replace=False, run=None, chown=os.chown):
+    """Make the authority's WireGuard service key, as root: root:<the service's group> 0640 (root's wg-apply
+    reads it as its owner, serve through its group; neither holds CAP_DAC_*). Refused if one exists, unless
+    `replace` (a rotation: then every node's site configuration takes the new public key,
+    service_mesh.authority.key). Written whole, then renamed: the old key stays until the new one is
+    complete. Returns the public key, hex."""
+    import subprocess
+    run = run or subprocess.run
+    path = cfg["wg_service_key"]
+    require(replace or not os.path.lexists(path), "%s exists: --replace to rotate it" % path)
+    group = os.stat(cfg["state_dir"]).st_gid          # the service's own group, as its StateDirectory= made it
+    private = run(["wg", "genkey"], capture_output=True, timeout=10).stdout.decode().strip()
+    require(re.fullmatch(r"[A-Za-z0-9+/]{43}=", private) is not None, "wg genkey gave no key")
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".wg-service-")
     try:
-        anchor.verify(digest_of, lock=False)
-    except Refused as refused:
-        if str(refused).startswith("ROLLBACK"):
-            raise
-        anchor.verify(digest_of, lock=False)          # a commit racing the read: it stands only if it stays
-    return manifest
+        chown(tmp, 0, group)
+        os.fchmod(fd, 0o640)
+        with os.fdopen(fd, "w") as f:
+            f.write(private + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+    return tunnel_key(cfg, run)[1]
 
 
 def tunnel_key(cfg, run):
@@ -577,6 +857,10 @@ def main(argv=None):
     sub.add_parser("serve")
     sub.add_parser("status")
     sub.add_parser("wg-apply")
+    wgkey = sub.add_parser("wg-key", help="as root: make the WireGuard service key, root:<the service's group> 0640")
+    wgkey.add_argument("--replace", action="store_true", help="rotate an existing key (the nodes' site configurations take the new public key)")
+    sub.add_parser("clear-pin-latch", help="let the token signer log in again. First fix the PIN credential and reset the token's "
+                   "counter with one correct login (pkcs11-tool --login --test); then this; then restart the service")
     revoke = sub.add_parser("revoke")
     revoke.add_argument("--node", required=True)
     revoke.add_argument("--state", required=True, choices=RESTRICTIVE)
@@ -600,6 +884,18 @@ def main(argv=None):
             require(os.geteuid() == owner, "run as the authority's own user (uid %d), e.g. runuser -u regalia-authority -- ...: "
                     "files written as anyone else would lock the service out" % owner)
             _writer = one_writer(cfg["state_dir"])         # after the uid check; held for the life of this process
+        if args.command == "clear-pin-latch":
+            require(os.geteuid() == 0, "clear-pin-latch is the operator's, as root")
+            latch = os.path.join(cfg["state_dir"], PIN_LATCH)
+            print("was latched: %s" % json.dumps(_read_latch(latch)) if os.path.exists(latch) else "not latched")
+            if os.path.exists(latch):
+                os.unlink(latch)
+                print("cleared: restart regalia-authority to sign again")
+            return 0
+        if args.command == "wg-key":
+            require(os.geteuid() == 0, "wg-key is the operator's, as root: the key is root's, readable by the service's group")
+            print("wg-svc public key (service_mesh.authority.key in every node's site configuration): %s" % wg_key(cfg, args.replace))
+            return 0
         if args.command == "wg-apply":
             print("wg-svc applied: %s" % wg_apply(cfg))    # as root: a reader, never the Authority (no key, no lock files)
             return 0

@@ -23,7 +23,8 @@ RestartSec=5s
 User=regalia-admission
 Group=regalia-admission
 # the TPM (its quotes, the anchor) is the tss group's
-SupplementaryGroups=tss
+# regalia-audit-admission: the reader group of this service's audit trail, which it gives the file (#286)
+SupplementaryGroups=tss regalia-audit-admission
 CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
@@ -31,7 +32,7 @@ ProtectSystem=strict
 # Its own directory under root's /run/regalia, made by tmpfiles and never declared as this unit's
 # RuntimeDirectory: systemd would remove it when this unit stops, and the last admission file must
 # stand until it runs out by itself (admission.py).
-ReadWritePaths=/run/regalia/admission
+ReadWritePaths=/run/regalia/admission -/run/regalia-metrics/admission
 StateDirectory=regalia-admission
 StateDirectoryMode=0700
 ProtectHome=yes

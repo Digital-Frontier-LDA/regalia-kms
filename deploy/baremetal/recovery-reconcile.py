@@ -11,6 +11,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import hashlib
 import re
 import signal
 import subprocess
@@ -149,13 +150,19 @@ def reconcile(device, keep, retire, kept_key, retired_keys):
     # the metadata, so a kill between the two leaves the slot listed while its card
     # opens nothing. That is accepted only when this tool recorded, on the kept
     # slot's token and after proving the card, that it was retiring exactly that slot
-    # (number and salt), and cryptsetup itself answers "no key" (exit 2) for the card.
+    # (number and salt), the slot's key material is no longer what it was when the mark
+    # was written (#255: a run killed after the mark but before the kill leaves the slot
+    # intact, and a wrong card opens nothing there too), and cryptsetup itself answers
+    # "no key" (exit 2) for the card.
     retiring = retiring_marks(before, keep)
     for slot, value in zip(retire, retired_keys):
         if slot in before['keyslots'] and not proves(device, value, slot):
             salt = before['keyslots'][slot].get('kdf', {}).get('salt')
             if (slot, salt) not in retiring:
                 raise Refused('retired card does not open its selected slot')
+            if area_digest(device, before['keyslots'][slot]) == retiring[(slot, salt)]:
+                raise Refused('retired card does not open its selected slot, whose key material is as it was when '
+                              'it was marked: the slot is intact, and this is not its card')
             if command(device, ['open', '--test-passphrase'], value).returncode != 2:
                 raise Refused('cannot prove the retired card opens nothing; inspect and repeat the selections')
     retained = {s: v for s, v in before['keyslots'].items() if s not in retire and s != keep}
@@ -198,8 +205,11 @@ def reconcile(device, keep, retire, kept_key, retired_keys):
         mark = (slot, current['keyslots'][slot]['kdf']['salt'])
         if mark not in retiring_marks(current, keep):
             token_id, token = kept_token(current, keep)
-            marks = [list(m) for m in sorted(retiring_marks(current, keep) | {mark})]
-            data = json.dumps(dict(token, regalia_retiring=marks)).encode()
+            # the slot's key material as it is now, proven by its card: a later retry tells a slot
+            # wiped by a cut luksKillSlot (changed) from an intact one (the same) by it (#255)
+            marks = retiring_marks(current, keep)
+            marks[mark] = area_digest(device, current['keyslots'][slot])
+            data = json.dumps(dict(token, regalia_retiring=[[s, salt, area] for (s, salt), area in sorted(marks.items())])).encode()
             current = checked_write(['token', 'import', '--token-id', token_id, '--token-replace', '--json-file', '-'], input_data=data)
         current = checked_write(['luksKillSlot', '--batch-mode', slot], kept_key)
     for token in describe(header(device))['orphan_recovery_tokens']:
@@ -210,11 +220,11 @@ def reconcile(device, keep, retire, kept_key, retired_keys):
     # Only marks whose slot is gone are cleared; a mark for a slot still listed stays, so a later
     # retry can still finish it.
     marks = retiring_marks(current, keep)
-    pending = sorted(m for m in marks if m[0] in current['keyslots'])
+    pending = sorted((key, area) for key, area in marks.items() if key[0] in current['keyslots'])
     if marks and len(pending) < len(marks):
         token_id, token = kept_token(current, keep)
         token = {k: v for k, v in token.items() if k != 'regalia_retiring'}
-        if pending: token['regalia_retiring'] = [list(m) for m in pending]
+        if pending: token['regalia_retiring'] = [[s, salt, area] for (s, salt), area in pending]
         data = json.dumps(token).encode()
         checked_write(['token', 'import', '--token-id', token_id, '--token-replace', '--json-file', '-'], input_data=data)
     final = header(device)
@@ -237,14 +247,40 @@ def kept_token(data, keep):
 
 
 def retiring_marks(data, keep):
-    """(slot, salt) pairs this tool recorded on the kept slot's token before retiring them."""
+    """{(slot, salt): the sha256 of its key area then} that this tool recorded on the kept slot's token
+    before retiring them. A mark without the area (written before #255) is not one: it is ignored, so a
+    listed slot it names is held to its card again."""
     try:
         _, token = kept_token(data, keep)
     except Refused:
-        return set()
+        return {}
     marks = token.get('regalia_retiring')
-    if not isinstance(marks, list): return set()
-    return {(m[0], m[1]) for m in marks if isinstance(m, list) and len(m) == 2 and all(isinstance(x, str) for x in m)}
+    if not isinstance(marks, list): return {}
+    return {(m[0], m[1]): m[2] for m in marks
+            if isinstance(m, list) and len(m) == 3 and all(isinstance(x, str) for x in m) and re.fullmatch(r'[0-9a-f]{64}', m[2])}
+
+
+def area_digest(device, keyslot):
+    """The SHA-256 of a keyslot's key material, its binary area as the metadata places it: what luksKillSlot
+    overwrites (with random bytes) before it removes the slot from the metadata."""
+    area = keyslot.get('area') or {}
+    try:
+        offset, size = int(area.get('offset', -1)), int(area.get('size', -1))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        raise Refused('a keyslot area that cannot be read') from None
+    if offset < 0 or not 0 < size <= 64 << 20:
+        raise Refused('a keyslot area that cannot be read')
+    fd = os.open(device, os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        # cryptsetup wipes with O_DIRECT: the range is dropped from the page cache first, so this reads
+        # what the device holds, not a copy cached before the wipe (d9 on #255)
+        os.posix_fadvise(fd, offset, size, os.POSIX_FADV_DONTNEED)
+        data = os.pread(fd, size, offset)
+    finally:
+        os.close(fd)
+    if len(data) != size:
+        raise Refused('a keyslot area that cannot be read')
+    return hashlib.sha256(data).hexdigest()
 
 
 @contextmanager

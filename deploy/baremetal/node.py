@@ -62,8 +62,8 @@ import tempfile
 import threading
 import time
 
-from deploy.baremetal import (admission, trails, attest, authtime, bootnet, convergence, heartbeat, heartbeat_watch, lease,
-                              measurements, membership, sitecfg, sync, unlock, wgsvc)
+from deploy.baremetal import (admission, trails, attest, authtime, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
+                              measurements, membership, metrics, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
 
@@ -92,7 +92,7 @@ def validate(doc):
     membership.exact(doc, KEYS, "node configuration")
     require(doc["schema"] == SCHEMA, "schema must be %s" % SCHEMA)
     require(isinstance(doc["node_id"], str) and re.fullmatch(sitecfg.NODE_ID, doc["node_id"]) is not None, "node_id is not a node ID")
-    membership.hex_field(doc["root_key"], 64, "root_key")
+    membership.root_entries(doc["root_key"], "root_key")
     require(doc["tcti"] is None or (isinstance(doc["tcti"], str) and re.fullmatch(r"[a-z]+(:[A-Za-z0-9/_.,=-]{1,200})?", doc["tcti"]) is not None),
             "tcti must be null (the kernel's resource manager) or a TCTI string")
     epoch, beat = _index(doc["nv_epoch"], "nv_epoch"), _index(doc["nv_heartbeat"], "nv_heartbeat")
@@ -123,14 +123,26 @@ def load(path):
 # ---- the published chain ----
 
 def publish(store, path):
-    """Write the store's verified chain where the root services read it: complete or not at all, 0644."""
+    """Write the store's verified chain where the root services read it: complete or not at all, 0644. A file
+    that already holds exactly these bytes, 0644, is left as it is: the path units that watch it fire on a
+    change of the chain, not on every publication."""
     envelopes = store.envelopes(0)
+    encoded = membership.canonical(envelopes)
+    with contextlib.suppress(OSError):
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            info = os.fstat(fd)
+            if stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o644 and info.st_size == len(encoded) \
+                    and os.read(fd, len(encoded) + 1) == encoded:
+                return envelopes[-1]["manifest"] if envelopes else None
+        finally:
+            os.close(fd)
     directory = os.path.dirname(os.path.abspath(path))
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".chain-")
     try:
         os.fchmod(fd, 0o644)
         with os.fdopen(fd, "wb") as f:
-            f.write(membership.canonical(envelopes))
+            f.write(encoded)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
@@ -223,12 +235,14 @@ class Trail:
     """Audit events, one JSON object a line, hash-chained, appended and fsynced (trails.append, #278).
     Raises if it cannot write: callers that must not act unrecorded (sync.Server) refuse to answer then."""
 
-    def __init__(self, path):
+    def __init__(self, path, trail=None):
+        """`trail` names it in trails.TRAILS, so the file takes that trail's reader group (#286)."""
         self.path, self.lock = path, threading.Lock()
+        self.group = trails.TRAILS[trail][3] if trail else None
 
     def __call__(self, event):
         with self.lock:
-            trails.append(self.path, dict(event, at=int(time.time())))
+            trails.append(self.path, dict(event, at=int(time.time())), group=self.group)
 
 
 def heartbeat_counter(cfg, run=subprocess.run):
@@ -395,7 +409,7 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
     """The lease holder and the admission file, asking peers in turn for a lease over the service tunnel."""
     session, public = boot_session(node.runtime, rand)
     holder = lease.Holder(node.node_id, session, node.clock(), node.tpm_clock(), node.held("lease.json"), run=node.run)
-    trail = Trail(node.held("audit.jsonl"))
+    trail = Trail(node.held("audit.jsonl"), "admission")
 
     class Manifest:
         load = staticmethod(node.manifest)
@@ -416,7 +430,8 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
                 failures.append("%s: %s" % (name, refused))
         raise Refused("no peer gave a lease (%s)" % "; ".join(failures))
     return admission.Service(holder, node.manifest, renew, admission_file(node.runtime),
-                             daemon_started=daemon_started or admission.unit_started())
+                             daemon_started=daemon_started or admission.unit_started(),
+                             metrics=lambda samples: metrics.publish("admission", samples))      # #305
 
 
 class Sync:
@@ -424,21 +439,27 @@ class Sync:
 
     def __init__(self, node):
         self.node, self.store, self.freshness = node, node.store(), node.freshness()
-        self.trail = Trail(node.path("sync-audit.jsonl"))
+        self.trail = Trail(node.path("sync-audit.jsonl"), "sync")
         self.signer = lease.TpmSigner(node.tcti, node.run)
         self.published = None
+        # the unlock listener's refusals, by cause (#317), in regalia-sync's metrics directory
+        self.refusals = metrics.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", metrics.UNLOCK_CAUSES)
 
     def manifest(self):
         return self.store.load()
 
     def server(self):
         manifest = self.manifest()
+        # the enrolment operations (#190): the same contribution store the unlock peer serves paths from
+        enrol = enrolpeer.Peer(unlock.Contributions(self.node.path("contributions.json")), enrolpeer.Wraps(self.node.path("enrol-wraps.json")),
+                               enrolpeer.tpm_identity(self.node.tcti, self.node.run), enrolpeer.tpm_activate(self.node.tcti, self.node.run))
         return sync.Server(self.node.node_id, self.store, self.freshness, self.node.attester_for(manifest), self.signer,
-                           wgsvc.key_at, self.trail)
+                           wgsvc.key_at, self.trail, enrol=enrol)
 
     def unlock_peer(self):
         return unlock.Peer(self.node.node_id, self.store, self.freshness, self.node.attester_for,
-                           unlock.Contributions(self.node.path("contributions.json")), self.signer, self.trail, run=self.node.run)
+                           unlock.Contributions(self.node.path("contributions.json")), self.signer, self.trail, run=self.node.run,
+                           refused=self.refusals)
 
     def caller(self, address):
         """unlock.serve's `caller`: the node a boot-tunnel address belongs to, by the manifest held NOW."""
@@ -470,7 +491,7 @@ class Sync:
         return changed
 
     def watch(self):
-        return heartbeat_watch.Watch(self.freshness, self.manifest, self.trail, self.node.path("heartbeat.prom"),
+        return heartbeat_watch.Watch(self.freshness, self.manifest, self.trail, metrics.path("sync", "heartbeat.prom"),      # #305: node_exporter's
                                      self.node.path("heartbeat-watch.json"))
 
     def run(self, stop):
@@ -488,11 +509,13 @@ class Sync:
         for thread in threads:
             thread.start()
         watch = self.watch()
+        self.refusals.flush()                   # its zeros from the start, then every round (refusals only count)
         try:
             while not stop():
                 self.pull_round()
                 with contextlib.suppress(Refused, OSError):
                     watch.step()
+                self.refusals.flush()
                 deadline = time.monotonic() + self.node.cfg["pull_interval"]
                 while not stop() and time.monotonic() < deadline:
                     time.sleep(1)
@@ -517,7 +540,7 @@ def bind_when_up(where, stop, family=socket.AF_INET, create=socket.create_server
 def authtime_service(cfg):
     """Takes the configuration only: it reads nothing else (not the site configuration, not a key), and
     its unit hides the rest of /etc and all of /var from it."""
-    return authtime.Service(os.path.join(cfg["run_dir"], "authtime.json"), cfg["time_servers"])
+    return authtime.service(cfg["run_dir"], cfg["time_servers"])     # the one entry point, the authority host's too (#71)
 
 
 # ---- command line ----
@@ -525,9 +548,18 @@ def authtime_service(cfg):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", default="/etc/regalia/node.json")
-    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check"))
+    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check", "time-clear"))
+    parser.add_argument("--reason", help="time-clear only: why chronyd may run again. FIRST compare the declared NTS servers "
+                        "with an independent clock (another site's, a GNSS receiver, a phone on the mobile network): chronyd "
+                        "stopped because two of them agreed on a jump, and a restarted chronyd steps to what they agree on")
     args = parser.parse_args(argv)
     try:
+        if args.service == "time-clear":
+            # #303: the latch the chrony drop-in leaves when chronyd stops abnormally; root's, recorded first
+            require(os.geteuid() == 0, "time-clear is root's: the latch is in root's %s" % authtime.LATCH_DIR)
+            event = authtime.clear_latch(args.reason or "", Trail(trails.where(authtime.TRAIL), authtime.TRAIL))
+            print("CLEARED the time latch (recorded in the time trail: %s). Start chronyd: systemctl start chrony" % event["chrony_said"][:120])
+            return 0
         if args.service == "authtime":
             authtime_service(load(args.config)).run(lambda: False)
             return 0

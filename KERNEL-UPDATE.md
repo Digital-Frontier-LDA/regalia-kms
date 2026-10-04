@@ -90,23 +90,30 @@ with the named tools; **NOT BUILT** = no way to do it yet.
 | 2.3 | Compute the document's version from the file in hand, at signing time: `python3 -Es -m deploy.baremetal.rollout version --measurements BOTH.json` | **exists** |
 | 2.4 | Write manifest N+1, unsigned: `python3 -Es -m deploy.baremetal.rollout propose --membership CHAIN.json --root-key HEX --old CURRENT.json --new BOTH.json`. It prints the current manifest with `epoch + 1`, `prev_digest`, and `policy_version` set to that version, and signs nothing | writing the proposal **exists**; signing it is step 2.6 |
 | 2.5 | In the same session, write and sign manifest N+2 for the NEXT-only document (step 5), and keep it back | as 2.4 |
-| 2.6 | Sign with the offline root key | **NOT BUILT**: the root key is "proposed" (THREE-SITE-SECRETS.md); no ceremony generates it and no tool signs with it |
+| 2.6 | Sign with the offline root key | `python3 -Es -m deploy.baremetal.manifest sign --expected-epoch N --signer root --key 'pkcs11:serial=…;token=…;id=…;type=private' --old CURRENT.json --new BOTH.json …`. A proposal that changes the measurements is not signed without the two documents: the tool judges the step itself and never takes the proposal's word for it (#75) signs on the root's Nitrokey (#156); `--chain-out` gives the chain the retiring manifest is proposed from. **NOT BUILT**: no ceremony generates the root key yet (option C on #156: P-256 on its own offline Nitrokey) |
 | 2.7 | Bring manifest N+1 and the document to all three hosts; each commits the manifest (its TPM epoch counter rises) and rebuilds its attestation policy from the document | commit **exists** (`membership.Store`), exchange between nodes **exists** (`convergence.py`); installing the document and reloading the policy on a running host is **NOT BUILT** |
 | 2.8 | Check that all three hold epoch N+1: on each host, `python3 -Es -m deploy.baremetal.rollout epoch --membership CHAIN.json --root-key HEX --tpm-index 0x…` (the TPM epoch counter is read, never advanced; a chain that is not the one the TPM recorded is refused; the TPM read is `--tcti`'s, default `device:/dev/tpmrm0`, the output names it, and a `TPM2TOOLS_TCTI` left in the shell is refused), and compare the three answers | **exists**, one host at a time; nothing collects the three |
 
 ### 3. Update the hosts, one at a time, in the order of their node IDs
 
+The hosts boot the signed UKI straight from the firmware: no boot loader sits between them, so nothing but the image
+is measured into PCR 4. The trial boot of a new image is therefore the firmware's own one-shot, **BootNext** (#75,
+`deploy/baremetal/bootnext.py`), not a boot loader's boot counting. *Earlier versions of this page described
+systemd-boot (`bootctl`, boot counting). Those steps were never rehearsed and are removed: adding a boot loader would
+change the measured chain, which is a decision of its own.*
+
 For each host, in order:
 
 | # | Step | Status |
 |---|---|---|
-| 3.1 | Install the new UKI beside the current one; the current one stays the fallback entry | **manual** (`kernel-install`, `bootctl`); not rehearsed on these hosts |
-| 3.2 | Ask whether this host may reboot now: `python3 -Es -m deploy.baremetal.rollout may-reboot …` (the manifest, the document, this node, the image it runs, its boot session, its verifier state, its leases). It refuses unless an update is approved for this host, the hosts before it are back on the new image, and both peers have vouched for this boot in the last five minutes | **exists** as a command; where the leases, the boot session and authenticated time come from on a running host is **NOT BUILT** (the lease service of #74 holds them) |
-| 3.3 | Reboot into the new image | **manual** |
+| 3.1 | Copy the new UKI to the ESP beside the current one (e.g. `\EFI\Linux\<name>.efi`) and give it its own firmware entry: `efibootmgr --create --disk … --part … --label 'regalia-kms <name>' --loader '\EFI\Linux\<name>.efi'`, then put the CURRENT entry back first in BootOrder (`efibootmgr --create` puts the new entry first: `efibootmgr --bootorder CURRENT,NEW,…`). The current entry stays first: it is the fallback, and `update.py apply` refuses unless BootOrder starts with the entry the host is running | **manual**; needs `efibootmgr` on the host |
+| 3.2 | `sudo python3 -Es -m deploy.baremetal.update apply --config /etc/regalia/node.json --entry XXXX` (XXXX: the new entry). It reads the host's own state: the manifest from its published chain (against the TPM high-water), the set it runs from its PCRs, a **fresh lease from each peer** for this boot (asked once each, held in a root-only directory under /run that is deleted when it exits, never the admission service's), and `rollout.may_reboot` on them. It refuses unless an update is approved for this host, the hosts before it are back on the new image, and both peers vouch for this boot now. It then reads the entry's image from the ESP the host booted from and refuses unless it measures NEXT's PCR 11 in both phases. It prints the plan and a **deadline**, asks for a typed phrase, records the request and the peers whose leases justified it on the update trail (`/var/log/regalia/update.jsonl`), sets BootNext and reboots | **exists** (#75); not yet run on a DL360 (#65) |
+| 3.3 | The host reboots into the new image, once (BootNext) | the firmware's |
 | 3.4 | The host is unlocked by a peer and the KMS serves again, with nobody present. The peer accepts the unlock request only from the image's initrd phase, and the lease request only once the host has booted | the peer's decision **exists** (`replacement.may_unlock`, `unlock.py`); the boot-time client that asks for it is **NOT BUILT** (#66, #67 in progress). Today the disk unlocks from the local TPM alone (#135) |
 | 3.5 | **Wait until the host is back and serving before touching the next one.** `may_reboot` alone is not the interlock: for up to five minutes after a host falls back or goes down, the next one may still be told it can go | the limit is stated and tested (`rollout.py`, LIMITS) |
-| 3.6 | If the new image does not boot: the boot loader falls back to the current image by itself, and the host is unlocked as before, because both are accepted | systemd-boot boot counting: **manual**, not rehearsed; the acceptance of both **exists** |
-| 3.7 | If it boots but its peers refuse it, the prediction in step 1 was wrong: boot the current image, fix the document, and repeat step 2 with a new manifest | **manual** |
+| 3.6 | **If the host is not back up on the new image by the deadline** (it hangs at the recovery prompt because its peers refuse it, or it does not boot): reset it through the iLO (Power: Reset). BootNext was used once, so this boot follows BootOrder: the current image, still approved, and its peers unlock it. **Nothing resets a hung trial boot by itself**: a hardware watchdog armed across the reboot would, but none is set up; that is a rehearsal item for the DL360s (#65). A kernel panic reboots by itself only with `panic=` on the image's command line | the fallback **exists** (BootOrder, both sets approved); the reset is the **operator's** |
+| 3.7 | If it booted but its peers refused it, the prediction in step 1 was wrong: after the reset, fix the document, and repeat step 2 with a new manifest | **manual** |
+| 3.8 | Once the host is back up on the new image: `sudo python3 -Es -m deploy.baremetal.update promote --config /etc/regalia/node.json`. It refuses unless the host runs its target set (from its PCRs), the image it booted measures that set, and at least one peer has just given this boot a lease; then BootOrder puts the running entry first. **Promote every host before step 5**: a host whose BootOrder still starts with the old image boots it at its next reset, and after the retire that boot is refused | **exists** (#75) |
 
 ### 4. Check the rollout is complete
 
@@ -114,27 +121,46 @@ For each host, in order:
 |---|---|---|
 | 4.1 | Collect each host's attestation state file and ask `python3 -Es -m deploy.baremetal.rollout retire-ready … --state a=A.json --state b=B.json --state c=C.json`. It needs every host's file and refuses unless every host was last seen **up** on the new image by every peer that has seen it (a host seen only in its initrd, where it asks for its disk, does not count) | **exists**; collecting the files is **manual** |
 | 4.2 | Let the cluster run on the new image for the agreed time before retiring the old one. Until step 5 the old image is the fallback | **manual**; the time is not decided |
+| 4.3 | On every host: `sudo python3 -Es -m deploy.baremetal.update status --config /etc/regalia/node.json --require-promoted`. It reads only, and exits 1 unless BootOrder's first entry is the target image and no BootNext is armed, i.e. a reset boots the new image. **The retire's tools cannot see a host's BootOrder** (`rollout propose` and `manifest sign` judge from the peers' records): this check is the operator's, on each host, before step 5 | **exists** (#75); running it on each host is **manual** |
 
 ### 5. Retire: the root signs "only the new one"
 
 | # | Step | Status |
 |---|---|---|
-| 5.1 | Check the step: `python3 -Es -m deploy.baremetal.rollout transition --old BOTH.json --new NEXT.json` must answer `retire`. `abandon` means the document drops the NEW image instead: the wrong half. `python3 -Es -m deploy.baremetal.rollout propose …` then prints manifest N+2, unsigned | **exists** |
+| 5.1 | Check the step: `python3 -Es -m deploy.baremetal.rollout transition --old BOTH.json --new NEXT.json` must answer `retire`. `abandon` means the document drops the NEW image instead: the wrong half. `python3 -Es -m deploy.baremetal.rollout propose … --state a=A.json --state b=B.json --state c=C.json` then prints manifest N+2, unsigned. It needs the same state files as step 4.1, and refuses (NOT YET, naming the host and the peer that saw it) while any host may still run the image that goes. The same holds for an `abandon` while a host is already on the new image. Sign it with `manifest sign … --old BOTH.json --new NEXT.json --state a=A.json --state b=B.json --state c=C.json`, which runs the same check again from the documents and the files, not from the proposal. A host that neither unlocks nor serves (QUARANTINED) cannot be checked, so it must be named with `--locked-out`. Neither tool sees a host's BootOrder: step 4.3 (`update status --require-promoted` on every host) must have passed | **exists** |
 | 5.2 | Release manifest N+2 (signed in step 2.5, or sign it now); every host commits it | as 2.4 to 2.7 |
 | 5.3 | From now on a host booted into the old image gets no unlock and no lease. A lease issued just before runs out within five minutes | **exists**; shown on three software TPMs (`e2e/rolling-policy-swtpm.sh`) |
-| 5.4 | Remove the old UKI from each host | **manual** |
+| 5.4 | Remove the old image's entry on each host: `sudo python3 -Es -m deploy.baremetal.update forget --config /etc/regalia/node.json --entry XXXX`. It refuses unless the entry's image measures none of the sets the manifest still approves for the host, and the entry is neither the one booted, the first, nor BootNext. Then delete the file from the ESP | the entry: **exists** (#75); the file: **manual** |
 
 **After step 5 there is no automatic fallback.** If the new image then breaks, the root signs again:
 either the next update, or a document that re-approves the old image.
+
+## A membership format change: schema v3 and typed keys (#199, #156)
+
+Typed keys exist so that the revocation key (#199) and the root (#156) can live on Nitrokeys. A typed key is an
+`{"alg": "ecdsa-p256", "key": ...}` entry: ECDSA P-256, because the token's PKCS#11 offers no EdDSA. A typed key
+is valid **only in a `regalia.membership/v3` manifest**. A verifier that knows only Ed25519 must refuse such a
+manifest whole, never misread a key, and that includes the initrd's Go `accept()` until it is ported. The order
+is therefore fixed:
+
+1. **An image whose verifiers know v3** (the Python services and the initrd's Go `accept()`, both checked
+   against `tests/vectors/typed-keys-p256.json`) is approved, rolled out and booted on every node by the
+   procedure above.
+2. **Only then does the root sign a v3 manifest** that introduces a typed key. The schema only moves forward,
+   and only the root can move it (`membership.accept`).
+
+A v2 manifest carrying a typed key is refused everywhere (a vector checks it). Before the first ceremony there
+is no chain yet, so the **first** manifest can already be v3, provided both verifiers have merged before that
+ceremony (a ceremony prerequisite).
 
 ## If something goes wrong
 
 | Situation | What to do | Status |
 |---|---|---|
-| A host does not come back, before step 5 | boot the current image from the boot menu; it is still accepted | **manual** |
+| A host does not come back, before step 5 | reset it through the iLO: BootNext was used once, so it boots the current image (first in BootOrder), still accepted (step 3.6) | **manual** |
 | A host does not come back and no peer will unlock it | open its disk with its recovery key at the console (PIN-CUSTODY.md, "The disk recovery key") | **exists** (`recovery-key.sh`) |
-| A host is down and must not hold the others up | a manifest that sets it QUARANTINED; the revocation key may sign it. The others then update without it | rule **exists**; signing tool **NOT BUILT** |
-| The CURRENT image is found compromised | the emergency path: one manifest whose document drops it on every host at once (`python3 -Es -m deploy.baremetal.rollout propose … --emergency`). Every host still running it is locked out until it boots the new image. Root key | writing the proposal **exists**; signing it does not |
+| A host is down and must not hold the others up | a manifest that sets it QUARANTINED; the revocation key may sign it. The others then update without it | rule **exists**; signed with `deploy.baremetal.manifest sign --signer revocation` on the revocation key's token |
+| The CURRENT image is found compromised | the emergency path: one manifest whose document drops it on every host at once (`python3 -Es -m deploy.baremetal.rollout propose … --emergency --state …`). Every host still running it is locked out until it boots the new image, and both `propose` and `manifest sign … --emergency` refuse unless each of them is named with `--locked-out NODE`: exactly those, no more and no fewer. The output names them. A host that cannot boot the new image is opened with its recovery key at the console. Root key | writing the proposal **exists**; signing it does not |
 | All three hosts are down | total-outage recovery: PIN-CUSTODY.md and the recovery keys | **manual** |
 
 ## What has been shown, and where
@@ -196,6 +222,16 @@ snapshot of the Debian archive, its updates and its security suite (`REGALIA_BOO
 2. Build.
 3. Write the inventory with `python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd INITRD --root /`.
 4. Read the diff: the `generated` lines first, then the packages whose versions moved.
+
+Each builder then checks the COMMITTED inventory, the one read in step 4. Its own initrd's inventory must equal
+that inventory line for line, class and origin included. Every `package` line is checked against its `.deb`
+along Debian's signed chain (`deploy/baremetal/debverify.py`, #246). That chain is trusted only through the pinned
+keyring (`KEYRING_SHA256`) and a good signature by a pinned trixie key (`SIGNERS`). A `generated dracut-over:`
+line is accepted only for a path on `uki.DRACUT_OVER`, the pinned list of the paths dracut writes over, each
+with the dracut line that writes it. A link must point where the list says; a file must be the dracut-core file
+the list names. A dracut update that writes over another package path fails the build until that list grows in
+a reviewed change; it is never reclassed by itself. Moving the snapshot to a new Debian release, or to a
+new archive key, moves `KEYRING_SHA256`, `SIGNERS` and `e2e/lib/debian-keyring.sh` in the same pull request.
 
 A pinned snapshot also freezes security fixes, so how stale it may get has a limit. **The date must be moved
 whenever a Debian security advisory (DSA, or a point release's security update) touches a package that the

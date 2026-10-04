@@ -216,12 +216,12 @@ class SchemaV2(unittest.TestCase):
         self.assertEqual(m.accept(self.m2, sign(self.next2(v2(three())), ROOT), ROOT_PUB)["schema"], m.SCHEMA_V2)
 
     def test_an_unknown_schema_is_refused(self):
-        for bad in ("regalia.membership/v3", "regalia.membership/v0", "", None, 2, ["regalia.membership/v2"]):
+        for bad in ("regalia.membership/v4", "regalia.membership/v0", "", None, 2, ["regalia.membership/v2"]):
             with self.subTest(schema=bad):
-                self.refused("schema must be regalia.membership/v1 or regalia.membership/v2", self.m2, dict(self.next2(v2(three())), schema=bad))
+                self.refused("schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3", self.m2, dict(self.next2(v2(three())), schema=bad))
         missing = self.next2(v2(three()))
         del missing["schema"]
-        self.refused("schema must be regalia.membership/v1 or regalia.membership/v2", self.m2, missing)
+        self.refused("schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3", self.m2, missing)
         with self.assertRaisesRegex(m.Refused, "manifest must be an object"):
             m.validate([missing])
 
@@ -935,6 +935,28 @@ class RecordWrites(unittest.TestCase):
         hw.redefine(13, "13" * 32)
         self.assertEqual([index for tool, index in self.calls if tool == "nvundefine"][:2], ["0x150001b", "0x150001a"])
         self.assertEqual((hw.value(), hw.slots()), (13, [(13, "13" * 32)] * 2))
+
+    def test_a_counter_or_base_of_another_size_is_an_unusable_anchor_that_re_anchoring_replaces(self):
+        """regalia-kms-ed, porting the reader to Go: a base smaller than 8 bytes was a plain Refused ("cannot read
+        8 bytes"), which re-anchoring treats as a TPM that failed, so the node had no way back."""
+        for index, size in (("0x1500017", 4), ("0x1500017", 16), ("0x1500016", 16)):
+            with self.subTest(index=index, size=size):
+                self.tpm = FakeTpm()
+                hw = self.defined()
+                hw.anchor(3, lambda epoch: "%02x" % epoch * 32)
+                self.tpm(["tpm2_nvundefine", index, "-C", "o"])
+                if index == "0x1500017":
+                    self.tpm(["tpm2_nvdefine", index, "-C", "o", "-s", str(size), "-a", "ownerread|ownerwrite|authread|writedefine"])
+                    self.tpm(["tpm2_nvwrite", index, "-C", "o", "-i", "-"], input=b"\0" * size)
+                    self.tpm(["tpm2_nvwritelock", index, "-C", "o"])
+                else:
+                    self.tpm(["tpm2_nvdefine", index, "-C", "o", "-s", str(size), "-a", "nt=counter|ownerread|ownerwrite|authread"])
+                    self.tpm(["tpm2_nvincrement", index, "-C", "o"])
+                self.assertEqual(hw.unusable(), "NV index %s is %d bytes, not 8" % (index, size))
+                with self.assertRaises(m.Unusable):
+                    hw.value()
+                hw.redefine(3, "03" * 32)                                     # and a re-anchor's TPM half replaces it
+                self.assertEqual((hw.value(), hw.unusable()), (3, None))
 
     def test_two_valid_slots_that_disagree_at_one_epoch_are_refused(self):
         hw = self.defined()
