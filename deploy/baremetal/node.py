@@ -389,7 +389,7 @@ def signing_counter(cfg, run=subprocess.run):
                              policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg),
                              # #361 C3: under a v4 tip, the "signing-counter" class under K_A
                              schema=lambda: _tip_schema(cfg), anchor_key=lambda: _tip_anchor_key(cfg),
-                             classes={"counter": "signing-counter"}, approvals=lambda cls: anchor_approval(cfg, cls))
+                             classes={"counter": "signing-counter"}, approvals=lambda cls, manifest=None: anchor_approval(cfg, cls, manifest=manifest))
 
 
 def node_beat_signer(node, pem_path=None):
@@ -517,7 +517,7 @@ def heartbeat_counter(cfg, run=subprocess.run, owner_auth=None):
                              # laid down under the node's policy when its signed images name one (define_policy)
                              define_policy=lambda: define_policy(cfg), owner_auth=owner_auth,
                              schema=lambda: _tip_schema(cfg), anchor_key=lambda: _tip_anchor_key(cfg),
-                             classes={"counter": "heartbeat"}, approvals=lambda cls: anchor_approval(cfg, cls))
+                             classes={"counter": "heartbeat"}, approvals=lambda cls, manifest=None: anchor_approval(cfg, cls, manifest=manifest))
 
 
 # ---- the node ----
@@ -561,7 +561,7 @@ class Node:
                                     policy=lambda: image_policy(self.cfg), image_key=lambda: image_key(self.cfg),
                                     schema=schema or (lambda: _tip_schema(self.cfg)),
                                     anchor_key=anchor_key or (lambda: _tip_anchor_key(self.cfg)),
-                                    approvals=lambda cls: anchor_approval(self.cfg, cls))
+                                    approvals=lambda cls, manifest=None: anchor_approval(self.cfg, cls, manifest=manifest))
 
     def manifest(self, patience=2.0, step=0.25):
         """The current manifest, by the published chain, verified (the root services' view).

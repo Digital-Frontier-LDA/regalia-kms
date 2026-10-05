@@ -351,7 +351,6 @@ def _anchor_steps(session, d, anchor, approved_policy, approval_der, rotation, t
     _tpm(run, tcti, "loadexternal", "-C", "o", "-G", "ecc", "-u", p["ka.pem"], "-c", p["ka.ctx"], "-n", p["ka.name"])
     require(_read(p["ka.name"]) == anchorpolicy.k_a_name(anchor["k_a"]), "the TPM names K_A otherwise than this policy does")
     _tpm(run, tcti, "verifysignature", "-c", p["ka.ctx"], "-g", "sha256", "-m", p["ka.msg"], "-s", p["ka.sig"], "-f", "ecdsa", "-t", p["ka.ticket"])
-    run(["tpm2_flushcontext", p["ka.ctx"]], capture_output=True, env=_env(tcti))
     _tpm(run, tcti, "policyauthorize", "-S", session, "-i", p["ka.approved"], "-n", p["ka.name"], "-q",
          anchorpolicy._ref(anchor["class"]).hex(), "-t", p["ka.ticket"])
 

@@ -1101,7 +1101,7 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     hw = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=n.path("highwater.lock"), define_policy=policy,
                               image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth,
                               schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"),
-                              approvals=lambda cls: node_module.anchor_approval(cfg, cls, manifest=tip))
+                              approvals=lambda cls, manifest=None: node_module.anchor_approval(cfg, cls, manifest=manifest or tip))
     under_k_a = dict(schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"))      # the counters too (#361 C3)
     store = membership.Store(n.path("membership.json"), cfg["root_key"], hw, documents=n.documents().require_for)
     counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"), policy=policy,
@@ -1111,7 +1111,7 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     signing = heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=n.path("signing-counter.lock"), define_policy=policy,
                                 image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth,
                                 classes={"counter": "signing-counter"},
-                                approvals=lambda cls: node_module.anchor_approval(cfg, cls, manifest=tip), **under_k_a)
+                                approvals=lambda cls, manifest=None: node_module.anchor_approval(cfg, cls, manifest=manifest or tip), **under_k_a)
 
     def defined(owner, indices):
         return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]

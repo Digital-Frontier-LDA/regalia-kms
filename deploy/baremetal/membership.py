@@ -956,10 +956,11 @@ class HighWater:
         pem = self._image_key()
         if self.tip_schema() == SCHEMA_V4:
             # #361 C3: under K_A, through the composite session with K_A's approval of this index's class for this node
+            require(index == self.index or index in self.record_indices, "NV index %s is not one this anchor writes by policy" % index)
             kind = "slot" if index in self.record_indices else "counter"
             require(callable(self._approvals), "NV index %s is written under the anchor-policy authority and this anchor has no "
                     "K_A approvals to present" % index)
-            anchor = self._approvals(self.anchor_classes[kind])
+            anchor = self._approvals(self.anchor_classes[kind], getattr(self, "_tip_manifest", None))
             require(anchor.get("k_a") == self.tip_anchor_key(), "K_A's approval names another K_A than the chain tip's: nothing is written")
             tcti = (self.env or {}).get("TPM2TOOLS_TCTI")
             with signkey.policy_session(pem, tcti, self.run, self._signatures, anchor=anchor) as session:
@@ -994,15 +995,19 @@ class HighWater:
         return anchorpolicy.class_policy(key, self.anchor_classes[kind]).hex()
 
     def tip_state(self):
-        """What the anchor is judged by (the tip's schema and K_A), to put back when a candidate is refused."""
-        return self._schema, self._anchor_key
+        """What the anchor is judged by (the tip's schema, K_A and the manifest itself), to put back when a candidate is
+        refused."""
+        return self._schema, self._anchor_key, getattr(self, "_tip_manifest", None)
 
     def judge_by_tip(self, manifest):
-        """Judge the anchor by `manifest`, a verified chain's tip: its schema, and under v4 its anchor_policy_key."""
-        self._schema, self._anchor_key = manifest["schema"], manifest.get("anchor_policy_key")
+        """Judge the anchor by `manifest`, a verified chain's tip: its schema, under v4 its anchor_policy_key, and the
+        manifest itself, whose document K_A's approvals for a write are taken from (regalia-kms-95 on #467: a commit
+        writes under the epoch it commits, so after a retire bump its G+1 approval, which only the NEW epoch's document
+        carries, is the one that opens the TPM)."""
+        self._schema, self._anchor_key, self._tip_manifest = manifest["schema"], manifest.get("anchor_policy_key"), manifest
 
     def restore_tip(self, state):
-        self._schema, self._anchor_key = state
+        self._schema, self._anchor_key, self._tip_manifest = state
 
     def _auth_policy(self, index):
         """An index's authPolicy as tpm2_nvreadpublic reports it (64 lowercase hex), or "" when it has none."""

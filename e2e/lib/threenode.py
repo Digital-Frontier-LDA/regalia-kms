@@ -286,6 +286,12 @@ class Cluster:
             return key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         self.pcr_private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         self.pcr_pem = public(self.pcr_private)
+        # #361 C3: the anchor-policy authority K_A, a TEST key this fixture holds (the ceremony's is an offline Shamir key):
+        # each node's rotation counter starts under it at its identity, and it approves the cluster's system-phase key
+        # for every node at that node's G (approved())
+        self.k_a = ec.generate_private_key(ec.SECP256R1())
+        self.k_a_point = self.k_a.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()
+        self.rotation = {}                            # node -> its rotation counter's first value (its G)
         # this process reads the nodes' anchors as root on a booted host does (#242 B3: under v4 every index is written by
         # policy, so a read needs the running image's system-phase key, node.image_policy): the cluster's one such key,
         # where root's /run/systemd would have it. _as_booted swaps a node's own in, and puts this one back
@@ -460,11 +466,28 @@ class Cluster:
             os.environ.pop("TPM2TOOLS_TCTI") if before is None else os.environ.__setitem__("TPM2TOOLS_TCTI", before)
         ek, ak = (out / "ek.pub").read_bytes(), (out / "ak.pub").read_bytes()
         ek_name = attest.name_of(attest.public_area(ek, "the EK public area")).hex()
-        # #199: the signing key, made in the node's TPM and certified by its AK, accepted as `enrol entry` accepts it
-        blob = signkey.create(self.pcr_pem, tcti=n.tcti)
+        # #361 C1: the node's own rotation counter, started under K_A as `enrol init --anchor-policy` starts it
+        from deploy.baremetal import anchorpolicy
+        _, point, der = anchorpolicy.read_first(anchorpolicy.first_document(self.k_a, self.k_a_point, n.name), n.name)
+        tpm = lambda argv, **kw: subprocess.run(argv, env=dict(os.environ, TPM2TOOLS_TCTI=n.tcti), **kw)    # noqa: E731
+        self.rotation[n.name] = anchorpolicy.start_rotation(anchorpolicy.ROTATION_INDEX, point, der, n.name, run=tpm)["value"]
+        # #199, #361 C3: the signing key, made in the node's TPM under K_A's "signing" class and certified by its AK,
+        # accepted as `enrol entry` accepts it
+        blob = signkey.create(self.pcr_pem, tcti=n.tcti, k_a=self.k_a_point)
         info, sig = signkey.certify(tcti=n.tcti)
-        self.signing[n.name] = signkey.verify_certification(blob, info, sig, ak, ek_name, self.pcr_pem)
+        self.signing[n.name] = signkey.verify_certification(blob, info, sig, ak, ek_name, self.pcr_pem, k_a=self.k_a_point)
         return ek_name, attest.ak_identity(ak)[0].hex(), ak.hex()
+
+    def approved(self, document):
+        """`document` with K_A's approvals of the cluster's system-phase key for every node, each at its G (#361 C2/C3):
+        every set an image signed by it has, as the ceremony's signer fills them."""
+        from deploy.baremetal import anchorpolicy
+        signed = [e for node in document["nodes"].values() for e in node["accepted"] if "signing" in e]
+        if signed and all("anchor_approvals" in e["signing"] for e in signed):
+            return document                           # approved already: K_A's signatures are randomised, and a document's
+                                                      # version (what a manifest commits to) must not change under a caller
+        nodes = set(document["nodes"])
+        return anchorpolicy.fill(document, self.pcr_pem, self.k_a_point, self.k_a, {n: g for n, g in self.rotation.items() if n in nodes})
 
     def _reference(self, n, pcrs):
         """The node's accepted measurement set, read from its TPM, as pcr_survey.py records it on a host."""
@@ -486,8 +509,8 @@ class Cluster:
         self.signing = {}
         self.ids = {n.name: self._identity(n) for n in self.nodes.values()}
         self.reference = {n.name: self._reference(n, example["pcrs"]) for n in self.nodes.values()}
-        self.document = {"schema": measurements.SCHEMA, "name": "e2e3",
-                         "nodes": {n.name: {"accepted": [dict(self.reference[n.name])]} for n in self.nodes.values()}}
+        self.document = self.approved({"schema": measurements.SCHEMA, "name": "e2e3",
+                                       "nodes": {n.name: {"accepted": [dict(self.reference[n.name])]} for n in self.nodes.values()}})
         # #199: the first real manifest is v4 (no ceremony has run): the nodes and the owner sign, by quorum
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import ec
@@ -499,10 +522,8 @@ class Cluster:
                          "heartbeat_signers": {"threshold": 2, "parties": names + [membership.OWNER]},
                          "activation_signers": {"threshold": 2, "parties": names},
                          "revocation_signers": [{"threshold": 2, "parties": names}, {"threshold": 1, "parties": [membership.OWNER]}],
-                         # #361/#405: K_A (a fresh public P-256 point: nothing is defined under it until #361 C) and the
-                         # card record's pin (no card ceremony runs here: a placeholder record)
-                         "anchor_policy_key": {"alg": "ecdsa-p256", "key": ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
-                             serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()},
+                         # #361/#405: K_A (the fixture's test key) and the card record's pin (no card ceremony runs here)
+                         "anchor_policy_key": {"alg": "ecdsa-p256", "key": self.k_a_point},
                          "card_record": {"sequence": 1, "digest": "ca" * 32},
                          "nodes": [{"node_id": n.name, "state": "ACTIVE", "ek_name": self.ids[n.name][0], "ak_name": self.ids[n.name][1],
                                     "wg_boot_pub": self.keys[n.name]["boot"][1], "wg_service_pub": self.keys[n.name]["service"][1],
@@ -769,7 +790,7 @@ class Cluster:
         example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
         n = self.nodes[new]
         document = self.document if same_policy else \
-            dict(self.document, nodes=dict(self.document["nodes"], **{new: {"accepted": [self._reference(n, example["pcrs"])]}}))
+            self.approved(dict(self.document, nodes=dict(self.document["nodes"], **{new: {"accepted": [self._reference(n, example["pcrs"])]}})))
         entry = {"node_id": new, "state": "ACTIVE", "ek_name": self.ids[new][0], "ak_name": self.ids[new][1],
                  "wg_boot_pub": self.keys[new]["boot"][1], "wg_service_pub": self.keys[new]["service"][1], "hsm_serials": ["E2E3%s" % new.upper()]}
         current = self.manifest
@@ -1241,6 +1262,8 @@ class Cluster:
         into the seed's store with the epoch (deliver's --documents, or put beside the commit), as an operator's
         `measurements install` does on one host; every other node fetches it by sync with the epoch,
         and no node is ever judged by another epoch's document (#332)."""
+        if document is not None:
+            document = self.approved(document)         # #361 C3: every node's K_A approvals, at its G
         current = self.manifest
         nodes = [dict(n, state=states.get(n["node_id"], n["state"])) for n in current["nodes"]]
         manifest = candidate or dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
