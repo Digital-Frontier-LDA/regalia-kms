@@ -216,37 +216,68 @@ def judge_enrolled(document, enrolled):
     return judged
 
 
-def anchor_policy_key(pem):
-    """K_A (#361) as the manifest's typed entry: from the ANCHOR-POLICY-ENTRY that regalia-ceremony's offline-keys prints
-    (rc#129: {"alg": "ecdsa-p256", "key": <130 hex>}), or from its public half in PEM (SubjectPublicKeyInfo). A P-256 key
-    and nothing else, since every node defines its anchor objects under PolicyAuthorize of exactly this point."""
+# regalia-ceremony's offline-keys generation record (rc#129, offline-keys.record.json): signed by the ROOT, in the very session
+# that generated and sealed K_A beside it, after every key signed a fresh challenge that verified under its published public
+# key ("operation_proof"). K_A is taken from it and nowhere else (regalia-kms-95 on #438): never typed, never a loose file.
+OFFLINE_KEYS_SCHEMA = "regalia.offline-keys-record/v1"
+OFFLINE_KEYS_FIELDS = ("schema", "event", "threshold", "shares", "slip39_identifier", "master_id", "publics", "root_entry",
+                       "anchor_policy_entry", "root_fingerprint", "files", "operation_proof", "tool", "at")
+
+
+def offline_keys_record(envelope, root):
+    """K_A (#361) as the manifest's typed entry, from the offline-keys generation record verified under the PINNED root
+    (as card_record_keys takes the owner's keys from the card record): exactly {record, signature}; schema
+    OFFLINE_KEYS_SCHEMA, event "generate", every top-level field by name; root_entry the pinned Ed25519 root and
+    root_fingerprint its SHA-256; the root's signature over cardrecord.RECORD_DOMAIN + canonical(record); then
+    anchor_policy_entry a P-256 key equal to the published "anchor-policy" public key, whose generation proof is
+    "verified". That binds K_A to this ceremony's sealed set and shows its private half signed when it was sealed; a
+    wrong entry (a rehearsal's, another set's) or one never sealed is refused here, not found at the first rotation.
+    Returns (the typed entry, the record)."""
+    import base64
+    from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ec
-    text = pem.strip()
-    if text.startswith(b"ANCHOR-POLICY-ENTRY"):
-        text = text[len(b"ANCHOR-POLICY-ENTRY"):].strip()
-    if text.startswith(b"{"):
-        try:                                   # the line as printed ends with "  (K_A, pinned in ...)": that note only
-            entry, end = json.JSONDecoder().raw_decode(text.decode("utf-8"))
-            rest = text.decode("utf-8")[end:].strip()
-            if rest and not (rest.startswith("(") and rest.endswith(")") and "\n" not in rest):
-                raise ValueError
-        except ValueError:
-            raise Refused("the anchor-policy key is neither its typed entry (JSON) nor a PEM public key") from None
-        alg, key = membership.typed_key(entry, "the anchor-policy key", membership.ANCHOR_POLICY_KEY_ALGS)
-        return {"alg": alg, "key": key}
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    entries = membership.root_entries(root)
+    require(len(entries) == 1 and entries[0][0] == "ed25519", "the genesis root is one Ed25519 key (D28): the offline-keys record is "
+            "verified under that key only")
+    root_key = entries[0][1]
+    require(isinstance(envelope, dict), "the offline-keys record is not an object")
+    membership.exact(envelope, ("record", "signature"), "the offline-keys record")
+    record, signature = envelope["record"], envelope["signature"]
+    require(isinstance(signature, str) and re.fullmatch(r"[0-9a-f]{128}", signature) is not None, "the offline-keys record's signature is not 128 hex")
+    require(isinstance(record, dict), "the offline-keys record's record is not an object")
+    membership.exact(record, OFFLINE_KEYS_FIELDS, "the offline-keys record")
+    require(record["root_entry"] == {"alg": "ed25519", "key": root_key},
+            "the offline-keys record names another root than the pinned one: it is not this network's sealed set")
+    require(record["root_fingerprint"] == hashlib.sha256(bytes.fromhex(root_key)).hexdigest(), "the offline-keys record's root_fingerprint is not the root's")
     try:
-        key = serialization.load_pem_public_key(pem)
-    except (ValueError, TypeError):
-        raise Refused("the anchor-policy key is neither its typed entry (JSON) nor a PEM public key") from None
-    require(isinstance(key, ec.EllipticCurvePublicKey) and isinstance(key.curve, ec.SECP256R1),
-            "the anchor-policy key is not a P-256 key (K_A is ECDSA P-256, #361)")
-    return {"alg": "ecdsa-p256", "key": key.public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()}
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(root_key)).verify(bytes.fromhex(signature),
+                                                                           cardrecord.RECORD_DOMAIN + membership.canonical(record))
+    except (InvalidSignature, ValueError):
+        raise Refused("the offline-keys record's signature is not the pinned root's") from None
+    require(record["schema"] == OFFLINE_KEYS_SCHEMA and record["event"] == "generate",
+            "the offline-keys record is not a %s generation record" % OFFLINE_KEYS_SCHEMA)
+    alg, key = membership.typed_key(record["anchor_policy_entry"], "the offline-keys record's anchor_policy_entry", membership.ANCHOR_POLICY_KEY_ALGS)
+    published = record["publics"].get("anchor-policy") if isinstance(record["publics"], dict) else None
+    require(isinstance(published, dict) and published.get("alg") == "ecdsa-p256" and isinstance(published.get("spki"), str),
+            "the offline-keys record publishes no ecdsa-p256 anchor-policy key")
+    try:
+        point = serialization.load_der_public_key(base64.b64decode(published["spki"], validate=True))
+        require(isinstance(point, ec.EllipticCurvePublicKey) and isinstance(point.curve, ec.SECP256R1), "")
+        point = point.public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()
+    except (ValueError, TypeError, Refused):
+        raise Refused("the offline-keys record's published anchor-policy key is not a P-256 public key") from None
+    require(point == key, "the offline-keys record's anchor_policy_entry is not its published anchor-policy key")
+    proof = record["operation_proof"]
+    require(isinstance(proof, dict) and proof.get("anchor-policy") == "verified",
+            "the offline-keys record shows no generation proof for K_A (operation_proof[\"anchor-policy\"] is not \"verified\")")
+    return {"alg": alg, "key": key}, record
 
 
 def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None, anchor_policy=None, card_record=None):
     """Epoch 1 (v4), unsigned: every node from its `enrol entry` output (state ACTIVE), the measurements `document` it
-    commits to, the owner's two keys, K_A (`anchor_policy`, anchor_policy_key's entry), the card record that names the
+    commits to, the owner's two keys, K_A (`anchor_policy`, offline_keys_record's typed entry), the card record that names the
     owner's keys (`card_record`, {"sequence", "digest"} from card_record_keys), and GENESIS_POLICY (with `policy`
     overrides). Refused unless it is a manifest a
     node would accept from the root at genesis (validate, transition(None, ..., "root"), measurements.bind), and unless
@@ -590,7 +621,8 @@ def _propose_genesis(args, root, confirm=None, say=print):
     require(args.measurements and args.card_record and args.state_dir,
             "--genesis needs --measurements, --card-record and --state-dir (the laptop's root signing record, #403)")
     require(args.node and args.system_pub, "--genesis needs --node BUNDLE KEEP ACTIVATION for each node, and --system-pub (#399)")
-    require(args.anchor_policy_key, "--genesis needs --anchor-policy-key (K_A's public half: offline-keys' ANCHOR-POLICY-ENTRY, or PEM; #361)")
+    require(args.offline_keys_record, "--genesis needs --offline-keys-record (offline-keys.record.json, signed by the pinned root: "
+            "K_A is taken from it, #361)")
     cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root, args.state_dir)
     owners, release_key = cards["owners"], cards["release_key"]
     with open(args.system_pub, "rb") as f:
@@ -606,8 +638,7 @@ def _propose_genesis(args, root, confirm=None, say=print):
     pcr7_judged = judge_enrolled(document, enrolled)
     policy = {k: v for k, v in (("heartbeat_max_lifetime_s", args.heartbeat_max_lifetime_s),
                                 ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s)) if v is not None}
-    with open(args.anchor_policy_key, "rb") as f:
-        anchor_policy = anchor_policy_key(f.read(65536))
+    anchor_policy, generated = offline_keys_record(read_json(args.offline_keys_record, membership.MAX_BYTES), root)
     candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy, anchor_policy, cards)
     require(not os.path.lexists(args.out), "%s exists: nothing is overwritten" % args.out)
     for line in diff({"nodes": []}, candidate):
@@ -628,6 +659,8 @@ def _propose_genesis(args, root, confirm=None, say=print):
     say("release card key (not in the manifest; refused as an owner, root or node key): %s" % release_key)
     say("anchor-policy key K_A (#361; fixed for the life of this genesis: a new one is a new genesis): %s, SHA-256 %s"
         % (anchor_policy["key"], hashlib.sha256(bytes.fromhex(anchor_policy["key"])).hexdigest()))
+    say("K_A is from the offline-keys generation record of %s (sealed set %s, %d of %d shares), signed by the pinned root; its "
+        "private half signed a challenge when it was sealed" % (generated["at"], generated["master_id"], generated["threshold"], generated["shares"]))
     typed = (confirm or keyfd.tty_line)("type the two owner cards' serials, as printed ON THE CARDS, in the order above: ").split()
     require(typed == order, "the serials typed are not the owner cards above: nothing was written")
     _write_new(args.out, json.dumps(candidate, indent=2, sort_keys=True).encode() + b"\n")
@@ -714,9 +747,9 @@ def main(argv=None):
                         "root: the owner's two keys and the release card's, from it and never typed")
     c.add_argument("--state-dir", metavar="DIR", help="--genesis: the ceremony laptop's state directory (its root signing record "
                    "and regalia-signing-state.json): the card record must be the newest the root signed (#403)")
-    c.add_argument("--anchor-policy-key", metavar="PEM", help="--genesis: K_A's public half (P-256, #361): the "
-                   "ANCHOR-POLICY-ENTRY line regalia-ceremony's offline-keys prints, or a PEM public key; pinned in epoch 1 "
-                   "for the life of the genesis")
+    c.add_argument("--offline-keys-record", metavar="RECORD.json", help="--genesis: regalia-ceremony's offline-keys.record.json "
+                   "(the generation record, signed by the pinned root): K_A (#361) is taken from it and pinned in epoch 1 for the "
+                   "life of the genesis")
     c.add_argument("--heartbeat-max-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["heartbeat_max_lifetime_s"])
     c.add_argument("--owner-heartbeat-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["owner_heartbeat_lifetime_s"])
     c.add_argument("--from-rollout", metavar="R.json", help="the output of `rollout propose --json`")
@@ -761,10 +794,10 @@ def main(argv=None):
             return _propose_genesis(args, root)
         if args.command == "propose":
             require(args.chain is not None, "give --chain (or --genesis)")
-            require(not (args.node or args.system_pub or args.measurements or args.card_record or args.state_dir or args.anchor_policy_key
+            require(not (args.node or args.system_pub or args.measurements or args.card_record or args.state_dir or args.offline_keys_record
                          or args.heartbeat_max_lifetime_s
                          or args.owner_heartbeat_lifetime_s), "--node, --system-pub, --measurements, --card-record, --state-dir, "
-                    "--anchor-policy-key and the lifetimes are for --genesis only")
+                    "--offline-keys-record and the lifetimes are for --genesis only")
         if args.command == "sign" and args.genesis:
             # the first ceremony: no chain at all, the offline root only (see GENESIS above)
             require(args.chain is None and args.expected_epoch is None, "--genesis takes no --chain and no --expected-epoch")

@@ -47,3 +47,13 @@ regexTarget = "secret"
 regexes = [
     '''^76584946437bf4e61a99805663321c864da655197a406063af5e7da0840817da$''',
 ]
+
+[[allowlists]]
+description = "PUBLIC values in tests/vectors/offline-keys-record/offline-keys.record.json, the generation record regalia-ceremony's offline-keys generate wrote once (rc fd8df0a; its shares and sealed file were not kept): K_A's public point, the lab root's public key, and the SHA-256 digests of the sealed and break-glass files it names, pinned by value"
+regexTarget = "secret"
+regexes = [
+    '''^04364c0471d19f84996841493aeb83ea017d6786118e4c00ee7f4ba79f47a4b7830e09ed163bc53c2e094cab29d28fba349d2593e69d4ee4674192501042ccf2c1$''',
+    '''^d253f87454a3717ca6d4aa59b0a64db1e1e0a1a0d6c577d701f02580fd62cb95$''',
+    '''^ce739290666ef5cb672e1eb94f747aa00f5c2cae39f95c2e70eb0478929feea5$''',
+    '''^13b6cbcc7020cc1f332ea1fbefe5b2ebc3e1300d17947b3d8a26f97ac3cff909$''',
+]

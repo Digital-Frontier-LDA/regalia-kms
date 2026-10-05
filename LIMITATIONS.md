@@ -171,6 +171,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   and digest, never the record itself: a node cannot read a card record (it has no laptop signing
   record to judge it by), so it holds only that the root moved to a later one whenever owner_keys
   changed, not what that record says.
+- **K_A is taken from the sealed set's generation record** (`--offline-keys-record`, regalia-kms-95 on
+  #438). It is verified under the pinned root, and its published key must equal the entry. Its private
+  half is shown only by the record's `operation_proof` ("verified": the generating tool's own check of a
+  challenge signature, vouched for by the root's signature on the record). It is not re-proven at
+  genesis: a sealed file damaged after generation is found only at the first approval K_A signs.
 - **Card attestation: not built** (#400). Nothing yet produces the YubiKeys' OpenPGP attestation
   certificates (`ykman openpgp keys attest`). The card record's `attestation_sha256` values are
   placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is
