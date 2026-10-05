@@ -19,12 +19,13 @@ type pocCARecord struct {
 }
 
 type pocSoftwareCA struct {
-	key       *ecdsa.PrivateKey
-	issuer    *x509.Certificate
-	mu        sync.Mutex
-	records   []pocCARecord
-	cap, used int
-	day       string
+	key               *ecdsa.PrivateKey
+	issuer            *x509.Certificate
+	mu                sync.Mutex
+	records           []pocCARecord
+	leafCap, crlCap   int
+	leafUsed, crlUsed int
+	day               string
 }
 
 func (s *pocSoftwareCA) Execute(ctx context.Context, route registry.Route, op, format, content string, data, aad []byte) ([]byte, string, error) {
@@ -46,14 +47,22 @@ func (s *pocSoftwareCA) Execute(ctx context.Context, route registry.Route, op, f
 	// fencing and recovery semantics; this demonstrates only the refusal path.
 	day := now.Format("2006-01-02")
 	if s.day != day {
-		s.day, s.used = day, 0
+		s.day, s.leafUsed, s.crlUsed = day, 0, 0
 	}
-	allowed := kind != "refused" && s.cap > 0 && s.used < s.cap && ctx.Err() == nil
+	var used *int
+	cap := 0
+	switch kind {
+	case "certificate":
+		cap, used = s.leafCap, &s.leafUsed
+	case "crl":
+		cap, used = s.crlCap, &s.crlUsed
+	}
+	allowed := used != nil && cap > 0 && *used < cap && ctx.Err() == nil
 	s.records = append(s.records, pocCARecord{kind, digest, allowed})
 	if !allowed {
 		return nil, "", errPOCProfile
 	}
-	s.used++
+	(*used)++
 	r, sigS, err := ecdsa.Sign(rand.Reader, s.key, digest[:])
 	if err != nil {
 		return nil, "", err

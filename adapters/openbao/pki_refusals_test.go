@@ -32,7 +32,7 @@ func configuredPKIPoC(t *testing.T, f *signingFixture, config map[string]string)
 func TestPKIPoCInspectedSigningRefusals(t *testing.T) {
 	ca := testSigner(t, "p256").(*ecdsa.PrivateKey)
 	issuer := pocIssuer(t, ca)
-	backend := &pocSoftwareCA{key: ca, issuer: issuer, cap: 1}
+	backend := &pocSoftwareCA{key: ca, issuer: issuer, leafCap: 1, crlCap: 1}
 	f := newSigningFixtureWith(t, "p256", "sha256", ca, backend, true)
 	key := configuredPKIPoC(t, f, f.pki.caConfig)
 	now := time.Now()

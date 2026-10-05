@@ -81,7 +81,7 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 	b.seedSyntheticKV(t)
 	caKey := testSigner(t, "p256").(*ecdsa.PrivateKey)
 	issuer, root := pocIssuerChain(t, caKey)
-	backend := &pocSoftwareCA{key: caKey, issuer: issuer, cap: 32}
+	backend := &pocSoftwareCA{key: caKey, issuer: issuer, leafCap: 3, crlCap: 16}
 	f := newSigningFixtureWith(t, "p256", "sha256", caKey, backend, true)
 	provider := externalProviderConfig(f.pki.caConfig)
 	provider["plugin"] = "regalia"
@@ -123,6 +123,20 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 	b.must(t, http.MethodPost, "/v1/pki/roles/poc", role)
 	response := pocData(t, b.must(t, http.MethodPost, "/v1/pki/issue/poc", map[string]string{"common_name": "web.svc.poc.invalid"}))
 	leaf := pocLeaf(t, pocString(t, response, "certificate"), root, issuer, backend)
+	pocACME(t, b, root, issuer, backend)
+	// The API and both ACME orders consumed all three leaf reservations.
+	beforeExhaustion, signs := len(backend.snapshot()), f.audit.successful("sign")
+	status, _, err = b.call(http.MethodPost, "/v1/pki/issue/poc", map[string]string{"common_name": "web.svc.poc.invalid"})
+	attempts := backend.snapshot()
+	if err != nil || status < 400 || len(attempts) <= beforeExhaustion || f.audit.successful("sign") != signs {
+		t.Fatal("leaf budget not exhausted")
+	}
+	for _, attempt := range attempts[beforeExhaustion:] {
+		if attempt.Kind != "certificate" || attempt.Allowed {
+			t.Fatal("leaf quota refusal did not inspect a valid certificate")
+		}
+	}
+	// Exhausted leaf issuance must still allow a bounded CRL update and revocation.
 	b.must(t, http.MethodPost, "/v1/pki/revoke", map[string]string{"serial_number": pocString(t, response, "serial_number")})
 	b.must(t, http.MethodGet, "/v1/pki/crl/rotate", nil)
 	status, crlDER, err := b.call(http.MethodGet, "/v1/pki/crl", nil)
@@ -138,7 +152,6 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 	if !found {
 		t.Fatal("revoked leaf absent from CRL")
 	}
-	pocACME(t, b, root, issuer, backend)
 	pocBaoRefusals(t, b, f, backend, role)
 	before := len(backend.snapshot())
 	b.must(t, http.MethodDelete, keyPath+"/grants/pki", nil)
@@ -149,7 +162,7 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 	b.assertValue(t)
 	p.stop(t)
 	assertBaoArtifactsClean(t, dir, filepath.Join(dir, "openbao-plugin-kms-regalia-poc"), b.token, share)
-	t.Log("Real OpenBao PKI: read-only CA mapping, exact mount grant and revocation, externally held intermediate, full-byte inspected leaf and CRL signatures, verified chain/revoked serial, EAB-gated DNS-01 ACME issuance and renewal, HTTPS certificate rotation and unsafe issuance refusals; software fixture only.")
+	t.Log("Real OpenBao PKI: read-only CA mapping, exact mount grant and revocation, externally held intermediate, full-byte inspected leaf and CRL signatures, verified chain/revoked serial after leaf budget exhaustion, EAB-gated DNS-01 ACME issuance and renewal, HTTPS certificate rotation and unsafe issuance refusals; software fixture only.")
 }
 
 func pocBaoRefusals(t *testing.T, b baoAPI, f *signingFixture, backend *pocSoftwareCA, role map[string]any) {
