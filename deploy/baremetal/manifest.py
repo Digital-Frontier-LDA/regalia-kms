@@ -580,13 +580,14 @@ def _propose_genesis(args, root, confirm=None, say=print):
             "system phase%s)" % (node_id, quoted["7"], quoted["11"], ", PCR 7 too" if pcr7_judged[node_id] else
                                  ", PCR 7 compared across the nodes only"))
     say("card record: session %s, made %s, signed by the pinned root" % (cards["session"], cards["at"]))
-    say("card record %d of %d (the newest on this laptop's signing record), digest %s, supersedes %s: check both against "
-        "the ceremony sheet" % (cards["sequence"], cards["of"], cards["digest"], cards["supersedes"] or "nothing (the first)"))
+    say("card record %d of %d (%s), digest %s, supersedes %s: check both against "
+        "the ceremony sheet" % (cards["sequence"], cards["of"], "pinned by the chain" if cards.get("pinned") else
+                                "the newest on this laptop's signing record", cards["digest"], cards["supersedes"] or "nothing (the first)"))
     if cards["baseline"] is not None:
         # a rebuilt state directory (#406): the history before its baseline is the sheet's or the chain's, not this laptop's
         say("this laptop's signing record was REBUILT: card records 1..%d stand as one baseline from the %s, digest %s: check it "
             "against the ceremony sheet" % (cards["baseline"]["sequence"], cards["baseline"]["source"], cards["baseline"]["digest"]))
-    if not cards["supersedes_checked"]:
+    if cards["supersedes_checked"] is False and cards["baseline"] is not None:
         say("supersedes not checked: history before %d rebuilt from %s" % (cards["baseline"]["sequence"], cards["baseline"]["source"]))
     roles = {serial: role for role, serial in cards["roles"].items()}
     order = sorted(owners)

@@ -267,7 +267,7 @@ def verify_rebuild(envelope, root):
 def _newest(record, root, signing_lines, pin=None):
     """`record` is the newest card line M (or, with `pin`, the chain's pinned record), and supersedes line M-1. A rebuilt
     record (#406) starts with ONE card-record-baseline line N standing for the lost history 1..N; card lines then run
-    N+1..M. Returns (M, the baseline line or None, whether supersedes was checked)."""
+    N+1..M. Returns (M, the baseline line or None, whether supersedes was checked: None under a pin, which decides alone)."""
     cards = []
     for number, line in enumerate(signing_lines, 1):
         require(isinstance(line, dict) and isinstance(line.get("kind"), str),
@@ -304,7 +304,7 @@ def _newest(record, root, signing_lines, pin=None):
                 "this card record is not the one the chain pins (sequence %s): only the pinned record counts after genesis" % pin[0])
         require(any((line["sequence"], line["digest"]) == (pin[0], pin[1]) for line in cards),
                 "the chain's pinned card record is not in this signing record")
-        return cards[-1]["sequence"], base, False
+        return cards[-1]["sequence"], base, None                     # the pin decides: supersedes is not this path's question
     newest = cards[-1]
     require(record["sequence"] == newest["sequence"] and digest(record) == newest["digest"],
             "this card record (sequence %d) is not the newest the root signed (sequence %d, digest %s): an older one is superseded"
@@ -402,4 +402,5 @@ def verify(envelope, root, signing_lines, pin=None):
     of, base, checked = _newest(record, root, signing_lines, pin)   # #403: the newest the root signed, by the laptop's record
     return {"owners": owners, "roles": roles, "release_key": key, "session": record["session"], "at": record["at"],
             "sequence": record["sequence"], "of": of, "digest": digest(record), "supersedes": record["supersedes"],
-            "baseline": None if base is None else {k: base[k] for k in ("sequence", "digest", "source")}, "supersedes_checked": checked}
+            "baseline": None if base is None else {k: base[k] for k in ("sequence", "digest", "source")}, "supersedes_checked": checked,
+            "pinned": pin is not None}

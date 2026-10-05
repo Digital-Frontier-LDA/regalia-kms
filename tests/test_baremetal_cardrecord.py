@@ -449,6 +449,16 @@ class Rebuilt(unittest.TestCase):
         self.refused("the card-record-baseline line fields mismatch", cr.verify, self.envelope, self.root,
                      [{k: v for k, v in self.lines[0].items() if k != "source"}, self.lines[1]])
 
+    def test_a_pin_on_a_never_rebuilt_record(self):
+        """regalia-kms-51's read on #444: under a pin there is no supersedes verdict (None), and no baseline to report."""
+        log = [json.loads(line) for line in (self.here / "signing-record.jsonl").read_text().splitlines()]
+        record_2 = json.loads((self.here / "sequence-2.json").read_text())
+        got = cr.verify(record_2, self.root, log, (2, cr.digest(record_2["record"])))
+        self.assertEqual((got["baseline"], got["supersedes_checked"], got["pinned"], got["of"]), (None, None, True, 2))
+        record_1 = json.loads((self.here / "valid.json").read_text())
+        got = cr.verify(record_1, self.root, log, (1, cr.digest(record_1["record"])))
+        self.assertEqual((got["sequence"], got["of"], got["pinned"]), (1, 2, True))   # the pinned 1, whatever the laptop signed since
+
     def test_the_pin_counts_after_genesis(self):
         pinned = (3, cr.digest(self.envelope["record"]))
         self.assertEqual(cr.verify(self.envelope, self.root, self.lines, pinned)["sequence"], 3)
@@ -520,6 +530,22 @@ class Rebuilt(unittest.TestCase):
             f.write(json.dumps(self.lines[0], sort_keys=True) + "\n")
         out = _genesis(self, self.root, str(self.here / "sequence-2.json"), self.state)
         self.assertIn("supersedes not checked: history before 2 rebuilt from chain", out)
+
+
+    def test_propose_genesis_under_a_pin_prints_pinned_and_no_baseline_note(self):
+        """51's read on #444: a pinned, never-rebuilt record printed without a TypeError, and named as the chain's pin."""
+        from unittest import mock
+        from deploy.baremetal import manifest as tool
+        record_2 = json.loads((self.here / "sequence-2.json").read_text())
+        pin = (2, cr.digest(record_2["record"]))
+        with open(os.path.join(self.state, cr.SIGNING_RECORD), "w") as f:
+            f.write((self.here / "signing-record.jsonl").read_text())
+        os.unlink(os.path.join(self.state, cr.REBUILD_RECORD))
+        with mock.patch.object(tool, "card_record_keys", lambda envelope, root, state: cr.verify(envelope, root, cr.read_signing_state(state, root), pin)):
+            out = _genesis(self, self.root, str(self.here / "sequence-2.json"), self.state)
+        self.assertIn("card record 2 of 2 (pinned by the chain)", out)
+        self.assertNotIn("supersedes not checked", out)
+        self.assertNotIn("REBUILT", out)
 
 
 def _genesis(test, root, record, state):
