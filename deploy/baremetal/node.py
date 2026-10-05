@@ -67,6 +67,7 @@ import argparse
 import binascii
 import contextlib
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -285,6 +286,67 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
     anchor.anchor(epoch, membership.Store._digests(manifests))
     anchor.check(epoch)
     return epoch, hashlib.sha256(chain).hexdigest(), rewritten, unrenderable
+
+
+ESP_SETTLE_RUNS = 5          # runs of esp_advance at most, while the published chain keeps changing under it
+
+
+def esp_advance_settled(node, esp, lock_path=ESP_LOCK, advance=None):
+    """esp_advance, run again while the published chain changed DURING the run, at most ESP_SETTLE_RUNS times.
+
+    regalia-esp-advance.path's PathChanged= is edge-triggered: a publication that lands while a run is already active
+    is folded into that run by systemd and starts nothing afterwards. If that run had read the chain before it changed,
+    the ESP and the anchor would stay one epoch behind until the NEXT publication (regalia-kms-24 and 3e on main's
+    three-node-recovery; on a host, the unit's boot run beside sync's first publication). So the published file is read
+    before and after each run; a run that saw what is published now is the last one. Still changing after the bound (a
+    sync publishing faster than a run, not something sync does), it is refused, and the unit's Restart= tries again.
+    That cannot strand a node (24): every run that completes has written the ESP and moved the anchor to the chain it
+    read, so each run makes progress and the anchor is never more than one publication behind; and the refusal is
+    what guarantees ANOTHER run (Restart=on-failure, 15 s later, re-reading the newest), where a success after the
+    bound could leave a lost trigger behind it."""
+    advance = advance or esp_advance
+    path = node.path(PUBLISHED)
+    # the RUN holds `lock_path` (node.ESP_LOCK): the same file reanchor holds for its whole re-anchor (#391), so the unit,
+    # a hand-run esp-advance and a re-anchor all serialize on one lock (regalia-kms-24). The anchor's own HighWater lock
+    # inside each run is another file beside it: HighWater flocks its lock_path itself, and a second open of the held
+    # file in this process would block on itself (regalia-kms-95)
+    with _one_run(lock_path):
+        for _ in range(ESP_SETTLE_RUNS):
+            before = _read_regular(path, membership.MAX_CHAIN_BYTES + 1)
+            result = advance(node, esp, lock_path=lock_path + ".anchor")
+            if _read_regular(path, membership.MAX_CHAIN_BYTES + 1) == before:
+                return result
+    raise Refused("the published membership chain changed during each of %d runs: not settled; the unit tries again"
+                  % ESP_SETTLE_RUNS)
+
+
+@contextlib.contextmanager
+def _one_run(path):
+    """One ESP advance at a time, across the WHOLE run (every rerun: the ESP's write and the anchor's move), on
+    node.ESP_LOCK, which reanchor also holds for its whole re-anchor (#391). Without it a hand-run `esp-advance` beside the
+    unit could write an OLDER chain to the ESP after the other run anchored a newer one: an ESP below its anchor, a
+    ROLLBACK at the next boot (regalia-kms-95 on #471). Its directory is the unit's RuntimeDirectory; a hand-run while the
+    unit is stopped makes it (root's, 0700) rather than run unlocked. Opened as reanchor opens it: never through a link, a
+    regular file with one name. Held by another run or a re-anchor, it is a refusal, not a wait: the unit's Restart=
+    tries again, and an operator is told."""
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as failure:
+        if failure.errno == errno.ELOOP:
+            raise Refused("the ESP advance's lock %s is a symbolic link: it is not taken through one" % path) from None
+        raise
+    try:
+        held = os.fstat(fd)
+        require(stat.S_ISREG(held.st_mode) and held.st_nlink == 1, "the ESP advance's lock %s is not a regular file with one name" % path)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refused("another regalia-esp-advance run, or a re-anchor, holds %s: one at a time (try again when it has "
+                          "finished)" % path) from None
+        yield
+    finally:
+        os.close(fd)
 
 
 def esp_metrics(node, ok, renderable=None, publish=None):
@@ -525,7 +587,7 @@ class Node:
         """The membership epoch anchor: membership.HighWater on its own index (and the pair and slots after it),
         with this node's approved-image write policy (image_policy) for an index written by policy (#242), judged by the
         schema of the chain tip this node holds (_tip_schema, #242 B3).
-        `lock_path`: the writer's lock. The run-time writer is esp_advance, with its own (ESP_LOCK); the default, in
+        `lock_path`: the writer's lock. The run-time writer is esp_advance: its run holds ESP_LOCK, and this lock is ESP_LOCK + ".anchor"; the default, in
         the state directory, is for the hand tools that build an anchoring store (enrolment). sync only reads.
         `schema`: the schema of the chain this anchor is judged by, for a caller holding another chain than the node's
         (esp_advance: the published one it anchors); default, the chain tip this node holds."""
@@ -944,7 +1006,7 @@ def main(argv=None):
             print("wg-svc and %s applied under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
         elif args.service == "esp-advance":
             try:
-                epoch, sha, rewritten, unrenderable = esp_advance(node, args.esp, lock_path=args.esp_lock)
+                epoch, sha, rewritten, unrenderable = esp_advance_settled(node, args.esp, lock_path=args.esp_lock)
             except BaseException:
                 esp_metrics(node, ok=False)
                 raise

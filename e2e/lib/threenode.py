@@ -1300,7 +1300,11 @@ class Cluster:
             self.start(seed, services)
         for name in running:
             if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
-                raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], seed))
+                try:
+                    why = self._why_not_taken(name, seed, since)
+                except Exception as failure:              # noqa: BLE001 - the diagnostic never hides the failure it explains
+                    why = "diagnostic unavailable: %s: %s" % (type(failure).__name__, failure)
+                raise RuntimeError("%s did not take epoch %d from %s | %s" % (name, manifest["epoch"], seed, why))
         # #66 B3: neither deliver nor sync moves the anchor; each running node's regalia-esp-advance writes the epoch to its
         # ESP and then anchors it. Checked at every advance, so tier N keeps the anchor's progression (regalia-kms-24)
         for name in [seed] + running:
@@ -1351,6 +1355,21 @@ class Cluster:
 
     def journal(self, name, service, lines=40):
         return sh("journalctl", "-u", self.unit(name, service), "-n", str(lines), "--no-pager", "-o", "cat", check=False).stdout
+
+    def _why_not_taken(self, name, seed, since):
+        """What a node that did not take an epoch says about it (regalia-kms-24: main's recovery failed with "c did not take
+        epoch 2 from b" and nothing else, c's journal holding only systemd's lines): the epoch the seed publishes, whether
+        each one's sync runs, and the puller's sync trail since the epoch was given (its pulls, applies and refusals)."""
+        def published(n):
+            try:
+                return membership.load((self.nodes[n].state / node.PUBLISHED).read_bytes(), membership.MAX_CHAIN_BYTES)[-1]["manifest"]["epoch"]
+            except (OSError, ValueError, KeyError, IndexError) as error:
+                return "unreadable (%s)" % error
+        lines = [{k: e.get(k) for k in ("at", "event", "outcome", "peer", "subject", "epoch", "reason") if e.get(k) not in (None, "")}
+                 for e in self.trail(name) if e.get("at", 0) >= int(since)]   # whole seconds, as audit_has takes them
+        return "%s publishes epoch %s, its sync %s; %s's sync %s, its trail since: %s" % (
+            seed, published(seed), "runs" if self.running(seed) else "does NOT run", name,
+            "runs" if self.running(name) else "does NOT run", lines[-12:])
 
     def trail(self, name):
         """The node's sync trail, parsed."""
