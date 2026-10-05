@@ -100,6 +100,25 @@ class ChronyDropIn(unittest.TestCase):
             self.assertNotRegex(name.read_text(), r"(?m)^(Wants|Requires|BindsTo|Upholds|OnFailure)=.*chrony", name.name)
 
 
+class NoTestUnitShips(unittest.TestCase):
+    """#75 tier Q, Q4 (regalia-kms-d9): the boot test's guest has test-only units (e2e/lib/boot-guest), one of which takes
+    a command from the ESP, which nothing authenticates. None may ship: nothing under deploy/ is named e2e-*, nor names
+    one of them."""
+
+    def test_no_e2e_unit_or_script_is_under_deploy(self):
+        deploy = UNITS.parents[1]
+        test_only = sorted(p.name for p in (UNITS.parents[2] / "e2e" / "lib" / "boot-guest").iterdir())
+        self.assertIn("e2e-boot-entries", test_only)                   # the guard holds what it guards
+        for path in deploy.rglob("*"):
+            if not path.is_file() or "__pycache__" in path.parts:
+                continue
+            self.assertFalse(path.name.startswith(("e2e-", "regalia-e2e-")), "%s is a test-only unit or script under deploy/" % path)
+            if path.suffix in (".service", ".path", ".timer", ".socket", ".conf", ".sh", ".py", "") and path.stat().st_size < 1 << 20:
+                text = path.read_text(errors="replace")
+                for name in test_only:
+                    self.assertNotIn("/usr/lib/regalia/" + name, text, "%s runs the test-only %s" % (path, name))
+
+
 class Units(unittest.TestCase):
     def service(self, name):
         return unit(name + ".service")["Service"]

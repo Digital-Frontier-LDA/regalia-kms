@@ -518,7 +518,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 mmdebstrap debian-archive-keyring \
-            swtpm swtpm-tools tpm2-tools cryptsetup-bin wireguard-tools nftables iproute2 cpio e2fsprogs ovmf dosfstools openssl
+            swtpm swtpm-tools tpm2-tools cryptsetup-bin wireguard-tools nftables iproute2 cpio e2fsprogs ovmf dosfstools openssl \
+            python3-virt-firmware   # tier Q, Q4: virt-fw-vars reads the persistent OVMF VARS, the firmware's side of BootNext
       - name: A guest boots a measured UKI through a peer (QEMU, OVMF, swtpm, dracut, LUKS2, WireGuard before root, PCR 12)
         # the archive as of the reviewed initrd's inventory (deploy/baremetal/initrd/initrd-inventory.txt, #198):
         # moving this date is an update of that inventory, in the same pull request. The initrd and its client
