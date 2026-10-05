@@ -82,7 +82,8 @@ RECOVERY = b"cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuu
 MARKER = b"regalia-kms root volume marker"
 SWITCH = "e2e3-sw"
 UNIT_PREFIX = "e2e3-"
-AUDIT_TRAILS = (("sync", "state", "sync-audit.jsonl"), ("admission", "admission", "audit.jsonl"))   # each node's own (#340)
+AUDIT_TRAILS = (("sync", "state", "sync-audit.jsonl"), ("admission", "admission", "audit.jsonl"),   # each node's own (#340)
+                ("esp-advances", "log", "esp-advances.jsonl"))                                       # the ESP advance's (#66 B3)
 COLLECTOR_UNIT = UNIT_PREFIX + "audit-collector"
 COLLECTOR_PORT = 18443
 
@@ -134,6 +135,7 @@ class NodeHere:
         self.tcti = "swtpm:path=%s" % self.tpm_sock
         self.cfg_path = self.dir / "etc" / "node.json"
         self.state, self.admission, self.run = self.dir / "state", self.dir / "admission", self.dir / "run"
+        self.log = self.dir / "log"                   # its /var/log/regalia-esp-advance: the ESP advance's trail (#66 B3)
 
     def in_ns(self, *argv, check=True, **kw):
         return sh("ip", "netns", "exec", self.ns, *argv, check=check, **kw)
@@ -695,7 +697,11 @@ class Cluster:
         if not esp.exists():
             esp.mkdir(mode=0o755)
             os.chmod(esp, 0o755)
-        return ("--esp", str(esp), "--esp-lock", str(n.run / "esp-advance.lock"))
+        if not n.log.exists():                        # as regalia.tmpfiles.conf makes /var/log/regalia-esp-advance on a host
+            n.log.mkdir(mode=0o750)
+            shutil.chown(n.log, "root", "regalia-audit-esp-advances")
+            os.chmod(n.log, 0o750)
+        return ("--esp", str(esp), "--esp-lock", str(n.run / "esp-advance.lock"), "--esp-trail", str(n.log / "esp-advances.jsonl"))
 
     def _esp_watch(self, n):
         """#66 B3: regalia-esp-advance.path's stand-in, at every new published chain: the chain to the node's ESP, then
@@ -1374,7 +1380,8 @@ class Cluster:
 
     def _trail_path(self, name, trail):
         n = self.nodes[name]
-        return {"sync": n.state / "sync-audit.jsonl", "admission": n.admission / "audit.jsonl"}[trail]
+        return {"sync": n.state / "sync-audit.jsonl", "admission": n.admission / "audit.jsonl",
+                "esp-advances": n.log / "esp-advances.jsonl"}[trail]
 
     def _trail_groups(self, name):
         """Each of the node's trails (and its rotated archives) back in its reader group, 0640, as its writer keeps it on a
@@ -1468,7 +1475,7 @@ class Cluster:
         return None
 
     def audit_complete(self, timeout=180):
-        """{(node, trail): what is wrong} for every node trail (sync, admission) the collector does not hold, line for
+        """{(node, trail): what is wrong} for every node trail (sync, admission, esp-advances) the collector does not hold, line for
         line, UP TO A SNAPSHOT of the trail taken when this is called. The trails go on growing while it waits (the
         services run): judged against the trail as re-read at each look, a line written after the shipper's last pass
         failed it (regalia-kms#409, d9: 400 trail lines, 399 in the collector). So the snapshot, taken first, is the

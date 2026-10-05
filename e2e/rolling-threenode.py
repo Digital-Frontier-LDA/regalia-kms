@@ -27,7 +27,7 @@ set it runs read from its TPM (update.running_set). The retire is judged as `rol
   7  b's turn once b itself has seen a on NEXT: b onto NEXT; the retire still refused, naming c; then c onto NEXT
   8  the retire, once every node is seen on NEXT by every peer: accepted; the root signs NEXT alone; c, booted onto
      CURRENT again, gets no key from either peer; onto NEXT, it is unlocked and leased
-  9  #340: every line of every node's sync and admission trail is in the audit collector (a real collector and
+  9  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector (a real collector and
      each node's real shipper: Cluster(audit=True)), and the events the rollout turns on are in it by name: the
      PCR 11 refusals, the leases a issued on NEXT, the epoch that retired CURRENT, each node's return to serving
 Every move to NEXT is an update: may_reboot first. A boot onto an image that is not approved (step 2), back onto
@@ -269,10 +269,10 @@ def scenario(cluster):
     ok(opened(r["got"]) and r["leased"], "c, onto %s, is unlocked through %s and leased" % (NEXT_IMAGE, r["got"].get("peer")), r["got"])
     ok(r["served"], "a and b were freshly leased while c was down")
 
-    header("9  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
+    header("9  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector, for the node that recorded it")
     wrong = cluster.audit_complete()
-    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t in ("sync", "admission")}
-    ok(wrong == {}, "every node's sync and admission trail is written and in the collector line for line: sequence from 1, chained from "
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t, _, _ in threenode.AUDIT_TRAILS}
+    ok(wrong == {}, "every node's sync, admission and ESP-advance trail is written and in the collector line for line: sequence from 1, chained from "
        "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
        {"%s.%s" % k: v for k, v in wrong.items()})
 
