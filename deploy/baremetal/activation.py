@@ -565,23 +565,6 @@ def read_json(path, limit=65536):
         return json.loads(f.read(limit + 1)[:limit])
 
 
-def write_json(path, value, mode=0o644):
-    """Replaced atomically (a temporary file, fsynced, renamed, the directory fsynced): the Gate reads whole files only."""
-    tmp = path + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
-    with os.fdopen(fd, "w") as f:
-        json.dump(value, f, sort_keys=True)
-        f.flush()
-        os.fsync(f.fileno())
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
-    dirfd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
-    try:
-        os.fsync(dirfd)
-    finally:
-        os.close(dirfd)
-
-
 def renewal_step(node_id, manifest, clock, signer, ask, peers, state_dir, trail):
     """One round of the holder's renewal (node.Sync's loop). Renews only when this node HOLDS a lease for itself that has
     not expired and has less than half its life left (no probing: a node without a lease never proposes on a timer,
