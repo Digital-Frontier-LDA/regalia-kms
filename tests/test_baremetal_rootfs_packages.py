@@ -17,7 +17,7 @@ BASE = os.path.join(ROOT, "deploy", "baremetal")
 LIST = os.path.join(BASE, "image", "packages.txt")
 UNIT_DIRS = (os.path.join(BASE, "units"), os.path.join(ROOT, "deploy", "systemd"))
 NOT_IMAGE_UNITS = {"regalia-sops-kms.service"}          # a workload-host sidecar, not part of the KMS host (regalia-kms-ed)
-SECTIONS = ("roots", "packages", "imported-not-run", "not-on-host")
+SECTIONS = ("roots", "packages", "built", "imported-not-run", "not-on-host")
 
 CALL = re.compile(r"""(?:\brun|\bsh|_run|subprocess\.run|subprocess\.check_output|subprocess\.Popen|self\.run|self\._run|check_output|Popen|_efibootmgr)\(\s*\[\s*["']([^"'\s]+)["']""")
 ABSOLUTE = re.compile(r"""["'](/usr/s?bin/[A-Za-z0-9_.+-]+|/s?bin/[A-Za-z0-9_.+-]+|/usr/lib/systemd/systemd-[A-Za-z0-9_-]+)["']""")
@@ -42,7 +42,7 @@ def parse(text):
         if section is None:
             raise ValueError("line %d: an entry outside any section" % number)
         fields = [f.strip() for f in line.split("|")]
-        want = 3 if section in ("roots", "packages") else 2
+        want = 3 if section in ("roots", "packages", "built") else 2
         if len(fields) != want or not all(fields[:1]) or not fields[-1]:
             raise ValueError("line %d: [%s] entries are %d fields (%s), the last a reason: %r"
                              % (number, section, want, "name | what | why" if want == 3 else "name | why", line))
@@ -150,7 +150,7 @@ class TheHostsPackages(unittest.TestCase):
         cls.roots = [name for name, _ in cls.spec["roots"]]
         cls.host, cls.third = closure(cls.roots, cls.local)
         cls.provided = set()
-        for _, (what, _why) in cls.spec["packages"]:
+        for _, (what, _why) in cls.spec["packages"] + cls.spec["built"]:
             cls.provided |= {w for w in what.split() if w != "-"}
         cls.not_run = {name for name, _ in cls.spec["imported-not-run"]}
 
@@ -176,6 +176,13 @@ class TheHostsPackages(unittest.TestCase):
     def test_every_third_party_import_has_a_package(self):
         missing = {t: sorted(m) for t, m in self.third.items() if "py:" + t not in self.provided}
         self.assertEqual(missing, {}, "Python modules the host imports that no [packages] line provides (py:<module>)")
+
+    def test_built_programs_exist(self):
+        """A [built] line names a cmd/ directory of this repository and one absolute path: the builder installs it there."""
+        for source, (path, _why) in self.spec["built"]:
+            with self.subTest(source=source):
+                self.assertTrue(os.path.isdir(os.path.join(ROOT, source)) and source.startswith("cmd/"), "%s is not a cmd/ program" % source)
+                self.assertTrue(path.startswith("/") and len(path.split()) == 1, "%s installs to one absolute path" % source)
 
     def test_nothing_listed_is_stale(self):
         """An [imported-not-run] command must still be found in the host's modules: a stale exemption hides nothing."""

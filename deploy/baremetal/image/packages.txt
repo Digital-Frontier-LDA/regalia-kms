@@ -51,8 +51,11 @@ pcscd | - | PC/SC for the -tags piv daemon's YubiKey and OpenPGP backends (#72 G
 libpcsclite1 | - | the -tags piv daemon's cgo link
 apparmor | - | the daemon's profile (AppArmorProfile=regalia-kms, deploy/baremetal/apparmor/usr.sbin.regalia-kms)
 prometheus-node-exporter | - | node metrics (units/prometheus-node-exporter.service.d/regalia.conf)
-regalia-kms | /usr/sbin/regalia-kms | built by the image builder from cmd/regalia-kms, -tags piv (not a Debian package)
-regalia-audit-ship | /usr/bin/regalia-audit-ship | built by the image builder from cmd/regalia-audit-ship (not a Debian package)
+
+[built]
+# This repository's programs, built by the image builder (not Debian packages) | the path it installs | why
+cmd/regalia-kms | /usr/sbin/regalia-kms | the KMS daemon, -tags piv (cgo, PC/SC: #72 G2)
+cmd/regalia-audit-ship | /usr/bin/regalia-audit-ship | ships the audit trails to the external collector (regalia-audit-ship@.service)
 
 [imported-not-run]
 # Commands found in modules the host imports, which those modules run only on the signing laptop or the builder.
