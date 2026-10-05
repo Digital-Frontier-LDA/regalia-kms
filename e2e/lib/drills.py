@@ -28,13 +28,14 @@ def from_loadgen(line):
     outcome: "ok" or the API code, attempt, drill, stateful: bool, declared by the load generator from the canary key's
     profile}), as a request here. One adapter for both tiers (3e on #497). No inference (ed): "stateful" is the line's own,
     and a line without it is refused: a sign with a sequenced Cosmos key must never be read as stateless."""
-    for k in ("start_ms", "end_ms", "op", "key", "node", "outcome", "stateful"):
+    for k in ("start_ms", "end_ms", "op", "key", "node", "outcome", "stateful", "request_id", "attempt"):
         if k not in line:
             raise Malformed("a load-generator line without %r is refused, never defaulted" % k)
     if not isinstance(line["stateful"], bool):
         raise Malformed("a load-generator line's stateful must be true or false, not %r" % (line["stateful"],))
     return {"start": line["start_ms"] / 1000.0, "end": line["end_ms"] / 1000.0, "op": line["op"], "key": line["key"],
-            "node": line["node"], "outcome": "ok" if line["outcome"] == "ok" else "failed", "stateful": line["stateful"]}
+            "node": line["node"], "outcome": "ok" if line["outcome"] == "ok" else "failed", "stateful": line["stateful"],
+            "request_id": line["request_id"], "attempt": line["attempt"]}
 
 
 def _fail(text):
@@ -65,7 +66,11 @@ def failures_only_in_flight(requests, t_inject):
     together with load_throughout()."""
     if not requests:
         return _fail("no request at all: there is no evidence to judge")
-    late = [r for r in requests if r["outcome"] != "ok" and not (r["start"] <= t_inject <= r["end"])]
+    # a retry reuses its request's ID and nonce (ed): one whose first attempt was in flight comes back CONFLICT after
+    # the injection, and is that same in-flight request, not a new failure
+    in_flight = {r.get("request_id") for r in requests if r["start"] <= t_inject <= r["end"] and r.get("request_id")}
+    late = [r for r in requests if r["outcome"] != "ok" and not (r["start"] <= t_inject <= r["end"])
+            and not (r.get("request_id") and r["request_id"] in in_flight)]
     if late:
         r = late[0]
         return _fail("%d request(s) failed that were not in flight at the injection; first: %s %s at %.1f on %s"

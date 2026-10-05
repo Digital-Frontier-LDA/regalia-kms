@@ -23,6 +23,10 @@ class Predicates(unittest.TestCase):
         self.assertTrue(drills.failures_only_in_flight(good, 10)[0])
         self.failed(drills.failures_only_in_flight(good + [req(12, "b", "failed")], 10), "not in flight at the injection")
         self.failed(drills.failures_only_in_flight([], 10), "no request at all")
+        first = dict(req(9.9, "a", "failed", end=10.4), request_id="r-1")
+        retry = dict(req(10.5, "b", "failed"), request_id="r-1")              # CONFLICT: the nonce the first reserved
+        self.assertTrue(drills.failures_only_in_flight([first, retry, req(11, "b")], 10)[0])
+        self.failed(drills.failures_only_in_flight([first, dict(retry, request_id="r-2")], 10), "not in flight at the injection")
 
     def test_the_load_ran_throughout(self):
         log = [req(t, "a") for t in (1, 31, 61)]
@@ -80,19 +84,24 @@ class Predicates(unittest.TestCase):
 
     def test_the_load_generator_s_line_becomes_a_request(self):
         line = {"start_ms": 1700000000123, "end_ms": 1700000000373, "op": "sign", "key": "canary-cosmos", "node": "b",
-                "outcome": "ABORTED", "attempt": 1, "drill": "r1", "stateful": True}
+                "outcome": "ABORTED", "attempt": 1, "drill": "r1", "stateful": True, "request_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"}
         r = drills.from_loadgen(line)
         self.assertEqual((r["start"], r["end"], r["outcome"], r["stateful"], r["node"]), (1700000000.123, 1700000000.373, "failed", True, "b"))
         self.assertEqual(drills.from_loadgen(dict(line, outcome="ok", stateful=False))["outcome"], "ok")
 
     def test_a_line_without_stateful_is_refused_never_defaulted(self):
         """ed: no inference; a sign with a sequenced Cosmos key is stateful, which only the load generator knows."""
-        line = {"start_ms": 1, "end_ms": 2, "op": "sign", "key": "k", "node": "a", "outcome": "ok", "attempt": 1, "drill": "r1"}
+        line = {"start_ms": 1, "end_ms": 2, "op": "sign", "key": "k", "node": "a", "outcome": "ok", "attempt": 1, "drill": "r1",
+                "request_id": "u"}
         with self.assertRaises(drills.Malformed) as caught:
             drills.from_loadgen(line)
         self.assertIn("without 'stateful' is refused", str(caught.exception))
         with self.assertRaises(drills.Malformed):
             drills.from_loadgen(dict(line, stateful="yes"))
+        no_id = dict(line, stateful=False)
+        del no_id["request_id"]
+        with self.assertRaises(drills.Malformed):
+            drills.from_loadgen(no_id)
 
     def test_the_bounds_are_deploy_s(self):
         """3e on #497: drills.py may not import deploy; these hold its copies equal to the source."""
