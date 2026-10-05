@@ -6,7 +6,9 @@ authorization: the point of #242, shown here with the owner authorization set to
 Another image's PCR 11, the initrd phase, and a key that is not the node's write nothing. A re-anchor from a recovery
 boot (no approved image) still works, with the owner's authorization, because the indices keep ownerwrite. The boot
 is e2e/lib/signed_boot.py's stand-in (checked against systemd-measure by tests/test_e2e_signed_boot.py)."""
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -203,6 +205,62 @@ class Enrolment(ea.Anchor):
         from deploy.baremetal import node as node_module
         signing = node_module.signing_counter(self.node().cfg)
         self.assertEqual((signing.value(), signing.advance(1)), (0, 1))
+
+    def set_owner_auth(self, raw, lockout=True):
+        """The TPM's owner authorization set as `enrol ownerauth` leaves it (and its lockout one, #57), test-side."""
+        from deploy.baremetal import ownerauth
+        env = dict(os.environ, TPM2TOOLS_TCTI=self.tcti)
+        for hierarchy in ("o", "l") if lockout else ("o",):
+            with open(self.d + "/auth-" + hierarchy, "w") as f:
+                f.write("hex:" + raw.hex())
+            r = subprocess.run(["tpm2_changeauth", "-c", hierarchy, "file:" + self.d + "/auth-" + hierarchy], env=env, capture_output=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            os.unlink(self.d + "/auth-" + hierarchy)
+        return ownerauth.Auth(raw)
+
+    def defined(self):
+        """The NV indices this TPM holds (tpm2_getcap handles-nv-index), as integers: an index's absence is checked
+        here, never by a public area that cannot be read (regalia-kms-1e on #428)."""
+        out = subprocess.run(["tpm2_getcap", "handles-nv-index"], env=dict(os.environ, TPM2TOOLS_TCTI=self.tcti), capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", out.stdout)}
+
+    def test_enrolment_with_the_owner_authorization_set(self):
+        """#420, on a real TPM whose owner (and lockout) authorizations are set, as production's are (#242): the anchor
+        step and the heartbeat counter's definition refuse without the value, nothing defined, and with it define the
+        anchor and the counters by policy and commit the chain by policy; commit's v4 decision reads the TPM's own
+        posture. (The rest of `enrol commit` around these steps: tests/test_baremetal_enrol.py.)"""
+        from deploy.baremetal import node as node_module
+        from deploy.baremetal import ownerauth
+        auth = self.set_owner_auth(bytes.fromhex("00aa" * 16))      # 0x00 bytes: the channel's hex form keeps them
+        chain = self.chain(3)
+        with self.assertRaisesRegex(m.Refused, "the TPM's owner authorization is set and none was given"):
+            self.anchor(chain)
+        enrolment = {int(self.cfg[k], 16) + d for k in ("nv_epoch", "nv_heartbeat", "nv_signing") for d in range(6)}
+        self.assertEqual(self.defined() & enrolment, set())                              # nothing defined, no index at all
+        epoch, digest = enrol.anchor_and_store(self.path, chain, run=self.tpm, owner_auth=auth)
+        self.assertEqual((epoch, digest), (3, m.digest(chain[-1]["manifest"])))
+        # the control: the same listing now holds the anchor's and the signing counter's indices
+        self.assertTrue({int(self.cfg["nv_epoch"], 16), int(self.cfg["nv_signing"], 16)} <= self.defined())
+        self.assertIn("authorization policy: %s" % signkey.policy(self.pem).hex().upper(), self.public(self.cfg["nv_epoch"]))
+        self.assertEqual((self.node().anchor().value(), self.node().anchor().record()), (3, (3, digest)))   # read with no auth
+        signing = node_module.signing_counter(self.node().cfg)
+        self.assertEqual((signing.value(), signing.advance(1)), (0, 1))                  # run-time writes: by policy, no auth
+        # the heartbeat counter's one definition (the first heartbeat's), by the owner: with the value only
+        with self.assertRaisesRegex(m.Refused, "the TPM's owner authorization is set and none was given"):
+            node_module.heartbeat_counter(self.node().cfg).define_at(5)
+        heartbeat_indices = {int(self.cfg["nv_heartbeat"], 16), int(self.cfg["nv_heartbeat"], 16) + 1}
+        self.assertEqual(self.defined() & heartbeat_indices, set())                      # the refusal left nothing half-defined
+        counter = node_module.heartbeat_counter(self.node().cfg, owner_auth=auth)
+        counter.define_at(5)
+        self.assertEqual(counter.value(), 5)
+        self.assertTrue(heartbeat_indices <= self.defined())                            # the control: now both are there
+        # commit's decision under v4, on this TPM's own posture (both authorizations set): the value is required
+        record = json.load(open(os.path.join(os.path.dirname(__file__), "vectors", "ownerauth-v1.json")))
+        self.assertEqual(ownerauth.posture(self.tcti), {"owner": True, "lockout": True})
+        with self.assertRaisesRegex(enrol.Refused, "under regalia.membership/v4 the TPM's owner authorization is set"):
+            enrol.commit_owner_auth({"schema": m.SCHEMA_V4}, None, record["root"], "a",
+                                    run=lambda argv, env=None, **kw: subprocess.run(argv, env=dict(os.environ, TPM2TOOLS_TCTI=self.tcti), **kw))
 
     def test_another_image_s_key_defines_nothing(self):
         os.makedirs(self.d + "/other")

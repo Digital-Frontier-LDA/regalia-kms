@@ -425,19 +425,23 @@ class ProducersWriterRun(unittest.TestCase):
         self.addCleanup(shutil.rmtree, d, True)
         entries = [{k: v for k, v in n.items() if k != "state"} for n in nodes4()]
         doc = {"schema": measurements.SCHEMA, "name": "genesis", "nodes": {
-            e["node_id"]: {"accepted": [{"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32}}]} for e in entries}}
+            e["node_id"]: {"accepted": [{"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32},
+                                         "phases": {"initrd": {"11": "aa" * 32}, "system": {"11": "bb" * 32}}}]} for e in entries}}
         with open(os.path.join(d, "doc.json"), "w") as f:
             json.dump(doc, f)
+        with open(os.path.join(d, "system.pem"), "w") as f:
+            f.write("stub\n")
         args = ["propose", "--genesis", "--root-key", self.root, "--card-record", str(self.here / "card-record-2.record.json"),
                 "--state-dir", self.state, "--measurements", os.path.join(d, "doc.json"), "--out", os.path.join(d, "e1.json"),
-                "--issued-at", "2026-10-04T12:00:00Z"]
-        for e in entries:
-            path = os.path.join(d, "entry-%s.json" % e["node_id"])
+                "--issued-at", "2026-10-04T12:00:00Z", "--system-pub", os.path.join(d, "system.pem")]
+        for e in entries:                   # each node as `enrol` proves it (#399; stubbed here: its proof is enrol's own test)
+            path = os.path.join(d, "bundle-%s.json" % e["node_id"])
             with open(path, "w") as f:
                 json.dump(e, f)
-            args += ["--entry", path]
+            args += ["--node", path, path, path]
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch.object(tool.keyfd, "tty_line", lambda p: "40000001 40000002"):
+        with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch.object(tool.keyfd, "tty_line", lambda p: "40000001 40000002"), \
+                mock.patch.object(tool.enrol, "proven_entry", lambda bundle, pub, keep, act, run=None: (bundle, {"7": "00" * 32, "11": "bb" * 32})):
             self.assertEqual(tool.main(args), 0, err.getvalue())
         self.assertIn("card record 2 of 2 (the newest on this laptop's signing record)", out.getvalue())
         with open(os.path.join(d, "e1.json")) as f:
