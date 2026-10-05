@@ -76,17 +76,25 @@ that set `required_approvals`. Each entry is
 ```
 
 The canonical binding is what the approver signs. It is a version line terminated by `\n`,
-then six **length-prefixed records** in this order:
+then seven **length-prefixed records** in this order:
 
 ```
-regalia-approval-v2
+regalia-approval-v3
 <len>:<object_id>
 <len>:<context.purpose>
 <len>:<context.environment>
 <len>:<context.nonce>
 <len>:<context.expires_at, RFC3339Nano UTC>
 <len>:<sha256 hex of the payload>
+<len>:<the node that may sign: context.signer, the node ID the membership manifest spells>
 ```
+
+**An approval is for one node** (ADR-0002 D32, #432). The daemon builds the binding with its
+OWN node ID as the signer, never the caller's, so an approval given for node `b` does not verify
+on node `a`: it simply never counts there. A request whose optional `context.signer` names
+another node is refused (`INVALID_ARGUMENT`, audited as `approval-signer-other-node`) instead of
+failing on its approval count. Ask approvers to sign for the node the request will be sent to;
+if that node is lost before it signs, the request must be approved again for another node.
 
 Each record is `<len>`, a colon, exactly `<len>` bytes of field, then one `\n` — including the
 last record. For `object_id: "signing-key-1"` the record is `13:signing-key-1`.
@@ -114,6 +122,7 @@ context.purpose:     release-signing
 context.environment: production
 context.nonce:       nonce-aaaa-bbbb-cccc
 context.expires_at:  2026-01-02T15:04:05Z
+context.signer:      site-a
 payload:             the bytes being signed
 ```
 
@@ -121,13 +130,14 @@ the canonical binding is exactly these bytes (`\n` shown as line breaks, and the
 also ends with `\n`):
 
 ```
-regalia-approval-v2
+regalia-approval-v3
 13:signing-key-1
 15:release-signing
 10:production
 20:nonce-aaaa-bbbb-cccc
 20:2026-01-02T15:04:05Z
 64:850578896d7e7f0c6b2d8c93a22f456a12545aec94b1cbbd3770e39f7582c59c
+6:site-a
 ```
 
 `payload_digest` is `850578896d7e7f0c6b2d8c93a22f456a12545aec94b1cbbd3770e39f7582c59c`.
@@ -138,7 +148,7 @@ documentation vector and nothing else** — never configure it as an approver.
 | | |
 |---|---|
 | public key | `A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=` |
-| signature | `wO20bUHZh99VG+VzFp2M/+fz+8a7tYcynVUKzi4dAas6B2+mnzeI8jI0pHIZxSLyywcWo/zbOGoOCpidSo2CAg==` |
+| signature | `+8B8npyNKQegWZugMkXeTKnZdVf7BnmaooTrTWsD1aoCcPPyqO7UwB1l+ReBTkyywZnLLe++T1wBbMMi3nJyCg==` |
 
 `TestTheCanonicalBindingIsTheBytesAPIMdPublishes` asserts these same bytes and verifies this
 signature, so the daemon cannot drift from this vector without a test failing.

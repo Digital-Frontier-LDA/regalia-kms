@@ -209,6 +209,8 @@ check("an approval that had expired when the request was spent", S,
       [approval(S, "alice"), approval(S, "bob", expires_at="2026-10-05T11:59:00Z")], False)
 check("an approval that outlives the request", S, [approval(S, "alice"), approval(S, "bob", expires_at="2026-10-05T13:00:00Z")], False)
 check("an approval signed over another environment", S, [approval(S, "alice"), approval(S, "bob", signed_as={"environment": "staging"})], False)
+check("an approval given for another node (#432 G3)", S,
+      [approval(S, "alice"), approval(S, "bob", signed_as={"node_id": "b" if S["node_id"] != "b" else "c"})], False)
 check("the same approver twice", S, [approval(S, "alice"), approval(S, "alice")], False)
 check("approvals that are not the approvers the spend names", spend(approvals=("alice", "bob"), approvers=["alice", "carol"]),
       [approval(S, "alice"), approval(S, "bob")], False)
