@@ -21,12 +21,36 @@ def load():
 class Vectors(unittest.TestCase):
     def test_every_case_is_decided_as_the_vector_says(self):
         doc = load()
-        sessions = lambda node, boot: doc["sessions"].get("%s|%s" % (node, boot))      # noqa: E731
+        sessions = lambda node, boot, key: key in doc["sessions"].get("%s|%s" % (node, boot), [])      # noqa: E731
         for c in doc["cases"]:
             with self.subTest(c["name"]):
                 try:
                     entry = opstate.verify(c["key"], c["value"], sessions, doc["approver_sets"])
                     opstate.transition(c["previous"], entry)
+                    got, why = True, ""
+                except m.Refused as refused:
+                    got, why = False, str(refused)
+                self.assertEqual((got, why), (c["accept"], c["python_reason"]))
+        for c in doc["approval_checks"]:
+            with self.subTest(c["name"]):
+                try:
+                    opstate.check_approvals(c["spend"], c["approvals"], doc["approver_sets"])
+                    got, why = True, ""
+                except m.Refused as refused:
+                    got, why = False, str(refused)
+                self.assertEqual((got, why), (c["accept"], c["python_reason"]))
+        for c in doc["session_checks"]:
+            with self.subTest(c["name"]):
+                try:
+                    opstate.verify_session(c["key"], c["value"], doc["manifest"])
+                    got, why = True, ""
+                except m.Refused as refused:
+                    got, why = False, str(refused)
+                self.assertEqual((got, why), (c["accept"], c["python_reason"]))
+        for c in doc["sign_checks"]:
+            with self.subTest(c["name"]):
+                try:
+                    opstate.may_sign(c["spend"], c["now"], c["held_lease_digest"], c["held_lease_expires_at"])
                     got, why = True, ""
                 except m.Refused as refused:
                     got, why = False, str(refused)
@@ -42,7 +66,14 @@ class Vectors(unittest.TestCase):
 
     def test_the_vector_is_what_the_generator_makes_now(self):
         made = subprocess.run([sys.executable, "-Es", str(MAKE)], capture_output=True, text=True, check=True, cwd=ROOT).stdout
-        self.assertEqual(json.loads(made), load(), "regenerate: python3 -Es tests/vectors/make-opstate-v1.py > tests/vectors/opstate-v1.json")
+
+        def steady(doc):
+            """P-256 signatures (the session entries') are randomized: compared as present, verified by the replay above."""
+            for c in doc["session_checks"]:
+                c["value"]["signature"] = "<p-256>"
+            return doc
+        self.assertEqual(steady(json.loads(made)), steady(load()),
+                         "regenerate: python3 -Es tests/vectors/make-opstate-v1.py > tests/vectors/opstate-v1.json")
 
     def test_both_outcomes_and_every_kind_are_covered(self):
         doc = load()
@@ -68,6 +99,12 @@ class Format(unittest.TestCase):
         self.assertEqual(opstate.nonce_digest("n"), "1b16b1df538ba12dc3f97edbb85caa7050d46c148134290feba80f8236c83db9")
         with self.assertRaises(m.Refused):
             opstate.nonce_digest("")
+
+    def test_a_spend_s_key_outlives_its_request_by_the_skew(self):
+        """1e: etcd's lease runs on its leader's clock; the key must outlive the request, or the nonce could be replayed."""
+        spend = load()["cases"][0]["value"]["entry"]
+        self.assertEqual(spend["kind"], "spend")
+        self.assertEqual(opstate.gc_ttl(spend), 300 + opstate.SKEW_S)      # 12:00:00 to 12:05:00, plus the skew
 
     def test_a_reserve_fits_one_etcd_transaction(self):
         self.assertLessEqual(opstate.MAX_BATCH, 128 // 2)        # etcd's --max-txn-ops default, with room for the compares

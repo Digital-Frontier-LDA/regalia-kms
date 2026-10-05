@@ -1,5 +1,529 @@
 {
+ "approval_checks": [
+  {
+   "accept": true,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    },
+    {
+     "approver_id": "bob",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+    }
+   ],
+   "name": "both approvals behind a spend",
+   "python_reason": "",
+   "spend": {
+    "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": true,
+   "approvals": [],
+   "name": "no approvals behind an ungated spend",
+   "python_reason": "",
+   "spend": {
+    "approvals_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "approver_set": "3e26ce3ec785ae88ef392ba771e89696904b11af3722bf0a2ff1ab570ee5a583",
+    "approvers": [],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    }
+   ],
+   "name": "an approval missing from what the spend counted",
+   "python_reason": "these are not the approvals the spend counted (approvals_sha256)",
+   "spend": {
+    "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    },
+    {
+     "approver_id": "mallory",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "lNs71HOofBeNajNoINwNhKY0Qeh5bspMDeVUXOVSiHeOWuV+zYNLsfnzVA44C4JBM/sgkFNAI6MzkOmCepf8AA=="
+    }
+   ],
+   "name": "an approval by someone outside the set",
+   "python_reason": "mallory is not an approver of the set, or counted twice",
+   "spend": {
+    "approvals_sha256": "ec318e1f6839397359b8ec0f5bd81723da45d46ab00b94d6f7745ba66d57aa5f",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    },
+    {
+     "approver_id": "bob",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-2",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "wPAPuaYcAZIVhYXO2iX1IPd7Rj98pnj74IjDyr7J8GCrl4IdwDc35a4k2iP5k6JxnBdfkPvUiza2mvljhFFqDg=="
+    }
+   ],
+   "name": "an approval of another request's nonce",
+   "python_reason": "bob approved another request's nonce",
+   "spend": {
+    "approvals_sha256": "efa0b2e86adc714ce74b1572a829bf3ab0b828228c9398a1f57be0a93def1021",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    },
+    {
+     "approver_id": "bob",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+     "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+    }
+   ],
+   "name": "an approval of another payload",
+   "python_reason": "bob approved another payload",
+   "spend": {
+    "approvals_sha256": "597e5616421bec475b56943046f77ad96405797d2be07d151eed070c06721589",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    },
+    {
+     "approver_id": "bob",
+     "expires_at": "2026-10-05T13:00:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+    }
+   ],
+   "name": "an approval that outlives the request",
+   "python_reason": "bob's approval outlives the request",
+   "spend": {
+    "approvals_sha256": "ca9ffc8c470b5450a3b34d25de2704e7bdb288252cc02e46f75aabef76d76b68",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    },
+    {
+     "approver_id": "bob",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "7w245UhxppkU9BI+OWg5swFBm+gBPyd7lYBO/kBDePwoZyx2OMYZzuMmeMenkEjC47Cxik/8tvo/bJnWYPWUDg=="
+    }
+   ],
+   "name": "an approval signed over another environment",
+   "python_reason": "bob's approval does not verify over the request's binding",
+   "spend": {
+    "approvals_sha256": "994b5cab0f1b1cb813d33d3c9fb772b7d8fe5c6704481328b32df977f046d782",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    },
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    }
+   ],
+   "name": "the same approver twice",
+   "python_reason": "alice is not an approver of the set, or counted twice",
+   "spend": {
+    "approvals_sha256": "82b81bd4d288e5087811b5bc2a21b1f78f85e00fff9fb950606ad8c999c64eb9",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    },
+    {
+     "approver_id": "bob",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+    }
+   ],
+   "name": "approvals that are not the approvers the spend names",
+   "python_reason": "the spend names ['alice', 'carol']; the approvals are ['alice', 'bob']'s",
+   "spend": {
+    "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "carol"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    }
+   ],
+   "name": "one approval where the set requires two",
+   "python_reason": "1 of 2 required approvals",
+   "spend": {
+    "approvals_sha256": "7ea03caa3ea5d588454dcef1496aaa4fb43d7b486b25cd1befde05fa9afd678d",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": true,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    }
+   ],
+   "name": "one approval under the set before a rotation",
+   "python_reason": "",
+   "spend": {
+    "approvals_sha256": "7ea03caa3ea5d588454dcef1496aaa4fb43d7b486b25cd1befde05fa9afd678d",
+    "approver_set": "fdd1ebecfb19a52f5422e2f43cb737edf6731827dccee4e9927ec69ceeb5127c",
+    "approvers": [
+     "alice"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    },
+    {
+     "approver_id": "bob",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+    }
+   ],
+   "name": "an approver set nobody knows",
+   "python_reason": "the approver set eeeeeeeeeeeeeeee is not one this verifier knows",
+   "spend": {
+    "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+    "approver_set": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  }
+ ],
  "approver_sets": {
+  "3e26ce3ec785ae88ef392ba771e89696904b11af3722bf0a2ff1ab570ee5a583": {
+   "approvers": {},
+   "required": 0
+  },
   "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945": {
    "approvers": {
     "alice": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
@@ -25,6 +549,8 @@
      "previous": null,
      "value": {
       "entry": {
+       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
         "bob"
@@ -39,7 +565,7 @@
        "node_id": "a",
        "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
        "object_id": "release-signing",
-       "payload_sha256": "abababababababababababababababababababababababababababababababab",
+       "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
        "principal": "spiffe://regalia/ci/release",
        "purpose": "sign",
        "schema": "regalia.opstate/v1"
@@ -48,7 +574,8 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
-        "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
        }
       ]
      }
@@ -80,6 +607,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "926a2696f108c4dff91ea40292dbbed4926773fa8cbde535bd71d9b6bec615ff2f53d306c493c8a4f67cad822e13f0ab458c535e0185e226234e660735158307"
        }
       ]
@@ -118,6 +646,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "fa050e7ee643702f22f0039d054f71af6a8f373799a81ae7c03438d6ae592b466065d03c8447b785cc1c4459d2beb4f054e2199a94addbc88448518626502a03"
        }
       ]
@@ -135,6 +664,8 @@
      "previous": null,
      "value": {
       "entry": {
+       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
         "bob"
@@ -149,7 +680,7 @@
        "node_id": "a",
        "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
        "object_id": "release-signing",
-       "payload_sha256": "abababababababababababababababababababababababababababababababab",
+       "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
        "principal": "spiffe://regalia/ci/release",
        "purpose": "sign",
        "schema": "regalia.opstate/v1"
@@ -158,7 +689,8 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
-        "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
        }
       ]
      }
@@ -197,6 +729,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "926a2696f108c4dff91ea40292dbbed4926773fa8cbde535bd71d9b6bec615ff2f53d306c493c8a4f67cad822e13f0ab458c535e0185e226234e660735158307"
        }
       ]
@@ -214,6 +747,8 @@
      "previous": null,
      "value": {
       "entry": {
+       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
         "bob"
@@ -228,7 +763,7 @@
        "node_id": "a",
        "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
        "object_id": "release-signing",
-       "payload_sha256": "abababababababababababababababababababababababababababababababab",
+       "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
        "principal": "spiffe://regalia/ci/release",
        "purpose": "sign",
        "schema": "regalia.opstate/v1"
@@ -237,7 +772,8 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
-        "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
        }
       ]
      }
@@ -247,6 +783,8 @@
      "previous": null,
      "value": {
       "entry": {
+       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
         "bob"
@@ -261,7 +799,7 @@
        "node_id": "a",
        "nonce_digest": "dad956feb0ba8e5f889acee66672fa39b4896ac9fd32756bdcbe2107e385ced5",
        "object_id": "release-signing",
-       "payload_sha256": "abababababababababababababababababababababababababababababababab",
+       "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
        "principal": "spiffe://regalia/ci/release",
        "purpose": "sign",
        "schema": "regalia.opstate/v1"
@@ -270,7 +808,8 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
-        "sig": "95837977834119b95d4f07210311e662d9be9b7a7be72ccc9dc80df75e0a92d0e0c38290026d92b2e6a4bd145987a5102baa8f516536c32e77f8dbe5af31cc02"
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "sig": "31ba70dc23deb971c6d304574521114f771ed26b58badb84b953ffaf9a7498a27e7d1254c03f270b32c1a06963ae27d9977bbae543da7792df7ccadcef51360e"
        }
       ]
      }
@@ -287,6 +826,8 @@
      "previous": null,
      "value": {
       "entry": {
+       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
         "bob"
@@ -301,7 +842,7 @@
        "node_id": "a",
        "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
        "object_id": "release-signing",
-       "payload_sha256": "abababababababababababababababababababababababababababababababab",
+       "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
        "principal": "spiffe://regalia/ci/release",
        "purpose": "sign",
        "schema": "regalia.opstate/v1"
@@ -310,7 +851,8 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
-        "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
        }
       ]
      }
@@ -342,6 +884,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "94730708426732abbea3d61db8cc3a302ef3222f9bcd14e57411ed9c728b8f3c53e228af004e5b9979ec0e5b2fc6cc5c1e77490c77caa40a6d1e5a33cbd4660d"
        }
       ]
@@ -359,6 +902,8 @@
      "previous": null,
      "value": {
       "entry": {
+       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
         "bob"
@@ -373,7 +918,7 @@
        "node_id": "a",
        "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
        "object_id": "release-signing",
-       "payload_sha256": "abababababababababababababababababababababababababababababababab",
+       "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
        "principal": "spiffe://regalia/ci/release",
        "purpose": "sign",
        "schema": "regalia.opstate/v1"
@@ -382,7 +927,8 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
-        "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
        }
       ]
      }
@@ -420,6 +966,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "b",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "781897b36546e84590edb841dbe0d8ec46410745e5458d641d32fffc6bfd5e4cb13c441d0e23a7c1745771f2358e56f151105b91712ced740523c846af82af07"
        }
       ]
@@ -437,6 +984,8 @@
      "previous": null,
      "value": {
       "entry": {
+       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
         "bob"
@@ -451,7 +1000,7 @@
        "node_id": "a",
        "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
        "object_id": "release-signing",
-       "payload_sha256": "abababababababababababababababababababababababababababababababab",
+       "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
        "principal": "spiffe://regalia/ci/release",
        "purpose": "sign",
        "schema": "regalia.opstate/v1"
@@ -460,7 +1009,8 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
-        "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
        }
       ]
      }
@@ -512,6 +1062,8 @@
      "previous": null,
      "value": {
       "entry": {
+       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
         "bob"
@@ -526,7 +1078,7 @@
        "node_id": "a",
        "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
        "object_id": "release-signing",
-       "payload_sha256": "abababababababababababababababababababababababababababababababab",
+       "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
        "principal": "spiffe://regalia/ci/release",
        "purpose": "sign",
        "schema": "regalia.opstate/v1"
@@ -535,7 +1087,8 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
-        "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
        }
       ]
      }
@@ -573,6 +1126,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "fa050e7ee643702f22f0039d054f71af6a8f373799a81ae7c03438d6ae592b466065d03c8447b785cc1c4459d2beb4f054e2199a94addbc88448518626502a03"
        }
       ]
@@ -611,6 +1165,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "06c88ae11e8decb6063a16cd3854f8dcf13bad435d4d4d590d6f3d25a9a1643e0b372f894e215c361ce63bb07cc5e0f3d4d4a83ef52e6fa8d448c948f45ec801"
        }
       ]
@@ -628,6 +1183,8 @@
      "previous": null,
      "value": {
       "entry": {
+       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
         "bob"
@@ -642,7 +1199,7 @@
        "node_id": "a",
        "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
        "object_id": "release-signing",
-       "payload_sha256": "abababababababababababababababababababababababababababababababab",
+       "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
        "principal": "spiffe://regalia/ci/release",
        "purpose": "sign",
        "schema": "regalia.opstate/v1"
@@ -651,7 +1208,8 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
-        "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
        }
       ]
      }
@@ -677,6 +1235,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "d11a315e2e4e6e7045327c89f6e11fc432810324033377e34fa92f8b745c281ca0659023d1e8a778be8e9d26ea3160985d43096f58edd6fd7657c12e8005000a"
        }
       ]
@@ -703,6 +1262,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "fbe9b1004f7fa10ef75d613dd710660aa84c8fa0201f1cab707a076da516d51bf5f87a8a8a11faf73807dd78745d0a721c8f4c1db008d51ddadc69db2a252a00"
        }
       ]
@@ -729,6 +1289,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "46487fa33beebce3ee2c719fb4fd6780934b8aa9339284ad3639261618df02ecdd4626e36d7177f51e0a7f45d9e1a13f8f6e56ab3647a3706bf82112d2060b0c"
        }
       ]
@@ -755,6 +1316,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "39b177320f4e5531f1de621b8f47f929e50fbc1bb8bb8e23fde0f5fabf906a877db488eebb48605a56383ff5a25f2417d03d22f66d7045a06be896bee4f98900"
        }
       ]
@@ -781,6 +1343,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "1d188a07830b9488fe538c9d2e86deefcc543188b99fd07d52a4097a2c9fccc5b16bac3c8e757e4e62afe5f9d335fa5f8ddb878946a13755c13e2d87f758a701"
        }
       ]
@@ -807,6 +1370,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "2e66ca0d737f9967670a180016ab0da03b8b36684b4e48392a14f076e9f48f8c0dbf867b63f0a970d4c5ff2ca23c9043450775294407ef49733aeb1261174f0f"
        }
       ]
@@ -833,6 +1397,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "6f33c65ceede4cd65b5486181efd0d0f1fe24b2ff068b07538334833f61efaf96fe73e6887ed8d690dffac5cd6a830097a21e67e68abf5ab59abfc2af33b690e"
        }
       ]
@@ -859,6 +1424,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "a7bf26af9fb3491070d4308877a873d72fc789f273e9642e69135d2ef14aaaa416347a2729916034a660672e964017601b4c8fce001f3625af4c276e26f1200b"
        }
       ]
@@ -885,6 +1451,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "328057abc207adcf526a0bc281a28075068d086d6ab6a29a899f8a6aa5419dafec1494716be869c302df9838eedbbde10084e493a1d81c7affc2ae9b3992c106"
        }
       ]
@@ -911,6 +1478,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "2b1148a348b14004cd90ff58dca3c1bdd5b1fd7d19d3b001043854115094542d4fff3687a3bf3aac3db43ef6b96511b2c4648df444c31193de8bb7ec571e3702"
        }
       ]
@@ -937,6 +1505,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "a7c003757a1f15d2bab0ce81f7066272c90f719b58915c78da053f31a13f151a95f444056a9ed6e9286cd8c0189f38793f3ed1db9a90b6cf13f936273cf5b805"
        }
       ]
@@ -963,6 +1532,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "f355bfd7a2e2e00a6b2b2c9bdadc9b2c272fc76e72b061e89b756027d78ffa1797832d31222f54ddfae6d647c028dfa9dc0ac2f60f3e650923d8cf76b7ac910b"
        }
       ]
@@ -989,6 +1559,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "01ba5559a090661b622d6a2384f10c3b64a48b412ab93488b0602826357a3e7d230c78c37843d50b0da218df6fd449405ed547249b0ef41cc33938dc372b3000"
        }
       ]
@@ -1015,6 +1586,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "f3ad25f616355704b6c37d641823342f8c1a590101dfe409fad5cb27fe06101b2111b04c28e4b7ee172b60c868bcf1af15dcdb0b7225d4b2392c0b4cfb78310e"
        }
       ]
@@ -1041,6 +1613,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "c5cf066c4a8378794ff4a43b599cb57a322985c22c19dfcc850d119dfb4dde8b6c16d8962ae4177a378fc26cb440d7fe8bfb92df060c3faf4f31eed0ec6d3b04"
        }
       ]
@@ -1067,6 +1640,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "e860d280bbb5577fd9418e58a26a166fee3abe9b4f5f4163bd5fc6a4570f475d20fa1e633ed123201c2ab69e4908bc2a8e9d7800fac79272d2935d1f08f7b802"
        }
       ]
@@ -1093,6 +1667,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "c788398eb515bf5ff1958ceec02c1640bbfec6a0f403ebfb966cee3a51afa2dcf218272296795e3153335c60a21caad25e1911ed1d21bcc481350489493aef00"
        }
       ]
@@ -1119,6 +1694,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "3a662bbdf6c2b7d5ef5066a93d88f9eedc9af6e00832c719a44306eba7bf4504202ab1685f5f7fec695a20ea3aed0aba69e7063d62d427ce9eb21e3a098fe40c"
        }
       ]
@@ -1145,6 +1721,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "2e735dadf72ef13d3f907e81d8f543eb0a28198e3623c9035ee7db6ba85ba69a952f2454763b0f6dfe68b4b4645214d25e32dc2f1d0643ffb83c32475e2a0404"
        }
       ]
@@ -1171,6 +1748,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "e304b4c9a6cada85b91dee927b077221845d7bc21a95d85512c23ece5bf935d3ef528dfc14d30e4e90899f08bf327fb85e22416adeb0f17e8b0c7b9d05773a0d"
        }
       ]
@@ -1197,6 +1775,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "8edff75a6f06586ca3e18ae29bb16a6a0d6c620bb5a24d39ba7287cd8bd52625cf5d9dbdd7a3256060c44d31871359fe2ad23380b4d1f4f81a61e5b6652ccc0a"
        }
       ]
@@ -1223,6 +1802,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "07e9a88b8413c3429f613d1528aed2baadf2889ad6e2c436754160bcc0f8dea09d74a94f0c9ddb9d6a216681a6e02f4a62ed0368d8c7b28a597c30143563420f"
        }
       ]
@@ -1249,6 +1829,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "f8b089a102fc0e0e6cc1d4f4bf21235b5d411826c6739fe355bfa364b48d768850425cfd85ed18b3a49d15ba520611ecc679d1d4e92fdf7903623d2b24a28705"
        }
       ]
@@ -1275,6 +1856,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "e378da590786989f9946518bdb31560f470435f34495613943f0ead37dfe29949f1f64f56fd1d60d59084ab90c1f904c3be995f936c8b516206b5dfe0e58c409"
        }
       ]
@@ -1301,6 +1883,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "18c9cc918458c33d86eb980a767a9a68e226fd97be15edc3b629060094b61b10877bb288614a4e83c0472c667369c543c5ae8902c7b1b3cfda553859f495970f"
        }
       ]
@@ -1327,6 +1910,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "b002959e42d812e198d903a7c5c6ad7626eb05748b2486132b15539e261c7dba11f5b9004f64ecaae29ca7e1f47c69ed59677bd700b920c1d569b5bd557e6a04"
        }
       ]
@@ -1353,6 +1937,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "4424e202c418c83c87df9f0b478c7bea317fea13348ea04998223563d61d67c974a78280e5c69d7060f4fd361bfe035c607a80185e31358e3d202b1a8d24c60e"
        }
       ]
@@ -1379,6 +1964,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "868c0e5e88dbae1fb699cba34af20c3867ddfc7bf683b66c5fc974d9fdcc23b963f5a94447804186767fe204ccd8a23751ebbf51d7a71043eae59d7516d7d50a"
        }
       ]
@@ -1405,6 +1991,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "6c6761649a27ca462dd994f8ee47aa805c6ae2d7757de034ab59404ce479c58f726dea7960cc4fa91d8fc14c7e8a162b48e4b620a3709b0c2772ec8ebf1c2201"
        }
       ]
@@ -1431,6 +2018,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "d9996279aeb44e268d1f47c6a36e06564f21002792104d04e876e8395562acdcdbcb2c0bec7355be91451e558310429aeb5e4d10ac15f96a4f03440ab4f15b0f"
        }
       ]
@@ -1457,6 +2045,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "1d497688844c5f29f5ba892638d454dba2a191333a0d60c2a9a8a9cbc9be495f73dee3c09a1149d065213dc7e10f2bdbca23aaf3a50d6953b1ff621ca2712e0c"
        }
       ]
@@ -1483,6 +2072,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "1c59fb12d3302534b6b11909dd5810cf8df8bd7f3c57dd5e7815ab04024c8caf4a1be36fe8fa6ed80a4ec5721df46e701e963c7efcd12b39e7c687a6d021b401"
        }
       ]
@@ -1509,6 +2099,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "df44970b018cea3fc3f620c021d811a9932892d007f2572573742f3e43209e6ee670845bc1c963ff0c5a19d473a994fe0b6e15a6c0148fc34c779584365f3405"
        }
       ]
@@ -1535,6 +2126,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "a31f29314ef326500b0940b143a00bb653acace7a76c64505fdfc436f05903ab4fb686fda6eb9f4051145a18ec2026a4a77ca14a7ccf6bf88769aefdf355230a"
        }
       ]
@@ -1561,6 +2153,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "498883b25fdbc9b7e52a9d5336b0f453b500969947a780a93bc8114cff3b245efda2840b9e7eea51a3a0a987eb07c8bb28c5aa60558154ed01a79f1ae362b807"
        }
       ]
@@ -1587,6 +2180,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "92738e0024ce6f0d60a30252e5a3d4fccd18d42ced69a92956181461e400b81c68764e8ddb389f81ee6b3a0b4b23aaca7b4f0b3d25c76406b36eeb37efe5980e"
        }
       ]
@@ -1613,6 +2207,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "2d5328218458e6c60b596bee2ec684bd065a59bd18a86604d424bd80b57df5f65592fa5fb2809e0cb5a4b2af0b8faf8ff8a6c2dae31c07f81c0b9c5f508c0508"
        }
       ]
@@ -1639,6 +2234,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "09992003aeceadbcb40b06d8dcb5b73386fd4c838fa04ed55a2f6f80db5a9faebeea8a8ed7193a40c4e490c0a6b5350413d32ec2ffe941f217f72b455246a503"
        }
       ]
@@ -1665,6 +2261,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "7e3f7316e0867748341230b832a96cd720f3d29677ed10c160318b3448c4398fa2da493a0bce34ffac03d171bbbe85dc59a7748a8ff4da97888481d2cf811708"
        }
       ]
@@ -1691,6 +2288,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "3129a0d877f9f18f4b0c07bbed3c0d3355c6783daeb1cb2f7b5f08b139689e3ffe01d030f623e80f51a68e6827ebe877cfcd11bb5cf0141492695f3420ae650a"
        }
       ]
@@ -1717,6 +2315,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "cdc66cb46125f1b87c16908b1cff91518ec5167e1258aaf8d19148b4a67535cc58e0263896b2e50aed5c6b77f493ac9001c8428121f0a0b7aabb421af293af0c"
        }
       ]
@@ -1743,6 +2342,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "0ea5bca99c014b8e98dfe3c672decd41e145caf624cab82c18ce847311ecd2be8c90a436a8bd12221ca83f1bf547015be2104b9ced4c8c2a063d0610ebc99e05"
        }
       ]
@@ -1769,6 +2369,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "3e01c054d260cd71313ee936eda1ff3e6d40279eb1a716c55f0c535217a30f7c1295e1ba886408cf1422e57e949b7dc03ac43652d00b765fcb3933ca836b7306"
        }
       ]
@@ -1795,6 +2396,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "3bb3c04701d6c4f6298594e6164fb1fde83502eaf8e8989bb8ff77ab6bf9f90bf58b5124b101c2e89735f67e3d07a4a87f0c333c45b44d243f6c1e6608cc9002"
        }
       ]
@@ -1821,6 +2423,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "1849f0c36bac3f419578a5d61f8a4c18989492903a2b601f0eccff775f5aca9b3795eb526354d5f9ed31b6d18d7970f5c0e6d5cc48c6ebcf60e430ae0577810c"
        }
       ]
@@ -1847,6 +2450,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "ad50378af2872d22e0c3e40d10db06f6386e6bf82708e56323389bc1245839713b741e35a8fbf5c62e56b6fbbbbfc6f244462442777f533d7e5e441905164f0d"
        }
       ]
@@ -1873,6 +2477,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "0b7f5664463973f99f0df49bc02cc3a74dfca0db2e74fc90fead9321238e8de3238402c76f06c789ca1119def1ed4463f3b86f3e3bafe745d8e576be652c4c0b"
        }
       ]
@@ -1899,6 +2504,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "f6c4458f5f6bec077582ccd1a49b5b2f33e0061f2e2f4b8451deafa4809af56f9774db6691f9eae4d09ef29eada0a207d84d17206f74c4c06a0714a984d37e00"
        }
       ]
@@ -1925,6 +2531,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "a833602269d3b232e944cd80539267f17d520d11b19c7fa43e507b5aaf2502c5e844fe74c723c803052086f6eda5b8065750801f87b36dade13c67729d6ad00b"
        }
       ]
@@ -1951,6 +2558,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "7d531f9b9a5d46e8bb2d66b778dd5a7aaa1c94a6f458d321e3e62bd77716f4d9feb7a3110c50b952b6645606e7ebe279da3bfef900b8a74ed329a21e90a74d05"
        }
       ]
@@ -1977,6 +2585,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "52f9f88f41b5f01e60ee9b3a2d0a60c71e655203c6cfb171914ba9e2328c555c1c8d30805d9c334e6f2ac2c49aaa334317671ecac2f477b8af2075ce609d6e05"
        }
       ]
@@ -2003,6 +2612,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "d0522088d2f43edede408969e1cffb43be6ec1d38a936f8947e80dd90a8026fa6a2a00d22651c2a2f779f3ecde30527f4ebc51f815acad67af3873c4a19f3602"
        }
       ]
@@ -2029,6 +2639,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "2fafe288208cf37272304aff8ca40a63e4c9628722298ecc73a3794d4bd6c86ed9d8366f38c18e575aeb8b8d2399407a6b5451af5c6f4f0f99aeb453380c5700"
        }
       ]
@@ -2055,6 +2666,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "697c2f843ff769574c03151c7a3652d499c84e49067b280c06ea8f457005fa3f1facd9a964619ceab42571f1ccfa533b70888fa820e0667bf79c7cb0762e690a"
        }
       ]
@@ -2081,6 +2693,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "7d63c4a39bf85032d5feaa7078e3689ebbee6331976cec164941ced564dd1b28a5edcc8b2d0834a4c70ad2d826b5cfe570ecae1428c8e58993e5b78266a6ac0f"
        }
       ]
@@ -2107,6 +2720,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "5413d422562901e9f15231632bac9ff823869101d898e6864326cb1b3e0a4c506d69941ac46ccdc875749cd433a64d07e55f0c10378df17c8d245642bd3f990f"
        }
       ]
@@ -2133,6 +2747,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "b4ce0abfa1bf714012bc1f5393ee15122c8257e41d3ea31adbfa82b5e662a9ac114713f6aba013faa9d0a2ca45b59b5f663ef41af5022a41c9b7213ba7077c00"
        }
       ]
@@ -2159,6 +2774,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "8807948cfe4c9582f59709e1680f8c81c175aa35035c9d88eaf3c16663ea4480a2e0fccffe8d146a008ca723faf9e95a2643a4ffeab353b4180b143d505f020b"
        }
       ]
@@ -2185,6 +2801,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "cdf0a4146a950725600466cb79f816c8634de4891d8bce724a6d4464d456976b07942a30f09bcd93643edad67e35f1e0b19f7b47d272869a33c8e2b5bec0b304"
        }
       ]
@@ -2211,6 +2828,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "945db7ece6754a1a584dd220d68df91227a4f5ef05f94b26c47f41180605979eaecc5016e55f8d2deb37c2b74bddf68206bb3250396a8001efa4fdccdf16c20f"
        }
       ]
@@ -2237,6 +2855,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "88ad5687f1bcddf4afec80e2173e39df6a8b9c03fa702bfdc0012e1519c8c2e59766c580edebf83225f561ce4669d7f691875a5398e6b05d349df15d98f6c00c"
        }
       ]
@@ -2263,6 +2882,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "e56b1dbdc9724e818ef3f8d96c7aee770ae5111502b81a1e16e67cca97c423119c41574c96fb061969774e1360439bb17c3bedea1d4609e0991c971c839ad108"
        }
       ]
@@ -2289,6 +2909,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "7ac3545ea33a3682be9e1a3e2debdb5d994341d70d013ac98220a9a94e3aadb682e325d75e4f40829059b923cb9f3f4dc707acaea6a2e25840eaf7243c45f60c"
        }
       ]
@@ -2315,6 +2936,7 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         "sig": "bbae56c3389545548b82486a03705560a6cf152a29fb504af979f1ab48b0db7c35ba12f20f92405157ae03169093de98d9751fbea822f28735b5eff7850e7e09"
        }
       ]
@@ -2330,6 +2952,8 @@
     {
      "key": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "previous": {
+      "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+      "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
       "approvers": [
        "alice",
        "bob"
@@ -2344,13 +2968,15 @@
       "node_id": "a",
       "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
       "object_id": "release-signing",
-      "payload_sha256": "abababababababababababababababababababababababababababababababab",
+      "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
       "principal": "spiffe://regalia/ci/release",
       "purpose": "sign",
       "schema": "regalia.opstate/v1"
      },
      "value": {
       "entry": {
+       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
         "bob"
@@ -2365,7 +2991,7 @@
        "node_id": "a",
        "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
        "object_id": "release-signing",
-       "payload_sha256": "abababababababababababababababababababababababababababababababab",
+       "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
        "principal": "spiffe://regalia/ci/release",
        "purpose": "sign",
        "schema": "regalia.opstate/v1"
@@ -2374,7 +3000,8 @@
        {
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
-        "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+        "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
        }
       ]
      }
@@ -2391,6 +3018,8 @@
    "python_reason": "",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -2405,7 +3034,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -2414,7 +3043,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
      }
     ]
    }
@@ -2422,11 +3052,13 @@
   {
    "accept": true,
    "key": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
-   "name": "a spend with no approvers (a request no policy gates)",
+   "name": "a spend with no approvers (a purpose no policy gates)",
    "previous": null,
    "python_reason": "",
    "value": {
     "entry": {
+     "approvals_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "approver_set": "3e26ce3ec785ae88ef392ba771e89696904b11af3722bf0a2ff1ab570ee5a583",
      "approvers": [],
      "at": "2026-10-05T12:00:00Z",
      "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
@@ -2438,7 +3070,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -2447,7 +3079,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "55f086a9ba0fa5303ccf41ddd3ec17753ed837363b1bc8dad743e4be2f6ba94c8a8a12b6cf1bfa956cd365237eeec363644ac9fbe91978fafd145820d4b22d0e"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "09a28feb3228978a8c40dff880677e0394c7a93515cd293a8af07dec2f2b29ec8dbc714907cbff797cb43c7d089d15715896b88ba7a1ada18560a328d2cf0701"
      }
     ]
    }
@@ -2473,6 +3106,7 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
       "sig": "2508cbe0bcf24c1ff3d34cf9294b2a01f7481729e3d2f8209657301e8d70d74421247840ef69ddc347f7eb2aa46ba43ad0282b101bb1d6e4934d048788f9b60d"
      }
     ]
@@ -2508,6 +3142,7 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
       "sig": "926a2696f108c4dff91ea40292dbbed4926773fa8cbde535bd71d9b6bec615ff2f53d306c493c8a4f67cad822e13f0ab458c535e0185e226234e660735158307"
      }
     ]
@@ -2549,6 +3184,7 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
       "sig": "fa050e7ee643702f22f0039d054f71af6a8f373799a81ae7c03438d6ae592b466065d03c8447b785cc1c4459d2beb4f054e2199a94addbc88448518626502a03"
      }
     ]
@@ -2590,6 +3226,7 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
       "sig": "7207d1f1b843311d20f4a1d77d41a83d62fbec3faa606cde89529918b7653b2c2493e85d37c24c649feee727e532d0cedc8e119613fc6a25fad2ed6e29459605"
      }
     ]
@@ -2777,6 +3414,8 @@
    "key": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
    "name": "SPENT: the nonce exists already",
    "previous": {
+    "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
     "approvers": [
      "alice",
      "bob"
@@ -2791,7 +3430,7 @@
     "node_id": "a",
     "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
     "object_id": "release-signing",
-    "payload_sha256": "abababababababababababababababababababababababababababababababab",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
     "principal": "spiffe://regalia/ci/release",
     "purpose": "sign",
     "schema": "regalia.opstate/v1"
@@ -2799,6 +3438,8 @@
    "python_reason": "SPENT: the nonce d3e6a034dfb02da1 was spent by a at 2026-10-05T11:59:00Z",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -2813,7 +3454,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -2822,7 +3463,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
      }
     ]
    }
@@ -2835,6 +3477,8 @@
    "python_reason": "the entry belongs under /regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4, not /regalia/v1/nonces/1111111111111111111111111111111111111111111111111111111111111111",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -2849,7 +3493,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -2858,7 +3502,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
      }
     ]
    }
@@ -2868,9 +3513,11 @@
    "key": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
    "name": "a spend signed by a key no lease names",
    "previous": null,
-   "python_reason": "a's session signature does not verify",
+   "python_reason": "no verified session entry names that key for a in boot 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -2885,7 +3532,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -2894,7 +3541,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "f90db8808c139da3be45eec99e84664d6d71d71748fcb566312c91225d25e5de8c9a27cbc8ef88e5489e24740da653d5f09d4020838fc9db50223b7d4e82ed05"
+      "session_key": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618",
+      "sig": "6cf0d366e8efec2fec471eb9d2e81ac6ac5a7a47ea8fee86303124cbb335adf650a5b653f252125109e4fd28c46a1d33ef07f2a4d415325f9f9ca8f14f4b890b"
      }
     ]
    }
@@ -2907,6 +3555,8 @@
    "python_reason": "the entry is signed as b, boot 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0; it names a, boot 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -2921,7 +3571,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -2930,7 +3580,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "b",
-      "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
      }
     ]
    }
@@ -2943,6 +3594,8 @@
    "python_reason": "the entry is signed as a, boot 11111111-2222-3333-4444-555555555555; it names a, boot 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -2957,7 +3610,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -2966,7 +3619,8 @@
      {
       "boot_id": "11111111-2222-3333-4444-555555555555",
       "party": "a",
-      "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
      }
     ]
    }
@@ -2976,9 +3630,11 @@
    "key": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
    "name": "a spend by a boot with no session on record",
    "previous": null,
-   "python_reason": "no verified lease names a session key for a in boot 11111111-2222-3333-4444-555555555555",
+   "python_reason": "no verified session entry names that key for a in boot 11111111-2222-3333-4444-555555555555",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -2993,7 +3649,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -3002,7 +3658,8 @@
      {
       "boot_id": "11111111-2222-3333-4444-555555555555",
       "party": "a",
-      "sig": "60d933484d3433efa8e8a0d8a64017c47a89095aa87bfe549f2233fd829b28f1667ac814c187957b5520d68d4957c08ad3927b463d7066a937dad99d9024ae03"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "8cc46c4ce9b3052de0d855720b9f89841a8ee6dc425227ed6ae2ed7a4d420de3cb72cc57f1ebc1e802de7833a64a83011ee9832567a56f6547af425b501bc20d"
      }
     ]
    }
@@ -3015,6 +3672,8 @@
    "python_reason": "a's session signature does not verify",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -3029,7 +3688,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -3038,7 +3697,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "e13edb972df73136773f061817c4b01767c883be83d7211351126bed86970a90cb9a9896cbce7f0a57ce4c5e6f656b6425cb009eabb9c92810a6f066da1fe004"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "cd56f356cd54aa4c9eef7e4169cafc4b825348deef659ca4c07e329a1b3be918143ac230c33351cfdae3f412e5d9092d672aab6fa5b33fb95c37668a483df503"
      }
     ]
    }
@@ -3051,6 +3711,8 @@
    "python_reason": "the signing node's lease had run out when it spent",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -3065,7 +3727,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -3074,7 +3736,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "19f04a1dd338792ae0e6926853eccdad9037c00fc1a6cc9de0e1564ff42d5e90031ab3ba9cb047a02e74ca2404e5863449afae6a7889f5826649cd5d9e0f3804"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "40330d4b1c3cdcd3ed530c2c1300cac912b5ac5d1d3a94976e79d33a89431dbe67f1ef16d5706d13b2b10c3aac4227360c4f5d36c613c6f5c6b6ec78a259c401"
      }
     ]
    }
@@ -3087,6 +3750,8 @@
    "python_reason": "the request had expired when it was spent",
    "value": {
     "entry": {
+     "approvals_sha256": "92d64e492ed17f897e2ef8087feeae7caeb901dc79660656a7e42d12dc9b9c6e",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -3101,7 +3766,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -3110,7 +3775,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "16e477d498572aef2869b19d222cdef93528e05192ea1ae7673d6f218d41b13ff649380a88f218103598575311c7dd442dd5561f5697effd9daa7b10ab10ac06"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "0784120e687c49ea98bee1713b9aa3c0fb5b44cb05acdeeb04fe7430012466a5ac4815b6bf57e51e38ebf7cc9c318536db3a9d76fe0cc8ca1668d83145a8e607"
      }
     ]
    }
@@ -3123,6 +3789,8 @@
    "python_reason": "approvers must be sorted, each once",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "bob",
       "alice"
@@ -3137,7 +3805,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -3146,7 +3814,47 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "a4ea340a7fb5a9887e7116ec118ef7b509b4e217c285e2533312bbcf40c094894ae202cb6b334071bd9093347751742f662267ff7c89831d81460d036ba8ed05"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "8b8dfa86d027c40fa933362ac586561a34c168152948af22b149030595071d600b49e41435855ae1e3701db0cbe5b7a8923009b8bb7fa111d8892f0359135306"
+     }
+    ]
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/nonces/0000000000000000000000000000000000000000000000000000000000000000",
+   "name": "an approvals digest that is not hex",
+   "previous": null,
+   "python_reason": "approvals_sha256 must be 64 lowercase hex",
+   "value": {
+    "entry": {
+     "approvals_sha256": "xyz",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+     "approvers": [
+      "alice",
+      "bob"
+     ],
+     "at": "2026-10-05T12:00:00Z",
+     "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "environment": "production",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "kind": "spend",
+     "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "lease_expires_at": "2026-10-05T12:00:20Z",
+     "node_id": "a",
+     "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+     "object_id": "release-signing",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "principal": "spiffe://regalia/ci/release",
+     "purpose": "sign",
+     "schema": "regalia.opstate/v1"
+    },
+    "signatures": [
+     {
+      "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+      "party": "a",
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "58f8e75eb3928dba9a3a0ce013ecc030fd1371eb448d61b223c1d2b70a162f6b62308dc983a60513290662246ddf15cfb868966991839db0e590a14b2067f608"
      }
     ]
    }
@@ -3159,6 +3867,8 @@
    "python_reason": "approvers must be sorted, each once",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "alice"
@@ -3173,7 +3883,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -3182,7 +3892,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "504e31105a3a36c66bf1e4ab69ab0612a3b02399e8ec0b49fea01b6f06fa5edaff97a6fb0437cf565a37ae7e3b032dbd282d67fb3125ac08e6e0ba6ea078380c"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "9b13a737b8c8866329b92c0283e2878b0b8c2a4a6622ac5f69d589f2a2a811458d6b4733f1a60cff0a9fa2132925eb1c6c434e3b93ef5211f17c11596dc1430a"
      }
     ]
    }
@@ -3195,6 +3906,8 @@
    "python_reason": "the spend entry fields mismatch: missing=[] unknown=['note']",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -3210,7 +3923,7 @@
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "note": "x",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -3219,7 +3932,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "080a0284c63099f25d05d866908473a053bed896110b17c6db2e2be733b2da1eae929a909e83016e1db3ee349b33fd17a1cf49c6ee3ba0c225acecc4a1a66600"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "e2751ffa173f9233462b3f43d7787d06d563f456ca92157d60158698185baccf2512a2a4ed7ca86d4c0eb1208ccd82bc3d7ee6f9a7232d535adba665caf14e08"
      }
     ]
    }
@@ -3232,6 +3946,8 @@
    "python_reason": "schema must be regalia.opstate/v1",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -3246,7 +3962,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v0"
@@ -3255,7 +3971,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "f5ca8d6ab9fb0dbc7e8f8a9ada2b68fc300da1d6df3a9e6be0da3a4a8bedc84e82148a5b4c28ef7e9d6da198e3e687c34cdf4a9b42397f1a2b96990a67add208"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "fd695eb58630c511e366e5e9cb3a3c883467638e3b89905e96b756f655bef306d1f0e6a3eadfda1a9a69914721dbe0cc325991fc65b11af863317aa86db9c209"
      }
     ]
    }
@@ -3268,6 +3985,8 @@
    "python_reason": "kind must be one of spend, sequence, quota, key-state",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -3282,7 +4001,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -3291,7 +4010,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "88c1e9f4824a719520aa6e9528675e043123368f21127148cf65a03bace98df96073a2820bb5c4a9db44a93047624dfd9cfd8ff52f12e1aeec738b2e4d95dc09"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "15e0ead8a54b6fc8b2ee9f238472001564fb0e3dfa8058ed3287f28b1f087158bc4bcd7b57e07d6bd6ab4f2793094a9fd1406651199b141177fdb79a7beb550f"
      }
     ]
    }
@@ -3304,6 +4024,8 @@
    "python_reason": "a node's entry carries exactly one signature",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "alice",
       "bob"
@@ -3318,7 +4040,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -3327,12 +4049,14 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
      },
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "03f9bfffbc05ffa45df4ca08d83b9072395b5897196acc5b06cbd29a972699790b657bb25b7e856b2dcc2aaa61adc978caf9e152e355fd0a5bdc88f8dd04a407"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
      }
     ]
    }
@@ -3345,6 +4069,8 @@
    "python_reason": "the entry is over 4096 bytes",
    "value": {
     "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "approvers": [
       "approver-000-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "approver-001-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -3387,7 +4113,7 @@
      "node_id": "a",
      "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
      "object_id": "release-signing",
-     "payload_sha256": "abababababababababababababababababababababababababababababababab",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
      "principal": "spiffe://regalia/ci/release",
      "purpose": "sign",
      "schema": "regalia.opstate/v1"
@@ -3396,7 +4122,8 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "5a64db43d125a179d69aa92a1e0f13831c7730e773ec347eb8e0ac758a9bae52f83ac5619f749f4dea4950dae73c3f13c699a2e82b443cecdc58f12f3e9eff05"
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "sig": "9be5734faa6c86714c42197b97cd4de8cacc7ce3c05caa6701a63aabeec1b3a4ff440e654ce119563db4f82ae8d933cf256ccb80747ca0bd4b02903da5a27908"
      }
     ]
    }
@@ -3431,6 +4158,7 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
       "sig": "2508cbe0bcf24c1ff3d34cf9294b2a01f7481729e3d2f8209657301e8d70d74421247840ef69ddc347f7eb2aa46ba43ad0282b101bb1d6e4934d048788f9b60d"
      }
     ]
@@ -3466,6 +4194,7 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
       "sig": "11946f3e6aea23ce91e4b4360bd6d5847b76a87fc15f704435b22b188a3d4a8d5274109c38a14b0e14c77dd686fe452c25e6152596ef117e7d9a5b1e317c7a08"
      }
     ]
@@ -3507,6 +4236,7 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
       "sig": "78fc76ea5e158c194e4797c9e0a4a7af7c83d9ed0b8b565da1954d0fcdf44209e8d3ee8fa850b393e90cba04259fd230a846c48633bc371b2ab1fa265954a200"
      }
     ]
@@ -3548,6 +4278,7 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
       "sig": "5f76b54c90bc6f187f4f05a5df41451720f20dedca1220c6ff0e1bc9bdde9717201208cac1f282de1e0a0e14d5324e9ea9671cd1c8a7dee4fdb4f7bcfe88d30a"
      }
     ]
@@ -3950,7 +4681,7 @@
    "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
    "name": "a key state signed by a node session",
    "previous": null,
-   "python_reason": "an approval fields mismatch: missing=[] unknown=['boot_id']",
+   "python_reason": "an approval fields mismatch: missing=[] unknown=['boot_id', 'session_key']",
    "value": {
     "entry": {
      "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
@@ -3966,6 +4697,7 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
       "sig": "aca2716adc1ab95deedd8fd257dc53b0cf187a594c2eddf9bb4c593257f6d2cc0e8a23b3c819f97d8c96ec0f58c388f12d7c5ab972af74622bc42c139410b801"
      }
     ]
@@ -4004,6 +4736,7 @@
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
+      "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
       "sig": "a9d32c4e91f6c36394070f1e34199593e4a55f0c18a6a2ce49a70a8d1c4a69901770836691381c9815650532217f6757870b15366693b3123ab2d41b26e1ef00"
      }
     ]
@@ -4011,9 +4744,355 @@
   }
  ],
  "domain": "regalia-opstate/v1\\0",
+ "manifest": {
+  "activation_signers": {
+   "parties": [
+    "a",
+    "b",
+    "c"
+   ],
+   "threshold": 2
+  },
+  "epoch": 1,
+  "heartbeat_max_lifetime_s": 21600,
+  "heartbeat_signers": {
+   "parties": [
+    "a",
+    "b",
+    "c",
+    "owner"
+   ],
+   "threshold": 2
+  },
+  "issued_at": "2026-10-04T09:00:00Z",
+  "nodes": [
+   {
+    "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+    "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+    "hsm_serials": [
+     "DENK0404100"
+    ],
+    "node_id": "a",
+    "signing_key": {
+     "alg": "ecdsa-p256",
+     "key": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+    },
+    "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+    "state": "ACTIVE",
+    "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+    "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+   },
+   {
+    "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
+    "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+    "hsm_serials": [
+     "DENK0404101"
+    ],
+    "node_id": "b",
+    "signing_key": {
+     "alg": "ecdsa-p256",
+     "key": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2"
+    },
+    "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+    "state": "ACTIVE",
+    "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
+    "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+   },
+   {
+    "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
+    "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
+    "hsm_serials": [
+     "DENK0404102"
+    ],
+    "node_id": "c",
+    "signing_key": {
+     "alg": "ecdsa-p256",
+     "key": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee"
+    },
+    "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+    "state": "ACTIVE",
+    "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
+    "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+   }
+  ],
+  "owner_heartbeat_lifetime_s": 3600,
+  "owner_keys": [
+   {
+    "alg": "ed25519",
+    "key": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+   },
+   {
+    "alg": "ed25519",
+    "key": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+   },
+   {
+    "alg": "ed25519",
+    "key": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+   }
+  ],
+  "policy_version": "p1",
+  "prev_digest": "",
+  "revocation_signers": [
+   {
+    "parties": [
+     "a",
+     "b",
+     "c"
+    ],
+    "threshold": 2
+   },
+   {
+    "parties": [
+     "owner"
+    ],
+    "threshold": 1
+   }
+  ],
+  "schema": "regalia.membership/v4"
+ },
  "max_batch": 64,
+ "payload_hex": "726567616c69612072656c6561736520312e30206d616e6966657374",
  "schema": "regalia.opstate-vectors/v1",
+ "session_checks": [
+  {
+   "accept": true,
+   "key": "/regalia/v1/sessions/a/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+   "name": "a's session key, vouched for by a's signing key",
+   "python_reason": "",
+   "value": {
+    "entry": {
+     "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "issued_at": "2026-10-05T12:00:00Z",
+     "node_id": "a",
+     "schema": "regalia.opstate-session/v1",
+     "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+    },
+    "signature": "5e3d2e0b5fc37353af7a1f4a88562be39f6c31784e0aaf25145973d6c59ef5f113c7be094beddfb21cd01f857657d77db4095b42799e45a4acaebe2dd2d5e902"
+   }
+  },
+  {
+   "accept": true,
+   "key": "/regalia/v1/sessions/a/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618",
+   "name": "a second daemon start in the same boot",
+   "python_reason": "",
+   "value": {
+    "entry": {
+     "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "issued_at": "2026-10-05T12:00:00Z",
+     "node_id": "a",
+     "schema": "regalia.opstate-session/v1",
+     "session_key": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618"
+    },
+    "signature": "2179baf386a1af074391b1f17faf1ee8cd67805ce8bfb8a6d7cd1b10b7549af517fe1b0818313cedfd2ab5a3f77526a9606e06f786dcb51fa3b9dbf044d20a1b"
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/sessions/a/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+   "name": "a's key vouched for by b's signing key",
+   "python_reason": "the a's session entry signature does not verify",
+   "value": {
+    "entry": {
+     "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "issued_at": "2026-10-05T12:00:00Z",
+     "node_id": "a",
+     "schema": "regalia.opstate-session/v1",
+     "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+    },
+    "signature": "d02cf337002d9c852431e6db6444f624864f075a09d417b9870699314e10cbf4647d9be64ce7b3457def5697a5a5afbcbc518a9f7a78496430922b872792c33c"
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/sessions/b/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+   "name": "under another node's path",
+   "python_reason": "the session entry belongs under /regalia/v1/sessions/a/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c, not /regalia/v1/sessions/b/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+   "value": {
+    "entry": {
+     "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "issued_at": "2026-10-05T12:00:00Z",
+     "node_id": "a",
+     "schema": "regalia.opstate-session/v1",
+     "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+    },
+    "signature": "69eb4aa309d1b2ff23b15d0aa456b896187774921b552195f8f06450f95a5f2659dcf25c4a7b27ee3e4537d8d273aa8a00d8a57d6086a1607dbb64bf36fd749d"
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/sessions/z/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+   "name": "a node the manifest does not hold",
+   "python_reason": "z has no signing key in the manifest at epoch 1",
+   "value": {
+    "entry": {
+     "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "issued_at": "2026-10-05T12:00:00Z",
+     "node_id": "z",
+     "schema": "regalia.opstate-session/v1",
+     "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+    },
+    "signature": "80d249898bafa9f02cb9e07e39011107ef1275030e20b4c982795ee5f40454110ef0dfcd3f2af0ba47721199f828deb12fb1f4b66c105f1c929046aa2dff59a1"
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/sessions/x",
+   "name": "a session key of 31 bytes",
+   "python_reason": "session_key must be 64 lowercase hex",
+   "value": {
+    "entry": {
+     "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "issued_at": "2026-10-05T12:00:00Z",
+     "node_id": "a",
+     "schema": "regalia.opstate-session/v1",
+     "session_key": "00000000000000000000000000000000000000000000000000000000000000"
+    },
+    "signature": "371a84e2bda6f042d0054084be8af0e2cd79745511861e07a06500f78bfef54a700280ad7075974c721a7588de9b005202fdd0217551c70e9e8aa4080d5031d0"
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/sessions/a/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+   "name": "a signature over the entry without its domain",
+   "python_reason": "the a's session entry signature does not verify",
+   "value": {
+    "entry": {
+     "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "issued_at": "2026-10-05T12:00:00Z",
+     "node_id": "a",
+     "schema": "regalia.opstate-session/v1",
+     "session_key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+    },
+    "signature": "64908dac967b9391639e17e8e31ee7662e63a1db7744a0f78c43738916b97d6060037bed8b1c382129be5bffa8ab8bf85e3b8d15306aba3376be0bcdb7880f15"
+   }
+  }
+ ],
  "sessions": {
-  "a|0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
- }
+  "a|0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0": [
+   "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+  ]
+ },
+ "sign_checks": [
+  {
+   "accept": true,
+   "held_lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "held_lease_expires_at": "2026-10-05T12:00:20Z",
+   "name": "the lease it was committed under, unlapsed",
+   "now": 1791201605,
+   "python_reason": "",
+   "spend": {
+    "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "held_lease_digest": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+   "held_lease_expires_at": "2026-10-05T12:00:40Z",
+   "name": "BURNED: another lease held now",
+   "now": 1791201605,
+   "python_reason": "BURNED: this node no longer holds the lease the spend was committed under",
+   "spend": {
+    "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "held_lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "held_lease_expires_at": "2026-10-05T12:00:20Z",
+   "name": "BURNED: the lease lapsed before the HSM",
+   "now": 1791201620,
+   "python_reason": "BURNED: the lease the spend names has lapsed",
+   "spend": {
+    "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "held_lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "held_lease_expires_at": "2026-10-05T12:00:20Z",
+   "name": "BURNED: the request expires within the skew",
+   "now": 1791201605,
+   "python_reason": "BURNED: the request expires within 60 s: its spend's key might be collected before it",
+   "spend": {
+    "approvals_sha256": "7912ccded30c4e95d1a3d40ac2fd012f9e3cf46ff379b84758b6799138491aaa",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:01:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  }
+ ],
+ "skew_s": 60
 }

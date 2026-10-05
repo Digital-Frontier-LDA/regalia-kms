@@ -32,9 +32,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     transition rule, and one Reserve's transaction rule, as a library with a vector for the Go side.
   Not built yet:
   - nothing writes or reads etcd: the daemon's transactions and watch cache are regalia-kms-ed's;
-  - the per-boot session key that signs a node's entries, and `sessions/<node>/<boot_id>`, wait for the runtime
-    lease v2 (regalia-kms-95), and the caller supplies the resolver;
-  - the D25 approver set for a key-state change is the caller's, not yet read from the policy;
+  - nothing yet writes the session entries (`sessions/<node>/<boot_id>/<key>`, signed by the node's signing key at each
+    daemon start), nor the spend's approvals into the signer's audit line, which the collector re-verifies against
+    `approvals_sha256` (`check_approvals`); the daemon calls `may_sign` at sign (ed);
+  - the D25 approver sets are the caller's, not yet read from the policy;
   - garbage collection by hour-bucketed etcd leases.
   - the etcd role that grants the daemons put, never delete, under `/regalia/v1/` (ed's daemon). Until it exists, a
     client of the etcd socket could delete a key. A reader that has seen a key-state refuses its absence, but a reader
@@ -44,6 +45,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     entry, because every entry carries its own signatures. A whole-cluster rollback is caught by the revision in the
     signed heartbeats (planned, #432).
   - A transaction that loses a race is retried at most three times, one round trip each, then refused.
+  - A spend's key is collected by an etcd lease of `(expires_at - at) + 60 s`, on the etcd leader's clock. A leader whose
+    clock runs more than 60 s ahead of the signer's could collect it before the request expires, and the nonce could
+    then be spent again. Authenticated time (NTS) on every server bounds that, and `may_sign` refuses a request that
+    expires within 60 s.
+  - Session entries are never deleted, so every old spend stays verifiable. They are about 300 bytes each, one per
+    daemon start.
   - Quota days are UTC days.
 - **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
   refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,

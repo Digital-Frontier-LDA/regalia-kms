@@ -26,15 +26,34 @@ KINDS, and the key under /regalia/v1/ each lives at (key_for):
 
 Names inside a key are hashed: a principal is a SPIFFE ID, and a "/" in a name must not make two keys one.
 
-WHO SIGNS. spend, sequence and quota: the node that reserved them, with its per-boot session key. The daemon makes
-that key at each start; the node's TPM-quoted runtime lease names it (lease v2, regalia-kms-95), and
-sessions/<node>/<boot_id> keeps that lease, so a verifier resolves (node_id, boot_id) to the key long after the lease
-ran out (`sessions`, the caller's resolver). key-state: approvers under D25 (Ed25519, as internal/approval verifies),
+WHO SIGNS. spend, sequence and quota: the node that reserved them, with its daemon's session key, made at each daemon
+start and named in its TPM-quoted runtime lease (lease v2, regalia-kms-95). The node's signature names the key, and the
+key is vouched for by a SESSION entry (regalia-kms-ed's design): {node_id, boot_id, session_key, issued_at}, signed once
+per daemon start by the node's manifest-pinned signing_key (domain SESSION_DOMAIN), at
+sessions/<node>/<boot_id>/<session_key>, created only and never deleted. verify_session checks it against the CURRENT
+manifest's key, as the etcd certificate binding is checked; `sessions` is the caller's resolver over verified ones. key-state: approvers under D25 (Ed25519, as internal/approval verifies),
 `required` of a set the entry names by its digest (approver_set_digest), so an entry signed under an earlier set still
 verifies after the set is rotated: the verifier keeps every set by digest (`approver_sets`), as it keeps manifests.
 
+THE APPROVALS BEHIND A SPEND (regalia-kms-1e's D25 read of #488). The spend names the approver set it was judged under
+(approver_set: the digest, as key-state; an ungated purpose is UNGATED_SET, no approvers) and the SHA-256 of the
+approvals actually counted (approvals_sha256, approvals_digest). The signer's audit line carries those approvals, so a
+collector re-verifies them (check_approvals): each internal/approval Approval signed by its approver over the request's
+Binding (binding_bytes, internal/approval.CanonicalBytes), the threshold met, and exactly the IDs the spend names.
+Without that, the one-spend check would prove single use, not that the approvals existed.
+
+AT SIGN (may_sign, in this module so Python and Go decide it alike): the node still holds the very lease the spend
+names, unlapsed, and the request expires more than SKEW_S from now. A spend whose lease lapsed before the HSM signed
+is burned: the request is approved again.
+
+THE TIE between a Reserve's entries is the spend's nonce_digest and node_id, written in one transaction: they share its
+mod_revision, which is what a collector pairs them by.
+
 DELETION. Nothing deletes under /regalia/v1/ but etcd's own lease expiry, for spends whose request has expired and
-quota days that are over (an etcd role grants the daemons put, never delete, there). A key-state entry is never
+quota days that are over (an etcd role grants the daemons put, never delete, there). A spend's etcd lease lives
+gc_ttl(spend) = (expires_at - at) + SKEW_S: etcd's leases run on its leader's clock, which may be ahead of the
+signer's, and the key must outlive the request, or a replay of its nonce would be taken after the key vanished (1e).
+sessions/<node>/<boot_id> is never deleted: every spend and audit line that names a session key must stay verifiable. A key-state entry is never
 collected: a reader that has seen a key's state refuses its absence, and a version 1 entry after a later one is a
 replay.
 
@@ -44,6 +63,7 @@ with a fresh read, then refused: fail closed, one round trip each.
 
 tests/vectors/opstate-v1.json (tests/vectors/make-opstate-v1.py) holds the cases; the Go verifier decides each alike.
 """
+import base64
 import hashlib
 import re
 
@@ -71,7 +91,7 @@ NODE_SIGNED = ("spend", "sequence", "quota")
 COMMON = ("schema", "kind", "at")
 FIELDS = {
     "spend": COMMON + ("nonce_digest", "principal", "object_id", "purpose", "environment", "payload_sha256", "approvers",
-                       "node_id", "boot_id", "lease_digest", "lease_expires_at", "expires_at"),
+                       "approver_set", "approvals_sha256", "node_id", "boot_id", "lease_digest", "lease_expires_at", "expires_at"),
     "sequence": COMMON + ("sequence_key", "value", "nonce_digest", "node_id", "boot_id"),
     "quota": COMMON + ("principal", "utc_date", "counter", "total", "cap", "nonce_digest", "node_id", "boot_id"),
     "key-state": COMMON + ("object_id", "state", "version", "prev_digest", "approver_set"),
@@ -116,6 +136,8 @@ def validate(entry):
         for a in approvers:
             _name(a, "an approver ID")
         require(approvers == sorted(set(approvers)), "approvers must be sorted, each once")
+        membership.hex_field(entry["approver_set"], 64, "approver_set")
+        membership.hex_field(entry["approvals_sha256"], 64, "approvals_sha256")
         at = heartbeat.parse_time(entry["at"], "at")
         require(heartbeat.parse_time(entry["lease_expires_at"], "lease_expires_at") > at, "the signing node's lease had run out when it spent")
         require(heartbeat.parse_time(entry["expires_at"], "expires_at") > at, "the request had expired when it was spent")
@@ -144,8 +166,120 @@ def validate(entry):
 
 
 def approver_set_digest(approvers, required):
-    """The digest a key-state entry names its approver set by: {approver ID: Ed25519 key hex} and the threshold."""
+    """The digest a spend or a key-state entry names its approver set by: {approver ID: Ed25519 key hex} and the
+    threshold. A purpose no approval gates is the empty set with threshold 0 (UNGATED_SET)."""
     return hashlib.sha256(membership.canonical({"approvers": approvers, "required": required})).hexdigest()
+
+
+UNGATED_SET = approver_set_digest({}, 0)
+SKEW_S = 60                   # between a signer's authenticated clock and etcd's leader: lease expiry and sign margins
+APPROVAL_FIELDS = ("approver_id", "nonce", "expires_at", "payload_digest", "signature")     # internal/approval.Approval
+
+
+SESSION_SCHEMA = "regalia.opstate-session/v1"
+SESSION_DOMAIN = b"regalia-opstate-session/v1\0"
+SESSION_FIELDS = ("schema", "node_id", "boot_id", "session_key", "issued_at")
+
+
+def session_key_path(entry):
+    """Where a session entry lives: one per daemon start (several in one boot)."""
+    membership.exact(entry, SESSION_FIELDS, "the session entry")
+    require(entry["schema"] == SESSION_SCHEMA, "schema must be %s" % SESSION_SCHEMA)
+    require(isinstance(entry["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", entry["node_id"]) is not None, "node_id must be a node ID")
+    require(isinstance(entry["boot_id"], str) and BOOT_ID.fullmatch(entry["boot_id"]) is not None, "boot_id must be a boot UUID")
+    membership.hex_field(entry["session_key"], 64, "session_key")
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(entry["session_key"]))
+    except ValueError:
+        raise Refused("session_key is not an Ed25519 public key") from None
+    heartbeat.parse_time(entry["issued_at"], "issued_at")
+    return PREFIX + "sessions/%s/%s/%s" % (entry["node_id"], entry["boot_id"], entry["session_key"])
+
+
+def session_message(entry):
+    session_key_path(entry)
+    return SESSION_DOMAIN + membership.canonical(entry)
+
+
+def verify_session(key, value, manifest):
+    """The session entry at `key` if its node's signing_key in the CURRENT `manifest` signed it, else Refused. Not judged
+    by the node's state: a node revoked later keeps its earlier spends verifiable (their nonces stay spent); whether a
+    node may serve NOW is its lease's question, not its past entries'."""
+    membership.exact(value, ("entry", "signature"), "the session value")
+    entry = value["entry"]
+    require(key == session_key_path(entry), "the session entry belongs under %s, not %s" % (session_key_path(entry), key))
+    nodes = membership.validate(manifest)
+    node = nodes.get(entry["node_id"])
+    require(node is not None and "signing_key" in node, "%s has no signing key in the manifest at epoch %d" % (entry["node_id"], manifest["epoch"]))
+    alg, pub = membership.typed_key(node["signing_key"], "%s's signing_key" % entry["node_id"], membership.SIGNING_KEY_ALGS)
+    membership.verify_revocation(alg, pub, session_message(entry), value["signature"], "%s's session entry" % entry["node_id"])
+    return entry
+
+
+def approvals_digest(approvals):
+    """What a spend names as approvals_sha256: SHA-256 of the canonical list of the approvals counted, by approver ID."""
+    return hashlib.sha256(membership.canonical(sorted(approvals, key=lambda a: a.get("approver_id", "")))).hexdigest()
+
+
+def binding_bytes(spend, nonce):
+    """What every approver signed: internal/approval.Binding.CanonicalBytes for the request this spend consumed (its
+    nonce in clear, from the approvals; its expiry whole seconds, as RFC 3339 writes them)."""
+    lines = ["regalia-approval-v2\n"]
+    for field in (spend["object_id"], spend["purpose"], spend["environment"], nonce, spend["expires_at"], spend["payload_sha256"]):
+        raw = field.encode()
+        lines.append("%d:" % len(raw) + field + "\n")
+    return "".join(lines).encode()
+
+
+def check_approvals(spend, approvals, approver_sets):
+    """The collector's check that the approvals a spend names existed (1e on #488): `approvals` (from the signer's audit
+    line) hash to approvals_sha256; each is an internal/approval Approval for this request (its nonce, its payload, an
+    expiry not after the request's), signed by its approver under the set the spend names, once; the threshold met;
+    the IDs exactly the spend's approvers. Returns the approver IDs, or Refused."""
+    validate(spend)
+    require(spend["kind"] == "spend", "only a spend has approvals")
+    require(isinstance(approvals, list) and len(approvals) <= MAX_APPROVERS, "approvals must be a list of at most %d" % MAX_APPROVERS)
+    require(approvals_digest(approvals) == spend["approvals_sha256"], "these are not the approvals the spend counted (approvals_sha256)")
+    named = (approver_sets or {}).get(spend["approver_set"])
+    require(named is not None and approver_set_digest(named["approvers"], named["required"]) == spend["approver_set"],
+            "the approver set %s is not one this verifier knows" % spend["approver_set"][:16])
+    counted = []
+    for a in approvals:
+        membership.exact(a, APPROVAL_FIELDS, "an approval")
+        who = a["approver_id"]
+        require(who in named["approvers"] and who not in counted, "%s is not an approver of the set, or counted twice" % membership.printable(who))
+        require(isinstance(a["nonce"], str) and nonce_digest(a["nonce"]) == spend["nonce_digest"], "%s approved another request's nonce" % who)
+        require(a["payload_digest"] == spend["payload_sha256"], "%s approved another payload" % who)
+        require(heartbeat.parse_time(a["expires_at"], "an approval's expires_at") <= heartbeat.parse_time(spend["expires_at"], "expires_at"),
+                "%s's approval outlives the request" % who)
+        try:
+            sig = base64.b64decode(a["signature"], validate=True)
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(named["approvers"][who])).verify(sig, binding_bytes(spend, a["nonce"]))
+        except (InvalidSignature, ValueError):
+            raise Refused("%s's approval does not verify over the request's binding" % who) from None
+        counted.append(who)
+    require(len(counted) >= named["required"], "%d of %d required approvals" % (len(counted), named["required"]))
+    require(sorted(counted) == spend["approvers"], "the spend names %s; the approvals are %s's" % (spend["approvers"], sorted(counted)))
+    return sorted(counted)
+
+
+def may_sign(spend, now, held_lease_digest, held_lease_expires_at):
+    """At sign, after the spend committed and before the HSM is used: the node still holds the very lease the spend
+    names, unlapsed at `now` (its authenticated seconds), and the request expires more than SKEW_S from now. Refused
+    otherwise: the spend is burned and the request approved again."""
+    validate(spend)
+    require(spend["kind"] == "spend", "only a spend is signed under")
+    require(held_lease_digest == spend["lease_digest"] and held_lease_expires_at == spend["lease_expires_at"],
+            "BURNED: this node no longer holds the lease the spend was committed under")
+    require(now < heartbeat.parse_time(spend["lease_expires_at"], "lease_expires_at"), "BURNED: the lease the spend names has lapsed")
+    require(now + SKEW_S < heartbeat.parse_time(spend["expires_at"], "expires_at"),
+            "BURNED: the request expires within %d s: its spend's key might be collected before it" % SKEW_S)
+
+
+def gc_ttl(spend):
+    """The etcd lease a spend's key is written with, in seconds: it outlives the request by SKEW_S on any leader's clock."""
+    validate(spend)
+    return heartbeat.parse_time(spend["expires_at"], "expires_at") - heartbeat.parse_time(spend["at"], "at") + SKEW_S
 
 
 def entry_digest(entry):
@@ -185,7 +319,8 @@ def _ed25519(key_hex, sig_hex, raw, label):
 
 def verify(key, value, sessions, approver_sets=None):
     """The entry stored at etcd key `key` as `value`, if it verifies, else Refused (and the entry is unavailable).
-    `sessions(node_id, boot_id)` returns that boot's session key (64 hex), or None when no verified lease named one.
+    `sessions(node_id, boot_id, session_key)` is true when a verified session entry (verify_session) names that key for
+    that node and boot: a daemon start makes a key, so one boot may have several.
     `approver_sets` ({digest: {"approvers": {ID: Ed25519 key hex}, "required": n}}, every set the policy has had)
     judges a key-state entry (D25) by the set it names."""
     membership.exact(value, ("entry", "signatures"), "the opstate value")
@@ -196,12 +331,13 @@ def verify(key, value, sessions, approver_sets=None):
     if entry["kind"] in NODE_SIGNED:
         require(len(signatures) == 1, "a node's entry carries exactly one signature")
         sig = signatures[0]
-        membership.exact(sig, ("party", "boot_id", "sig"), "the node's signature")
+        membership.exact(sig, ("party", "boot_id", "session_key", "sig"), "the node's signature")
         require(sig["party"] == entry["node_id"] and sig["boot_id"] == entry["boot_id"],
                 "the entry is signed as %s, boot %s; it names %s, boot %s" % (sig["party"], sig["boot_id"], entry["node_id"], entry["boot_id"]))
-        session = sessions(entry["node_id"], entry["boot_id"])
-        require(session is not None, "no verified lease names a session key for %s in boot %s" % (entry["node_id"], entry["boot_id"]))
-        _ed25519(session, sig["sig"], raw, "%s's session" % entry["node_id"])
+        membership.hex_field(sig["session_key"], 64, "the signature's session_key")
+        require(sessions(entry["node_id"], entry["boot_id"], sig["session_key"]),
+                "no verified session entry names that key for %s in boot %s" % (entry["node_id"], entry["boot_id"]))
+        _ed25519(sig["session_key"], sig["sig"], raw, "%s's session" % entry["node_id"])
         return entry
     named = (approver_sets or {}).get(entry["approver_set"])
     require(named is not None, "the approver set %s is not one this verifier knows" % entry["approver_set"][:16])
