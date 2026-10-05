@@ -21,11 +21,15 @@ CONTEXT = {
     "regalia_heartbeat_checked_timestamp_seconds": "staleness is node_textfile_mtime_seconds",
     "regalia_admission_lease_seconds_left": "RegaliaNotServing watches the outcome",
     "regalia_audit_trail_lines": "read beside backlog",
+    "regalia_esp_anchor_epoch": "root's reading of the anchor, beside sync's (RegaliaMembershipAnchorBehind)",
+    "regalia_esp_advance_run_timestamp_seconds": "when it last ran: a oneshot, run on each new chain",
     "regalia_audit_trail_committed": "read beside backlog",
 }
 AUTHTIME = "/run/regalia-metrics/authtime/authtime.prom"
 HEARTBEAT = "/run/regalia-metrics/sync/heartbeat.prom"
 LEASE = "/run/regalia-metrics/admission/lease.prom"
+MEMBERSHIP = "/run/regalia-metrics/sync/membership.prom"
+ESP_ADVANCE = "/run/regalia-metrics/esp-advance/esp-advance.prom"
 SHIP = "/run/regalia-metrics/audit-ship/sync.prom"
 NODE_A, NODE_B = {"instance": "a:9100", "job": "regalia-node"}, {"instance": "b:9100", "job": "regalia-node"}
 
@@ -71,6 +75,9 @@ EXTRA = [
     ("RegaliaHeartbeatRunningOut", "a 24-hour lifetime, issued 2 h 10 min ago: the age alert's case, not this one", 120,
      [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "78600+0x5"),
       ("regalia_heartbeat_lifetime_seconds", {}, "86400+0x5")], []),
+    # the ESP advance runs seconds after a publication: ten minutes behind, then caught up, is not an alert (#66 B3)
+    ("RegaliaMembershipAnchorBehind", "ten minutes behind, then caught up", 1200,
+     [("regalia_membership_epoch", {}, "5+0x30"), ("regalia_membership_anchor_epoch", {}, "4+0x9 5+0x20")], []),
     # the authtime file missing on one node only: that node alone
     ("RegaliaAuthtimeMetricsMissing", "two nodes: only the one without the file", 420,
      [("up", NODE_A, "1+0x10"), ("up", NODE_B, "1+0x10"),
@@ -120,6 +127,19 @@ SCENARIOS = {
     "RegaliaUnlockRefused": {
         "fault": [("regalia_unlock_refused_total", {"cause": "rate"}, "0+1x20")],
         "healthy": [("regalia_unlock_refused_total", {"cause": "rate"}, "5+0x20")], "at": 900},
+    "RegaliaMembershipAnchorBehind": {      # published at 5, anchored at 4 for twenty minutes; healthy: caught up
+        "fault": [("regalia_membership_epoch", {}, "5+0x30"), ("regalia_membership_anchor_epoch", {}, "4+0x30")],
+        "healthy": [("regalia_membership_epoch", {}, "5+0x30"), ("regalia_membership_anchor_epoch", {}, "5+0x30")], "at": 1200},
+    "RegaliaEspAdvanceFailing": {
+        "fault": [("regalia_esp_advance_ok", {}, "0+0x30")], "healthy": [("regalia_esp_advance_ok", {}, "1+0x30")], "at": 1200},
+    "RegaliaNextBootNeedsRecoveryKey": {
+        "fault": [("regalia_esp_boot_renderable", {}, "0+0x5")], "healthy": [("regalia_esp_boot_renderable", {}, "1+0x5")], "at": 120},
+    "RegaliaEspAdvanceMetricsMissing": {
+        "fault": [("up", NODE_A, "1+0x10")],
+        "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=ESP_ADVANCE), "0+0x10")], "at": 420},
+    "RegaliaMembershipMetricsMissing": {
+        "fault": [("up", NODE_A, "1+0x10")],
+        "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=MEMBERSHIP), "0+60x10")], "at": 420},
     "RegaliaNodeMetricsStale": {
         "fault": [("node_textfile_mtime_seconds", {"file": AUTHTIME}, "0+0x10")],
         "healthy": [("node_textfile_mtime_seconds", {"file": AUTHTIME}, "0+60x10")], "at": 600},
