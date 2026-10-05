@@ -171,7 +171,15 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   real laptop can sign. The marker and log path is unit-tested only until the first-ceremony rehearsal.
 - **The laptop's signing record is not hash-chained** (#405). A deleted line, a cut tail or a state
   directory restored from an older backup is not detected; #405 would anchor the newest card-record
-  digest in the root-signed manifest. A lost state directory has no recovery path yet (#406).
+  digest in the root-signed manifest.
+- **A lost state directory is rebuilt from a baseline, not from its history** (#406). regalia-ceremony's
+  rebuild (rc#131) writes ONE `card-record-baseline` line standing for card records 1..N, the root-signed
+  rebuild record, and record N+1. This reader checks all three. What it cannot check: before genesis
+  the baseline is only as true as the ceremony sheet it was typed from ("sheet"), and nothing arbitrates
+  a fork. A Shamir root reconstructed elsewhere can sign a later record this laptop never sees. After
+  genesis, the chain's `card_record` pin (#405) decides, given as `pin` to `cardrecord.verify`. Nothing
+  in this repository passes it yet: the one reader here, `propose --genesis`, runs before any chain. The
+  lost manifest-signing lines are not rebuilt: their evidence is the chain and the ceremony log.
 - **The bench-token lists are kept by hand** (`membership.BENCH_NITROKEYS`, `BENCH_PICOS`,
   `BENCH_YUBIKEYS`). A new bench token must be added there. A test keeps the drills' staging list equal
   to it, and nothing ties it to the operators' staging registry.
