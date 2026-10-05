@@ -1,0 +1,13 @@
+[Unit]
+Description=regalia e2e: the firmware's boot entries, as the test's request on the ESP asks (TEST ONLY, #75 tier Q, Q4)
+# NEVER IN A PRODUCTION IMAGE: it takes a command from the ESP, which nothing authenticates (see the script's text).
+# Before the report, which powers the guest off.
+After=regalia-e2e-enrol.service
+Before=regalia-e2e-report.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/regalia/e2e-boot-entries
+
+[Install]
+WantedBy=multi-user.target

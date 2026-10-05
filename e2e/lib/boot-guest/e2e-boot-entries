@@ -1,0 +1,118 @@
+#!/usr/bin/python3 -Es
+"""TEST ONLY (#75 tier Q, Q4): the firmware's boot entries in the boot test's guest, driven by a request the test puts on
+the ESP, through the production deploy package's bootnext.py and the real efibootmgr.
+
+NEVER IN A PRODUCTION IMAGE. It takes a command from the ESP, which nothing authenticates beyond loader/credentials. It
+lives only in the e2e guest build (e2e/unlock-boot-qemu.sh), and a repository test refuses any e2e-* unit under deploy/.
+
+Every run says, on the console, `REGALIA-E2E-BOOTENTRIES before {...}` (BootCurrent, BootNext, BootOrder and each
+entry's label, as bootnext.state() reads them). With a request it then does exactly one thing and says `after {...}`:
+
+  {"verb": "make-entries"}                                CURRENT (\\EFI\\regalia\\current.efi) and NEXT (\\EFI\\regalia\\next.efi)
+                                                          made on the booted ESP's partition, BootOrder CURRENT, NEXT, the rest
+  {"verb": "trial", "entry": "XXXX", "accepted": {...}}   bootnext.trial: the entry's image must measure `accepted`, then BootNext
+  {"verb": "promote", "entry": "XXXX"}                    bootnext.promote: BootOrder puts the entry first
+
+The request is read strictly: one of the three verbs, exactly its keys, an entry as four hex digits. Anything else is
+refused, said, and nothing is done.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+
+sys.path.insert(0, "/usr/lib/regalia-kms")             # the deploy package, where a host's units run it from
+from deploy.baremetal import bootnext                   # noqa: E402
+
+ESP = "/efi"
+REQUEST = os.path.join(ESP, "EFI", "regalia-e2e", "request.json")
+KEYS = {"make-entries": {"verb"}, "trial": {"verb", "entry", "accepted"}, "promote": {"verb", "entry"}}
+LOADERS = {"regalia-current": "\\EFI\\regalia\\current.efi", "regalia-next": "\\EFI\\regalia\\next.efi"}
+
+
+def say(text):
+    with open("/dev/console", "w") as console:
+        console.write(text + "\n")
+
+
+def report(tag):
+    s = bootnext.state()
+    say("REGALIA-E2E-BOOTENTRIES %s %s" % (tag, json.dumps({"current": s["current"], "next": s["next"], "order": s["order"],
+                                                              "entries": {n: e["label"] for n, e in sorted(s["entries"].items())}},
+                                                             sort_keys=True)))
+    return s
+
+
+def request():
+    """The request on the ESP, read strictly, or None when there is none."""
+    if not os.path.exists(REQUEST):
+        return None
+    with open(REQUEST, "rb") as f:
+        value = json.loads(f.read(1 << 16))
+    if not isinstance(value, dict) or value.get("verb") not in KEYS or set(value) != KEYS[value["verb"]]:
+        raise ValueError("the request is not one of %s with exactly its keys" % ", ".join(sorted(KEYS)))
+    if "entry" in value and not (isinstance(value["entry"], str) and re.fullmatch(r"[0-9A-F]{4}", value["entry"])):
+        raise ValueError("the entry is not four upper-case hex digits")
+    if "accepted" in value and not isinstance(value["accepted"], dict):
+        raise ValueError("the accepted set is not an object")
+    return value
+
+
+def disk_and_part(guid):
+    """The whole disk and the partition number of the GPT partition `guid` (the ESP systemd-stub booted from)."""
+    node = os.path.realpath(os.path.join("/dev/disk/by-partuuid", guid))
+    match = re.fullmatch(r"(/dev/[a-z]+?)(?:p)?([0-9]+)", node)
+    if match is None:
+        raise ValueError("the ESP's device %s is not a disk partition" % node)
+    return match.group(1), match.group(2)
+
+
+def make_entries(guid):
+    disk, part = disk_and_part(guid)
+    made = {}
+    for label in ("regalia-next", "regalia-current"):                 # each --create goes first in BootOrder
+        before = set(bootnext.state()["entries"])
+        bootnext._efibootmgr(subprocess.run, "--create", "--disk", disk, "--part", part, "--label", label, "--loader", LOADERS[label])
+        new = set(bootnext.state()["entries"]) - before
+        if len(new) != 1:
+            raise RuntimeError("efibootmgr --create %s made %d entries" % (label, len(new)))
+        made[label] = new.pop()
+    rest = [e for e in bootnext.state()["order"] if e not in made.values()]
+    bootnext._efibootmgr(subprocess.run, "--bootorder", ",".join([made["regalia-current"], made["regalia-next"]] + rest))
+
+
+def main():
+    os.makedirs(ESP, exist_ok=True)
+    guid = bootnext._loader_partition()
+    if guid is None:
+        say("REGALIA-E2E-BOOTENTRIES refused: LoaderDevicePartUUID is not set")
+        return 1
+    subprocess.run(["mount", "-t", "vfat", "-o", "ro,nosuid,nodev,noexec", os.path.join("/dev/disk/by-partuuid", guid), ESP], check=True)
+    try:
+        report("before")
+        try:
+            asked = request()
+        except (ValueError, OSError) as refusal:
+            say("REGALIA-E2E-BOOTENTRIES refused: %s" % refusal)
+            return 1
+        if asked is None:
+            return 0
+        try:
+            if asked["verb"] == "make-entries":
+                make_entries(guid)
+            elif asked["verb"] == "trial":
+                bootnext.trial(asked["entry"], ESP, asked["accepted"])
+            else:
+                bootnext.promote(asked["entry"])
+        except Exception as failure:                                   # noqa: BLE001 - said on the console, then refused
+            say("REGALIA-E2E-BOOTENTRIES refused: %s: %s" % (asked["verb"], failure))
+            return 1
+        report("after")
+        return 0
+    finally:
+        subprocess.run(["umount", ESP], check=False)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

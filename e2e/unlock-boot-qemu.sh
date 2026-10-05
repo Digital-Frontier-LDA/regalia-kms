@@ -62,6 +62,14 @@
 #           guest's ESP and anchor hold it: NEXT boots unattended, rendered under epoch 3 (high-water 3), its own
 #           initrd-phase PCR 11 on the console, the key given by a peer under epoch 3. Q3 (NEXT not approved) is boot
 #           2k-unapproved.
+#   boots 14-19 #75 TIER Q, Q4: THE TRIAL BOOT THROUGH THE FIRMWARE'S BootNext, on one persistent OVMF VARS file (its copy
+#           checked against the template), driven in the guest by the production bootnext.py and the real efibootmgr
+#           (the test-only unit e2e-boot-entries, from a request on the ESP), and read after each boot by virt-fw-vars,
+#           an observer not under test. 14: through the fallback, CURRENT's and NEXT's entries made, BootOrder CURRENT
+#           first. 15: CURRENT's own entry boots; NEXT's trial sets BootNext. 16: the root's epoch 4 withdraws NEXT; the
+#           firmware boots NEXT once, the peers refuse it for its PCR 11 and only then is it reset; BootNext is consumed
+#           and BootOrder still starts with CURRENT. 17: CURRENT again, unattended. 18: epoch 5 approves NEXT again; its
+#           trial is set again. 19: NEXT boots, a peer under epoch 5 unlocks it, and it is promoted to BootOrder's head.
 #
 # The guest is built here from Debian's own packages (mmdebstrap). REGALIA_BOOT_ROOTFS names a directory
 # to use instead: the one variable to change when the appliance image of #61 exists.
@@ -114,7 +122,7 @@ else
   SOURCES=("deb [signed-by=$KEYRING] $MIRROR $SUITE main" "deb [signed-by=$KEYRING] $MIRROR $SUITE-updates main"
            "deb [signed-by=$KEYRING] ${REGALIA_BOOT_SECURITY_MIRROR:-http://deb.debian.org/debian-security} $SUITE-security main")
   mmdebstrap --variant=minbase "${APTOPT[@]}" \
-    --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography,git \
+    --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography,git,efibootmgr \
     "$SUITE" "$ROOT" "${SOURCES[@]}" >"$W/mmdebstrap.log" 2>&1 \
     || { tail -40 "$W/mmdebstrap.log"; echo "unlock-boot-qemu: mmdebstrap failed"; exit 2; }
   # the guest's own apt reads the same lines: the keyring at the same path inside it
@@ -147,10 +155,17 @@ install -m 0644 deploy/baremetal/initrd/regalia-boot-render.service deploy/barem
 install -D -m 0755 deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/module-setup.sh"
 install -m 0644 deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"
 # And what only the test adds, in the real root: the enrolment step and the report.
-install -m 0755 e2e/lib/boot-guest/e2e-enrol e2e/lib/boot-guest/e2e-report "$ROOT/usr/lib/regalia/"
-install -m 0644 e2e/lib/boot-guest/regalia-e2e-enrol.service e2e/lib/boot-guest/regalia-e2e-report.service "$ROOT/etc/systemd/system/"
+install -m 0755 e2e/lib/boot-guest/e2e-enrol e2e/lib/boot-guest/e2e-report e2e/lib/boot-guest/e2e-boot-entries "$ROOT/usr/lib/regalia/"
+install -m 0644 e2e/lib/boot-guest/regalia-e2e-enrol.service e2e/lib/boot-guest/regalia-e2e-report.service \
+  e2e/lib/boot-guest/regalia-e2e-boot-entries.service "$ROOT/etc/systemd/system/"
+# #75 tier Q, Q4: the deploy package where a host's units run it from (their WorkingDirectory, /usr/lib/regalia-kms),
+# for bootnext.py and the real efibootmgr (installed above, from the same snapshot). In the root filesystem only: the
+# initrd is built apart (build-initrd.sh) and checked against its reviewed inventory below, so neither can enter it
+[ -x "$ROOT/usr/bin/efibootmgr" ] || { echo "unlock-boot-qemu: the guest has no efibootmgr (a REGALIA_BOOT_ROOTFS without it?): tier Q's Q4 needs it"; exit 2; }
+install -d -m 0755 "$ROOT/usr/lib/regalia-kms"
+tar -C . --exclude=__pycache__ --exclude='*.pyc' -cf - deploy | tar -C "$ROOT/usr/lib/regalia-kms" -xf -
 mkdir -p "$ROOT/etc/systemd/system/multi-user.target.wants"
-for u in regalia-e2e-enrol.service regalia-e2e-report.service; do ln -sf "/etc/systemd/system/$u" "$ROOT/etc/systemd/system/multi-user.target.wants/$u"; done
+for u in regalia-e2e-enrol.service regalia-e2e-report.service regalia-e2e-boot-entries.service; do ln -sf "/etc/systemd/system/$u" "$ROOT/etc/systemd/system/multi-user.target.wants/$u"; done
 echo "/dev/mapper/root / ext4 defaults 0 1" > "$ROOT/etc/fstab"
 echo "lisbon" > "$ROOT/etc/hostname"
 
@@ -309,4 +324,4 @@ fi
 if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: 20 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, a forked chain refused by the TPM anchor, an older signed image approved and then retired (refused: the recovery key), an image whose kernel differs refused until approved and then booted, an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock, a new epoch on the ESP ahead of the anchor and with it, the ESP behind the anchor refused, NEXT under a new epoch that approves it, unlocked by a peer under that epoch)"
+echo "unlock-boot-qemu: 26 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, a forked chain refused by the TPM anchor, an older signed image approved and then retired (refused: the recovery key), an image whose kernel differs refused until approved and then booted, an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock, a new epoch on the ESP ahead of the anchor and with it, the ESP behind the anchor refused, NEXT under a new epoch that approves it, unlocked by a peer under that epoch, the trial boot through the firmware's BootNext: refused and reset back to CURRENT, then approved, unlocked and promoted)"

@@ -19,6 +19,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -70,6 +71,69 @@ def initrd_pcr11(said):
     """The initrd-phase PCR 11 the client said on the console (#412), or None."""
     shown = INITRD_PCR11.findall(said)
     return shown[0] if shown else None
+
+
+BOOT_ENTRIES = re.compile(r"REGALIA-E2E-BOOTENTRIES (before|after) (\{[^\r\n]*\})")
+EFI_GLOBAL = "8be4df61-93ca-11d2-aa0d-00e098032b8c"
+
+
+def boot_entries(said):
+    """#75 tier Q, Q4: what the guest's test-only unit said of the firmware's entries ({"before": state, "after": state}),
+    each state as bootnext.state() read it inside the guest."""
+    return {when: json.loads(state) for when, state in BOOT_ENTRIES.findall(said)}
+
+
+def _load_option(data):
+    """(description, loader path or None) of an EFI_LOAD_OPTION: 4 bytes of attributes, 2 of the device path's length,
+    the description in UCS-2 to its NUL, then the device path, whose file node (type 4, subtype 4) names the loader."""
+    length = int.from_bytes(data[4:6], "little")
+    end = 6
+    while end + 1 < len(data) and data[end:end + 2] != b"\0\0":
+        end += 2
+    description = data[6:end].decode("utf-16-le", "replace")
+    path, at, stop = None, end + 2, min(len(data), end + 2 + length)
+    while at + 4 <= stop:
+        kind, sub, size = data[at], data[at + 1], int.from_bytes(data[at + 2:at + 4], "little")
+        if size < 4:
+            break
+        if (kind, sub) == (4, 4):
+            path = data[at + 4:at + size].decode("utf-16-le", "replace").rstrip("\0")
+        at += size
+    return description, path
+
+
+def vars_state(path):
+    """#75 tier Q, Q4: the firmware's side of the boot entries, read from the persistent OVMF VARS file by virt-fw-vars
+    (python3-virt-firmware) READ-ONLY, and only once QEMU has exited (pflash writes are not atomic for a reader):
+    {"order": [...], "next": "XXXX" or None, "entries": {"XXXX": {"label", "path"}}}. An observer not under test: the
+    guest's own efibootmgr report is checked against it."""
+    tool = shutil.which("virt-fw-vars")
+    if tool is None:
+        raise AssertionError("virt-fw-vars (python3-virt-firmware) is required for tier Q's Q4")
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "vars.json")
+        run([tool, "--input", path, "--output-json", out], capture_output=True, check=True)
+        with open(out) as f:
+            dumped = json.load(f)
+    variables = dumped.get("variables", []) if isinstance(dumped, dict) else dumped
+    found = {"order": None, "next": None, "entries": {}}
+    for var in variables:
+        if str(var.get("guid", "")).lower() != EFI_GLOBAL:
+            continue
+        raw = var.get("data", "")
+        data = bytes.fromhex(raw) if re.fullmatch(r"(?:[0-9a-fA-F]{2})*", raw or "") else base64.b64decode(raw)
+        name = var.get("name", "")
+        if name == "BootOrder":
+            found["order"] = ["%04X" % int.from_bytes(data[i:i + 2], "little") for i in range(0, len(data) - 1, 2)]
+        elif name == "BootNext":
+            found["next"] = "%04X" % int.from_bytes(data[:2], "little")
+        elif re.fullmatch(r"Boot[0-9A-Fa-f]{4}", name):
+            label, loader = _load_option(data)
+            found["entries"][name[4:].upper()] = {"label": label, "path": loader}
+    if found["order"] is None:
+        raise AssertionError("virt-fw-vars shows no BootOrder in %s: the dump's form is not the one read here (%s)"
+                             % (path, json.dumps(dumped)[:300]))
+    return found
 
 
 def no_shell(test, said):
@@ -233,11 +297,13 @@ class OnQemu(tub.OnSwtpm):
             time.sleep(0.1)
         return loop, "%sp%d" % (loop, number)
 
-    def esp(self, named, image="e2e"):
+    def esp(self, named, image="e2e", entries=None, request=None):
         """Puts exactly these credentials ({name: bytes}) in the ESP's loader/credentials, as <name>.cred, and
-        `image` (<image>.efi of REGALIA_BOOT_DIR, signed by e2e/unlock-boot-qemu.sh) as the one boot image, and
-        the membership chain (self.chain, #66 B3) at EFI/regalia/membership.json, and returns the credential
-        files as systemd-stub will read them. Nothing else changes on the ESP."""
+        `image` (<image>.efi of REGALIA_BOOT_DIR, signed by e2e/unlock-boot-qemu.sh) as the removable-media boot image,
+        and the membership chain (self.chain, #66 B3) at EFI/regalia/membership.json, and returns the credential
+        files as systemd-stub will read them. #75 tier Q, Q4: `entries` ({name: image}) also as EFI/regalia/<name>.efi
+        (the files the firmware's own Boot#### entries load), and `request` (a dict) as EFI/regalia-e2e/request.json, the
+        test-only unit's command (e2e/lib/boot-guest/e2e-boot-entries); with no request, none is left on the ESP."""
         loop, part = self.partition(1)
         mnt = self.d + "/esp"
         os.makedirs(mnt, exist_ok=True)
@@ -255,6 +321,14 @@ class OnQemu(tub.OnSwtpm):
             os.makedirs(mnt + "/EFI/regalia", exist_ok=True)
             with open(mnt + "/" + bootcreds.CHAIN_ON_ESP, "wb") as f:
                 f.write(membership.canonical(self.chain))
+            for name, entry_image in sorted((entries or {}).items()):
+                shutil.copyfile("%s/%s.efi" % (BOOT, entry_image), "%s/EFI/regalia/%s.efi" % (mnt, name))
+            asked = mnt + "/EFI/regalia-e2e"
+            shutil.rmtree(asked, ignore_errors=True)
+            if request is not None:
+                os.makedirs(asked)
+                with open(asked + "/request.json", "w") as f:
+                    json.dump(request, f)
         finally:
             unmounted = not mounted or run(["umount", mnt], capture_output=True).returncode == 0
             run(["losetup", "-d", loop], capture_output=True)
@@ -262,16 +336,21 @@ class OnQemu(tub.OnSwtpm):
         return files
 
     def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None, smbios=None, smbios_strings=(), image="e2e",
-             watch=None):
+             watch=None, entries=None, request=None, variables=None, stop_when=None):
         """One boot of the guest under OVMF, to power-off, with `credentials` and `image` on its ESP. Returns what its
         console said. With `recovery`, the recovery key is typed whenever the console asks for a passphrase; when it is
         a function of (console so far, seconds since start), only once that says so (and what it returns, when that is
         bytes, is typed instead). `watch`, a function of the same, is
         called as the console grows (to change the network under the guest), and the times it returned true are kept in
-        self.watched."""
-        self.on_esp = self.esp(credentials or {}, image)
-        variables = "%s/vars-%s.fd" % (self.d, label)
-        shutil.copyfile(OVMF + "/OVMF_VARS_4M.fd", variables)
+        self.watched. #75 tier Q, Q4: `variables`, a VARS file kept across boots (the firmware's BootNext and BootOrder
+        live there), instead of a fresh copy per boot; `stop_when`, a function of the same, kills the guest once it says
+        so (the operator's or the iLO's reset of a hung boot), and self.stopped says whether it did; `entries` and
+        `request` go to esp()."""
+        self.on_esp = self.esp(credentials or {}, image, entries=entries, request=request)
+        if variables is None:
+            variables = "%s/vars-%s.fd" % (self.d, label)
+            shutil.copyfile(OVMF + "/OVMF_VARS_4M.fd", variables)
+        self.stopped = False
         kvm = os.access("/dev/kvm", os.R_OK | os.W_OK)
         timeout = timeout or (600 if kvm else 2400)
         ctrl = self.d + "/a.ctrl"
@@ -321,9 +400,14 @@ class OnQemu(tub.OnSwtpm):
                     if prompts and self.prompted_after is None:
                         self.prompted_after = time.monotonic() - started
                     elapsed = time.monotonic() - started
-                    text = said.decode(errors="replace") if watch or callable(recovery) else ""   # what boot() returns
+                    text = said.decode(errors="replace") if watch or stop_when or callable(recovery) else ""   # what boot() returns
                     if watch and watch(text, elapsed):
                         self.watched.append(elapsed)
+                    if stop_when and stop_when(text, elapsed):
+                        qemu.kill()                                   # the reset of a hung boot, once it is seen for what it is
+                        said += b"\n[the test reset the guest: it was seen refused]\n"
+                        self.stopped = True
+                        break
                     typed = recovery and prompts > answered and (recovery is True or recovery(text, elapsed))
                     if typed:
                         answered = prompts
@@ -796,6 +880,102 @@ class OnQemu(tub.OnSwtpm):
         self.assertEqual(initrd_pcr11(said), other_kernel["pcr11"]["initrd"])
         allowed = [e for e in self.events[since:] if e.get("event") == "unlock" and e.get("outcome") == "ALLOW"]
         self.assertTrue(allowed and all(e.get("epoch") == 3 for e in allowed), "no peer under epoch 3 gave the key: %s" % allowed)
+        no_shell(self, said)
+
+        # boots 14-19, #75 TIER Q, Q4: THE TRIAL BOOT THROUGH THE FIRMWARE'S BootNext (bootnext.py, run in the guest by
+        # the test-only unit e2e-boot-entries, with the real efibootmgr), on ONE persistent VARS file, read after each
+        # boot by virt-fw-vars as an observer not under test. CURRENT is e2e (EFI/regalia/current.efi), NEXT e2e-k2
+        # (EFI/regalia/next.efi); BOOTX64.EFI, the removable-media fallback, is CURRENT too.
+        template = OVMF + "/OVMF_VARS_4M.fd"
+        variables = self.d + "/vars-q4.fd"
+        shutil.copyfile(template, variables)
+        with open(template, "rb") as f:
+            digest = hashlib.sha256(f.read()).hexdigest()
+        with open(variables, "rb") as f:
+            self.assertEqual(hashlib.sha256(f.read()).hexdigest(), digest, "the VARS copy is not the template")
+        print("tier Q, Q4: OVMF VARS template %s, sha256 %s, one copy for boots 14-19" % (template, digest), file=sys.stderr)
+        images = {"current": "e2e", "next": "e2e-k2"}
+        next_set = next(e for e in self.reference["accepted"] if e["label"] == "e2e-k2")       # epoch 3's document
+
+        def epoch(n, previous, document):
+            """The root's epoch `n` committing to `document`: given to the peers (their root) and to the guest's ESP and
+            anchor (the image's root), the peers' policy for a read out of the document. Returns the manifest."""
+            manifest = dict(previous, epoch=n, prev_digest=membership.digest(previous), issued_at="2026-10-%02dT00:00:00Z" % (4 + n),
+                            policy_version=measurements.version(document))
+            for peer in ("b", "c"):
+                self.stores[peer].commit(tub.rt.sign(manifest))
+                self.fresh[peer].accept(tub.hbt.beat(manifest, n, issued=self.now), manifest)
+            self.chain = self.chain + [self.signed(manifest)]
+            self.anchor_guest(self.chain)
+            self.reference = {"accepted": measurements.validate(document)["a"]}
+            return manifest
+
+        def q4(label, request=None, **kw):
+            said = self.boot(label, credentials, image="e2e", entries=images, request=request, variables=variables, **kw)
+            return said, boot_entries(said), vars_state(variables)
+
+        # boot 14: through the fallback (no entry of ours yet), the unit makes CURRENT and NEXT, BootOrder CURRENT first
+        said, seen, fw = q4("14-q4-make-entries", {"verb": "make-entries"})
+        unattended(self, said)
+        self.assertNotIn(seen["before"]["entries"].get(seen["before"]["current"]), ("regalia-current", "regalia-next"),
+                         "boot 14 did not come through the fallback: %s" % seen)
+        labels = {name: n for n, name in seen["after"]["entries"].items()}
+        current, nxt = labels.get("regalia-current"), labels.get("regalia-next")
+        self.assertTrue(current and nxt, "the entries were not made: %s" % seen)
+        self.assertEqual(seen["after"]["order"][:2], [current, nxt])
+        self.assertEqual((fw["order"][:2], fw["entries"][current]["label"], fw["entries"][nxt]["label"]),
+                         ([current, nxt], "regalia-current", "regalia-next"), fw)
+        self.assertEqual((fw["entries"][current]["path"].lower(), fw["entries"][nxt]["path"].lower()),
+                         ("\\efi\\regalia\\current.efi", "\\efi\\regalia\\next.efi"), fw)
+        self.assertIsNone(fw["next"])
+        # boot 15: the firmware takes BootOrder, so CURRENT's own entry (on the ESP's GPT partition: bootnext.trial's
+        # "the ESP this host booted from" is exercised for real); the trial of NEXT sets BootNext
+        said, seen, fw = q4("15-q4-trial", {"verb": "trial", "entry": nxt, "accepted": next_set})
+        unattended(self, said)
+        self.assertEqual(seen["before"]["current"], current, seen)
+        self.assertEqual(seen["after"]["next"], nxt, seen)
+        self.assertEqual((fw["next"], fw["order"][0]), (nxt, current), fw)
+        # boot 16: the approval of NEXT withdrawn before the reboot (the root's epoch 4: CURRENT only). The firmware takes
+        # BootNext: NEXT boots, says its own initrd-phase PCR 11, and both peers refuse it naming PCR 11. Only once both
+        # are seen is the guest reset (the operator's or the iLO's reset of a hung trial boot), never on a bare timeout
+        m4 = epoch(4, m3, {"schema": measurements.SCHEMA, "name": "e2e-current-only", "nodes": {"a": reference(expected["pcr12"])}})
+        since = len(self.events)
+
+        def refused(text, elapsed):
+            denied = {e.get("peer") for e in self.events[since:] if e.get("event") == "unlock" and e.get("outcome") == "DENY"
+                      and ("PCR 11 is %s" % other_kernel["pcr11"]["initrd"]) in (e.get("reason") or "")}
+            return initrd_pcr11(text) == other_kernel["pcr11"]["initrd"] and denied >= {"b", "c"}
+        said, seen, fw = q4("16-q4-next-refused", recovery=False, stop_when=refused, timeout=420)
+        self.assertTrue(self.stopped, "the trial boot of NEXT was not seen refused before the limit")
+        self.assertIn("rendered the boot configuration of a under manifest epoch 4 (TPM high-water 4)", said)
+        self.assertEqual(initrd_pcr11(said), other_kernel["pcr11"]["initrd"])
+        self.assertNotIn(("unlock", "ALLOW"), {(e["event"], e["outcome"]) for e in self.events[since:]})
+        self.assertEqual(seen, {}, "NEXT reached its root filesystem: %s" % seen)
+        self.assertIsNone(fw["next"], "BootNext was not consumed by the firmware: %s" % fw)
+        self.assertEqual(fw["order"][0], current, "a refused trial boot moved BootOrder: %s" % fw)
+        # boot 17: the next boot follows BootOrder, CURRENT, which epoch 4 approves: unattended
+        said, seen, fw = q4("17-q4-back-to-current")
+        unattended(self, said)
+        self.assertEqual(seen["before"]["current"], current, seen)
+        self.assertEqual((fw["next"], fw["order"][0]), (None, current), fw)
+        # boot 18: NEXT approved again (the root's epoch 5), its trial set again from CURRENT
+        approving_again = {"schema": measurements.SCHEMA, "name": "e2e-next-again",
+                           "nodes": {"a": reference(expected["pcr12"], (("e2e", record), ("e2e-k2", other_kernel)))}}
+        epoch(5, m4, approving_again)
+        next_set = next(e for e in self.reference["accepted"] if e["label"] == "e2e-k2")
+        said, seen, fw = q4("18-q4-trial-again", {"verb": "trial", "entry": nxt, "accepted": next_set})
+        unattended(self, said)
+        self.assertEqual((seen["before"]["current"], seen["after"]["next"]), (current, nxt), seen)
+        self.assertEqual(fw["next"], nxt, fw)
+        # boot 19: the firmware takes BootNext: NEXT boots, is unlocked by a peer under epoch 5, and is promoted
+        since = len(self.events)
+        said, seen, fw = q4("19-q4-next-promoted", {"verb": "promote", "entry": nxt})
+        unattended(self, said)
+        self.assertIn("rendered the boot configuration of a under manifest epoch 5 (TPM high-water 5)", said)
+        self.assertEqual(initrd_pcr11(said), other_kernel["pcr11"]["initrd"])
+        self.assertEqual((seen["before"]["current"], seen["after"]["order"][0]), (nxt, nxt), seen)
+        self.assertEqual((fw["next"], fw["order"][0]), (None, nxt), fw)
+        self.assertTrue([e for e in self.events[since:] if e.get("event") == "unlock" and e.get("outcome") == "ALLOW" and e.get("epoch") == 5])
         no_shell(self, said)
 
     def anchor_guest(self, envelopes):
