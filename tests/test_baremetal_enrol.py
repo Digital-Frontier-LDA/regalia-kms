@@ -792,8 +792,12 @@ class InitOnSwtpm(unittest.TestCase):
             listed = {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", subprocess.run(["tpm2_getcap", "handles-nv-index"],
                                                                                          capture_output=True, text=True).stdout)}
             self.assertTrue({int(example[k], 16) for k in ("nv_epoch", "nv_heartbeat", "nv_signing")} <= listed)   # the control
-            public_area = subprocess.run(["tpm2_nvreadpublic", "0x01500016"], capture_output=True, text=True).stdout
-            self.assertIn("authorization policy: %s" % signkey.policy(pem).hex().upper(), public_area)    # policy-written
+            # #361 C3: every index under K_A, each in its own class, and written through the composite session
+            for index, cls in (("0x01500016", "anchor"), ("0x0150001a", "slots"), ("0x0150001b", "slots"), ("0x01500018", "heartbeat"),
+                               ("0x0150001c", "signing-counter")):
+                public_area = subprocess.run(["tpm2_nvreadpublic", index], capture_output=True, text=True).stdout
+                self.assertIn("authorization policy: %s" % anchorpolicy.class_policy(K_A_POINT, cls).hex().upper(), public_area,
+                              (index, cls))
             from deploy.baremetal import node as nm
             here = nm.Node(nm.load(etc + "node.json"))
             self.assertEqual((here.anchor().value(), here.anchor().record()), (1, (1, digest)))          # read with no auth
