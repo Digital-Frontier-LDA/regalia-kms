@@ -74,10 +74,11 @@ ADMISSION_DIR_MODE = _state_directory_mode("regalia-admission.service")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import attest, authtime, bootnet, heartbeat, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
-import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root key
+from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
+import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
 NAMES = ("a", "b", "c")
+RUN_PCR_KEY = signkey.PCR_PUBLIC_KEY_PATH       # where systemd puts the system-phase key on a host: the units' bind target
 RECOVERY = b"cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuuvvcb"     # the TEST recovery key (as the unlock tests')
 MARKER = b"regalia-kms root volume marker"
 SWITCH = "e2e3-sw"
@@ -92,6 +93,15 @@ def sh(*argv, check=True, **kw):
     if check and done.returncode != 0:
         raise RuntimeError("%s failed (%d): %s %s" % (" ".join(argv[:4]), done.returncode, done.stdout.strip()[-600:], done.stderr.strip()[-600:]))
     return done
+
+
+def show_state(unit):
+    """(LoadState, ActiveState, Result, InvocationID) of a unit. A oneshot that ran to success is loaded, inactive, success;
+    a unit that is NOT loaded also reads inactive/success (systemd's defaults), hence LoadState (regalia-kms-48), and a run
+    is told from an earlier one by its InvocationID."""
+    out = sh("systemctl", "show", unit, "-p", "LoadState,ActiveState,Result,InvocationID", check=False).stdout
+    props = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    return props.get("LoadState"), props.get("ActiveState"), props.get("Result"), props.get("InvocationID")
 
 
 def until(what, seconds, interval=1.0):
@@ -285,6 +295,11 @@ class Cluster:
             return key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         self.pcr_private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         self.pcr_pem = public(self.pcr_private)
+        # this process reads the nodes' anchors as root on a booted host does (#242 B3: under v4 every index is written by
+        # policy, so a read needs the running image's system-phase key, node.image_policy): the cluster's one such key,
+        # where root's /run/systemd would have it. _as_booted swaps a node's own in, and puts this one back
+        (self.work / "tpm2-pcr-public-key.pem").write_bytes(self.pcr_pem)
+        signkey.PCR_PUBLIC_KEY_PATH = str(self.work / "tpm2-pcr-public-key.pem")
         self.pcr_sigs = {}                            # PCR 11 value -> its signature entry
         initrd_pem = public(rsa.generate_private_key(public_exponent=65537, key_size=2048))
         sb = ec.generate_private_key(ec.SECP256R1())
@@ -530,21 +545,22 @@ class Cluster:
         """The node as its services see it (deploy/baremetal/node.Node), from its configuration."""
         return node.Node(node.load(str(self.nodes[name].cfg_path)))
 
-    @staticmethod
-    def enrolled_store(here):
-        """The store as enrolment builds it (enrol.py commit): ANCHORING, so a node starts with its anchor at the chain
-        it was enrolled with. The node's own services use node.store(), which never anchors (#66 B3)."""
-        return membership.Store(here.path("membership.json"), here.cfg["root_key"], here.anchor(), documents=here.documents().require_for)
-
     def _anchor_and_store(self, n):
         here = self.node(n.name)
-        anchor = here.anchor()
-        anchor.define()
         here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
-        self.enrolled_store(here).commit(self.chain[0])
-        with self._as_booted(n.name):                 # laid down by the node's policy (node.define_policy: the system key its measurements name)
+        self._enrolled(n.name, self.chain)            # the chain is v4: the anchor written by policy only (#242 B3)
+
+    def _enrolled(self, name, chain):
+        """v4 (#242 B3): the node's trust anchors as `enrol commit`'s step lays them down, enrol.anchor_and_store: the
+        anchor and the signing counter defined under the node's policy (the system key its measurements name), the
+        chain committed by policy sessions; then its heartbeat counter, by the same policy. Run as its booted system
+        (_as_booted), in the system phase: enrolment runs on the booted image, and a policy write needs PCR 11 at the
+        system value (_leave_initrd, which start() then does not repeat)."""
+        here = self.node(name)
+        self._leave_initrd(name)
+        with self._as_booted(name):
+            enrol.anchor_and_store(str(self.nodes[name].cfg_path), chain)
             node.heartbeat_counter(here.cfg).define()
-            node.signing_counter(here.cfg).define()  # #199: the highest sequence this node has signed
 
     # ---- the stand-ins ----
 
@@ -622,7 +638,7 @@ class Cluster:
         # where a booted host's systemd-stub puts the image's PCR signatures and its system-phase key: the node's own
         pcr = n.dir / "pcr"
         props += ["BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", signkey.PCR_PUBLIC_KEY_PATH)]
+                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
         return props
 
     def start(self, name, services=("sync", "wg-apply")):
@@ -700,8 +716,12 @@ class Cluster:
     def _esp_watch(self, n):
         """#66 B3: regalia-esp-advance.path's stand-in, at every new published chain: the chain to the node's ESP, then
         the TPM anchor. A run that fails is in its journal; anchored() says where the anchor is."""
+        # retried on failure as the installed unit is (Restart=on-failure, StartLimitIntervalSec=0): a transient TPM error on
+        # the shared software TPM must not leave the anchor behind until the next chain, as it would not on a host. 2 s
+        # here, where the unit waits 15 s, so the fixture's 60 s wait for the anchor holds several retries
         self._run(n, "esp-advance", unit=self.unit(n.name, "esp-watch"), args=self._esp_args(n),
-                  extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
+                  extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot",
+                         "-p", "Restart=on-failure", "-p", "RestartSec=2s", "-p", "StartLimitIntervalSec=0"])
 
     def _esp_advance(self, n):
         """regalia-esp-advance's run at start (its unit is WantedBy=multi-user.target), once sync has published: the path
@@ -709,8 +729,18 @@ class Cluster:
         if not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
             raise RuntimeError("%s's sync published no chain" % n.name)
         unit = self.unit(n.name, "esp-watch") + ".service"
-        if sh("systemctl", "start", unit, check=False).returncode != 0:
-            raise RuntimeError("%s's regalia-esp-advance failed at start: %s" % (n.name, self.journal(n.name, "esp-watch")[-1500:]))
+        # a failed start is restarted by the unit itself (Restart=on-failure): what is waited for is a run that succeeded,
+        # within the bound, not the first attempt (main's three-node-recovery once read "cannot read 8 bytes from NV index"
+        # on the shared software TPM, and the fixture gave up where the host's unit would have tried again)
+        before = show_state(unit)[3]
+        started = sh("systemctl", "start", unit, check=False).returncode == 0
+
+        def succeeded():
+            load, active, result, invocation = show_state(unit)
+            return load == "loaded" and active == "inactive" and result == "success" and invocation not in ("", before)
+        if not started and until(succeeded, 60, 1) is not True:
+            raise RuntimeError("%s's regalia-esp-advance failed at start and on its retries: %s"
+                               % (n.name, self.journal(n.name, "esp-watch")[-1500:]))
 
     def anchored(self, name):
         """The node's TPM anchor epoch (read as root)."""
@@ -798,13 +828,11 @@ class Cluster:
         envelope = self.chain[-1]
         n = self.nodes[new]
         here = self.node(new)
-        here.anchor().define()
         here.documents().put(document)
-        for i, held in enumerate(self.chain):
-            self.enrolled_store(here).commit(held, final=i == len(self.chain) - 1)
-        with self._as_booted(new):                    # laid down by its policy, as at build (#389: the system key its set names)
-            node.heartbeat_counter(here.cfg).define()
-            node.signing_counter(here.cfg).define()
+        self._enrolled(new, self.chain)                 # as at build: the whole chain, by its policy (#242 B3)
+        # enrolment ran on the booted system (PCR 11 in its system phase, _leave_initrd); the host reboots before its
+        # initrd asks for the disk, so its quote shows the initrd phase the peers admit
+        self.power_cycle(new)
         sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
@@ -1293,21 +1321,27 @@ class Cluster:
                 path = d / ("document-%d-%d.json" % (envelopes[-1]["manifest"]["epoch"], i))
                 path.write_text(json.dumps(document))
                 args.append(str(path))
-        # in a transient unit of root's with the node's /run/systemd as its services see it (the system-phase PCR key and
-        # its signatures, bound as _props binds them): where an operator runs it on the host, and what the node's policy
-        # sessions read when the anchor is written by policy (#242 B3, 95's read); the other nodes' directories hidden
+        done = self.as_root(name, "deliver-%d" % envelopes[-1]["manifest"]["epoch"], args)
+        if done.returncode != 0:
+            raise RuntimeError("deliver to %s failed (%d): %s" % (name, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
+        return done.stdout
+
+    def as_root(self, name, label, args, input=None, in_ns=False):
+        """`args` run as root on node `name`'s host, the way an operator or a root unit runs it there: a transient unit of
+        root's, named e2e3-<node>-<label>, with the node's /run/systemd as its services see it (the system-phase PCR key
+        and its signatures, bound as properties() binds them: what the node's policy sessions read, and what a read of its
+        anchor needs once it is written by policy, #242 B3), the other nodes' directories hidden, and with `in_ns` in the
+        node's network namespace. `input` goes to its standard input. Returns the completed process (not checked)."""
         n = self.member(name)
         pcr = n.dir / "pcr"
         props = ["WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1",
                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", signkey.PCR_PUBLIC_KEY_PATH)]
+                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
+        props += ["NetworkNamespacePath=/run/netns/" + n.ns] if in_ns else []
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
-        done = sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, "deliver-%d" % envelopes[-1]["manifest"]["epoch"]),
+        return sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, label),
                   *[a for p in props for a in ("-p", p)], *args, check=False,
-                  stdin=subprocess.DEVNULL)
-        if done.returncode != 0:
-            raise RuntimeError("deliver to %s failed (%d): %s" % (name, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
-        return done.stdout
+                  **({"input": input} if input is not None else {"stdin": subprocess.DEVNULL}))
 
     def journal(self, name, service, lines=40):
         return sh("journalctl", "-u", self.unit(name, service), "-n", str(lines), "--no-pager", "-o", "cat", check=False).stdout
