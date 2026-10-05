@@ -939,14 +939,12 @@ def part2(work, binaries, user, ctx, servers, status):
     ok(bool(renewals) and all(b'"refused"' in r[2] for r in renewals) and any("REVOKED_STOLEN under epoch 3" in e.get("reason", "") for e in denied),
        "a asks b to renew (%s); b refuses the caller by name, as REVOKED_STOLEN under epoch 3 (the transport, before the lease code)"
        % (renewals[0][0] if renewals else "no request"), (renewals[-1:] if renewals else requests[-3:], denied[-1:]))
-    pulls = from_a(("pull",))
-    ok(bool(pulls) and all(b'"refused"' in r[2] for r in pulls), "a's own pulls are refused too: it is told nothing of its revocation", pulls[-2:] or requests[-3:])
     # from here nothing writes the admission file: the daemon must stop on its own CLOCK_BOOTTIME
     sh("systemctl", "stop", "regalia-admission.service")
     frozen = pathlib.Path(ADMISSION_FILE).read_bytes()
     end = json.loads(frozen)["serve_until_boottime_ms"]
     granted = [e for e in events[mark:] if e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW"]
-    ok(not granted and end - admission.boottime_ms() > 15000,
+    ok(not granted and end - admission.boottime_ms() > 6000,     # room for the probe 5 s before the end (a 30 s lease, D32)
        "b granted no lease after the revocation; regalia-admission is stopped with %.0f s of the last lease left"
        % ((end - admission.boottime_ms()) / 1000), (granted, end, admission.boottime_ms()))
     time.sleep(max(0, (end - 5000 - admission.boottime_ms()) / 1000))
@@ -957,6 +955,9 @@ def part2(work, binaries, user, ctx, servers, status):
     ok(code == 503 and daemon.ready() == 503 and pathlib.Path(ADMISSION_FILE).read_bytes() == frozen,
        "2 s after the end it refuses (503) and is not ready, with the admission file untouched since the lease service stopped",
        (code, answer, daemon.log()[-600:]))
+    # a's sync pulls on its own cadence, slower than a 30 s lease's renewals: waited for here, after the lease's end
+    pulls = until(lambda: from_a(("pull",)), 120, 2) or []
+    ok(bool(pulls) and all(b'"refused"' in r[2] for r in pulls), "a's own pulls are refused too: it is told nothing of its revocation", pulls[-2:] or requests[-3:])
     # b's handler never failed (a failure there is swallowed by sync.serve and would look like silence)
     ok(not raised, "b's handler answered every request it received without raising (%d requests)" % len(started), raised[-1:])
 
