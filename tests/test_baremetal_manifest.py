@@ -1230,6 +1230,16 @@ class ProposeGenesis(unittest.TestCase):
         swapped = dict(b, rotation=dict(b["rotation"], name=self.bundle_of(self.entries[0])["rotation"]["name"]))
         with self.assertRaisesRegex(enrol.Refused, "b's rotation counter is not under this genesis's K_A"):
             enrol.rotation_of(swapped, self.anchor()["key"])
+        # regalia-kms-95 on #462: an R under the SHARED "rotation" class (a pre-per-node init, or a tampered one) is
+        # refused, and so is a bundle that names no node: never judged against the shared Name by omission
+        from deploy.baremetal import anchorpolicy
+        shared = dict(b, rotation=dict(b["rotation"], name=anchorpolicy._shared_rotation_name(int(anchorpolicy.ROTATION_INDEX, 16),
+                                                                                               self.anchor()["key"]).hex()))
+        with self.assertRaisesRegex(enrol.Refused, "b's rotation counter is not under this genesis's K_A"):
+            enrol.rotation_of(shared, self.anchor()["key"])
+        for missing in ({k: v for k, v in b.items() if k != "node_id"}, dict(b, node_id=None)):
+            with self.assertRaisesRegex(enrol.Refused, "the bundle names no node ID: its rotation counter cannot be judged"):
+                enrol.rotation_of(missing, self.anchor()["key"])
         code, _, err, path = self.run_cli(rotation_k_a={"b": ec.generate_private_key(ec.SECP256R1())})
         self.assertEqual(code, 2)
         self.assertIn("b's rotation counter is not under this genesis's K_A", err)

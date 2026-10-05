@@ -17,7 +17,7 @@ with open(os.path.join(HERE, "vectors", "anchor-policy-v1.json")) as f:
 class TheTpmsOwnValues(unittest.TestCase):
     def setUp(self):
         self.index = int(V["rotation"]["index"], 16)
-        self.rotation = ap.rotation_name(self.index, V["k_a"]["point"])
+        self.rotation = ap._shared_rotation_name(self.index, V["k_a"]["point"])
 
     def test_k_a_s_name_is_the_one_loadexternal_gives(self):
         self.assertEqual(ap.k_a_name(V["k_a"]["point"]).hex(), V["k_a"]["name"])
@@ -27,10 +27,10 @@ class TheTpmsOwnValues(unittest.TestCase):
         for cls, want in V["refs"].items():
             with self.subTest(cls=cls):
                 self.assertEqual(ap.REFS[cls].hex(), want["policy_ref_hex"])
-                self.assertEqual(ap.class_policy(V["k_a"]["point"], cls).hex(), want["auth_policy"])
+                self.assertEqual(ap.class_policy(V["k_a"]["point"], cls, shared=True).hex(), want["auth_policy"])
 
     def test_the_rotation_counter_s_name_before_and_after_its_first_write(self):
-        self.assertEqual(ap.rotation_name(self.index, V["k_a"]["point"], written=False).hex(), V["rotation"]["name_unwritten"])
+        self.assertEqual(ap._shared_rotation_name(self.index, V["k_a"]["point"], written=False).hex(), V["rotation"]["name_unwritten"])
         self.assertEqual(self.rotation.hex(), V["rotation"]["name_written"])
 
     def test_the_approved_policies_and_the_increment_approvals(self):
@@ -138,20 +138,26 @@ class Refusals(unittest.TestCase):
         """#361 (1e, d9, 95): R is defined under PolicyAuthorize(Name(K_A), SHA-256("regalia-rotation/v1\\0" || node_id)), so
         its Name, and every approval naming it, is one node's; the ref is 32 bytes, within any TPM 2.0's TPM2B_NONCE."""
         index, point = int(ap.ROTATION_INDEX, 16), V["k_a"]["point"]
-        names = {n: ap.rotation_name(index, point, node_id=n) for n in ("a", "b", "c", "x" * 32)}
+        names = {n: ap.rotation_name(index, point, n) for n in ("a", "b", "c", "x" * 32)}
         self.assertEqual(len(set(names.values())), 4)
-        self.assertNotIn(ap.rotation_name(index, point), names.values())                 # nor the shared class's
+        self.assertNotIn(ap._shared_rotation_name(index, point), names.values())                 # nor the shared class's
         for n in names:
             self.assertEqual(len(ap._ref(ap.rotation_class(n))), 32)
         self.assertEqual(ap._ref("rotation/a"), hashlib.sha256(b"regalia-rotation/v1\x00a").digest())
         k_sys = bytes.fromhex(V["k_sys"]["name"])
         self.assertNotEqual(ap.approved(k_sys, names["a"], 7), ap.approved(k_sys, names["b"], 7))
+        # the shared class is the vectors' only: refused on every production path (95)
+        for call in (lambda: ap.class_policy(point, "rotation"), lambda: ap.authorize_message(ap.increment_first(), "rotation")):
+            with self.assertRaisesRegex(m.Refused, "the shared rotation class is the vectors' only"):
+                call()
+        with self.assertRaises(TypeError):
+            ap.rotation_name(index, point)                                              # no node: no Name
         for bad in ("A", "", "a" * 33, "a/b", None):
             with self.subTest(bad=bad), self.assertRaisesRegex(m.Refused, "is not a node ID|no policy class"):
                 ap.rotation_class(bad) if bad is not None else ap.rotation_class(bad)
 
     def test_classes_never_share_a_policy(self):
-        policies = {ap.class_policy(V["k_a"]["point"], c) for c in ap.REFS}
+        policies = {ap.class_policy(V["k_a"]["point"], c, shared=True) for c in ap.REFS}
         self.assertEqual(len(policies), len(ap.REFS))
 
 
