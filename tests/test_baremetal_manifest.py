@@ -1089,6 +1089,12 @@ class ProposeGenesis(unittest.TestCase):
                     ec.generate_private_key(ec.SECP384R1()).public_key().public_bytes(serialization.Encoding.DER,
                                                                                     serialization.PublicFormat.SubjectPublicKeyInfo)).decode())),
                  "the offline-keys record's published anchor-policy key is not a P-256 public key"),
+                ("a threshold as a string", self.generation_record(change=lambda r: r.update(threshold="2")),
+                 "the offline-keys record's threshold and shares are not counts with threshold <= shares"),
+                ("a threshold above the shares", self.generation_record(change=lambda r: r.update(threshold=4)),
+                 "the offline-keys record's threshold and shares are not counts with threshold <= shares"),
+                ("an at that is not a string", self.generation_record(change=lambda r: r.update(at=5)),
+                 "the offline-keys record's at and master_id are not strings"),
                 ("no generation proof", self.generation_record(change=lambda r: r["operation_proof"].pop("anchor-policy")),
                  "the offline-keys record shows no generation proof for K_A")):
             with self.subTest(name):

@@ -256,8 +256,14 @@ def offline_keys_record(envelope, root):
                                                                            cardrecord.RECORD_DOMAIN + membership.canonical(record))
     except (InvalidSignature, ValueError):
         raise Refused("the offline-keys record's signature is not the pinned root's") from None
+    # the ceremony's records (card, ownerauth, generation) share RECORD_DOMAIN: THIS check is what tells their kinds apart
+    # under it (regalia-kms-95), never redundant with the signature
     require(record["schema"] == OFFLINE_KEYS_SCHEMA and record["event"] == "generate",
             "the offline-keys record is not a %s generation record" % OFFLINE_KEYS_SCHEMA)
+    require(all(type(record[k]) is int for k in ("threshold", "shares")) and 1 <= record["threshold"] <= record["shares"],
+            "the offline-keys record's threshold and shares are not counts with threshold <= shares")
+    require(isinstance(record["at"], str) and isinstance(record["master_id"], str),
+            "the offline-keys record's at and master_id are not strings")
     alg, key = membership.typed_key(record["anchor_policy_entry"], "the offline-keys record's anchor_policy_entry", membership.ANCHOR_POLICY_KEY_ALGS)
     published = record["publics"].get("anchor-policy") if isinstance(record["publics"], dict) else None
     require(isinstance(published, dict) and published.get("alg") == "ecdsa-p256" and isinstance(published.get("spki"), str),
