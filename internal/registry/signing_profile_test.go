@@ -1,0 +1,48 @@
+package registry
+
+import (
+	"strings"
+	"testing"
+)
+
+// THE SIGNING PROFILE (#432; the owner: the KMS is a blockchain user, not a validator). A secp256k1 key signs as
+// cosmos-account unless its manifest says otherwise; cosmos-validator is refused until validator signing (with its
+// height and round high-water marks) exists; a profile on any other key is refused, as is an unknown one.
+func TestTheSigningProfileOfAKey(t *testing.T) {
+	pinned := `,"device_serial":"test-serial","public_key_sha256":"sha256:` + strings.Repeat("c", 64) + `"`
+	sibling := `,"device_serial":"sibling-serial","public_key_sha256":"sha256:` + strings.Repeat("e", 64) + `"`
+	load := func(algorithm, profile string) (*Registry, error) {
+		document := object("wallet-key", "cosmos-transaction", algorithm, "sign",
+			nitrokeyBinding("sitea", "local-hsm", pinned)+","+nitrokeyBinding("siteb", "remote-hsm", sibling))
+		if profile != "" {
+			document = strings.Replace(document, `"verification":`, `"signing_profile":`+profile+`,"verification":`, 1)
+		}
+		return Load(strings.NewReader(manifest(document)), "sitea", &healthMap{states: map[string]bool{}})
+	}
+	for _, c := range []struct {
+		name, algorithm, profile, want, refused string
+	}{
+		{"a secp256k1 key with no profile is an account key", "secp256k1", "", ProfileCosmosAccount, ""},
+		{"an explicit account key", "secp256k1", `"cosmos-account"`, ProfileCosmosAccount, ""},
+		{"a validator key is refused", "secp256k1", `"cosmos-validator"`, "", "this KMS signs no validator votes"},
+		{"an unknown profile is refused", "secp256k1", `"cosmos-relayer"`, "", `signing_profile "cosmos-relayer" is not cosmos-account`},
+		{"a profile on an ed25519 key is refused", "ed25519", `"cosmos-account"`, "", "is for a secp256k1 (Cosmos) key, not ed25519"},
+		{"an ed25519 key has none", "ed25519", "", "", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			registry, err := load(c.algorithm, c.profile)
+			if c.refused != "" {
+				if err == nil || !strings.Contains(err.Error(), c.refused) {
+					t.Fatalf("loaded, or refused for another reason: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := registry.entries["wallet-key"].route.SigningProfile; got != c.want {
+				t.Fatalf("profile %q, want %q", got, c.want)
+			}
+		})
+	}
+}
