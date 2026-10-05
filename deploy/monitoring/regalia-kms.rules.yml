@@ -69,21 +69,33 @@ groups:
       # daemon's own Gate verdict (the authoritative "this site signs"); until the Gate verifies the v2 quorum lease
       # (#432 step 3) it is regalia-fence's single-authority verdict, and both rules hold under either.
       #
-      # No site for 15 minutes. A planned switchover (`activation release`, the lease runs out, then `activation
-      # promote`) leaves at most one lease life (fencing.MaxLeaseDuration, 10 min) plus the co-signers' skew (60 s)
-      # plus the promote: 15 minutes does not page on it. A site whose daemons never evaluated (absent series) or are
-      # not scraped matches nothing here: RegaliaFencingNeverEvaluated and the scrape rules see those.
+      # A site COUNTS as holding only while its verdict is fresh: held, and evaluated in the last 60 s
+      # (regalia_fencing_last_check_seconds). The daemon evaluates on Ready() (each operation, each readiness probe
+      # from the load balancer), not on a timer, so an IDLE site whose lease has expired keeps exporting held=1 (48's
+      # read). A new site's lease begins at least SKEW_S (60 s) after the old one's expiry, so by then the old site's
+      # held=1 is stale and is not counted: a correct promote never pages "two sites". A verdict older than 120 s is
+      # RegaliaFencingEvaluationStale's case.
+      #
+      # No site for 20 minutes. Two planned gaps stay under it:
+      #   * a switchover (`activation release`, the lease runs out, `activation promote`): at most one lease life
+      #     (fencing.MaxLeaseDuration, 10 min) plus the skew (60 s) plus the promote;
+      #   * a recovery's exit (#432 amendment 5): the survivor's lease stops verifying when it takes the restoring
+      #     epoch, and the returning nodes co-sign only once they have seen every authorizing peer at it, plus
+      #     RECOVERY_WAIT_S (11 min), a pull round and the promote: about 13 to 14 minutes.
+      #   If the survivor was quarantined at the exit, the wait runs to recovery_ends_by (days): the page is right,
+      #   nothing signs. A site whose daemons never evaluated (absent series) or are not scraped matches nothing here:
+      #   RegaliaFencingNeverEvaluated and the scrape rules see those.
       - alert: RegaliaNoActiveSite
-        expr: max by (job) (regalia_fencing_lease_held) == 0
-        for: 15m
+        expr: max by (job) (regalia_fencing_lease_held * ((time() - regalia_fencing_last_check_seconds) < bool 60)) == 0
+        for: 20m
         labels:
           severity: critical
         annotations:
-          summary: "No site of {{ $labels.job }} has held the activation lease for 15 minutes: nothing signs. Check the active site's renewals (RegaliaActivationRenewalFailing) and, for a switchover, `activation promote` (FENCING.md)."
+          summary: "No site of {{ $labels.job }} has held the activation lease for 20 minutes: nothing signs. Check the active site's renewals (RegaliaActivationRenewalFailing) and, for a switchover, `activation promote` (FENCING.md)."
       # Two sites at once: what fencing exists to prevent. No for: one evaluation is enough. The backstop if exclusion
       # ever failed (#432's accepted risk: a false fencing attestation on the recovery path).
       - alert: RegaliaTwoActiveSites
-        expr: sum by (job) (regalia_fencing_lease_held) > 1
+        expr: sum by (job) (regalia_fencing_lease_held * ((time() - regalia_fencing_last_check_seconds) < bool 60)) > 1
         labels:
           severity: critical
         annotations:
