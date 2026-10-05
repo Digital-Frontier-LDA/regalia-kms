@@ -275,7 +275,7 @@ def main(argv=None):
                 return keyfd.tty_line("> ")
             envelope = activation.owner_recovery_lease(tip, args.survivor, args.site, args.registry_digest, record, args.journal_head,
                                                        how, int(time.time()), confirm_line, open_signer, witness_latest=args.witness_latest)
-            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
             with os.fdopen(fd, "w") as f:
                 json.dump(envelope, f, sort_keys=True)
             print("WRITTEN: %s, signed by the owner, valid until %s; the survivor co-signs it at its console"
