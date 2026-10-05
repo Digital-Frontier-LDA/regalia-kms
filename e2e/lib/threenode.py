@@ -530,24 +530,10 @@ class Cluster:
         """The node as its services see it (deploy/baremetal/node.Node), from its configuration."""
         return node.Node(node.load(str(self.nodes[name].cfg_path)))
 
-    @staticmethod
-    def enrolled_store(here):
-        """The store as enrolment builds it (enrol.py commit): ANCHORING, so a node starts with its anchor at the chain
-        it was enrolled with. The node's own services use node.store(), which never anchors (#66 B3)."""
-        return membership.Store(here.path("membership.json"), here.cfg["root_key"], here.anchor(), documents=here.documents().require_for)
-
     def _anchor_and_store(self, n):
         here = self.node(n.name)
         here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
-        if self.v4:
-            self._enrolled(n.name, self.chain)
-            return
-        anchor = here.anchor()
-        anchor.define()
-        self.enrolled_store(here).commit(self.chain[0])
-        with self._as_booted(n.name):                 # laid down by the node's policy (node.define_policy: the system key its measurements name)
-            node.heartbeat_counter(here.cfg).define()
-            node.signing_counter(here.cfg).define()  # #199: the highest sequence this node has signed
+        self._enrolled(n.name, self.chain)            # the chain is v4: the anchor written by policy only (#242 B3)
 
     def _enrolled(self, name, chain):
         """v4 (#242 B3): the node's trust anchors as `enrol commit`'s step lays them down, enrol.anchor_and_store: the
