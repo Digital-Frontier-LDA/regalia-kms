@@ -208,13 +208,17 @@ def scenario(cluster):
         cluster.nodes[crashed].in_ns("ip", "link", "del", interface, check=False)
     (cluster.nodes[crashed].run / "boot-session").unlink(missing_ok=True)   # so the client asks rather than standing down
     since = time.time()
+    # two rounds to each peer: with the session-binding check's own rounds below, b's unlock requests to a in this minute
+    # stay well under the listener's per-subject rate limit (a later added round could otherwise read as a refusal of
+    # the session binding when it is the rate's: regalia-kms-48)
     got = cluster.unlock(crashed, timeout=90, rounds=2)
-    phase = "the node is in the system phase"                   # the survivor's attestation refusal, in its unlock trail
-    denied = [e.get("reason") for e in cluster.trail(survivor) if e.get("event") == "unlock" and e.get("subject") == crashed
-              and e.get("outcome") == "DENY" and e.get("at", 0) >= since - 1]
-    ok("error" not in got and got.get("rc") != 0 and got.get("peer") is None and any(phase in (r or "") for r in denied),
-       "N: %s, crashed in its running system (the same boot, PCR 11 in the system phase), gets no key from %s, which says "
-       "why: %s" % (crashed, survivor, phase), {"client": got, "denied": denied})
+    phase = "the node is in the system phase"                   # each peer's attestation refusal, in its unlock trail
+    denied = {p: [e.get("reason") for e in cluster.trail(p) if e.get("event") == "unlock" and e.get("subject") == crashed
+                  and e.get("outcome") == "DENY" and e.get("at", 0) >= since - 1] for p in (survivor, rebooted)}
+    ok("error" not in got and got.get("rc") != 0 and got.get("peer") is None
+       and all(any(phase in (r or "") for r in denied[p]) for p in (survivor, rebooted)),
+       "N: %s, crashed in its running system (the same boot, PCR 11 in the system phase), gets no key from %s or %s, both "
+       "saying why: %s" % (crashed, survivor, rebooted, phase), {"client": got, "denied": denied})
     cluster.stop(rebooted)
     cluster.stop(crashed)                                       # a new boot, never started: PCR 11 in the initrd phase
     first = cluster.unlock(crashed)
