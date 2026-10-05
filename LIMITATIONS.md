@@ -179,15 +179,17 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   approvals (C2) and the writes under them (C3) are not built: until then no index is written under R. Its value
   is the TPM's saved highest count, so it differs per node (regalia-kms-95). Measured on swtpm only. A node
   enrolled before C1 has no R and is refused at the genesis ("made before #361 C1").
-- **K_A's approvals are made and carried, and nothing uses them yet** (#361 C2). A signed set's
-  `signing.anchor_approvals` holds K_A's signature per class over P(K_sys, G) for THAT node's rotation
-  counter. The signer (`anchorpolicy approve`, `approve-first`, `approve-increment`) takes G from each
-  node's AK-quoted first value at the genesis, and from the current root-committed document at a rotation
-  (the same G for a key already approved, one above the highest otherwise). It never takes a typed G. The
-  node's use of them (the composite write session) is C3; until then the approvals are only validated by
-  form, at load, and by signature, in the signer. The signer runs on the offline laptop under
-  regalia-ceremony's offline-keys (its TOOLS entries come in an rc PR after this merges); it is unit-tested
-  with keys on pipes, not yet run there.
+- **Under a v4 tip, every policy-written object is defined and written under K_A** (#361 C3). The anchor
+  counter and slots, the heartbeat and signing counters, and the node signing key each sit under
+  PolicyAuthorize(Name(K_A), their class). A run-time write opens the composite session: PolicyPCR(11), then
+  PolicyAuthorize(K_sys), then PolicyNV(this node's R <= G), then PolicyAuthorize(K_A, class) with K_A's
+  approval from the node's set. Shown on swtpm: the production enrolment, a retire bump revoking the old
+  approval in the TPM, and one session per command. Not on a hardware TPM. Approvals are checked at three
+  points: by form when the document is loaded, by signature by the signer, and by signature for the node's
+  own set before each write (another node's is refused by name before the TPM is asked). A set names K_sys
+  only by fingerprint, so another node's approvals can't be checked at load, only at use (regalia-kms-d9).
+  Definitions, a re-anchor and a recount still write with the owner's authorization (the indices keep
+  ownerwrite). The retire bump and catch-up are C4.
 - **K_A is taken from the sealed set's generation record** (`--offline-keys-record`, regalia-kms-95 on
   #438). It is verified under the pinned root, and its published key must equal the entry. Its private
   half is shown only by the record's `operation_proof` ("verified": the generating tool's own check of a

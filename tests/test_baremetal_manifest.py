@@ -1179,7 +1179,8 @@ class ProposeGenesis(unittest.TestCase):
         for files in nodes:
             args += ["--node"] + files
 
-        def proven(bundle, system_pub, keep, activation, run=None):
+        def proven(bundle, system_pub, keep, activation, run=None, k_a=None):
+            self.assertEqual(k_a, self.anchor()["key"], "the genesis judges each signing key under its own K_A (#361 C3)")
             self.assertEqual((system_pub, keep["node_id"], activation["node_id"]), (b"system-phase PCR key (stub)\n",) + (bundle["node_id"],) * 2)
             return {k: v for k, v in bundle.items() if k != "rotation"}, self.enrolled[bundle["node_id"]]   # the entry, as proven_entry gives it
         stdout, stderr = io.StringIO(), io.StringIO()

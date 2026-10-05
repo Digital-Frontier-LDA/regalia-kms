@@ -451,7 +451,7 @@ class ProducersWriterRun(unittest.TestCase):
             args += ["--node", path, path, path]
         out, err = io.StringIO(), io.StringIO()
         with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch.object(tool.keyfd, "tty_line", lambda p: "40000001 40000002"), \
-                mock.patch.object(tool.enrol, "proven_entry", lambda bundle, pub, keep, act, run=None: ({k: v for k, v in bundle.items() if k != "rotation"}, {"7": "00" * 32, "11": "bb" * 32})), \
+                mock.patch.object(tool.enrol, "proven_entry", lambda bundle, pub, keep, act, run=None, k_a=None: ({k: v for k, v in bundle.items() if k != "rotation"}, {"7": "00" * 32, "11": "bb" * 32})), \
                 mock.patch.object(tool, "offline_keys_record", lambda envelope, root: (typed(K_A), generated)):
             self.assertEqual(tool.main(args), 0, err.getvalue())
         self.assertIn("card record 2 of 2 (the newest on this laptop's signing record)", out.getvalue())

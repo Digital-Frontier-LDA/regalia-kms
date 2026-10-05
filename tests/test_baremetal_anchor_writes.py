@@ -50,6 +50,14 @@ class CompositeSession(unittest.TestCase):
         self.assertEqual(self.increment(self.approval()).returncode, 0)
         self.assertEqual(self.increment(self.approval(generation=self.r["value"] + 5)).returncode, 0)   # R <= a higher G: still fine
 
+    def test_one_session_authorizes_one_command(self):
+        """regalia-kms-95: the TPM resets a policy session's digest when the session is used, so the composite session
+        authorizes ONE write; a second command on it is refused, and each write opens its own (as HighWater._write does)."""
+        with signkey.policy_session(self.pem, self.tcti, signatures=self.signatures, anchor=self.approval()) as session:
+            self.assertEqual(self.tpm("nvincrement", INDEX, "-C", INDEX, "-P", "session:" + session).returncode, 0)
+            self.assertNotEqual(self.tpm("nvincrement", INDEX, "-C", INDEX, "-P", "session:" + session).returncode, 0)
+        self.assertEqual(self.increment(self.approval()).returncode, 0)
+
     def test_another_node_class_or_g_writes_nothing(self):
         """Refused in software before the TPM is asked: K_A's approval is checked over THIS node's R, class and G."""
         good = self.approval()

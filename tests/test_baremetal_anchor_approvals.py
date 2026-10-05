@@ -286,7 +286,7 @@ class Signer(unittest.TestCase):
             nodes += ["--node"] + files
         args = ["approve", "--root-key", case.root, "--offline-keys-record", self.path("rec.json", case.generation_record()),
                 "--document", self.path("d.json", document()), "--system-pub", self.path("k.pem", SYSTEM_PUB)] + nodes
-        proven = lambda bundle, pem, keep, act, run=None: ({k: v for k, v in bundle.items() if k != "rotation"}, {})  # noqa: E731
+        proven = lambda bundle, pem, keep, act, run=None, k_a=None: ({k: v for k, v in bundle.items() if k != "rotation"}, {})  # noqa: E731
         with unittest.mock.patch.object(enrol, "proven_entry", proven):
             code, out, err = self.run_cli(*args)
         self.assertEqual(code, 0, err)
