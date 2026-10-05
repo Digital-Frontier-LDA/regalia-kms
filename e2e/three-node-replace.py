@@ -25,7 +25,7 @@ with new identities and keeps c as RETIRED, a tombstone whose identities are nev
      lease; and through a service tunnel forced open by hand, a's sync refuses it by name (RETIRED). Its TPM posing
      as c2 (refused on the EK and AK the manifest pins for c2) is NOT covered here: replacement.py's unit tests
      cover it (test_poc_16_5_the_old_hardware_is_refused_by_every_decision).
-  6  #340: every line of every node's sync and admission trail (c2's and the old c's included) is in the audit
+  6  #340: every line of every node's sync, admission and time trail (c2's and the old c's included) is in the audit
      collector (a real collector and each node's real shipper: Cluster(audit=True)), and the decisions this scenario
      turns on are there by name, in the stream of the node that made them: b's apply of the replacement from a (step
      2), the leases a and b issued c2 (step 3), and a's refusal of the RETIRED c (step 5)
@@ -178,7 +178,7 @@ def scenario(cluster):
        {"a denied": named, "c": cluster.journal("c", "admission")[-300:]})
     refused_since = since
 
-    header("6  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
+    header("6  #340: every line of every node's sync, admission and time trail is in the audit collector, for the node that recorded it")
     everyone = list(cluster.nodes)
     wrong = cluster.audit_complete()
     counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in everyone for t, _, _ in threenode.AUDIT_TRAILS}

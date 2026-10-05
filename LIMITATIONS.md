@@ -220,8 +220,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   deciding node's own stream. In recovery, each node's change to serving is tied to the step-2 pair that restored it
   (that peer's lease, in that pair's window), and each step-7 victim's not-serving line is checked. Not covered:
   netns (no audit decisions of its own) and the re-anchor rehearsal (its trail is the operator tool's, checked
-  line by line there, not shipped). **The time trail and the update trail are still never checked end to end in a
-  three-node scenario:** both write to fixed host paths the fixture would first have to give each node.
+  line by line there, not shipped). The time trail is shipped and checked too: the fixture's authtime records each
+  transition on a per-node trail, and outage names a's switch to "not authenticated" in it.
+- **The update trail is not shipped end to end in tier N** (#476). `update.py apply`'s lease and verdict path and its
+  REQUEST/ALLOW lines are covered by unit tests (`tests/test_baremetal_update.py`); firmware and image measurement
+  by tier Q (#442, OVMF with real UKIs). The three-node fixture has no real UKIs, and a scenario that stood in for
+  the image's measurement would prove less than it appears to.
 - **`regalia-sync` says nothing in the journal about its rounds** (#470). Its decisions (pulls, applies,
   refusals and their reasons) are only in its hash-chained trail. `journalctl -u regalia-sync` shows systemd's
   start and stop lines, so an operator asking why a node is behind its peers must read the trail. In the

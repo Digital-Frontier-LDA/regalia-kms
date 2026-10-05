@@ -24,10 +24,10 @@ then the other two by themselves, through that node; then the nodes sign their o
      (fail closed). Judged by position in a's trail, not by time: after a's first refusal for want of time, no
      signature as proposer or co-signer. One signature already in flight across the switch is allowed (the Proposer
      reads authenticated time once per step): a stated limitation, not a failure
-  6  #340: every line of every node's sync and admission trail is in the audit collector (a real collector and each
+  6  #340: every line of every node's sync, admission and time trail is in the audit collector (a real collector and each
      node's real shipper: Cluster(audit=True)), and the decisions this scenario turns on are there by name, in the
-     stream of the node that made them: c's revocation committed (step 4), and a's refusals for want of authenticated
-     time, as proposer and as co-signer (step 5)
+     stream of the node that made them: c's revocation committed (step 4), and a's time no longer authenticated on its
+     time trail with its refusals for want of it, as proposer and as co-signer (step 5)
 """
 import base64
 import json
@@ -178,7 +178,7 @@ def scenario(cluster):
        "co-signer, and says why (fail closed)%s" % (" (one signature in flight across the switch, allowed)" if in_flight else ""),
        {"co-sign answer": answer, "refused at": refused_at, "signed after": signed, "in flight": in_flight, "events": recent(cluster, "a")})
 
-    header("6  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
+    header("6  #340: every line of every node's sync, admission and time trail is in the audit collector, for the node that recorded it")
     wrong = cluster.audit_complete()
     counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t, _, _ in threenode.AUDIT_TRAILS}
     ok(wrong == {}, "every node's trails are written and in the collector line for line: sequence from 1, chained from genesis, "
@@ -190,9 +190,11 @@ def scenario(cluster):
     # since step 5 began: a node's first rounds after any start may refuse for want of time too, before chrony answers
     as_proposer = cluster.audit_has("a", "sync", since=step5, event="beat-propose", outcome="DENY", reason=untimed)
     as_cosigner = cluster.audit_has("a", "sync", since=step5, event="sync-beat-sign", outcome="DENY", reason=untimed)
-    ok(bool(as_proposer) and bool(as_cosigner),
-       "a's refusals for want of authenticated time (step 5), as proposer (%d) and as co-signer (%d), are in a's stream"
-       % (len(as_proposer), len(as_cosigner)))
+    # and the switch itself, on a's TIME trail (#303: authtime records each change between authenticated and not)
+    switched = cluster.audit_has("a", "time", since=step5, event="time-unauthenticated")
+    ok(bool(as_proposer) and bool(as_cosigner) and bool(switched),
+       "a's time no longer authenticated (step 5) is in a's time stream (%d), and its refusals for want of it, as proposer (%d) "
+       "and as co-signer (%d), in its sync stream" % (len(switched), len(as_proposer), len(as_cosigner)))
 
 
 def main():

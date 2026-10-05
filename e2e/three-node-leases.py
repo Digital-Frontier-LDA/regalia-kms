@@ -17,7 +17,7 @@ whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
   5  a cut off from one peer (its service mesh): it renews through the other
   6  14.3: running a revoked by b and c, each at its own console (revoke.py); both peers refuse its renewals (it is off their service tunnels; by name through a
      tunnel forced open), and a's admission stops serving by itself when its lease ends (measured against 300 s)
-  7  #340: every line of every node's sync and admission trail is in the audit collector (a real collector and each
+  7  #340: every line of every node's sync, admission and time trail is in the audit collector (a real collector and each
      node's real shipper: Cluster(audit=True)), and the decisions this scenario turns on are there by name, in the
      stream of the node that made them: a's renewal by its issuer (step 2), a's revocation committed (step 6), b's
      refusal of the revoked a by name, and a's admission stopping after the revocation
@@ -181,7 +181,7 @@ def scenario(cluster):
     ok(not any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= revoked_at
                for p in ("b", "c") for e in cluster.trail(p)), "and nobody issued a a lease after the revocation")
 
-    header("7  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
+    header("7  #340: every line of every node's sync, admission and time trail is in the audit collector, for the node that recorded it")
     names = list(cluster.nodes)
     wrong = cluster.audit_complete()
     counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t, _, _ in threenode.AUDIT_TRAILS}

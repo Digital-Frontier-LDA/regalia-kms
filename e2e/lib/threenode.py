@@ -74,7 +74,7 @@ ADMISSION_DIR_MODE = _state_directory_mode("regalia-admission.service")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
+from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, measurements, membership, node, signkey, sitecfg, trails, unlock, uki, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
 NAMES = ("a", "b", "c")
@@ -83,7 +83,8 @@ RECOVERY = b"cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuu
 MARKER = b"regalia-kms root volume marker"
 SWITCH = "e2e3-sw"
 UNIT_PREFIX = "e2e3-"
-AUDIT_TRAILS = (("sync", "state", "sync-audit.jsonl"), ("admission", "admission", "audit.jsonl"))   # each node's own (#340)
+AUDIT_TRAILS = (("sync", "state", "sync-audit.jsonl"), ("admission", "admission", "audit.jsonl"),   # each node's own (#340)
+                ("time", "time_log", "time.jsonl"))                                                  # its authtime's (#303)
 COLLECTOR_UNIT = UNIT_PREFIX + "audit-collector"
 COLLECTOR_PORT = 18443
 
@@ -144,6 +145,7 @@ class NodeHere:
         self.tcti = "swtpm:path=%s" % self.tpm_sock
         self.cfg_path = self.dir / "etc" / "node.json"
         self.state, self.admission, self.run = self.dir / "state", self.dir / "admission", self.dir / "run"
+        self.time_log = self.dir / "log-time"         # its /var/log/regalia-time: authtime's transitions (#303)
 
     def in_ns(self, *argv, check=True, **kw):
         return sh("ip", "netns", "exec", self.ns, *argv, check=check, **kw)
@@ -577,7 +579,17 @@ class Cluster:
             return {"leap": "Normal" if answering else "Not synchronised", "reference_time": now, "system_offset": 0.0,
                     "sources": [{"name": s, "state": state, "reaching": answering, "mode": "NTS", "keyed": True}
                                 for s, state in (("nts1.e2e3.invalid", "*"), ("nts2.e2e3.invalid", "+"))]}
-        service = authtime.Service(str(n.run / "authtime.json"), ["nts1.e2e3.invalid", "nts2.e2e3.invalid"], reading=reading)
+        # each transition on the node's own time trail, as authtime.service() records it on a host (#303): root's, in the
+        # directory regalia.tmpfiles.conf makes (root:regalia-audit-time 0750), the file in that group for its shipper
+        if not n.time_log.exists():
+            n.time_log.mkdir(mode=0o750)
+            shutil.chown(n.time_log, "root", "regalia-audit-time")
+            os.chmod(n.time_log, 0o750)
+        trail = str(n.time_log / "time.jsonl")
+
+        def record(event, trail=trail):
+            trails.append(trail, dict(event, at=int(time.time())), group="regalia-audit-time")
+        service = authtime.Service(str(n.run / "authtime.json"), ["nts1.e2e3.invalid", "nts2.e2e3.invalid"], reading=reading, record=record)
         self.authtimes[n.name] = service
         service.step()
         self._authtime_writer(n.name)
@@ -1427,7 +1439,7 @@ class Cluster:
 
     def _trail_path(self, name, trail):
         n = self.nodes[name]
-        return {"sync": n.state / "sync-audit.jsonl", "admission": n.admission / "audit.jsonl"}[trail]
+        return {"sync": n.state / "sync-audit.jsonl", "admission": n.admission / "audit.jsonl", "time": n.time_log / "time.jsonl"}[trail]
 
     def _trail_groups(self, name):
         """Each of the node's trails (and its rotated archives) back in its reader group, 0640, as its writer keeps it on a
@@ -1521,7 +1533,7 @@ class Cluster:
         return None
 
     def audit_complete(self, timeout=180):
-        """{(node, trail): what is wrong} for every node trail (sync, admission) the collector does not hold, line for
+        """{(node, trail): what is wrong} for every node trail (AUDIT_TRAILS: sync, admission, time) the collector does not hold, line for
         line, UP TO A SNAPSHOT of the trail taken when this is called. The trails go on growing while it waits (the
         services run): judged against the trail as re-read at each look, a line written after the shipper's last pass
         failed it (regalia-kms#409, d9: 400 trail lines, 399 in the collector). So the snapshot, taken first, is the
