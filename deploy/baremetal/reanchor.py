@@ -226,13 +226,16 @@ def active_units(run=subprocess.run):
     """Which of ANCHOR_UNITS systemd says are running (or starting, or stopping). No systemctl at all (a machine that is
     not a node, as the unit tests run on): none. A systemctl that cannot answer ("Failed to connect to bus" on a
     recovery boot, in a chroot) is a refusal, never "none running" (regalia-kms-1e on #391): exactly one known state per
-    unit, and is-active's own status (0 all active, 3 some not), or nothing is assumed."""
+    unit, and is-active's own status (0 all active, 3 some not, 4 some not loaded at all: it still prints "inactive"
+    for those, as on a machine where they are not installed), or nothing is assumed. Status 4 is taken only when EVERY
+    unit reads inactive or failed (regalia-kms-24): a missing unit beside a running one is a refusal too."""
     try:
         done = run(["systemctl", "is-active"] + list(ANCHOR_UNITS), capture_output=True, text=True, check=False)
     except FileNotFoundError:
         return []
     states = done.stdout.split()
-    if done.returncode not in (0, 3) or len(states) != len(ANCHOR_UNITS) or any(state not in UNIT_STATES for state in states):
+    if done.returncode not in (0, 3, 4) or len(states) != len(ANCHOR_UNITS) or any(state not in UNIT_STATES for state in states) \
+            or (done.returncode == 4 and any(state not in ("inactive", "failed") for state in states)):
         raise Refused("cannot ask systemd which of %s run (status %s: %s): stop them and run this on the booted node"
                       % (", ".join(ANCHOR_UNITS), done.returncode, " ".join(((done.stderr or "") + " " + (done.stdout or "")).split())[:200]))
     return [unit for unit, state in zip(ANCHOR_UNITS, states) if state in ("active", "activating", "reloading", "refreshing", "deactivating")]

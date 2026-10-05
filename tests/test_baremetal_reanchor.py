@@ -974,6 +974,11 @@ class AnchorUnits(unittest.TestCase):
         self.assertEqual(reanchor.active_units(run), ["regalia-esp-advance.service", "regalia-admission.service"])
         self.assertEqual(calls, [["systemctl", "is-active"] + list(reanchor.ANCHOR_UNITS)])
 
+        # 4: units that are not installed at all (a runner, a machine that is not a node): each still "inactive". The
+        # three-node rehearsal's first final run failed on this (#391 at 47f600a)
+        self.assertEqual(reanchor.active_units(lambda argv, **kw: subprocess.CompletedProcess(argv, 4, stdout="inactive\n" * 4,
+                                                                                              stderr="Unit regalia-sync.service could not be found.")), [])
+
         def missing(argv, **kw):
             raise FileNotFoundError("systemctl")
         self.assertEqual(reanchor.active_units(missing), [])
@@ -983,7 +988,8 @@ class AnchorUnits(unittest.TestCase):
         for code, out, err in ((1, "", "Failed to connect to bus: No such file or directory"),
                                (3, "inactive\ninactive\n", ""),                      # fewer states than units
                                (3, "inactive\ninactive\ninactive\nweird\n", ""),       # a state it does not know
-                               (4, "inactive\ninactive\ninactive\ninactive\n", "")):     # not is-active's own status
+                               (1, "inactive\ninactive\ninactive\ninactive\n", ""),      # not is-active's own status
+                               (4, "inactive\nactive\ninactive\ninactive\n", "")):       # 4 (one missing) beside a running one
             with self.assertRaisesRegex(m.Refused, "cannot ask systemd which of .* run .*: stop them and run this on the booted node"):
                 reanchor.active_units(lambda argv, **kw: subprocess.CompletedProcess(argv, code, stdout=out, stderr=err))
 
