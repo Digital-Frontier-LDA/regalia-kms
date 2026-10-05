@@ -31,9 +31,6 @@ that the interface was configured by reconcile(), which checks its own result.
 A STALE INTERFACE DOES NOT HELP A REVOKED NODE: key_at() and sync.pinned() look in the manifest held NOW,
 so a node that is revoked there is refused although its peer entry has not been removed yet.
 
-THE REVOCATION AUTHORITY is one more peer, configured locally by its key and underlay (it is not a node of
-the manifest). Nodes ask it; it never asks them, and nothing it sends is trusted for coming from it.
-
 ONE MORE CONDITION, ON THE HOST: a packet with a tunnel source address must not reach the sync port by any
 other way than the tunnel. Linux takes packets for a local address on any interface, and IPv6 has no
 reverse-path filter, so a host on the same link could send one in plaintext. The host firewall closes
@@ -59,8 +56,6 @@ Refused, require = membership.Refused, membership.require
 INTERFACE = "wg-svc"
 LISTEN_PORT = 51821              # UDP; 51820 is wg-unlock's (#66)
 PREFIX = ipaddress.IPv6Network("fd72:6567:6c61::/48")
-AUTHORITY_KEYS = ("key", "underlay", "port")
-AUTHORITY = "@authority"         # convergence.AUTHORITY: the one name here that is not a node ID
 
 
 def address(key):
@@ -97,21 +92,18 @@ def _port(value, label):
     return value
 
 
-def conf(manifest, node_id, underlays, authority=None, listen_port=LISTEN_PORT, own_key=None):
+def conf(manifest, node_id, underlays, listen_port=LISTEN_PORT):
     """The `wg setconf` text for `node_id`'s service interface under `manifest`, without the private key.
     `underlays` maps a node ID to its IPv4 underlay address (a peer with none is still a peer: it can call,
-    and is answered where it called from). `authority` is None or {"key", "underlay", "port"}."""
+    and is answered where it called from). Every peer is a node of the manifest (#199 retired the one that
+    was not, the revocation authority)."""
     entries = {node["node_id"]: node for node in manifest["nodes"]}
-    require(node_id in entries or node_id == AUTHORITY, "%s is not in the manifest" % (node_id,))
+    require(node_id in entries, "%s is not in the manifest" % (node_id,))
     require(isinstance(underlays, dict), "underlays maps node IDs to addresses")
     text = "[Interface]\nListenPort = %d\n" % _port(listen_port, "listen_port")
-    if node_id == AUTHORITY:        # the authority's own interface: every node that may still be talked to
-        require(authority is None, "the authority is not its own peer")
-        seen = set()
-    elif entries[node_id]["state"] in membership.TERMINAL:
+    if entries[node_id]["state"] in membership.TERMINAL:
         return text
-    else:
-        seen = {entries[node_id]["wg_service_pub"]}
+    seen = {entries[node_id]["wg_service_pub"]}
     for other in manifest["nodes"]:
         if other["node_id"] == node_id or other["state"] in membership.TERMINAL:
             continue
@@ -120,22 +112,12 @@ def conf(manifest, node_id, underlays, authority=None, listen_port=LISTEN_PORT, 
         if other["node_id"] in underlays:
             text += "Endpoint = %s:%d\n" % (_underlay(underlays[other["node_id"]], "the underlay of %s" % other["node_id"]), listen_port)
         seen.add(key)
-    if authority is not None:
-        membership.exact(authority, AUTHORITY_KEYS, "authority")
-        key = authority["key"]
-        membership.hex_field(key, 64, "authority.key")
-        require(key not in seen and key not in {n["wg_service_pub"] for n in manifest["nodes"]}, "the authority's key is a node's key")
-        text += "\n[Peer]\n# %s\nPublicKey = %s\nAllowedIPs = %s/128\nEndpoint = %s:%d\n" % (
-            "authority", wg_key(key), address(key), _underlay(authority["underlay"], "authority.underlay"), _port(authority["port"], "authority.port"))
     # ONE ADDRESS, ONE KEY. Two keys whose hashes share 80 bits would share an address, and the caller of
     # a connection from it could not be told apart. Finding such a pair takes about 2^40 work, but only a
     # key the root signer pins is ever a peer, so it would take the signer's help; still, it is refused
-    # here rather than assumed: every node of the manifest (this one and terminal ones included) and the
-    # authority must derive addresses of their own.
-    if own_key is not None:      # the authority's own interface: its key is no node's, and derives an address of its own
-        membership.hex_field(own_key, 64, "the authority's key")
-        require(own_key not in {n["wg_service_pub"] for n in manifest["nodes"]}, "the authority's key is a node's key")
-    keys = [n["wg_service_pub"] for n in manifest["nodes"]] + [k for k in ((authority or {}).get("key"), own_key) if k is not None]
+    # here rather than assumed: every node of the manifest (this one and terminal ones included) must derive an
+    # address of its own.
+    keys = [n["wg_service_pub"] for n in manifest["nodes"]]
     derived = [address(k) for k in keys]
     require(len(set(derived)) == len(derived), "two keys derive the same tunnel address: they could not be told apart")
     return text
@@ -245,19 +227,16 @@ def verify(text, interface=INTERFACE, run=subprocess.run):
             "peers that differ %s" % (wrong, strangers))
 
 
-def reconcile(manifest, node_id, underlays, private_key, authority=None, listen_port=LISTEN_PORT, interface=INTERFACE, run=subprocess.run,
-              own_key=None):
+def reconcile(manifest, node_id, underlays, private_key, listen_port=LISTEN_PORT, interface=INTERFACE, run=subprocess.run):
     """The root side: make the interface what `manifest` says, and prove it. The interface is brought UP
     only after its peers have been applied and read back. On ANY failure once it exists it is taken DOWN
-    (or deleted, if it will not go down) before the refusal is raised. `own_key` is this host's public key
-    when it is the authority (node_id AUTHORITY); a node's is the manifest's."""
+    (or deleted, if it will not go down) before the refusal is raised. The node's own key is the manifest's."""
     membership.validate(manifest)
     entries = {node["node_id"]: node for node in manifest["nodes"]}
-    text = conf(manifest, node_id, underlays, authority, listen_port, own_key)
-    require((own_key is None) == (node_id in entries), "a node's key is the manifest's; the authority's is given")
+    text = conf(manifest, node_id, underlays, listen_port)
     name = _interface(interface)
     try:
-        own = prepare(own_key or entries[node_id]["wg_service_pub"], name, run)
+        own = prepare(entries[node_id]["wg_service_pub"], name, run)
         apply(text, private_key, name, run)
         verify(text, name, run)
         up(name, run)

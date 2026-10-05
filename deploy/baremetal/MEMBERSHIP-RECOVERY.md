@@ -11,9 +11,9 @@ That is deliberate. This page says, for each refusal, what happened and how the 
 |---|---|---|---|
 | `ROLLBACK: the membership on disk is epoch N but the TPM high-water is M` | The file is older than what this node accepted: a restored disk, or the file was lost | The node, from a peer | `convergence.recover`: one source is enough while the record names the manifest at the anchored epoch |
 | `CONFLICT: the manifest at epoch N is not the one this node's TPM recorded` | The file holds another validly signed chain: a substituted disk, and a key that signed twice for one epoch | The node, from a peer, **and an incident** | `convergence.recover`; if the disk still holds the other chain the restore refuses it too: record the incident, keep the file as evidence, remove it, recover |
-| `recovery needs whole chains from 2 different sources` | A crash fell between the counter and the record; the record names the epoch below | The node, from two sources | `convergence.recover` with a peer's chain and the authority's |
+| `recovery needs whole chains from 2 different sources` | A crash fell between the counter and the record; the record names the epoch below | The node, from two sources | `convergence.recover` with the chains of two other nodes the manifest lets authorize (#199: there is no authority to be the second source). With only one such node left (the other revoked or down), nothing goes on by itself: an operator calls `convergence.recover(..., minimum=1)` deliberately, after checking that node's chain by hand as for a re-anchor (below), against the chain the owner signs revocations against. No tool does this yet |
 | `cannot write the record index …` / `did not take the write` | The TPM refused a write, or power was lost during one | Nobody needs to | Start the service again: `load()` completes it. A record write that was cut half-way damages one slot only; the other still holds the epoch before |
-| `the fetched chain ends at epoch N, below the TPM high-water M` | The peer asked is itself behind | The node | Ask another peer, or the authority |
+| `the fetched chain ends at epoch N, below the TPM high-water M` | The peer asked is itself behind | The node | Ask another peer |
 | `epoch jump N exceeds the bound 1000: anomaly` | The chain offered is more than 1000 epochs ahead of this node's anchor | The node, in steps; an operator to look first | Manifests change rarely, so first find out why a node is so far behind. Then: a node whose chain on disk is intact catches up through `convergence.catch_up`, which applies at most 1000 envelopes a message and commits them one by one. A node whose chain is lost restores the chain cut at its anchored epoch + 1000 (`Store.restore` of the first epochs), then catches up the rest the same way. Nothing is anchored more than 1000 epochs at a time, and nothing needs a re-anchor |
 | `NO RECORD: neither record slot … holds a valid record` | Both record slots are unreadable as records. Two cut writes in a row cannot do it (the second write goes to the slot the first one damaged); a failing TPM or a deliberate write can | **An operator, on the host** | Re-anchor (below) |
 | `cannot read NV index …: … the index is not defined` | The TPM answers, and says an index of the anchor does not exist: it was deleted, or the anchor was never defined | **An operator** | Re-anchor |
@@ -36,11 +36,12 @@ established. **It is the one operation that resets a node's rollback protection.
 believes the chain it was given, exactly as a newly enrolled node does. So:
 
 - it is a command an operator runs on the host, never something a service or a peer can trigger;
-- it needs whole chains from **the revocation authority and at least one other node**, agreeing at every
-  epoch they share (the code today; with no authority host, decided in ADR-0002 D28, the sources a re-anchor
-  trusts are #199's to set, not built). Two peers alone are refused, the authority alone is refused, the node being
-  re-anchored is not accepted as its own peer, and **the chain anchored is the authority's**: a peer
-  that is ahead of the authority is refused, because its newest epochs would rest on that peer alone;
+- it needs whole chains from **at least two other nodes** that the newest manifest lets authorize, agreeing at
+  every epoch and **ending at the same epoch** (#199: there is no authority host, so no single source is
+  trusted more than another; the trust is the nodes' quorum, as for heartbeats and revocations). One node
+  alone is refused, the node being re-anchored is not accepted as its own peer, and chains that end at
+  different epochs are refused: the newest epochs of the longer one would rest on that node alone. Fetch
+  each node's current chain again, after the newest epoch has reached both;
 - it refuses when the anchor is usable (that case is `recover`'s, under the anchor as it is), and when
   the TPM does not answer (nothing is known about the anchor then);
 - **nothing the TPM still holds is forgotten**: the chain must reach the old counter's epoch while it
@@ -57,7 +58,7 @@ believes the chain it was given, exactly as a newly enrolled node does. So:
 
 ```sh
 python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.json --root-key "$ROOT_KEY_HEX" \
-    --tpm-index 0x1500016 --node-id b --authority authority-chain.json --peer c=c-chain.json \
+    --tpm-index 0x1500016 --node-id b --peer a=a-chain.json --peer c=c-chain.json \
     --audit-log /var/log/regalia/reanchor.jsonl
 ```
 
@@ -79,17 +80,17 @@ be computed from the chain files.
 ### Deciding that the sources are right
 
 The command checks signatures, the chain, and that the sources agree. It cannot check that the files
-are what the authority and the peer really hold. That is the operator's part, before typing the phrase:
+are what the two peers really hold. That is the operator's part, before typing the phrase:
 
 1. **Fetch each chain yourself, from its holder**, over the channel you already trust for that host
-   (the authority's own machine; the peer over SSH under its manifest-pinned host key, `SSH.md`). Do not
+   (each peer over SSH under its manifest-pinned host key, `SSH.md`). Do not
    take both files from one place, and never from the node being re-anchored. The command refuses the
    node as its own peer by name; it cannot tell that two files with different names came from one place.
 2. **Compare the epoch and digest the command prints with what a healthy peer reports for itself**
    (`python3 -Es -m deploy.baremetal.rollout epoch --membership … --root-key … --tpm-index 0x1500016` on that
    peer: it checks the peer's chain against the peer's own TPM). The digest must be the same.
-3. **Compare with the last signing record** for the root or revocation key: the newest epoch signed is
-   the epoch you expect. A chain that ends below it is old.
+3. **Compare with the last signing record** for the root, and with the last revocation the nodes or the
+   owner signed (`revoke.py`): the newest epoch signed is the epoch you expect. A chain that ends below it is old.
 4. **Ask why the anchor is unusable** before repairing it. A power cut explains one damaged slot, not
    two. If you cannot explain it, treat the host as suspect: quarantine the node in a manifest first,
    and re-anchor it afterwards.

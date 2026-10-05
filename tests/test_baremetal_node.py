@@ -28,8 +28,7 @@ SITE = {"schema": sitecfg.SCHEMA, "site": "site-a", "host_ipv4": "192.0.2.10", "
                       "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                       "peers": [{"node_id": "b", "underlay": "192.0.2.20", "address": "10.89.0.2"},
                                 {"node_id": "c", "underlay": "192.0.2.30", "address": "10.89.0.3"}]},
-        "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444,
-                         "authority": {"key": "5e" * 32, "underlay": "192.0.2.50", "port": 51821}}}
+        "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444}}
 PRIVATE = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
 
 
@@ -96,11 +95,11 @@ class Configuration(Case):
                     json.dump(site, f)
                 self.refused(reason, self.node)
 
-    def test_the_sources_are_the_peers_and_the_authority_at_their_tunnel_addresses(self):
+    def test_the_sources_are_the_peers_at_their_tunnel_addresses(self):
         n = self.node()
         peers = n.peers(self.m1)
         self.assertEqual(peers, {"b": wgsvc.address(self.m1["nodes"][1]["wg_service_pub"]), "c": wgsvc.address(self.m1["nodes"][2]["wg_service_pub"])})
-        self.assertEqual(sorted(n.sources(self.m1)), ["@authority", "b", "c"])
+        self.assertEqual(sorted(n.sources(self.m1)), ["b", "c"])
         self.assertEqual(sorted(n.peers(hbt.manifest(c="REVOKED_STOLEN"))), ["b"])          # a terminal node is nobody's source
         self.refused("is not in the manifest", n.own_address, dict(self.m1, nodes=self.m1["nodes"][1:]))
 
@@ -336,7 +335,7 @@ class Host:
             if argv[-1] == "down" or argv[:3] == ["ip", "link", "del"]:
                 return subprocess.CompletedProcess(argv, 1, b"", b"")
         if argv[:3] == ["wg", "show", "wg-svc"]:
-            peers = [n["wg_service_pub"] for n in hbt.manifest()["nodes"] if n["node_id"] != "a"] + ["5e" * 32]
+            peers = [n["wg_service_pub"] for n in hbt.manifest()["nodes"] if n["node_id"] != "a"]
             return subprocess.CompletedProcess(argv, 0, "".join("%s\t%s/128\n" % (wgsvc.wg_key(k), wgsvc.address(k)) for k in peers).encode(), b"")
         if argv[:3] == ["wg", "show", "wg-unlock"]:
             wanted = wgsvc.expected(bootnet.peer_wg_conf(self.site, hbt.manifest()))
