@@ -910,12 +910,13 @@ removing only what it can prove it made.
 - `ownerauth` (#242 step C), after `init` and before `commit`: `gpg --decrypt ownerauth-X.yk.gpg | enrol ownerauth
   --node-id X --root-key ROOT --record ownerauth.record.json` sets the TPM's owner authorization to this node's
   value from the ceremony's envelope (regalia-ceremony#111). **Custody** (owner, 2026-10-05, #242): two independent
-  paths. Day to day, `.yk.gpg`, to the owner pair's decryption keys (ADR-0002 D30.7, regalia#568). Break-glass, one binary SOPS file per node, encrypted to an age
-  key that only the ADR-0002 D28 platform Shamir shares rebuild, as the ceremony opens its vault (no server holds
-  the value or that key):
-  `( cd /dev/shm && umask 077; ssss-combine -t K -q 2> bg.key )`, then
-  `SOPS_AGE_KEY_FILE=/dev/shm/bg.key sops decrypt --input-type binary --output-type binary ownerauth-X.bg.sops | sudo ...`,
-  then remove `/dev/shm/bg.key` by that exact path. The key goes on a tmpfs, mode 0600: a removed file on a disk is not destroyed. It must be a binary SOPS file, not a YAML map: `sops decrypt --extract` drops the newline
+  paths. Day to day, `.yk.gpg`, to the owner pair's decryption keys (ADR-0002 D30.7, regalia#568). Break-glass, one binary SOPS file per node
+  (`ownerauth-X.bg.sops`), encrypted to the post-quantum "ownerauth-recovery" age identity that offline-keys keeps
+  in its D28 key map under the platform SLIP-39 shares (no server holds the value or that key). offline-keys opens
+  the identity from k shares into a mode-0600 file on a RAM filesystem, then
+  `SOPS_AGE_KEY_FILE=<that file> sops decrypt --input-type binary --output-type binary ownerauth-X.bg.sops | sudo ...`,
+  and the file is shredded by its exact path (regalia-ceremony#111 gives the exact commands). On a disk, removing
+  a file does not destroy it. It must be a binary SOPS file, not a YAML map: `sops decrypt --extract` drops the newline
   that the value's form requires (measured with sops 3.13.1). The drill, at the ceremony rehearsal, checks a
   decrypted value with no TPM: `... | python3 -Es -m deploy.baremetal.ownerauth check --node-id X --root-key ROOT
   --record ownerauth.record.json`. ROOT is the network's pinned root, from a node's node.json or the root card's

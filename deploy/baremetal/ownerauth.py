@@ -18,17 +18,17 @@ under the node's PINNED root (verify, check) BEFORE the TPM is touched, and live
 CUSTODY (owner, 2026-10-05, recorded on #242 by regalia-kms-24). Two independent paths, so neither strands a node:
   * day to day, the .yk.gpg envelope, to the OWNER pair's decryption keys (ADR-0002 D30.7, regalia#568; the record
     still calls its recipients yk_recipients), as above;
-  * BREAK-GLASS, a SOPS file per node encrypted to an age key that is never held whole: it is rebuilt k-of-n from the
-    ADR-0002 D28 platform Shamir share set (`ssss-combine ... 2> key`, never typed), as the ceremony opens its own vault
-    (regalia-ceremony qubes/recovery/RECOVERY-TECHNICAL.md), and it replaces the per-node .bg.age envelope
-    (regalia-ceremony#111). A binary SOPS file (`--input-type binary`) holds "<64 hex>\n" and `sops decrypt` gives
+  * BREAK-GLASS, a SOPS file per node (ownerauth-<node>.bg.sops) encrypted to the "ownerauth-recovery" age identity, a
+    post-quantum key (age1pq1, an mlkem768x25519 stanza: measured with the ceremony's sops 3.13.1 and age 1.3.2) sealed in
+    offline-keys' ADR-0002 D28 key map under the same SLIP-39 shares as the root and K_A, never held whole (24, rc#111);
+    it replaces the per-node .bg.age envelope. A binary SOPS file (`--input-type binary`) holds "<64 hex>\n" and `sops decrypt` gives
     it back byte for byte, read_value's form; a YAML value given by `--extract` comes WITHOUT the newline (measured with
     the ceremony's sops 3.13.1), which read_value refuses: one binary file per node, not a map. Nothing on a server
     holds either the value or that key.
-  * THE DRILL (the ceremony rehearsal): rebuild the key, decrypt one node's value, check it against the root-signed
-    record WITHOUT a TPM (`python3 -Es -m deploy.baremetal.ownerauth check`, main), destroy the rebuilt key file.
-    The key is rebuilt into a tmpfs (/dev/shm, or the ceremony's RAM-only qube), mode 0600, and removed there by its
-    exact path after the decrypt: on a disk, removing a file does not destroy it. `--root-key` is the network's PINNED root, from the ceremony's own record of it (a
+  * THE DRILL (the ceremony rehearsal): offline-keys opens the identity from k shares into a RAM file, one node's
+    value is decrypted and checked against the root-signed record WITHOUT a TPM (`python3 -Es -m
+    deploy.baremetal.ownerauth check`, main), and the identity file is shredded. The file is on a tmpfs (the ceremony's
+    RAM-only qube), mode 0600, removed there by its exact path: on a disk, removing a file does not destroy it. `--root-key` is the network's PINNED root, from the ceremony's own record of it (a
     node's node.json root_key, the root card's printed fingerprint), NEVER read from the owner-authorization record or
     the folder it came in: a record checked under a root it names itself proves nothing (regalia-kms-ed).
 

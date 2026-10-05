@@ -77,12 +77,14 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.
-  - **Break-glass custody is decided, not yet produced** (owner, 2026-10-05). One binary SOPS file per node, under an
-    age key rebuilt from the D28 platform Shamir shares, replaces the ceremony's `.bg.age` envelope. That is
-    regalia-ceremony#111's change; until it lands, the ceremony writes `.bg.age`. The record names the break-glass
-    envelope's digest as `bg_sha256`, and `ownerauth.verify` follows rc#111 if that field changes. The drill's check
-    (`python3 -m deploy.baremetal.ownerauth check`) is built and was run end to end with ssss, sops 3.13.1 and the test
-    vector, without a TPM.
+  - **Break-glass custody is decided, not yet produced** (owner, 2026-10-05; 24 on rc#111). One binary SOPS file per
+    node, `ownerauth-<node>.bg.sops`, replaces the ceremony's `.bg.age` envelope. It is encrypted to the post-quantum
+    "ownerauth-recovery" identity in offline-keys' D28 key map, under the same SLIP-39 shares. That is
+    regalia-ceremony#111's change; until it lands, the ceremony writes `.bg.age`. The record keeps `bg_sha256` as that
+    file's digest, so `ownerauth.verify` is unchanged. The drill's check (`python3 -m deploy.baremetal.ownerauth check`)
+    is built. With sops 3.13.1, age 1.3.2 and the test vector it was run by hand without a TPM: the post-quantum
+    recipient (an mlkem768x25519 stanza) decrypts byte for byte, and another node's value is refused. That hand run
+    split the key with ssss as a stand-in for offline-keys' opening, which rc#111 is building.
 - **Re-anchoring on a real host has three known faults, fixed in #391 (not merged):**
   - Run as root, `reanchor` writes `membership.json` as root with mode 0600, so the node's `regalia-sync`
     cannot read its own chain afterwards and the node cannot serve.
