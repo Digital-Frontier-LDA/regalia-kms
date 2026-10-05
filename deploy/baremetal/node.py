@@ -587,7 +587,7 @@ class Node:
         """The membership epoch anchor: membership.HighWater on its own index (and the pair and slots after it),
         with this node's approved-image write policy (image_policy) for an index written by policy (#242), judged by the
         schema of the chain tip this node holds (_tip_schema, #242 B3).
-        `lock_path`: the writer's lock. The run-time writer is esp_advance, with its own (ESP_LOCK); the default, in
+        `lock_path`: the writer's lock. The run-time writer is esp_advance: its run holds ESP_LOCK, and this lock is ESP_LOCK + ".anchor"; the default, in
         the state directory, is for the hand tools that build an anchoring store (enrolment). sync only reads.
         `schema`: the schema of the chain this anchor is judged by, for a caller holding another chain than the node's
         (esp_advance: the published one it anchors); default, the chain tip this node holds."""
