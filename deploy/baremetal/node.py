@@ -822,6 +822,10 @@ class Sync:
             seconds, authenticated = self.node.clock()()
             require(authenticated is True, "time is not authenticated: no activation is signed")
             self._started = int(seconds)
+            # for the operator's commands (activation promote/recover), which have no start of their own: this boot's
+            # sync start, by boot ID, so a stale file from an earlier boot is never taken (it would shorten the busy window)
+            with contextlib.suppress(OSError):
+                activation.write_json(self.node.path(activation.STARTED_FILE), {"boot_id": activation.boot_id(), "started": self._started}, mode=0o600)
         return self._started
 
     def activation_signer(self):

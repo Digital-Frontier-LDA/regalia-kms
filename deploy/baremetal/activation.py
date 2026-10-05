@@ -553,6 +553,22 @@ def self_renew(node_id, manifest, clock, signer, signed, trail):
 LEASE_FILE = "activation-lease.json"          # in the state directory: sync writes it, the KMS daemon's Gate only reads it
 RECOVERY_FILE = "activation-recovery.json"    # the installed owner authorization (activation recover)
 RELEASE_FILE = "activation-release"           # present: the holder stops renewing, and its lease lapses at its expiry
+STARTED_FILE = "activation-started.json"      # this boot's sync start (authenticated), for the operator's commands
+
+
+def boot_id():
+    with open("/proc/sys/kernel/random/boot_id") as f:
+        return f.read().strip()
+
+
+def sync_started(state_dir, boot=None):
+    """This boot's sync start, as node.Sync recorded it: refused when absent or from another boot (sync has not signed
+    anything yet this boot, or the file is stale), never guessed: a later start would only lengthen the busy window,
+    an earlier one would shorten it."""
+    held = read_json(os.path.join(state_dir, STARTED_FILE))
+    require(isinstance(held, dict) and held.get("boot_id") == (boot or boot_id()) and isinstance(held.get("started"), int),
+            "regalia-sync has not started under authenticated time in this boot: start it, then try again")
+    return held["started"]
 
 
 def read_json(path, limit=65536):
@@ -622,3 +638,117 @@ def waited_until(refusal):
     """From propose()'s refusal, the latest "until N" its co-signers named (an OVERLAP: when promotion may succeed), or None."""
     found = [int(n) for n in re.findall(r"until (\d+)", str(refusal))]
     return max(found) + SKEW_S if found else None
+
+
+# ---- the operator's commands (root at the node's console; the work as regalia-sync, as deliver does it) ----
+
+SYNC_USER = "regalia-sync"
+PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _run_as_sync(config_path, op, given, run=None):
+    """`op` in a process of regalia-sync with the tss group, nothing of root's environment, `given` on its standard
+    input. Returns its JSON answer, or Refused with what it said."""
+    import subprocess
+    import sys
+    done = (run or subprocess.run)(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i",
+                                    "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", sys.executable, "-Es", "-m",
+                                    "deploy.baremetal.activation", "--config", config_path, op],
+                                   cwd=PACKAGE_ROOT, capture_output=True, text=True, input=json.dumps(given))
+    require(done.returncode == 0, (done.stderr or done.stdout).strip()[-600:] or "%s failed" % op)
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+def _node_parts(config_path):
+    from deploy.baremetal import node as node_module, sync
+    node = node_module.Node(node_module.load(config_path))
+    store, trail = node.store(), node_module.Trail(node.path("sync-audit.jsonl"), "sync")
+    manifest = store.load()
+    peers = sorted(n["node_id"] for n in manifest["nodes"] if n["node_id"] != node.node_id and membership.may(manifest, n["node_id"], "authorize"))
+    freshness = node.freshness()
+
+    def ask(peer, lease):
+        return sync.Client(node.node_id, store, freshness, node.sources(manifest), trail).activate_sign(peer, lease)
+    signer = node_module.node_activation_signer(node, sync_started(node.cfg["state_dir"]))
+    return node, manifest, peers, ask, signer, trail
+
+
+def main(argv=None):
+    import argparse
+    import sys
+    from deploy.baremetal import keyfd
+    parser = argparse.ArgumentParser(prog="activation", description="#432: which site signs, by the nodes (and in recovery the owner)")
+    parser.add_argument("--config", required=True)
+    sub = parser.add_subparsers(dest="op", required=True)
+    p = sub.add_parser("promote", help="(root, at the console) activate THIS node's site: waits for any other site's lease to expire")
+    p.add_argument("--site", required=True)
+    p.add_argument("--registry-digest", required=True)
+    sub.add_parser("release", help="(root, at the console) stop renewing this node's lease: it lapses at its expiry")
+    r = sub.add_parser("recover", help="(root, at the console) install the owner's recovery authorization (owner.py sign-activation)")
+    r.add_argument("--authorization", required=True)
+    for hidden in ("_promote", "_release", "_recover"):
+        sub.add_parser(hidden)
+    args = parser.parse_args(argv)
+    try:
+        if args.op.startswith("_"):
+            import pwd
+            require(os.geteuid() == pwd.getpwnam(SYNC_USER).pw_uid, "%s runs as %s only (the command hands over with runuser)" % (args.op, SYNC_USER))
+            given = json.loads(sys.stdin.read(65536))
+            node, manifest, peers, ask, signer, trail = _node_parts(args.config)
+            state_dir = node.cfg["state_dir"]
+            if args.op == "_promote":
+                try:
+                    done = promote(node.node_id, given["site"], given["registry_digest"], manifest, node.clock(), signer, ask, peers, state_dir, trail)
+                except Refused as refused:
+                    raise Refused("%s%s" % (refused, "" if waited_until(refused) is None else
+                                            "; another site's lease runs: try again after %d" % waited_until(refused))) from None
+                print(json.dumps({"expires_at": done["lease"]["expires_at"], "epoch": done["lease"]["activation_epoch"]}))
+            elif args.op == "_release":
+                write_json(os.path.join(state_dir, RELEASE_FILE), {"released": True}, mode=0o600)
+                trail({"event": "activation-release", "outcome": "ALLOW", "epoch": manifest["epoch"]})
+                print(json.dumps({"released": True}))
+            else:
+                auth = install_authorization(manifest, node.node_id, given, node.clock(), signer.record)
+                write_json(os.path.join(state_dir, RECOVERY_FILE), given, mode=0o600)
+                trail({"event": "activation-recovery-install", "outcome": "ALLOW", "epoch": manifest["epoch"], "site": auth["site"],
+                       "until": auth["expires_at"]})
+                print(json.dumps({"until": auth["expires_at"], "site": auth["site"]}))
+            return 0
+        if os.geteuid() != 0:
+            print("REFUSED: run as root, at the node's console", file=sys.stderr)
+            return 2
+        from deploy.baremetal import node as node_module
+        me = node_module.load(args.config)["node_id"]
+        if args.op == "promote":
+            want = "promote %s %s" % (me, args.site)
+            require(keyfd.tty_line("Make %s the active site %s (it waits for any other site's lease to end).\nType exactly: %s\n> "
+                                   % (me, args.site, want)).strip() == want, "not confirmed: nothing was asked")
+            got = _run_as_sync(args.config, "_promote", {"site": args.site, "registry_digest": args.registry_digest})
+            print("ACTIVE: %s is the active site %s until %s (renewed by sync from now on)" % (me, args.site, got["expires_at"]))
+        elif args.op == "release":
+            want = "release %s" % me
+            require(keyfd.tty_line("Stop renewing %s's activation: its site stops signing when the lease ends.\nType exactly: %s\n> "
+                                   % (me, want)).strip() == want, "not confirmed: nothing was changed")
+            _run_as_sync(args.config, "_release", {})
+            print("RELEASED: %s renews no more; its lease lapses at its expiry" % me)
+        else:
+            with open(args.authorization, "rb") as f:
+                signed = json.loads(f.read(65536))
+            auth = signed.get("authorization", {}) if isinstance(signed, dict) else {}
+            want = "recover %s %s until %s" % (me, auth.get("site"), auth.get("expires_at"))
+            require(keyfd.tty_line("Install the owner's RECOVERY AUTHORIZATION: %s activates %s ALONE until %s, or until any new "
+                                   "epoch.\n  attested: %s\nType exactly: %s\n> " % (me, auth.get("site"), auth.get("expires_at"),
+                                                                                  auth.get("fenced"), want)).strip() == want,
+                    "not confirmed: nothing was installed")
+            got = _run_as_sync(args.config, "_recover", signed)
+            print("RECOVERY: %s activates %s alone until %s; sync renews its leases. RegaliaActivationRecoveryActive fires meanwhile."
+                  % (me, got["site"], got["until"]))
+    except (Refused, OSError, ValueError, KeyError) as refusal:
+        print("REFUSED: %s" % refusal, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

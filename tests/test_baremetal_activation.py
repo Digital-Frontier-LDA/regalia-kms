@@ -698,5 +698,38 @@ class Running(Record):
         self.assertIn("no node co-signed", ended["failed"])                  # back on the normal path, nobody to co-sign: recorded
 
 
+class Commands(unittest.TestCase):
+    """The operator's commands: typed at root's console, the work handed to regalia-sync with an argv its half parses
+    (#386's lesson), never as root; the busy window from this boot's sync start only."""
+
+    def test_the_hand_over_argv_reaches_the_sync_half_and_never_runs_as_root(self):
+        from unittest import mock
+        import pwd
+        seen = []
+
+        def run(argv, **kw):
+            seen.append(argv)
+            return mock.Mock(returncode=0, stdout='{"released": true}\n', stderr="")
+        self.assertEqual(act._run_as_sync("/etc/regalia/node.json", "_release", {}, run=run), {"released": True})
+        argv = seen[0][seen[0].index("deploy.baremetal.activation") + 1:]
+        self.assertEqual(argv, ["--config", "/etc/regalia/node.json", "_release"])
+        with mock.patch.object(act.os, "geteuid", return_value=0), mock.patch.object(pwd, "getpwnam", return_value=mock.Mock(pw_uid=990)), \
+                mock.patch("sys.stderr") as err:
+            self.assertEqual(act.main(argv), 1)
+        self.assertIn("runs as regalia-sync only", "".join(str(c) for c in err.write.call_args_list))
+        with mock.patch.object(act.os, "geteuid", return_value=1000), mock.patch("sys.stderr"):
+            self.assertEqual(act.main(["--config", "/x.json", "release"]), 2)
+
+    def test_the_busy_window_starts_at_this_boot_s_sync_start_only(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        with self.assertRaisesRegex(m.Refused, "has not started under authenticated time in this boot"):
+            act.sync_started(d, boot="boot-2")
+        act.write_json(os.path.join(d, act.STARTED_FILE), {"boot_id": "boot-1", "started": T0})
+        self.assertEqual(act.sync_started(d, boot="boot-1"), T0)
+        with self.assertRaisesRegex(m.Refused, "in this boot"):
+            act.sync_started(d, boot="boot-2")                              # a stale file from an earlier boot
+
+
 if __name__ == "__main__":
     unittest.main()
