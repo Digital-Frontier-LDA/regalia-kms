@@ -654,8 +654,8 @@ class RecordWrites(unittest.TestCase):
         verdict = self.fault(argv)
         if isinstance(verdict, bytes):                       # the tool succeeds and prints this
             return subprocess.CompletedProcess(argv, 0, verdict, b"")
-        if isinstance(verdict, tuple):                       # the tool FAILS and still prints this
-            return subprocess.CompletedProcess(argv, verdict[0], verdict[1], b"")
+        if isinstance(verdict, tuple):                       # the tool FAILS and still prints this (and, third, says this)
+            return subprocess.CompletedProcess(argv, verdict[0], verdict[1], verdict[2] if len(verdict) > 2 else b"")
         if verdict is not None:
             return subprocess.CompletedProcess(argv, verdict, b"", b"")
         return self.tpm(argv, **kw)
@@ -796,6 +796,26 @@ class RecordWrites(unittest.TestCase):
         with self.assertRaises(m.Unusable):
             hw.value()
         self.assertEqual(hw.remains(), (None, [(0, "00" * 32), (0, "00" * 32)]))
+
+    def test_a_failed_read_names_the_tpm_s_reason_in_the_journal_and_the_refusal_is_unchanged(self):
+        """#448/#450: an intermittent "cannot read 8 bytes" in CI said nothing of why. What tpm2_nvread printed goes to
+        stderr (the unit's journal); the refusal's text is the shared vectors' and does not change."""
+        import contextlib
+        import io
+        hw = self.defined()
+        said = b"WARNING:esys:src/tss2-esys/api/Esys_NV_Read.c:311:Esys_NV_Read_Finish() Received a non-TPM Error\nERROR: TPM_RC_RETRY"
+        for index, reason in (("0x1500016", "cannot read 8 bytes from NV index 0x1500016"),
+                              ("0x150001b", "cannot read 48 bytes from the record index 0x150001b")):
+            with self.subTest(index):
+                self.fault = lambda argv, index=index: (1, b"", said) if argv[:2] == ["tpm2_nvread", index] else None
+                journal = io.StringIO()
+                with contextlib.redirect_stderr(journal), self.assertRaises(m.Refused) as caught:
+                    hw.unusable()
+                self.assertIn(reason, str(caught.exception))
+                self.assertNotIn("TPM_RC_RETRY", str(caught.exception))        # the refusal stays the vectors'
+                self.assertIn("regalia: tpm2_nvread %s failed (exit 1, 0 bytes out): " % index, journal.getvalue())
+                self.assertIn("Received a non-TPM Error | ERROR: TPM_RC_RETRY", journal.getvalue())
+        self.fault = lambda argv: None
 
     def test_a_record_read_that_fails_is_refused_whatever_it_printed(self):
         hw = self.defined()
