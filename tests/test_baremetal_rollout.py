@@ -1238,7 +1238,7 @@ class OnSwtpm(unittest.TestCase):
             self.refused("the subject's attestation is refused: the quoted PCR digest is not the expected PCR values", self.unlock, peer, "c")
             self.refused("the quoted PCR digest is not the expected PCR values", self.vouch, peer, "c")
             self.assertEqual(self.seen(peer, "c"), "image-2")             # a refusal does not rewrite the record
-        # the lease c held from before the retirement was issued under epoch 2 and is still inside its lease lifetes:
+        # the lease c held from before the retirement was issued under epoch 2 and is still inside its lease lifetime:
         # the lease bound, as lease.py states it. It is not renewed.
         self.assertGreater(lease.verify(old_lease_for_c, m3, self.now), 0)
         self.offset += lease.MAX_LIFETIME
