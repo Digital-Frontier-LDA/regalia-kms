@@ -19,6 +19,7 @@ type pocCARecord struct {
 }
 
 type pocSoftwareCA struct {
+	clock             func() time.Time
 	key               *ecdsa.PrivateKey
 	issuer            *x509.Certificate
 	mu                sync.Mutex
@@ -34,6 +35,9 @@ func (s *pocSoftwareCA) Execute(ctx context.Context, route registry.Route, op, f
 		return nil, "", errPOCProfile
 	}
 	now := time.Now().UTC()
+	if s.clock != nil {
+		now = s.clock().UTC()
+	}
 	kind := "refused"
 	if _, err := pocInspectCertificate(data, s.issuer, now); err == nil {
 		kind = "certificate"
@@ -46,7 +50,7 @@ func (s *pocSoftwareCA) Execute(ctx context.Context, route registry.Route, op, f
 	// The fixture budget is in memory. Production needs a durable reservation,
 	// fencing and recovery semantics; this demonstrates only the refusal path.
 	day := now.Format("2006-01-02")
-	if s.day != day {
+	if day > s.day {
 		s.day, s.leafUsed, s.crlUsed = day, 0, 0
 	}
 	var used *int
@@ -57,7 +61,7 @@ func (s *pocSoftwareCA) Execute(ctx context.Context, route registry.Route, op, f
 	case "crl":
 		cap, used = s.crlCap, &s.crlUsed
 	}
-	allowed := used != nil && cap > 0 && *used < cap && ctx.Err() == nil
+	allowed := day == s.day && used != nil && cap > 0 && *used < cap && ctx.Err() == nil
 	s.records = append(s.records, pocCARecord{kind, digest, allowed})
 	if !allowed {
 		return nil, "", errPOCProfile
