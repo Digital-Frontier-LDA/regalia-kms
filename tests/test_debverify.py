@@ -7,10 +7,12 @@ import io
 import lzma
 import os
 import shutil
+import ssl
 import subprocess
 import tarfile
 import tempfile
 import unittest
+import urllib.error
 
 from deploy.baremetal import debverify as dv
 
@@ -232,6 +234,66 @@ class Archive(unittest.TestCase):
         findings, verified = self.run_verify([self.line("zlib1g=1:1.3-1", "f", "usr/lib/libz.so.1.3", sha(b"genuine"))])
         self.assertEqual(verified, {})
         self.assertIn("cannot be fetched", findings[0])
+
+    def test_wrong_bytes_are_refused_at_once_never_fetched_again(self):
+        """#425: a fetch that ANSWERED with bytes the signed chain does not name is a verification failure: refused,
+        and the .deb is fetched once, never retried."""
+        self.publish("zlib1g", "1:1.3-1", {"usr/lib/libz.so.1.3": b"genuine"}, tamper_deb=True)
+        self.release()
+        calls = []
+
+        def counting(url, timeout=None):
+            calls.append(url)
+            return self.opener(url, timeout)
+        cache = os.path.join(self.d, "cache-wrong")
+        index = dv.source_index(BASE, "trixie", self.keyring, cache, counting, signers=self.signers)
+        findings, _ = dv.verify(dv.inventory_packages([self.line("zlib1g=1:1.3-1", "f", "usr/lib/libz.so.1.3", sha(b"genuine"))]),
+                                index, cache, counting)
+        self.assertIn("is not the .deb its signed Packages states", findings[0])
+        self.assertEqual(len([u for u in calls if u.endswith(".deb")]), 1)
+
+
+class FetchRetries(unittest.TestCase):
+    """#425: dv.fetch tries a TRANSIENT error again (a dropped connection, TLS cut off, a timeout, an HTTP 5xx),
+    FETCH_ATTEMPTS times in all with backoff, and nothing else: a 404 is refused at once."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.slept, self.calls = [], 0
+
+    def fetch(self, *outcomes):
+        """dv.fetch with an opener that gives `outcomes` in turn: an exception is raised, bytes are served."""
+        outcomes = list(outcomes)
+
+        def opener(url, timeout=None):
+            self.calls += 1
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return io.BytesIO(outcome)
+        return dv.fetch(BASE + "/x.deb", os.path.join(self.d, "cache"), opener, sleep=self.slept.append)
+
+    def http(self, code):
+        return urllib.error.HTTPError(BASE + "/x.deb", code, "status %d" % code, {}, None)
+
+    def test_a_dropped_connection_or_a_tls_cut_is_tried_again(self):
+        got = self.fetch(urllib.error.URLError(ssl.SSLError("UNEXPECTED_EOF_WHILE_READING")), ConnectionResetError("reset"), b"the bytes")
+        self.assertEqual((got, self.calls, self.slept), (b"the bytes", 3, [2, 4]))
+
+    def test_a_server_error_is_tried_again(self):
+        self.assertEqual(self.fetch(self.http(503), b"the bytes"), b"the bytes")
+        self.assertEqual(self.calls, 2)
+
+    def test_a_404_is_refused_at_once(self):
+        with self.assertRaises(urllib.error.HTTPError):
+            self.fetch(self.http(404), b"never")
+        self.assertEqual((self.calls, self.slept), (1, []))
+
+    def test_failing_on_and_on_is_refused_after_the_bound(self):
+        with self.assertRaisesRegex(OSError, "\\(after %d attempts\\)" % dv.FETCH_ATTEMPTS):
+            self.fetch(*[urllib.error.URLError("timed out")] * (dv.FETCH_ATTEMPTS + 1))
+        self.assertEqual((self.calls, self.slept), (dv.FETCH_ATTEMPTS, [2, 4, 8]))
 
 
 if __name__ == "__main__":

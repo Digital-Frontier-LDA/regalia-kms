@@ -42,14 +42,18 @@ Standard library, plus gpgv and, for a .deb compressed with zstd, the zstd tool.
 """
 import argparse
 import hashlib
+import http.client
 import io
 import json
 import lzma
 import os
 import re
+import ssl
 import subprocess
 import sys
 import tarfile
+import time
+import urllib.error
 import urllib.request
 
 SCHEMA = "regalia.initrd-packages/v1"
@@ -78,16 +82,39 @@ def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def fetch(url, cache, opener=urllib.request.urlopen):
+def _transient(error):
+    """A fetch error worth trying again (#425): the connection dropped, TLS broke off, it timed out, or the server
+    answered 5xx. Never a 404 or another 4xx (the file is not there), never anything about the bytes themselves:
+    every hash and signature check is the callers', after a fetch, and is never retried."""
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code >= 500
+    return isinstance(error, (urllib.error.URLError, ConnectionError, TimeoutError, ssl.SSLError, http.client.HTTPException))
+
+
+FETCH_ATTEMPTS = 4                    # the first try and three more, 2, 4 and 8 s apart
+
+
+def fetch(url, cache, opener=urllib.request.urlopen, sleep=None):
     """`url`'s bytes, kept in `cache` under its own sha256 name so a rerun does not fetch again. Never trusted
-    for what it is: every caller checks the bytes against a hash from the signed chain."""
+    for what it is: every caller checks the bytes against a hash from the signed chain. A transient error
+    (_transient) is tried again, FETCH_ATTEMPTS times in all, with backoff; any other error is raised at once, and
+    the last transient one naming the attempts, so the caller refuses as before."""
     os.makedirs(cache, exist_ok=True)
     path = os.path.join(cache, hashlib.sha256(url.encode()).hexdigest())
     if os.path.exists(path):
         with open(path, "rb") as f:
             return f.read()
-    with opener(url, timeout=300) as response:
-        data = response.read(MAX_DOWNLOAD + 1)
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            with opener(url, timeout=300) as response:
+                data = response.read(MAX_DOWNLOAD + 1)
+            break
+        except Exception as error:   # noqa: BLE001 - classified here: only a transient one is tried again
+            if not _transient(error):
+                raise
+            if attempt == FETCH_ATTEMPTS:
+                raise OSError("%s (after %d attempts)" % (error, FETCH_ATTEMPTS)) from error
+            (sleep or time.sleep)(2 ** attempt)
     require(len(data) <= MAX_DOWNLOAD, "%s is larger than %d bytes" % (url, MAX_DOWNLOAD))
     with open(path + ".part", "wb") as f:
         f.write(data)
