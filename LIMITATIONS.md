@@ -90,8 +90,6 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
-- **Refusing a crashed node in the wrong boot phase: no end-to-end test** (#397). It is covered by unit
-  tests only.
 - **`recover` is a Python call, not a command** (#387). `reanchor` is a command.
 
 ## Tokens and the HSM gate (#72)
