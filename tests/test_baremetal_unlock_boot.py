@@ -515,7 +515,7 @@ class OnQemu(tub.OnSwtpm):
         # boot 2k, #75 TIER Q, Q1: AN IMAGE WHOSE KERNEL DIFFERS (the same kernel with bytes appended: it boots
         # identically, and only its measurement differs). Before it boots: its .linux is e2e's plus the bytes, and they
         # alone change its predicted PCR 11 (not only its command line). Not approved, both peers refuse it for PCR 11;
-        # approved beside the others, it boots unattended; the client says the initrd-phase PCR 11 its OWN record predicts, and
+        # approved as NEXT beside CURRENT, it boots unattended; the client says the initrd-phase PCR 11 its OWN record predicts, and
         # it is booted on the system-phase one. Its signed command line has no journald forwarding (#413): the
         # client's lines reach the console through its unit alone (#412), as on a production console.
         with open(BOOT + "/e2e-k2.record.json") as f:
@@ -554,8 +554,9 @@ class OnQemu(tub.OnSwtpm):
             self.assertIn("PCR 11 is %s, expected %s" % (other_kernel["pcr11"]["initrd"], record["pcr11"]["initrd"]), reason)
             self.assertNotRegex(reason, r"PCR (7|12) is")
 
-        # then approved beside the others: it boots unattended
-        self.reference = reference(expected["pcr12"], (("e2e", record), ("e2e-old", older), ("e2e-k2", other_kernel)))
+        # then approved as NEXT beside CURRENT (a node's document holds at most two sets, attest.MAX_SETS: CURRENT and
+        # NEXT; listing a third refuses every request before a nonce): it boots unattended
+        self.reference = reference(expected["pcr12"], (("e2e", record), ("e2e-k2", other_kernel)))
         since = len(self.events)
         said = self.boot("2k-other-kernel", credentials, image="e2e-k2")
         # what the peers decided, said whatever happens (a refusal at hello names its reason only here)
