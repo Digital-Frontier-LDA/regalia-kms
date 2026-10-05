@@ -341,23 +341,23 @@ def sign(key, policy, cls):
     return "%064x%064x" % (r, min(s, membership.P256_ORDER - s))
 
 
-def approved_for(k_sys_pem, k_a_point, generation):
-    """P(K_sys, G) for this K_A's rotation counter: what each class's approval signs."""
+def approved_for(k_sys_pem, k_a_point, generation, node_id):
+    """P(K_sys, G) for `node_id`'s rotation counter under this K_A: what each class's approval for that node signs."""
     from deploy.baremetal import signkey
-    return approved(signkey.pcr_key_name(k_sys_pem), rotation_name(int(ROTATION_INDEX, 16), k_a_point), generation)
+    return approved(signkey.pcr_key_name(k_sys_pem), rotation_name(int(ROTATION_INDEX, 16), k_a_point, node_id=node_id), generation)
 
 
-def approvals_for(key, k_sys_pem, k_a_point, generation):
-    """A set's anchor_approvals block, signed with K_A's private `key` (the signer's)."""
-    policy = approved_for(k_sys_pem, k_a_point, generation)
+def approvals_for(key, k_sys_pem, k_a_point, generation, node_id):
+    """`node_id`'s set's anchor_approvals block, signed with K_A's private `key` (the signer's)."""
+    policy = approved_for(k_sys_pem, k_a_point, generation, node_id)
     return {"generation": generation, "classes": {cls: sign(key, policy, cls) for cls in APPROVAL_CLASSES}}
 
 
-def check_approvals(approvals, k_sys_pem, k_a_point, label="anchor_approvals"):
-    """Every class's approval in `approvals` (attest.validate_approvals' form) is K_A's, over THIS key and THIS node's
-    rotation counter at its G: refused by name otherwise. Returns G."""
+def check_approvals(approvals, k_sys_pem, k_a_point, node_id, label="anchor_approvals"):
+    """Every class's approval in `approvals` (attest.validate_approvals' form) is K_A's, over THIS key and `node_id`'s
+    rotation counter at its G: refused by name otherwise (another node's approvals among them). Returns G."""
     attest.validate_approvals(approvals, label)
-    policy = approved_for(k_sys_pem, k_a_point, approvals["generation"])
+    policy = approved_for(k_sys_pem, k_a_point, approvals["generation"], node_id)
     for cls in APPROVAL_CLASSES:
         verify_approval(k_a_point, policy, cls, approvals["classes"][cls], "%s.classes.%s" % (label, cls))
     return approvals["generation"]
@@ -365,7 +365,7 @@ def check_approvals(approvals, k_sys_pem, k_a_point, label="anchor_approvals"):
 
 # ---- the K_A signer (#361 C2): run by regalia-ceremony's offline-keys with K_A in a sealed memfd (51's TOOLS entries) ----
 #
-#   python3 -Es -m deploy.baremetal.anchorpolicy approve-first --root-key ROOT --offline-keys-record REC --key-fd N --offline-session ID
+#   python3 -Es -m deploy.baremetal.anchorpolicy approve-first --root-key ROOT --offline-keys-record REC --node-id X --key-fd N --offline-session ID
 #   python3 -Es -m deploy.baremetal.anchorpolicy approve --document DOC --system-pub PEM --root-key ROOT --key-fd N --offline-session ID
 #       (--offline-keys-record REC --node BUNDLE KEEP ACTIVATION ...   at the genesis)
 #       (--chain CHAIN --current CURRENT_DOC                            at a rotation)
@@ -412,11 +412,11 @@ def _pinned_by_chain(root, chain_path):
     return tip["anchor_policy_key"]["key"], tip
 
 
-def first_document(key, k_a_point):
-    """The `enrol init --anchor-policy` file: K_A and its approval of the rotation counter's first increment."""
-    doc = {"schema": FIRST_SCHEMA, "anchor_policy_key": {"alg": "ecdsa-p256", "key": k_a_point},
-           "increment_first": sign(key, increment_first(), "rotation")}
-    read_first(doc)                                             # verified before it is printed
+def first_document(key, k_a_point, node_id):
+    """`node_id`'s `enrol init --anchor-policy` file: K_A and its approval of that node's rotation counter's first increment."""
+    doc = {"schema": FIRST_SCHEMA, "node_id": node_id, "anchor_policy_key": {"alg": "ecdsa-p256", "key": k_a_point},
+           "increment_first": sign(key, increment_first(), rotation_class(node_id))}
+    read_first(doc, node_id)                                    # verified before it is printed
     return doc
 
 
@@ -435,8 +435,9 @@ def fill(document, k_sys_pem, k_a_point, key, generations):
             if entry.get("signing", {}).get("system") != fingerprint:
                 continue
             require(node_id in generations, "%s has a set signed by this system-phase key and no generation to approve it at" % node_id)
-            entry["signing"]["anchor_approvals"] = approvals_for(key, k_sys_pem, k_a_point, generations[node_id])
-            check_approvals(entry["signing"]["anchor_approvals"], k_sys_pem, k_a_point, "nodes.%s.accepted[%d].signing.anchor_approvals" % (node_id, i))
+            entry["signing"]["anchor_approvals"] = approvals_for(key, k_sys_pem, k_a_point, generations[node_id], node_id)
+            check_approvals(entry["signing"]["anchor_approvals"], k_sys_pem, k_a_point, node_id,
+                            "nodes.%s.accepted[%d].signing.anchor_approvals" % (node_id, i))
             filled.append(node_id)
     require(filled, "no set in the document is signed by this system-phase key (%s): nothing to approve" % fingerprint)
     measurements.validate(out)
@@ -475,9 +476,9 @@ def rotation_generations(current, k_sys_pem, k_a_point):
 def increment_document(key, k_a_point, node_id, n):
     """K_A's single-use approval of the increment that takes `node_id`'s R from `n` (C4's retire)."""
     _count(n, "--from")
-    rotation = rotation_name(int(ROTATION_INDEX, 16), k_a_point)
-    sig = sign(key, increment_from(rotation, n), "rotation")
-    verify_approval(k_a_point, increment_from(rotation, n), "rotation", sig, "the increment approval")
+    rotation = rotation_name(int(ROTATION_INDEX, 16), k_a_point, node_id=node_id)
+    sig = sign(key, increment_from(rotation, n), rotation_class(node_id))
+    verify_approval(k_a_point, increment_from(rotation, n), rotation_class(node_id), sig, "the increment approval")
     return {"schema": INCREMENT_SCHEMA, "node_id": node_id, "from": n, "signature": sig}
 
 
@@ -496,6 +497,7 @@ def main(argv=None, out=None):
         c.add_argument("--offline-session", required=True, help="the offline-keys session ID (32 hex)")
         if name == "approve-first":
             c.add_argument("--offline-keys-record", required=True, help="offline-keys.record.json: K_A, verified under the root")
+            c.add_argument("--node-id", required=True, help="the node whose rotation counter this starts (one file per node)")
         elif name == "approve":
             c.add_argument("--document", required=True, help="the measurements document to fill")
             c.add_argument("--system-pub", required=True, help="the system-phase PCR key whose sets are approved (PEM)")
@@ -514,7 +516,7 @@ def main(argv=None, out=None):
         root = manifest.root_key(args.root_key)
         if args.command == "approve-first":
             point = _pinned_at_genesis(root, args.offline_keys_record)
-            result = first_document(_key_from_fd(args.key_fd, point), point)
+            result = first_document(_key_from_fd(args.key_fd, point), point, args.node_id)
         elif args.command == "approve-increment":
             point, tip = _pinned_by_chain(root, args.chain)
             require(args.node_id in membership.validate(tip), "%s is not a node of the chain's tip" % args.node_id)
