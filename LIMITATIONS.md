@@ -59,6 +59,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   node that accepts a second manifest would boot to the recovery prompt. The fix is to write the ESP
   first and advance the anchor after it, in a root oneshot ("ESP advance", #66). It must land before
   any node takes a second manifest.
+  The same order causes a transient refusal (#430, seen in CI). `regalia-sync` moves the anchor before it
+  publishes `chain.json`, so a `wg-apply` started in between reads the published chain one epoch behind the
+  anchor. It refuses that as a ROLLBACK, and its unit fails until the next publish runs it again. #410 removes
+  this as well: sync then never moves the anchor.
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
