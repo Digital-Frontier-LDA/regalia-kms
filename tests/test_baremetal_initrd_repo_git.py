@@ -162,6 +162,76 @@ class RepoGit(unittest.TestCase):
         self.assertEqual(lines[:4], ["real", "link", "gitfile", "loose"], done.stderr)
         self.assertEqual(lines[4], str(os.getuid()))
 
+    def clean(self):
+        """repo_git_clean on the checkout, as build-initrd.sh calls it: (exit, stderr)."""
+        done = subprocess.run(["bash", "-c", '. "$LIB"; repo_git_clean'], capture_output=True, text=True,
+                              env={"PATH": "/usr/bin:/bin", "LIB": LIB, "REPO": self.repo})
+        return done.returncode, done.stderr
+
+    def commit_all(self):
+        env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+        for argv in (["add", "-A"], ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "y"]):
+            subprocess.run(["git", "-C", self.repo] + argv, check=True, capture_output=True, env=env)
+
+    def test_clean_is_the_commit_and_nothing_else(self):
+        """#404's rule on the builder: no change and no untracked file, listed with NO exclude rule, so a .gitignore
+        or .git/info/exclude cannot hide an untracked .go file `go build` would compile; and, unlike the signer, no
+        bytecode either: this builder runs the checkout's Python as root."""
+        with open(os.path.join(self.repo, ".gitignore"), "w") as f:
+            f.write("ignored-by-tree.go\n__pycache__/\n")
+        self.commit_all()                                               # file.txt and .gitignore: tracked
+        code, err = self.clean()
+        self.assertEqual(code, 0, err)
+        cases = (("ignored-by-tree.go", None), ("ignored-by-exclude.go", "info"), ("pkg/__pycache__/m.cpython-313.pyc", None))
+        for name, exclude in cases:
+            with self.subTest(name=name):
+                path = os.path.join(self.repo, name)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w") as f:
+                    f.write("x\n")
+                if exclude:
+                    with open(os.path.join(self.repo, ".git", "info", "exclude"), "a") as f:
+                        f.write(name + "\n")
+                status = subprocess.run(["git", "-C", self.repo, "status", "--porcelain", "--untracked-files=all"],
+                                        capture_output=True, text=True, env=dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null")).stdout
+                self.assertEqual(status, "", "the premise: git status does not show %s" % name)
+                code, err = self.clean()
+                self.assertEqual(code, 1, err)
+                self.assertIn("holds untracked files that an ignore rule hides", err)
+                self.assertIn(name, err)
+                os.unlink(path)
+        code, err = self.clean()
+        self.assertEqual(code, 0, err)
+
+    def test_a_change_or_a_visible_untracked_file_is_not_clean(self):
+        code, err = self.clean()                                        # setUp's file.txt is untracked and visible
+        self.assertEqual(code, 1, err)
+        self.assertIn("has changes or untracked files", err)
+        self.assertIn("file.txt", err)
+
+    def test_a_git_that_fails_is_never_clean(self):
+        """`[ -z "$(git status)" ]` read a failing git as clean; repo_git_clean refuses it by name."""
+        self.commit_all()
+        done = subprocess.run(["bash", "-c", '. "$LIB"; repo_git(){ return 128; }; repo_git_clean'], capture_output=True,
+                              text=True, env={"PATH": "/usr/bin:/bin", "LIB": LIB, "REPO": self.repo})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("git status failed on the checkout: it is not read as clean", done.stderr)
+        done = subprocess.run(["bash", "-c", '. "$LIB"; repo_git(){ [ "$1" = status ] || return 128; }; repo_git_clean'],
+                              capture_output=True, text=True, env={"PATH": "/usr/bin:/bin", "LIB": LIB, "REPO": self.repo})
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("git ls-files failed on the checkout: it is not read as clean", done.stderr)
+
+    def test_the_builder_writes_no_bytecode_into_the_checkout(self):
+        """Every Python run from the checkout in build-initrd.sh has -B: a second build from the same clone is clean."""
+        import re
+        with open(os.path.join(HERE, "..", "deploy", "baremetal", "initrd", "build-initrd.sh")) as f:
+            text = f.read()
+        from_tree = [line for line in text.splitlines()
+                     if re.search(r"python3 ", line) and ("-m deploy." in line or "PYTHONPATH" in line)]
+        self.assertTrue(from_tree)
+        for line in from_tree:
+            self.assertRegex(line, r"python3 -\w*B", line)
+
     def test_the_allowlist_is_uki_pys(self):
         """The builder and the signer refuse the same configurations (#374's CLONE_CONFIG, once it lands)."""
         import re

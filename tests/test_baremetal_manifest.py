@@ -1,6 +1,6 @@
 """deploy/baremetal/manifest.py, regalia-manifest (#156): the membership root's operator proposes, compares,
 signs and verifies manifests. The root is ECDSA P-256 on an offline Nitrokey; here the token is the PyKCS11
-stand-in of the authority's tests, so the signer is the real authority.Pkcs11Signer (#262)."""
+stand-in of p11sign's tests, so the signer is the real p11sign.Pkcs11Signer (#262)."""
 import io
 import json
 import os
@@ -11,8 +11,8 @@ import unittest.mock
 
 from cryptography.hazmat.primitives import serialization
 
-from deploy.baremetal import attest, authority, manifest as tool, measurements, membership as m
-from tests.test_baremetal_authority import FakeToken
+from deploy.baremetal import attest, manifest as tool, measurements, membership as m, p11sign
+from tests.test_baremetal_p11sign import FakeToken
 from tests.test_baremetal_membership import REVOKE_PUB, manifest, three
 import tests.test_baremetal_revocation_keys as tk
 import tests.test_baremetal_rollout as rt
@@ -25,6 +25,17 @@ def point(key):
     return key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
 
 
+def marked(state, root):
+    """The ceremony laptop's state directory as the card ceremony, run first, leaves it: its marker naming the root (#403)."""
+    from deploy.baremetal import cardrecord
+    key = m.root_entries(root)[0][1]
+    path = os.path.join(state, cardrecord.SIGNING_STATE)
+    with open(path, "w") as f:
+        json.dump({"schema": cardrecord.SIGNING_STATE_SCHEMA, "root": key}, f)
+    os.chmod(path, 0o600)
+    return state
+
+
 class Case(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
@@ -35,6 +46,7 @@ class Case(unittest.TestCase):
         self.fake.labels = {0: LABEL}
         self.fake.point = b"\x04\x41" + point(self.fake.key)
         self.root = {"alg": "ecdsa-p256", "key": point(self.fake.key).hex()}
+        marked(self.state, self.root)
         first = tk.v3(manifest(1, "", three()))
         self.chain = [{"manifest": first, "signature": {"signer": "root", "key": self.root["key"],
                                                          "sig": tk.sign_p256(self.fake.key, m.DOMAIN + m.canonical(first))}}]
@@ -524,13 +536,13 @@ class CardMadeChain(unittest.TestCase):
 class OnSoftHsm(unittest.TestCase):
     """The same PKCS#11 calls the Nitrokey gets, through SoftHSM: the token label, the key found by CKA_LABEL,
     and a root signature a node accepts (skipped where PyKCS11 or SoftHSM is missing, required in CI)."""
-    setUp = __import__("tests.test_baremetal_authority", fromlist=["Pkcs11"]).Pkcs11.setUp
+    setUp = __import__("tests.test_baremetal_p11sign", fromlist=["Pkcs11"]).Pkcs11.setUp
 
     def test_the_root_on_a_token_signs_a_manifest_nodes_accept(self):
         state = os.path.join(self.d, "state")
         os.mkdir(state, 0o700)
         uri = "pkcs11:serial=%s;token=revocation;object=revocation;type=private" % self.serial
-        from tests.test_baremetal_authority import SOFTHSM
+        from tests.test_baremetal_p11sign import SOFTHSM
         signer = tool.token_signer(uri, SOFTHSM, None, lambda: self.pin, os.path.join(state, tool.LATCH))
         root = {"alg": "ecdsa-p256", "key": signer.public()}
         first = tk.v3(manifest(1, "", three()))
@@ -563,6 +575,7 @@ class OfflineRoot(unittest.TestCase):
         os.mkdir(self.state, 0o700)
         self.key = Ed25519PrivateKey.generate()
         self.root = self.raw(self.key).hex()
+        marked(self.state, self.root)
         first = manifest(1, "", three())
         self.chain = [{"manifest": first, "signature": {"signer": "root", "key": self.root,
                                                          "sig": self.key.sign(m.DOMAIN + m.canonical(first)).hex()}}]
@@ -616,6 +629,15 @@ class OfflineRoot(unittest.TestCase):
         self.assertEqual((line["provenance"], line["verified"], line["key"]), ("offline-keys session " + self.SESSION, True, self.root))
         self.assertEqual(line["pin_source"], "none (offline key)")
         self.assertNotIn("PRIVATE", json.dumps(line))
+
+    def test_a_later_epoch_is_signed_only_on_the_root_s_signing_state(self):
+        """#403: a later epoch too: a directory without the root's marker signs nothing."""
+        from deploy.baremetal import cardrecord
+        os.unlink(os.path.join(self.state, cardrecord.SIGNING_STATE))
+        code, err = self.run_sign()
+        self.assertEqual(code, 2)
+        self.assertIn("has no regalia-signing-state.json: it is not the root's signing state", err)
+        self.assertEqual((self.record(), os.path.exists(self.paths["e2.json"])), ([], False))
 
     def test_a_key_that_is_not_the_pinned_root_is_refused_before_anything_is_signed(self):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -720,6 +742,7 @@ class Genesis(unittest.TestCase):
         os.mkdir(self.state, 0o700)
         self.key = Ed25519PrivateKey.generate()
         self.root = OfflineRoot.raw(self.key).hex()
+        marked(self.state, self.root)
         self.fingerprint = hashlib.sha256(bytes.fromhex(self.root)).hexdigest()
         self.manifest4, self.nodes4 = manifest4, nodes4
         self.first = manifest4(1, "", nodes4())
@@ -754,6 +777,43 @@ class Genesis(unittest.TestCase):
             return []
         with open(path) as f:
             return [json.loads(line) for line in f]
+
+    def test_the_state_dir_must_be_the_root_s_signing_state(self):
+        """#403, regalia-kms-d9's reads of #408: one log of the root's uses. A directory without the marker, or another
+        root's, signs nothing, and this tool never makes one: the card ceremony, run first, does."""
+        from deploy.baremetal import cardrecord
+        self.write(self.first)
+        marker = os.path.join(self.state, cardrecord.SIGNING_STATE)
+        os.unlink(marker)
+        code, err = self.run_genesis()
+        self.assertEqual(code, 2)
+        self.assertIn("has no regalia-signing-state.json: it is not the root's signing state", err)
+        self.assertEqual((self.record(), os.path.exists(self.paths["e1.json"]), os.path.exists(marker)), ([], False, False))
+        marked(self.state, "9b" * 32)
+        code, err = self.run_genesis()
+        self.assertIn("is another root's signing state: nothing is signed", err)
+        self.assertEqual((self.record(), os.path.exists(self.paths["e1.json"])), ([], False))
+
+    def test_there_is_no_way_to_start_a_signing_state_here(self):
+        """d9: --new-state-dir was a second-log hatch (the proposal was already made against the marked directory); gone."""
+        self.write(self.first)
+        with unittest.mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+            self.run_genesis("--new-state-dir")
+        self.assertFalse(os.path.exists(self.paths["e1.json"]))
+
+    def test_the_genesis_signs_on_the_state_the_card_ceremony_left(self):
+        """regalia-kms-51 on #408: at the first ceremony the card ceremony runs first, so the genesis meets the marker and
+        card-record line 1, and signs there; the card reader then takes the whole log."""
+        from deploy.baremetal import cardrecord
+        self.write(self.first)
+        line = {"kind": "card-record", "sequence": 1, "digest": "cd" * 32, "key": self.root, "at": "2026-10-04T10:00:00Z"}
+        with open(os.path.join(self.state, tool.RECORD), "w") as f:
+            f.write(json.dumps(line) + "\n")
+        os.chmod(os.path.join(self.state, tool.RECORD), 0o600)
+        code, err = self.run_genesis()
+        self.assertEqual(code, 0, err)
+        self.assertEqual([l["kind"] for l in cardrecord.read_signing_state(self.state, self.root)], ["card-record", "manifest"])
+
 
     def test_the_offline_root_signs_epoch_1_after_the_fingerprint_and_the_digest_are_typed(self):
         code, err = self.run_genesis("--chain-out", self.paths["chain.json"])
@@ -871,7 +931,8 @@ class ProposeGenesis(unittest.TestCase):
                                      {"serial": self.BACKUP, "primary": "C" * 40, "subkey": "D" * 40}],
             "ssh_signers": [{"serial": s, "key": ssh(Ed25519PrivateKey.generate())} for s in (self.MAIN, self.BACKUP)],
             "release_key": {"alg": "ed25519", "key": self.release, "fingerprint": "E" * 40, "cards": ["40000003", "40000004"],
-                            "imported": True, "attested": False}}
+                            "imported": True, "attested": False},
+            "sequence": 1, "supersedes": ""}
         record = copy.deepcopy(record)
         if change:
             change(record)
@@ -943,7 +1004,25 @@ class ProposeGenesis(unittest.TestCase):
         self.refused("owner_heartbeat_lifetime_s must be an integer from 300", self.propose, policy={"owner_heartbeat_lifetime_s": 100})
         self.assertEqual(self.propose(policy={"heartbeat_max_lifetime_s": 7200})["heartbeat_max_lifetime_s"], 7200)
 
-    def run_cli(self, *extra, typed="40000001 40000002", record=None, root=None, with_record=True):
+    def state(self, *records):
+        """The ceremony laptop's state directory (#403): the marker naming the pinned root, and a signing record holding a
+        manifest line and one card-record line per record given, in order."""
+        from deploy.baremetal import cardrecord
+        state = os.path.join(self.d, "state")
+        os.makedirs(state, mode=0o700, exist_ok=True)
+        with open(os.path.join(state, cardrecord.SIGNING_STATE), "w") as f:
+            json.dump({"schema": cardrecord.SIGNING_STATE_SCHEMA, "root": self.root}, f)
+        with open(os.path.join(state, cardrecord.SIGNING_RECORD), "w") as f:
+            f.write(json.dumps({"kind": "manifest", "epoch": 7, "digest": "ab" * 32, "signer": "root"}) + "\n")
+            for envelope in records:
+                f.write(json.dumps({"kind": "card-record", "sequence": envelope["record"]["sequence"],
+                                    "digest": cardrecord.digest(envelope["record"]), "key": self.root, "at": "2026-10-04T11:00:01Z"}) + "\n")
+        for name in (cardrecord.SIGNING_STATE, cardrecord.SIGNING_RECORD):
+            os.chmod(os.path.join(state, name), 0o600)
+        return state
+
+    def run_cli(self, *extra, typed="40000001 40000002", record=None, root=None, with_record=True, logged=None, with_state=True):
+        record = record or self.card_record()
         paths = {}
         for e in self.entries:
             paths[e["node_id"]] = os.path.join(self.d, "entry-%s.json" % e["node_id"])
@@ -954,10 +1033,11 @@ class ProposeGenesis(unittest.TestCase):
             json.dump(self.document, f)
         cards = os.path.join(self.d, "cards.record.json")
         with open(cards, "w") as f:
-            json.dump(record or self.card_record(), f)
+            json.dump(record, f)
         out = os.path.join(self.d, "e1.json")
         args = ["propose", "--genesis", "--root-key", root or self.root, "--measurements", doc, "--out", out,
-                "--issued-at", "2026-10-04T12:00:00Z"] + (["--card-record", cards] if with_record else [])
+                "--issued-at", "2026-10-04T12:00:00Z"] + (["--card-record", cards] if with_record else []) \
+            + (["--state-dir", self.state(*(logged or [record]))] if with_state else [])
         for p in paths.values():
             args += ["--entry", p]
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -975,6 +1055,8 @@ class ProposeGenesis(unittest.TestCase):
         self.assertEqual(code, 0, err)
         for shown in ("owner card 40000001 (dev-main): key " + self.owner_a, "owner card 40000002 (dev-backup): key " + self.owner_b,
                       "card record: session " + "cd" * 16 + ", made 2026-10-04T11:00:00Z, signed by the pinned root",
+                      "card record 1 of 1 (the newest on this laptop's signing record), digest ",
+                      "supersedes nothing (the first): check both against the ceremony sheet",
                       "release card key (not in the manifest", "heartbeat_max_lifetime_s", "revocation_signers", "node c: ADDED"):
             self.assertIn(shown, out)
         written = json.load(open(path))
@@ -986,7 +1068,7 @@ class ProposeGenesis(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         code, _, err, path = self.run_cli(with_record=False)
         self.assertEqual(code, 2)
-        self.assertIn("--genesis needs --measurements and --card-record", err)
+        self.assertIn("--genesis needs --measurements, --card-record and --state-dir", err)
         code, _, err, path = self.run_cli(record=self.card_record(signer=Ed25519PrivateKey.generate()))
         self.assertIn("the card record names another root than the pinned one", err)
         self.assertFalse(os.path.exists(path))
@@ -1011,7 +1093,26 @@ class ProposeGenesis(unittest.TestCase):
             self.assertEqual(tool.main(["propose", "--root-key", self.root, "--chain", os.path.join(self.d, "none.json"),
                                         "--card-record", os.path.join(self.d, "x.json"), "--set-state", "c=MAINTENANCE",
                                         "--out", os.path.join(self.d, "x")]), 2)
-        self.assertIn("--entry, --measurements, --card-record and the lifetimes are for --genesis only", stderr.getvalue())
+        self.assertIn("--entry, --measurements, --card-record, --state-dir and the lifetimes are for --genesis only", stderr.getvalue())
+
+    def test_only_the_newest_card_record_on_the_laptop_s_signing_record(self):
+        """#403: an older record, still validly signed, is refused once a newer one is on the laptop's signing record; and
+        without the laptop's state directory nothing is judged."""
+        first = self.card_record()
+        second = self.card_record(change=lambda r: r.update(sequence=2, supersedes=tool.cardrecord.digest(first["record"]),
+                                                            at="2026-10-05T11:00:00Z"))
+        code, _, err, path = self.run_cli(record=first, logged=[first, second])
+        self.assertEqual(code, 2, err)
+        self.assertIn("this card record (sequence 1) is not the newest the root signed (sequence 2", err)
+        self.assertFalse(os.path.exists(path))
+        code, out, err, path = self.run_cli(record=second, logged=[first, second])
+        self.assertEqual(code, 0, err)
+        self.assertIn("card record 2 of 2 (the newest on this laptop's signing record)", out)
+        self.assertIn("supersedes %s" % tool.cardrecord.digest(first["record"]), out)
+        os.unlink(path)
+        code, _, err, path = self.run_cli(with_state=False)
+        self.assertIn("--genesis needs --measurements, --card-record and --state-dir", err)
+        self.assertFalse(os.path.exists(path))
 
     def test_genesis_takes_no_chain_and_the_other_proposals_still_need_one(self):
         chain = os.path.join(self.d, "c.json")

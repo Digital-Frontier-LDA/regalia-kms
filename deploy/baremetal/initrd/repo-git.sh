@@ -95,6 +95,30 @@ repo_git(){
   fi
 }
 
+# Refuse (return 1, saying why) a checkout that is not exactly its commit: a change to a tracked file, or ANY untracked
+# file, listed with NO exclude rule (#404): a .gitignore, .git/info/exclude or an ignore file must not hide a file the
+# build reads. `go build` compiles every .go file of a package directory, tracked or not, and this builder runs the
+# checkout's Python AS ROOT (the root check, uki.py, debverify.py), so an untracked __pycache__/*.pyc whose recorded
+# source mtime and size match would run as root in place of the reviewed source. Unlike the signer's check (uki.py
+# Checkout.clean, which runs as the signer and allows bytecode), no bytecode is allowed here. A git that fails is
+# never read as clean.
+repo_git_clean(){
+  local changed others
+  changed="$(repo_git status --porcelain --untracked-files=all)" || {
+    echo "build-initrd: git status failed on the checkout: it is not read as clean" >&2; return 1; }
+  if [ -n "$changed" ]; then
+    echo "build-initrd: the checkout has changes or untracked files: build from a clean clone at the agreed commit" >&2
+    printf '%s\n' "$changed" | head -5 | sed 's/^/  /' >&2; return 1
+  fi
+  others="$(set -o pipefail; repo_git ls-files -z --others | tr '\0' '\n')" || {
+    echo "build-initrd: git ls-files failed on the checkout: it is not read as clean" >&2; return 1; }
+  if [ -n "$others" ]; then
+    echo "build-initrd: the checkout holds untracked files that an ignore rule hides (bytecode included: the build runs the" \
+         "checkout's Python as root): build from a fresh clone, or remove them (git clean -xdn lists them)" >&2
+    printf '%s\n' "$others" | head -5 | sed 's/^/  /' >&2; return 1
+  fi
+}
+
 # Refuse (return 1, saying why) a checkout whose own configuration (local and worktree scopes, includes followed)
 # sets any name outside REPO_GIT_ALLOWED. Listing the configuration runs nothing: it only prints names.
 repo_git_check(){
