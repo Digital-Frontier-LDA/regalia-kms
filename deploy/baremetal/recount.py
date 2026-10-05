@@ -45,7 +45,7 @@ import re
 import sys
 import time
 
-from deploy.baremetal import heartbeat, membership, trails
+from deploy.baremetal import heartbeat, membership, ownerauth, trails
 
 Refused, require = membership.Refused, membership.require
 
@@ -199,6 +199,7 @@ def main(argv=None, ask=None, run=None):
                     help="another heartbeat to take the floor from (e.g. another node's freshness state); repeatable")
     ap.add_argument("--audit-log", default=trails.where("recount"),
                     help="the audit trail (default %(default)s, its place in trails.py's registry)")
+    ownerauth.add_arguments(ap)
     args = ap.parse_args(argv)
 
     def record(event):                 # hash-chained, whole or not at all, never through a link (trails.py, #278)
@@ -215,7 +216,12 @@ def main(argv=None, ask=None, run=None):
         run = run or subprocess.run
         cfg = node.validate(raw)
         index, defaults = cfg["nv_heartbeat"], [os.path.join(cfg["state_dir"], "freshness.json")]
-        counter = node.heartbeat_counter(cfg, run)                # the service's own construction and lock
+        # the owner authorization the recount deletes and defines with (#242), from the node's envelope on standard
+        # input, judged now; the phrase is then typed at the terminal itself
+        owner_auth = ownerauth.from_arguments(args, cfg["root_key"], cfg["node_id"])
+        if owner_auth is not None and ask is None:
+            ask = ownerauth.console
+        counter = node.heartbeat_counter(cfg, run, owner_auth)    # the service's own construction and lock
         active = run(["systemctl", "is-active", "regalia-sync.service"], capture_output=True, timeout=10)
         status = active.stdout.decode(errors="replace").strip()
         # only a stopped service passes: "activating", "deactivating", "reloading" or a systemctl that failed

@@ -50,7 +50,7 @@ import re
 import sys
 import time
 
-from deploy.baremetal import convergence, membership, trails
+from deploy.baremetal import convergence, membership, ownerauth, trails
 
 Refused, require = membership.Refused, membership.require
 
@@ -156,8 +156,8 @@ def _chain(path):
         return membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), limit=membership.MAX_CHAIN_BYTES)
 
 
-def _highwater(index, tcti, policy=None, define_policy=None):
-    return membership.HighWater(index, tcti=tcti, policy=policy, define_policy=define_policy)
+def _highwater(index, tcti, policy=None, define_policy=None, owner_auth=None):
+    return membership.HighWater(index, tcti=tcti, policy=policy, define_policy=define_policy, owner_auth=owner_auth)
 
 
 def node_policy(path, node_id):
@@ -229,6 +229,7 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
                     help="the audit trail (default %(default)s, its place in trails.py's registry)")
     ap.add_argument("--tcti", help="the TPM to re-anchor, as a TCTI (e.g. device:/dev/tpmrm0); default: tpm2-tools' default TPM")
     ap.add_argument("--node-config", help="this node's node.json: needed when its anchor is written by its approved-image policy (#242)")
+    ownerauth.add_arguments(ap)
     args = ap.parse_args(argv)
     # The TPM is named on the command line or is the default, never taken from the environment: a
     # TPM2TOOLS_TCTI left over in the shell would re-anchor ANOTHER TPM, which would truthfully say that the
@@ -264,6 +265,11 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
         membership.hex_field(args.root_key, 64, "--root-key")
         # The phrase is a deliberate act at this host's terminal, not a line in a script or a pipe. (It is not a
         # secret: what authorizes the change is the TPM's owner authorization.)
+        # the owner authorization re-anchoring deletes and defines with (#242), from the node's envelope on standard
+        # input, judged now; the phrase is then typed at the terminal itself
+        owner_auth = ownerauth.from_arguments(args, args.root_key, args.node_id)
+        if owner_auth is not None and ask is None:
+            ask = ownerauth.console
         require(ask is not None or (tty or sys.stdin.isatty)(), "the phrase must be typed at a terminal: standard input is not one")
         sources = {}
         for item in args.peer:
@@ -274,8 +280,9 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
         # a node configuration that cannot be loaded, or another node's, refuses here; its define policy is resolved
         # from the manifest being anchored, after the plan and before anything changes (NodePolicies.prepare)
         policies = NodePolicies(args.node_config, args.node_id)
+        extra = {} if owner_auth is None else {"owner_auth": owner_auth}
         store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti, policy=policies.reader,
-                                                                          define_policy=policies.define))
+                                                                          define_policy=policies.define, **extra))
         now_at = reanchor(store, sources, args.node_id, typed, record, prepare=policies.prepare)
     except Incomplete as failure:
         print("reanchor: INCOMPLETE: the anchor was being replaced and it did not finish: %s\nRun this command again with the same "

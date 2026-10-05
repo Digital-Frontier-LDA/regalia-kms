@@ -53,6 +53,7 @@ before that object or file existed. Anything else at its handle or path is refus
 """
 import argparse
 import base64
+import contextlib
 import glob
 import hashlib
 import json
@@ -949,7 +950,7 @@ def first_epoch(envelopes, root_key, node_id):
     return None
 
 
-def anchor_and_store(config_path, chain, run=subprocess.run):
+def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     """Phase 2's trust anchors, run AS regalia-sync (the user that owns them from then on, #214): the
     membership epoch anchor (membership.HighWater: the counter, its base and the two record slots, #68),
     the store committed with the whole chain, so the anchor stands at its last epoch N, the heartbeat counter
@@ -971,13 +972,14 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     tip = membership.accept_chain(None, envelopes, cfg["root_key"])
     policy = lambda: node_module.define_policy(cfg, manifest=tip)
     hw = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=n.path("highwater.lock"), define_policy=policy,
-                              image_key=lambda: node_module.image_key(cfg, manifest=tip))
+                              image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth)
     store = membership.Store(n.path("membership.json"), cfg["root_key"], hw, documents=n.documents().require_for)
-    counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"), policy=policy)
+    counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"), policy=policy,
+                                owner_auth=owner_auth)
     # the signing counter (#199: the highest heartbeat sequence this node has signed): defined HERE, at 0, under the same
     # policy as the anchor, since a node that has signed nothing starts there
     signing = heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=n.path("signing-counter.lock"), define_policy=policy,
-                                image_key=lambda: node_module.image_key(cfg, manifest=tip))
+                                image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth)
 
     def defined(owner, indices):
         return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]
@@ -1025,7 +1027,7 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     return manifest["epoch"], membership.digest(manifest)
 
 
-def first_heartbeat(config_path, run=subprocess.run, bootstrap=False):
+def first_heartbeat(config_path, run=subprocess.run, bootstrap=False, owner_auth=None):
     """As regalia-sync (it owns the heartbeat state and the counter's lock), for a node first named above epoch 1:
     the highest heartbeat any reachable peer holds, verified under this node's manifest, taken as
     its FIRST (heartbeat.Freshness.accept_first: same checks as accept, live by authenticated time with no
@@ -1039,7 +1041,7 @@ def first_heartbeat(config_path, run=subprocess.run, bootstrap=False):
     store = n.store()
     manifest = store.load()             # the store the anchor step committed, checked against the TPM anchor (the
     #                                     published chain does not exist yet: the sync service writes it)
-    return take_first_heartbeat(n.node_id, manifest, store, n.freshness(), n.sources(manifest),
+    return take_first_heartbeat(n.node_id, manifest, store, n.freshness(owner_auth), n.sources(manifest),
                                 node_module.Trail(n.path("sync-audit.jsonl")), bootstrap, note=lambda text: print("NOTE " + " ".join(text.split())))
 
 
@@ -1112,11 +1114,39 @@ def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bo
     return sequence, left
 
 
-def run_first_heartbeat_as_sync(config_path, run=subprocess.run, bootstrap=False):
-    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_first-heartbeat", "--config", config_path]
-               + (["--bootstrap"] if bootstrap else []),
-               cwd=PACKAGE_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+def _no_sync_process(run):
+    """Refused while any process of uid regalia-sync exists (regalia-kms-d9 on #418): the owner authorization handed to
+    enrolment's regalia-sync step is readable by every process of that uid (/proc/<pid>/fd) while the step runs, so
+    none may be there. A residual race with a process starting meanwhile stays (stated; #419 removes the handoff)."""
+    done = run(["pgrep", "-u", SYNC_USER], capture_output=True, text=True)
+    require(done.returncode == 1, "a process of %s is running (%s): the owner authorization is handed to enrolment's %s step "
+            "only while none is (stop regalia-sync and its services first; pgrep -u %s)" % (
+                SYNC_USER, (done.stdout or "pgrep failed").split()[:5], SYNC_USER, SYNC_USER) if done.returncode == 0 else
+            "cannot tell whether a process of %s is running (pgrep exit %d): the owner authorization is not handed over" % (
+                SYNC_USER, done.returncode))
+
+
+@contextlib.contextmanager
+def _owner_fd(owner_auth, run=subprocess.run):
+    """(argv, kw) handing the owner authorization to a regalia-sync step: an inherited memfd (ownerauth.child_fd) named
+    by --ownerauth-fd, closed here after the step; nothing when there is none (an empty owner authorization)."""
+    if owner_auth is None:
+        yield [], {}
+        return
+    _no_sync_process(run)
+    fd = ownerauth.child_fd(owner_auth)
+    try:
+        yield ["--ownerauth-fd", str(fd)], {"pass_fds": (fd,)}
+    finally:
+        os.close(fd)
+
+
+def run_first_heartbeat_as_sync(config_path, run=subprocess.run, bootstrap=False, owner_auth=None):
+    with _owner_fd(owner_auth, run) as (extra, kw):
+        done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                    "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_first-heartbeat", "--config", config_path]
+                   + (["--bootstrap"] if bootstrap else []) + extra,
+                   cwd=PACKAGE_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL, **kw)
     require(done.returncode == 0, "the first-heartbeat step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     m = re.search(r"^FIRST-HEARTBEAT (\S+) (\S+)$", done.stdout, re.M)
     require(m is not None, "the first-heartbeat step did not report its result")
@@ -1127,14 +1157,15 @@ def run_first_heartbeat_as_sync(config_path, run=subprocess.run, bootstrap=False
     return int(m.group(1)), (None if m.group(2) == "-" else float(m.group(2)))
 
 
-def run_as_sync(config_path, chain, run=subprocess.run):
+def run_as_sync(config_path, chain, run=subprocess.run, owner_auth=None):
     """anchor_and_store, in a process of regalia-sync with the tss group (the TPM), started from the package
     root so `-m` finds it. The chain goes on its standard input: the enrolment directory is root's (0700),
     and regalia-sync could not read a file there. The journal stays with the caller."""
     # env -i: nothing of root's environment reaches the step (the TCTI comes from node.json, not from here)
-    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", "-"],
-               cwd=PACKAGE_ROOT, capture_output=True, text=True, input=membership.canonical(chain).decode())
+    with _owner_fd(owner_auth, run) as (extra, kw):
+        done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                    "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", "-"]
+                   + extra, cwd=PACKAGE_ROOT, capture_output=True, text=True, input=membership.canonical(chain).decode(), **kw)
     require(done.returncode == 0, "the anchor step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     m = re.search(r"^ANCHORED epoch (\d+) digest ([0-9a-f]{64})$", done.stdout, re.M)
     require(m is not None, "the anchor step did not report its result")
@@ -1830,19 +1861,37 @@ def render_credentials(journal, esp, site, chain, root_key, anchor, device=None)
     return record
 
 
+def commit_owner_auth(manifest, given, root_key, node_id, run=subprocess.run):
+    """The owner authorization enrolment commits with (#242): `given` (Auth, record), read from standard input before
+    the fingerprint was typed, judged against the record under `root_key` (the typed fingerprint's by now). Under v4
+    (production) the TPM's owner and lockout authorizations must both be SET, and the value given: refused otherwise,
+    before anything is written. None: an empty owner authorization (a v1-v3 lab chain without --ownerauth)."""
+    owner_auth = None if given is None else ownerauth.confirm(given[0], given[1], root_key, node_id)
+    if manifest["schema"] == membership.SCHEMA_V4:
+        ownerauth.require_production(run=run)
+        require(owner_auth is not None, "under %s the TPM's owner authorization is set and enrolment takes it from this "
+                "node's envelope: gpg --decrypt ownerauth-%s.yk.gpg | enrol commit ... --ownerauth ownerauth.record.json"
+                % (membership.SCHEMA_V4, node_id))
+    return owner_auth
+
+
 def commit(directory, chain, root_key, typed, document, site, example, boot=None, run=subprocess.run, prefix="", as_sync=None,
-           out=sys.stdout, replace=None, first_beat=None, bootstrap=False):
+           out=sys.stdout, replace=None, first_beat=None, bootstrap=False, ownerauth_given=None):
     """Phase 2 (#190): this host's TPM identity re-checked by Name, the manifest chain checked again (never trusted
     from an earlier `check`), the boot image checked (approved_image), the configuration installed, the state
     directory made regalia-sync's, the anchor, the store and the heartbeat counter set up AS regalia-sync, and the
     two boot credentials sealed onto the ESP. `boot` = {"image", "record", "initrd_pub", "system_pub",
     "secure_boot_cert", "esp"}; the CLI always gives it, and only tests of the earlier steps leave it out, which
-    stops after the anchors. The peers' paths and the enrolment record follow in later steps."""
+    stops after the anchors. The peers' paths and the enrolment record follow in later steps.
+    `ownerauth_given`: (ownerauth.Auth, ownerauth.record.json) as read from standard input before the operator typed the
+    root's fingerprint; judged here once that fingerprint has confirmed the root key, before anything is written. Under
+    v4 the TPM's owner and lockout authorizations must both be set (#242: ownerauth.require_production)."""
     journal = Journal(directory, _bundle(directory)["node_id"])
     require(journal.state("identity") == "done", "this host has no identity yet: run `enrol init` first")
     identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
     recheck_signing_key(journal, directory, run)                    # and the signing key at its own (#199; CodeRabbit on #358)
     manifest = check_manifest(directory, chain, root_key, typed, document, replace)
+    owner_auth = commit_owner_auth(manifest, ownerauth_given, root_key, journal.doc["node_id"], run)
     note = signing_note(directory, manifest)
     if note:
         print(note, file=out)
@@ -1856,7 +1905,8 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     # before the anchor: the store commits no epoch whose document it does not hold
     store_documents(prefix + config["state_dir"], document, as_sync is None)
     journal.started("anchor")
-    epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain if isinstance(chain, list) else [chain])
+    owner = {} if owner_auth is None else {"owner_auth": owner_auth}      # an empty owner authorization: as before (#242)
+    epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain if isinstance(chain, list) else [chain], **owner)
     require(epoch == manifest["epoch"] and digest == membership.digest(manifest),
             "the anchor stands at epoch %d (%s), not at the manifest checked (%d)" % (epoch, digest[:16], manifest["epoch"]))
     journal.done("anchor", epoch=epoch, digest=digest)
@@ -1864,7 +1914,7 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
         # the heartbeat counter starts AT the network's current sequence whenever the node enrols (#190), at 0 only at
         # the network's bootstrap (--bootstrap)
         journal.started("heartbeat_first")
-        sequence, left = (first_beat or run_first_heartbeat_as_sync)(prefix + NODE_JSON, bootstrap=bootstrap)
+        sequence, left = (first_beat or run_first_heartbeat_as_sync)(prefix + NODE_JSON, bootstrap=bootstrap, **owner)
         journal.done("heartbeat_first", sequence=sequence, bootstrap=bool(bootstrap and sequence == 0 and left is None))
         print("FIRST HEARTBEAT: %s" % ("nothing to do (a heartbeat held, or the counter defined)" if sequence is None else
                                       "network bootstrap: the counter starts at 0" if left is None else
@@ -1952,11 +2002,13 @@ def main(argv=None):
     k.add_argument("--esp", required=True, help="the ESP's mount point: the sealed credentials go to ESP/loader/credentials")
     k.add_argument("--enrol-dir", default=ENROL_DIR)
     k.add_argument("--replace", metavar="OLD_NODE_ID", help="this host replaces that node (#76): the manifest must say so")
+    ownerauth.add_arguments(k)
     k.add_argument("--bootstrap", action="store_true", help="the network has issued no heartbeat yet: start the counter at 0 "
                    "if no reachable peer holds one")
     h = sub.add_parser("_first-heartbeat", help=argparse.SUPPRESS)
     h.add_argument("--config", required=True)
     h.add_argument("--bootstrap", action="store_true")
+    h.add_argument("--ownerauth-fd", type=int, help=argparse.SUPPRESS)     # commit's memfd (_owner_fd): commit verified it
     q = sub.add_parser("paths", help="the peers' AKs and this node's LUKS path from each peer; then local.bin goes")
     q.add_argument("--esp", required=True, help="the ESP's mount point (the sealed unlock-local credential is read from it)")
     q.add_argument("--device", default=ROOT_DEVICE)
@@ -1970,6 +2022,7 @@ def main(argv=None):
     a = sub.add_parser("_anchor", help=argparse.SUPPRESS)
     a.add_argument("--config", required=True)
     a.add_argument("--chain", required=True, choices=["-"], help="always -: the chain comes on standard input")
+    a.add_argument("--ownerauth-fd", type=int, help=argparse.SUPPRESS)     # commit's memfd (_owner_fd): commit verified it
     args = ap.parse_args(argv)
     if args.command == "ownerauth":
         try:
@@ -2021,7 +2074,8 @@ def main(argv=None):
         return 3 if missing else 0
     if args.command == "_first-heartbeat":           # run by commit, as regalia-sync
         try:
-            sequence, left = first_heartbeat(args.config, bootstrap=args.bootstrap)
+            owner_auth = None if args.ownerauth_fd is None else ownerauth.read_fd(args.ownerauth_fd)
+            sequence, left = first_heartbeat(args.config, bootstrap=args.bootstrap, owner_auth=owner_auth)
         except (Refused, membership.Refused, OSError, ValueError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
@@ -2030,7 +2084,8 @@ def main(argv=None):
     if args.command == "_anchor":                    # run by commit, as regalia-sync
         try:
             chain = membership.load(sys.stdin.buffer.read(membership.MAX_CHAIN_BYTES + 1), membership.MAX_CHAIN_BYTES)
-            epoch, digest = anchor_and_store(args.config, chain)
+            owner_auth = None if args.ownerauth_fd is None else ownerauth.read_fd(args.ownerauth_fd)
+            epoch, digest = anchor_and_store(args.config, chain, owner_auth=owner_auth)
         except (Refused, membership.Refused, OSError, ValueError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
@@ -2047,12 +2102,20 @@ def main(argv=None):
             for name in ("measurements", "site", "example"):
                 with open(getattr(args, name)) as f:
                     loaded[name] = json.load(f)
-            require(sys.stdin.isatty(), "the root key's fingerprint is typed at the console; standard input is not a terminal")
-            typed = input("The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): ")
+            # the envelope's value FIRST, on standard input (gpg asks for the card's PIN on the console and exits), judged
+            # once the fingerprint is typed; then the fingerprint, at the terminal
+            given = ownerauth.read_arguments(args)
+            prompt = "The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): "
+            if given is not None:
+                typed = ownerauth.console(prompt)
+                require(typed is not None, "no fingerprint was typed")
+            else:
+                require(sys.stdin.isatty(), "the root key's fingerprint is typed at the console; standard input is not a terminal")
+                typed = input(prompt)
             boot = {"image": args.image, "record": args.image_record, "initrd_pub": args.initrd_pub, "system_pub": args.system_pub,
                     "secure_boot_cert": args.secure_boot_cert, "esp": args.esp}
             commit(args.enrol_dir, chain, args.root_key, typed, loaded["measurements"], loaded["site"], loaded["example"], boot,
-                   replace=args.replace, bootstrap=args.bootstrap)
+                   replace=args.replace, bootstrap=args.bootstrap, ownerauth_given=given)
         except (Refused, membership.Refused, attest.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
