@@ -283,7 +283,13 @@ def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers,
     this node record and sign (cosign's docstring: a refusal costs the proposer nothing). A co-signer's refusal may name
     its last epoch ("last grant, N"): the proposal is retried ONCE at the highest such N + 1, never in a loop (ed).
     Returns the envelope the Gate takes, or Refused. `ask(peer, lease)` returns that peer's signature or raises Refused;
-    `trail(event)` records each attempt."""
+    `trail(event)` records each attempt.
+
+    SAFETY rests on one invariant, not on the order between signers: every signature is preceded, under its signer's
+    lock, by that signer's record (d9's read). The pre-check here is ADVISORY (no lock); the real check is Signer's,
+    under the lock. LIVENESS costs of co-signer-first: if this node's own check then refuses, or it crashes after the
+    co-signer signed, the co-signer holds a grant for a lease that never formed, and refuses other sites until that
+    lease's expiry plus SKEW_S."""
     now = _now(clock)
     last, _ = signer.record.state(now)
     epoch = (last["activation_epoch"] if last else 0) + 1
@@ -301,7 +307,12 @@ def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers,
                 if found:
                     seen.append(int(found.group(1)))
                 continue
-            own = signer(lease, manifest, now)                # recorded, then signed: a crash here costs a count
+            try:
+                own = signer(lease, manifest, now)            # recorded, then signed: a crash here costs a count
+            except Refused as refused:                        # this node's record moved since the advisory pre-check
+                trail({"event": "activation", "outcome": "DENY", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site,
+                       "reason": ("co-signed by %s, refused by this node's own record: %s" % (peer, refused))[:240]})
+                raise
             done = {"lease": lease, "signatures": [own, theirs]}
             verify(done, manifest)
             trail({"event": "activation", "outcome": "ALLOW", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site, "peer": peer})

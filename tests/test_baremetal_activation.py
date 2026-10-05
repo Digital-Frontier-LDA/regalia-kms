@@ -310,6 +310,20 @@ class Issuance(Record):
         self.assertEqual(results.count("ALLOW"), 1, results)
         self.assertEqual(b.record.counter.v, 1)
 
+    def test_the_proposer_s_own_late_refusal_is_recorded_in_its_trail(self):
+        """d9: a's record moved between the advisory pre-check and its own signature: a DENY line, then Refused."""
+        a, b = self.node("a"), self.node("b")
+        events = []
+
+        def ask(peer, body):
+            sig = act.cosign(self.m1, peer, "a", body, self.clock(), b, lambda: True)
+            a.record.record(lease(self.m1, site="site-x", activation_epoch=99), T0 + 600)   # a co-signed another site meanwhile
+            return sig
+        with self.assertRaises(m.Refused):
+            act.propose("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(), a, ask, ["b"], events.append)
+        self.assertEqual(events[-1]["outcome"], "DENY")
+        self.assertIn("co-signed by b, refused by this node's own record", events[-1]["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()
