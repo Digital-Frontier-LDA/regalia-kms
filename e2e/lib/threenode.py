@@ -950,8 +950,11 @@ class Cluster:
         if os.path.exists("/dev/mapper/e2e3-" + name):
             sh("cryptsetup", "close", "e2e3-" + name, check=False)
         if power:
-            self.time[name] = False
+            # the writer halted BEFORE its time is marked unanswered (regalia-kms-1e on #473): a step between the two
+            # would record a transition on the time trail after the node's shipper stopped, stranded on a node that
+            # stays down. A host whose chrony dies with it records that transition at its next boot, as start() does here
             self._authtime_halt(name)                 # nothing of this node writes its /run while it is off
+            self.time[name] = False
             # its authtime writer is halted above; an entry that vanishes anyway (a belt) is gone, not an error
             for entry in n.run.iterdir():
                 with contextlib.suppress(FileNotFoundError):
