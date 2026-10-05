@@ -842,13 +842,20 @@ removing only what it can prove it made.
 - The root's side, on its own machine and without a TPM, in three steps:
   - `challenge --bundle B --out CRED --keep KEEP` makes a credential to the bundle's EK and AK Name. KEEP holds only
     the secret's SHA-256.
-  - `activate --credential CRED`, run as root on the node, prints the secret. Only the TPM that holds that EK and
-    that AK can release it, which proves the AK is the EK's. Without that proof, the AK's certification of the
-    signing key would prove nothing.
-  - `entry --bundle B --system-pub PEM --keep KEEP --answer HEX` checks the answer. It then checks the bundle: the
-    EK and AK Names from their public areas, and the signing key certified by that AK, with the attributes and
-    policy of the root's own system-phase key. Only then does it print the node's identity fields as a v4
-    manifest entry carries them.
+  - `activate --credential CRED --out ACTIVATION`, run as root on the node, writes the secret its TPM releases
+    and, with it, the AK's quote of PCRs 7 and 11 over the node's identity fields (its bundle.json: both
+    WireGuard keys, the signing key, the token serials, the SSH host key), bound to this challenge by the secret's
+    SHA-256 (#399). Only the TPM that holds that EK and that AK can release the secret, which proves the AK is the
+    EK's; the quote then says every other field is what that TPM's node stated now, on the image it booted. The
+    activation holds no lasting secret: the answer opens this one challenge only.
+  - `entry --bundle B --system-pub PEM --keep KEEP --activation ACTIVATION` checks the answer, the EK and AK Names
+    from their public areas, the signing key certified by that AK (with the attributes and policy of the root's
+    own system-phase key), and the identity quote over the bundle's own fields. Only then does it print the
+    node's identity fields as a v4 manifest entry carries them, and the PCR 7 and 11 values quoted.
+  - `manifest propose --genesis` takes each node as `--node BUNDLE KEEP ACTIVATION` (no entry file in between)
+    and runs the same checks, then JUDGES each node's quoted PCR 11 against the genesis measurements' system-phase
+    value (PCR 7 too where they give it, else the nodes must agree). Enrolment on an image the measurements do not
+    list, a bench image included, is therefore refused at the genesis: enrol on the reviewed production image.
 - `ownerauth` (#242 step C), after `init` and before `commit`: `gpg --decrypt ownerauth-X.yk.gpg | enrol ownerauth
   --node-id X --root-key ROOT --record ownerauth.record.json` sets the TPM's owner authorization to this node's
   value from the ceremony's envelope (regalia-ceremony#111; the break-glass `.bg.age` gives the same value through

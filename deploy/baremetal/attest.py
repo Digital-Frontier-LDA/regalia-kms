@@ -688,23 +688,55 @@ def record_qualifying(payload):
     return hashlib.sha256(b"".join(struct.pack(">I", len(f)) + f for f in (RECORD_LABEL, payload))).digest()
 
 
-def quote_document(payload, pcrs, quote_path, signature_path, run=subprocess.run):
-    """This node's AK quotes `pcrs` with record_qualifying(payload) as its qualifying data."""
+def _quote(qualifying, pcrs, quote_path, signature_path, run):
     require(pcrs and all(isinstance(i, int) and 0 <= i <= 23 for i in pcrs), "PCRs must be 0-23")
     tpm2("quote", "-c", AK_HANDLE, "-g", "sha256", "-l", "sha256:" + ",".join(str(i) for i in sorted(set(pcrs))),
-         "-q", record_qualifying(payload).hex(), "-m", quote_path, "-s", signature_path, "-f", "plain", run=run)
+         "-q", qualifying.hex(), "-m", quote_path, "-s", signature_path, "-f", "plain", run=run)
 
 
-def verify_document(payload, ak_public, ek_name, quote, signature, run=subprocess.run):
-    """A quote_document made by the AK `ak_public` under the EK named `ek_name` (hex) over exactly `payload`: the AK's
-    Name and the quote's PCRs, or Refused. Needs no TPM."""
+def _verified(qualifying, ak_public, ek_name, quote, signature, run, what):
     require(len(quote) <= 1024 and len(signature) <= 256, "the quote or its signature is oversized")
     ak_name, spki = ak_identity(ak_public)
     verify_signature(spki, quote, signature, run)
     q = parse_quote(quote)
     require(q["qualified_signer"] == qualified_name(bytes.fromhex(ek_name), ak_name), "the quote's signer is not this AK under this EK")
-    require(hmac.compare_digest(q["extra_data"], record_qualifying(payload)), "the quote does not sign this document")
+    require(hmac.compare_digest(q["extra_data"], qualifying), "the quote does not sign %s" % what)
     return {"ak_name": ak_name.hex(), "pcrs": q["pcrs"], "pcr_digest": q["pcr_digest"].hex(), "reset_count": q["reset_count"]}
+
+
+def quote_document(payload, pcrs, quote_path, signature_path, run=subprocess.run):
+    """This node's AK quotes `pcrs` with record_qualifying(payload) as its qualifying data."""
+    _quote(record_qualifying(payload), pcrs, quote_path, signature_path, run)
+
+
+def verify_document(payload, ak_public, ek_name, quote, signature, run=subprocess.run):
+    """A quote_document made by the AK `ak_public` under the EK named `ek_name` (hex) over exactly `payload`: the AK's
+    Name and the quote's PCRs, or Refused. Needs no TPM."""
+    return _verified(record_qualifying(payload), ak_public, ek_name, quote, signature, run, "this document")
+
+
+# #399: a node's IDENTITY (the bundle's fields), quoted by its AK at `enrol activate` and bound to THAT ceremony's
+# challenge: the qualifying data takes the SHA-256 of the secret the credential released, so a quote from an earlier
+# enrolment (an older WireGuard or SSH key kept by someone) never verifies for this one. Its own label (regalia-kms-d9):
+# a quote made for an enrolment record or a session transcript never verifies as an identity, whatever its payload.
+IDENTITY_LABEL = b"regalia-enrol/v1/identity"
+
+
+def identity_qualifying(payload, secret_sha256):
+    require(isinstance(payload, bytes) and payload, "the payload is bytes")
+    require(isinstance(secret_sha256, bytes) and len(secret_sha256) == 32, "the challenge secret's SHA-256 is 32 bytes")
+    return hashlib.sha256(b"".join(struct.pack(">I", len(f)) + f for f in (IDENTITY_LABEL, payload, secret_sha256))).digest()
+
+
+def quote_identity(payload, secret_sha256, pcrs, quote_path, signature_path, run=subprocess.run):
+    """This node's AK quotes `pcrs` over its identity `payload`, bound to the challenge whose secret hashes to `secret_sha256`."""
+    _quote(identity_qualifying(payload, secret_sha256), pcrs, quote_path, signature_path, run)
+
+
+def verify_identity(payload, secret_sha256, ak_public, ek_name, quote, signature, run=subprocess.run):
+    """A quote_identity by the AK `ak_public` under the EK `ek_name` over exactly `payload` and this challenge, or Refused."""
+    return _verified(identity_qualifying(payload, secret_sha256), ak_public, ek_name, quote, signature, run,
+                     "this identity under this challenge")
 
 
 def node_quote(node_id, epoch, session_id, ephemeral_public, nonce, pcrs, quote_path, signature_path, run=subprocess.run, binding=None):

@@ -898,7 +898,10 @@ class ProposeGenesis(unittest.TestCase):
         self.root = OfflineRoot.raw(self.root_key).hex()
         self.entries = [{k: v for k, v in n.items() if k != "state"} for n in nodes4()]
         self.document = {"schema": measurements.SCHEMA, "name": "genesis", "nodes": {
-            e["node_id"]: {"accepted": [{"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32}}]} for e in self.entries}}
+            e["node_id"]: {"accepted": [{"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "07" * 32},
+                                         "phases": {"initrd": {"11": "aa" * 32}, "system": {"11": "bb" * 32}}}]} for e in self.entries}}
+        # what each node's AK quoted at `enrol activate` (#399): booted, on the reviewed image
+        self.enrolled = {e["node_id"]: {"7": "07" * 32, "11": "bb" * 32} for e in self.entries}
         self.owner_a, self.owner_b = typed(OWNER_KEYS[0])["key"], typed(OWNER_KEYS[1])["key"]
         self.release = typed(OWNER_KEYS[2])["key"]
 
@@ -1023,11 +1026,17 @@ class ProposeGenesis(unittest.TestCase):
 
     def run_cli(self, *extra, typed="40000001 40000002", record=None, root=None, with_record=True, logged=None, with_state=True):
         record = record or self.card_record()
-        paths = {}
-        for e in self.entries:
-            paths[e["node_id"]] = os.path.join(self.d, "entry-%s.json" % e["node_id"])
-            with open(paths[e["node_id"]], "w") as f:
-                json.dump(e, f)
+        nodes = []
+        for e in self.entries:                       # each node's three files; their proof is enrol's (stubbed below, tested there)
+            files = []
+            for kind, content in (("bundle", e), ("keep", {"node_id": e["node_id"]}), ("activation", {"node_id": e["node_id"]})):
+                files.append(os.path.join(self.d, "%s-%s.json" % (kind, e["node_id"])))
+                with open(files[-1], "w") as f:
+                    json.dump(content, f)
+            nodes.append(files)
+        pub = os.path.join(self.d, "system.pub.pem")
+        with open(pub, "w") as f:
+            f.write("system-phase PCR key (stub)\n")
         doc = os.path.join(self.d, "doc.json")
         with open(doc, "w") as f:
             json.dump(self.document, f)
@@ -1038,11 +1047,16 @@ class ProposeGenesis(unittest.TestCase):
         args = ["propose", "--genesis", "--root-key", root or self.root, "--measurements", doc, "--out", out,
                 "--issued-at", "2026-10-04T12:00:00Z"] + (["--card-record", cards] if with_record else []) \
             + (["--state-dir", self.state(*(logged or [record]))] if with_state else [])
-        for p in paths.values():
-            args += ["--entry", p]
+        args += ["--system-pub", pub]
+        for files in nodes:
+            args += ["--node"] + files
+
+        def proven(bundle, system_pub, keep, activation, run=None):
+            self.assertEqual((system_pub, keep["node_id"], activation["node_id"]), (b"system-phase PCR key (stub)\n",) + (bundle["node_id"],) * 2)
+            return bundle, self.enrolled[bundle["node_id"]]
         stdout, stderr = io.StringIO(), io.StringIO()
         with unittest.mock.patch("sys.stdout", stdout), unittest.mock.patch("sys.stderr", stderr), \
-                unittest.mock.patch.object(tool.keyfd, "tty_line", lambda prompt: typed):
+                unittest.mock.patch.object(tool.keyfd, "tty_line", lambda prompt: typed), unittest.mock.patch.object(tool.enrol, "proven_entry", proven):
             code = tool.main(args + list(extra))
         return code, stdout.getvalue(), stderr.getvalue(), out
 
@@ -1093,7 +1107,43 @@ class ProposeGenesis(unittest.TestCase):
             self.assertEqual(tool.main(["propose", "--root-key", self.root, "--chain", os.path.join(self.d, "none.json"),
                                         "--card-record", os.path.join(self.d, "x.json"), "--set-state", "c=MAINTENANCE",
                                         "--out", os.path.join(self.d, "x")]), 2)
-        self.assertIn("--entry, --measurements, --card-record, --state-dir and the lifetimes are for --genesis only", stderr.getvalue())
+        self.assertIn("--node, --system-pub, --measurements, --card-record, --state-dir and the lifetimes are for --genesis only", stderr.getvalue())
+
+    def test_each_node_was_enrolled_on_the_reviewed_image(self):
+        """#399 (regalia-kms-d9): the PCR 11 each node's AK quoted at activation is the SYSTEM-phase value the genesis
+        measurements accept for it; its initrd-phase value, or an image they do not list (a bench one), is refused."""
+        for node, value, reason in (("b", "aa" * 32, "b was enrolled booted on PCR 11 %s, not the system-phase value %s" % ("aa" * 32, "bb" * 32)),
+                                    ("c", "cc" * 32, "c was enrolled booted on PCR 11 %s" % ("cc" * 32))):
+            with self.subTest(node=node):
+                self.enrolled[node] = dict(self.enrolled[node], **{"11": value})
+                self.refused(reason, tool.judge_enrolled, self.document, self.enrolled)
+                code, _, err, path = self.run_cli()
+                self.assertIn(reason, err)
+                self.assertFalse(os.path.exists(path))
+                self.enrolled[node] = dict(self.enrolled[node], **{"11": "bb" * 32})
+        self.enrolled["a"] = dict(self.enrolled["a"], **{"7": "77" * 32})
+        self.refused("a was enrolled with PCR 7 (Secure Boot state) %s, not %s as the measurements give" % ("77" * 32, "07" * 32),
+                     tool.judge_enrolled, self.document, self.enrolled)
+        # no PCR 7 in the measurements: compared across the nodes only
+        bare = {"schema": measurements.SCHEMA, "name": "genesis", "nodes": {n: {"accepted": [{"label": "image-1", "tpm_firmware_version": "0" * 16,
+                "pcrs": {"0": "00" * 32}, "phases": {"initrd": {"11": "aa" * 32}, "system": {"11": "bb" * 32}}}]} for n in self.enrolled}}
+        self.refused("the nodes a, b, c were enrolled with different Secure Boot states (PCR 7)", tool.judge_enrolled, bare, self.enrolled)
+        self.enrolled["a"] = dict(self.enrolled["a"], **{"7": "07" * 32})
+        tool.judge_enrolled(bare, self.enrolled)
+
+    def test_the_summary_shows_what_each_node_booted_and_entry_files_are_gone(self):
+        code, out, err, path = self.run_cli()
+        self.assertEqual(code, 0, err)
+        self.assertIn("node a enrolled booted on PCR 7 %s, PCR 11 %s (its AK's quote at activation; PCR 11 judged against the "
+                      "measurements' system phase, PCR 7 too)" % ("07" * 32, "bb" * 32), out)
+        os.unlink(path)
+        with unittest.mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+            tool.main(["propose", "--genesis", "--root-key", self.root, "--entry", os.path.join(self.d, "entry-a.json")])
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stderr", err):
+            self.assertEqual(tool.main(["propose", "--genesis", "--root-key", self.root, "--measurements", "m", "--card-record", "c",
+                                        "--state-dir", "s", "--out", path, "--node", "b", "k", "a"]), 2)
+        self.assertIn("--genesis needs --node BUNDLE KEEP ACTIVATION for each node, and --system-pub", err.getvalue())
 
     def test_only_the_newest_card_record_on_the_laptop_s_signing_record(self):
         """#403: an older record, still validly signed, is refused once a newer one is on the laptop's signing record; and

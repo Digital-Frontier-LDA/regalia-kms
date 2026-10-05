@@ -13,7 +13,7 @@ envelope, so nothing a node would refuse is ever signed.
                                                      [--issued-at YYYY-MM-DDTHH:MM:SSZ] --out PROPOSAL.json
                                                      [--old OLD.json --new NEW.json [--state NODE=STATE.json]...]
     python3 -Es -m deploy.baremetal.manifest propose --genesis --root-key ROOT --card-record CARDS.json --measurements DOC.json
-                                                     --entry A.json --entry B.json --entry C.json --out EPOCH1.json
+                                                     --system-pub SYSTEM-PCR-KEY.pem --node A-BUNDLE A-KEEP A-ACTIVATION ... --out EPOCH1.json
     python3 -Es -m deploy.baremetal.manifest diff    --chain CHAIN.json --root-key ROOT --proposal PROPOSAL.json
     python3 -Es -m deploy.baremetal.manifest sign    --chain CHAIN.json --root-key ROOT --expected-epoch N --proposal PROPOSAL.json
                                                      --signer root|revocation --key 'pkcs11:serial=…;token=…;id=%01;type=private'
@@ -103,7 +103,7 @@ import re
 import sys
 import time
 
-from deploy.baremetal import attest, cardrecord, keyfd, measurements, membership, p11uri, rollout
+from deploy.baremetal import attest, cardrecord, enrol, keyfd, measurements, membership, p11uri, rollout
 from deploy.baremetal.membership import Refused, require
 
 RECORD = cardrecord.SIGNING_RECORD              # the laptop's one ordered record of the root's uses (#403)
@@ -186,6 +186,26 @@ def card_record_keys(envelope, root, signing_state):
     return cardrecord.verify(envelope, entries[0][1], cardrecord.read_signing_state(signing_state, entries[0][1]))
 
 
+def judge_enrolled(document, enrolled):
+    """The PCR values each node's AK quoted at `enrol activate` ({node_id: {"7": hex, "11": hex}}, #399), judged against
+    the genesis measurements `document`. Enrolment runs on a BOOTED host, so PCR 11 is the system-phase value of the
+    node's set (its initrd-phase value, or any image the measurements do not accept, is refused: a bench image too). PCR 7
+    (the Secure Boot state) is judged where the set gives it; where it does not, the nodes must agree on it (a stated
+    limitation: compared, not judged). Without this, the identity quote says only that SOME code on that TPM vouched for
+    the fields; with it, the reviewed image did (regalia-kms-d9)."""
+    for node_id, quoted in sorted(enrolled.items()):
+        expected = attest.values(measurements.target(document, node_id), "system")
+        require("11" in expected, "the measurements give %s no PCR 11: the image it was enrolled on cannot be judged" % node_id)
+        require(quoted["11"] == expected["11"], "%s was enrolled booted on PCR 11 %s, not the system-phase value %s the genesis measurements "
+                "accept for it: it was not the reviewed image (an initrd-phase or bench image is refused)" % (node_id, quoted["11"], expected["11"]))
+        if "7" in expected:
+            require(quoted["7"] == expected["7"], "%s was enrolled with PCR 7 (Secure Boot state) %s, not %s as the measurements give"
+                    % (node_id, quoted["7"], expected["7"]))
+    unjudged = sorted(n for n in enrolled if "7" not in attest.values(measurements.target(document, n), "system"))
+    require(len({enrolled[n]["7"] for n in unjudged}) <= 1, "the nodes %s were enrolled with different Secure Boot states (PCR 7): "
+            "the measurements give no PCR 7 to judge them by, and they must at least agree" % ", ".join(unjudged))
+
+
 def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None):
     """Epoch 1 (v4), unsigned: every node from its `enrol entry` output (state ACTIVE), the measurements `document` it
     commits to, the owner's two keys, and GENESIS_POLICY (with `policy` overrides). Refused unless it is a manifest a
@@ -199,7 +219,7 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
         require(isinstance(serial, str) and serial.upper() not in membership.BENCH_TOKENS,
                 "the owner card %s is a bench token: the ceremony never uses a bench serial (D28.5, D30)" % serial)
     require(len(set(owners.values())) == 2, "the two owner cards have the same key: they are one card")
-    require(isinstance(entries, list) and entries, "no node entry given (--entry, one per node, as `enrol entry` printed it)")
+    require(isinstance(entries, list) and entries, "no node entry given (--node, one per node: its bundle, kept challenge and activation)")
     nodes = []
     for i, entry in enumerate(entries):
         require(isinstance(entry, dict), "entry %d is not an object" % i)
@@ -524,10 +544,20 @@ def _propose_genesis(args, root, confirm=None, say=print):
             "--genesis takes no --chain, --from-rollout, --set-state or measurements step: nothing comes before it")
     require(args.measurements and args.card_record and args.state_dir,
             "--genesis needs --measurements, --card-record and --state-dir (the laptop's root signing record, #403)")
+    require(args.node and args.system_pub, "--genesis needs --node BUNDLE KEEP ACTIVATION for each node, and --system-pub (#399)")
     cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root, args.state_dir)
     owners, release_key = cards["owners"], cards["release_key"]
-    entries = [read_json(path, membership.MAX_BYTES) for path in args.entry]
+    with open(args.system_pub, "rb") as f:
+        system_pub = f.read(65536)
+    entries, enrolled = [], {}
+    for bundle_path, keep_path, activation_path in args.node:    # each node proven here: no unsigned entry file in between
+        entry, quoted = enrol.proven_entry(read_json(bundle_path, membership.MAX_BYTES), system_pub, read_json(keep_path, 4096),
+                                           read_json(activation_path, 65536))
+        require(entry["node_id"] not in enrolled, "--node names %s twice" % entry["node_id"])
+        entries.append(entry)
+        enrolled[entry["node_id"]] = quoted
     document = measurements.load(_raw(args.measurements, measurements.MAX_BYTES))
+    judge_enrolled(document, enrolled)
     policy = {k: v for k, v in (("heartbeat_max_lifetime_s", args.heartbeat_max_lifetime_s),
                                 ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s)) if v is not None}
     candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy)
@@ -535,6 +565,10 @@ def _propose_genesis(args, root, confirm=None, say=print):
     for line in diff({"nodes": []}, candidate):
         say("  " + line)
     say("measurements: %s (%s)" % (candidate["policy_version"], document["name"]))
+    for node_id, quoted in sorted(enrolled.items()):
+        say("node %s enrolled booted on PCR 7 %s, PCR 11 %s (its AK's quote at activation; PCR 11 judged against the measurements' "
+            "system phase%s)" % (node_id, quoted["7"], quoted["11"], ", PCR 7 too" if "7" in attest.values(measurements.target(document, node_id), "system") else
+                                 ", PCR 7 compared across the nodes only"))
     say("card record: session %s, made %s, signed by the pinned root" % (cards["session"], cards["at"]))
     say("card record %d of %d (the newest on this laptop's signing record), digest %s, supersedes %s: check both against "
         "the ceremony sheet" % (cards["sequence"], cards["of"], cards["digest"], cards["supersedes"] or "nothing (the first)"))
@@ -620,7 +654,10 @@ def main(argv=None):
     c.add_argument("--chain", metavar="CHAIN.json", help="the signed chain (a JSON list of envelopes); not with --genesis")
     c.add_argument("--root-key", required=True, metavar="ROOT", help="the pinned root: 64 hex, or a typed entry or list as JSON")
     c.add_argument("--genesis", action="store_true", help="the first ceremony: epoch 1 from the nodes' entries, the measurements and the owner's two keys")
-    c.add_argument("--entry", action="append", default=[], metavar="ENTRY.json", help="--genesis: a node's `enrol entry` output; one per node")
+    c.add_argument("--node", action="append", default=[], nargs=3, metavar=("BUNDLE", "KEEP", "ACTIVATION"),
+                   help="--genesis, once per node: its bundle.json (enrol init), the kept challenge (enrol challenge) and its "
+                        "activation (enrol activate): each proven here, the AK's quote of its identity included (#399)")
+    c.add_argument("--system-pub", metavar="PEM", help="--genesis: the root's own copy of the system-phase PCR key's public half")
     c.add_argument("--measurements", metavar="DOC.json", help="--genesis: the measurements document epoch 1 commits to")
     c.add_argument("--card-record", metavar="CARDS.json",
                    help="--genesis: the card ceremony's record (regalia-ceremony#111, cards.record.json), signed by the pinned "
@@ -671,8 +708,8 @@ def main(argv=None):
             return _propose_genesis(args, root)
         if args.command == "propose":
             require(args.chain is not None, "give --chain (or --genesis)")
-            require(not (args.entry or args.measurements or args.card_record or args.state_dir or args.heartbeat_max_lifetime_s
-                         or args.owner_heartbeat_lifetime_s), "--entry, --measurements, --card-record, --state-dir and the "
+            require(not (args.node or args.system_pub or args.measurements or args.card_record or args.state_dir or args.heartbeat_max_lifetime_s
+                         or args.owner_heartbeat_lifetime_s), "--node, --system-pub, --measurements, --card-record, --state-dir and the "
                     "lifetimes are for --genesis only")
         if args.command == "sign" and args.genesis:
             # the first ceremony: no chain at all, the offline root only (see GENESIS above)

@@ -94,10 +94,15 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 
 - **Not measured**: `propose`/`sign --genesis`, the card-record verifier and build provenance have run
   only with software keys, software TPMs and in CI.
-- **Genesis node entries are not signed** (#399). `propose --genesis` cannot tell a node's
-  `enrol entry` file from an edited copy. A mismatch is caught by that node's `enrol check`, but only
-  after the root has signed, so the cost is redoing the genesis, not a silent acceptance. Until then the
-  operator carries the files and reads the printed diff.
+- **Genesis node identities are bound to each node's TPM, not to its hardware** (#399). `propose
+  --genesis` takes each node's bundle, kept challenge and activation and proves them itself: the AK is
+  in the TPM its EK names, and the AK quoted every identity field (both WireGuard keys, the signing
+  key, the token serials, the SSH host key) bound to that very challenge, booted on PCR 11 the genesis
+  measurements accept (system phase). What it cannot show: that the TPM is a genuine vendor TPM, which
+  rests on the EK certificate or, without one, the EK Name copied by hand (#190; the DL360's TPM is
+  unknown); that the node was not compromised when it enrolled (enrolment trusts the host at its own
+  console); and PCR 7 is only compared across the nodes where the measurements give no expected value.
+  Run only on software TPMs so far.
 - **Card attestation: not built** (#400). Nothing yet produces the YubiKeys' OpenPGP attestation
   certificates (`ykman openpgp keys attest`). The card record's `attestation_sha256` values are
   placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is
