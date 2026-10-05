@@ -448,6 +448,19 @@ class Command(Case):
             code = tool.main(list(args))
         return code, out.getvalue(), err.getvalue()
 
+    def test_verify_prints_the_tip_s_card_record_pin(self):
+        """#406 (regalia-kms-51): regalia-ceremony's readers take the verified chain's newest card_record as --pin SEQ:DIGEST."""
+        from tests.test_baremetal_membership import ROOT, ROOT_PUB, sign
+        from tests.test_baremetal_membership_v4 import manifest4, nodes4
+        first = manifest4(1, "", nodes4())
+        later = manifest4(2, m.digest(first), nodes4(), card_record={"sequence": 2, "digest": "cb" * 32})
+        chain = os.path.join(self.d, "chain4.json")
+        with open(chain, "w") as f:
+            json.dump([sign(first, ROOT), sign(later, ROOT)], f)
+        code, out, err = self.run_main("verify", "--chain", chain, "--root-key", ROOT_PUB)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.splitlines()[-1], "CARD-RECORD-PIN 2 " + "cb" * 32)
+
     def test_verify_propose_and_diff(self):
         chain = os.path.join(self.d, "chain.json")
         with open(chain, "w") as f:
@@ -456,6 +469,7 @@ class Command(Case):
         code, out, _ = self.run_main("verify", "--chain", chain, "--root-key", root)
         self.assertEqual(code, 0)
         self.assertIn("epoch 1", out)
+        self.assertNotIn("CARD-RECORD-PIN", out)                         # no pin before v4
         proposal = os.path.join(self.d, "p.json")
         code, out, _ = self.run_main("propose", "--chain", chain, "--root-key", root, "--set-state", "c=MAINTENANCE",
                                      "--issued-at", "2026-10-03T12:00:00Z", "--out", proposal)

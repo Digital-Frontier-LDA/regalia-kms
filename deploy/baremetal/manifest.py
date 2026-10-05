@@ -782,6 +782,10 @@ def main(argv=None):
         current = verify_chain(chain_doc, root)
         if args.command == "verify":
             print("chain verified: %d envelopes, epoch %d, digest %s" % (len(chain_doc), current["epoch"], membership.digest(current)))
+            if "card_record" in current:
+                # the verified tip's pin of the card ceremony's record (#405, #406): one line for regalia-ceremony's readers
+                # (--pin SEQ:DIGEST), who accept only this record after genesis. A chain before v4 has no pin: no line.
+                print("CARD-RECORD-PIN %d %s" % (current["card_record"]["sequence"], current["card_record"]["digest"]))
             return 0
         if args.command == "propose":
             require(bool(args.from_rollout) != bool(args.set_state), "give --from-rollout or --set-state, not both")
