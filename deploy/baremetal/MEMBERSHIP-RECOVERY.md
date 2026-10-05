@@ -78,8 +78,9 @@ is written by its approved-image policy (#242): all of them since then. The audi
 reanchor trail (`trails.py`). Run as root, it writes the membership file as root; when it is done (or
 INCOMPLETE) it gives that file, and any lock it made, back to the owner of the state directory
 (`regalia-sync`, as `enrol` made it), or the node's own sync could not read its chain (#388). The lock it
-takes is the node's own (`highwater.lock` in the state directory), so it and the node's sync never change
-the anchor at the same moment. Stop the node's services first all the same (below).
+takes is the node's own (`highwater.lock` in the state directory, `node.Node.anchor()`'s). The node's one
+run-time writer of the anchor, `regalia-esp-advance` (#410), takes its own lock (`/run/regalia-esp-advance/`),
+so the two do not serialize: stop the node's units first, `regalia-esp-advance.path` included (below).
 
 It needs the TPM's owner authorization, as defining the anchor did at commissioning (#242 step C,
 `ownerauth.py`): this node's value comes on standard input from its envelope, decrypted with the owner's
@@ -143,10 +144,15 @@ they are opened by hand too. Rehearsed end to end on three nodes by `e2e/three-n
    the last signing record, and why b's anchor is unusable.
 5. **Open b by hand** with its own recovery key. It boots, and its services start by themselves: its sync
    refuses its membership (the reason above). **Stop them before anything else**:
-   `systemctl stop regalia-sync regalia-admission`, and check with `systemctl is-active` that both are
-   inactive, so that nothing but the command touches the anchor. Then run the command above at b's console
+   `systemctl stop regalia-esp-advance.path regalia-esp-advance regalia-sync regalia-admission`, and check
+   with `systemctl is-active` that all four are inactive, so that nothing but the command touches the anchor
+   (`regalia-esp-advance` is the node's one run-time writer of it, #410, under a lock of its own). Then run the command above at b's console
    as root, with `--peer a=a-chain.json --peer c=c-chain.json`. Read what it prints, then type the phrase.
-6. **Status 0: start b's services** (`systemctl start regalia-sync regalia-admission`). b loads its membership
+6. **Status 0: start b's services** (`systemctl start regalia-sync regalia-admission regalia-esp-advance.path`),
+   then **`systemctl start regalia-esp-advance`** and check that `regalia-node check` shows `anchor` equal to
+   `epoch`. The ESP must hold the chain the anchor now names: the peers' chain may be newer than what b's ESP
+   held, and the initrd refuses an ESP chain below its anchor (a ROLLBACK), so b's next boot would go to the
+   recovery prompt until the advance runs. b loads its membership
    at the chain's epoch under the new anchor, takes the heartbeat a and c signed, asks them for a lease and
    serves again; it issues leases to them in turn. Any other status: the table above.
 
