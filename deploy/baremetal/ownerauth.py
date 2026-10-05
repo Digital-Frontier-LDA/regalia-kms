@@ -15,6 +15,18 @@ An operator decrypts the envelope with the owner's card (`gpg --decrypt owneraut
 comes on STANDARD INPUT as 64 lowercase hex and one newline (read_value), is checked against the record verified
 under the node's PINNED root (verify, check) BEFORE the TPM is touched, and lives only in the process that uses it.
 
+CUSTODY (owner, 2026-10-05, recorded on #242 by regalia-kms-24). Two independent paths, so neither strands a node:
+  * day to day, the developer cards' envelope (.yk.gpg, rc#120/#130), as above;
+  * BREAK-GLASS, a SOPS file per node encrypted to an age key that is never held whole: it is rebuilt k-of-n from the
+    ADR-0002 D28 platform Shamir share set (`ssss-combine ... 2> key`, never typed), as the ceremony opens its own vault
+    (regalia-ceremony qubes/recovery/RECOVERY-TECHNICAL.md), and it replaces the per-node .bg.age envelope
+    (regalia-ceremony#111). A binary SOPS file (`--input-type binary`) holds "<64 hex>\n" and `sops decrypt` gives
+    it back byte for byte, read_value's form; a YAML value given by `--extract` comes WITHOUT the newline (measured with
+    the ceremony's sops 3.13.1), which read_value refuses: one binary file per node, not a map. Nothing on a server
+    holds either the value or that key.
+  * THE DRILL (the ceremony rehearsal): rebuild the key, decrypt one node's value, check it against the root-signed
+    record WITHOUT a TPM (`python3 -Es -m deploy.baremetal.ownerauth check`, main), destroy the rebuilt key file.
+
 THE CHANNEL. tpm2-tools takes an authorization as `-P <auth>`; on argv it would be in /proc for every local user.
 Every owner call here passes `-P file:/dev/fd/N`, N an anonymous memory file (memfd) holding "hex:<64 hex>"
 (owner_call): never on a disk nor on a command line; while the call runs it is readable through /proc/<pid>/fd by
@@ -40,9 +52,10 @@ CURRENT LIMITATIONS (#242):
     epoch and digest) cross in clear, none of them secret;
   * the value is a Python object (bytes, and the 64-hex text it was read from): it cannot be zeroed, and lives in the
     process's memory until it exits, as the offline keys' do;
-  * the break-glass envelope (.bg.age) is decrypted by the operator with age, and the value reaches these tools on
-    standard input in the same form; nothing here reads either envelope file or checks its SHA-256 (the record's
-    yk_sha256/bg_sha256 are for the ceremony's own proof);
+  * the break-glass path is decrypted by the operator (today's ceremony writes .bg.age, for age; the decided SOPS file
+    replaces it with rc#111), and the value reaches these tools on standard input in the same form; nothing here reads
+    any envelope file or checks its SHA-256 (the record's yk_sha256/bg_sha256 are for the ceremony's own proof). The
+    record's field for the break-glass envelope follows rc#111 when it changes: bg_sha256 until then;
   * set() takes the owner authorization from EMPTY only. A TPM whose owner authorization is already set is refused,
     with the way on (its value is this envelope's: nothing to do, `check` proves it; otherwise the TPM's owner
     hierarchy must be cleared by its owner first). Changing a set value to a new one (a rotation) is not built;
@@ -486,3 +499,37 @@ def holds(auth, tcti=None, run=subprocess.run):
     require(AUTH_FAILURE.search(_tail(done.stderr)) is not None,
             "could not ask the TPM whether its owner authorization is this value: %s" % _tail(done.stderr))
     return False
+
+
+def main(argv=None, stdin=None):
+    """`python3 -Es -m deploy.baremetal.ownerauth check --node-id X --root-key ROOT --record ownerauth.record.json`, the
+    value on standard input: whether it is node X's, by the check value of the record verified under the pinned root.
+    Touches no TPM and writes nothing: the break-glass drill's last step (the module text), and a way to tell which
+    node a decrypted value is for before going to that node."""
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.ownerauth",
+                                     description="the TPM owner authorization, without a TPM (#242)")
+    sub = parser.add_subparsers(dest="command", required=True)
+    c = sub.add_parser("check", help="is the value on standard input this node's? (the record's check value; no TPM)")
+    c.add_argument("--node-id", required=True)
+    c.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex: the record is verified under it")
+    c.add_argument("--record", required=True, help="the ceremony's ownerauth.record.json")
+    args = parser.parse_args(argv)
+    stream = stdin or sys.stdin.buffer
+    try:
+        require(not (hasattr(stream, "isatty") and stream.isatty()), "standard input is a terminal: it carries the decrypted "
+                "value (sops decrypt ... | or gpg --decrypt ... |), which is never typed")
+        with open(args.record, "rb") as f:
+            envelope = membership.load(f.read(membership.MAX_BYTES + 1), membership.MAX_BYTES)
+        from_envelope(stream, envelope, args.root_key, args.node_id)
+    except (OSError, Refused) as failure:
+        print("REFUSED: %s" % failure, file=sys.stderr)
+        return 2
+    print("the value is %s's: it matches the check value of the record signed by the pinned root (no TPM touched, "
+          "nothing written)" % args.node_id)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

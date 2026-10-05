@@ -77,6 +77,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.
+  - **Break-glass custody is decided, not yet produced** (owner, 2026-10-05). One binary SOPS file per node, under an
+    age key rebuilt from the D28 platform Shamir shares, replaces the ceremony's `.bg.age` envelope. That is
+    regalia-ceremony#111's change; until it lands, the ceremony writes `.bg.age`. The record names the break-glass
+    envelope's digest as `bg_sha256`, and `ownerauth.verify` follows rc#111 if that field changes. The drill's check
+    (`python3 -m deploy.baremetal.ownerauth check`) is built and was run end to end with ssss, sops 3.13.1 and the test
+    vector, without a TPM.
 - **Re-anchoring on a real host has three known faults, fixed in #391 (not merged):**
   - Run as root, `reanchor` writes `membership.json` as root with mode 0600, so the node's `regalia-sync`
     cannot read its own chain afterwards and the node cannot serve.

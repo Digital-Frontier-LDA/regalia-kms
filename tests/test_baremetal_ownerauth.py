@@ -120,6 +120,41 @@ class TheValueOnStandardInput(unittest.TestCase):
                 ownerauth.read_value(io.BytesIO(bad.encode()))
 
 
+class TheDrillCheck(unittest.TestCase):
+    """`python3 -Es -m deploy.baremetal.ownerauth check` (#242, the break-glass drill's last step): the value on standard
+    input judged against the record under the pinned root, with no TPM."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.record = os.path.join(self.d, "ownerauth.record.json")
+        with open(self.record, "w") as f:
+            f.write(VECTOR["record_file"])
+
+    def check(self, node, given, root=PIN):
+        return subprocess.run([sys.executable, "-Es", "-m", "deploy.baremetal.ownerauth", "check", "--node-id", node,
+                               "--root-key", root, "--record", self.record], input=given.encode(), capture_output=True,
+                              cwd=str(ROOT), env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1"})
+
+    def test_the_node_s_value_matches(self):
+        done = self.check("a", VECTOR["values"]["a"])
+        self.assertEqual((done.returncode, done.stderr), (0, b""))
+        self.assertIn(b"the value is a's: it matches the check value of the record signed by the pinned root", done.stdout)
+        self.assertNotIn(VECTOR["values"]["a"][:16].encode(), done.stdout)
+
+    def test_another_node_s_value_another_root_or_the_wrong_form(self):
+        for node, given, root, reason in (
+                ("b", VECTOR["values"]["a"], PIN, b"the owner authorization given is not b's"),
+                ("a", VECTOR["values"]["a"], "ab" * 32, b"names another root than the pinned one"),
+                ("a", VECTOR["values"]["a"][:64], PIN, b"is not 64 lowercase hex and a newline")):
+            with self.subTest(node=node, root=root, given=len(given)):
+                done = self.check(node, given, root)
+                self.assertEqual(done.returncode, 2)
+                self.assertIn(b"REFUSED: ", done.stderr)
+                self.assertIn(reason, done.stderr)
+                self.assertNotIn(VECTOR["values"]["a"][:16].encode(), done.stderr)
+
+
 class TheChannel(unittest.TestCase):
     def test_empty_gives_no_authorization(self):
         with ownerauth.owner_call(None) as (argv, kw):
