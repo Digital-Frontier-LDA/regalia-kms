@@ -21,7 +21,6 @@ CONTEXT = {
     "regalia_heartbeat_checked_timestamp_seconds": "staleness is node_textfile_mtime_seconds",
     "regalia_admission_lease_seconds_left": "RegaliaNotServing watches the outcome",
     "regalia_audit_trail_lines": "read beside backlog",
-    "regalia_esp_anchor_epoch": "root's reading of the anchor, beside sync's (RegaliaMembershipAnchorBehind)",
     "regalia_esp_advance_run_timestamp_seconds": "when it last ran: a oneshot, run on each new chain",
     "regalia_audit_trail_committed": "read beside backlog",
 }
@@ -78,6 +77,25 @@ EXTRA = [
     # the ESP advance runs seconds after a publication: ten minutes behind, then caught up, is not an alert (#66 B3)
     ("RegaliaMembershipAnchorBehind", "ten minutes behind, then caught up", 1200,
      [("regalia_membership_epoch", {}, "5+0x30"), ("regalia_membership_anchor_epoch", {}, "4+0x9 5+0x20")], []),
+    # a new epoch reaches the nodes a few minutes apart: no alert; one left behind for 35 minutes: that node alone
+    ("RegaliaMembershipBehindFleet", "b catches up within ten minutes", 2100,
+     [("regalia_membership_epoch", NODE_A, "4+0x5 5+0x35"), ("regalia_membership_epoch", NODE_B, "4+0x15 5+0x25")], []),
+    ("RegaliaMembershipBehindFleet", "two clusters: only the node behind in its own job", 2100,
+     [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_membership_epoch", NODE_B, "4+0x40"),
+      ("regalia_membership_epoch", {"instance": "c:9100", "job": "regalia-node-other"}, "4+0x40")],
+     [NODE_B]),
+    ("RegaliaAnchorBehindFleet", "a sync that writes the peers' epoch but anchored nothing newer", 2100,
+     [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_membership_epoch", NODE_B, "5+0x40"),
+      ("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "4+0x40")],
+     [NODE_B]),
+    # a rolling update: one node's anchor follows ten minutes late, then catches up: no alert (1e)
+    ("RegaliaAnchorBehindFleet", "b's anchor catches up within ten minutes", 2100,
+     [("regalia_esp_anchor_epoch", NODE_A, "4+0x5 5+0x35"), ("regalia_esp_anchor_epoch", NODE_B, "4+0x15 5+0x25")], []),
+    # a peer's sync that writes an inflated epoch moves no honest node's alert: the reference is root-read anchors (48)
+    ("RegaliaAnchorBehindFleet", "a peer's sync claims epoch 99; every anchor is at 5", 2100,
+     [("regalia_membership_epoch", NODE_A, "99+0x40"), ("regalia_membership_epoch", NODE_B, "5+0x40"),
+      ("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "5+0x40")],
+     []),
     # the authtime file missing on one node only: that node alone
     ("RegaliaAuthtimeMetricsMissing", "two nodes: only the one without the file", 420,
      [("up", NODE_A, "1+0x10"), ("up", NODE_B, "1+0x10"),
@@ -139,6 +157,16 @@ SCENARIOS = {
     "RegaliaEspAdvanceMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=ESP_ADVANCE), "0+0x10")], "at": 420},
+    # across the nodes: the node behind is listed LAST, so the alert's expected labels are its own
+    "RegaliaMembershipBehindFleet": {
+        "fault": [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_membership_epoch", NODE_B, "4+0x40")],
+        "healthy": [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_membership_epoch", NODE_B, "5+0x40")], "at": 2100},
+    "RegaliaAnchorBehindFleet": {
+        "fault": [("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "4+0x40")],
+        "healthy": [("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "5+0x40")], "at": 2100},
+    "RegaliaEspAnchorEpochMissing": {
+        "fault": [("up", NODE_A, "1+0x10")],
+        "healthy": [("up", NODE_A, "1+0x10"), ("regalia_esp_anchor_epoch", NODE_A, "5+0x10")], "at": 420},
     "RegaliaMembershipMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=MEMBERSHIP), "0+60x10")], "at": 420},
