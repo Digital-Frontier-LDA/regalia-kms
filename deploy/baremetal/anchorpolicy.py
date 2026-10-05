@@ -507,6 +507,179 @@ def increment_document(key, k_a_point, node_id, n):
     return {"schema": INCREMENT_SCHEMA, "node_id": node_id, "from": n, "signature": sig}
 
 
+# ---- C4: a node's catch-up (the retire bump, applied on the node; regalia-kms-1e's shape, agreed by d9 on #361) ----
+#
+# The measurements document carries, per node, `rotations`: a list of {"from": n, "signature": r||s}, one per retire
+# this node has been through, each K_A's single-use increment_from(Name(R_node), n) (increment_document). G_pub, the
+# generation the root has published for the node, is the last entry's from + 1. A node whose R is below it bumps FIRST
+# (catch_up) and refuses every write under K_A and every signature until it has (require_current).
+
+
+def published(rotations, label="rotations"):
+    """G_pub from `rotations` (their form: each {"from", "signature"}, `from` a count rising by exactly 1), or None when
+    the node has been through no retire."""
+    require(isinstance(rotations, list), "%s is not a list" % label)
+    previous = None
+    for i, entry in enumerate(rotations):
+        require(isinstance(entry, dict) and sorted(entry) == ["from", "signature"], "%s[%d] is not {from, signature}" % (label, i))
+        _count(entry["from"], "%s[%d].from" % (label, i))
+        require(previous is None or entry["from"] == previous + 1, "%s[%d].from is %d, not %d: a retire moves R by exactly 1"
+                % (label, i, entry["from"], (previous or 0) + 1))
+        previous = entry["from"]
+    return None if previous is None else previous + 1
+
+
+def bump(index, point, node_id, n, signature, run=None):
+    """K_A's single-use approval `signature` of R's increment from `n`, checked in software, then applied in the TPM:
+    PolicyCommandCode(NV_Increment), PolicyNV(R == n), PolicyAuthorize(K_A, rotation/<node_id>). R is read back at n + 1."""
+    import os
+    import tempfile
+    cls = rotation_class(node_id)
+    rotation = rotation_name(int(index, 16), point, node_id)
+    approved_ = increment_from(rotation, n)
+    der = verify_approval(point, approved_, cls, signature, "K_A's approval of %s's rotation counter from %d" % (node_id, n))
+    with tempfile.TemporaryDirectory(prefix="regalia-rotation-") as d:
+        path = lambda name: os.path.join(d, name)                             # noqa: E731
+        for name, data in (("ka.pem", k_a_pem(point)), ("sig.der", der), ("approved", approved_),
+                           ("message", authorize_message(approved_, cls)), ("n", n.to_bytes(8, "big"))):
+            with open(path(name), "wb") as f:
+                f.write(data)
+        _tpm(run, "flushcontext", "-t")
+        _must(_tpm(run, "loadexternal", "-C", "o", "-G", "ecc", "-u", path("ka.pem"), "-c", path("ka.ctx"), "-n", path("ka.name")), "loading K_A")
+        with open(path("ka.name"), "rb") as f:
+            require(f.read() == k_a_name(point), "the TPM's Name of K_A is not the one computed for it")
+        _must(_tpm(run, "verifysignature", "-c", path("ka.ctx"), "-g", "sha256", "-m", path("message"), "-s", path("sig.der"),
+                   "-f", "ecdsa", "-t", path("ticket")), "the TPM's check of K_A's approval of the bump from %d" % n)
+        _tpm(run, "flushcontext", "-t")
+        _must(_tpm(run, "startauthsession", "--policy-session", "-S", path("s.ctx")), "a policy session")
+        try:
+            _must(_tpm(run, "policycommandcode", "-S", path("s.ctx"), "TPM2_CC_NV_Increment"), "PolicyCommandCode")
+            _must(_tpm(run, "policynv", "-S", path("s.ctx"), "-i", path("n"), index, "eq"),
+                  "PolicyNV(R == %d): the rotation counter is not at the value this approval bumps from" % n)
+            _must(_tpm(run, "policyauthorize", "-S", path("s.ctx"), "-i", path("approved"), "-n", path("ka.name"),
+                       "-q", _ref(cls).hex(), "-t", path("ticket")), "PolicyAuthorize(K_A, %s)" % cls)
+            _must(_tpm(run, "nvincrement", index, "-C", index, "-P", "session:" + path("s.ctx")), "the rotation counter's bump from %d" % n)
+        finally:
+            _tpm(run, "flushcontext", path("s.ctx"))
+    now = read_rotation(index, run)
+    require(now == n + 1, "the rotation counter %s reads %d after the bump from %d, not %d" % (index, now, n, n + 1))
+    return now
+
+
+def catch_up(index, point, node_id, rotations, booted_generation, run=None):
+    """Bring this node's R up to G_pub (published(rotations)) by applying, in order, each entry from R on. Refused, with R
+    as it was, when an entry at R is missing, or when the set the node is BOOTED on carries approvals below G_pub
+    (`booted_generation`, its anchor_approvals.generation): a bump would leave it no approval to write with, so it keeps
+    the old one, still valid, until it boots an image approved at G_pub (local no-stranding). Returns R."""
+    target, r = published(rotations), read_rotation(index, run)
+    if target is None or r >= target:
+        return r
+    by_from = {e["from"]: e for e in rotations}
+    require(r in by_from, "%s's rotation counter is %d and the document's rotations start at %d: an entry is missing, nothing "
+            "is bumped" % (node_id, r, rotations[0]["from"]))
+    require(isinstance(booted_generation, int) and booted_generation >= target,
+            "%s is booted on an image whose approvals are at generation %s, below the published %d: bumping would leave it no "
+            "approval to write with, so it keeps its current one until it boots an image approved at %d"
+            % (node_id, booted_generation, target, target))
+    while r < target:
+        r = bump(index, point, node_id, r, by_from[r]["signature"], run)
+    return r
+
+
+def require_current(index, node_id, rotations, run=None):
+    """Refused unless this node's R has reached G_pub: a node behind on R writes nothing under K_A and signs nothing
+    (heartbeats, activations), since an approval the retire meant to revoke may still open its objects."""
+    target = published(rotations)
+    if target is None:
+        return
+    r = read_rotation(index, run)
+    require(r >= target, "%s's rotation counter is %d, below the published %d: it bumps first (catch-up), and writes or signs "
+            "nothing under the anchor-policy authority until it has" % (node_id, r, target))
+
+
+# ---- C4: R in a D32 lease request (regalia-kms-24, 48 and 95 on #361): a peer co-signs no lease while R < G_pub ----
+#
+# The requester certifies its R with its AK (TPM2_NV_Certify, R's own empty authorization: authread), qualified by
+# what the request binds (48: the SHA-256 of the canonical lease it proposes; a peer's nonce works the same). Measured
+# on swtpm by 1e and 95: TPM_ST_ATTEST_NV, extraData = the qualifying data, the certified Name = R's, the 8-byte value.
+
+ST_ATTEST_NV = 0x8014
+ROTATION_REQUEST_KEYS = ("value", "certify", "signature")
+
+
+def certify_rotation(qualifying, index=ROTATION_INDEX, run=None):
+    """This node's R, certified by its AK (attest.AK_HANDLE) over `qualifying` (bytes, at most 64): the request's
+    `rotation` field, {"value", "certify", "signature"} (base64 for the TPMS_ATTEST and the AK's DER signature)."""
+    import base64
+    import os
+    import tempfile
+    require(isinstance(qualifying, bytes) and 0 < len(qualifying) <= 64, "the qualifying data is 1 to 64 bytes")
+    with tempfile.TemporaryDirectory(prefix="regalia-rotation-") as d:
+        attest_path, sig_path = os.path.join(d, "attest"), os.path.join(d, "sig")
+        _must(_tpm(run, "nvcertify", "-C", attest.AK_HANDLE, "-c", index, "-g", "sha256", "-s", "ecdsa", "-f", "plain",
+                   "-q", qualifying.hex(), "--size", "8", "--offset", "0", "-o", sig_path, "--attestation", attest_path, index),
+              "certifying the rotation counter %s with the AK" % index)
+        with open(attest_path, "rb") as f:
+            blob = f.read(1025)
+        with open(sig_path, "rb") as f:
+            sig = f.read(257)
+    value = parse_nv_certify(blob)["contents"]
+    require(len(value) == 8, "the certified rotation counter is not 8 bytes")
+    return {"value": int.from_bytes(value, "big"), "certify": base64.b64encode(blob).decode(), "signature": base64.b64encode(sig).decode()}
+
+
+def parse_nv_certify(blob):
+    """TPMS_ATTEST for an NV_Certify: its signer, extra data, the certified index's Name, offset and contents."""
+    r = attest.Reader(blob, "the NV certification")
+    require(r.u("I") == attest.TPM_GENERATED, "the NV certification was not generated by a TPM (magic)")
+    require(r.u("H") == ST_ATTEST_NV, "the attestation is not an NV certification")
+    out = {"qualified_signer": r.sized(), "extra_data": r.sized()}
+    r.take(8 + 4 + 4 + 1 + 8)                       # clockInfo and firmwareVersion
+    out["name"], out["offset"], out["contents"] = r.sized(), r.u("H"), r.sized()
+    r.end()
+    return out
+
+
+def check_rotation(rotation, qualifying, ak_public, ek_name, ak_name, k_a_point, node_id, rotations, run=None):
+    """A lease request's `rotation` (certify_rotation's), checked by the peer asked to co-sign: certified by the AK the
+    manifest names for `node_id` (its `ak_name`, the AK's public area `ak_public` from enrolment, under its `ek_name`),
+    over THIS request's `qualifying`, of that node's R under the tip's K_A (`k_a_point`), and at least G_pub from the
+    node's `rotations` in the measurements document. Refused, by name, otherwise: a node behind on R gets no lease."""
+    import base64
+    import hmac
+    require(isinstance(rotation, dict) and sorted(rotation) == sorted(ROTATION_REQUEST_KEYS),
+            "the request's rotation is not {%s}" % ", ".join(ROTATION_REQUEST_KEYS))
+    try:
+        blob = base64.b64decode(rotation["certify"], validate=True)
+        sig = base64.b64decode(rotation["signature"], validate=True)
+    except (TypeError, ValueError):
+        raise Refused("the request's rotation certification is not base64") from None
+    require(len(blob) <= 1024 and len(sig) <= 256, "the request's rotation certification is oversized")
+    _count(rotation["value"], "the request's rotation value")
+    try:
+        name, spki = attest.ak_identity(ak_public)
+    except attest.Refused as refused:
+        raise Refused("%s's AK: %s" % (node_id, refused)) from None
+    require(name.hex() == ak_name, "the AK given is not the one the manifest names for %s" % node_id)
+    try:
+        attest.verify_signature(spki, blob, sig, run or __import__("subprocess").run)
+    except (Refused, attest.Refused):
+        raise Refused("%s's rotation certification does not verify under its AK" % node_id) from None
+    c = parse_nv_certify(blob)
+    require(c["qualified_signer"] == attest.qualified_name(bytes.fromhex(ek_name), name),
+            "%s's rotation certification is not by its AK under its EK" % node_id)
+    require(hmac.compare_digest(c["extra_data"], qualifying), "%s's rotation certification is not for this request" % node_id)
+    require(c["name"] == rotation_name(int(ROTATION_INDEX, 16), k_a_point, node_id) and c["offset"] == 0 and len(c["contents"]) == 8,
+            "%s's rotation certification is not of its rotation counter under the anchor-policy authority" % node_id)
+    value = int.from_bytes(c["contents"], "big")
+    require(value == rotation["value"], "%s's rotation value %d is not the certified %d" % (node_id, rotation["value"], value))
+    target = published(rotations)
+    if target is not None:
+        require(value >= target, "%s's rotation counter is %d, below the published %d: no lease is co-signed until it has caught up"
+                % (node_id, value, target))
+    return value
+
+
 def main(argv=None, out=None):
     import argparse
     import json
