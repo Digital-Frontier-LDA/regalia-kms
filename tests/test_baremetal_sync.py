@@ -55,7 +55,8 @@ class Case(ct.Case):
     def server(self, name):
         p = self.peers[name]
         return sync.Server(name, self.stores[name], p["freshness"], p["attester"], p["signer"], self.identify, self.events.append,
-                           sync.Buckets(clock=lambda: self.tick), clock=lambda: self.now)
+                           sync.Buckets(clock=lambda: self.tick), clock=lambda: self.now,
+                           floor=p["floor"], applied=lambda: (lt.CLUSTER, self.revision))      # D32: the issuer's floor
 
     def client_of(self, name, store, freshness, sources=("b", "c", "seed")):
         transports = {s: self.wire(s, name) for s in sources}
@@ -87,11 +88,13 @@ class Case(ct.Case):
         self.assertEqual(self.last()["outcome"], "DENY")
         self.assertIn(reason, self.last()["reason"])
 
-    def quote(self, nonce, manifest, session=lt.SESSION, node="a"):
-        """Node a's fresh quote over a nonce a peer issued."""
+    def quote(self, nonce, manifest, binding="state", session=lt.SESSION, node="a"):
+        """Node a's fresh quote over a nonce a peer issued, binding its request's state (D32: lease.request_binding)."""
+        if binding == "state":
+            binding = lease.request_binding(dict(lt.STATE, state_revision=self.revision))
         key = b"ephemeral key of boot " + bytes.fromhex(session)
         signed = self.keys[node].signer(ek_name=self.keys[node].ek_name)(
-            attest.qualifying_data(node, manifest["epoch"], bytes.fromhex(session), key, bytes.fromhex(nonce)))
+            attest.qualifying_data(node, manifest["epoch"], bytes.fromhex(session), key, bytes.fromhex(nonce), binding=binding))
         return {"ephemeral_public": key.hex(), "nonce": nonce, "quote": signed["quote"], "signature": signed["sig"]}
 
     def advance(self, epochs, store="seed", **change):
@@ -743,7 +746,7 @@ class Lying(Case):
         # membership.load refuses it itself since #182 ("nested too deeply"); before, the RecursionError reached this caller
         self.assertIn("nested too deeply", str(caught.exception))
 
-        def broken_quote(nonce, manifest):
+        def broken_quote(nonce, manifest, binding=None):
             raise KeyError("tpm")
         with self.assertRaises(m.Refused):
             self.client.renewer("b", broken_quote)(self.holder.request())
@@ -778,11 +781,11 @@ class Leases(Case):
     def test_a_quote_over_another_nonce_or_by_another_node_is_refused_by_the_peer(self):
         self.client.pull("b")
         with self.assertRaises(m.Refused) as caught:
-            self.client.renewer("b", lambda nonce, manifest: self.quote("11" * 32, manifest))(self.holder.request())
+            self.client.renewer("b", lambda nonce, manifest, binding=None: self.quote("11" * 32, manifest, binding))(self.holder.request())
         self.assertIn("the source refused", str(caught.exception))
         self.assertEqual((self.last()["event"], self.last()["outcome"]), ("sync-lease", "DENY"))
         with self.assertRaises(m.Refused):
-            self.client.renewer("b", lambda nonce, manifest: self.quote(nonce, manifest, node="c"))(self.holder.request())
+            self.client.renewer("b", lambda nonce, manifest, binding=None: self.quote(nonce, manifest, binding, node="c"))(self.holder.request())
 
     def test_a_revoked_node_gets_no_lease_from_a_peer_that_knows(self):
         self.client.pull("b")
