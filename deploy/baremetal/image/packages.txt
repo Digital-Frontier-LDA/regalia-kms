@@ -1,0 +1,75 @@
+# The KMS host image's packages (#61), each with what it provides and why the host needs it.
+#
+# Not guessed: tests/test_baremetal_rootfs_packages.py derives what the host RUNS and IMPORTS from the code, and
+# refuses a command, a unit's executable or a Python module that no line here provides, or one this file names without
+# a reason. The root-filesystem builder installs exactly the [packages] (and their dependencies), from the same
+# snapshot.debian.org timestamp as the initrd (build-initrd.sh).
+#
+# Format: one entry per line, "name | what | why", in sections. Blank lines and lines starting with # are ignored.
+
+[roots]
+# The deploy modules the host starts. Everything they import, transitively, is on the host and is scanned.
+node | the six Python units' entry point (python3 -Es -m deploy.baremetal.node ...) | admission, authtime, boot-session, esp-advance, sync, wg-apply
+trails | regalia-audit-prune@.service runs deploy/baremetal/trails.py | the audit trails' pruning after the collector's receipt
+enrol | enrolment, as root at the node's console | #156, #242
+recount | the heartbeat counter's recount, as root at the node | #279
+reanchor | the TPM anchor's re-anchor, as root at the node | #242
+revoke | importing an owner-signed revocation at the node | revoke.py import
+update | an image update, BootNext and its trial, at the node | #75
+ownerauth | the TPM owner authorization's set and check at the node | #242
+recovery-reconcile | the LUKS recovery key's reconcile at the node | #175
+host_probe | the host's readiness probe | #66
+os_probe | the OS hardening probe | #61
+network_probe | the network probe | #66
+deliver | gives a running node the laptop's signed epochs, as root at its console | #199
+pcr_survey | the commissioning survey of a host's PCRs across boots, as root at the node | #65
+
+[packages]
+# package | what it provides that the host runs (commands, absolute paths, py:<module>) | why
+dash | /bin/sh | chrony.service.d/regalia.conf's ExecStartPre
+python3 | /usr/bin/python3 python3 | every Python unit and the deploy tools
+python3-cryptography | py:cryptography | Ed25519, P-256 and AES-GCM in membership, trails, signkey, ownerauth, enrol, unlock
+systemd | systemctl journalctl systemd-analyze systemd-creds | the units; authtime reads chronyd's journal; enrol and host_probe seal with systemd-creds
+systemd-sysv | /sbin/init | systemd as PID 1
+util-linux | runuser findmnt lsblk | enrol, deliver and revoke run steps as regalia-sync (runuser); host_probe reads the root's block devices
+coreutils | stat test | host_probe and os_probe's file checks
+findutils | find | os_probe's world-writable search
+libc-bin | getent | os_probe's account checks
+procps | pgrep | enrol refuses while a regalia-sync process runs (#418)
+chrony | /usr/sbin/chronyd | authenticated time, two NTS sources (authtime, #155)
+tpm2-tools | tpm2_* | attestation, the anchor and counters, the owner authorization, enrolment, heartbeats
+libtss2-tcti-device0t64 | - | tpm2-tools' device TCTI (/dev/tpmrm0)
+cryptsetup-bin | cryptsetup /usr/sbin/cryptsetup | the root volume's keyslots (host_probe, unlock, recovery-reconcile)
+wireguard-tools | wg | the service and unlock tunnels (wgsvc, node, enrol)
+iproute2 | ip ss | the tunnels' interfaces and addresses (node, wgsvc); os_probe's listening sockets
+nftables | nft | the host firewall; host_probe reads its ruleset
+openssl | openssl | attest and evidence's certificate checks
+opensc | pkcs11-tool | enrol's HSM token checks (Nitrokey HSM 2)
+yubikey-manager | ykman | enrol's YubiKey checks
+efibootmgr | /usr/bin/efibootmgr | bootnext and update: BootNext, BootOrder (#75, #61's first finding)
+pcscd | - | PC/SC for the -tags piv daemon's YubiKey and OpenPGP backends (#72 G2)
+libpcsclite1 | - | the -tags piv daemon's cgo link
+apparmor | - | the daemon's profile (AppArmorProfile=regalia-kms, deploy/baremetal/apparmor/usr.sbin.regalia-kms)
+prometheus-node-exporter | - | node metrics (units/prometheus-node-exporter.service.d/regalia.conf)
+regalia-kms | /usr/sbin/regalia-kms | built by the image builder from cmd/regalia-kms, -tags piv (not a Debian package)
+regalia-audit-ship | /usr/bin/regalia-audit-ship | built by the image builder from cmd/regalia-audit-ship (not a Debian package)
+
+[imported-not-run]
+# Commands found in modules the host imports, which those modules run only on the signing laptop or the builder.
+git | uki.Checkout: the build's provenance, read at signing on the laptop (uki.py sign)
+/usr/bin/loginctl | uki.py's signing session on the laptop
+/usr/lib/systemd/systemd-measure | uki.py signs the PCR 11 policy on the laptop
+keyctl | uki.py purges systemd-measure's cached PIN on the laptop
+gpgv | debverify: the initrd builder's archive check
+zstd | debverify: the initrd builder's package check
+pkcheck | os_probe only looks for polkit, which the image does not ship (absence is the expected answer)
+
+[not-on-host]
+# Deploy modules the host neither runs nor imports.
+cardrecord | the card-ceremony record, verified on the laptop (manifest propose --genesis)
+firewall | renders a host's nftables ruleset from its site config, from the operator's checkout
+initrd_drift | the scheduled initrd drift report (CI)
+manifest | regalia-manifest: propose, sign and verify membership manifests, on the laptop
+owner | the owner's co-signatures, off the nodes
+p11sign | a key on a PKCS#11 token for the laptop's signing paths
+ssh_trust | an administrator's known_hosts, generated from the membership, on the operator's side
