@@ -224,6 +224,12 @@ class Service:
                                           self._requests().get(held["nonce"], 0) if held and serve_until else 0),
                 "serve_until_boottime_ms": serve_until, "mode": mode, "reason": _printable(reason, ADMISSION_REASON_LIMIT)}
 
+    def _may_serve(self, manifest):
+        try:
+            return membership.may(manifest, self.holder.node_id, "serve")
+        except (Refused, KeyError, TypeError):
+            return False
+
     def _node(self, manifest):
         """This node's entry in `manifest`, or None (no manifest, one that does not validate: holder.check refuses
         that one, or a manifest that does not name the node)."""
@@ -306,15 +312,22 @@ class Service:
         envelope, serve_until, left, mode, requested = None, 0, 0, "lease", None
         if not refused:
             before = self.boottime()              # read BEFORE the check: the bound can only come out earlier
+            alive = False                         # a normal lease not yet run out, inside its margin included
             try:
                 left = self.holder.check(manifest)
                 envelope = self.holder.held()
+                alive = left > 0
                 require(left > MARGIN, "the lease has %d s left, inside the %d s margin" % (left, MARGIN))
                 serve_until, reason = before + (left - MARGIN) * 1000, ""
             except Refused as refusal:            # serve_until is still 0: it is set only by a check that passed
                 reason = (reason + "; " if reason else "") + str(refusal)
                 envelope = None
-                if self.survivor is not None:     # no normal lease holds: the owner's survivor authorization, if any
+                last = self.written                 # the last lease admission written, judged on the boot clock: not run out yet
+                alive = alive or bool(last and last["mode"] == "lease" and last["serve_until_boottime_ms"]
+                                      and before < last["serve_until_boottime_ms"] + MARGIN * 1000)
+                # the owner's survivor authorization only with NO unexpired normal lease, and only for a node the manifest
+                # lets serve (regalia-kms-ed on #494: never on any refusal of the normal check)
+                if self.survivor is not None and not alive and self._may_serve(manifest):
                     try:
                         auth_left = self.survivor(manifest)
                     except Refused as why:
@@ -322,7 +335,9 @@ class Service:
                     if auth_left is not None:
                         left = min(auth_left, lease.MAX_LIFETIME)       # re-checked every round, as a lease would be
                         if left > MARGIN:
-                            serve_until, mode, requested = before + (left - MARGIN) * 1000, "recovery", before
+                            # requested 0: no peer vouched, so recovery never satisfies the daemon's "a lease asked for
+                            # after this token arrived" (#72; regalia-kms-ed on #494)
+                            serve_until, mode, requested = before + (left - MARGIN) * 1000, "recovery", 0
                             reason = ("RECOVERY: serving alone under the owner's survivor authorization (%d s left), stateless "
                                       "operations only (ADR-0002 D32.6)" % auth_left)
                         else:
