@@ -58,7 +58,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
-from deploy.baremetal import attest, membership, uki
+from deploy.baremetal import attest, membership, ownerauth, uki
 
 Refused, require = membership.Refused, membership.require
 
@@ -197,8 +197,8 @@ def _env(tcti):
     return dict(os.environ, TPM2TOOLS_TCTI=tcti) if tcti else None
 
 
-def _tpm(run, tcti, *args):
-    done = run(["tpm2_" + args[0], *args[1:]], capture_output=True, env=_env(tcti))
+def _tpm(run, tcti, *args, **kw):
+    done = run(["tpm2_" + args[0], *args[1:]], capture_output=True, env=_env(tcti), **kw)
     _flush_transients(run, tcti)            # each call's objects are in its saved context files; the next call loads them
     require(done.returncode == 0, "tpm2_%s failed: %s" % (args[0], (done.stderr or b"").decode("utf-8", "replace").strip()[-300:]))
     return done.stdout
@@ -223,7 +223,7 @@ def _read(path):
         return f.read()
 
 
-def create(pem, tcti=None, run=subprocess.run, record=None):
+def create(pem, tcti=None, run=subprocess.run, record=None, owner_auth=None):
     """Make the signing key in this TPM, persistent at HANDLE, its policy PolicyAuthorize(`pem`). Returns its
     TPM2B_PUBLIC. A handle already in use is refused: the key a manifest names is never replaced in place.
     `record(name_hex)`, if given, is called with the new key's Name after it is made and BEFORE it is persistent,
@@ -237,13 +237,15 @@ def create(pem, tcti=None, run=subprocess.run, record=None):
         _tpm(run, tcti, "loadexternal", "-C", "o", "-G", "rsa", "-a", PCR_KEY_TOOL_ATTRIBUTES, "-u", p["pcr.pem"], "-c", p["pcr.ctx"], "-n", p["pcr.name"])
         require(_read(p["pcr.name"]) == pcr_key_name(pem), "the TPM names the PCR key otherwise than this policy does")
         _write(p["policy"], policy(pem))
-        _tpm(run, tcti, "createprimary", "-C", "o", "-g", "sha256", "-G", "ecc256", "-c", p["srk.ctx"])
+        with ownerauth.owner_call(owner_auth) as (owner, kw):     # the owner hierarchy's: its authorization (#242 C)
+            _tpm(run, tcti, "createprimary", *owner, "-g", "sha256", "-G", "ecc256", "-c", p["srk.ctx"], **kw)
         _tpm(run, tcti, "create", "-C", p["srk.ctx"], "-g", "sha256", "-G", "ecc256:ecdsa-sha256", "-a", TOOL_ATTRIBUTES, "-L", p["policy"],
              "-u", p["key.pub"], "-r", p["key.priv"])
         _tpm(run, tcti, "load", "-C", p["srk.ctx"], "-u", p["key.pub"], "-r", p["key.priv"], "-c", p["key.ctx"])
         if record is not None:
             record(attest.name_of(attest.public_area(_read(p["key.pub"]), "the signing key's public area")).hex())
-        _tpm(run, tcti, "evictcontrol", "-C", "o", "-c", p["key.ctx"], HANDLE)
+        with ownerauth.owner_call(owner_auth) as (owner, kw):
+            _tpm(run, tcti, "evictcontrol", *owner, "-c", p["key.ctx"], HANDLE, **kw)
         blob = _read(p["key.pub"])
     identity(blob, pem)                              # what was made is what the root will check
     return blob

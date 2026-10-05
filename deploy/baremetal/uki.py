@@ -1037,8 +1037,20 @@ def _inventory_counts(path=None):
 # commit), in build and in sign: the record's commit is that checkout's HEAD, the tree is clean, and the record names
 # exactly the files build-initrd.sh records (its REPO_FILES, read from that checkout's script), each with that checkout's
 # SHA-256. A record written by hand, or by a builder at another commit or with another script, is refused by name.
+# CURRENT LIMITATIONS (the cross-cutting list is LIMITATIONS.md):
+#   * Only REPO_FILES are hashed. Every other file of the build is held by "commit == HEAD and the tree is clean", i.e. by
+#     git's object ids, SHA-1 in this repository's object format.
+#   * The Go release is compared by NAME with go.mod's; the toolchain binary itself is the builder's to verify (the Go
+#     checksum database, build-initrd.sh's limitations).
+#   * The build record is unsigned: nothing authenticates which builder wrote it; two builders' records must agree.
+#   * Git runs with no global, system or environment configuration and no file under the signer's HOME (Checkout._env),
+#     but as the signer: a signer's checkout owned by someone else is read with that user's rights over the files.
+#   * "Clean" allows untracked Python bytecode (__pycache__/*.pyc, which running this tool writes). Python runs a .pyc
+#     whose recorded source mtime and size match, so the signer's clone must be writable by the signer alone: a .pyc
+#     planted by another writer would run in place of the reviewed source.
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BUILDER = "deploy/baremetal/initrd/build-initrd.sh"
+BYTECODE = re.compile(r"(?:[^\0]*/)?__pycache__/[^/\0]+\.pyc")       # the one untracked file a clean checkout may hold
 # what `git clone`/`git init` + fetch, actions/checkout (gc.auto) and a developer write into a checkout's own config,
 # none naming a command: any other key there (a filter or textconv driver, core.pager/editor/sshCommand/worktree, an
 # include) is refused (Checkout.check_config)
@@ -1050,15 +1062,24 @@ CLONE_CONFIG = re.compile(r"core\.(repositoryformatversion|filemode|bare|logallr
 
 class Checkout:
     """The repository at `root` (default: the one this file is in), read with git as build-initrd.sh reads it: trusted
-    at exactly this path (safe.directory), no index lock taken, and no fsmonitor or hook of the tree's own run."""
+    at exactly this path (safe.directory), no index lock taken, and no fsmonitor or hook of the tree's own run. Git
+    runs in the environment build-initrd.sh's repo_git gives it (repo-git.sh): PATH, LC_ALL=C, HOME=/nonexistent, no
+    global or system configuration, and nothing else of the caller's. So no GIT_* variable reaches it (GIT_DIR,
+    GIT_WORK_TREE, GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT/KEY_n/VALUE_n would redirect it or add configuration), nor
+    any file under the signer's HOME or XDG_CONFIG_HOME (git/ignore would hide untracked files from status,
+    regalia-kms-d9's read of #404): only the checkout's own configuration, which check_config holds to CLONE_CONFIG."""
 
     def __init__(self, root=REPO_ROOT, run=subprocess.run):
         self.root, self.run = root, run
 
+    @staticmethod
+    def _env():
+        return {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "HOME": "/nonexistent", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+
     def _git(self, *argv):
         try:
             done = self.run(["git", "-c", "safe.directory=" + self.root, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-                             "--no-optional-locks", "-C", self.root] + list(argv), capture_output=True, env=_clean_env())
+                             "--no-optional-locks", "-C", self.root] + list(argv), capture_output=True, env=self._env())
         except OSError as error:
             raise Refused("this checkout cannot be read with git (%s): sign from a clone at the build's commit" % error.strerror)
         require(done.returncode == 0, "%s is not a git checkout git can read: sign from a clone at the build's commit" % self.root)
@@ -1089,7 +1110,12 @@ class Checkout:
         return head
 
     def clean(self):
-        return self._git("status", "--porcelain", "--untracked-files=all") == ""
+        """No change to a tracked file, and no untracked file but Python bytecode (__pycache__/*.pyc). Untracked files are
+        listed with NO exclude rule (ls-files --others): a .gitignore, .git/info/exclude or the signer's own ignore file
+        must not hide a file the build reads, e.g. an untracked .go file `go build` would compile (24, d9 on #404)."""
+        if self._git("status", "--porcelain", "--untracked-files=all") != "":
+            return False
+        return all(BYTECODE.fullmatch(path) for path in self._git("ls-files", "-z", "--others").split("\0") if path)
 
     def sha256(self, path):
         full = os.path.join(self.root, path)
@@ -1123,7 +1149,8 @@ def check_provenance(built, checkout):
     head = checkout.head()
     require(built["commit"] == head, "the initrd was built from commit %s; this checkout is at %s: sign from a clone at the build's commit"
             % (built["commit"], head))
-    require(checkout.clean(), "this checkout has changes or untracked files: sign from a clean clone at commit %s" % head)
+    require(checkout.clean(), "this checkout has changes or untracked files (ignored ones too, but for __pycache__ bytecode): sign "
+            "from a clean clone at commit %s" % head)
     release = checkout.go_release()
     require(built["go"] == release, "the initrd's client was built with %s; this checkout's go.mod names %s" % (built["go"], release))
 
