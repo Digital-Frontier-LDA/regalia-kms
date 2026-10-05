@@ -820,8 +820,11 @@ class RoundLog:
         now, prev = self.clock(), self.last.get(source)
         if prev is not None and prev[0] == key and now - prev[1] < self.REPEAT_S:
             return
+        try:
+            self.out(line)
+        except OSError:                         # the journal is best-effort: a closed stderr never stops a round
+            return
         self.last[source] = (key, now)
-        self.out(line)
 
     def pulled(self, source, held, epoch):
         if held is None or epoch > held:

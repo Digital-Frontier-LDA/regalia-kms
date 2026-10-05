@@ -146,6 +146,19 @@ class PullRound(unittest.TestCase):
         self.assertEqual(self.lines, ["DENY sync-heartbeat from b: first", "DENY pull from c: 'c' is not a configured source",
                                       "nothing newer from d: epoch 5 held"])
 
+    def test_a_journal_that_cannot_be_written_never_stops_the_round(self):
+        published = []
+
+        def broken(line):
+            raise BrokenPipeError("stderr is closed")
+        self.sync.rounds = nodemod.RoundLog(clock=Clock(), out=broken)
+        self.sync.publish = lambda: published.append(True) or False
+        FakeClient.script = {"b": 6, "c": 6, "d": 6}
+        with mock.patch.object(nodemod.sync, "Client", FakeClient):
+            self.sync.pull_round()
+        self.assertEqual(len(published), 3)                 # every source's round went on to publish
+        self.assertEqual(self.sync.rounds.last, {})         # nothing counted as said: the next round tries again
+
     def test_a_trail_that_fails_stops_the_round_as_before(self):
         def broken(event):
             raise nodemod.sync.SinkFailed("the audit sink did not take the event (OSError)")
