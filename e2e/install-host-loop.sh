@@ -11,7 +11,8 @@
 #   the ESP holding the UKI at \EFI\Linux\<name>.efi and \EFI\BOOT\BOOTX64.EFI, byte for byte, and nothing else;
 #   the install record, naming the digests and UUIDs it found.
 # And refused, each before anything is written: an input that is not its record's, the test mode on a disk that is not
-# a loop device, and a disk holding partitions without --wipe.
+# a loop device or on a loop device over a block device, a disk holding partitions or a whole-device filesystem
+# without --wipe, and a reinstall while the previous install's record is in --out.
 # It INSTALLS nothing on this machine; it uses /run for its work and removes what it made by its exact paths.
 # shellcheck disable=SC2319  # file-wide: `ok $?` reads the check made just before it, on purpose
 set -euo pipefail
@@ -20,12 +21,13 @@ export LC_ALL=C
 [ "$(id -u)" = 0 ] || { echo "install-host-loop: run as root"; exit 2; }
 INSTALLER="$PWD/deploy/baremetal/image/install-host.sh"
 W="$(mktemp -d /run/install-host-loop.XXXXXX)"
-LOOP=""
+LOOP="" OVER="" BARE=""
 passed=0 failed=0
 ok(){ if [ "$1" = 0 ]; then passed=$((passed + 1)); echo "  PASS $2"; else failed=$((failed + 1)); echo "  FAIL $2"; fi; }
 cleanup(){
   mountpoint -q "$W/check" 2>/dev/null && umount "$W/check"
   [ -e /dev/mapper/install-host-loop ] && cryptsetup close install-host-loop
+  for l in "$OVER" "$BARE"; do [ -n "$l" ] && losetup "$l" >/dev/null 2>&1 && losetup -d "$l"; done
   [ -n "$LOOP" ] && losetup -d "$LOOP"
   rm -rf --one-file-system -- "$W"
 }
@@ -57,12 +59,29 @@ out="$(install "$LOOP" "$W/wrong-record.json" 2>&1)" && rc=0 || rc=$?
 out="$(REGALIA_INSTALL_TEST=1 "$INSTALLER" --disk /dev/null --rootfs "$W/rootfs.tar" --rootfs-record "$W/rootfs-build.json" --uki "$W/e2e-test.efi" \
          --uki-record "$W/e2e-test.signed.json" --out "$W/out" <<< "$PASS" 2>&1)" && rc=0 || rc=$?
 [ "$rc" != 0 ] && grep -qE "not a block device|is for a /dev/loopN only" <<< "$out"; ok $? "the test mode is refused for anything but a loop device"
+# a loop device over a block device is that device: the test mode asks no serial, so it is refused there too
+OVER="$(losetup --find --show "$LOOP")"
+out="$(install "$OVER" "$W/rootfs-build.json" 2>&1)" && rc=0 || rc=$?
+losetup -d "$OVER"
+[ "$rc" != 0 ] && grep -q "is for a loop device backed by a regular file" <<< "$out"; ok $? "the test mode is refused for a loop device over a block device"
+# a filesystem on the WHOLE device holds no partition, and is data all the same
+truncate -s 64M "$W/bare.img"; mkfs.ext4 -q -F "$W/bare.img"
+BARE="$(losetup --find --show "$W/bare.img")"
+out="$(install "$BARE" "$W/rootfs-build.json" 2>&1)" && rc=0 || rc=$?
+[ "$rc" != 0 ] && grep -q "holds data (partitions or signatures): refused without --wipe" <<< "$out" && [ "$(blkid -o value -s TYPE "$BARE")" = ext4 ]
+ok $? "a filesystem on the whole device is refused without --wipe, and left as it was"
+losetup -d "$BARE"
 
 echo "### install"
 install "$LOOP" "$W/rootfs-build.json"; ok $? "the installer finished"
 udevadm settle
 out="$(install "$LOOP" "$W/rootfs-build.json" 2>&1)" && rc=0 || rc=$?
-[ "$rc" != 0 ] && grep -q "holds partitions: refused without --wipe" <<< "$out"; ok $? "a disk holding partitions is refused without --wipe"
+[ "$rc" != 0 ] && grep -q "holds data (partitions or signatures): refused without --wipe" <<< "$out"; ok $? "a disk holding partitions is refused without --wipe"
+# with --wipe, the previous install's record still in --out: refused before the disk is touched
+before="$(cryptsetup luksUUID "${LOOP}p2")"
+out="$(install "$LOOP" "$W/rootfs-build.json" --wipe 2>&1)" && rc=0 || rc=$?
+[ "$rc" != 0 ] && grep -q "install-test-$(basename "$LOOP").json exists: move it away first" <<< "$out" && [ "$(cryptsetup luksUUID "${LOOP}p2")" = "$before" ]
+ok $? "a reinstall onto the previous install's record is refused, and the disk is untouched"
 
 echo "### the disk, read back"
 layout="$(sfdisk -J "$LOOP")"

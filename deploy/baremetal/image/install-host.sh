@@ -9,8 +9,9 @@
 # because the root volume's key must be: a pre-encrypted image would give every host one volume key (the design and
 # its discussion are on #61). In order, refusing at the first failure, nothing written before step 3:
 #   1. the inputs: rootfs.tar's sha256 is its record's rootfs_sha256; the UKI's is its record's signed.image_sha256
-#   2. the disk: the operator types its serial (lsblk), which must be --disk's; a disk holding partitions needs
-#      --wipe and the serial typed again
+#   2. the disk: the operator types its serial (lsblk), which must be --disk's; a disk holding data (partitions, or
+#      any signature wipefs finds on the whole device) needs --wipe and the serial typed again; an install record
+#      for this serial already in DIR is refused (move it away). DIR is made only after these checks
 #   3. GPT: an ESP (FAT32, 1 GiB) and `regalia-root` (Linux root x86-64), the PARTLABEL the initrd's crypttab opens
 #   4. LUKS2 (argon2id) on regalia-root, its volume key made HERE; the installer passphrase typed twice at the
 #      console. It is the slot the README's steps replace: recovery-key.sh --enrol, the peer path, then
@@ -21,7 +22,7 @@
 #   7. a firmware entry for \EFI\Linux\<name>.efi, first in BootOrder (not with --no-efi-entry)
 #   8. DIR/install-<serial>.json: the inputs' digests, the disk, the partition and LUKS UUIDs, the time. Nothing secret
 #
-# THE TEST MODE: with REGALIA_INSTALL_TEST=1, and only when --disk is a /dev/loopN, the serial is not asked (a loop
+# THE TEST MODE: with REGALIA_INSTALL_TEST=1, and only when --disk is a /dev/loopN backed by a regular file, the serial is not asked (a loop
 # device has none), the passphrase comes from standard input (one line), and no firmware entry is made. On any other
 # disk the variable is refused.
 #
@@ -59,14 +60,16 @@ while [ $# -gt 0 ]; do
 done
 [ "$(id -u)" = 0 ] || die "run as root"
 for v in DISK ROOTFS ROOTFS_RECORD UKI UKI_RECORD OUT; do [ -n "${!v}" ] || die "--$(tr '[:upper:]_' '[:lower:]-' <<< "$v") is required"; done
-for t in sfdisk cryptsetup mkfs.ext4 mkfs.vfat tar python3 lsblk blkid udevadm; do command -v "$t" >/dev/null || die "$t is required"; done
+for t in sfdisk wipefs losetup cryptsetup mkfs.ext4 mkfs.vfat tar python3 lsblk blkid udevadm; do command -v "$t" >/dev/null || die "$t is required"; done
 [ -b "$DISK" ] || die "$DISK is not a block device"
 TEST=0
 if [ "${REGALIA_INSTALL_TEST:-}" = 1 ]; then
   [[ "$DISK" =~ ^/dev/loop[0-9]+$ ]] || die "REGALIA_INSTALL_TEST is for a /dev/loopN only, never a host's disk"
+  # ... and one backed by a FILE: a loop device over a real disk (losetup /dev/loopN /dev/sda) is that disk
+  BACK="$(losetup -nO BACK-FILE "$DISK" 2>/dev/null | sed 's/[[:space:]]*$//')"
+  [ -f "$BACK" ] && [ ! -L "$BACK" ] || die "REGALIA_INSTALL_TEST is for a loop device backed by a regular file; $DISK is backed by '${BACK:-nothing}'"
   TEST=1; EFI_ENTRY=0
 fi
-mkdir -p "$OUT"
 NAME="$(basename "$UKI" .efi)"
 [[ "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || die "the UKI's name '$NAME' is not a plain file name"
 
@@ -95,12 +98,19 @@ if [ "$TEST" = 0 ]; then
 else
   SERIAL="test-$(basename "$DISK")"
 fi
-if [ -n "$(lsblk -no NAME "$DISK" | tail -n +2)" ]; then
-  [ "$WIPE" = 1 ] || die "$DISK holds partitions: refused without --wipe"
+# data is a partition OR any signature on the whole device (a filesystem, a LUKS header, an LVM PV, an md member,
+# a partition table with no partitions): either needs --wipe. A device whose signatures cannot be read is refused
+SIGS="$(wipefs --noheadings "$DISK")" || die "cannot read $DISK's signatures (wipefs): refused"
+if [ -n "$(lsblk -no NAME "$DISK" | tail -n +2)" ] || [ -n "$SIGS" ]; then
+  [ "$WIPE" = 1 ] || die "$DISK holds data (partitions or signatures): refused without --wipe"
   if [ "$TEST" = 0 ]; then
-    [ "$(ask "$DISK holds partitions. Type its serial AGAIN to wipe it: ")" = "$SERIAL" ] || die "not confirmed: nothing was written"
+    [ "$(ask "$DISK holds data. Type its serial AGAIN to wipe it: ")" = "$SERIAL" ] || die "not confirmed: nothing was written"
   fi
 fi
+# the record is made last: one that exists would fail the install at its very end, the disk written and unrecorded
+RECORD="$OUT/install-$SERIAL.json"
+[ ! -e "$RECORD" ] && [ ! -L "$RECORD" ] || die "$RECORD exists: move it away first (it is the previous install's evidence)"
+mkdir -p "$OUT"
 
 # the passphrase, before the disk is touched (typed twice, or one line on stdin in the test mode)
 if [ "$TEST" = 1 ]; then
@@ -174,7 +184,7 @@ fi
 
 # 8. the install record
 # (values as arguments, never pasted into the code: a disk's serial is the firmware's text)
-python3 -I - "$OUT/install-$SERIAL.json" "$SERIAL" "$ROOTFS_SHA" "$NAME" "$UKI_SHA" "$ESP_UUID" "$ROOT_UUID" "$LUKS_UUID" "$EFI_ENTRY" <<'PY'
+python3 -I - "$RECORD" "$SERIAL" "$ROOTFS_SHA" "$NAME" "$UKI_SHA" "$ESP_UUID" "$ROOT_UUID" "$LUKS_UUID" "$EFI_ENTRY" <<'PY'
 import json, sys, time
 path, serial, rootfs, name, uki, esp, root, luks, entry = sys.argv[1:]
 record = {"schema": "regalia.install/v1", "disk_serial": serial, "rootfs_sha256": rootfs, "uki": name, "uki_sha256": uki,
@@ -184,5 +194,5 @@ with open(path, "x") as f:
     json.dump(record, f, indent=1, sort_keys=True)
     f.write("\n")
 PY
-say "installed on $DISK ($SERIAL): ESP $ESP_UUID, regalia-root $ROOT_UUID (LUKS $LUKS_UUID). Record: $OUT/install-$SERIAL.json"
+say "installed on $DISK ($SERIAL): ESP $ESP_UUID, regalia-root $ROOT_UUID (LUKS $LUKS_UUID). Record: $RECORD"
 say "next, on the booted host: recovery-key.sh --enrol, the enrolment, then wipe the installer passphrase (README)"
