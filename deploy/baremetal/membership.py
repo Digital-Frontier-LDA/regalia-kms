@@ -817,7 +817,12 @@ class HighWater:
         from deploy.baremetal import ownerauth         # here: ownerauth imports this module
         self._owner_auth = ownerauth.resolve(self._owner_auth)     # a function is called once: its answer replaces it
         with ownerauth.owner_call(self._owner_auth) as (argv, kw):
-            return self._tpm(tool, index, *argv, *args, input=input, **kw)
+            done = self._tpm(tool, index, *argv, *args, input=input, **kw)
+        if done.returncode != 0 and ownerauth.AUTH_FAILURE.search(ownerauth._tail(done.stderr)):
+            require(self._owner_auth is not None, "the TPM's owner authorization is set and none was given: give this node's "
+                    "(gpg --decrypt ownerauth-<node>.yk.gpg | ... --ownerauth ownerauth.record.json, #242)")
+            raise Refused("the TPM refused the owner authorization given: it is not this TPM's (another node's envelope?)")
+        return done
 
     def _defined(self):
         """The NV indices the TPM says it holds. Refused when the TPM does not answer: then nothing is known

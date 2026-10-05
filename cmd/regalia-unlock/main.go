@@ -125,6 +125,12 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	if err != nil {
 		return errors.New("cannot open the TPM " + o.tpm)
 	}
+	// before anything is quoted: what a peer will judge this node by (a status line; a diagnostic if it cannot be read)
+	if line, read := initrdPCR11Line(device); read {
+		fmt.Fprintln(out, line)
+	} else {
+		fmt.Fprintln(diagnostics, line)
+	}
 	device.Close()
 	quote := func(qualifying []byte) ([]byte, []byte, map[string]string, error) {
 		device, err := openTPM(o.tpm)

@@ -1122,6 +1122,10 @@ class OnSwtpm(unittest.TestCase):
         with unittest.mock.patch.dict(os.environ, TPM2TOOLS_TCTI=self.tcti[tpm]):
             return fn(*args)
 
+    def pcr11_line(self, name):
+        """What the native client says first, once it has the TPM (#75): the PCR 11 it holds, as a status line."""
+        return "regalia-unlock: initrd PCR 11 (sha256) = %s\n" % self.pcr(name, 11)
+
     def pcr(self, name, index):
         out = subprocess.run(["tpm2_pcrread", "sha256:%d" % index], env=dict(os.environ, TPM2TOOLS_TCTI=self.tcti[name]),
                              check=True, capture_output=True, text=True).stdout
@@ -1315,10 +1319,12 @@ class OnSwtpm(unittest.TestCase):
         code, out, err, slot = self.native(endpoints, mapped=self.mapped)
         self.assertEqual((code, err, slot), (0, "", 1))
         said = out.splitlines()
-        self.assertEqual(len(said), 3, out)
-        self.assertTrue(said[0].startswith("regalia-unlock: b gave its half (keyslot 1); waiting for the request for "), said[0])
-        self.assertEqual(said[1], "regalia-unlock: gave the key of %s for keyslot 1, through b" % self.device)
-        self.assertTrue(said[2].endswith(" is open: standing down"), said[2])
+        self.assertEqual(len(said), 4, out)
+        # first, before any quote (#75): the PCR 11 the TPM holds, which is what the peers judge (an operator's console line)
+        self.assertEqual(said[0], self.pcr11_line("a").strip())
+        self.assertTrue(said[1].startswith("regalia-unlock: b gave its half (keyslot 1); waiting for the request for "), said[1])
+        self.assertEqual(said[2], "regalia-unlock: gave the key of %s for keyslot 1, through b" % self.device)
+        self.assertTrue(said[3].endswith(" is open: standing down"), said[3])
         # what it left for the running system: the session and key b's verifier recorded for this boot, and who opened the disk
         self.assertEqual(self.left_session(self.session_dir), self.recorded_session("b"))
         with open(self.session_dir + "/key-given-through") as f:
@@ -1338,7 +1344,7 @@ class OnSwtpm(unittest.TestCase):
         # PoC 7.4: no peer; the TPM half alone opens nothing, after a bounded number of rounds
         self.reboot("a", "the approved image")
         code, out, err, slot = self.native({"b": self.dead, "c": self.dead}, "-attempts", "2")
-        self.assertEqual((code, out, slot), (1, "", None), err)
+        self.assertEqual((code, out, slot), (1, self.pcr11_line("a"), None), err)
         # no peer was reached, so no quote was taken and no peer holds a session of this boot: nothing is on record
         self.assertEqual(os.listdir(self.session_dir), [])
         self.assertIn("regalia-unlock: no peer helped in 2 attempts", err)
@@ -1356,7 +1362,7 @@ class OnSwtpm(unittest.TestCase):
         self.reboot("a", "a retired image")
         since = len(self.events)
         code, out, err, slot = self.native(endpoints, "-attempts", "1")
-        self.assertEqual((code, out, slot), (1, "", None), err)
+        self.assertEqual((code, out, slot), (1, self.pcr11_line("a"), None), err)
         for peer in ("b", "c"):
             self.assertIn("%s (path epoch 1): unlock: the peer refused (DENIED)" % peer, err)
         self.assertNotIn("does not release the local contribution", err)
@@ -1390,7 +1396,7 @@ class OnSwtpm(unittest.TestCase):
         self.reboot("a", "the approved image")
         since = len(self.events)
         code, out, err, slot = self.native(endpoints, "-attempts", "1")
-        self.assertEqual((code, out, slot), (1, "", None), err)
+        self.assertEqual((code, out, slot), (1, self.pcr11_line("a"), None), err)
         for peer in ("b", "c"):
             self.assertIn("%s (path epoch 1): hello: the peer refused (DENIED)" % peer, err)
         self.assertEqual(self.reasons(since), ["a may not be unlocked under epoch 2"] * 2)
