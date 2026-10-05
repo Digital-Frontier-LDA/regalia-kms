@@ -1,5 +1,5 @@
 """regalia-node enrol, a node joining a running network (#190 --replace, decided on #190 as (B) at define time): its
-heartbeat counter starts AT the network's current sequence, from the highest heartbeat a peer or the authority holds,
+heartbeat counter starts AT the network's current sequence, from the highest heartbeat a peer holds,
 verified under its manifest and live by authenticated time (heartbeat.Freshness.accept_first). The sync tests'
 fixtures: b and c hold the chain and heartbeats; node a's own counter is not defined yet."""
 import json
@@ -18,8 +18,8 @@ class FirstHeartbeat(st.Case):
         self.late = hb.Freshness(self.counter, self.clock, lambda: self.ticks, os.path.join(self.d, "late-freshness.json"))
         self.trail, self.notes = [], []
 
-    def take(self, sources=("b", "c", "authority"), bootstrap=False, manifest=None):
-        transports = {s if s != "authority" else "authority": self.wire(s, "a") for s in sources}
+    def take(self, sources=("b", "c"), bootstrap=False, manifest=None):
+        transports = {s: self.wire(s, "a") for s in sources}
         return enrol.take_first_heartbeat("a", manifest or self.m1, self.stores["b"], self.late, transports, self.trail.append, bootstrap,
                                           note=self.notes.append)
 
@@ -37,7 +37,7 @@ class FirstHeartbeat(st.Case):
         self.assertEqual(self.take(), (None, None), "a second run takes nothing: a heartbeat is held")
 
     def test_nobody_answering_is_a_refusal_that_writes_nothing(self):
-        with self.assertRaisesRegex((enrol.Refused, m.Refused), "no peer and no authority gave a heartbeat"):
+        with self.assertRaisesRegex((enrol.Refused, m.Refused), "no peer gave a heartbeat"):
             self.take(sources=())
         self.assertIsNone(self.late.held())
         self.assertEqual(self.trail, [])
@@ -91,7 +91,7 @@ class FirstHeartbeat(st.Case):
 
     def test_a_heartbeat_for_another_manifest_is_not_taken(self):
         self.beat(self.m1)
-        other = self.advance(1)                           # the authority moves on; a's manifest stays epoch 1
+        other = self.advance(1)                           # the chain moves on; a's manifest stays epoch 1
         with self.assertRaises((enrol.Refused, m.Refused)):
             enrol.take_first_heartbeat("a", other, self.stores["b"], self.late, {"b": self.wire("b", "a")}, self.trail.append)
         self.assertIsNone(self.late.held())

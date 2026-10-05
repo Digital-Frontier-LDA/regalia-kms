@@ -176,7 +176,7 @@ class ReanchorTakesIt(unittest.TestCase):
         record = os.path.join(d, "ownerauth.record.json")
         with open(record, "w") as f:
             json.dump(envelope, f)
-        for name in ("authority", "c"):
+        for name in ("b", "c"):                                     # two other nodes (#199: no authority)
             with open("%s/%s.json" % (d, name), "wb") as f:
                 f.write(m.canonical(chain(3)))
         built = {}
@@ -188,7 +188,7 @@ class ReanchorTakesIt(unittest.TestCase):
         stdin.buffer.isatty = lambda: False
         err = io.StringIO()
         argv = ["--membership", d + "/m.json", "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "a",
-                "--authority", d + "/authority.json", "--peer", "c=%s/c.json" % d, "--ownerauth", record]
+                "--peer", "b=%s/b.json" % d, "--peer", "c=%s/c.json" % d, "--ownerauth", record]
         with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err):
             rc = reanchor.main(argv, ask=lambda prompt: None, highwater=highwater)
         self.assertEqual(rc, 1)

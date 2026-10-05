@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""The audit trails of a KMS node and of the revocation authority, and how each line is written (#278).
+"""The audit trails of a KMS node, and how each line is written (#278).
 
-ONE REGISTRY. TRAILS names every trail: where it is (fixed, or from the node's or authority's
+ONE REGISTRY. TRAILS names every trail: where it is (fixed, or from the node's
 configuration), who writes it, and its stream name at the collector. The units, the shipper and the tests
 read it; nothing else lists trail files.
 
@@ -71,7 +71,6 @@ TRAILS = {
     # #303: regalia-authtime's transitions (authenticated or not, and why) and each clear of the chrony latch;
     # both writers are root, the directory is root:regalia-audit-time 0750 (regalia.tmpfiles.conf)
     "time": ("/var/log/regalia-time/time.jsonl", "regalia-authtime.service and regalia-node time-clear, root, node", "time", "regalia-audit-time"),
-    "authority": ("state_dir/audit.jsonl", "regalia-authority.service (user regalia-authority)", "authority", "regalia-audit-authority"),
     "reanchor": (TOOL_DIR + "/reanchor.jsonl", "reanchor.py, root, by hand", "reanchor", TOOL_GROUP),
     "recount": (TOOL_DIR + "/recount.jsonl", "recount.py, root, by hand", "recount", TOOL_GROUP),
     # #75: update.py's BootNext, promotion and removal of a boot entry, each REQUEST before the change, with the

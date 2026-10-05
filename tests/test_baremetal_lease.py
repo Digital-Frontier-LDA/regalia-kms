@@ -284,12 +284,12 @@ class Issue(Case):
         self.refused("a node does not vouch for itself", self.issue, issuer="a")
         self.refused("z may not serve", self.issue, request={"node_id": "z", "session_id": SESSION, "nonce": "11" * 32})
 
-    def test_partition_and_authority_outage_a_peer_without_a_live_heartbeat_issues_nothing(self):
+    def test_partition_and_signer_outage_a_peer_without_a_live_heartbeat_issues_nothing(self):
         cut_off = self.peer("b", "-cut-off")             # a peer that never received a heartbeat
         self.refused("no heartbeat is held", self.issue, freshness=cut_off["freshness"])
         m2 = self.manifest(2, m.digest(self.m1), c="DRAINING")
         self.refused("the heartbeat is for epoch 1, the current manifest is epoch 2", self.issue, manifest=m2)   # new epoch, no heartbeat for it yet
-        self.later(hb.MAX_LIFETIME)                      # the authority is down for a day
+        self.later(hb.MAX_LIFETIME)                      # no quorum signs for a day
         self.refused("EXPIRED: the heartbeat expired", self.issue)
         self.beat(self.m1, issued=self.now)
         self.assertEqual(lease.verify(self.issue(), self.m1, self.now), 300)

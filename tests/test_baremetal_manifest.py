@@ -1,6 +1,6 @@
 """deploy/baremetal/manifest.py, regalia-manifest (#156): the membership root's operator proposes, compares,
 signs and verifies manifests. The root is ECDSA P-256 on an offline Nitrokey; here the token is the PyKCS11
-stand-in of the authority's tests, so the signer is the real authority.Pkcs11Signer (#262)."""
+stand-in of p11sign's tests, so the signer is the real p11sign.Pkcs11Signer (#262)."""
 import io
 import json
 import os
@@ -11,8 +11,8 @@ import unittest.mock
 
 from cryptography.hazmat.primitives import serialization
 
-from deploy.baremetal import attest, authority, manifest as tool, measurements, membership as m
-from tests.test_baremetal_authority import FakeToken
+from deploy.baremetal import attest, manifest as tool, measurements, membership as m, p11sign
+from tests.test_baremetal_p11sign import FakeToken
 from tests.test_baremetal_membership import REVOKE_PUB, manifest, three
 import tests.test_baremetal_revocation_keys as tk
 import tests.test_baremetal_rollout as rt
@@ -536,13 +536,13 @@ class CardMadeChain(unittest.TestCase):
 class OnSoftHsm(unittest.TestCase):
     """The same PKCS#11 calls the Nitrokey gets, through SoftHSM: the token label, the key found by CKA_LABEL,
     and a root signature a node accepts (skipped where PyKCS11 or SoftHSM is missing, required in CI)."""
-    setUp = __import__("tests.test_baremetal_authority", fromlist=["Pkcs11"]).Pkcs11.setUp
+    setUp = __import__("tests.test_baremetal_p11sign", fromlist=["Pkcs11"]).Pkcs11.setUp
 
     def test_the_root_on_a_token_signs_a_manifest_nodes_accept(self):
         state = os.path.join(self.d, "state")
         os.mkdir(state, 0o700)
         uri = "pkcs11:serial=%s;token=revocation;object=revocation;type=private" % self.serial
-        from tests.test_baremetal_authority import SOFTHSM
+        from tests.test_baremetal_p11sign import SOFTHSM
         signer = tool.token_signer(uri, SOFTHSM, None, lambda: self.pin, os.path.join(state, tool.LATCH))
         root = {"alg": "ecdsa-p256", "key": signer.public()}
         first = tk.v3(manifest(1, "", three()))

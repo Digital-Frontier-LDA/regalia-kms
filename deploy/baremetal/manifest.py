@@ -42,7 +42,7 @@ envelopes), verified from ROOT every time.
      --offline-session (the ID offline-keys.py records too). The key is read into a bytearray, loaded, and the
      buffer zeroed; the typed confirmation then comes from /dev/tty (offline-keys.py runs this with /dev/null
      on stdin), and the signing record names "offline-keys session <ID>" as its provenance;
-  4. the token is opened in process (authority.Pkcs11Signer, #262): exactly one token attached, its serial
+  4. the token is opened in process (p11sign.Pkcs11Signer, #262): exactly one token attached, its serial
      and label read again in the session that logs in; its P-256 public key must be a pinned root key
      (--signer root) or a revocation key the current manifest names (--signer revocation);
   5. the diff, the epoch and the manifest digest are printed, and the operator types the epoch and the first
@@ -406,11 +406,11 @@ def signing_state(path, root):
 
 
 def token_signer(uri, module, opensc_conf, pin, latch_path, pkcs11=None):
-    """The token the URI names, opened through authority.Pkcs11Signer (#262) with the operator's opt-ins."""
-    from deploy.baremetal import authority
+    """The token the URI names, opened through p11sign.Pkcs11Signer (#262) with the operator's opt-ins."""
+    from deploy.baremetal import p11sign
     attributes = p11uri.parse(uri, "--key")
     require(module.startswith("/"), "--module must be an absolute path")
-    return authority.Pkcs11Signer(module, attributes["serial"], p11uri.key_id(attributes), None, opensc_conf=opensc_conf,
+    return p11sign.Pkcs11Signer(module, attributes["serial"], p11uri.key_id(attributes), None, opensc_conf=opensc_conf,
                                   pkcs11=pkcs11, latch_path=latch_path, label=attributes["token"], only_token=True,
                                   key_label=attributes.get("object"), pin=pin)
 

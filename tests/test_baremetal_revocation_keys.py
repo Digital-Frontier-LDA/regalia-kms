@@ -28,7 +28,7 @@ def p256():
 
 
 def sign_p256(key, message, high=False):
-    """r || s, low-S (as the authority's signer normalises), or deliberately high-S."""
+    """r || s, low-S (as p11sign's signer normalises), or deliberately high-S."""
     r, s = decode_dss_signature(key.sign(message, ec.ECDSA(hashes.SHA256())))
     s = min(s, m.P256_ORDER - s)
     if high:

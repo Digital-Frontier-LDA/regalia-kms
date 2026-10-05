@@ -105,7 +105,7 @@ jobs:
           # tests/test_shell_locale.py runs the shell validators under en_US.UTF-8, generated below,
           # so a missing locale is a failure here, not a skip.
           REGALIA_EXPECT_UTF8_LOCALE: "1"
-          # The revocation authority signs on a token in process (PyKCS11), tested against SoftHSM:
+          # p11sign signs on a token in process (PyKCS11), tested against SoftHSM:
           # installed below, so a missing one is a failure here, not a skip (#262).
           REGALIA_EXPECT_PYKCS11: "1"
         run: |
@@ -649,9 +649,8 @@ jobs:
           grep -q '^authtime-chrony-nts: 26 passed, 0 failed$' "$RUNNER_TEMP/authtime.log" || {
             echo "::error::the authenticated-time test did not run all 26 checks" >&2; exit 1; }
 
-  # regalia-kms#80: regalia-sync over real WireGuard, in network namespaces. Three nodes and the
-  # revocation authority, each with a wg-svc interface configured from the manifest and read back from
-  # the kernel. A node pulls the chain and the heartbeat through the tunnel; a lease is issued across
+  # regalia-kms#80: regalia-sync over real WireGuard, in network namespaces. Three nodes, each with a
+  # wg-svc interface configured from the manifest and read back from the kernel. A node pulls the chain and the heartbeat through the tunnel; a lease is issued across
   # it; a revoked node is refused by name while its tunnel is up and gets no answer once the peer is
   # reconciled; an address that is not its key's does not get through; a peer list widened by hand is
   # detected and repaired; a partitioned node catches up in rounds and authorizes nothing until a
@@ -667,12 +666,12 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends wireguard-tools iproute2 python3-cryptography
-      - name: regalia-sync between three namespaces and the authority (real WireGuard)
+      - name: regalia-sync between three namespaces (real WireGuard)
         run: |
           set -o pipefail
           sudo python3 -Es e2e/regalia-sync-netns.py | tee "$RUNNER_TEMP/sync.log"
-          grep -q '^regalia-sync-netns: 32 passed, 0 failed$' "$RUNNER_TEMP/sync.log" || {
-            echo "::error::the sync test did not run all 32 checks" >&2; exit 1; }
+          grep -q '^regalia-sync-netns: 28 passed, 0 failed$' "$RUNNER_TEMP/sync.log" || {
+            echo "::error::the sync test did not run all 28 checks" >&2; exit 1; }
 
   # regalia-kms#67 (and the software half of #135): a KMS host's disk opens with its TPM and one peer,
   # never the TPM alone. Three software TPMs and a real dm-crypt volume on a loop device: either peer
