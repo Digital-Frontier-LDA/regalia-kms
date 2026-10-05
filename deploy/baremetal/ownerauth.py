@@ -3,7 +3,7 @@
 owner-authorized TPM call through ONE channel, never on a command line.
 
 The card ceremony (regalia-ceremony#111 step 3, rc#120) makes, per node, a random 32-byte owner authValue and
-encrypts it twice: `ownerauth-<node>.yk.gpg` (to the developer cards' decryption keys) and `ownerauth-<node>.bg.age`
+encrypts it twice: `ownerauth-<node>.yk.gpg` (to the owner cards' decryption keys, D30.7) and `ownerauth-<node>.bg.age`
 (break-glass). Its signed record, `ownerauth.record.json`, names each envelope's SHA-256 and a CHECK value:
 
     {"record": {..., "nodes": {"<node>": {"yk_sha256", "bg_sha256", "check"}}, ...}, "signature": "<128 hex>"}
@@ -161,10 +161,10 @@ def verify(envelope, root, node_id):
     membership.exact(entry, FIELDS["node"], "the record's entry for %s" % node_id)
     for field in FIELDS["node"]:
         membership.hex_field(entry[field], 64, "%s.%s" % (node_id, field))
-    # the YubiKey envelope's recipients: the two developer cards' decryption subkeys (D30.3), and the ceremony's proof
+    # the YubiKey envelope's recipients: the two OWNER cards' decryption subkeys (D30.3, D30.7), and the ceremony's proof
     # that each card opened its own (verify_keys: {subkey: SHA-256}); not used here, held to their form
     recipients = record["yk_recipients"]
-    require(isinstance(recipients, list) and len(recipients) == 2, "yk_recipients is not the two developer cards (D30.3)")
+    require(isinstance(recipients, list) and len(recipients) == 2, "yk_recipients is not the two owner cards (D30.7)")
     for i, recipient in enumerate(recipients):
         membership.exact(recipient, FIELDS["recipient"], "yk_recipients[%d]" % i)
         for f in FIELDS["recipient"]:

@@ -42,8 +42,9 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "Ed25519 PUBLIC key of the throwaway Shamir lab root regalia-ceremony#128's writer was run under once, in tests/vectors/card-ceremony-record/writer-run/ (root.hex; its shares were not kept), pinned by value"
+description = "Ed25519 PUBLIC keys of the throwaway Shamir lab roots regalia-ceremony#128's writer was run under, in tests/vectors/card-ceremony-record/writer-run/ (root.hex; their shares were not kept), pinned by value: the 2026-10-04 run (in history) and the 2026-10-05 D30.7 run (d74a7aa)"
 regexTarget = "secret"
 regexes = [
     '''^76584946437bf4e61a99805663321c864da655197a406063af5e7da0840817da$''',
+    '''^e80564ba6fbe0c65fe472ca921ba0b914332c0f4f01d152b66a6c2406c175c65$''',
 ]

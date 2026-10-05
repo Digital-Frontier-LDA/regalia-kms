@@ -11,7 +11,7 @@
     },
     "attested": true,
     "key": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
-    "role": "dev-main",
+    "role": "owner-main",
     "serial": "40000001"
    },
    {
@@ -22,7 +22,7 @@
     },
     "attested": true,
     "key": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d",
-    "role": "dev-backup",
+    "role": "owner-backup",
     "serial": "40000002"
    }
   ],
@@ -70,5 +70,5 @@
   "supersedes": "",
   "tool": "card-ceremony-vectors/1"
  },
- "signature": "c394ddb901931e59408fc08f92ff4e144ab526aad92f3f8bf043a3a41a82b7b7888c7b523dd6371a7bbeb59a21142637d7dea6274347a3359e11322566e72300"
+ "signature": "09cee9fe0df37db400d72fc807360970b95eb00faad02530455fc1e08ff5c5fe5ef0e160cc564d7ce115f2566acd09debab54c606461e3f2f02c5fc8cd39bd09"
 }

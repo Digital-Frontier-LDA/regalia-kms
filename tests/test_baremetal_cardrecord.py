@@ -35,9 +35,9 @@ class Case(unittest.TestCase):
         self.record = {
             "schema": cr.SCHEMA, "event": cr.EVENT, "session": "ab" * 16, "tool": "offline-keys.py test", "at": "2026-10-04T12:00:00Z",
             "root_entry": {"alg": "ed25519", "key": self.root}, "root_fingerprint": hashlib.sha256(bytes.fromhex(self.root)).hexdigest(),
-            "owner_keys": [{"role": "dev-main", "serial": "11111111", "alg": "ed25519", "key": self.main, "attested": True,
+            "owner_keys": [{"role": "owner-main", "serial": "11111111", "alg": "ed25519", "key": self.main, "attested": True,
                             "attestation_sha256": {"sig": "a1" * 32, "dec": "a2" * 32}},
-                           {"role": "dev-backup", "serial": "22222222", "alg": "ed25519", "key": self.backup, "attested": True,
+                           {"role": "owner-backup", "serial": "22222222", "alg": "ed25519", "key": self.backup, "attested": True,
                             "attestation_sha256": {"sig": "b1" * 32, "dec": "b2" * 32}}],
             "ownerauth_recipients": [{"serial": "11111111", "primary": "A" * 40, "subkey": "B" * 40},
                                      {"serial": "22222222", "primary": "C" * 40, "subkey": "D" * 40}],
@@ -72,7 +72,7 @@ class Signature(Case):
     def test_a_record_the_pinned_root_signed_gives_its_owner_and_release_keys(self):
         got = cr.verify(self.sign(self.record), self.root, [self.line(self.record)])
         self.assertEqual(got["owners"], {"11111111": self.main, "22222222": self.backup})
-        self.assertEqual((got["roles"], got["release_key"]), ({"dev-main": "11111111", "dev-backup": "22222222"}, self.release))
+        self.assertEqual((got["roles"], got["release_key"]), ({"owner-main": "11111111", "owner-backup": "22222222"}, self.release))
 
     def test_a_bad_signature_a_wrong_domain_and_another_root_are_refused(self):
         bad = self.sign(self.record)
@@ -102,8 +102,11 @@ class Content(Case):
         self.refused("release_key fields mismatch", self.changed(lambda r: r["release_key"].update(note="x")))
 
     def test_owner_keys_two_roles_two_cards_two_keys_attested(self):
-        self.refused("owner_keys is not exactly two keys", self.changed(lambda r: r["owner_keys"].pop()))
-        self.refused("the role 'dev-main' is not one of", self.changed(lambda r: r["owner_keys"][1].update(role="dev-main")))
+        self.refused("owner_keys is not exactly two keys: the two owner cards' (D30.7)", self.changed(lambda r: r["owner_keys"].pop()))
+        # D30.7: the developer cards are in no KMS record; their old roles are refused by name
+        self.refused("owner_keys[0]: the role 'dev-main' is not one of owner-main, owner-backup",
+                     self.changed(lambda r: r["owner_keys"][0].update(role="dev-main")))
+        self.refused("the role 'owner-main' is not one of", self.changed(lambda r: r["owner_keys"][1].update(role="owner-main")))
         self.refused("the card 11111111 holds two owner keys", self.changed(lambda r: r["owner_keys"][1].update(serial="11111111")))
         self.refused("the two owner cards hold the same key", self.changed(lambda r: r["owner_keys"][1].update(key=self.main)))
         self.refused("is not attested as made on its card", self.changed(lambda r: r["owner_keys"][0].update(attested=False)))
@@ -127,8 +130,9 @@ class Content(Case):
         self.refused("a bench YubiKey is named (35718625)", self.changed(lambda r: r["release_key"].update(cards=["33333333", "35718625"])))
 
     def test_the_release_key_is_never_an_owner_key_nor_on_an_owner_card(self):
-        self.refused("the release key is an owner key", self.changed(lambda r: r["release_key"].update(key=self.backup)))
-        self.refused("a release card is an owner card (D30.3): 22222222", self.changed(lambda r: r["release_key"].update(cards=["22222222", "44444444"])))
+        self.refused("the release key is an owner key: the release cards hold no owner key (D30.3, D30.7)",
+                     self.changed(lambda r: r["release_key"].update(key=self.backup)))
+        self.refused("a release card is an owner card (D30.3, D30.7): 22222222", self.changed(lambda r: r["release_key"].update(cards=["22222222", "44444444"])))
         self.refused("release_key is not an imported (unattested) key", self.changed(lambda r: r["release_key"].update(attested=True)))
         self.refused("release_key.cards is not two distinct cards", self.changed(lambda r: r["release_key"].update(cards=["33333333", "33333333"])))
         self.refused("release_key.fingerprint is not 40 HEX", self.changed(lambda r: r["release_key"].update(fingerprint="e" * 40)))
@@ -295,7 +299,7 @@ class ProducersVectors(unittest.TestCase):
     # the producer's refusal, and the words this verifier refuses the same record with
     SAME = {"bad-signature.json": "signature is not the pinned root's", "wrong-domain.json": "signature is not the pinned root's",
             "other-root.json": "names another root than the pinned one", "release-is-owner.json": "the release key is an owner key",
-            "missing-dev-backup.json": "owner_keys is not exactly two keys", "unknown-field.json": "owner_keys[0] fields mismatch",
+            "missing-owner-backup.json": "owner_keys is not exactly two keys", "unknown-field.json": "owner_keys[0] fields mismatch",
             "first-supersedes.json": "supersedes is not \"\" at sequence 1"}
 
     def test_every_vector_as_the_producer_judges_it(self):
@@ -583,8 +587,8 @@ def _genesis(test, root, record, state):
 
 
 class ProducersWriterRun(unittest.TestCase):
-    """The producer's REAL output, not a vector: regalia-ceremony#128's writer (offline-keys card-record, head c688584)
-    run once, 2026-10-04, by regalia-kms-1e through that PR's test_card_record_writer.Writer setup: a 2-of-3 Shamir lab
+    """The producer's REAL output, not a vector: regalia-ceremony#128's writer (offline-keys card-record, head d74a7aa: the
+    D30.7 owner pair) run once, 2026-10-05, by regalia-kms-1e through that PR's test_card_record_writer.Writer setup: a 2-of-3 Shamir lab
     root (ok.generate, real age; the shares not kept), then card_record(first=True) and card_record(). Kept: the state
     directory it left (marker, signing-record.jsonl with card-record lines 1 and 2) and both records
     (tests/vectors/card-ceremony-record/writer-run/). Its output is not byte-reproducible, so it is a fixture made once,
@@ -610,7 +614,7 @@ class ProducersWriterRun(unittest.TestCase):
         lines = cr.read_signing_state(self.state, self.root)
         got = cr.verify(self.record(2), self.root, lines)
         self.assertEqual((got["sequence"], got["of"], got["supersedes"]), (2, 2, cr.digest(self.record(1)["record"])))
-        self.assertEqual(got["roles"], {"dev-main": "40000001", "dev-backup": "40000002"})
+        self.assertEqual(got["roles"], {"owner-main": "40000001", "owner-backup": "40000002"})
         with self.assertRaises(m.Refused) as caught:
             cr.verify(self.record(1), self.root, lines)
         self.assertIn("this card record (sequence 1) is not the newest the root signed (sequence 2", str(caught.exception))

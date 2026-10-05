@@ -11,7 +11,7 @@
     },
     "attested": true,
     "key": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
-    "role": "dev-main",
+    "role": "owner-main",
     "serial": "40000001"
    }
   ],
@@ -59,5 +59,5 @@
   "supersedes": "",
   "tool": "card-ceremony-vectors/1"
  },
- "signature": "aa42d8328cbbeceb413c80bf8dc4fdd4b6c5115a04cee8bd660c418f007f82aea33cc9cd78adb6d2ac775c9ac46fc8af3e0b9178db5fed6199e23a0ddf274c06"
+ "signature": "a34bac9f645db3738177f85593b30a3f6fb266135b36fa3dfe8cfa3e36a06549f3771f0eda609ae149ffa6d2f63edd3f20521c31b5b108f562f629183550d20e"
 }

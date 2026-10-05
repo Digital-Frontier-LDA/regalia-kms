@@ -105,7 +105,7 @@ class TheRecordIsRefused(unittest.TestCase):
 
     def test_the_recipients_are_the_two_developer_cards(self):
         envelope, root = resigned(lambda r: r["yk_recipients"].pop())
-        self.refused("yk_recipients is not the two developer cards (D30.3)", envelope, root)
+        self.refused("yk_recipients is not the two owner cards (D30.7)", envelope, root)
         envelope, root = resigned(lambda r: r["yk_recipients"].__setitem__(1, dict(r["yk_recipients"][0])))
         self.refused("yk_recipients names one card twice", envelope, root)
         envelope, root = resigned(lambda r: r["verify_keys"].pop(sorted(r["verify_keys"])[0]))
