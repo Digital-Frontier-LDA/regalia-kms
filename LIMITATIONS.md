@@ -30,24 +30,19 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Accepted, once #387 lands:** a one-peer recovery cannot see a revocation that was made after the
   signing laptop last synced, if the surviving peer withholds it and the audit collector has no
   receipt for it. The owner is asked before signing ([`deploy/baremetal/MEMBERSHIP-RECOVERY.md`](deploy/baremetal/MEMBERSHIP-RECOVERY.md)).
-- **TPM owner authorization: partly built** (#242 step C).
-  - **Built (C1, #411):**
-    - `enrol ownerauth` sets the owner authorization from the node's envelope. It sets it from empty only and
-      refuses a TPM whose owner authorization is already set.
-    - In the library, every owner-authorized call takes it through one channel: a sealed memfd, never argv. That
-      covers the anchor (`membership.HighWater`), the heartbeat counter's definition, recount's undefine, the AK's
-      and the signing key's `evictcontrol`, and the signing key's `createprimary`.
-    - A grep test holds `deploy/` (Python and shell) and `cmd/` to that channel.
-  - **Not built yet (C2):**
-    - `enrol commit` (and its steps run as regalia-sync), `reanchor`, `recount` and `deploy/seal-hsm-pin.sh` do not
-      pass the value. On a host whose owner authorization is set, their owner-authorized steps fail closed.
-    - Enrolment does not yet refuse a TPM whose owner or lockout authorization is empty under v4.
-    - Nothing checks that systemd's SRK (0x81000001) is persistent before the owner authorization is set.
-  - `attest.py node-init` (the lab CLI, stdlib-only) keeps an empty owner authorization.
-  - **Residuals:**
-    - The owner authorization crosses the TPM bus in clear when used (password sessions, #414).
-    - The value cannot be zeroed in Python memory.
-    - While an owner-authorized call runs, the value is readable through /proc by root.
+- **TPM owner authorization: built (#242 step C), with these limits.**
+  - The owner authorization crosses the TPM bus in clear when used (password sessions, #414). A discrete TPM can
+    be sniffed by someone with physical access during enrolment, a re-anchor or a recount.
+  - The value cannot be zeroed in Python memory. While an owner-authorized call runs, the value is readable through
+    /proc by root (a memfd; `seal-hsm-pin.sh` uses a root-only file on /run).
+  - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path
+    is held by unit tests and by swtpm tests of the anchor's owner calls.
+  - During `enrol commit` the owner authorization is held by a process of uid regalia-sync, the network-facing
+    sync daemon's user. commit refuses while another process of that uid exists. Moving the owner calls into the
+    root parent is #419.
+  - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
+    CLI) keeps an empty one.
+  - Rotating a set owner authorization is not built.
 - **Re-anchoring on a real host has three known faults, fixed in #391 (not merged):**
   - Run as root, `reanchor` writes `membership.json` as root with mode 0600, so the node's `regalia-sync`
     cannot read its own chain afterwards and the node cannot serve.
@@ -108,20 +103,28 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is
   built, the attestation will show the touch policy ("fixed"), the key source, the serial and the
   fingerprint. OpenPGP has **no PIN-policy attestation**, so "PIN always" stays a recorded setting.
-- **The card record has no freshness check** (#403). Any record the pinned root has ever signed is
-  accepted, so after a card replacement an older record would bring back the retired cards' keys. Until
-  then the operator checks the printed session and time against the ceremony sheet. It must be closed
-  before any card is replaced.
-- **The laptop's signing record is not hash-chained** (#405), and a lost signing-record directory has
-  no recovery path yet (#406). Freshness checks built on the record (#403, #408) are only as strong as
-  the laptop it lives on.
+- **Card-record freshness is per laptop** (#403, #408). A record is accepted only if it is the newest
+  card record on the ceremony laptop's root signing record (`signing-record.jsonl`, in the state
+  directory marked `regalia-signing-state.json`). That is newest on THIS laptop, not newest of the
+  root: a Shamir root rebuilt elsewhere with a fresh state directory signs a valid "sequence 1". The
+  card ceremony's `--first-card-record` makes that visible (regalia-ceremony#111). `propose --genesis`
+  prints `card record N of M` with its digests, for the operator to check against the ceremony sheet.
+- **Nothing writes the state-directory marker yet.** `manifest sign` refuses a directory without it and
+  never writes one; the card ceremony's writer (regalia-ceremony#111) is not built. Until it lands, no
+  real laptop can sign. The marker and log path is unit-tested only until the first-ceremony rehearsal.
+- **The laptop's signing record is not hash-chained** (#405). A deleted line, a cut tail or a state
+  directory restored from an older backup is not detected; #405 would anchor the newest card-record
+  digest in the root-signed manifest. A lost state directory has no recovery path yet (#406).
 - **The bench-token lists are kept by hand** (`membership.BENCH_NITROKEYS`, `BENCH_PICOS`,
   `BENCH_YUBIKEYS`). A new bench token must be added there. A test keeps the drills' staging list equal
   to it, and nothing ties it to the operators' staging registry.
 - **Build provenance** hashes only the files in `REPO_FILES`. It compares the Go release by **name**
   with `go.mod`, not the toolchain binary, which the builder verifies through the Go checksum database.
-  `build-initrd.sh` runs git as the checkout's owner with no global or system configuration (#384).
-  `uki.py`'s own checkout is being given the same rule.
+  `build-initrd.sh` runs git as the checkout's owner with no global or system configuration (#384), and
+  so does `uki.py`'s own checkout (#404): repo-git.sh's exact environment, no file under the signer's
+  HOME. `uki.py` also refuses any untracked file but `__pycache__` bytecode, ignore rules included
+  (`build-initrd.sh` to follow). The build record is unsigned; two builders' records must agree. The
+  signer's clone must be writable by the signer alone: a `.pyc` planted by another writer would run.
 
 ## Audit and monitoring
 
@@ -130,9 +133,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   [`deploy/baremetal/MONITORING.md`](deploy/baremetal/MONITORING.md)). The real service has not been
   chosen or deployed. The audit collector's conformance suite runs against the reference collector in
   CI. **Monitoring has no conformance command** (MONITORING.md section 5: not built).
-- **Audit completeness is checked in some scenarios only.** `audit_complete` runs in the theft and
-  rolling scenarios. Recovery is #402, and outage, leases and replace are not covered. The time trail
-  and the update trail are never checked end to end in a three-node scenario.
+- **Audit completeness is checked in some scenarios only.** `audit_complete` runs in the theft, rolling and
+  recovery scenarios (#402). Outage, leases and replace are not covered. The time trail and the update trail
+  are never checked end to end in a three-node scenario. In recovery, "each node's change to serving" is not
+  tied to a step, and the victims' not-serving lines are not checked.
 - **Collector receipts carry no signed time** (#398), so a stale receipt still verifies. This matters
   for the one-peer recovery witness (#387).
 
