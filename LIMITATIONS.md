@@ -108,9 +108,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - Until a run succeeds the node acts on a chain ahead of its anchor, and rollback protection stands at
     the anchor's epoch. `RegaliaMembershipAnchorBehind` and `RegaliaEspAdvanceFailing` warn after 15 min;
     an operator fixes the ESP and restarts the unit (deploy/baremetal/README.md §7). Nothing repairs it alone.
-  - **Accepted:** a compromised `regalia-sync` that stops publishing is not caught by these alerts (the
-    advance never runs). That is the withholding a compromised sync could always do. A fleet-level rule
-    comparing the three nodes' epochs is **not built**.
+  - A compromised `regalia-sync` that stops publishing is not caught by that node's own alerts (the
+    advance never runs, and sync's file can say anything). It is caught ACROSS the nodes:
+    `RegaliaMembershipBehindFleet` (its held epoch) and `RegaliaAnchorBehindFleet` (its anchor, as root
+    reads it) warn after 30 min below the highest epoch its peers hold (a node whose metrics flap away more often
+    than that resets the `for:` and never fires; the `*MetricsMissing` rules see a file that stays away). **Accepted:** that needs the peers'
+    metrics to be scraped together (one job per cluster) and at least one honest peer ahead; a node retired
+    or revoked lags by design and must leave the scrape.
   - Its run is in the journal and its metrics, not in a hash-chained trail (#278).
   - An anchor read the TPM refuses says only "cannot read 8 bytes from NV index …": `HighWater._read8` drops
     `tpm2_nvread`'s error text, so an operator diagnosing it gets no TPM reason (#450; the text is pinned by
