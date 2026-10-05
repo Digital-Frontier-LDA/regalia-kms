@@ -11,7 +11,7 @@ import unittest.mock
 
 from cryptography.hazmat.primitives import serialization
 
-from deploy.baremetal import attest, manifest as tool, measurements, membership as m, p11sign
+from deploy.baremetal import attest, heartbeat, manifest as tool, measurements, membership as m, p11sign
 from tests.test_baremetal_p11sign import FakeToken
 from tests.test_baremetal_membership import REVOKE_PUB, manifest, three
 import tests.test_baremetal_revocation_keys as tk
@@ -1136,6 +1136,12 @@ class ProposeGenesis(unittest.TestCase):
         self.refused("is earlier than an authorization the record holds (until 1790300000)", tool.recovery_ends_by, recovery, back, 1790200000, lines)
         self.assertEqual(tool.recovery_ends_by(recovery, back, 1790400000, lines)[0], 1790400000)
         self.refused("give --recovery-ends-by", tool.recovery_ends_by, recovery, back, None, [])
+        # no record at all (lost, or another machine's): the record-free bound, issued_at + the run's longest life (d9)
+        self.assertEqual(tool.recovery_ends_by(recovery, back, None, [], run_max=604800),
+                         (heartbeat.parse_time("2026-10-05T00:00:00Z", "t") + 604800, None))
+        self.assertEqual(tool.run_authorization_bound([first, recovery], recovery), 604800)
+        shorter = v4(2, m.digest(first), nodes4(a="QUARANTINED", b="QUARANTINED"), recovery_authorization_max_s=7200)
+        self.assertEqual(tool.run_authorization_bound([first, shorter], shorter), 7200)
         self.assertEqual(tool.recovery_ends_by(recovery, back, None, [{"event": "closed", "through_epoch": 1, "recovery_ends_by": 5}])[0], 0)   # none issued
         policy = tool.propose_states(recovery, {"c": "DRAINING"}, "2026-10-05T00:00:00Z")    # not ending it
         self.assertEqual(tool.recovery_ends_by(recovery, policy, None, lines), (None, None))

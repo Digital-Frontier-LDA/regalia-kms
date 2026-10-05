@@ -43,6 +43,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - **Availability cost:** with one node dead and not yet quarantined, an unplanned reboot of a second
     node stops lease renewals until the owner quarantines the dead one, because of the boot rule. An
     alert after a set number of minutes unreachable prompts the owner.
+- **`recovery_ends_by` from the owner's record is only as good as the restored record** (#432, d9). The laptop's state
+  travels on archive discs, and an older disc would give an end earlier than a real authorization's (51's session
+  counter refuses an older disc at restore). With no record, `manifest.py propose` uses the record-free bound: the
+  restoring epoch's `issued_at` plus the longest `recovery_authorization_max_s` of the run (up to 7 days).
 - **Recovery with only one surviving peer: not built.** `recover` and `reanchor` need two peer chains
   today. With one peer left, a node cannot be recovered or re-anchored. The design is decided, with the
   owner co-signing as the second source behind `--one-source` (#387, PR #395). With **both** peers gone,

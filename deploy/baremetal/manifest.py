@@ -103,7 +103,7 @@ import re
 import sys
 import time
 
-from deploy.baremetal import attest, cardrecord, enrol, keyfd, measurements, membership, p11uri, rollout
+from deploy.baremetal import attest, cardrecord, enrol, heartbeat, keyfd, measurements, membership, p11uri, rollout
 from deploy.baremetal.membership import Refused, require
 
 RECORD = cardrecord.SIGNING_RECORD              # the laptop's one ordered record of the root's uses (#403)
@@ -140,19 +140,36 @@ def utc_now():
 AUTHORIZATIONS = "activation-authorizations.jsonl"     # in the laptop's state directory: the owner's recovery authorizations
 
 
-def recovery_ends_by(current, candidate, given, record_lines):
+def run_authorization_bound(manifests, current):
+    """The longest recovery authorization any epoch of the below-threshold run ending at `current` allowed: the largest
+    recovery_authorization_max_s over that run (an authorization for an epoch is judged by that epoch's manifest)."""
+    by_epoch = {mm["epoch"]: mm for mm in manifests}
+    most, e = current["recovery_authorization_max_s"], current["epoch"]
+    while e in by_epoch and by_epoch[e].get("schema") == membership.SCHEMA_V4 and membership.below_quorum(by_epoch[e]):
+        most = max(most, by_epoch[e]["recovery_authorization_max_s"])
+        e -= 1
+    return most
+
+
+def recovery_ends_by(current, candidate, given, record_lines, run_max=None):
     """recovery_ends_by for `candidate` (#432 amendment 5, d9): null unless it brings the counting node parties back to the
     activation threshold from below it (membership._recovery_end_rules), and then the latest expires_at of the owner's recovery authorizations: taken from
     the record of what the owner's tool issued (`record_lines`, owner.py's AUTHORIZATIONS lines) when present, or `given`;
-    a `given` value earlier than any expiry the record holds is refused. Returns (the value, the closing record line or None)."""
+    a `given` value earlier than any expiry the record holds is refused; with NO record, the record-free bound: this
+    epoch's issued_at plus the run's longest authorization life (`run_max`, run_authorization_bound; d9). The record-
+    derived value is only as good as the restored record (an older disc rolls it back: 51's session counter refuses
+    that at restore). Returns (the value, the closing record line or None)."""
     if current.get("schema") != membership.SCHEMA_V4 or not (membership.below_quorum(current) and not membership.below_quorum(candidate)):
         require(given is None, "--recovery-ends-by is for an epoch that ends a recovery, and this one does not")
         return None, None
     issued = [line["expires_at"] for line in record_lines if line.get("event") == "issued" and line.get("quarantine_epoch", 0) <= current["epoch"]]
     latest = max(issued) if issued else None
     if given is None:
-        require(record_lines or latest is not None, "this epoch ends a recovery: give --recovery-ends-by (the latest expiry of the "
-                "owner's recovery authorizations, 0 when none was issued), or --state-dir with the owner's %s" % AUTHORIZATIONS)
+        if not record_lines:
+            # no record (lost, or another machine's): the record-free bound (d9). Every authorization for an epoch of this
+            # run was signed before this epoch is, so it ends by this epoch's issued_at plus the run's longest life
+            require(run_max is not None, "this epoch ends a recovery: give --recovery-ends-by, or the chain and --state-dir")
+            return heartbeat.parse_time(candidate["issued_at"], "issued_at") + run_max, None
         value = latest if latest is not None else 0      # a record that shows none issued: nothing to wait out
     else:
         require(latest is None or given >= latest, "--recovery-ends-by %d is earlier than an authorization the record holds (until %d)"
@@ -878,7 +895,8 @@ def main(argv=None):
                 changes = _states(args.set_state)
                 trial = propose_states(current, changes, args.issued_at or utc_now(), None)
                 lines = _authorization_lines(args.state_dir)
-                ends, closing = recovery_ends_by(current, trial, args.recovery_ends_by, lines)
+                run_max = run_authorization_bound([e["manifest"] for e in chain_doc], current) if current.get("schema") == membership.SCHEMA_V4 else None
+                ends, closing = recovery_ends_by(current, trial, args.recovery_ends_by, lines, run_max)
                 candidate = propose_states(current, changes, args.issued_at or utc_now(), ends)
                 if closing is not None and args.state_dir:
                     # the record closes the epochs before: the owner's tool issues no authorization for them again (d9)
