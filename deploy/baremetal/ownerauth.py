@@ -454,16 +454,46 @@ def set_owner(auth, ek_name, tcti=None, run=subprocess.run):
             "menu, and set it again" % why)
 
 
+def dictionary_attack(tcti=None, run=subprocess.run):
+    """(counter, max, recovery seconds): TPM_PT_LOCKOUT_COUNTER, TPM_PT_MAX_AUTH_FAIL and TPM_PT_LOCKOUT_RECOVERY, as
+    `tpm2_getcap properties-variable` prints them ("TPM2_PT_LOCKOUT_COUNTER: 0x0", one hex value a line; measured on swtpm).
+    Unreadable is a refusal, never a guess."""
+    r = run(["tpm2_getcap", "properties-variable"], capture_output=True, env=_env(tcti))
+    require(r.returncode == 0, "cannot read the TPM's properties (tpm2_getcap properties-variable)")
+    text = r.stdout.decode("utf-8", "replace") if isinstance(r.stdout, bytes) else r.stdout
+    found = []
+    for name in ("TPM2_PT_LOCKOUT_COUNTER", "TPM2_PT_MAX_AUTH_FAIL", "TPM2_PT_LOCKOUT_RECOVERY"):
+        m = re.search(r"(?m)^\s*%s:\s*0x([0-9a-fA-F]+)\s*$" % name, text)
+        require(m is not None, "the TPM's properties do not say %s: its dictionary-attack state cannot be judged" % name)
+        found.append(int(m.group(1), 16))
+    return tuple(found)
+
+
+def require_da_budget(tcti=None, run=subprocess.run):
+    """Refused unless the TPM can take a failed authorization without coming near lockout: MAX - COUNTER at least
+    min(3, MAX) (regalia-kms-d9; swtpm's MAX is 3, so there the counter must be 0). Before the ONE call here that a wrong
+    value makes a dictionary-attack strike: a changeauth in the EK-salted session (measured: TPM_RC_AUTH_FAIL, the counter
+    raised; holds' unsalted session answers TPM_RC_BAD_AUTH and raises nothing). At the max, every DA-protected object on
+    the node (its keys) is locked out until LOCKOUT_RECOVERY passes or the lockout authorization resets it."""
+    counter, most, recovery = dictionary_attack(tcti, run)
+    require(most - counter >= min(3, most), "the TPM's dictionary-attack counter is %d of %d: a rotation could lock the node's "
+            "keys out, so it is not attempted. Wait for it to fall (one per %d s without failures) or reset it with the "
+            "lockout authorization (tpm2_dictionarylockout -c, #57). Nothing was changed" % (counter, most, recovery))
+
+
 def rotate_owner(old, new, ek_name, tcti=None, run=subprocess.run):
     """The TPM's owner authorization changed from `old` (the value it holds) to `new` (#242, regalia-kms-24): one
     tpm2_changeauth in a session salted to the node's EK with parameter encryption (salted_session, #414), `old` as that
     session's authorization (`-p session:<ctx>+file:/dev/fd/N`: never sent, only an HMAC keyed by it) and `new` its
     encrypted parameter, each through its own sealed memfd; then `new` proven (holds). Measured on swtpm: A to B, a wrong
     `old` refused with the TPM unchanged, B back to A.
-    The CALLER checks both values against their records first: a wrong value reaching the TPM costs a dictionary-attack
-    strike (swtpm answers an owner authorization failure with TPM_RC_AUTH_FAIL, 0x98e). Resumable: a TPM that no longer
-    answers to `old` but answers to `new` (a run that stopped after the change) is left as it is; that costs the one
-    strike of asking for `old` first. Returns True if it changed the TPM, False if it already held `new`."""
+    The CALLER checks both values against their records first. DICTIONARY ATTACK (measured on swtpm, tpm2-tools 5.7): a
+    wrong owner value through holds (tpm2-tools' own UNSALTED HMAC session) is TPM_RC_BAD_AUTH, "without DA implications",
+    and the counter does not move; a wrong value as the authorization of the EK-SALTED session in changeauth is
+    TPM_RC_AUTH_FAIL and raises it. So `old` is proven by holds BEFORE the changeauth, the changeauth never runs on an
+    unproven value, and require_da_budget guards it. Resumable: a TPM that no longer answers to `old` but answers to
+    `new` (a run that stopped after the change) is left as it is, at no strike. Returns True if it changed the TPM, False
+    if it already held `new`."""
     require(isinstance(old, Auth) and isinstance(new, Auth), "the owner authorizations are not ownerauth.Auth values")
     require(not hmac.compare_digest(old._raw, new._raw), "the new owner authorization is the current one: nothing to rotate. "
             "Nothing was changed")
@@ -474,6 +504,7 @@ def rotate_owner(old, new, ek_name, tcti=None, run=subprocess.run):
         require(holds(new, tcti, run), "the TPM's owner authorization is neither the current value given nor the new one: "
                 "this TPM was provisioned otherwise, or the records are another node's. Nothing was changed")
         return False
+    require_da_budget(tcti, run)
     with salted_session(ek_name, tcti, run) as session:
         fds = (_value_fd(old), _value_fd(new))
         try:

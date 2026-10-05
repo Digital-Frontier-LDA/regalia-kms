@@ -943,6 +943,12 @@ removing only what it can prove it made.
     current value authorizes (never sent) and the new one is the encrypted parameter; then the new value is proven.
     A rerun after a stop is idempotent. The ceremony's rotation run, with fresh values and envelopes to the current
     owner cards only, is regalia-ceremony#135. Measured on swtpm.
+    The node remembers which record it is on (`/var/lib/regalia-enrol/ownerauth.json`, root's 0600: the record's
+    SHA-256, written by set and rotate once the TPM answers). A rotation from another record is refused before the TPM.
+    A node set up before this records its current one with `enrol ownerauth --check --adopt`, one way and only after
+    the TPM answered to it. The rotation's one call that a wrong value would make a dictionary-attack strike (the
+    changeauth in the EK-salted session) is made only after the current value is proven, and only with `min(3, max)`
+    tries left: at the maximum the node's DA-protected keys lock out until `LOCKOUT_RECOVERY`.
   - On the TPM bus (measured on swtpm, #414): owner calls are authorized in HMAC sessions that tpm2-tools opens
     itself, so the value is never sent. Setting it (changeauth's new value is a parameter) goes in a session salted
     to the EK `enrol init` recorded, with parameter encryption. The EK's Name is checked first (`--enrol-dir`), so a

@@ -87,11 +87,16 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - **Rotating a set owner authorization: built, with these limits** (`enrol ownerauth --rotate-from`).
     - The ceremony's rotation run, which makes the fresh values and the new record, is regalia-ceremony#135 (51), not
       yet built. Until then no new record exists to rotate to.
-    - A rerun after a stop first asks the TPM for the CURRENT value, which it no longer holds. That costs one
-      dictionary-attack strike: swtpm answers an owner authorization failure with TPM_RC_AUTH_FAIL. A value that fails
-      its record never reaches the TPM.
-    - Every owner-authorized tool must be given the NEW record from then on. Nothing on the host remembers which record
-      is current; the TPM's answer is the only proof.
+    - Dictionary attack, measured on swtpm: a wrong owner value through the proof (`holds`, tpm2-tools' unsalted HMAC
+      session) is TPM_RC_BAD_AUTH and raises nothing; the same value as the auth of the EK-salted changeauth is
+      TPM_RC_AUTH_FAIL and raises `TPM_PT_LOCKOUT_COUNTER`. So the rotation proves the current value first, and makes
+      the changeauth only with `min(3, max)` tries left (at the max, the node's DA-protected keys lock out). Until the
+      DL360's TPM is measured, each failed owner check is treated as a possible strike.
+    - The node holds which record it is on (`ownerauth.json`) and refuses a rotation from another. The other
+      owner-authorized tools (`enrol commit`, `reanchor`, `recount`, `seal-hsm-pin.sh`) do not check it yet: a stale
+      `--ownerauth` record there is refused by the TPM, not before it (#460, agreed with regalia-kms-d9).
+    - The rollback guard orders records by their root-signed `at`, the laptop's clock. Ordering by the card record the
+      owner-authorization record encrypted to (a ceremony schema change, after #438) is #461.
     - Measured on swtpm with tpm2-tools 5.7, not on the DL360's TPM.
 - **Re-anchoring on a real host has three known faults, fixed in #391 (not merged):**
   - Run as root, `reanchor` writes `membership.json` as root with mode 0600, so the node's `regalia-sync`

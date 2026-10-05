@@ -274,12 +274,13 @@ class SetAndCheck(unittest.TestCase):
         self.tpm = FakeTpm()
 
     def run_step(self, node="a", check=False, stream=None):
-        return enrol.set_ownerauth(node, PIN, self.record, stream or value(node), check=check, run=self.tpm,
+        return enrol.set_ownerauth(node, PIN, self.record, stream or value(node), check=check, run=self.tpm, directory=self.d,
                                    ek_name=self.tpm.ek_name.hex())
 
     def test_set_from_empty_then_checked(self):
         self.assertFalse(ownerauth.posture(run=self.tpm)["owner"])
         self.assertIn("is set to a's envelope value, and answers to it", self.run_step())
+        self.assertEqual(enrol.ownerauth_current(self.d), hashlib.sha256(m.canonical(RECORD)).hexdigest())   # #456
         self.assertEqual(self.tpm.owner_auth, bytes.fromhex(VECTOR["values"]["a"][:64]))
         self.assertTrue(ownerauth.posture(run=self.tpm)["owner"])
         self.assertIn("is a's envelope value", self.run_step(check=True))
@@ -315,7 +316,7 @@ class SetAndCheck(unittest.TestCase):
                         return subprocess.CompletedProcess(argv, 1, b"", answer)
                     return tpm(argv, **kw)
                 with self.assertRaises(m.Refused) as caught:
-                    enrol.set_ownerauth("a", PIN, self.record, value("a"), run=run, ek_name=tpm.ek_name.hex())
+                    enrol.set_ownerauth("a", PIN, self.record, value("a"), run=run, ek_name=tpm.ek_name.hex(), directory=self.d)
                 self.assertIn("the owner authorization may now be UNKNOWN. Re-run `enrol ownerauth --check` with this envelope; "
                               "if that fails, clear the owner hierarchy with the lockout authorization (tpm2_clear -c l, #57)",
                               str(caught.exception))
@@ -370,6 +371,11 @@ class Rotation(unittest.TestCase):
         self.write("current", self.current, "2026-10-05T10:00:00Z")
         self.write("new", self.new, "2026-10-05T11:00:00Z")
         self.tpm = FakeTpm(owner_auth=self.current)
+        enrol._ownerauth_hold(self.d, self.digest("current"))             # the node is on the current record
+
+    def digest(self, name):
+        with open(self.records[name], "rb") as f:
+            return hashlib.sha256(m.canonical(json.loads(f.read()))).hexdigest()
 
     def write(self, name, raw, at):
         envelope, self.pin = resigned(lambda r: (r["nodes"]["a"].update(check=ownerauth.Auth(raw).check("a")), r.update(at=at)),
@@ -381,13 +387,16 @@ class Rotation(unittest.TestCase):
     def rotate(self, first=None, second=None):
         stream = io.BytesIO(((first or self.current).hex() + "\n" + (second or self.new).hex() + "\n").encode())
         return enrol.set_ownerauth("a", self.pin, self.records["new"], stream, run=self.tpm, ek_name=self.tpm.ek_name.hex(),
-                                   rotate_from=self.records["current"])
+                                   rotate_from=self.records["current"], directory=self.d)
 
     def test_rotated_in_a_salted_session_then_a_rerun_changes_nothing(self):
         self.assertIn("is rotated to a's NEW envelope value, and answers to it", self.rotate())
         self.assertEqual(self.tpm.owner_auth, self.new)
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("new"))   # the node now holds the new record
         self.assertEqual(self.tpm.salted_with, [self.tpm.ek_name])          # one change, salted to the enrolled EK
+        enrol._ownerauth_hold(self.d, self.digest("current"))             # a run that stopped before the node noted it
         self.assertIn("already answers to a's NEW envelope value: nothing was changed", self.rotate())
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("new"))
         self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.new, [self.tpm.ek_name]))
 
     def test_either_value_not_its_record_s_is_refused_before_the_tpm(self):
@@ -409,8 +418,49 @@ class Rotation(unittest.TestCase):
             ownerauth.rotate_owner(ownerauth.Auth(self.current), ownerauth.Auth(self.current), self.tpm.ek_name.hex(), run=self.tpm)
         with self.assertRaisesRegex(enrol.Refused, "--check and --rotate-from are different commands"):
             enrol.set_ownerauth("a", self.pin, self.records["new"], io.BytesIO(b""), check=True, run=self.tpm,
-                                rotate_from=self.records["current"])
+                                rotate_from=self.records["current"], directory=self.d)
 
+
+    def test_a_stale_or_unheld_current_record_is_refused_before_the_tpm(self):
+        """regalia-kms-d9: the node remembers which record it is on; a rotation from another is refused with no TPM call."""
+        enrol._ownerauth_hold(self.d, "ab" * 32)
+        with self.assertRaisesRegex(enrol.Refused, "the current record given is not the one this node is on"):
+            self.rotate()
+        os.unlink(os.path.join(self.d, enrol.OWNERAUTH_STATE))
+        with self.assertRaisesRegex(enrol.Refused, "this node holds no record of which owner-authorization record it is on"):
+            self.rotate()
+        self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.current, []))
+
+    def test_adopt_is_one_way_and_only_after_the_tpm_answers(self):
+        os.unlink(os.path.join(self.d, enrol.OWNERAUTH_STATE))
+        check = lambda record, raw, **kw: enrol.set_ownerauth("a", self.pin, self.records[record], io.BytesIO((raw.hex() + "\n").encode()),
+                                                              check=True, run=self.tpm, directory=self.d, **kw)
+        self.assertIn("the node holds NO record of it (--adopt)", check("current", self.current))
+        with self.assertRaisesRegex(enrol.Refused, "is NOT a's envelope value"):             # the TPM does not answer to it
+            check("new", self.new, adopt=True)
+        self.assertIsNone(enrol.ownerauth_current(self.d))
+        self.assertIn("the node now holds this record", check("current", self.current, adopt=True))
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+        self.tpm.owner_auth = self.new                                      # (as if rotated elsewhere)
+        with self.assertRaisesRegex(enrol.Refused, "already holds another owner-authorization record"):
+            check("new", self.new, adopt=True)
+        self.assertIn("but the node holds ANOTHER record", check("new", self.new))
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+        with self.assertRaisesRegex(enrol.Refused, "--adopt goes with --check"):
+            enrol.set_ownerauth("a", self.pin, self.records["new"], io.BytesIO(b""), run=self.tpm, directory=self.d, adopt=True)
+
+    def test_no_salted_changeauth_near_dictionary_attack_lockout(self):
+        """regalia-kms-d9: the one strike-capable call (a changeauth in the EK-salted session) is not made unless the TPM
+        has min(3, MAX) tries left: at MAX the node's DA-protected keys lock out."""
+        for counter, most in ((1, 3), (30, 32)):
+            with self.subTest(counter=counter, max=most):
+                self.tpm.da = [counter, most, 1000]
+                with self.assertRaisesRegex(m.Refused, "the TPM's dictionary-attack counter is %d of %d: a rotation could lock "
+                                            "the node's keys out" % (counter, most)):
+                    self.rotate()
+                self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.current, []))
+        self.tpm.da = [29, 32, 1000]
+        self.assertIn("is rotated to a's NEW envelope value", self.rotate())
 
     def test_never_back_to_an_older_or_equal_record(self):
         """regalia-kms-51: an operator who picks an older root-signed record must not re-arm envelopes that retired or lost
