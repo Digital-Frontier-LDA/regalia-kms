@@ -81,7 +81,12 @@ CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.m
     tampered entry costs a redone genesis, not a silently accepted node. Until #399, the operator carries each entry
     from the node's console and reads every field of the printed proposal.
   * The owner's and the release card's keys come only from the card ceremony's record, verified under the pinned root
-    (cardrecord.py); its attestation certificates are checked by digest only on this side (#400).
+    and required to be the newest the root signed on THIS laptop's signing record (cardrecord.py, #403): see its
+    limitations (attestation not yet captured, #400; the record is laptop-scoped and not hash-chained, #405, #406).
+  * Signing needs the laptop's state directory marked by the card ceremony (regalia-signing-state.json): this tool
+    never writes the marker, and until regalia-ceremony#111's writer lands, no real laptop can sign here. The marker
+    and log path is unit-tested only; nothing end to end runs `manifest sign` with a state directory before the
+    first-ceremony rehearsal (#297). A multi-key root pin (a rollover) is refused for signing: not modelled.
   * The bench tokens refused are a hand-kept list (membership.BENCH_TOKENS): a new bench token must be added there.
   * The genesis policy is GENESIS_POLICY's defaults plus two lifetime flags; the proposed D31 director party is not
     modelled.
@@ -101,7 +106,7 @@ import time
 from deploy.baremetal import attest, cardrecord, keyfd, measurements, membership, p11uri, rollout
 from deploy.baremetal.membership import Refused, require
 
-RECORD = "signing-record.jsonl"
+RECORD = cardrecord.SIGNING_RECORD              # the laptop's one ordered record of the root's uses (#403)
 LATCH = "pin-latch.json"
 
 
@@ -169,15 +174,16 @@ def _raw_ed25519(value, what):
     return value
 
 
-def card_record_keys(envelope, root):
+def card_record_keys(envelope, root, signing_state):
     """The owner's two keys and the release card's, from the card ceremony's record (regalia-ceremony#111, ADR-0002 D30)
-    and nowhere else: verified by cardrecord.verify under the PINNED root first, so a key is never typed. The genesis
-    root is one Ed25519 key (D28); a pin naming anything else is refused here. Returns cardrecord.verify's result."""
+    and nowhere else: verified by cardrecord.verify under the PINNED root first, so a key is never typed, and only if it
+    is the NEWEST card record the root signed by the laptop's signing record in `signing_state` (--state-dir, #403). The
+    genesis root is one Ed25519 key (D28); a pin naming anything else is refused here. Returns cardrecord.verify's result."""
     entries = membership.root_entries(root)
     require(len(entries) == 1 and entries[0][0] == "ed25519",
             "the genesis root is one Ed25519 key (D28): a card record is verified under that key only, not %s"
             % ", ".join(alg for alg, _ in entries))
-    return cardrecord.verify(envelope, entries[0][1])
+    return cardrecord.verify(envelope, entries[0][1], cardrecord.read_signing_state(signing_state, entries[0][1]))
 
 
 def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None):
@@ -344,6 +350,31 @@ def state_dir(path):
     return path
 
 
+def signing_state(path, root):
+    """state_dir, and the marker saying whose root's signing record it holds (cardrecord.SIGNING_STATE, #403, agreed with
+    regalia-kms-51 and d9): checked before anything is signed, never written here. The card ceremony, which runs first,
+    writes it (regalia-ceremony offline-keys --first-card-record); `propose --genesis` already needs its card record
+    there. So a directory with NO marker is refused, and so is one naming another root: a second, separate log of the
+    root's uses would each look gapless (d9: there is no legitimate sequence that starts one here). The genesis root is
+    one key (D28): a pin naming several (a rollover) is refused, a stated limitation."""
+    state_dir(path)
+    entries = membership.root_entries(root)
+    require(len(entries) == 1, "a signing state directory is one root's: the pinned root names %d keys (a root rollover is not "
+            "modelled)" % len(entries))
+    held = cardrecord._read_own(path, cardrecord.SIGNING_STATE, 4096, "the state directory's marker %s" % cardrecord.SIGNING_STATE)
+    require(held is not None, "--state-dir %s has no %s: it is not the root's signing state (the card ceremony makes it; wrong "
+            "--state-dir?), and nothing is signed" % (path, cardrecord.SIGNING_STATE))
+    try:
+        state = json.loads(held.decode("ascii"))
+    except (UnicodeDecodeError, ValueError):
+        raise Refused("the state directory's marker %s is not JSON" % cardrecord.SIGNING_STATE) from None
+    require(isinstance(state, dict), "the state directory's marker is not an object")
+    membership.exact(state, ("schema", "root"), "the state directory's marker")
+    require(state["schema"] == cardrecord.SIGNING_STATE_SCHEMA, "the state directory's marker is not a %s" % cardrecord.SIGNING_STATE_SCHEMA)
+    require(state["root"] == entries[0][1], "--state-dir %s is another root's signing state: nothing is signed" % path)
+    return path
+
+
 def token_signer(uri, module, opensc_conf, pin, latch_path, pkcs11=None):
     """The token the URI names, opened through authority.Pkcs11Signer (#262) with the operator's opt-ins."""
     from deploy.baremetal import authority
@@ -458,7 +489,8 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
     except Exception as failure:          # noqa: BLE001 - recorded as the reason; raised again below
         reason, failed = str(failure) or type(failure).__name__, failure
     try:
-        line = {"epoch": candidate["epoch"], "digest": digest, "signer": signer_role, "key": public,
+        # "kind": the laptop's one ordered record of the root's uses also holds the card ceremony's card-record lines (#403)
+        line = {"kind": "manifest", "epoch": candidate["epoch"], "digest": digest, "signer": signer_role, "key": public,
                 "token_serial": signer.serial, "token_label": signer.label, "pin_source": pin_source,
                 "verified": verified, "reason": reason, "at": int(time.time())}
         if getattr(signer, "provenance", None):
@@ -490,8 +522,9 @@ def _propose_genesis(args, root, confirm=None, say=print):
     pinned root before anything else is read: never typed, so there is no second way to give them."""
     require(args.chain is None and not args.from_rollout and not args.set_state and not (args.old or args.new or args.state),
             "--genesis takes no --chain, --from-rollout, --set-state or measurements step: nothing comes before it")
-    require(args.measurements and args.card_record, "--genesis needs --measurements and --card-record")
-    cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root)
+    require(args.measurements and args.card_record and args.state_dir,
+            "--genesis needs --measurements, --card-record and --state-dir (the laptop's root signing record, #403)")
+    cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root, args.state_dir)
     owners, release_key = cards["owners"], cards["release_key"]
     entries = [read_json(path, membership.MAX_BYTES) for path in args.entry]
     document = measurements.load(_raw(args.measurements, measurements.MAX_BYTES))
@@ -503,6 +536,8 @@ def _propose_genesis(args, root, confirm=None, say=print):
         say("  " + line)
     say("measurements: %s (%s)" % (candidate["policy_version"], document["name"]))
     say("card record: session %s, made %s, signed by the pinned root" % (cards["session"], cards["at"]))
+    say("card record %d of %d (the newest on this laptop's signing record), digest %s, supersedes %s: check both against "
+        "the ceremony sheet" % (cards["sequence"], cards["of"], cards["digest"], cards["supersedes"] or "nothing (the first)"))
     roles = {serial: role for role, serial in cards["roles"].items()}
     order = sorted(owners)
     for serial in order:
@@ -590,6 +625,8 @@ def main(argv=None):
     c.add_argument("--card-record", metavar="CARDS.json",
                    help="--genesis: the card ceremony's record (regalia-ceremony#111, cards.record.json), signed by the pinned "
                         "root: the owner's two keys and the release card's, from it and never typed")
+    c.add_argument("--state-dir", metavar="DIR", help="--genesis: the ceremony laptop's state directory (its root signing record "
+                   "and regalia-signing-state.json): the card record must be the newest the root signed (#403)")
     c.add_argument("--heartbeat-max-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["heartbeat_max_lifetime_s"])
     c.add_argument("--owner-heartbeat-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["owner_heartbeat_lifetime_s"])
     c.add_argument("--from-rollout", metavar="R.json", help="the output of `rollout propose --json`")
@@ -634,8 +671,8 @@ def main(argv=None):
             return _propose_genesis(args, root)
         if args.command == "propose":
             require(args.chain is not None, "give --chain (or --genesis)")
-            require(not (args.entry or args.measurements or args.card_record or args.heartbeat_max_lifetime_s
-                         or args.owner_heartbeat_lifetime_s), "--entry, --measurements, --card-record and the "
+            require(not (args.entry or args.measurements or args.card_record or args.state_dir or args.heartbeat_max_lifetime_s
+                         or args.owner_heartbeat_lifetime_s), "--entry, --measurements, --card-record, --state-dir and the "
                     "lifetimes are for --genesis only")
         if args.command == "sign" and args.genesis:
             # the first ceremony: no chain at all, the offline root only (see GENESIS above)
@@ -645,7 +682,7 @@ def main(argv=None):
             require(not (args.old or args.new or args.state or args.emergency or args.locked_out), "--genesis takes no measurements step")
             provenance = keyfd.session(args.offline_session)
             sign([], root, None, read_json(args.proposal, membership.MAX_BYTES), args.signer, lambda: OfflineSigner(args.key_fd, provenance),
-                 keyfd.tty_line, args.out, state_dir(args.state_dir), args.chain_out, pin_source="none (offline key)", offline=True,
+                 keyfd.tty_line, args.out, signing_state(args.state_dir, root), args.chain_out, pin_source="none (offline key)", offline=True,
                  genesis=True)
             return 0
         if args.command == "sign":
@@ -669,7 +706,7 @@ def main(argv=None):
         if args.command == "diff":
             print("\n".join(diff(current, candidate)))
             return 0
-        state = state_dir(args.state_dir)
+        state = signing_state(args.state_dir, root)
         if args.key_fd is not None:                      # the offline root: no token, no PIN; the descriptor and the session
             require(args.key is None and args.module is None and args.pin_env is None and args.opensc_conf is None,
                     "--key-fd is not given with --key, --module, --pin-env or --opensc-conf")

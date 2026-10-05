@@ -74,6 +74,7 @@ class FakeTpm:
         # the owner authorization (32 bytes, #242 C), None while it is empty. Set, an owner call (-C o) must give it as
         # the real channel does (-P file:/dev/fd/N, the pipe holding "hex:<64 hex>"), else the TPM says no
         self.owner_auth, self.lockout_set = owner_auth, False
+        self.persistent = {"0x81000001"}                     # systemd's SRK, as systemd-tpm2-setup leaves it at boot
 
     @staticmethod
     def _from_fd(where, kw):
@@ -119,6 +120,8 @@ class FakeTpm:
             return ok()
         if "-C" in argv and argv[argv.index("-C") + 1] == "o" and tool != "loadexternal" and not self._owner_ok(argv, kw):
             return bad_auth                                  # the owner authorization not given, or not the one held
+        if tool == "getcap" and index == "handles-persistent":
+            return ok("".join("- %s\n" % h for h in sorted(self.persistent)).encode())
         if tool == "getcap":                                 # tpm2_getcap handles-nv-index: what the TPM says it holds
             return ok("".join("- %s\n" % name for name in sorted(self.nv)).encode()) if index == "handles-nv-index" else no
         if tool == "nvdefine":
