@@ -665,6 +665,14 @@ class Running(Record):
         self.assertEqual(step("a", T0 + 600)["renewed"], False)               # expired: promote's, not the timer's
         open(os.path.join(self.state, act.RELEASE_FILE), "w").close()
         self.assertEqual(step("a", T0 + 400)["renewed"], False)               # released: it lapses
+        os.unlink(os.path.join(self.state, act.RELEASE_FILE))
+        held = act.read_json(os.path.join(self.state, act.LEASE_FILE))
+        forged = dict(held, lease=dict(held["lease"], site="site-x"))           # hand-edited: its signatures no longer hold
+        act.write_json(os.path.join(self.state, act.LEASE_FILE), forged)
+        events = []
+        got = act.renewal_step("a", self.m1, self.clock(T0 + 400), self.a, self.ask_from("a", T0 + 400), ["b"], self.state, events.append)
+        self.assertEqual((got["holder"], got["renewed"]), (False, False))       # d9: not a holder, no proposal
+        self.assertIn("does not verify", events[-1]["reason"])
 
     def test_a_second_site_s_promotion_waits_and_says_until_when(self):
         act.promote("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(T0), self.a, self.ask_from("a", T0), ["b"], self.state, lambda e: None)
@@ -693,9 +701,10 @@ class Running(Record):
         got = act.renewal_step("c", rp.m2, rp.clock(rp.now + 300), c, None, [], state, lambda e: None)
         self.assertEqual((got["recovery"], got["renewed"]), (True, True))
         m3 = manifest4(3, m.digest(rp.m2), nodes4(), activation_signers=dict(RULE))         # a and b back: the authorization ends
-        ended = act.renewal_step("c", m3, rp.clock(rp.now + 600), c, None, [], state, lambda e: None)
-        self.assertEqual((ended["recovery"], ended["renewed"]), (False, False))
-        self.assertIn("no node co-signed", ended["failed"])                  # back on the normal path, nobody to co-sign: recorded
+        events = []
+        ended = act.renewal_step("c", m3, rp.clock(rp.now + 600), c, None, [], state, events.append)
+        self.assertEqual((ended["recovery"], ended["holder"], ended["renewed"]), (False, False, False))
+        self.assertIn("does not verify", events[-1]["reason"])                # its recovery lease ended with the epoch: no lease
 
 
 class Commands(unittest.TestCase):

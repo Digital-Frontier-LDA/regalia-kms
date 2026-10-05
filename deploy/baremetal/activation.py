@@ -298,8 +298,9 @@ class Signer:
 
 def write_json(path, value, mode=0o644):
     """Replaced atomically (a temporary file, fsynced, renamed, the directory fsynced): readers see whole files only."""
-    tmp = path + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
+    import tempfile
+    # a fresh temporary name each time (ed): sync's renewal and an operator's command may write at once, as two processes
+    fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(path) + ".", dir=os.path.dirname(path) or ".")
     with os.fdopen(fd, "w") as f:
         json.dump(value, f, sort_keys=True)
         f.flush()
@@ -587,6 +588,9 @@ def renewal_step(node_id, manifest, clock, signer, ask, peers, state_dir, trail)
     ed); an expired lease is never renewed here: that is `promote`'s (d9). Under an installed recovery authorization that
     holds against the current manifest, the survivor renews alone (self_renew); otherwise two nodes (propose), for the
     same site and registry. Nothing while the release marker is present. Returns the state, for metrics:
+    The holder-only rule is the PROPOSER's liveness discipline, not a safety rule: a co-signer cannot tell a renewal
+    from a promotion, and every co-signer's grant record decides either way (d9). Never relax a record rule on the
+    belief that this timer guards it. A lease file that does not verify under the current manifest is "no lease".
     {"holder": bool, "expires": int or None, "recovery": bool, "renewed": bool[, "failed": why]}: a failed renewal is
     returned, never raised (the loop goes on; RegaliaActivationRenewalFailing fires as the lease runs out)."""
     lease_path, recovery_path = os.path.join(state_dir, LEASE_FILE), os.path.join(state_dir, RECOVERY_FILE)
@@ -603,7 +607,10 @@ def renewal_step(node_id, manifest, clock, signer, ask, peers, state_dir, trail)
         return state
     try:
         start, expires = validate(held["lease"])
-    except Refused:
+        verify(held, manifest)                       # signed as the Gate will check it, or this node does not hold it (d9)
+    except Refused as refused:
+        trail({"event": "activation", "outcome": "DENY", "epoch": manifest["epoch"],
+               "reason": ("the lease file does not verify, so this node holds no lease: %s" % refused)[:240]})
         return state
     now = _now(clock)
     state.update(holder=now < expires, expires=expires)
@@ -700,7 +707,7 @@ def main(argv=None):
                 try:
                     done = promote(node.node_id, given["site"], given["registry_digest"], manifest, node.clock(), signer, ask, peers, state_dir, trail)
                 except Refused as refused:
-                    raise Refused("%s%s" % (refused, "" if waited_until(refused) is None else
+                    raise Refused("%s%s; this node is not released (and holds no lease)" % (refused, "" if waited_until(refused) is None else
                                             "; another site's lease runs: try again after %d" % waited_until(refused))) from None
                 print(json.dumps({"expires_at": done["lease"]["expires_at"], "epoch": done["lease"]["activation_epoch"]}))
             elif args.op == "_release":
