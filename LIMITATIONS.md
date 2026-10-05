@@ -126,6 +126,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     out: re-run `enrol commit`, which resumes from its journal (the anchor step is a no-op on a chain
     already held, and the rendered files are replaced); or let `regalia-esp-advance` run at boot, which
     writes the published chain to the ESP.
+- **One transient TPM error fails an anchor read.** `HighWater` reads the anchor's NV indices with one
+  `tpm2_nvread` each and refuses on any failure, with no retry inside the tool. The services' units restart
+  (the ESP advance every 15 s; sync and admission on their own schedules) and the next run reads again. CI's
+  three-node fixture showed it intermittently on its shared software TPMs (#448). Since this change the tool's own
+  error text goes to the journal; if it names a transient TPM code (`TPM_RC_RETRY`, `TPM_RC_YIELDED`,
+  `TPM_RC_TESTING`, a busy socket), a small bounded retry on those codes alone is the next step. The refusal's own
+  text still carries no TPM reason (#450).
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
