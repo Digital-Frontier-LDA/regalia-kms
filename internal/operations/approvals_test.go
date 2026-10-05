@@ -202,3 +202,49 @@ func TestOneApproverSigningTwiceDoesNotSatisfyTwo(t *testing.T) {
 		t.Fatalf("two distinct approvers were refused (%v): the case above would prove nothing", err)
 	}
 }
+
+// AN APPROVAL IS FOR ONE NODE (#432 G3). On node site-a: approvals given for site-a count; the same approvers'
+// approvals given for site-b do not (the binding's signer is this node, never the caller's), so the policy denies on
+// the count and the HSM is never asked; and a request whose context names site-b is refused by name before any
+// approval is weighed.
+func TestAnApprovalCountsOnlyOnTheNodeItNames(t *testing.T) {
+	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	keys, signers, ids := twoApprovers(t)
+	forNode := func(node string) string {
+		binding := approvalsBinding(now)
+		binding.Signer = node
+		return approvalsHeader(t, binding, signers, ids...)
+	}
+
+	coordinator, _, hardware := approvalsHarness(t, now, 2, keys, ids)
+	coordinator.SetNodeID("site-a")
+	if _, err := coordinator.Execute(context.Background(), approvalsRequest(now, forNode("site-a"))); err != nil {
+		t.Fatalf("control: approvals for this node were refused: %v", err)
+	}
+	if hardware.calls != 1 {
+		t.Fatalf("control: hardware calls = %d, want 1", hardware.calls)
+	}
+
+	coordinator, recorder, hardware := approvalsHarness(t, now, 2, keys, ids)
+	coordinator.SetNodeID("site-a")
+	if _, err := coordinator.Execute(context.Background(), approvalsRequest(now, forNode("site-b"))); err == nil {
+		t.Fatal("DEFECT: approvals given for site-b authorized a signature on site-a: one approval can be spent on two nodes")
+	}
+	if hardware.calls != 0 {
+		t.Fatalf("DEFECT: the HSM was asked (%d calls) on another node's approvals", hardware.calls)
+	}
+	if last := recorder.drafts[len(recorder.drafts)-1]; len(last.VerifiedApprovers) != 0 {
+		t.Fatalf("DEFECT: site-b's approvals were counted on site-a: %v", last.VerifiedApprovers)
+	}
+
+	coordinator, recorder, hardware = approvalsHarness(t, now, 2, keys, ids)
+	coordinator.SetNodeID("site-a")
+	request := approvalsRequest(now, forNode("site-b"))
+	request.Context.Signer = "site-b"
+	if _, err := coordinator.Execute(context.Background(), request); err == nil || hardware.calls != 0 {
+		t.Fatalf("DEFECT: a request naming signer site-b was not refused on site-a (err %v, %d HSM calls)", err, hardware.calls)
+	}
+	if last := recorder.drafts[len(recorder.drafts)-1]; last.Outcome != "approval-signer-other-node" {
+		t.Fatalf("the refusal is audited as %q, not approval-signer-other-node", last.Outcome)
+	}
+}

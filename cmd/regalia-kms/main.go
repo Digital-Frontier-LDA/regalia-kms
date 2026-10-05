@@ -421,6 +421,7 @@ func run() error {
 		if admissionGate != nil {
 			coordinator.RequireAdmission(admissionGate)
 		}
+		coordinator.SetNodeID(settings.NodeID) // the one signer approvals are verified for (#432 G3)
 		slog.Info("KMS hardware backend ready", "module", settings.PKCS11ModulePath)
 	}
 
