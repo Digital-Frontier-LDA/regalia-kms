@@ -34,7 +34,17 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     token must not destroy keys irreversibly with no approver able to intervene);
   - the survivor's append-only store of the signed directives it applied. Each is verified before it is written, and
     a corrupt file refuses every key.
+  - **the owner's one-server decision (2026-10-05): scope `full`.** Stateful operations continue on the lone survivor from
+    the owner's attestation plus 900 s plus 60 s (every request the fenced far side could have spent has expired), plus
+    600 s more when the fence is only typed rather than an iLO power readback.
   Not built yet:
+  - the full scope's machinery:
+    - the iLO/Redfish fence step that produces the power readback;
+    - the take-over (an owner-gated etcd force-new-cluster, and the state-epoch key 95 proposes);
+    - the rejoin (export the divergent tail, wipe, member add);
+    - the daemon's halts (a peer heard below the quarantine epoch);
+    - approvals naming their spending node (1e).
+    Until they land, `full` is a recorded intent the daemon does not act on;
   - the survivor's admission mode: recovery only with no unexpired normal lease, left at the first normal lease;
   - the daemon serving stateless operations only in that mode, and refusing keys under a directive (ed);
   - installing the authorization on the node;

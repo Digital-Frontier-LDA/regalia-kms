@@ -34,20 +34,21 @@ class Case(unittest.TestCase):
         self.assertIn(reason, str(caught.exception))
         return str(caught.exception)
 
-    def authorize(self, tip=None, who="a", typed=None, key=None, life_s=None):
+    def authorize(self, tip=None, who="a", typed=None, key=None, life_s=None, scope="stateless", fence=None):
         tip = tip or self.m2
         want = {}
 
         def confirm(text):
             want["text"] = text
             return typed if typed is not None else text.split("Type exactly: ")[1].split("\n")[0]
-        return sv.make_authorization(tip, who, "powered off at their PDUs", T0, confirm, lambda: OwnerKey(key or OWNER_KEYS[0]), life_s=life_s)
+        return sv.make_authorization(tip, who, "powered off at their PDUs", T0, confirm, lambda: OwnerKey(key or OWNER_KEYS[0]), life_s=life_s,
+                                     scope=scope, fence=fence)
 
 
 class Authorization(Case):
     def test_the_owner_authorizes_a_survivor_at_the_quarantine_epoch(self):
         signed = self.authorize()
-        self.assertEqual(sv.in_force(signed, self.m2, "a", T0 + 60), T0 + sv.MAX_AUTHORIZATION_S)
+        self.assertEqual(sv.in_force(signed, self.m2, "a", T0 + 60), (T0 + sv.MAX_AUTHORIZATION_S, "stateless"))
         self.assertIn("b, c: powered off at their PDUs; they will not rejoin until they hold epoch 2", signed["authorization"]["fenced"])
 
     def test_any_new_epoch_ends_it(self):
@@ -80,10 +81,39 @@ class Authorization(Case):
         self.refused("is for a, not b", sv.in_force, signed, self.m2, "b", T0)
 
 
-def raw_authorization(tip, who="a"):
+def raw_authorization(tip, who="a", others=("b", "c")):
     """An authorization signed by the owner WITHOUT the tool's checks: what verify must judge on its own."""
     return {"schema": sv.AUTH_SCHEMA, "node_id": who, "quarantine_epoch": tip["epoch"], "quarantine_digest": m.digest(tip),
-            "not_before": "2026-10-05T12:00:00Z", "expires_at": "2026-10-06T12:00:00Z", "fenced": "b, c: off"}
+            "not_before": "2026-10-05T12:00:00Z", "expires_at": "2026-10-06T12:00:00Z", "fenced": "b, c: off", "scope": "stateless",
+            "fence": {"method": "attested", "nodes": {o: {"power_state": "unreachable", "read_at": "2026-10-05T12:00:00Z"} for o in others}}}
+
+
+class FullScope(Case):
+    """The owner's one-server decision (#432): "full" keeps stateful operations on a lone survivor, from full_from()
+    on: the attestation plus a request's longest life plus the skew (1e, A1), plus more for a fence only typed (d9, G1)."""
+
+    def fence(self, state="Off"):
+        return {"method": "redfish", "nodes": {n: {"power_state": state, "read_at": "2026-10-05T11:59:00Z"} for n in ("b", "c")}}
+
+    def test_full_begins_after_the_wait_and_sooner_with_a_power_readback(self):
+        read = self.authorize(scope="full", fence=self.fence())
+        start = T0 + sv.REQUEST_LIFE_S + sv.SKEW_S
+        self.assertEqual(sv.in_force(read, self.m2, "a", start - 1)[1], "stateless")
+        self.assertEqual(sv.in_force(read, self.m2, "a", start)[1], "full")
+        typed = self.authorize(scope="full")                              # no readback: the typed fallback waits longer
+        self.assertEqual(sv.in_force(typed, self.m2, "a", start)[1], "stateless")
+        self.assertEqual(sv.in_force(typed, self.m2, "a", start + sv.FALLBACK_EXTRA_S)[1], "full")
+        self.assertEqual(sv.in_force(self.authorize(), self.m2, "a", start + 10 ** 5)[1], "stateless")    # stateless stays so
+
+    def test_the_fence_evidence_names_every_other_node_powered_off(self):
+        self.refused("reads Off for every fenced node", self.authorize, scope="full", fence=self.fence("On"))
+        partial = {"method": "redfish", "nodes": {"b": {"power_state": "Off", "read_at": "2026-10-05T11:59:00Z"}}}
+        self.refused("the fence evidence names ['b']", self.authorize, scope="full", fence=partial)
+        self.refused("scope must be one of", self.authorize, scope="everything")
+
+    def test_the_typed_line_names_the_scope(self):
+        self.refused("the line typed is not this authorization's", self.authorize, scope="full",
+                     typed="authorize a alone stateless 2 until 2026-10-12T12:00:00Z")
 
 
 class VerifiedOnItsOwn(Case):
@@ -203,9 +233,9 @@ class OwnerTool(Case):
         out = os.path.join(self.d, "auth.json")
         code, signed = self.run_tool(["sign-survivor", "--chain", self.chain, "--root-key", self.root, "--node-id", "a",
                                       "--how", "powered off at their PDUs", "--life-s", "86400", "--out", out],
-                                     "authorize a alone 2 until 2026-10-06T12:00:00Z")
+                                     "authorize a alone stateless 2 until 2026-10-06T12:00:00Z")
         self.assertEqual(code, 0)
-        self.assertEqual(sv.in_force(signed, self.m2, "a", T0 + 60), T0 + 86400)
+        self.assertEqual(sv.in_force(signed, self.m2, "a", T0 + 60), (T0 + 86400, "stateless"))
 
     def test_sign_directive_writes_a_disable_only_directive_and_has_no_state_to_choose(self):
         out = os.path.join(self.d, "directive.json")

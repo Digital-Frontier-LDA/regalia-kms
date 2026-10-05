@@ -285,6 +285,9 @@ def main(argv=None):
     w.add_argument("--node-id", required=True, help="the survivor")
     w.add_argument("--how", required=True, help="how the other servers are fenced (powered off, cut off), as the attestation says it")
     w.add_argument("--life-s", type=int, help="at most, and by default, %d s" % 604800)
+    w.add_argument("--scope", choices=("stateless", "full"), default="stateless",
+                   help="full: stateful operations too, after the wait (the owner's one-server decision, #432)")
+    w.add_argument("--fence-evidence", help="the fence step's power readback (JSON); without it the fence is the typed fallback")
     w.add_argument("--out", required=True)
     d = sub.add_parser("sign-directive", help="(off the nodes) the owner's disable-only directive during a survivor recovery")
     d.add_argument("--chain", required=True, help="the survivor's signed chain; its tip is the quarantine epoch")
@@ -379,7 +382,9 @@ def main(argv=None):
                 return keyfd.tty_line("> ")                 # the console's terminal, never standard input
             tip = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), manifest_tool.root_key(args.root_key))
             if args.op == "sign-survivor":
-                signed = survivor.make_authorization(tip, args.node_id, args.how, int(time.time()), confirm_line, open_signer, life_s=args.life_s)
+                fence = manifest_tool.read_json(args.fence_evidence, 65536) if args.fence_evidence else None
+                signed = survivor.make_authorization(tip, args.node_id, args.how, int(time.time()), confirm_line, open_signer, life_s=args.life_s,
+                                                     scope=args.scope, fence=fence)
                 note = "valid until %s or any new epoch; install it on %s" % (signed["authorization"]["expires_at"], args.node_id)
             else:
                 signed = survivor.make_directive(tip, args.object_id, args.reason, int(time.time()), confirm_line, open_signer)

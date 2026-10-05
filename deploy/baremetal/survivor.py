@@ -39,7 +39,18 @@ Refused, require = membership.Refused, membership.require
 
 AUTH_SCHEMA = "regalia.survivor-authorization/v1"
 AUTH_DOMAIN = b"regalia-survivor-authorization/v1\0"
-AUTH_KEYS = ("schema", "node_id", "quarantine_epoch", "quarantine_digest", "not_before", "expires_at", "fenced")
+AUTH_KEYS = ("schema", "node_id", "quarantine_epoch", "quarantine_digest", "not_before", "expires_at", "fenced", "scope", "fence")
+# The owner's one-server decision (2026-10-05, #432 6003524779): "everything must remain active, even with only one
+# server". SCOPES: "stateless" (sign and decrypt only) or "full" (stateful operations too: Reserves on a one-member etcd
+# cluster the survivor forms with an owner-gated force-new-cluster). "full" takes effect only from full_from(): the
+# owner's attestation time plus the longest a request stays spendable plus the skew (regalia-kms-1e, A1: the far side is
+# 2 of 3 and may have spent until it was fenced), plus FALLBACK_EXTRA_S when the fence is only attested, not power-read
+# over iLO (regalia-kms-d9, G1)
+SCOPES = ("stateless", "full")
+FENCE_METHODS = ("redfish", "attested")     # G1: ForceOff then a PowerState readback over iLO 4 / Redfish; else typed
+REQUEST_LIFE_S = 900                        # opstate.MAX_REQUEST_LIFE_S (#492); a test holds the two equal once both land
+SKEW_S = 60
+FALLBACK_EXTRA_S = 600
 MAX_AUTHORIZATION_S = 7 * 24 * 3600
 MAX_FENCED_BYTES = 512
 DIRECTIVE_SCHEMA = "regalia.survivor-directive/v1"
@@ -81,6 +92,18 @@ def validate_authorization(auth):
     require(isinstance(auth["node_id"], str) and NODE_ID.fullmatch(auth["node_id"]) is not None, "node_id must be a node ID")
     _epoch_bound(auth, "the authorization")
     _text(auth["fenced"], "fenced")
+    require(auth["scope"] in SCOPES, "scope must be one of %s" % ", ".join(SCOPES))
+    fence = auth["fence"]
+    membership.exact(fence, ("method", "nodes"), "the fence evidence")
+    require(fence["method"] in FENCE_METHODS, "the fence method must be one of %s" % ", ".join(FENCE_METHODS))
+    require(isinstance(fence["nodes"], dict) and fence["nodes"], "the fence evidence names the fenced nodes")
+    for nid, seen in fence["nodes"].items():
+        require(isinstance(nid, str) and NODE_ID.fullmatch(nid) is not None, "the fence evidence names node IDs")
+        membership.exact(seen, ("power_state", "read_at"), "the fence evidence for %s" % nid)
+        heartbeat.parse_time(seen["read_at"], "the fence evidence's read_at")
+        require(seen["power_state"] == ("Off" if fence["method"] == "redfish" else "unreachable"),
+                "a %s fence reads %s for every fenced node; %s's is %r" % (fence["method"], "Off" if fence["method"] == "redfish"
+                                                                         else "unreachable", nid, seen["power_state"]))
     start, expires = heartbeat.parse_time(auth["not_before"], "not_before"), heartbeat.parse_time(auth["expires_at"], "expires_at")
     require(start < expires, "the authorization's expires_at must be after its not_before")
     require(expires - start <= MAX_AUTHORIZATION_S, "a survivor authorization lives at most %d s (this one: %d)" % (MAX_AUTHORIZATION_S, expires - start))
@@ -107,18 +130,28 @@ def verify_authorization(signed, current, node_id=None):
     loose = sorted(n for n, node in nodes.items() if n != survivor and node["state"] not in membership.NOT_COUNTING)
     require(not loose, "a lone survivor needs every other node quarantined, revoked or retired under epoch %d; %s %s not"
             % (current["epoch"], ", ".join(loose), "is" if len(loose) == 1 else "are"))
+    require(set(auth["fence"]["nodes"]) == set(nodes) - {survivor}, "the fence evidence names %s; the other nodes are %s"
+            % (sorted(auth["fence"]["nodes"]), sorted(set(nodes) - {survivor})))
     if node_id is not None:
         require(survivor == node_id, "the survivor authorization is for %s, not %s" % (survivor, node_id))
     return auth
 
 
+def full_from(auth):
+    """When a "full" authorization's stateful scope begins (seconds): the attestation (not_before) plus the longest a
+    request stays spendable plus the skew, plus FALLBACK_EXTRA_S for a fence only attested (A1, G1)."""
+    start, _ = validate_authorization(auth)
+    return start + REQUEST_LIFE_S + SKEW_S + (FALLBACK_EXTRA_S if auth["fence"]["method"] == "attested" else 0)
+
+
 def in_force(signed, current, node_id, now):
-    """The authorization's expiry (seconds) if it holds for `node_id` at `now` (its authenticated seconds), else Refused."""
+    """(expiry seconds, the scope in force now) if the authorization holds for `node_id` at `now` (its authenticated
+    seconds), else Refused. A "full" authorization is "stateless" until full_from()."""
     auth = verify_authorization(signed, current, node_id)
     start, expires = validate_authorization(auth)
     require(start <= now + heartbeat.FUTURE_SKEW, "the survivor authorization starts at %s, ahead of this node's clock" % auth["not_before"])
     require(now < expires, "EXPIRED: the survivor authorization ended at %s: the owner signs a new one, or the servers return" % auth["expires_at"])
-    return expires
+    return expires, ("full" if auth["scope"] == "full" and now >= full_from(auth) else "stateless")
 
 
 def _stamp(seconds):
@@ -126,11 +159,13 @@ def _stamp(seconds):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(seconds)))
 
 
-def make_authorization(tip, survivor, how, now, confirm, open_signer, life_s=None):
+def make_authorization(tip, survivor, how, now, confirm, open_signer, life_s=None, scope="stateless", fence=None):
     """The owner's survivor authorization (owner.py sign-survivor, off the nodes). `tip`: the survivor's newest manifest,
     verified from the pinned root by the caller: the quarantine manifest. `how`: what was done to the other servers.
-    Refused unless every other node has stopped counting in `tip` and the line naming survivor, epoch and expiry is
-    typed. Returns {"authorization", "signature"}."""
+    Refused unless every other node has stopped counting in `tip` and the line naming survivor, scope, epoch and expiry
+    is typed. `fence`: the fence step's evidence ({"method": "redfish", "nodes": {id: {"power_state": "Off", "read_at"}}}),
+    or None for the typed fallback (every other node "unreachable", FALLBACK_EXTRA_S more before full).
+    Returns {"authorization", "signature"}."""
     nodes = membership.validate(tip)
     others = sorted(n for n in nodes if n != survivor)
     _text(how, "how the other servers are fenced")
@@ -138,17 +173,20 @@ def make_authorization(tip, survivor, how, now, confirm, open_signer, life_s=Non
     require(0 < life <= MAX_AUTHORIZATION_S, "a survivor authorization lives at most %d s" % MAX_AUTHORIZATION_S)
     auth = {"schema": AUTH_SCHEMA, "node_id": survivor, "quarantine_epoch": tip["epoch"], "quarantine_digest": membership.digest(tip),
             "not_before": _stamp(now), "expires_at": _stamp(now + life),
-            "fenced": "%s: %s; they will not rejoin until they hold epoch %d" % (", ".join(others), how.strip(), tip["epoch"])}
+            "fenced": "%s: %s; they will not rejoin until they hold epoch %d" % (", ".join(others), how.strip(), tip["epoch"]),
+            "scope": scope, "fence": fence or {"method": "attested", "nodes": {o: {"power_state": "unreachable", "read_at": _stamp(now)}
+                                                                                 for o in others}}}
     validate_authorization(auth)
     loose = sorted(n for n in others if nodes[n]["state"] not in membership.NOT_COUNTING)
     require(not loose, "quarantine %s first (a root- or owner-signed epoch): a survivor is authorized only once every other server "
             "has stopped counting" % ", ".join(loose))
     require(survivor in nodes and nodes[survivor]["state"] not in membership.NOT_COUNTING, "%s does not count under epoch %d" % (survivor, tip["epoch"]))
-    want = "authorize %s alone %d until %s" % (survivor, tip["epoch"], auth["expires_at"])
-    shown = ("A SURVIVOR AUTHORIZATION: %s serves ALONE, stateless operations only, until %s or until any new epoch, under epoch %d:\n"
-             "  attested: %s\n  If any of %s is alive and can reach another server, or rejoins before it holds epoch %d, two sides can\n"
-             "  act on key state. STOP if so.\nType exactly: %s\n> " % (survivor, auth["expires_at"], tip["epoch"], auth["fenced"],
-                                                                       ", ".join(others), tip["epoch"], want))
+    want = "authorize %s alone %s %d until %s" % (survivor, scope, tip["epoch"], auth["expires_at"])
+    what = ("EVERYTHING, stateful operations included from %s" % _stamp(full_from(auth)) if scope == "full" else "stateless operations only")
+    shown = ("A SURVIVOR AUTHORIZATION: %s serves ALONE, %s, until %s or until any new epoch, under epoch %d:\n"
+             "  attested: %s\n  fence: %s\n  If any of %s is alive and can reach another server, or rejoins before it holds epoch %d,\n"
+             "  two sides can act on key state. STOP if so.\nType exactly: %s\n> "
+             % (survivor, what, auth["expires_at"], tip["epoch"], auth["fenced"], auth["fence"]["method"], ", ".join(others), tip["epoch"], want))
     require((confirm(shown) or "").strip() == want, "the line typed is not this authorization's: nothing is signed")
     owners = {e["key"] for e in tip["owner_keys"] if e["alg"] == "ed25519"}
     signer = open_signer()
