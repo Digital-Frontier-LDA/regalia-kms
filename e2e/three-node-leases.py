@@ -101,7 +101,7 @@ def scenario(cluster):
     first, issuer, _ = held(cluster, "a")
     since = time.time()
     got = until(lambda: renewed(cluster, "a", first), renewal + 60, 3)
-    ok(bool(got) and any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
+    ok(bool(got) and any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and threenode.at_or_after(e, since)
                          for e in cluster.trail(got[1] if got else issuer)),
        "a's lease is renewed (issued %s, then %s, by %s), and its issuer's trail holds the ALLOW" % (first, got and got[0], got and got[1]), got)
 
@@ -152,7 +152,7 @@ def scenario(cluster):
     cluster.nodes["b"].in_ns("wg", "set", "wg-svc", "peer", service_a, "allowed-ips", a_address + "/128",
                              "endpoint", "%s:51821" % cluster.nodes["a"].underlay)
     named = until(lambda: [e.get("reason") for e in cluster.trail("b") if e.get("event", "").startswith("sync") and e.get("outcome") == "DENY"
-                           and "a is REVOKED_STOLEN under epoch 2" in e.get("reason", "") and e.get("at", 0) >= revoked_at], 150, 3)
+                           and "a is REVOKED_STOLEN under epoch 2" in e.get("reason", "") and threenode.at_or_after(e, revoked_at)], 150, 3)
     ok(bool(named), "through a tunnel forced open on b, b's sync refuses a's requests by name", named)
     expiry = [lease_expiry(cluster, "a")]
 
@@ -171,6 +171,8 @@ def scenario(cluster):
        {"stop_minus_due": round(stop_at - due, 1) if due else None, "held": held(cluster, "a")})
     print("  MEASURED: running a revoked -> it stops serving: %.0f s (its last lease's end less the margin; MAX_LIFETIME %d s)"
           % (took, lease.MAX_LIFETIME))
+    # strict, NOT threenode.at_or_after: a check that nothing happened after a moment. Widened to the second, it would
+    # take a lease issued just before the revocation in the same second
     ok(not any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= revoked_at
                for p in ("b", "c") for e in cluster.trail(p)), "and nobody issued a a lease after the revocation")
 

@@ -75,7 +75,7 @@ def header(text):
 
 def leased_by(cluster, peer, subject, since):
     """Whether `peer`'s sync issued `subject` a lease (its trail) at or after `since`."""
-    return any(e.get("event") == "sync-lease" and e.get("subject") == subject and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
+    return any(e.get("event") == "sync-lease" and e.get("subject") == subject and e.get("outcome") == "ALLOW" and threenode.at_or_after(e, since)
                for e in cluster.trail(peer))
 
 
@@ -312,7 +312,7 @@ def scenario(cluster):
             alone = counting[0]
             # not vacuous (regalia-kms-3e): wait for its own try at the epoch, refused for want of a co-signer, then look
             tried = until(lambda: [e for e in cluster.trail(alone) if e.get("event") == "beat-propose" and e.get("epoch") == manifest["epoch"]
-                                   and e.get("outcome") == "DENY" and "no other node counts" in e.get("reason", "") and e.get("at", 0) >= since],
+                                   and e.get("outcome") == "DENY" and "no other node counts" in e.get("reason", "") and threenode.at_or_after(e, since)],
                           240, 3)
             ok(bool(tried) and not cluster.holds_heartbeat(alone, manifest["epoch"]),
                "%s, the only node left that counts, tried to sign epoch %d's heartbeat, found no co-signer, and holds none: alone it "
@@ -325,7 +325,7 @@ def scenario(cluster):
                % (alone, manifest["epoch"], lives), envelope["heartbeat"])
         pulled = [s for s in survivors if s != seed]
         ok(all(cluster.node(s).store().load()["epoch"] == manifest["epoch"] for s in survivors)
-           and all(any(e.get("event") == "sync-apply" and e.get("peer") == seed and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
+           and all(any(e.get("event") == "sync-apply" and e.get("peer") == seed and e.get("outcome") == "ALLOW" and threenode.at_or_after(e, since)
                        for e in cluster.trail(s)) for s in pulled),
            "epoch %d (%s %s, by the %s key) given to %s; %s took it from %s by sync"
            % (manifest["epoch"], victim, state, signer, seed, ", ".join(pulled) or "nobody else", seed))
@@ -345,7 +345,7 @@ def scenario(cluster):
             # nonce) or at the lease itself: the same reason either way
             denied = [s for s in survivors if any(e.get("event") in ("sync-lease-nonce", "sync-lease") and e.get("subject") == victim
                                                   and e.get("outcome") == "DENY"
-                                                  and refused in e.get("reason", "") and e.get("at", 0) >= since for e in cluster.trail(s))]
+                                                  and refused in e.get("reason", "") and threenode.at_or_after(e, since) for e in cluster.trail(s))]
             if denied:
                 return "%s refused its lease request: %s" % (", ".join(denied), refused)
             if state in ("RETIRED", "REVOKED_STOLEN") and all(svc_key not in cluster.wg_peers(s, "wg-svc") for s in survivors):

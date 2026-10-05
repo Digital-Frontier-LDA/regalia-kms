@@ -95,6 +95,15 @@ def sh(*argv, check=True, **kw):
     return done
 
 
+def at_or_after(event, since):
+    """Whether the trail line `event` may have been written at or after `since` (a time.time()). A trail's "at" is WHOLE
+    SECONDS (node.Trail: int(now())): a line written in the same second as `since` has an "at" below it, and a plain
+    `at >= since` drops it (rolling's and recovery's intermittent failures, #393). So `since` is taken to its second.
+    For a check that something DID happen. A check that nothing happened after a moment keeps its own strict bound (or a
+    trail position, as three-node-outage's step 5): widened, it would take a line written just before."""
+    return event.get("at", 0) >= int(since)
+
+
 def until(what, seconds, interval=1.0):
     """`what()` until it is true or the time is up; its last value (or the exception it raised)."""
     deadline, last = time.monotonic() + seconds, None
@@ -1585,7 +1594,7 @@ class Cluster:
                 value = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(value, dict) or value.get("at", 0) < int(since):
+            if not isinstance(value, dict) or not at_or_after(value, since):
                 continue
             if all(v(value.get(k)) if callable(v) else value.get(k) == v for k, v in fields.items()):
                 out.append(value)

@@ -110,11 +110,11 @@ def scenario(cluster):
     # one node stolen and one cut off: no two nodes can co-sign, so the owner revokes, off the nodes, and b imports it
     cluster.revoke_by_owner("b", "a", "REVOKED_STOLEN", "e2e: a stolen node", pull=[], beat=False)
     b_after = time.time() - revoked_at
-    ok(took_epoch(cluster, "b", 2) and any(e.get("event") == "revoke-commit" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= int(revoked_at)
+    ok(took_epoch(cluster, "b", 2) and any(e.get("event") == "revoke-commit" and e.get("outcome") == "ALLOW" and threenode.at_or_after(e, int(revoked_at))
                                            for e in cluster.trail("b")),
        "b holds epoch 2 (a REVOKED_STOLEN, signed by the owner alone off the nodes), committed by its import %.0f s after the start" % b_after)
     tried = until(lambda: [e.get("reason") for e in cluster.trail("c") if e.get("event") == "sync-apply" and e.get("outcome") == "DENY"
-                           and e.get("peer") == "b" and "did not answer" in e.get("reason", "") and e.get("at", 0) >= cut_at], 90, 3)
+                           and e.get("peer") == "b" and "did not answer" in e.get("reason", "") and threenode.at_or_after(e, cut_at)], 90, 3)
     ok(bool(tried) and took_epoch(cluster, "c", 1),
        "c, cut off, tried (its pulls from b did not answer) and still holds epoch 1", tried)
 
@@ -157,7 +157,7 @@ def scenario(cluster):
         return doc if doc.get("reason") and not doc.get("serve_until_boottime_ms") else None
     tried = until(asked_and_refused, 120, 3)
     ok(off is True and bool(tried) and not any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW"
-                                               and e.get("at", 0) >= since for p in ("b", "c") for e in cluster.trail(p)),
+                                               and e.get("at", 0) >= since for p in ("b", "c") for e in cluster.trail(p)),   # strict: nothing after (not at_or_after)
        "N: and no lease: a's admission asked and was refused (%s); a is off every service tunnel, and nobody issued it one"
        % ((tried or {}).get("reason", "")[:80]), tried)
 
@@ -167,7 +167,7 @@ def scenario(cluster):
     cluster.nodes["b"].in_ns("wg", "set", "wg-svc", "peer", service_a, "allowed-ips", a_address + "/128",
                              "endpoint", "%s:51821" % cluster.nodes["a"].underlay)
     named = until(lambda: [e.get("reason") for e in cluster.trail("b") if e.get("event", "").startswith("sync") and e.get("outcome") == "DENY"
-                           and "a is REVOKED_STOLEN under epoch 2" in e.get("reason", "") and e.get("at", 0) >= since], 120, 3)
+                           and "a is REVOKED_STOLEN under epoch 2" in e.get("reason", "") and threenode.at_or_after(e, since)], 120, 3)
     ok(bool(named), "b's sync refuses a's requests by name: a is REVOKED_STOLEN under epoch 2", named)
     ok(took_epoch(cluster, "b", 2) and took_epoch(cluster, "a", 1), "b's store stays at epoch 2; a's own stays at the old epoch 1")
 

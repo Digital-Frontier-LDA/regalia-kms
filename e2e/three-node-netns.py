@@ -53,7 +53,7 @@ def header(text):
 
 def answered(cluster, server, caller, since=0.0):
     """Whether `server`'s sync answered a pull from `caller` (ALLOW) at or after `since` (unix seconds)."""
-    return any(e.get("event") == "sync-pull" and e.get("subject") == caller and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
+    return any(e.get("event") == "sync-pull" and e.get("subject") == caller and e.get("outcome") == "ALLOW" and threenode.at_or_after(e, since)
                for e in cluster.trail(server))
 
 
