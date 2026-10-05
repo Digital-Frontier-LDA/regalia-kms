@@ -912,11 +912,12 @@ removing only what it can prove it made.
   value from the ceremony's envelope (regalia-ceremony#111). **Custody** (owner, 2026-10-05, #242): two independent
   paths. Day to day, `.yk.gpg`, to the owner pair's decryption keys (ADR-0002 D30.7, regalia#568). Break-glass, one binary SOPS file per node
   (`ownerauth-X.bg.sops`), encrypted to the post-quantum "ownerauth-recovery" age identity that offline-keys keeps
-  in its D28 key map under the platform SLIP-39 shares (no server holds the value or that key). offline-keys opens
-  the identity from k shares into a mode-0600 file on a RAM filesystem, then
-  `SOPS_AGE_KEY_FILE=<that file> sops decrypt --input-type binary --output-type binary ownerauth-X.bg.sops | sudo ...`,
-  and the file is shredded by its exact path (regalia-ceremony#111 gives the exact commands). On a disk, removing
-  a file does not destroy it. It must be a binary SOPS file, not a YAML map: `sops decrypt --extract` drops the newline
+  in its D28 key map under the platform SLIP-39 shares (no server holds the value or that key). On the signing
+  laptop (regalia-ceremony#111):
+  `python3 -Es offline-keys.py open-recovery-identity --sealed offline-keys.sealed.json --out /dev/shm/ownerauth-recovery.key`
+  (k offline shares on standard input, then Ctrl-D; it writes a NEW mode-0600 file on a RAM filesystem), then
+  `SOPS_AGE_KEY_FILE=/dev/shm/ownerauth-recovery.key sops decrypt --input-type binary --output-type binary ownerauth-X.bg.sops | sudo ...`,
+  then `shred -u -- /dev/shm/ownerauth-recovery.key`. On a disk, removing a file does not destroy it. It must be a binary SOPS file, not a YAML map: `sops decrypt --extract` drops the newline
   that the value's form requires (measured with sops 3.13.1). The drill, at the ceremony rehearsal, checks a
   decrypted value with no TPM: `... | python3 -Es -m deploy.baremetal.ownerauth check --node-id X --root-key ROOT
   --record ownerauth.record.json`. ROOT is the network's pinned root, from a node's node.json or the root card's
