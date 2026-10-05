@@ -477,10 +477,14 @@ def rotation_generations(current, k_sys_pem, k_a_point):
     for node_id, node in current["nodes"].items():
         own = [e["signing"]["anchor_approvals"]["generation"] for e in node["accepted"]
                if e.get("signing", {}).get("system") == fingerprint and "anchor_approvals" in e["signing"]]
-        known = [e["signing"]["anchor_approvals"]["generation"] for e in node["accepted"] if "anchor_approvals" in e.get("signing", {})]
+        known = sorted({e["signing"]["anchor_approvals"]["generation"] for e in node["accepted"] if "anchor_approvals" in e.get("signing", {})})
         if own:
             generations[node_id] = own[0]
         elif known:
+            # regalia-kms-d9: keys die oldest-first, one per retire bump; a node running CURRENT and NEXT under two live
+            # approvals takes no third (it would outlive its set, and a set dropped without a bump is still live)
+            require(len(known) < 2, "keys at G %s are live on node %s; retire the older (the rollout's retire bumps its "
+                    "rotation counter) before approving a third" % (" and ".join(str(g) for g in known), node_id))
             generations[node_id] = max(known) + 1
     return generations
 
@@ -497,16 +501,22 @@ def increment_document(key, k_a_point, node_id, n):
 def main(argv=None, out=None):
     import argparse
     import json
+    import os
     import sys
     from deploy.baremetal import enrol, keyfd, manifest, measurements
     out = out or sys.stdout
-    ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.anchorpolicy", description="K_A's approvals (#361), on the offline laptop")
+    # allow_abbrev=False (regalia-kms-51): offline-keys' allow-list checks the exact flags; an abbreviation (--key-f) given
+    # after the allowed one would otherwise be taken, the last one winning
+    ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.anchorpolicy", description="K_A's approvals (#361), on the offline laptop",
+                                 allow_abbrev=False)
     sub = ap.add_subparsers(dest="command", required=True)
     for name in ("approve-first", "approve", "approve-increment"):
-        c = sub.add_parser(name)
+        c = sub.add_parser(name, allow_abbrev=False)
         c.add_argument("--root-key", required=True, help="the pinned membership root (64 hex)")
         c.add_argument("--key-fd", type=int, required=True, help="K_A's private key: a sealed memfd or a pipe (offline-keys' {keyfd:anchor-policy})")
         c.add_argument("--offline-session", required=True, help="the offline-keys session ID (32 hex)")
+        c.add_argument("--state-dir", required=True, help="the laptop's state directory (the root's signing record): what is "
+                       "signed is appended there before it is printed (regalia-kms-d9: which approvals are live)")
         if name == "approve-first":
             c.add_argument("--offline-keys-record", required=True, help="offline-keys.record.json: K_A, verified under the root")
             c.add_argument("--node-id", required=True, help="the node whose rotation counter this starts (one file per node)")
@@ -524,15 +534,26 @@ def main(argv=None, out=None):
             c.add_argument("--from", dest="from_n", type=int, required=True, help="the node's rotation counter's value before the increment")
     args = ap.parse_args(argv)
     try:
-        keyfd.session(args.offline_session)
+        # every path absolute (51): offline-keys runs this from inside its digest-checked tool tree, where a relative path
+        # would name a file of the tree
+        for flag in ("document", "system_pub", "offline_keys_record", "chain", "current", "state_dir"):
+            value = getattr(args, flag, None)
+            require(value is None or os.path.isabs(value), "--%s %s is not an absolute path" % (flag.replace("_", "-"), value))
+        for triple in getattr(args, "node", None) or []:
+            for value in triple:
+                require(os.path.isabs(value), "--node %s is not an absolute path" % value)
+        provenance = keyfd.session(args.offline_session)
         root = manifest.root_key(args.root_key)
+        manifest.signing_state(args.state_dir, root)           # this root's laptop record, checked before anything is read
         if args.command == "approve-first":
             point = _pinned_at_genesis(root, args.offline_keys_record)
             result = first_document(_key_from_fd(args.key_fd, point), point, args.node_id)
+            issued = [{"kind": "anchor-first", "node_id": args.node_id}]
         elif args.command == "approve-increment":
             point, tip = _pinned_by_chain(root, args.chain)
             require(args.node_id in membership.validate(tip), "%s is not a node of the chain's tip" % args.node_id)
             result = increment_document(_key_from_fd(args.key_fd, point), point, args.node_id, args.from_n)
+            issued = [{"kind": "anchor-increment", "node_id": args.node_id, "from": args.from_n}]
         else:
             genesis = bool(args.offline_keys_record or args.node)
             require(genesis != bool(args.chain or args.current), "give --offline-keys-record and --node (the genesis), or --chain and "
@@ -552,6 +573,17 @@ def main(argv=None, out=None):
                 measurements.bind(tip, current)               # the document the tip commits to, and no other
                 generations = rotation_generations(current, pem, point)
             result = fill(document, pem, point, _key_from_fd(args.key_fd, point), generations)
+            from deploy.baremetal import signkey
+            fingerprint = signkey.pcr_key_fingerprint(pem)
+            issued = [{"kind": "anchor-approval", "node_id": node_id, "k_sys": fingerprint, "generation": e["signing"]["anchor_approvals"]["generation"],
+                       "classes": sorted(e["signing"]["anchor_approvals"]["classes"])}
+                      for node_id, node in sorted(result["nodes"].items()) for e in node["accepted"]
+                      if e.get("signing", {}).get("system") == fingerprint and "anchor_approvals" in e["signing"]]
+        # the issuance record (regalia-kms-d9): appended, synced, BEFORE anything is printed, in the laptop's one ordered
+        # record of the offline keys' uses (its readers skip kinds they do not know)
+        import time
+        for line in issued:
+            manifest._append_record(args.state_dir, dict(line, at=int(time.time()), provenance=provenance))
     except (Refused, enrol.Refused, OSError, ValueError) as error:          # enrol's: the genesis proof and rotation_of
         print("anchorpolicy: refused: %s" % error, file=sys.stderr)
         return 2

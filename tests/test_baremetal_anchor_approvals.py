@@ -95,6 +95,18 @@ class Approvals(unittest.TestCase):
         self.assertEqual(ap.rotation_generations(current, OTHER_PUB, POINT), {n: g + 1 for n, g in GENERATIONS.items()})
         self.assertEqual(ap.rotation_generations(document(signed_set(OTHER_PUB)), SYSTEM_PUB, POINT), {})
 
+    def test_a_third_live_key_is_refused(self):
+        """regalia-kms-d9: CURRENT at G and NEXT at G+1 are live; a third key waits for the retire's bump."""
+        third = ec.generate_private_key(ec.SECP256R1())          # stands in for nothing: its PEM is only fingerprinted
+        from tests.test_baremetal_enrol import _rsa_pem
+        third_pem = _rsa_pem()
+        current = ap.fill(document(signed_set(), signed_set(OTHER_PUB, "image-2", ("d4", "e5"))), SYSTEM_PUB, POINT, K_A, GENERATIONS)
+        current = ap.fill(current, OTHER_PUB, POINT, K_A, {n: g + 1 for n, g in GENERATIONS.items()})
+        with self.assertRaisesRegex(m.Refused, "keys at G 3 and 4 are live on node a; retire the older"):
+            ap.rotation_generations(current, third_pem, POINT)
+        self.assertEqual(ap.rotation_generations(current, OTHER_PUB, POINT), {n: g + 1 for n, g in GENERATIONS.items()})   # a known key: fine
+        del third
+
     def test_the_increment_approval_is_one_node_s_from_one_value(self):
         doc = ap.increment_document(K_A, POINT, "a", 7)
         self.assertEqual((doc["schema"], doc["node_id"], doc["from"]), (ap.INCREMENT_SCHEMA, "a", 7))
@@ -135,10 +147,26 @@ class Signer(unittest.TestCase):
                 json.dump(value, f)
         return p
 
+    def state(self, root):
+        """The laptop's state directory for `root`: its marker (as the card ceremony writes it) and its signing record."""
+        from deploy.baremetal import cardrecord
+        d = os.path.join(self.d, "state-" + root[:8])
+        if not os.path.isdir(d):
+            os.mkdir(d, 0o700)
+            with open(os.open(os.path.join(d, cardrecord.SIGNING_STATE), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+                json.dump({"schema": cardrecord.SIGNING_STATE_SCHEMA, "root": root}, f)
+        return d
+
+    def issued(self, root):
+        from deploy.baremetal import cardrecord
+        path = os.path.join(self.state(root), cardrecord.SIGNING_RECORD)
+        return [json.loads(line) for line in open(path)] if os.path.exists(path) else []
+
     def run_cli(self, *argv, key=K_A):
+        root = argv[list(argv).index("--root-key") + 1]
         out, err = io.StringIO(), io.StringIO()
         with unittest.mock.patch("sys.stderr", err):
-            code = ap.main(list(argv) + ["--key-fd", str(key_fd(key)), "--offline-session", "ab" * 16], out=out)
+            code = ap.main(list(argv) + ["--key-fd", str(key_fd(key)), "--offline-session", "ab" * 16, "--state-dir", self.state(root)], out=out)
         return code, out.getvalue(), err.getvalue()
 
     def chain(self, doc):
@@ -154,12 +182,41 @@ class Signer(unittest.TestCase):
         code, out, err = self.run_cli("approve-increment", "--root-key", ROOT_PUB, "--chain", chain, "--node-id", "a", "--from", "5")
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out), ap.increment_document(K_A, POINT, "a", 5) | {"signature": json.loads(out)["signature"]})
+        self.assertEqual([(l["kind"], l["node_id"], l["from"], l["provenance"]) for l in self.issued(ROOT_PUB)],
+                         [("anchor-increment", "a", 5, "offline-keys session " + "ab" * 16)])
         code, out, err = self.run_cli("approve-increment", "--root-key", ROOT_PUB, "--chain", chain, "--node-id", "a", "--from", "5", key=OTHER_K_A)
         self.assertEqual((code, out), (2, ""))
         self.assertIn("--key-fd: this key is not the pinned K_A", err)
+        self.assertEqual(len(self.issued(ROOT_PUB)), 1, "a refusal recorded an issuance")
         code, out, err = self.run_cli("approve-increment", "--root-key", ROOT_PUB, "--chain", chain, "--node-id", "z", "--from", "5")
         self.assertEqual((code, out), (2, ""))
         self.assertIn("z is not a node of the chain's tip", err)
+
+    def test_flags_exactly_and_paths_absolute(self):
+        """regalia-kms-51: no abbreviation of a flag (offline-keys checks the exact ones), and every path absolute (it runs
+        tools from inside its own tree)."""
+        from tests.test_baremetal_membership import ROOT_PUB
+        chain = self.path("chain.json", self.chain(document()))
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stderr", err), self.assertRaises(SystemExit):
+            ap.main(["approve-increment", "--root-key", ROOT_PUB, "--chain", chain, "--node-id", "a", "--from", "5", "--key-fd", "9",
+                     "--key-f", "0", "--offline-session", "ab" * 16, "--state-dir", self.state(ROOT_PUB)], out=io.StringIO())
+        self.assertIn("unrecognized arguments: --key-f", err.getvalue())
+        code, out, err = self.run_cli("approve-increment", "--root-key", ROOT_PUB, "--chain", os.path.relpath(chain), "--node-id", "a", "--from", "5")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("--chain %s is not an absolute path" % os.path.relpath(chain), err)
+
+    def test_the_state_directory_is_this_root_s(self):
+        """The issuance record goes to the laptop's record of THIS root's uses (manifest.signing_state): another root's
+        directory is refused before anything is read, and nothing is printed."""
+        from tests.test_baremetal_membership import ROOT_PUB
+        chain = self.path("chain.json", self.chain(document()))
+        err, out = io.StringIO(), io.StringIO()
+        with unittest.mock.patch("sys.stderr", err):
+            code = ap.main(["approve-increment", "--root-key", ROOT_PUB, "--chain", chain, "--node-id", "a", "--from", "5", "--key-fd",
+                            str(key_fd(K_A)), "--offline-session", "ab" * 16, "--state-dir", self.state("cd" * 32)], out=out)
+        self.assertEqual((code, out.getvalue()), (2, ""))
+        self.assertIn("is another root's signing state: nothing is signed", err.getvalue())
 
     def test_approve_at_a_rotation(self):
         from tests.test_baremetal_membership import ROOT_PUB
@@ -174,6 +231,8 @@ class Signer(unittest.TestCase):
         filled = json.loads(out)
         for n, g in GENERATIONS.items():
             self.assertEqual(ap.check_approvals(filled["nodes"][n]["accepted"][1]["signing"]["anchor_approvals"], OTHER_PUB, POINT, n), g + 1)
+        self.assertEqual([(l["kind"], l["node_id"], l["k_sys"], l["generation"]) for l in self.issued(ROOT_PUB)],
+                         [("anchor-approval", n, signkey.pcr_key_fingerprint(OTHER_PUB), g + 1) for n, g in sorted(GENERATIONS.items())])
         # a current document the chain does not commit to is refused
         args[args.index("--current") + 1] = self.path("other.json", dict(current, name="other"))
         code, out, err = self.run_cli(*args)
@@ -221,6 +280,7 @@ class Signer(unittest.TestCase):
         code, out, err = self.run_cli("approve-first", "--root-key", case.root, "--offline-keys-record", record, "--node-id", "b")
         self.assertEqual(code, 0, err)
         self.assertEqual(ap.read_first(json.loads(out), "b")[:2], ("b", POINT))
+        self.assertEqual([(l["kind"], l["node_id"]) for l in self.issued(case.root)], [("anchor-first", "b")])
         code, out, err = self.run_cli("approve-first", "--root-key", case.root, "--offline-keys-record", record, "--node-id", "b", key=OTHER_K_A)
         self.assertEqual((code, out), (2, ""))
         self.assertIn("--key-fd: this key is not the pinned K_A", err)
