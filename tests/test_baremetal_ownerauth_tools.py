@@ -154,11 +154,108 @@ class SetNeedsTheSrk(unittest.TestCase):
         tpm.persistent.discard(ownerauth.SRK)
         auth = ownerauth.from_envelope(value("a"), RECORD, PIN, "a")
         with self.assertRaisesRegex(m.Refused, "systemd's storage root key \\(0x81000001\\) is not persistent"):
-            ownerauth.set_owner(auth, run=tpm)
+            ownerauth.set_owner(auth, tpm.ek_name.hex(), run=tpm)
         self.assertIsNone(tpm.owner_auth)
         tpm.persistent.add(ownerauth.SRK)
-        ownerauth.set_owner(auth, run=tpm)
+        ownerauth.set_owner(auth, tpm.ek_name.hex(), run=tpm)
         self.assertTrue(ownerauth.holds(auth, run=tpm))
+
+
+class TheValueOffTheBus(unittest.TestCase):
+    """#414 (measured on swtpm): changeauth's new value is a parameter, so setting it goes in a session salted to the
+    enrolled EK with parameter encryption; the proof is an owner createprimary, which sends no value."""
+
+    def setUp(self):
+        self.tpm = FakeTpm()
+        self.auth = ownerauth.from_envelope(value("a"), RECORD, PIN, "a")
+
+    def test_set_through_a_session_salted_to_the_enrolled_ek(self):
+        ownerauth.set_owner(self.auth, self.tpm.ek_name.hex(), run=self.tpm)
+        self.assertEqual(self.tpm.salted_with, [self.tpm.ek_name])          # the one changeauth, salted and encrypting
+        self.assertEqual(self.tpm.sessions, {})                              # flushed
+
+    def test_another_ek_is_refused_before_anything_is_sent(self):
+        with self.assertRaisesRegex(m.Refused, "is not the one enrolment recorded"):
+            ownerauth.set_owner(self.auth, "000b" + "00" * 32, run=self.tpm)
+        self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (None, []))
+        self.tpm.ek_name = None
+        with self.assertRaisesRegex(m.Refused, "the TPM holds no EK at 0x81010001: `enrol init` makes it"):
+            ownerauth.set_owner(self.auth, "000b" + "e5" * 32, run=self.tpm)
+
+    def test_the_proof_sends_no_value_as_a_parameter(self):
+        ownerauth.set_owner(self.auth, self.tpm.ek_name.hex(), run=self.tpm)
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv[0])
+            return self.tpm(argv, **kw)
+        self.assertTrue(ownerauth.holds(self.auth, run=run))
+        self.assertNotIn("tpm2_changeauth", calls)
+        self.assertIn("tpm2_createprimary", calls)
+
+    def test_enrol_takes_the_ek_init_recorded(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        with self.assertRaisesRegex(enrol.Refused, "has no finished identity step: run `enrol init` first"):
+            enrol.enrolled_ek_name(d, "a")
+        journal = enrol.Journal(d, "a")
+        journal.started("identity")
+        journal.done("identity", ek_name=self.tpm.ek_name.hex(), ek_public="", ak_public="", ak_name="")
+        self.assertEqual(enrol.enrolled_ek_name(d, "a"), self.tpm.ek_name.hex())
+
+
+class OnlyMeasuredTools(unittest.TestCase):
+    """regalia-kms-d9 on #423: the value stays off the TPM bus because tpm2-tools opens its own HMAC session for -P,
+    measured for ownerauth.MEASURED_TOOLS only; another version is refused before any owner call with a value."""
+
+    def version(self, text, rc=0):
+        return lambda argv, **kw: unittest.mock.Mock(returncode=rc, stdout=text.encode(), stderr=b"")
+
+    def test_the_version_is_read_and_held_to_the_measured_set(self):
+        measured = ownerauth.MEASURED_TOOLS[0]
+        self.assertEqual(ownerauth.tools_version(self.version('tool="tpm2_createprimary" version="%s" tctis="x"' % measured)), measured)
+        ownerauth.require_measured_tools(self.version('version="%s"' % measured))
+        with self.assertRaisesRegex(m.Refused, "tpm2-tools 4.3 is not a version measured to keep the owner authorization off the TPM bus"):
+            ownerauth.require_measured_tools(self.version('version="4.3"'))
+        with self.assertRaisesRegex(m.Refused, "cannot tell tpm2-tools' version"):
+            ownerauth.require_measured_tools(self.version("", rc=1))
+
+    def test_the_channel_itself_refuses_an_unmeasured_tpm2_tools_once_per_process(self):
+        auth = ownerauth.from_envelope(value("a"), RECORD, PIN, "a")
+        asked = []
+
+        def tools(argv, **kw):
+            asked.append(argv)
+            return unittest.mock.Mock(returncode=0, stdout=b'tool="tpm2_createprimary" version="4.3"', stderr=b"")
+        with unittest.mock.patch.object(ownerauth, "_tools_checked", False), unittest.mock.patch("subprocess.run", tools):
+            with self.assertRaisesRegex(m.Refused, "tpm2-tools 4.3 is not a version measured"):
+                with ownerauth.owner_call(auth):
+                    self.fail("an owner call was made on an unmeasured tpm2-tools")
+            with self.assertRaisesRegex(m.Refused, "tpm2-tools 4.3 is not a version measured"):
+                ownerauth.set_owner(auth, "000b" + "e5" * 32, run=FakeTpm())
+        measured = ownerauth.MEASURED_TOOLS[0]
+        good = lambda argv, **kw: asked.append(argv) or unittest.mock.Mock(returncode=0, stdout=('version="%s"' % measured).encode(), stderr=b"")
+        asked.clear()
+        with unittest.mock.patch.object(ownerauth, "_tools_checked", False), unittest.mock.patch("subprocess.run", good):
+            for _ in range(3):
+                with ownerauth.owner_call(auth):
+                    pass
+            self.assertEqual(len(asked), 1)                                  # once per process
+        with ownerauth.owner_call(None):                                     # an empty owner authorization: no gate
+            pass
+
+    def test_a_proof_whose_key_cannot_be_flushed_says_so(self):
+        tpm = FakeTpm()
+        auth = ownerauth.from_envelope(value("a"), RECORD, PIN, "a")
+        ownerauth.set_owner(auth, tpm.ek_name.hex(), run=tpm)
+
+        def run(argv, **kw):
+            if argv[:2] == ["tpm2_flushcontext", "-t"]:
+                return unittest.mock.Mock(returncode=1, stdout=b"", stderr=b"ERROR: the TPM said no")
+            return tpm(argv, **kw)
+        with self.assertRaisesRegex(m.Refused, "the proof's transient key could not be flushed"):
+            ownerauth.holds(auth, tcti="swtpm:path=/x", run=run)          # a simulator: no resource manager flushes it
+        self.assertTrue(ownerauth.holds(auth, tcti="device:/dev/tpmrm0", run=run))   # the kernel's manager does
 
 
 class ReanchorTakesIt(unittest.TestCase):
@@ -189,7 +286,8 @@ class ReanchorTakesIt(unittest.TestCase):
         err = io.StringIO()
         argv = ["--membership", d + "/m.json", "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "a",
                 "--peer", "b=%s/b.json" % d, "--peer", "c=%s/c.json" % d, "--ownerauth", record]
-        with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err):
+        with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
+                unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
             rc = reanchor.main(argv, ask=lambda prompt: None, highwater=highwater)
         self.assertEqual(rc, 1)
         self.assertIn("stop after the anchor is built", err.getvalue())
@@ -199,7 +297,8 @@ class ReanchorTakesIt(unittest.TestCase):
         stdin = unittest.mock.Mock(buffer=value("b"))
         stdin.buffer.isatty = lambda: False
         err = io.StringIO()
-        with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err):
+        with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
+                unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
             self.assertEqual(reanchor.main(argv, ask=lambda prompt: None, highwater=highwater), 1)
         self.assertIn("is not a's", err.getvalue())
         self.assertEqual(built, {})
@@ -231,12 +330,25 @@ class RecountTakesIt(unittest.TestCase):
         err = io.StringIO()
         run = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, b"inactive\n", b"")
         with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
-                unittest.mock.patch.object(node, "heartbeat_counter", counter), unittest.mock.patch.dict(os.environ, {}, clear=False):
+                unittest.mock.patch.object(node, "heartbeat_counter", counter), unittest.mock.patch.dict(os.environ, {}, clear=False), \
+                unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
             os.environ.pop("TPM2TOOLS_TCTI", None)
             rc = recount.main(["--config", config, "--audit-log", d + "/audit.jsonl", "--ownerauth", record], ask=lambda p: None, run=run)
         self.assertEqual(rc, 1, err.getvalue())
         self.assertIn("stop after the counter is built", err.getvalue())
         self.assertEqual(built["owner_auth"].check("a"), RECORD["record"]["nodes"]["a"]["check"])
+
+
+def setUpModule():
+    """The channel refuses an unmeasured tpm2-tools once per process (ownerauth.measured_once). These tests are about
+    behaviour, and OnTheWire IS the measurement: the gate is marked passed for the module, and OnlyMeasuredTools
+    tests it with the mark cleared."""
+    global _saved_checked
+    _saved_checked, ownerauth._tools_checked = ownerauth._tools_checked, True
+
+
+def tearDownModule():
+    ownerauth._tools_checked = _saved_checked
 
 
 if __name__ == "__main__":
