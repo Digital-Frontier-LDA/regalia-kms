@@ -119,6 +119,7 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.instance }} holds an older membership epoch than its peers: it is cut off from them, or its sync withholds the newer chain."
+          description: "deploy/baremetal/README.md §7: compare `regalia-node check` on every node of the cluster; a node behind whose sync is running and reaches its peers is withholding."
       # The same, from root's own reading of the anchor (esp-advance.prom) on BOTH sides (regalia-kms-48): this node's sync
       # cannot hide it by writing a higher epoch in membership.prom than it anchored, and no peer's sync can make every
       # honest node fire by writing an inflated one. The reference lags membership by the ESP advance (seconds).
@@ -129,6 +130,7 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.instance }}'s TPM anchor is older than the epoch its peers hold: its rollback protection and next boot lag the cluster."
+          description: "deploy/baremetal/README.md §7: read `journalctl -u regalia-esp-advance` and `regalia-node check` on that node; fix the ESP, then `systemctl start regalia-esp-advance`."
       # regalia-esp-advance's own file (root; regalia-kms-48): a sync that lies in membership.prom does not silence these.
       - alert: RegaliaEspAdvanceFailing
         expr: regalia_esp_advance_ok == 0

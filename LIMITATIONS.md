@@ -99,7 +99,8 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - A compromised `regalia-sync` that stops publishing is not caught by that node's own alerts (the
     advance never runs, and sync's file can say anything). It is caught ACROSS the nodes:
     `RegaliaMembershipBehindFleet` (its held epoch) and `RegaliaAnchorBehindFleet` (its anchor, as root
-    reads it) warn after 30 min below the highest epoch its peers hold. **Accepted:** that needs the peers'
+    reads it) warn after 30 min below the highest epoch its peers hold (a node whose metrics flap away more often
+    than that resets the `for:` and never fires; the `*MetricsMissing` rules see a file that stays away). **Accepted:** that needs the peers'
     metrics to be scraped together (one job per cluster) and at least one honest peer ahead; a node retired
     or revoked lags by design and must leave the scrape.
   - Its run is in the journal and its metrics, not in a hash-chained trail (#278).

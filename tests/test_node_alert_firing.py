@@ -88,6 +88,9 @@ EXTRA = [
      [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_membership_epoch", NODE_B, "5+0x40"),
       ("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "4+0x40")],
      [NODE_B]),
+    # a rolling update: one node's anchor follows ten minutes late, then catches up: no alert (1e)
+    ("RegaliaAnchorBehindFleet", "b's anchor catches up within ten minutes", 2100,
+     [("regalia_esp_anchor_epoch", NODE_A, "4+0x5 5+0x35"), ("regalia_esp_anchor_epoch", NODE_B, "4+0x15 5+0x25")], []),
     # a peer's sync that writes an inflated epoch moves no honest node's alert: the reference is root-read anchors (48)
     ("RegaliaAnchorBehindFleet", "a peer's sync claims epoch 99; every anchor is at 5", 2100,
      [("regalia_membership_epoch", NODE_A, "99+0x40"), ("regalia_membership_epoch", NODE_B, "5+0x40"),
