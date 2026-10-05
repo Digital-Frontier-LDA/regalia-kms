@@ -9,11 +9,19 @@ import unittest
 from deploy.baremetal import membership as m
 from deploy.baremetal import owner, revoke
 from tests.test_baremetal_heartbeat import FakeTpm
-from tests.test_baremetal_membership import ROOT, ROOT_PUB, sign
+from tests.test_baremetal_membership import POLICY, ROOT, ROOT_PUB, sign
 from tests.test_baremetal_membership_v4 import NODE_KEYS, OWNER_KEYS, STRANGER, manifest4, nodes4, p256_sig, pub
 from tests.test_baremetal_owner import OwnerKey
 
 T0 = 1790000000
+
+
+class PolicyWritten(m.HighWater):
+    """An anchor laid down by policy whose run-time writes go straight to the FakeTpm, which has no policy sessions (it
+    does not check a write's authorization): what a v4 chain's Store needs here."""
+
+    def _write(self, tool, index, *args, input=None, owner=False):
+        return self._tpm(tool, index, "-C", index, *args, input=input)
 
 
 def signer_of(node_id):
@@ -66,7 +74,9 @@ class Revoke(unittest.TestCase):
         envelope = {"manifest": full["manifest"], "signatures": full["signatures"]}
         self.assertEqual(revoke.met(self.m1, envelope), (True, {"a", "b"}))
         # the store takes it, as every node's will when it pulls it
-        hw = m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=FakeTpm())
+        # under v4 the anchor is written by policy only (#242 B3): defined so, and written through the fake (a real policy
+        # session is test_baremetal_policy_writes's, on a software TPM)
+        hw = PolicyWritten("0x1500016", lock_path=self.d + "/hw.lock", run=FakeTpm(), define_policy=POLICY)
         hw.define()
         store = m.Store(self.d + "/membership.json", ROOT_PUB, hw)
         store.commit(sign(self.m1, ROOT))

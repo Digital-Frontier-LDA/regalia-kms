@@ -97,8 +97,33 @@ groups:
           severity: warning
         annotations:
           summary: "The unlock listener refused requests before any work ({{ $labels.cause }}): something is hammering it."
+      # #66 B3 (regalia-kms-48): sync holds and publishes a chain the TPM anchor has not reached. regalia-esp-advance
+      # moves the anchor seconds after each publication (it writes the ESP first); fifteen minutes behind is a run that
+      # keeps failing (an ESP not mounted, full or refused, a TPM refusal), and rollback protection stays at the anchor.
+      # README §7: fix the ESP, then systemctl start regalia-esp-advance.
+      - alert: RegaliaMembershipAnchorBehind
+        expr: regalia_membership_epoch > regalia_membership_anchor_epoch
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The TPM anchor is behind the membership chain this node holds: regalia-esp-advance keeps failing, and the next boot renders from an older chain."
+      # regalia-esp-advance's own file (root; regalia-kms-48): a sync that lies in membership.prom does not silence these.
+      - alert: RegaliaEspAdvanceFailing
+        expr: regalia_esp_advance_ok == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "regalia-esp-advance's last run failed fifteen minutes ago and has not succeeded since: the TPM anchor is not following the chain. README §7."
+      - alert: RegaliaNextBootNeedsRecoveryKey
+        expr: regalia_esp_boot_renderable == 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "The chain on this node's ESP leaves the initrd nothing to render (no peer, or the node gone from the manifest): its next boot asks for the recovery key. update.py apply refuses to reboot it."
       - alert: RegaliaNodeMetricsStale
-        expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?(authtime|heartbeat|lease)\\.prom"} > 120
+        expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?(authtime|heartbeat|lease|membership)\\.prom"} > 120
         labels:
           severity: warning
         annotations:
@@ -123,6 +148,20 @@ groups:
           severity: critical
         annotations:
           summary: "{{ $labels.instance }} is scraped but has no heartbeat.prom: regalia-sync's heartbeat watch never wrote it."
+      - alert: RegaliaMembershipMetricsMissing
+        expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?membership\\.prom"}
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but has no membership.prom: regalia-sync never wrote it, so a TPM anchor left behind is not seen."
+      - alert: RegaliaEspAdvanceMetricsMissing
+        expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?esp-advance\\.prom"}
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but has no esp-advance.prom: regalia-esp-advance has not run since boot (its unit runs at boot)."
       - alert: RegaliaLeaseMetricsMissing
         expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?lease\\.prom"}
         for: 5m

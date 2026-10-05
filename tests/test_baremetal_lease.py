@@ -210,7 +210,7 @@ class Verify(Case):
         good = sign(body, b)
         for label, reason, change in (
                 ("an altered signature", "signature does not verify", lambda s: s.update(sig=s["sig"][:-2] + ("00" if s["sig"][-2:] != "00" else "01"))),
-                ("an altered quote", "signature does not verify", lambda s: s.update(quote=s["quote"][:-2] + "ff")),
+                ("an altered quote", "signature does not verify", lambda s: s.update(quote=s["quote"][:-2] + ("ff" if s["quote"][-2:] != "ff" else "fe"))),
                 ("not a TPM structure", "lease signature is refused", lambda s: s.update(quote="00" * 40)),
                 ("an unrestricted key", "restricted, sign-only", lambda s: s.update(ak_public=s["ak_public"].replace("00050072", "00040072", 1))),
                 ("uppercase hex", "signature.sig must be lowercase hex", lambda s: s.update(sig=s["sig"].upper())),

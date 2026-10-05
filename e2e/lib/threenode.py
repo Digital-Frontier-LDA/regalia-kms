@@ -32,6 +32,11 @@ Stand-ins, each named where it is made, and each replaceable when the real piece
     passed as a plain credential (on a host LoadCredentialEncrypted= unseals it under the TPM's policy), and
     the key socket (socket activation, systemd-cryptsetup's side played by this fixture);
   * regalia-wg-apply.path: the same trigger (PathChanged= on the published chain), a transient path unit.
+  * regalia-esp-advance (#66 B3): the node's real command, as root with the installed unit's identity, at start and
+    from a transient path unit on the published chain; its ESP is a directory of the node's own (esp/, not a FAT
+    partition, and nothing boots from it) and its anchor lock is in the node's run directory. sync (and deliver,
+    through the node's Store) never moves the TPM anchor: this does, so advance() checks that each running node's
+    anchor follows the epoch.
 
 Underlay: a bridge in a switch namespace, node i at 192.0.2.(10*i)/24. Each node's site configuration names
 the others' underlay addresses, its boot mesh (wg-unlock) and its service mesh (wg-svc), as on a host.
@@ -69,10 +74,11 @@ ADMISSION_DIR_MODE = _state_directory_mode("regalia-admission.service")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import attest, authtime, bootnet, heartbeat, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
-import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root key
+from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
+import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
 NAMES = ("a", "b", "c")
+RUN_PCR_KEY = signkey.PCR_PUBLIC_KEY_PATH       # where systemd puts the system-phase key on a host: the units' bind target
 RECOVERY = b"cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuuvvcb"     # the TEST recovery key (as the unlock tests')
 MARKER = b"regalia-kms root volume marker"
 SWITCH = "e2e3-sw"
@@ -177,6 +183,7 @@ class Cluster:
         self.manifest = None
         self.keys = {}
         self.authtimes = {}
+        self.authtime_writers = {}                    # node -> (its writer thread, the Event that halts it at power-off)
         self.loops = {}
         self.services = {n: () for n in names}        # what start() last started on each node, until stop()
         self.client = os.environ.get("REGALIA_UNLOCK_BIN", "")
@@ -279,6 +286,11 @@ class Cluster:
             return key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         self.pcr_private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         self.pcr_pem = public(self.pcr_private)
+        # this process reads the nodes' anchors as root on a booted host does (#242 B3: under v4 every index is written by
+        # policy, so a read needs the running image's system-phase key, node.image_policy): the cluster's one such key,
+        # where root's /run/systemd would have it. _as_booted swaps a node's own in, and puts this one back
+        (self.work / "tpm2-pcr-public-key.pem").write_bytes(self.pcr_pem)
+        signkey.PCR_PUBLIC_KEY_PATH = str(self.work / "tpm2-pcr-public-key.pem")
         self.pcr_sigs = {}                            # PCR 11 value -> its signature entry
         initrd_pem = public(rsa.generate_private_key(public_exponent=65537, key_size=2048))
         sb = ec.generate_private_key(ec.SECP256R1())
@@ -526,13 +538,20 @@ class Cluster:
 
     def _anchor_and_store(self, n):
         here = self.node(n.name)
-        anchor = here.anchor()
-        anchor.define()
         here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
-        here.store().commit(self.chain[0])
-        with self._as_booted(n.name):                 # laid down by the node's policy (node.define_policy: the system key its measurements name)
+        self._enrolled(n.name, self.chain)            # the chain is v4: the anchor written by policy only (#242 B3)
+
+    def _enrolled(self, name, chain):
+        """v4 (#242 B3): the node's trust anchors as `enrol commit`'s step lays them down, enrol.anchor_and_store: the
+        anchor and the signing counter defined under the node's policy (the system key its measurements name), the
+        chain committed by policy sessions; then its heartbeat counter, by the same policy. Run as its booted system
+        (_as_booted), in the system phase: enrolment runs on the booted image, and a policy write needs PCR 11 at the
+        system value (_leave_initrd, which start() then does not repeat)."""
+        here = self.node(name)
+        self._leave_initrd(name)
+        with self._as_booted(name):
+            enrol.anchor_and_store(str(self.nodes[name].cfg_path), chain)
             node.heartbeat_counter(here.cfg).define()
-            node.signing_counter(here.cfg).define()  # #199: the highest sequence this node has signed
 
     # ---- the stand-ins ----
 
@@ -552,9 +571,37 @@ class Cluster:
         service = authtime.Service(str(n.run / "authtime.json"), ["nts1.e2e3.invalid", "nts2.e2e3.invalid"], reading=reading)
         self.authtimes[n.name] = service
         service.step()
-        thread = threading.Thread(target=service.run, args=(lambda: self.stop_threads,), kwargs={"interval": 5}, daemon=True)
+        self._authtime_writer(n.name)
+
+    def _authtime_writer(self, name):
+        """The node's authtime writer, every 5 s, as its unit would run on a host: only while the node is powered.
+        stop(power=...) halts it before emptying the node's /run (a powered-off node runs nothing, and a writer still
+        renaming its temp file there raced the emptying: three-node-outage on 8eb35a6); start() runs it again."""
+        service, off = self.authtimes[name], threading.Event()
+
+        def loop():
+            while not self.stop_threads and not off.is_set():
+                service.step()
+                off.wait(5)
+        thread = threading.Thread(target=loop, daemon=True)
         thread.start()
         self.threads.append(thread)
+        self.authtime_writers[name] = (thread, off)
+
+    def _authtime_halt(self, name):
+        """The node's authtime writer stopped, and waited for: nothing writes its /run after this returns."""
+        thread, off = self.authtime_writers.get(name, (None, None))
+        if thread is None:
+            return
+        off.set()
+        thread.join(30)
+        if thread.is_alive():
+            raise RuntimeError("%s's authtime writer did not stop: its /run is not emptied under it" % name)
+
+    def _authtime_resume(self, name):
+        thread, _ = self.authtime_writers.get(name, (None, None))
+        if name in self.authtimes and (thread is None or not thread.is_alive()):
+            self._authtime_writer(name)
 
     # ---- running ----
 
@@ -582,7 +629,7 @@ class Cluster:
         # where a booted host's systemd-stub puts the image's PCR signatures and its system-phase key: the node's own
         pcr = n.dir / "pcr"
         props += ["BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", signkey.PCR_PUBLIC_KEY_PATH)]
+                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
         return props
 
     def start(self, name, services=("sync", "wg-apply")):
@@ -598,6 +645,9 @@ class Cluster:
         if not self.time[name]:                       # booted again: its time is checked again (chrony, on a host)
             self.time[name] = True
             self.authtimes[name].step()
+        self._authtime_resume(name)                   # its writer runs again once it is booted (halted at power-off)
+        if "sync" in services:                        # its path unit FIRST, as paths.target precedes the services on a host:
+            self._esp_watch(n)                        # sync publishes at once, and a change before the watch is missed
         for service in services:
             if service == "wg-apply" and not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
                 raise RuntimeError("%s's sync published no chain" % name)
@@ -607,6 +657,8 @@ class Cluster:
             if service == "wg-apply":                 # and again at every new chain, as regalia-wg-apply.path runs it
                 self._run(n, "wg-apply", unit=self.unit(name, "wg-watch"),
                           extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
+        if "sync" in services:                        # and regalia-esp-advance's run at start, as its unit's WantedBy= gives
+            self._esp_advance(n)
         self.services[name] = tuple(dict.fromkeys(self.services[name] + tuple(services)))   # stop() clears it
         if self.audit and name in self.nodes:         # the node's trail shippers run with it, as regalia-audit-ship@ does
             self._ship_start(name)
@@ -635,6 +687,46 @@ class Cluster:
                 return None
         if not until(lambda: epoch() == self.manifest["epoch"], 180, 2):
             raise RuntimeError("%s, started at epoch %d, did not take epoch %d by its sync" % (name, held, self.manifest["epoch"]))
+        # #66 B3 (regalia-kms-48's read): and its regalia-esp-advance wrote what it caught up on to its ESP, then anchored it
+        target = self.manifest["epoch"]
+        if not until(lambda: self.anchored(name) == target and self.esp_epoch(name) == target, 60, 1):
+            raise RuntimeError("%s caught up on epoch %d, but its TPM anchor is at %s and its ESP at %s: regalia-esp-advance did not "
+                               "follow | %s" % (name, target, self.anchored(name), self.esp_epoch(name), self.journal(name, "esp-watch")[-800:]))
+
+    def esp(self, name):
+        """The node's ESP stand-in (a directory: what regalia-esp-advance writes; nothing boots from it here)."""
+        return self.nodes[name].dir / "esp"
+
+    def _esp_args(self, n):
+        esp = self.esp(n.name)
+        if not esp.exists():
+            esp.mkdir(mode=0o755)
+            os.chmod(esp, 0o755)
+        return ("--esp", str(esp), "--esp-lock", str(n.run / "esp-advance.lock"))
+
+    def _esp_watch(self, n):
+        """#66 B3: regalia-esp-advance.path's stand-in, at every new published chain: the chain to the node's ESP, then
+        the TPM anchor. A run that fails is in its journal; anchored() says where the anchor is."""
+        self._run(n, "esp-advance", unit=self.unit(n.name, "esp-watch"), args=self._esp_args(n),
+                  extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
+
+    def _esp_advance(self, n):
+        """regalia-esp-advance's run at start (its unit is WantedBy=multi-user.target), once sync has published: the path
+        unit's own service, started and waited for, so that two runs never overlap (one unit, as on a host)."""
+        if not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
+            raise RuntimeError("%s's sync published no chain" % n.name)
+        unit = self.unit(n.name, "esp-watch") + ".service"
+        if sh("systemctl", "start", unit, check=False).returncode != 0:
+            raise RuntimeError("%s's regalia-esp-advance failed at start: %s" % (n.name, self.journal(n.name, "esp-watch")[-1500:]))
+
+    def anchored(self, name):
+        """The node's TPM anchor epoch (read as root)."""
+        return self.node(name).anchor().value()
+
+    def esp_epoch(self, name):
+        """The epoch of the chain on the node's ESP stand-in, or None."""
+        path = self.esp(name) / "EFI" / "regalia" / "membership.json"
+        return membership.load(path.read_bytes(), membership.MAX_CHAIN_BYTES)[-1]["manifest"]["epoch"] if path.exists() else None
 
     def _run(self, n, service, oneshot=False, unit=None, extra=(), args=()):
         argv = ["systemd-run", "--unit", unit or self.unit(n.name, service), "--collect"] + list(extra)
@@ -713,13 +805,11 @@ class Cluster:
         envelope = self.chain[-1]
         n = self.nodes[new]
         here = self.node(new)
-        here.anchor().define()
         here.documents().put(document)
-        for i, held in enumerate(self.chain):
-            here.store().commit(held, final=i == len(self.chain) - 1)
-        with self._as_booted(new):                    # laid down by its policy, as at build (#389: the system key its set names)
-            node.heartbeat_counter(here.cfg).define()
-            node.signing_counter(here.cfg).define()
+        self._enrolled(new, self.chain)                 # as at build: the whole chain, by its policy (#242 B3)
+        # enrolment ran on the booted system (PCR 11 in its system phase, _leave_initrd); the host reboots before its
+        # initrd asks for the disk, so its quote shows the initrd phase the peers admit
+        self.power_cycle(new)
         sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
@@ -816,7 +906,8 @@ class Cluster:
         emptied (tmpfs on a host), its tunnels gone, its TPM through the power loss (power_cycle) and its time no
         longer authenticated until it starts again. power=None: the services only, as a crash."""
         n = self.member(name)
-        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply")] + [self.unit(name, "wg-watch") + t for t in (".path", ".service")] + \
+        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply")] + \
+                [self.unit(name, w) + t for w in ("wg-watch", "esp-watch") for t in (".path", ".service")] + \
                 [self.unit(name, "ship-" + trail) for trail, _, _ in AUDIT_TRAILS]:
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
@@ -825,8 +916,11 @@ class Cluster:
             sh("cryptsetup", "close", "e2e3-" + name, check=False)
         if power:
             self.time[name] = False
+            self._authtime_halt(name)                 # nothing of this node writes its /run while it is off
+            # its authtime writer is halted above; an entry that vanishes anyway (a belt) is gone, not an error
             for entry in n.run.iterdir():
-                shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+                with contextlib.suppress(FileNotFoundError):
+                    shutil.rmtree(entry) if entry.is_dir() and not entry.is_symlink() else entry.unlink()
             for interface in ("wg-svc", "wg-unlock", "wg-boot"):
                 n.in_ns("ip", "link", "del", interface, check=False)
             self.power_cycle(name, orderly=(power == "cycle"))
@@ -1178,6 +1272,13 @@ class Cluster:
         for name in running:
             if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
                 raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], seed))
+        # #66 B3: neither deliver nor sync moves the anchor; each running node's regalia-esp-advance writes the epoch to its
+        # ESP and then anchors it. Checked at every advance, so tier N keeps the anchor's progression (regalia-kms-24)
+        for name in [seed] + running:
+            if not until(lambda: self.anchored(name) == manifest["epoch"] and self.esp_epoch(name) == manifest["epoch"], 60, 1):
+                raise RuntimeError("%s's TPM anchor is at %s and its ESP at %s, not epoch %d: regalia-esp-advance did not follow | %s"
+                                   % (name, self.anchored(name), self.esp_epoch(name), manifest["epoch"],
+                                      self.journal(name, "esp-watch")[-800:]))
         self._beaten(manifest, owner_recovery)
         return manifest, since
 
@@ -1197,21 +1298,27 @@ class Cluster:
                 path = d / ("document-%d-%d.json" % (envelopes[-1]["manifest"]["epoch"], i))
                 path.write_text(json.dumps(document))
                 args.append(str(path))
-        # in a transient unit of root's with the node's /run/systemd as its services see it (the system-phase PCR key and
-        # its signatures, bound as _props binds them): where an operator runs it on the host, and what the node's policy
-        # sessions read when the anchor is written by policy (#242 B3, 95's read); the other nodes' directories hidden
+        done = self.as_root(name, "deliver-%d" % envelopes[-1]["manifest"]["epoch"], args)
+        if done.returncode != 0:
+            raise RuntimeError("deliver to %s failed (%d): %s" % (name, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
+        return done.stdout
+
+    def as_root(self, name, label, args, input=None, in_ns=False):
+        """`args` run as root on node `name`'s host, the way an operator or a root unit runs it there: a transient unit of
+        root's, named e2e3-<node>-<label>, with the node's /run/systemd as its services see it (the system-phase PCR key
+        and its signatures, bound as properties() binds them: what the node's policy sessions read, and what a read of its
+        anchor needs once it is written by policy, #242 B3), the other nodes' directories hidden, and with `in_ns` in the
+        node's network namespace. `input` goes to its standard input. Returns the completed process (not checked)."""
         n = self.member(name)
         pcr = n.dir / "pcr"
         props = ["WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1",
                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", signkey.PCR_PUBLIC_KEY_PATH)]
+                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
+        props += ["NetworkNamespacePath=/run/netns/" + n.ns] if in_ns else []
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
-        done = sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, "deliver-%d" % envelopes[-1]["manifest"]["epoch"]),
+        return sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, label),
                   *[a for p in props for a in ("-p", p)], *args, check=False,
-                  stdin=subprocess.DEVNULL)
-        if done.returncode != 0:
-            raise RuntimeError("deliver to %s failed (%d): %s" % (name, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
-        return done.stdout
+                  **({"input": input} if input is not None else {"stdin": subprocess.DEVNULL}))
 
     def journal(self, name, service, lines=40):
         return sh("journalctl", "-u", self.unit(name, service), "-n", str(lines), "--no-pager", "-o", "cat", check=False).stdout
