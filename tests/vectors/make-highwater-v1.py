@@ -53,7 +53,43 @@ def chain(length, fork_at=None):
     return envelopes
 
 
-CHAINS = {"main": chain(6), "fork at 3": chain(6, fork_at=3), "fork at 4": chain(6, fork_at=4)}
+def v4_chain(length):
+    """A v4 chain (#242 B3: under it the anchor is written by policy only): the same nodes with SSH host keys and fixed
+    P-256 signing keys, one Ed25519 owner key, and the format's signer rules."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    def p256(n):
+        return ec.derive_private_key(0x5EED4000 + n, ec.SECP256R1()).public_key().public_bytes(
+            serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()
+    owner = Ed25519PrivateKey.from_private_bytes(bytes([0x42]) * 32).public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+    nodes = [dict(node(i), ssh_host_pub="%02x" % (i + 90) * 32, signing_key={"alg": "ecdsa-p256", "key": p256(i)}) for i in (1, 2, 3)]
+    envelopes, prev = [], ""
+    for epoch in range(1, length + 1):
+        manifest = {"schema": m.SCHEMA_V4, "epoch": epoch, "prev_digest": prev, "policy_version": "p1", "issued_at": "2026-10-04T12:00:00Z",
+                    "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600,
+                    "owner_keys": [{"alg": "ed25519", "key": owner}],
+                    "heartbeat_signers": {"threshold": 2, "parties": ["n1", "n2", "n3", "owner"]},
+                    "activation_signers": {"threshold": 2, "parties": ["n1", "n2", "n3"]},
+                    "revocation_signers": [{"threshold": 2, "parties": ["n1", "n2", "n3"]}, {"threshold": 1, "parties": ["owner"]}],
+                    "nodes": nodes}
+        envelopes.append(envelope(manifest))
+        prev = m.digest(manifest)
+    return envelopes
+
+
+CHAINS = {"main": chain(6), "fork at 3": chain(6, fork_at=3), "fork at 4": chain(6, fork_at=4), "v4": v4_chain(6)}
+
+
+def composed(document):
+    """A document for the file: every "key" written "public" (the v4 chain's typed keys), as make-membership-v4.py writes
+    them, so the secret scanner's generic rule does not read a public key under the name "key" as a credential. Readers
+    undo it (cmd/regalia-unlock: restoreTyped, vectorManifest; the nv test's restore)."""
+    if isinstance(document, dict):
+        return {("public" if k == "key" else k): composed(v) for k, v in document.items()}
+    if isinstance(document, list):
+        return [composed(v) for v in document]
+    return document
 
 
 def manifests_of(envelopes):
@@ -96,7 +132,8 @@ class Tpm:
 
 
 def decide(hw, manifests):
-    """Store._load before its writes."""
+    """Store._load before its writes, judged by the tip's schema as the Store judges it (#242 B3, Store._judge_by)."""
+    hw._schema = manifests[-1]["schema"]
     try:
         high = hw.value()
         epoch = manifests[-1]["epoch"]
@@ -115,15 +152,15 @@ cases = []
 scratch = tempfile.mkdtemp()
 
 
-def case(name, anchored, chain_name, length, change=None, highest=41, then=None, policy=None):
-    """A TPM anchored through `anchored` epochs of the main chain (define, then anchor() each), changed by
+def case(name, anchored, chain_name, length, change=None, highest=41, then=None, policy=None, anchored_on="main"):
+    """A TPM anchored through `anchored` epochs of the chain `anchored_on` (define, then anchor() each), changed by
     `change(tpm, hw)`, read against the first `length` epochs of `chain_name` by a node whose approved-image
     policy is `policy`."""
     lock = os.path.join(scratch, "%d.lock" % len(cases))
     tpm = Tpm(highest)
     hw = m.HighWater(INDEX, run=tpm, lock_path=lock, policy=policy)
     hw.define()
-    digests = m.Store._digests(manifests_of(CHAINS["main"]))
+    digests = m.Store._digests(manifests_of(CHAINS[anchored_on]))
     for epoch in range(1, anchored + 1):
         hw.anchor(epoch, digests)
     if change:
@@ -262,8 +299,14 @@ case("a policy-written slot with an empty authPolicy", 3, "main", 3, both(by_pol
      then="(none)")
 case("a policy-written base", 3, "main", 3, by_policy("0x1500017"), policy=POLICY, then="attributes")
 case("an owner-written anchor read by a node with a policy", 3, "main", 3, policy=POLICY, then="high_water")
+# #242 B3: under a v4 chain tip the anchor is written by policy only; v1-v3 keep both layouts (the cases above)
+case("a v4 chain, an owner-written anchor", 3, "v4", 3, anchored_on="v4", policy=POLICY, then="is owner-written: under regalia.membership/v4")
+case("a v4 chain, a policy-written anchor", 3, "v4", 3, by_policy(*ALL), anchored_on="v4", policy=POLICY, then="high_water")
+case("a v4 chain, owner-written slots beside a policy-written counter", 3, "v4", 3, by_policy(INDEX), anchored_on="v4", policy=POLICY,
+     then="0x150001a is owner-written")
+case("a v4 chain ahead of a policy-written anchor", 3, "v4", 5, by_policy(*ALL), anchored_on="v4", policy=POLICY, then="high_water")
 
 shutil.rmtree(scratch)
 print(json.dumps({"about": __doc__.strip().split("\n\n")[0], "root_public": root_pub,
-                  "chains": {name: [{"manifest": e["manifest"], "sig": e["signature"]["sig"]} for e in envs] for name, envs in CHAINS.items()},
+                  "chains": {name: [{"manifest": composed(e["manifest"]), "sig": e["signature"]["sig"]} for e in envs] for name, envs in CHAINS.items()},
                   "cases": cases}, indent=1, sort_keys=True))

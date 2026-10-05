@@ -142,8 +142,13 @@ def scenario(cluster):
 
     header("1b  #75: update.py's live leases, the real call: a asks b and c for a lease for its boot, as root in its namespace")
     def live_leases():
-        return json.loads(cluster.nodes["a"].in_ns("env", "PYTHONDONTWRITEBYTECODE=1", "/usr/bin/python3", "-Es", "-c", LIVE_LEASES,
-                                                    input=json.dumps({"cfg": str(cluster.nodes["a"].cfg_path)}), cwd=str(cluster.code)).stdout)
+        # as root in a's namespace with a's /run/systemd, as update.py runs on its host (#242 B3: its read of a's anchor,
+        # written by policy, needs the system-phase key)
+        done = cluster.as_root("a", "live-leases-%d" % time.monotonic_ns(), ["/usr/bin/python3", "-Es", "-c", LIVE_LEASES],
+                               input=json.dumps({"cfg": str(cluster.nodes["a"].cfg_path)}), in_ns=True)
+        if done.returncode != 0:
+            raise RuntimeError("update.py's live leases on a failed (%d): %s" % (done.returncode, (done.stderr or done.stdout).strip()[-600:]))
+        return json.loads(done.stdout)
     got = live_leases()
     if got["refused"] and all("RATE:" in r for r in got["refused"].values()):
         # a's own admission may have spent its lease requests at b during the bootstrap (6 a minute, sync.RATE): the
