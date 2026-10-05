@@ -135,23 +135,27 @@ def scenario(cluster):
 
     header("5  without authenticated time a node signs nothing")
     # BY POSITION IN a's TRAIL, NOT BY TIME (regalia-kms-48 and 3e): a trail's "at" is whole seconds, and a signature
-    # a's Proposer began before its clock read saw the switch is legitimate. So: the trail's length before the switch;
-    # then a's first refusal for want of time after it, which must exist; then nothing signed after THAT refusal.
-    # Between the switch and the refusal, one signature in flight is allowed (the Proposer reads the time once per
-    # step): the stated limitation (LIMITATIONS.md, Tests)
-    switched_at = len(cluster.trail("a"))
+    # a's Proposer began before its clock read saw the switch is legitimate. So: the trail's last sequence before the
+    # switch; then a's first refusal for want of time after it, which must exist; then nothing signed after THAT
+    # refusal. Positions are each line's own hash-chained `seq` (trails.py), never a list index, so a rotation or a
+    # prune of the file cannot move them. Between the switch and the refusal, one signature in flight is allowed (the
+    # Proposer reads the time once per step): the stated limitation (LIMITATIONS.md, Tests)
+    switched_at = max([e.get("seq", 0) for e in cluster.trail("a")] or [0])
     cluster.time["a"] = False                        # chrony stops vouching (the stand-in's switch)
     ok(until(lambda: not json.loads((cluster.nodes["a"].run / "authtime.json").read_text())["authenticated"], 30, 1) is True,
        "a's authtime.json says not authenticated")
 
     def first_refusal():
         # as a proposer: Proposer.step reads authenticated time before it asks whether it is due, and the sync loop
-        # records the refusal at once (one line per cause), so a's first loop after the switch says it
-        return next((i for i, e in enumerate(cluster.trail("a")) if i >= switched_at and e.get("event") == "beat-propose"
-                     and e.get("outcome") == "DENY" and "time is not authenticated" in (e.get("reason") or "")), None)
-    refused_at = until(lambda: first_refusal(), 180, 3)
-    # an index (always > 0: the trail held lines before the switch); `until` gives back None, or an exception, otherwise
-    refused = isinstance(refused_at, int) and not isinstance(refused_at, bool)
+        # records the refusal at once (one line per cause), so a's first loop after the switch says it. Returns
+        # ("found", its seq) or None: a value `until` cannot take for false (a seq is never 0, but nothing relies on it)
+        seq = next((e.get("seq") for e in cluster.trail("a") if e.get("seq", 0) > switched_at and e.get("event") == "beat-propose"
+                    and e.get("outcome") == "DENY" and "time is not authenticated" in (e.get("reason") or "")), None)
+        return ("found", seq) if isinstance(seq, int) and not isinstance(seq, bool) else None
+    found = until(first_refusal, 180, 3)
+    # anything else (None, or an exception `until` gave back at its deadline) is not found
+    refused = isinstance(found, tuple) and found[0] == "found"
+    refused_at = found[1] if refused else None
     # and as a co-signer (regalia-kms-3e): b's tunnel asks a to co-sign a well-formed body; beat.cosign reads the time
     # before it judges the proposer's signature, so a refuses for want of time, whatever b would have signed
     current = cluster.manifest
@@ -159,9 +163,9 @@ def scenario(cluster):
             "expires_at": threenode.beat_stamp(time.time() + 3600), "manifest_digest": threenode.membership.digest(current)}
     answer = cluster.ask("b", "a", "beat-sign", heartbeat=body, signature={"party": "b", "key": "00" * 65, "sig": "00" * 64})[0]
     trail = cluster.trail("a")
-    signed = [e for i, e in enumerate(trail) if refused and i > refused_at and e.get("event") in ("beat-propose", "sync-beat-sign")
+    signed = [e for e in trail if refused and e.get("seq", 0) > refused_at and e.get("event") in ("beat-propose", "sync-beat-sign")
               and e.get("outcome") == "ALLOW"]
-    in_flight = [e for i, e in enumerate(trail) if refused and switched_at <= i < refused_at and e.get("event") == "beat-propose"
+    in_flight = [e for e in trail if refused and switched_at < e.get("seq", 0) < refused_at and e.get("event") == "beat-propose"
                  and e.get("outcome") == "ALLOW"]
     ok(refused and answer.get("ok") is False and "time is not authenticated" in answer.get("refused", "") and not signed and len(in_flight) <= 1,
        "time no longer authenticated: after its first refusal for want of time, a signs no heartbeat, as proposer or as "
