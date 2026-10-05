@@ -121,13 +121,13 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "1bd233eaf359a726c9d299c8011931a51a747a6e583803f3d56ee4d07242906c18b16f1d053d95b92cfda466e8dc26ac7065c75e740b38dfda1eb27612974a06",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "9dd5a1ff7a9a0ae1d1b43a98cab95e1fba78eb488dcf19f10c15ec595f26643b9cef5f47768418bafd6686b2f807f6534acdddbd80ae1a9cb641d08c6c97320c",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_a_quorum_cannot_change_the_card_record #1",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -365,18 +365,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "350e2834ee963e3640163cb433c8ca3cfd9a3b0a811372a2ee863c1bfc55b8ef6ebef3396fc62d7d31a377e28891b61433b9df996948b1f5e3cb0d60057e6efa"
+      "sig": "1e17e171df98fd586fcc116a7ce48223c68081c86b2a15d252972348a39d77620a503ad0ea47d4f9705d957869f5f7cc808435a956d1229ef6ae440051d2d416"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "02bb6a0d88f95bb3a6f602fd90ae505db77d418ddb02a661c6adefee953175170616b7ac78002001cc6b82bf9e62ebf3fc6c977333ea53aac8bd541ed7e00bae"
+      "sig": "feff8f7f791adbbdbbfc2ae146d50b6aa579b524286e2e6858f56ab3c1a3674b67a08eeaa388be2477c6ca36b85343c109ae574a713ae5994b9f32d029e4b0c2"
      }
     ]
    },
    "name": "AnchorPolicyAndCardRecord.test_a_quorum_cannot_change_the_card_record #2",
    "refused": "a revocation quorum cannot change card_record",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -611,14 +611,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "aaf27897605dc86fd8d480b9a53878d998362950f83da4a6a0e529deb1a9cbfa84338e5c5fd1fe3a05632404d379d76ad93bdcfd8a01d282bdc59fbac933cf00",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "6899a949779e95ac9bb39bc1ff90a4710618de80e351a76eecec24e12f5c9f82e796d50753dbd682afdb00c6229107fd2c03cb947e701db25a0357a4b054db0a",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_no_signer_changes_the_anchor_policy_key #1",
    "refused": "anchor_policy_key is set at genesis and never changes, for any signer: every node's TPM objects are defined under it (a new one is a new genesis)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -856,18 +856,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "15c4636c61b63208d714c3bac89ed6cbf7e9c3aab63ac7070cc8becee0a84022492b144440c6352ecb2172e17af3e92b88a6502c0583da6100bc6f37afffbda9"
+      "sig": "3d74a24f4b1e69a58095eb3afd5b79d784d373e7df5671d530d0627e29d885682503cbe2ac3aa570494ae7e410119e5a4d1c17140888675da773978deae9ea73"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "997ce038fd8c5274e6f04fa7768979570cfbff32f93c8e5070ea62a7f52ae3d66798d3a0f39b574affc85ed7458221a50aac6af22aefd7fc3cccd16a08b90e97"
+      "sig": "5096aa1dff57b380f3fce7caf23b1b766bdfa9b4657280d220f20a08f82a53cf0ad2dbb2c13da12a83db283391a6429ed46320fef17f504c39a1e2fc1d8477d4"
      }
     ]
    },
    "name": "AnchorPolicyAndCardRecord.test_no_signer_changes_the_anchor_policy_key #2",
    "refused": "anchor_policy_key is set at genesis and never changes, for any signer: every node's TPM objects are defined under it (a new one is a new genesis)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -1111,7 +1111,7 @@
    },
    "name": "AnchorPolicyAndCardRecord.test_no_signer_changes_the_anchor_policy_key #3",
    "refused": "anchor_policy_key is set at genesis and never changes, for any signer: every node's TPM objects are defined under it (a new one is a new genesis)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -1342,14 +1342,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "8456a1b76b7a98cc6a774fa3611ea946bf3253ed72e83a9e74f63d5390325078415e166f944645277bbd7bb658a7b7934dacf410654fc8ecb25ccda6a60e0c0a",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "319f043223f3ac7aadabbefc30476bff8eb2a9e1a7c2998e7405ad0daf6c7801536729adbd2ab250a6883498b6b7fa23ae00d0f8eda29037ca1a5679c0614304",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_owner_keys_change_only_with_a_new_card_record #1",
    "refused": "owner_keys change only with a new card_record: the card ceremony's record names them",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -1471,14 +1471,14 @@
     },
     "signature": {
      "public": "04e8bf1b8483a51f69c2f3ddbf040f5492f74e0ca5eb2fd006a7377d502b517fd575696e6558183bf3ee73a64fa73ace966a0fd68c239abdbe165d3ad1fbedfbe9",
-     "sig": "2aced78f8ce3c61f3aae9c88a6fe4267eb828114e98dc350b78bb742355b2e1118bab9b08b7a38173a2fa6a2ad1e07c6a2a698b3830c99c52ea7285e7b9ca57f",
+     "sig": "11dca73ac44a15ada77eb4e70f832630fc7f2ee77ad06ed5de5cab6ab38e49224baf1da034e070d1e3c27809bbdf9264f699aa92bc6021053d7a13cbbcc33850",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_anchor_policy_key_is_not_the_root #1",
    "refused": "anchor_policy_key is a pinned root key: the payload root is never a quorum party",
    "root_public": [
-    "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
+    "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
     {
      "alg": "ecdsa-p256",
      "public": "04e8bf1b8483a51f69c2f3ddbf040f5492f74e0ca5eb2fd006a7377d502b517fd575696e6558183bf3ee73a64fa73ace966a0fd68c239abdbe165d3ad1fbedfbe9"
@@ -1600,14 +1600,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "c35909fb13897efec6f71c935cc680b995867c85f3c8d440c7b2639c3400557cfd0b6a26c23d5f35d4b5c40dd617983c15effa9ea205629a39626c8f3af44901",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "5749687a7d864ec5b51e9abd76b8f778412f66c89ac3422e2e044bfb9faae5ca18d25f73f81a5f6a560af82e466ecbd544d40344b74ebc80383af60b630e3401",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #1",
    "refused": "manifest fields mismatch: missing=['anchor_policy_key'] unknown=[]",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -1724,14 +1724,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "ef66658922acd27e19c1d53fe1e2c9f1c785cd38eeb085f18120b41967693febc1a7394b454d08a28a6680317bf1360b39212b2566de64adcb45a7a4e6fe6c05",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "ecdd71d3599942b3774ec8609fb80e3114b1815f774b0ab9960997b42db32cce1f5c8600f7500056abc95e296c631e4926c9a66c0bcf2b40f5a283a33338ad05",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #2",
    "refused": "manifest fields mismatch: missing=['card_record'] unknown=[]",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -1849,14 +1849,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "d91d9e020c0c275796ba291335938a38ec12695290df3a7429a241d23b91a6b0dce072c60c53c6860612a433f6b0011a7ebbe25c4a3fd83ee28377496b3c8902",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "88c61411fe898a9cbe2db06958f7147b393cd2aa8362d07cf647d52a4257db7a6c7ae3dd7624e4cc5f794711cb424783262ba54099790a9fd71344fca3b82106",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #3",
    "refused": "anchor_policy_key must be a typed key {\"alg\", \"key\"}",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -1977,14 +1977,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "6a02dcd7cacd7dbeeadc90037e78fba209c39cba1558d6567fd3c6d19daec2a67f8e6180c0ca692398c72ae5d2e89e56e01add2d2c4930ad272e3301b9b05702",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "b2de783ccea3965cb129eba3bd11ac7de5a236ee34e636605fa43b6f9cdd1fd6befd9f7bee04c55ab1099033d47358a2cf9fe840f69c252a42d55d612b32ac01",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #4",
    "refused": "anchor_policy_key: alg must be one of ecdsa-p256",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -2105,14 +2105,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "3f5df87844acfb11c6fd657655c56fa986b169482caf9665d9454cf4f150157a1d74aa59b57da791f51eb004fadd0b242b914ca72c53ddeb506ff06452e4310a",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "8a0d7232639eebe2256878868ff0e2b439088f9279fe900b24260520c902489e65f74035b6e7864e0cc17fdcaf98146df849e75268e19c07cf34ec813b41dc00",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #5",
    "refused": "anchor_policy_key: not a point on P-256",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -2233,14 +2233,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "0a276b438cd6bb6d30d98f9c1a1760b1496774b39c3891f521fb4ba7d42fb56ab35efac2ab5af5689049f1d76d79518d6532d05a07dda889dd14407a56e9560b",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "2180e89a541cd75fc968be43d33e39544a07e2dfdd4a42a1598880958710118fdef5c3512a0ca49ac0a7c16a553425d5f24b2ee70581aa0314ce81b795807a0d",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #6",
    "refused": "anchor_policy_key is already used (signing_key of b)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -2365,14 +2365,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "0e04eedee7ac255dbcdea1e27b50744fe247a5cf63a765c352d60ff457c859a9fcc5779520ffd14c9b50cab8ce1a33d3f60aacfaf871f1104285dcd3460de806",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "e74d5ec5b65fdab340ee144e2cdd68b987df0b366a6db48aba1fef3b81fc84dc561ebdb90ed2a6fbf4808688f7f4f50b3267a3fd3f355ae87f86d6776fafe603",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #7",
    "refused": "anchor_policy_key is already used (owner_keys[3])",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -2494,14 +2494,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "ade7d9f9a396748bd1eec6a894ae8926741e44f7c9a67bd586d75c377f37a92766b84caba04937470720d2d3904c37c584c9d0a257ca7b8769f6ca884c6a7101",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "ef8c39221bfa873bbf3f69d2336c9d0f0acec94a469392b348e34aedf5bf5420ec6f5b961dae5fa6669495d4912df4c757af9bd774b2451751536333c95f2606",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #8",
    "refused": "card_record fields mismatch: missing=[] unknown=['at']",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -2621,14 +2621,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "e4cb3af44fa2c17be42c3a880bfba2444998aaba1c6b656af60de83a2fd7901a772bef7e9b6665a0244066946e96f1b4bcf51bea2e020f08fbf77e439d7eb806",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "81c1fb70c044d5ede729b0202f210ef7512812587fa96792f5aefdf2d6e45d95d3b39ee9be06d5c59391a9e7c2a3171eb105aae03d00d4f9fc6dfc1738692a06",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #9",
    "refused": "card_record fields mismatch: missing=['digest'] unknown=[]",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -2749,14 +2749,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "817f6480bbb3ddad1ceaf14ae22dfdde6f5eb27f2132a6eecbf119a09ce5bef0bf24d4f7b9807aaf2ae98b968eb57537da037cd9b818df2fcf7c1c05f03cbf0a",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "ed65b0d76387fe5f82449f78fb4ce3dc42aa6d59acd804c86b2a22a68d59317c972123fcb919bb4a9a54c372438c9b1e4750421e7181eccdc95b6c1757d4c204",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #10",
    "refused": "card_record.sequence must be an integer from 1 to 2147483647",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -2877,14 +2877,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "b26e76d46f14fbe1ed659cf2d32ce6c1bcb4676ecf8352fdd27261a67d168494ed4dcc57813db25c6d940dbfcf281aa7485788c9ec04c605bc381b25ddc92907",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "8b594233f02cf9615419499cf984fa5ac69f823f8b00c80b8d555d85b74f3af227ad514dab3bf364e80909e427acea1092773861df5c0cdc700e974e5001fe0b",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #11",
    "refused": "card_record.sequence must be an integer from 1 to 2147483647",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -3005,14 +3005,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "2bcc66a0957fccc4ef25ef6078bea07d23a8a0f57d4d6c8f33c08102c2269f10761ae49916932134ff1523e2c3418989a7f46a223ec6140e0e3a9fe871a58506",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "b7c8af3dc7f9e8e2ca66ff869708814306b234f1d74a79e86a72503b61642c50207c5be2c489198774cc7f089894047aa418ea948c752a48c967300bf2c1630b",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #12",
    "refused": "card_record.sequence must be an integer from 1 to 2147483647",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -3133,14 +3133,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "572772b7224b3bfad0c4a22c83698ad81858c71540c3e184cd3ecd0fcfcc501ab817a6e4a8198a81726f2d0dab314449fcc16d3ab53029c257b25322a13be707",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "760764a043d8861230f6690eba7618b61d18f686237d418298f421d00d9285a358da356f03ab78c2afc58abc40a655e50fc73fc7c2ee437a2da134de69c48501",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #13",
    "refused": "card_record.digest must be 64 lowercase hex",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -3261,17 +3261,17 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "f0585803796e6258d53d54bd654818070af0e1ddf539cfec8bb736ffa8d8b8de322472f10bf1da167307877f398118318cfc27b0fd3ea03c4976fb7becc2b104",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "a3289a3b6a27d69bb9a0f34b6c969ed763b8efb5677e5f9f9245ec8a8acdad23202bac57a03ac7bf81d09e818ad81ef21dd73ccd0a9738c553230ab6d25afe01",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_fields_are_validated #14",
    "refused": "card_record.digest must be 64 lowercase hex",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
-   "accepted": "0789c441eab100c2582a6fdb71b814d11ce7e9cb6a98e146c45f95be9f9b070f",
+   "accepted": "aa93914db5490c0c7624a0f96babd3990cab3a81e97ac8c2d720d7d0cd82d4c2",
    "current": null,
    "envelope": {
     "manifest": {
@@ -3319,21 +3319,21 @@
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_keys": [
-      "cd5d526ee52b53d0ebbc2c85be9e394be8e38db2b422e8b2803e1c77cae2b510"
+      "650eec69b6e6e5319dba19da5347f6c9d6e45ea3a87dcd4b2dfbf2fbbf5fc7cc"
      ],
      "schema": "regalia.membership/v3"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "e2a87e2fb013fceb51dbcdb4ab0420d73f8bf06eb200c42ae11ef827ebeb980cffdb16c69a845babb93255f087d023c82dc5581bc65a87df632215d5667ccf05",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "127ab08594fe1a0a2804f63e6084cc12c589ffe94dd62604a59ef774f98cdff03a21b6fd80bfd9b2c0285b7c94dadd452a8028878700f0c2d800b1b3c02af102",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_move_from_v3_sets_both #1",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
-   "accepted": "8a9522664ea6b98621c84cc665c89b01c0d37ec8b96edb5a517504f940764fd7",
+   "accepted": "200ca60da87fa91c8ce4145ba2dc53b6a71c5385eaa1301d1f70c1b325ba169c",
    "current": {
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
@@ -3379,7 +3379,7 @@
     "policy_version": "p1",
     "prev_digest": "",
     "revocation_keys": [
-     "cd5d526ee52b53d0ebbc2c85be9e394be8e38db2b422e8b2803e1c77cae2b510"
+     "650eec69b6e6e5319dba19da5347f6c9d6e45ea3a87dcd4b2dfbf2fbbf5fc7cc"
     ],
     "schema": "regalia.membership/v3"
    },
@@ -3479,7 +3479,7 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "0789c441eab100c2582a6fdb71b814d11ce7e9cb6a98e146c45f95be9f9b070f",
+     "prev_digest": "aa93914db5490c0c7624a0f96babd3990cab3a81e97ac8c2d720d7d0cd82d4c2",
      "recovery_authorization_max_s": 604800,
      "revocation_signers": [
       {
@@ -3500,13 +3500,13 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "61c01b038912fa1067df86645e7658fb51fbfc20b5132ea582eabf56fa4450ac645e5ef163a8ad2ab28d849924bc8e076789a98a215f351bc44aeb50cb238705",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "2b778aacd5541698a383fa6d942ccf370da6097eca8e3ad8eca6e5db5108df6677367565521f26ee2a00f83e6ed2dc208bcdb653bbd1c9a33aaae85e77e1e20a",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_move_from_v3_sets_both #2",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "4a9955defe3910134d62aca672b8f72e0efbfea23542ea3f3a2185de56f0bc08",
@@ -3742,13 +3742,13 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "7491b65463a885c56c57e26d2f9d0cbda8aaa2629eb70d69ed3b18fb950946656b29cdba3d6d9248ae586e10ad38f61cca71cf3fa7d31c639bc56975f651180e",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "86e7a49cbb106cd6351087ae0e0ab14829d02387122e74492ac4619b41d30d20df5ea2cfba189afba52ee544e09509bec38d188b0b25c668aacda889cc88970a",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_root_moves_the_card_record_forward_only #1",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -3983,14 +3983,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "bbe1a279069132f021211a57ccbf965dce7396502894274259f326e258d2a053121d7a3c7a596aa2cb8cce9fbe946d157ad7a92224ddc0c155f352a2a1b0a501",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "2a162717c69a4edebd2e0ebe18d930119d001205f12d69305d83d237adaca00db3be78bf679ea6c3a8ff3190edc028ad0069d57e7481a1178cc9c68617971e0e",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_root_moves_the_card_record_forward_only #2",
    "refused": "card_record changes only to a later card ceremony's record (sequence 3 after 3)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -4225,14 +4225,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "caaa2d07f8e4d834f380aa804ab10efccc07d4aeff71916f3086e58da094e3aa71328e37986662264169beaee5f355a2f9fd1a62d0150d329265f84e626e2406",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "e3d2c1cce428e30c96c1dbe698c8262798987ef19ab9898933664957f273ba12e338d7f47ca17db2a155d75f0e52aca14c15dbe3bf7aba5d996544e452c6f305",
      "signer": "root"
     }
    },
    "name": "AnchorPolicyAndCardRecord.test_the_root_moves_the_card_record_forward_only #3",
    "refused": "card_record changes only to a later card ceremony's record (sequence 2 after 3)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "9e09e16f88967c6b34d48a6eabcc69d59c7f6d437a2ec165eca44bc218be0161",
@@ -4354,13 +4354,13 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "72de794ee4e0a503a943b6607b3281ced8c926df0ab266fdc2e2696beea95a9971b29998dfbda395306bdc96a0cd2da7253b20bf52f6234264c771f0f9ab1700",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "6d69b0486aa9b5d3b35b64bac4be06374a58a73172cf71924e305d8c74e5acd0336d78c436c6362200a9207954d56ff647165ecc8c613cc9d50e46d350fbf50d",
      "signer": "root"
     }
    },
    "name": "Format.test_a_tombstone_keeps_the_fields_it_had #1",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "82b1839997e121c4a5fa3bec0d8271ac93d7694966a4a15d60b6e2c9ef605bff",
@@ -4478,13 +4478,13 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "f16510617b3b98f1f2ffb1a7246b81ea5a32b886fb48ed3a42cbe2e31067e5a6656094939d2908bc0a4d2ea7a0683d6cea573e3582ffc9f0112c651a761ad40e",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "93183bb7a81b96e02034d332bb9749e2b2af21070ebbbe5cfff204f02d4adef51321f6c80b3f436b380e015b5b652e8467228cdb5d90d3a23ab87a558b032907",
      "signer": "root"
     }
    },
    "name": "Format.test_a_tombstone_keeps_the_fields_it_had #2",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "8c180089b68ca55f9fe7362fccffbe3dcc9867b134ce490181bb593477c015cc",
@@ -4601,13 +4601,13 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "fc7623f8e7c0322132173d68d444a19ec33085f29e14c5639860c03565c5655695ce4bf80bdd125c9a4c36c90f6450c4f058ba382d583637da0d6dca00e8650c",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "6e3366241fc8058a68ec9eaf28bb60a6f1280b289b8b6b86a50d4587a74776ac95cf493eba491a0b9ee5146bd7b6236d134d02921f7cb2cf72598f66041a080b",
      "signer": "root"
     }
    },
    "name": "Format.test_a_tombstone_keeps_the_fields_it_had #3",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -4724,14 +4724,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "571962348759e6d0b118deb6223f56ae6238c43972327ea4619c6b85421ef358e6f5ab36a676e55eb37767f230a04566b3d5a4aa8f00ce76b83da05c8801b90e",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "a3eb0efcd5c215f218a4809a35927f573b5325c442f57d045a5944e7453091b69d9c528fa43aab22b788d2438c483061c5372a077a68ef20e3e9c43c4d7a0b03",
      "signer": "root"
     }
    },
    "name": "Format.test_a_tombstone_keeps_the_fields_it_had #4",
    "refused": "nodes[2] fields mismatch: missing=['signing_key'] unknown=[]",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -4852,14 +4852,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "53e7d1a477bf849cf4b1a87cac588415983d6212bec6a25db8c7d8f0002ad5e10289c493ccfd5a92dd6cd1b09d0aea3495db7f91bd612b6a6161bfc369c0ec01",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "b1210bea0c03e3aa55dac0a62ce4b2700170465a253a8054df632f2593b2f338c4d350c6ae6c115083147ac214a5598c2d45f75aa2cbdcb19396861e63680102",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #1",
    "refused": "heartbeat_signers.threshold must be from 2 to the number of its parties (4)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -4980,14 +4980,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "4464d7deb1b9d7160b5c534b766017988c5ea3426c31448966d52cbec79d904fce0278ac4b23c8d007f36d71b68a11bc04a613d2300ea820ba8f8344b58a5801",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "f3a2c513dc14108f911d7873f07913054a33f8b810b9fc96dcab8bd37a5c408ce95478e91d42ea9b4be22254f2d46cb125a0b69eea8125fab014c5f1d3cc620b",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #2",
    "refused": "activation_signers.threshold must be from 2 to the number of its parties (3)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -5106,14 +5106,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "e033c146ad34cf7587f2d5ab924c81dabbefe5355cf7047059c44b19439637569db94ab1ddb846683abd947f550d88773c0273984db7cc248baa57567134490c",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "2d4f8eb7e5a8a611502d26c723e3ee4a84eea25ddbc12fc358171ba6acb66d7c7498e46356da906f606dc849b4895b58cf90b5a894545a587e5e10883d91b20a",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #3",
    "refused": "activation_signers.threshold must be from 2 to the number of its parties (1)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -5226,14 +5226,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "aaaaf65043f46b784a2e10f83ee309daa2292a219f2a56fa7f34fc9980ed8532bfbc2acaa0d47c9580a9c2526ba8bdc77ee9aae617b54364a4adfa006270790c",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "07d790fb4214e64b49d9feede538c77a9e95cd3da2f3707bdc4fac4b622214ec50a8408748a9d1cf6c0b80dc834085ca65334a98117a7c1b4dc03c713e316307",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #4",
    "refused": "manifest fields mismatch: missing=['activation_signers'] unknown=[]",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -5351,14 +5351,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "4fe3d53a8056e0944feb4d91bb261f4ba3833e1c595fa7a04fb3c4735720b1f425c7d31eef381dd0f336e60ab7961ae58dfdca4a419dfe5de808ca3aa9b2c60b",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "4aabf306e55fda2a47ccc312abd95b276438d9ba647d7e47261311895aa0673dff9ca97484b0dc06b1e291131eae411ab9d923310a1c4b153234522d92abf302",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #5",
    "refused": "heartbeat_signers.threshold must be from 2 to the number of its parties (1)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -5479,14 +5479,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "21ef8fa2de0de308b87eaefb2c55e5bde5377de13a6d3871e0077376f12ed1b21140005da745d5d64b09c6e0dcc56ced7e1626eb362bf80d34bc70682cbc3e04",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "05de552134b6ef89c7312bc725bb8ab17869fad098ab04e750fa68ea8b4dd68d8bf9fddd22953b83ca0a1c69f4e3b7c649d0deb659f80c5e34d07d969c3ba300",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #6",
    "refused": "revocation_signers[0].threshold must be from 2 to the number of its parties (3)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -5608,14 +5608,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "5f00a0f28c51303cc832c1122505b8220480985640bdd2ad5c824eff4b83438f1ce2410d94dee76d136dacdd1e1e0ead917afa154ad4d33ddb8b0367fc858b0f",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "c08d70e13fc9c69260919ccb960a8f99dc64b71bd2ec11a0dd631be98c0481a27c1f01733c9aa1964ef09624dc47f8019a41f6c7e331b4663bba248dab901102",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #7",
    "refused": "revocation_signers[1].threshold must be from 2 to the number of its parties (2)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -5736,14 +5736,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "3f4b341c2457cf2429b69d8d99e8eb7a99d1a198bb632dd4a1b8924a0ac5040132c4eadfbf1f7b2169851f1b143aa48c995415919683a290b9e4aed62be8890d",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "6feddc39014cd23b5d1d6e9e32f88caaeadec677949da52f5be577bec6bffe6be8c125e72ac8f43b16901b66eeb6efa54c92d0abcbf5d9f7db90c76741789e0d",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #8",
    "refused": "heartbeat_signers.threshold must be from 2 to the number of its parties (4)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -5864,14 +5864,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "53b21c34cabf1616cec0718d46a6ca00bc2a3bc63df14cc882896160d9e9162397a3edcc62e569bc9a5db179a78025b0bc124e1a841370d6737fa33e3f097308",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "7ac18045a7f801fd5cc720b2af5ac277869e750b52522247035758d35238d1babe223e9bd56037d074192d381104140614ed62a90568a50fd1c3174e7dd1910e",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #9",
    "refused": "heartbeat_signers.threshold must be an integer",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -5992,14 +5992,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "d62542daada7d5a0c4b1e4988b5174808c51ea61e40f0b476a25ac6c27fa7a6c64484d1c544a0cf1c9d2bf30b155fff9988fc9da76aefaec7f3faa483b17de03",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "f2b35a2860a3ee302b1a30ceae3c22cba24175f7ce9e20b48c3dd08e542ef7d35b1cd39410fd1c354f6d85560635617c3355b450389f11fd23e5698824cea701",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #10",
    "refused": "heartbeat_signers.threshold must be an integer",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -6121,14 +6121,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "0697edb1ba49c60d93785ad31a9016daff67294180b0f360c5e33dd334f4e592bbe602c18f51df0259c96ca31a926a4cca24bf5012c1e1b029eaeef20a471a0c",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "2edac7e0b5ab19dc9b7e93c7826cb48569f11e7c1d0b3f03b6bce7d38fba98dc8f1248ffc5ade45cc6ab4405be5bce307121498fae6851f2d7978183e0371703",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #11",
    "refused": "heartbeat_signers names 'z', which is neither a node of this manifest nor owner",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -6250,14 +6250,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "c557c92d65351bcd40dd223700ddac3f9d4e8f307d8e65c7a02e26d1c1374d6714cfa3c7f3ffffdee33809d47e347ae2918aafb34a0a32690a3e5ee4618aa609",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "d2e6a5eb521619b979db6db5c218519913d3d8e8ca9769be3ebc5760e442f8ec62937e79fda78e51f658bf023f30abd695cc6761839001baec07cdeee5d7c00a",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #12",
    "refused": "revocation_signers[0].parties must be distinct",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -6373,14 +6373,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "2792b42f588da872921aad4eeeb85aa786348255565efccedba6b49f76ac8947605c47c24e952a8ae33d15fd905b1a7f68f3232b63147c7c7d909a6ccf7f1904",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "16422be45c88ccf8825fac1f0945b55db1a1aaeb33a2872c1317f5e7361b832d1e74b61b6747e99a9d693c5cdf747f8be93b4bf4a0779eec10da0dfd71d94b0a",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #13",
    "refused": "heartbeat_signers.parties must be a non-empty list of names",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -6502,14 +6502,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "c33dde459a4696ee83ab2e6f1668efbbacc4fb120e11568156647b1536ee68a6e1143ba4aec54a7ceed9c756f76bb9253d0deaccdc0b6df662a720701aaf7a03",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "40c227c426c31ff0a75ab8b81bde40bca60e8241db1475df53e00c86f03ee2b9fdf0606cd2c6d5c7ea73b5297fb645e77caf5ed6891a193cd177398250e30503",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #14",
    "refused": "heartbeat_signers fields mismatch: missing=[] unknown=['weight']",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -6615,14 +6615,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "5c569029c5236e41d585e09eff6020f1783207f4067c19f7d45deb690794b37eae0719b1694a7ad6f4698e3727152609e6e804c6db58269c7df56cce33736307",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "2d17adc120db76c4e4946394a8c52054276260a1133ddd195498fd046f049a2d83ff943cd867005b7106c9e9280dcf1eab25b7bf2dd534093d2670b1ee4cb108",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #15",
    "refused": "revocation_signers must be a list of one to 4 rules",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -6759,14 +6759,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "47b1be4709efca8073b7262d9620151c3c30a9775a0fc482fd0660508da196f18314ecdd594ab5e6367c6758741f43423e900377ec2a4c9f901aed84cce60f05",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "d17291fc25f90f732fb0c64302ac71927b0d221e4844e9e8a2c8c5e5ef315608d1c1978efa23dda62e3337fb8ffeaaa0fc0f9bae7f47d49a56349b02ec41dc05",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #16",
    "refused": "revocation_signers must be a list of one to 4 rules",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "4d80dde27c6571bae1644fdcc51b29f806058d9f85770dd80a85fbc18ba14e84",
@@ -6882,13 +6882,13 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "937a26db898f988b6475386a97f4374eb956e7decd996aa01b254886f669c7f0b9315868332ed96d26f97d7b9eddc1e77753b0e4a54f48fcd06435da36dc4e0c",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "1bc41b3b3830da4861e6fa9798897e2fdf4fef4cdd4bcdfc6ab3887248c20dd5d9e40dee9b538f879e2d68b68c1a776b637eaecd821ddc92f278bb7dfb50700e",
      "signer": "root"
     }
    },
    "name": "Format.test_the_floors_are_the_format_s #17",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -6996,14 +6996,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "6d47efd45ef1cf96b9cd2fbc1ebb56196b32bdc12e6806bd1bec86b02e6dd89a4c02ab91f2188dea8c4499d9477c48d58e1d06732d3fc64c731c4c1e989ccc0c",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "1fee77f471d23e50138fc17f64d282e9ae0581e494c3a3966da076a997bf714e15815ee9f7532041a5be7d118ee3f888d77beba55c6b04e0500ac319d176e005",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #1",
    "refused": "owner_keys must be a list of one to 8 keys",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -7148,14 +7148,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "70c2ffb01846e7044d3b6352c8ee044c4eaaac95f9ae73f989174b6e5d8ab66f0defc0f85038b5bbbc765117dddcb0cd9fd7c5fb2974e6a2e084b32e036caf04",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "8fdfe74b6d65ca01aab68e3daaacd89440482fcfd68450bd4674da5b5423f7c415fff3b0d9a48cbe289bb9f6c12fe0c41ce5cc90758d1ed3aa91d7bfa8696a06",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #2",
    "refused": "owner_keys must be a list of one to 8 keys",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -7265,14 +7265,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "30d45e9acd5518df0f570615ec2bf142f335027f81daa995c3524fe0524f1acae18eb3d14ce5d1fc5d7426fd3992db6e8cf4448939453f70d44c28ceba76ef03",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "354f2994e2180b521a39d9528a93ba2f025e7ce2e289c1dcfb1ef23bcba9bbfc90ce871b7b44706fd5fa3dd897130320958b96e286baabf2850af3fbb5a0f509",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #3",
    "refused": "owner_keys[0] must be a typed key {\"alg\", \"key\"}",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -7389,14 +7389,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "9e78a8d7b4bbdf391d544c68c2ce09633d4b8e58a1d1b0b8374c152b3a45f2d1d1db0395cdb6e3aeb7fc90d7b97c449f4b935981099c3c6b52a07ee4dc9c1b06",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "4a7cfe70294b2406a90b9c5c9a9092aa6d9d416f759c7bc0c06db43a8cc823473e585635bc917618e5fac55bddb9437229465059265edcf0b01dcd730e74d701",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #4",
    "refused": "owner_keys[1] is already used (owner_keys[0])",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -7521,14 +7521,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "24c1e71290cfdef63eded5b10a060315313b1dcf0ac9d83d958b94bd253620c5627926692ec4160c4be44ade0924b76e9d85d8fdef2c996a5c7c3db59f1dc80f",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "ceb9c7bb16e858ab0fbc4a130ae59873e42d5201c392497096a22892589ff451f7c28a8ca89cbfa9cd103a0df926bc1510c1f63af66c6bde4995df10d1a40e0e",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #5",
    "refused": "owner_keys[3] is already used (signing_key of a)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -7653,14 +7653,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "aeb3acda876751d90f5fd71108d6cf12370bae55b5d223da12ef5217f755441a6a77f623c6dd7b05ccd5de27057340b7bb775f354a95625e160039828d826908",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "4e162f6fb4511a47f76da2317cf152ad753c50f1f99dad45bfd3efc56e4c72f2b7ef5edbeaccc3ca303ddade790860d4e429a688060161dddb6376cfbf0fb90b",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #6",
    "refused": "owner_keys[3] is already used (ssh_host_pub of a)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -7785,14 +7785,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "712faf68e3f61213f5df4c0542692a04caf6ed872844a4aee58fa000a50898722c2e8661b7ed1a775c8827a736bbeb034d2bce5bdd9ad454594efa440a5f9508",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "a3e9848fb4be7b6b2f8a0e80d473b4509ef287de28e7ca6c9dea5fcd0e4d12d2d1e8b85e576fa0d0bba8e48f9d02d29f63f862a3de5f495e8ce0a801408f0b08",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #7",
    "refused": "owner_keys[3]: alg must be one of ed25519, ecdsa-p256",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -7917,14 +7917,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "dde8fd5d5b03f0874fe5b89990aa8f669ac815d8baadad733816d3b643e52e526ef4687db437ecc409197d8c9e33a5af8df2bc93807b827fd013bce873506600",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "cd02c3080cddd4ad777ed972154946e9c9f069d3a3ba5cda859daeeaf35fd9ef86613918c52945773f44087499c0ba80ac3028eeece023f4c358bc53b829b20e",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #8",
    "refused": "owner_keys[3]: an ed25519 key must be 64 lowercase hex",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -8045,14 +8045,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "6197fda981940df5603ecbf8d5f14310283d55d6e17fdc0ad9a0f402ffc036538d5cb8d872567fb5232fb41d4ae72bb1a3b145645d365a50578cf7a08dede10c",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "6352467aadd35c6d27ee82f57115492ad0c2321767570da124ef24ddfd927983346f23dc8859eb924636d9ee43f340a04d2c1d1b70ce2fe0e3914ac023f9b00b",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #9",
    "refused": "signing_key of b is already used (signing_key of a)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -8170,14 +8170,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "3837602f3da512b64d52181f98abcf02dd8d8e695522d1156d4bccf9ec996af987d5d27852205bacf7c93da12182676b86377da4817b410ae7c2acf8ea005704",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "0ef1ee9e93ca204fa90af2504245df0ab2bb3f19d890a07bc94def01e432ade8abfe4b70b5708c2c0998d07967c09fdbd6392fa1d939475af4c760b7b64c550a",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #10",
    "refused": "nodes[0].signing_key must be a typed key {\"alg\", \"key\"}",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -8298,14 +8298,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "78324286e85d88c460989d9d49ebb9484f26de08f02ad115a1c0b5b4a4961a180e93ddd3276eb2746201447beba2de433c083c9d16712f6a6ac0e0f0a8ea860e",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "f9249e752b48fc9a1b9f7926318299ed56fe19f068705ed7603b9040c6199b84691e3d3438c877a9a8699f3bd91cdb7f507d2339b54ddba9301007716696f002",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #11",
    "refused": "nodes[0].signing_key: alg must be one of ecdsa-p256",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -8426,14 +8426,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "ee62379d7adba7a5f6bd7300dc4ff4a0fde3d927466bff498f019427fe666dc751e675bf7d07225c868981b3a4f57762029c5a3bc33db6560ef6c8709f906a05",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "661906fe1c21040017366e7a353fa6f98cb8584d9853cd6b6cce0dc2a18df0ec8047355ef51419c8bcb38a35ecec3e43dbc786f1a8dbf0355a8d3a763ad66907",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #12",
    "refused": "nodes[0].signing_key: not a point on P-256",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -8550,14 +8550,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "101656ea9d8fb5c4daf9d84e6fb1ac7ddcf398b99c5f9482c731dccad1b625ab95fbe533ab8f8d55d3a586a70660dac4a9452eafce457d590e17f410d54d650a",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "f7d36a930628ed31e28b3f7535e040a823b6b326267f2ef658f98bc8683f7ac8ec2d72957bb17f3b1ccdf90601c4587e8ca862d0378ab6e649dabbb5f74f0201",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #13",
    "refused": "nodes[0] fields mismatch: missing=['signing_key'] unknown=[]",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -8678,14 +8678,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "87ad696530ae4ead0d21b2bac4cd3a2bc24b38b2ab82944eea5c445468979978921bf1ee052f02c1ecb88ad70aaf594b8b5da1e10038fd5f9d324cc0345d7104",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "ee7cb0d5f5ed0aeafcd70fa07f36f1ffd687dfda86dadc041f68e314d5d0784d08605c9ef0263660535a286c3ced70c738bfeae1370719c24684753c61812502",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #14",
    "refused": "nodes[0]: 'owner' is the owner's party name under regalia.membership/v4, never a node_id",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -8807,14 +8807,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "3b55987c935f3195b02be4652147b43aba809d621c7eb2dad4a38f7d35796a3709426bfcd0ace065b61a86874fedc0a89d69af24ccd83daf300b5e2ff9482107",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "3050085c958e8f5ae8836602efa12e1962f4b62e8bdfefeaf62b4904bdc2037ecc6ec27043c7a13d38b8784cc7789e3a7a80536ef998432164a52810670d0f00",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #15",
    "refused": "manifest fields mismatch: missing=[] unknown=['revocation_keys']",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -8934,14 +8934,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "82f7e00ef7e4318c168ff5367349ea10faa86bcc84bbf4b351ecb93445af2cdc906dd64488ec74ff654bd3ad4e94bc80c144cb86861376be3e29a93ca9f30f0e",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "74130350d68b15bcd22ec5c419cb9123951eca9bd81ebd843827d0c34909f336d21e769ebcc09220241f173b0363f7a20a4b27187ab6c99f76b39b8577ec7600",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #16",
    "refused": "manifest fields mismatch: missing=['owner_heartbeat_lifetime_s'] unknown=[]",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -9062,14 +9062,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "d47a3b5c4a3354c719b4af8bf0c5f8b2bc82f56e9cb2a43d16c1ac5f7a85e9e0a9424fa355ce10587196f1f5e278fbbb77f1848ed70e20c4e94bf6ece5310508",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "3ef015adb2fed42efa871666050c3218b9efe6e6294e0698540add817840f0ffd483d9df14d302c8d80c92cc34932eb7da4d6fcfd9bc7314e5a79c7eedb80b0c",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #17",
    "refused": "owner_heartbeat_lifetime_s must be an integer from 300 to heartbeat_max_lifetime_s",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -9190,14 +9190,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "8dc79c62a637ac7d21113eee229fe304076032d85d56c8e08cfd2546bdd275134dd53240249c40067c7330a0f15af38026f3411a386b077d595ce9754dec6e05",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "9bfc8bda21345b15a510eba0e0efea0598fbcba7ca8405ad7ad0834414cdc5e91990d0b518bbfeebfe1f9e8f5d871dd574f57ac37b819d33f3a3f00a86f35f02",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #18",
    "refused": "owner_heartbeat_lifetime_s must be an integer from 300 to heartbeat_max_lifetime_s",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -9318,14 +9318,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "84445728b8d8d6c60b75b33b8446bbc29d9392c4caffe8c0e98e3ffda9c3fd0d6270d3e9da1d8c410130b4975186c23e8b1d5880482346ea54f809b96a832e01",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "610d74368746536859875c004a383590b2d4e665053f0e47687e494156c0d1af03ec05d8b909c1bd9d82f5441a4acb731eb1c80c897a7d8f7f1e059fcb92440e",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #19",
    "refused": "owner_heartbeat_lifetime_s must be an integer from 300 to heartbeat_max_lifetime_s",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -9445,14 +9445,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "23a62cc54ade3f51c259bb62c29a7d8d1e71250ffd43b50d992afe1635cdccadfbac6071bb38be5199c93f3778bce279ecf4ea75ab55e0a852993ce31ae1d50d",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "e63f584b192ec06605a05309a5e349e637f7cb887bdbcf439fba65bdb94edc1bb1845119926931a807000e14afbea9d105c0fef0c9ad288cb9aaebf3ce757b0d",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #20",
    "refused": "manifest fields mismatch: missing=['recovery_authorization_max_s'] unknown=[]",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -9573,14 +9573,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "0cd92a6c780c784a641791b5c7f46a19fb61588f539967b66810cc1f8dc813c07a25ef37714febc8405d191b23ed90166e4d818b965d9ebdbe8675323891df0d",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "7aa47e3cd56f7d0ba48829b20f846df065bb7b280ce4921691bfe62bd10e07e7716f5d4d69641d02fdbde340a2e66e3e1cc33df495b8dbbfa517d279c4cfa30e",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #21",
    "refused": "recovery_authorization_max_s must be an integer from 3600 to 604800",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -9701,14 +9701,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "0dcffa69bc6ad5fe0e9b851fe32a5fd6a3519bf20da1678d94125e85c4580e8105c5c3df5a7f0f51461daf8aa9a3efdfdc0797a0941d7b61d95ad89a61d01200",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "d3f59e0aedca2c4f354e0434e2677b1ee79a99ffb2e3fef27689da435f3f30aa5ab91395e388fbc8be0790cc2a991c0e0444d4849064989624c7bd59d6298d0f",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #22",
    "refused": "recovery_authorization_max_s must be an integer from 3600 to 604800",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -9829,14 +9829,142 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "e3ef5556fbaec8726d7e4f6e7432c44e9c29c4478b6ba02c5a5f2d03215b3351254caa676aa52cb079c4595fb0e2bd842a2ea7a7ccdad4b558df89e969958503",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "426fe13da1153ff7d7ed13301ba90e722e178189345c87b2100d461709c41994cb6a79865df0aa34606df625abf592381701c3601ee9f6d0e765ddbf0aa19708",
      "signer": "root"
     }
    },
    "name": "Format.test_the_owner_s_keys_and_the_signing_keys #23",
    "refused": "recovery_authorization_max_s must be an integer from 3600 to 604800",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
+  },
+  {
+   "accepted": "0672495991d951d8f7aa0dc53128695ee19863e64f9d30686aac4ece5838062d",
+   "current": null,
+   "envelope": {
+    "manifest": {
+     "activation_signers": {
+      "parties": [
+       "a",
+       "b",
+       "c"
+      ],
+      "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
+     },
+     "epoch": 1,
+     "heartbeat_max_lifetime_s": 21600,
+     "heartbeat_signers": {
+      "parties": [
+       "a",
+       "b",
+       "c",
+       "owner"
+      ],
+      "threshold": 2
+     },
+     "issued_at": "2026-10-04T09:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+       "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+       "hsm_serials": [
+        "DENK0404100"
+       ],
+       "node_id": "a",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+       },
+       "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+       "state": "ACTIVE",
+       "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+       "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+      },
+      {
+       "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
+       "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+       "hsm_serials": [
+        "DENK0404101"
+       ],
+       "node_id": "b",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2"
+       },
+       "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
+       "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+      },
+      {
+       "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
+       "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
+       "hsm_serials": [
+        "DENK0404102"
+       ],
+       "node_id": "c",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee"
+       },
+       "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
+       "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+      }
+     ],
+     "owner_heartbeat_lifetime_s": 3600,
+     "owner_keys": [
+      {
+       "alg": "ed25519",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+      },
+      {
+       "alg": "ed25519",
+       "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+      },
+      {
+       "alg": "ed25519",
+       "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "",
+     "recovery_authorization_max_s": 3600,
+     "revocation_signers": [
+      {
+       "parties": [
+        "a",
+        "b",
+        "c"
+       ],
+       "threshold": 2
+      },
+      {
+       "parties": [
+        "owner"
+       ],
+       "threshold": 1
+      }
+     ],
+     "schema": "regalia.membership/v4"
+    },
+    "signature": {
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "7337f4a8db74501f92d064c1d2944c1975a67cf67313ae3942433e4c60e5a19c55760236281ddca694a80d4a3d1c2bd31b963bbd9c7a15800596677a3efa9502",
+     "signer": "root"
+    }
+   },
+   "name": "Format.test_the_recovery_authorization_bound_s_inclusive_ends_are_accepted #1",
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -9936,7 +10064,7 @@
       },
       {
        "alg": "ed25519",
-       "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+       "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
       }
      ],
      "policy_version": "p1",
@@ -9961,14 +10089,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "14c2cd625f70919e65b6c7b1d796d3414f5c1783b71a38c1664513f5435bbab18191a9ba567aa1f2c06d870241e4f725d0a261db562dca4e3b1101cae130cb0a",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "891f02bec19b29f764424a6258abd35ec92ad1874f78be1d1e26fcab813367a6ec26fae69bdc8cb84d0baf554a0a6271386d3b7012a91bdd021f3b5f34c51301",
      "signer": "root"
     }
    },
    "name": "Format.test_the_root_is_never_a_party #1",
    "refused": "owner_keys[3] is a pinned root key: the payload root is never a quorum party",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": null,
@@ -10090,14 +10218,14 @@
     },
     "signature": {
      "public": "04e8bf1b8483a51f69c2f3ddbf040f5492f74e0ca5eb2fd006a7377d502b517fd575696e6558183bf3ee73a64fa73ace966a0fd68c239abdbe165d3ad1fbedfbe9",
-     "sig": "e64b9325a33d8489aaa88c6dcf349b871096bbd50d3b13072057804ba9cf66757c8b328cfac9f8ab6b1ad325b3b7e6a15c7b839057376e1ba09ef533a533077c",
+     "sig": "b64a8f186aeba1e6f1108f999d5c87a6677e9515afa7c849d03d3b3a773583827212da8b4705f940dfd818f72a29b0a429813b333769596d575673c386e035d3",
      "signer": "root"
     }
    },
    "name": "Format.test_the_root_is_never_a_party #2",
    "refused": "signing_key of a is a pinned root key: the payload root is never a quorum party",
    "root_public": [
-    "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
+    "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
     {
      "alg": "ecdsa-p256",
      "public": "04e8bf1b8483a51f69c2f3ddbf040f5492f74e0ca5eb2fd006a7377d502b517fd575696e6558183bf3ee73a64fa73ace966a0fd68c239abdbe165d3ad1fbedfbe9"
@@ -10105,7 +10233,7 @@
    ]
   },
   {
-   "accepted": "548e4e09ead2dcdea7d7c31e9346db595a544ad20debfd6129869c90205de849",
+   "accepted": "529db3228429d7102e0f22bb111dc574ad9079721d25a39d35def722829a6a99",
    "current": null,
    "envelope": {
     "manifest": {
@@ -10153,21 +10281,21 @@
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_keys": [
-      "cd5d526ee52b53d0ebbc2c85be9e394be8e38db2b422e8b2803e1c77cae2b510"
+      "650eec69b6e6e5319dba19da5347f6c9d6e45ea3a87dcd4b2dfbf2fbbf5fc7cc"
      ],
      "schema": "regalia.membership/v3"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "bf966cedf96e947ecc835cc22e5f5f2ea37a41bca82f76daf55f00d6e8b961607abfc269ceffeb3f798874a0f8283df9115d790b640c577972765365d54e6a0c",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "4065f06130ddfc29970c4503d3d9b24a50e727c96f96dcd523910d0d3ccd16eea9da61fcdcf20888513aed56e2e1b10a0f0d854cf763fe0017baccf8ecc2ef0c",
      "signer": "root"
     }
    },
    "name": "MoveToV4.test_nothing_moves_a_chain_back_from_v4 #1",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
-   "accepted": "7767a7d8a6f09f9329136772e2d42beedb5d2ca043b3da8896bdeb157e9d6031",
+   "accepted": "31f2e0f93041ca878e65461df85cc1355e81ae29d6a99cc29c35be8af8f120db",
    "current": {
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
@@ -10213,7 +10341,7 @@
     "policy_version": "p1",
     "prev_digest": "",
     "revocation_keys": [
-     "cd5d526ee52b53d0ebbc2c85be9e394be8e38db2b422e8b2803e1c77cae2b510"
+     "650eec69b6e6e5319dba19da5347f6c9d6e45ea3a87dcd4b2dfbf2fbbf5fc7cc"
     ],
     "schema": "regalia.membership/v3"
    },
@@ -10309,7 +10437,7 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "548e4e09ead2dcdea7d7c31e9346db595a544ad20debfd6129869c90205de849",
+     "prev_digest": "529db3228429d7102e0f22bb111dc574ad9079721d25a39d35def722829a6a99",
      "recovery_authorization_max_s": 604800,
      "revocation_signers": [
       {
@@ -10330,13 +10458,13 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "32c330795a907bbc68cae05c44f0a3852d6c90cc8f0759a7dff37d408b37424b5440719b5b45ab5bc9e1797e594d937e47bc5ae3821dd974ff72dedf853d2105",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "5fd5106377b75aacb8f5c33ec04ce2ee7a160d02d591dd2ef3790efeac8ed94c947ed7bee6e9322ca3f240d25e52151ae0883f25a5cb9a21f21d743234e89204",
      "signer": "root"
     }
    },
    "name": "MoveToV4.test_nothing_moves_a_chain_back_from_v4 #2",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -10430,7 +10558,7 @@
      }
     ],
     "policy_version": "p1",
-    "prev_digest": "548e4e09ead2dcdea7d7c31e9346db595a544ad20debfd6129869c90205de849",
+    "prev_digest": "529db3228429d7102e0f22bb111dc574ad9079721d25a39d35def722829a6a99",
     "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
@@ -10494,21 +10622,21 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "7767a7d8a6f09f9329136772e2d42beedb5d2ca043b3da8896bdeb157e9d6031",
+     "prev_digest": "31f2e0f93041ca878e65461df85cc1355e81ae29d6a99cc29c35be8af8f120db",
      "revocation_keys": [
-      "cd5d526ee52b53d0ebbc2c85be9e394be8e38db2b422e8b2803e1c77cae2b510"
+      "650eec69b6e6e5319dba19da5347f6c9d6e45ea3a87dcd4b2dfbf2fbbf5fc7cc"
      ],
      "schema": "regalia.membership/v3"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "dec4d86fa5e3d9eb9e1f97e697d87693a52d2c1fd3fb72b846bbfcc9e7d330fa82b0be12e2c70775b0045692032ffe86c343c4d7eb5ac0f75722b487ef8a6f0b",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "9a490c17aa6cddb5ea650fc58e91de8075fbc6b683e4daad1099cbc4b11d3140e13431feb1485370debd885f12e5d6969eaf6322ebd3472aa8fb25eda878a000",
      "signer": "root"
     }
    },
    "name": "MoveToV4.test_nothing_moves_a_chain_back_from_v4 #3",
    "refused": "schema regalia.membership/v3 cannot follow regalia.membership/v4: the schema only moves forward",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -10556,7 +10684,7 @@
     "policy_version": "p1",
     "prev_digest": "",
     "revocation_keys": [
-     "cd5d526ee52b53d0ebbc2c85be9e394be8e38db2b422e8b2803e1c77cae2b510"
+     "650eec69b6e6e5319dba19da5347f6c9d6e45ea3a87dcd4b2dfbf2fbbf5fc7cc"
     ],
     "schema": "regalia.membership/v3"
    },
@@ -10652,7 +10780,7 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "548e4e09ead2dcdea7d7c31e9346db595a544ad20debfd6129869c90205de849",
+     "prev_digest": "529db3228429d7102e0f22bb111dc574ad9079721d25a39d35def722829a6a99",
      "recovery_authorization_max_s": 604800,
      "revocation_signers": [
       {
@@ -10673,14 +10801,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "cd5d526ee52b53d0ebbc2c85be9e394be8e38db2b422e8b2803e1c77cae2b510",
-     "sig": "a36c36f5e5ee14f83fda78276d6bac2d8d8c0ab67ac8d330ba697abda15c8063b31125f2b3096287403bb7306f5136cdc18a820b27552449baac12c6bda5e802",
+     "public": "650eec69b6e6e5319dba19da5347f6c9d6e45ea3a87dcd4b2dfbf2fbbf5fc7cc",
+     "sig": "dc6371dd5831b2ee1b22c0c0e01df7d010a7865054b99874f34aca2ca952c69624c4837e51412c8c8ecbc97af4701dad5873555070e38e46a143121d9ecd850f",
      "signer": "revocation"
     }
    },
    "name": "MoveToV4.test_only_the_root_moves_to_v4 #1",
    "refused": "only the root can change the schema (regalia.membership/v3 to regalia.membership/v4)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -10728,7 +10856,7 @@
     "policy_version": "p1",
     "prev_digest": "",
     "revocation_keys": [
-     "cd5d526ee52b53d0ebbc2c85be9e394be8e38db2b422e8b2803e1c77cae2b510"
+     "650eec69b6e6e5319dba19da5347f6c9d6e45ea3a87dcd4b2dfbf2fbbf5fc7cc"
     ],
     "schema": "regalia.membership/v3"
    },
@@ -10824,7 +10952,7 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "548e4e09ead2dcdea7d7c31e9346db595a544ad20debfd6129869c90205de849",
+     "prev_digest": "529db3228429d7102e0f22bb111dc574ad9079721d25a39d35def722829a6a99",
      "recovery_authorization_max_s": 604800,
      "revocation_signers": [
       {
@@ -10848,18 +10976,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "a88554c06aa36b8eee8b5beb28e9de7ea8e1c9e279b4aeffc77e2410b49cf51a6c4734df652fce0703d99ea4249a912dc326434300568c644e035130a5590cc3"
+      "sig": "625d1106b2f406622b474f92e76b8bbef931af3f4f0220765608e38eada252a020d53f9427c298050d7f68cc356c7c8a9a55a66c22ebb0c1720d6566bab18b27"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "1d10d33387461a672f8fa14e34f06185286f643edc37a3c95ef913a2c55de57547536ff41485cab1c5040b4794fb1780caa13a08cf3d4dc6cc651ceb32f3c02b"
+      "sig": "e2bc0d3c651c38ce1c060b4aa98d8f14511c81e3eb6e974c4cde43e24d9c0a3850c5f5bb6e2a222ad71c1b131e66b179a7602aa127bfb1fd6c02dfbcc5147ca1"
      }
     ]
    },
    "name": "MoveToV4.test_only_the_root_moves_to_v4 #2",
    "refused": "a manifest signed by a quorum needs a current regalia.membership/v4 manifest naming its signers",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -10953,7 +11081,7 @@
      }
     ],
     "policy_version": "p1",
-    "prev_digest": "548e4e09ead2dcdea7d7c31e9346db595a544ad20debfd6129869c90205de849",
+    "prev_digest": "529db3228429d7102e0f22bb111dc574ad9079721d25a39d35def722829a6a99",
     "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
@@ -11065,7 +11193,7 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "7767a7d8a6f09f9329136772e2d42beedb5d2ca043b3da8896bdeb157e9d6031",
+     "prev_digest": "31f2e0f93041ca878e65461df85cc1355e81ae29d6a99cc29c35be8af8f120db",
      "recovery_authorization_max_s": 604800,
      "revocation_signers": [
       {
@@ -11086,14 +11214,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "cd5d526ee52b53d0ebbc2c85be9e394be8e38db2b422e8b2803e1c77cae2b510",
-     "sig": "07c031a2a003d3fdf340f656678d5d1d4ad9a8ada8913f8d94c0ca8e59603481bcd97874de1bbe824a4c1e2f3791b296c480e1a4bacda66bbc70fe6780b1a90a",
+     "public": "650eec69b6e6e5319dba19da5347f6c9d6e45ea3a87dcd4b2dfbf2fbbf5fc7cc",
+     "sig": "0740d0f11b236e29628f3b871c3a85da5a80f274949cd8a027d72781e695910d23ae7efa50e600941042c6b5b180217c3221862427e140b07cd54161c0f92206",
      "signer": "revocation"
     }
    },
    "name": "MoveToV4.test_the_root_moves_a_v3_chain_to_v4_and_the_revocation_key_ends_there #1",
    "refused": "the signing revocation key is not named by the current manifest",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -11141,7 +11269,7 @@
     "policy_version": "p1",
     "prev_digest": "",
     "revocation_keys": [
-     "cd5d526ee52b53d0ebbc2c85be9e394be8e38db2b422e8b2803e1c77cae2b510"
+     "650eec69b6e6e5319dba19da5347f6c9d6e45ea3a87dcd4b2dfbf2fbbf5fc7cc"
     ],
     "schema": "regalia.membership/v3"
    },
@@ -11241,7 +11369,7 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "548e4e09ead2dcdea7d7c31e9346db595a544ad20debfd6129869c90205de849",
+     "prev_digest": "529db3228429d7102e0f22bb111dc574ad9079721d25a39d35def722829a6a99",
      "recovery_authorization_max_s": 604800,
      "revocation_signers": [
       {
@@ -11262,14 +11390,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "b661e40969be740b5e1bb1b4fe185cd18d9e4dc8bdfd3602675a2df6349c35e36aa875fa4eb008d6755171ac7db3f61b3160df7b9cd38ed0dc73ef41f3517203",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "8244ca2547c4bbf197633fe8b9aafc9c6455b8ead40c75c90ffbd074809a84944a67a862825adba1f13eec10ee56576ae8509a51f3aca56cfdbc06d48a3bb90e",
      "signer": "root"
     }
    },
    "name": "MoveToV4.test_the_tombstone_retired_under_v3_stays_as_it_was #1",
    "refused": "tombstone: c is RETIRED and its fields cannot change (ssh_host_pub is neither added nor dropped)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "7f42bef9213b76817665a80b6819011ec7b1d5c7dfad3652e3d198aeb89a485a",
@@ -11513,7 +11641,7 @@
     ]
    },
    "name": "Quorum.test_a_node_that_does_not_count_does_not_make_a_quorum #1",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -11751,18 +11879,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "41e1f2053c4243d58250cd4e72e30d03ce106f2a92bc130ce7169639504f57307fdcaae4dbf699193dff7b03fad3b1c1ce12d0a1afc1d6d22102fe086ed19db9"
+      "sig": "ecc0b41e9061d352460834d80824c0e27f2d1d93da0c381323e34ddf2a54d56176b386c99306b9e3c58d3a39c4abf39495711aff6ca91181d77ed950a6c9d26a"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "1aa62a1d0ddae52a547092081687a8924017fbd48ee9c71760975bde3ea0c9bd79c8d328b2324d7321065ad8331fd33eb54cea98cb9a47aeca546ba213c24048"
+      "sig": "66e647deee0e62f00d3d092808a620378d72bececd46bceeb6a9237e50c0e4540fd3ffb10ce43e8d2885075796d1c17a6131d44ec83cdbdbbce36fc49f0b50bb"
      }
     ]
    },
    "name": "Quorum.test_a_node_that_does_not_count_does_not_make_a_quorum #2",
    "refused": "the manifest's signatures meet no revocation_signers rule of the current manifest (counting: a)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "270e61902cfd7118f2aa365b9ab63fb4eb9f5862c51e620517af72c414a85f65",
@@ -12001,17 +12129,17 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "ee0ceb8a353095edff0624e73c509bf4de25cc3b3ad26be0b065ab4bff6647ab3fd0463cb89824b88840b559b18e559dd37c6893ab9ce5591ae723c32fe18b7a"
+      "sig": "2b5be5afd954332ab8ce13803d34de8ee83ec570758fb1ccacba19ea4aea441c3ab7b0f66aa155143a191bb5ac679fa5e3db1646cbaab3e241bac784457d0c5a"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "4298c5651925fd4acf1a2ef3b4c64e2ca064e7ffa0564ef7ad5c1fc6ca28bf960671bd636cf67be1d4a9307ca21a85bb6b3fb09a0a485777ff7b874d305c871d"
+      "sig": "99f5b8bc5b29b6108c7142b079a87aabea75fe410269e9715875d5c5625f019a3702a1364db5482f8229091337c1ea7a91e2fe53b79cfdee3edfd6547c89de91"
      }
     ]
    },
    "name": "Quorum.test_a_node_that_does_not_count_does_not_make_a_quorum #3",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -12249,23 +12377,23 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "3658169266927f8446da7596dcab60303d0643b1f040b3fb44356fcb13e1a7c72f62e3319419d03a58d1c9a2e6a79b40cd5e19f98531e94720f6817260953689"
+      "sig": "cba9fafc5b9c7bba2094515b0ff22bf7648d80a22fd78ababd88a3045576f3ef7d137fac039548765e0a4ef96f6b654cf76c1323acb4d0595d3b267b9bcde577"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "d3f78e2cd1b8940364ffd2b98faa7cdc51d9b207c1dd5dba43d005654478fb30068a2316af0e2418d6b3f360775c27f36a4d6cae9fa22950292a7205026b7142"
+      "sig": "4386c048ff4fa8281f6f2e10e68a0577c9028206da26b6d36f3658f29f42301d77602fd255e51bed9792198108556a97052c330a34bf69a5e874ed78e46b2a45"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "d3f78e2cd1b8940364ffd2b98faa7cdc51d9b207c1dd5dba43d005654478fb30068a2316af0e2418d6b3f360775c27f36a4d6cae9fa22950292a7205026b7142"
+      "sig": "4386c048ff4fa8281f6f2e10e68a0577c9028206da26b6d36f3658f29f42301d77602fd255e51bed9792198108556a97052c330a34bf69a5e874ed78e46b2a45"
      }
     ]
    },
    "name": "Quorum.test_a_node_that_does_not_count_does_not_make_a_quorum #4",
    "refused": "the manifest (signatures[2], c) signature does not verify",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "75d0ee6d5c9957e111ac20c1d546bba82f356e259ee6f5f9f45c7a770c2697e9",
@@ -12509,7 +12637,7 @@
     ]
    },
    "name": "Quorum.test_a_quorum_only_restricts_and_never_touches_the_signers #1",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -12747,18 +12875,18 @@
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "3dde317d2cd5420a1b7f961393660460a8541013f1df72936e70ce7efa3fac394b4563bea49a83dabf93a26058b02820a92b5275313ff53b85ca6f98bb536af9"
+      "sig": "bd493f020ab3909596207820bc5b5ba356c9701f85a4932b4aeb83cf9f0d0c9e043d9e57e7362bf9e45c0aa3ee2e8a236c5457740e5e496dae9f58624d07147c"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "d8ef7c1fbcb7c9aacdbee25a24b3581fbf1e99fde3c1ed05856672c781d8a4757915a5503d242042c422085505ab6faa5c031333b4df51d8aa45379156cb4467"
+      "sig": "f41c8d978f8e465683d546f7117c1d4fc8a6379aebb8732f611c05e1e8e7517424e99cde96b8c3f0860bac30617d188d5de201c853d95d585b3dbea0c9a80f76"
      }
     ]
    },
    "name": "Quorum.test_a_quorum_only_restricts_and_never_touches_the_signers #2",
    "refused": "a: MAINTENANCE -> ACTIVE widens capabilities; only the root can do that",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -12996,18 +13124,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "ca6da6be6fa940bcb172d5f43cc8ecae965801b741ee52d27db6d0e2554cfb81748bcbaf8efd0d637fa13eab5aab76c6697ca24b8b14bbe94a74ba6af5ee6b55"
+      "sig": "02d04e12ea3b8161560df782661833086528111ab1866bddda04bad425b470914305dd616c93bca4ece1764075fc601dd63b9ffe94ffd56de0062e28a2bd1a4f"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "80c93ce12568fa5701e6b848d53f9147d3a41160b899c4ddbda94c95062b61093826f62382de58247740c7aa7a3d8e4f38ade296ba74733d9a3abf92070492f4"
+      "sig": "f5f372eac272b2f46fe794ba2a9f66b87f68972c01b7e6d0773ade9f8e96a8f974e18254409cca5447ff5d269079389327ceeaa6ec21a3064f607837e233eea4"
      }
     ]
    },
    "name": "Quorum.test_a_quorum_only_restricts_and_never_touches_the_signers #3",
    "refused": "a revocation quorum cannot change heartbeat_signers",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -13244,18 +13372,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "55d04c4a2e78729f49889b19425f1fcf710d40baf8a1e096e639e5bfcbce1c5e4470271fb14dbf7015911c7fd01ff60c621d7a375133ada93ec655e6ce86d2ce"
+      "sig": "09cf09ec93a48b433f2dd48cc9227a49bacf1ef0eb7a0355ce44ac5cc668488e0cec0b7f75463929cfc5dffc690aeb4204a26d7ac9e587e3d41efd675f32fd02"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "a907bc17eddb8c1c7b7b43271cb3e0db3cc55cdd0f4d8546412a7b0b92d7745623c92e6e2b7fd7905a59ffbc51d616417db4a85508a0214f25eecde2e92d2a85"
+      "sig": "d4e98025123ebe7bfa7143613008ddc786e96dbce93d43d25f9ec44181601320618467fb0cd7b16ea009e7e37aa406d5d4a0ef0c7ff5aec2597646ba8cccc6bf"
      }
     ]
    },
    "name": "Quorum.test_a_quorum_only_restricts_and_never_touches_the_signers #4",
    "refused": "a revocation quorum cannot change activation_signers",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -13487,18 +13615,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "c79fe7a07c445bc7a206e4ee2891055f1a041437219bbaee2f3c9d9fef064cfb0f017cac28a2ee10788bfbe8de01b04cb15632645b3f40b6e631eea119b6d55a"
+      "sig": "f6bfd5b545ef3bb5d939fd231a0e92fba46dd89dd836317e1961e06ba0eb72b151aca02e1feca9ea5204496e5fb466f0759ae1673ec951d1b4b4fa59c418e1b8"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "298baca791b8fa5d3086c0968c1f0487162a53f2f942cf4258ed78b760dc92d41b02ee327b3ab5a0ecf523a5b1f9cc78db96be280400dd0b52b6d227758d7d72"
+      "sig": "a414633b42f102e6fd2d2142ea1a210069b9afc3e1f266cd66d11f8dda8c0c367e558aa9cc61132fe7d040c25f837ec7cd72bb830903cf164304083d336677bc"
      }
     ]
    },
    "name": "Quorum.test_a_quorum_only_restricts_and_never_touches_the_signers #5",
    "refused": "a revocation quorum cannot change revocation_signers",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -13740,18 +13868,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "8aa14fae686df46f38289902b5ef76090baaf1d41d5450f7dcebd6743d88ca8933d013cbdfd5f9c2002aeabc435f8d412d17d41d3f69c34e980e177dd7f37a69"
+      "sig": "2a0155d807e7bf8e11bb2855267419f239bde8a1e8b9277a7f23f05c761f69060c0c44b7e066c959604a34d14e20a711c1212afe86378e46caa6fbad077e6683"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "160822d7be970bd3465fdd3cc07a7791ecc00185055e0f9794e1a477aa826bb9296e8c7ab7ee278df536108f0c9d1ca65a4a65b393ca2691f0659a606755c5c1"
+      "sig": "208a2439b2b1988456b2a21e872cfdda7da1e4861f9d4a85b41f149580d6c86251387eae4f00119a2710d7f87625e9eda7f57fa10ab1255d1c27d44d69837b3d"
      }
     ]
    },
    "name": "Quorum.test_a_quorum_only_restricts_and_never_touches_the_signers #6",
    "refused": "a revocation quorum cannot change owner_keys",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -13989,18 +14117,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "fc5d59eb2d156591f77ec456afd1ee1736f326ee660f42f51b84bababf50d29c7b44d187c8cbb1eee2df71b926314e54d1b76717285f3ab0cb402f6cab361d3f"
+      "sig": "081980acf4fb885b569475a74e3c782bda3f7c2d4e0095d5cabba2b44433ba097b3e38672f1dd490508ad6ad938b0f5ec3ba9f40ab3abe884da1737489e87d76"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "fe347791078b02f50cd617aac1d9ee35e0a153fc499088870ad1be21f48a290c4357d46ff773d5f08308af87f8457b379aa1a23f98b9a793f2b616efa3cbb018"
+      "sig": "ed9ba02beca97d24850e7fe5dd1de29abc5042540218cfc356dc9f5430fe3c65463f34722748da0c8cec9f775009bd5c5d181945f80d90744259db10c922dfac"
      }
     ]
    },
    "name": "Quorum.test_a_quorum_only_restricts_and_never_touches_the_signers #7",
    "refused": "a revocation quorum cannot change owner_heartbeat_lifetime_s",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -14238,18 +14366,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7e8cb16be0e717dba6572cdffb85ca18ccaa1ce3f3f895b68aaa71887e5e175c0066ebb6fd610a078ceb1746297e433d518f12d59edfa5ff862dbea295f49944"
+      "sig": "10265339947c6b9f9eda3a5351cad6a2d73bc8aac117447eaf466213c2ba7f536632d528eba9d7e0afd6d0d9a8e28d36bf5e0e9b00db92d7a0480388b9604f11"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "9e2a185617e48f9f00354c11fa06143bf29a1ac51d0d299c91ce08fdd3c7b0f85b5d92c06514a187b7cc7d75214e61f142639c76e8eac9ef50190fbae146b863"
+      "sig": "aee5709ef1a2a46ffe569a8b3cfc017dda8f3c4edf3df3b2d3ea53136952f4a102a4edeb56e0b15302507adcd302501e6e265136141964aa31f2e2bc98fe037d"
      }
     ]
    },
    "name": "Quorum.test_a_quorum_only_restricts_and_never_touches_the_signers #8",
    "refused": "a revocation quorum cannot change recovery_authorization_max_s",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -14487,18 +14615,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "5ea7cfee6ab0ddad0a24b9ee44170fb50cb23552bc05b4e8dca8e047abd7207441899c7b1acd81401eacd64edc6e4ffd80845b074387140154217caf22fc9812"
+      "sig": "cd42a26e1cbefe28923f9fe9ce6af7dc292c94b495397a3a272b999f291f78c4680a0dd9fb382af37abccad3f99b6bbbc9df3cccbc4f59fe70ac2641e1a7331c"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "0b2a0bfb8b8dca1ed13bf10f46fc43e18a91750a9cbb76602730897fdd5fbe4d485fe2adb74b6982143cc43d4102ab311fda0c9ec5c2548320f37a3226fe1adf"
+      "sig": "429cad91ae0d3f8d77d1278351406b05819ed7a628e5f12bcbe228e392f3bbcf416a7d22375595ad34e0dd31a2c4c93a69a9908547c34030826ddbaccb99ffc1"
      }
     ]
    },
    "name": "Quorum.test_a_quorum_only_restricts_and_never_touches_the_signers #9",
    "refused": "a revocation quorum cannot change heartbeat_max_lifetime_s",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -14736,18 +14864,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "27a9aa335585338b3b045003242238945cf08fec55e357b18a2dec4712dfc8f6616ebc81539ac7f55a59f2dbc00cebbbc529a74779c417de64f1c01845c6d019"
+      "sig": "584af9b62818f4f06d6968886b8391e2c12cd79112247d2824dd7e0bb239d39149f8e7d6ed8cff2a1fbdadffe7ced248a004291043043bcd9e1a55dc6e014b0f"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "9860b6f19a194150731720625b6db0ed31ebf2e1f1d9dddf295c27ea4ddb34bb395154248f3dd6dfae5665246c681f690e4b529b9ed8e7f33008aa9ca01dbd70"
+      "sig": "b809c0d6e69aee162b0f96435818f32cdcb792cabdb72e52f7d9a20987b2541b534c9845d7bf482f5a447bfa80c3c134c108d5f0b8e0ebfe9b810b7f7adcc19a"
      }
     ]
    },
    "name": "Quorum.test_a_quorum_only_restricts_and_never_touches_the_signers #10",
    "refused": "a revocation quorum cannot change the policy version",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -14985,18 +15113,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "56914d6f6313cf8b482b078d7b45ffec2df0178ca04910bb3a50c37b95f69cf53144d6b079c745aebf973c40f01543e1436e3ef10284027e11156328ca45f25b"
+      "sig": "577656beaa35b08edd52ee936063805956d19fabaffda84c137f20745f11b608305c81dba1157f23335fcec2110a17b00f6ddbf69c841a434c81e9f67ae01d81"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "e40bcd9df6967979b28fc8c2b6062ada2e7c091fd9df666c7b7e7affcb05c59a162466da6e0c339672980f154d6cd5bdd4753ef52d26477faa019811fd635ce9"
+      "sig": "b4b37e68eb7fb64e36ad5fb9002bcf4bebd2bdd5cefbcd53c91cb95233082f116801b7cbe6753ef96ebe53663662162fdbf120f443a7b4fee21d6bc9c468cefa"
      }
     ]
    },
    "name": "Quorum.test_a_quorum_only_restricts_and_never_touches_the_signers #11",
    "refused": "a revocation quorum cannot change signing_key of a",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -15250,18 +15378,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "8fc26f511bdfb9195b83bb0939b97b7d6135e0f5a998769ead9e460a732eadd9659651da6f85d846afa1fcfb5520e479b12fd29a1941d7568b7034029c5f8292"
+      "sig": "cde5da16238232611ade8f5ca549639154b39743dcda57386ea1899c2315b9b73e4927b9b29dc07ea13a676c92e055bfa2bb19b35e526878b0b9e06f3aefe435"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "9682bb5c93a390043d869e527fa316cf731cffdcf01350af7b0f9ead1e222368062ea60ce4b98f5a235cc18f18ccfce56dc412cd6340adc2b5b8728fa5ab28b5"
+      "sig": "0f402a2194362c47924192a3b627f8b877205224518de0a78351a34be4cacdac05c7a3077f1c337bbbc7dba1cd173852a1938633beecf40edf9639cb293c8c0b"
      }
     ]
    },
    "name": "Quorum.test_a_quorum_only_restricts_and_never_touches_the_signers #12",
    "refused": "a revocation quorum cannot add or remove nodes",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "797fed9b07dd1a4231a4b560652958f034c7185a9e83b1a5ec567264d75c5600",
@@ -15505,7 +15633,7 @@
     ]
    },
    "name": "Quorum.test_a_retired_tombstone_is_terminal_for_a_quorum_too #1",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -15740,14 +15868,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "2b0429c868ef89cf01f56fb083812ac2d5f4dad7e2fd3ce10ea94bf25a23e5152f84c7254f733a49223858f8ef9d15de968733616e0f4e1993e108b69c51a200",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "1ed21f24c9bd6c4aed398061aa32e1089d886c2e3c57d00ce77219016d4af5ec95d0dbc9d96e6ed7da2234fad2410e57461e31360c291a5080c154e601a4fb0d",
      "signer": "root"
     }
    },
    "name": "Quorum.test_a_retired_tombstone_is_terminal_for_a_quorum_too #2",
    "refused": "tombstone: c is RETIRED, which is terminal for every signer (QUARANTINED refused); hardware that may return belongs in MAINTENANCE or QUARANTINED",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -15985,18 +16113,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "22089268252e0b8a5ca26fc434137d06dc91434fa05f9062f32dd43acd0b15af44c6763b6d8ada8c207eea69e80d904efa3cf09e4a43e1e4cda1b28fdf185dbc"
+      "sig": "e1d332d4d96478c62033fcab6a30b5520b410593d07120a28ddcd2eb53fbdb7038c3c16a2913d4f0d2ced9aa196c3ff812baae4ebb3a0906aacd6ea397215147"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "9f8cedfbe8d51369ebeb92c9599490ab93f80fcd02a850543d4998e53cb85d3c7cd4c071529a203c280ed8156010539889f041d0046c33f5eee0369d5dedebfe"
+      "sig": "4a97360feefc2ba86c3b223a973740328b3f28a5e44e4819998eb3791a5f64db25d7ec822f9f469fcd80060a776937485cf3ef32fa2d909511ee1518d05a589b"
      }
     ]
    },
    "name": "Quorum.test_every_signature_is_checked #1",
    "refused": "signatures[1]: party 'a' is named twice or is not a name",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -16245,7 +16373,7 @@
    },
    "name": "Quorum.test_every_signature_is_checked #2",
    "refused": "signatures[1]: party 'owner' is named twice or is not a name",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -16483,18 +16611,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "5af948c8674e2bcdb975d1d4e0822ea648cb7393b74563ce9e48f1ee8ecc6e6a6e9c07d74198ceaac578a183d35d23eb3b74c67522ff3649a203a189b8fd61fc"
+      "sig": "0f115e9e8b2dad168c9e069c8f3eb50d8953d5e97562ad14188b2d7cab2d653c3677cc54ad8efea3a585d147d92f40dfb39971a6ba252bf8820758a2c424509a"
      },
      {
       "party": "b",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "ccf59fecbe06286f948c8038e9d88d217e37f66c2c3f68d73fc26f671df49f6150c11e2898e79d4c42fa3ad4ed78e274bb815f52bc9592d589193134027ab089"
+      "sig": "adddae2412f754dec213bb852bc5cff3257e8e8f40e892f8eff47394253c593722c2aaaf987a98420afe36b648871565296bdad5f640448926a7b996f2674b5e"
      }
     ]
    },
    "name": "Quorum.test_every_signature_is_checked #3",
    "refused": "signatures[1]: the key is not b's signing_key",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -16732,18 +16860,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "5bd9acc574765c71b164d16d9093fb117918a95f59ad86bfa2851f624e12d7a25fa97b4fe5d2bb32d188f1ae3480277ca32086a787e337a7667283f70042ce0d"
+      "sig": "825fcbf2972c8593395db695678b4718d00b1b11a7e2239dfc71cf58c9b0665c0db1d1ec85e18e1514d2cd5030bd92d2500ac62147de81f0df38aa892e0d23b5"
      },
      {
       "party": "z",
       "public": "043a2f765da17a71c4881b06c9da4ed8f402bd06715fe7c6f919cc6508e7ea0578edcc9a810a89b58440ed9a1107f81984316565b041447bbcf0a17fcddf72eba0",
-      "sig": "d9aea64bd63218fdb3be4669e87c01cc75739b38b2ed1a2adc87039cd8724e5706f3a24732c3f842c93c4147f72a3c397cb19625f8d0d673ce76048d09c1fe25"
+      "sig": "33398f54ea445a76f945d314a678a64bb18348da5d88c6bd966696cf7bc0a92b2efdcfea68cb3aeb901d24398c17068360e95180e82bbbdd59bdd6165e52ff6b"
      }
     ]
    },
    "name": "Quorum.test_every_signature_is_checked #4",
    "refused": "signatures[1]: 'z' is not a node of the current manifest with a signing_key",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -16981,13 +17109,13 @@
      {
       "party": "owner",
       "public": "043a2f765da17a71c4881b06c9da4ed8f402bd06715fe7c6f919cc6508e7ea0578edcc9a810a89b58440ed9a1107f81984316565b041447bbcf0a17fcddf72eba0",
-      "sig": "591f3e88b72577c66a6277660fcda5021ca358df8ac2d649f1790aabb0c56394758006873ad30fe09370ba8a3a8059181cc7c047d398affc66de52c94b91d888"
+      "sig": "349276e348f6c51af3da0fecb4a39e2eafab1b93c56dc6dfffd1857c533d5db27aa0dd63c600dce63a6e381154352e52c9ae3027be9394b7a45e2c3c3944c1d8"
      }
     ]
    },
    "name": "Quorum.test_every_signature_is_checked #5",
    "refused": "signatures[0]: the key is not one of the current manifest's owner_keys",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -17225,18 +17353,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "f5f351c6be70d1b4c119412337360a4dcdeea8f28c7c95abe58724aea0587be0d0d5b8eb4f8d00c729f03b0f52fe6593da4aac0463452e60faa226188bc5cc5e"
+      "sig": "b8c181ff72588ffd8741861bbbcefb4012ca4c3c89cf874eb0aa0eb6f7f3bcdbe85349c9e9d29733713d2f91896fe3da03b12c8c3cb99b72e0de249506d5868d"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "eeb8ea3b91f6f5fd66673c4453604e6aca3cf303905aed5dc22bc20eed775615d743cebcc3b336107c7ecd3db35c26eda07bb95bfe74931ebf536995e7fd61eb"
+      "sig": "bf4568b87f492cc70e5d129cf0cafbd913a377691c58a814d08504863ff8cd7bb36a986be2421bd3a69d71274253ccc5fd11adc56275c9e4b664005c7c400430"
      }
     ]
    },
    "name": "Quorum.test_every_signature_is_checked #6",
    "refused": "the manifest (signatures[0], a) signature is not a low-S P-256 signature",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -17474,7 +17602,7 @@
    },
    "name": "Quorum.test_every_signature_is_checked #7",
    "refused": "signatures must be a list of one to 16 signatures",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -17712,93 +17840,93 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      },
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7d9dd5f48313c29a46559d04df8f97b7155e5eeb04724d6056d78a3eaa5dc05f0b8c18fb0a261bd3213aeec11a6f4a71905c9fb6a5977bb161bdc509ed1afad7"
+      "sig": "d01aba4d5589b67f1bc3de0cabbe437732c3e0fa5e2c78eaeb24fe75516ea9d24c1ee40a2b28117d2195a4a2381fa7822f1655db7ac77a655f7937fd7137d0a6"
      }
     ]
    },
    "name": "Quorum.test_every_signature_is_checked #8",
    "refused": "signatures must be a list of one to 16 signatures",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -18037,18 +18165,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "68ae6ce4a96ec457996fb4a2990b01855514acf6ee5d8b39b5ef8f03a9afb9837aa21f77813444f9647b3d82bde701b8f337433e7c4f9eb0dfd8d8b2850e0339"
+      "sig": "3c079aac03ba169ac89c3fe5358f913b86e345ba2f850709b0d041755334c9a4519fbc88b36d56b4bfe0b876b93e96da200d29b108a19498f0d6e4cadb219b5f"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "d677239fce19f579e9db3fdbf4edec9d6b6b427326a94b8f259ae6aafd15bfbd6f9273e33a6a50fc3d76f019b02b1bad7a5a879305d4165ceabf01a1f97d7ef6"
+      "sig": "d715d512f5af11ab8b8d8b695b6c3eaa90c759cf9d9f4960f24584012d0f4d8223d6a332b7d39d1090852c6cba37290cd859e683e4d50f0136a0d1488154e8be"
      }
     ]
    },
    "name": "Quorum.test_every_signature_is_checked #9",
    "refused": "envelope fields mismatch: missing=[] unknown=['signature']",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -18286,14 +18414,14 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "171269c208aea33579a0ad18bf80dfd867064aeb6ff56ec0ba74d21755f1cb0733ad9f6d475b42ab4cfbf88b23d8a8a8eb75cd29f36f8b0a993e493f80da700f",
+      "sig": "2530606425ed5ada2091167edaf4f1be08a5ce618317d5ab2e8a713fe9c7f095265d118021a5d13094c9ccd2f58a13031392f5a8cf1a4d234baadf04fe2f1818",
       "signer": "root"
      }
     ]
    },
    "name": "Quorum.test_every_signature_is_checked #10",
    "refused": "signatures[0] fields mismatch: missing=[] unknown=['signer']",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -18531,18 +18659,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "b2607af9bfc6f8e315b59d0502f8c21204233461f6967b094caf9b6238a026aa13b4e858665989e4923e2dfd90d735bed930d8b0071120cc0f187f23659c0db5"
+      "sig": "4f80aa720ca6ba07c5220a93100538e4eeb9e3b54714a03a1503f29c15b44beb614b36a8a8dd0920b4e022c87b212849b3994f7a3a46c4b03649932073af8998"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "c848c2eb85f81ceb87702bd8bec5c1ea95cfa45cd6f14f3e216d7d64358b7ab41ca364a8a5eb967ff2de9abf35ed978a6c3a360f8f025fa0517dc13c7af65cab"
+      "sig": "38e438156eb7bdf6ff5176b49bcfb3e4f6ed462ba2f683a3d3f28bb7cb169f0d1b118cc332994bd3278ab6a57dea5dc83927f89b3598cfed8a40a3dd9c5dee4e"
      }
     ]
    },
    "name": "Quorum.test_every_signature_is_checked #11",
    "refused": "the manifest (signatures[0], a) signature does not verify",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -18780,13 +18908,13 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "fccfb036a3036289ddd789dfc54a3de67a9760fff8898ef17d15a48abd80578e6a0d3704574b8d9ffc1edc8907d30c5ba9eeffb524f79579672c87a5d342ea41"
+      "sig": "cec7ff2be322725889efe499aa71b437a4a7c14c64994da7dc54c8bd069096711971059c048195ccf966c139d75c6835a1a913e6ed6f9096fce221455ed9e154"
      }
     ]
    },
    "name": "Quorum.test_one_node_is_not_a_quorum #1",
    "refused": "the manifest's signatures meet no revocation_signers rule of the current manifest (counting: a)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "current": {
@@ -19024,13 +19152,13 @@
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "8f74ced574d4cc5640eae3f9c319b882d38592994623385224b6f754cced2ca4490cb858517041b731105252142408b7b88045503170139b358bb704a0f0f94a"
+      "sig": "39e733a435e4bd693e4803f6185f6afb002106f337fc254c2bf7560d2c7b9c1206c089a414daaba3cb89c884c635f8291fda5834462115da99560a68398fe94c"
      }
     ]
    },
    "name": "Quorum.test_one_node_is_not_a_quorum #2",
    "refused": "the manifest's signatures meet no revocation_signers rule of the current manifest (counting: c)",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "0adc32a91ed499bd306c00af324d520c4f7162dafd43f6fcbf3d8676df52a352",
@@ -19262,13 +19390,13 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "907758f26e60b21eeec6460e758b2da9f8372d548576d74756c64251bc176df3039c02067a8218ac56129d531ccaecd1e1033b23a50b6f042f62e291e35d9f08",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "80e7283416ecb2f1354600ac269dbdcb586f167894e26e1c9c75f6c33d66857ab6b0d1daefdc1510ac8e49e487c83980626badd4bcc61aa1156c8fb253036408",
      "signer": "root"
     }
    },
    "name": "Quorum.test_the_root_changes_the_signers #1",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "7f42bef9213b76817665a80b6819011ec7b1d5c7dfad3652e3d198aeb89a485a",
@@ -19507,17 +19635,17 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7829da24d509c3b71b1e6fb919503244f482afb1148405108bb679363222b6b409efd01248b2c6a737d25b6c5f58a5caeda8e1bc8cf617b601ac663d7de2799f"
+      "sig": "2b43f94d2323cdbb33c0b91d5ee2865e982ddee3daa78bad17d236e869e7bb22613eaad69b466321a2af4c1db20ac72e5c6401efc1b6fb9a55dfe43f0a9c0abf"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "3ec3d266a149d4f8692daa0ea95b5e9ccea90310aa02432f9a65a3059d2a8e771bc2cf8b274655dc9686075e895d7c504b2fccbce846a59eed72cadcb0f23711"
+      "sig": "9432c75256ab86fb078f4379cac721468ae2a4a46fe4c73868c7a4d2e0bf5281296198049eae889c3ddd6b5ff91855668ab334bc953202100b8d5f01aa860913"
      }
     ]
    },
    "name": "Quorum.test_two_nodes_or_the_owner_alone_make_a_restrictive_change #1",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "7f42bef9213b76817665a80b6819011ec7b1d5c7dfad3652e3d198aeb89a485a",
@@ -19756,17 +19884,17 @@
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "496f136c0e1256bb549708188e5d92389e29a1972c935ba251955fcf10abff01042d9e172b2b32ea02c58971666b975acc122aa84ea8f10215680d97b18f11c8"
+      "sig": "a25f71b2f885229803051c7a9cd42a03b7d959133f822bdf999df75c98bab96947256e7fd91a692cb56369be7430ea360d9639e73d95ef2d55e39963d4435079"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "e3d820a33cf33faf423a7b4fb5e83b20013615e1aba6b6a252b5361cf374d00351bad59edbf2d2b7c2c86f1c9ff7c18110b0ef2cba9329d233a1687fc69087d4"
+      "sig": "6eee8d82d6528707f26f0aff4b9c79c12c2914d8bf2b61cf93076d862c56877d2112c758cc72e3444a6cdc3bb3b4181313b0f8dddb71758528e82a99567aed68"
      }
     ]
    },
    "name": "Quorum.test_two_nodes_or_the_owner_alone_make_a_restrictive_change #2",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "7f42bef9213b76817665a80b6819011ec7b1d5c7dfad3652e3d198aeb89a485a",
@@ -20005,22 +20133,22 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "4fada1399b4c37526fc2d0d709c3cf0700115ad44bcde4d6cbe2aa535fc649cc616d463751e86eda5f8097087801d537579e58f111ef9670d57a9d00435685d6"
+      "sig": "c6494288962ba98e126ffbca99c7c1a21de8506f1a105fe9d573bef385a65bb1398e49cc60f0fe0191d7b37a4f5c162cdb630555dffa07063dd9eff5fd166a45"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "b0a782fc60e2b72c0e898b3261f2582ea9435d52209fbf82c003ccc5148c3e446a2779d8a9f44a02e3dc66ec9ab618d029d8577a63fdab11610f0f3c229891a2"
+      "sig": "6e564405e999039cfaf5a91772579cbbfed6e7ec0deccd949ba39767b985cc9b313d8f25abf9bf070ee3fd83d6ec7d060a247f4c361997a5b6b55027f5bd16be"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "48ad0aa271d803a3851fe690e617275d0d9987e4c42ade0cd1f1150104385164372b27f23d8049692684d03b60bce88aaa5a716e4ff0194b454e123cc9100f48"
+      "sig": "d3daff51a7b376231e82e324085bc15bca7ea5d27d0b8c6b4485c0980a719f0e160a63b4968d5bcea5cbf6bd66000d277edc6165f17475288ca4c0b66a9d96b7"
      }
     ]
    },
    "name": "Quorum.test_two_nodes_or_the_owner_alone_make_a_restrictive_change #3",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "7f42bef9213b76817665a80b6819011ec7b1d5c7dfad3652e3d198aeb89a485a",
@@ -20264,7 +20392,7 @@
     ]
    },
    "name": "Quorum.test_two_nodes_or_the_owner_alone_make_a_restrictive_change #4",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "7f42bef9213b76817665a80b6819011ec7b1d5c7dfad3652e3d198aeb89a485a",
@@ -20503,7 +20631,7 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "5764b431881dcfcabbaad6be2fc9f6e4acfe75a2ca80ce3d428b3edb79f9574c3cd0052d54e670d0520f1623bfa80363cfab25eff80a57e9db7dc90d97069ed0"
+      "sig": "f24d814105afe24211711d78727c85c7e4a72872106e2f99a536a96c1af7a187169941505bc0ef9a6c5f7c2b80d0e58c23e8456f5d8f0a758fc6cdd51efc3fc6"
      },
      {
       "party": "owner",
@@ -20513,7 +20641,7 @@
     ]
    },
    "name": "Quorum.test_two_nodes_or_the_owner_alone_make_a_restrictive_change #5",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   },
   {
    "accepted": "9d7e70d58c629aa0dd205265e8b911bfa9c524e86db575333628014cd14f323c",
@@ -20765,13 +20893,13 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a",
-     "sig": "282c85053fa2b30848ce30bdbb7cb582591a80e29fed15a7d0867d782c954b8914ea8dac67ff6d9a2643bae3755ba1e2b4100664cc3dde5ff733df58501b850a",
+     "public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24",
+     "sig": "93ac294024be25af043c7ec2fc7da309c5a2b0690fd74cd9643c2ae19e9e3b01d8e1cfd6e48f833d767ddde48c08e4c21fd5484f0e2126149f5f2a15021bbe02",
      "signer": "root"
     }
    },
    "name": "Replacement.test_the_new_node_takes_the_old_one_s_place_in_the_rules #1",
-   "root_public": "b0ad9a0f280e4fa223a7d81d5cfafd40a8080732ef18e5e3b79d493af9fbe93a"
+   "root_public": "64d929e5b45e680adc6171eb5539cc37c601aef4e6341f713160e8cac512dc24"
   }
  ]
 }

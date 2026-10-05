@@ -128,6 +128,11 @@ class Format(Case):
     def valid(self, man):
         self.assertEqual(m.accept(None, sign(man, ROOT), ROOT_PUB), man)
 
+    def test_the_recovery_authorization_bound_s_inclusive_ends_are_accepted(self):
+        """#432 (ed): 3600 and 604800 are accepted, 3599 and 604801 refused (the refusals are in the field cases)."""
+        for value in (3600, 604800):
+            self.valid(manifest4(1, "", nodes4(), recovery_authorization_max_s=value))
+
     def test_the_floors_are_the_format_s(self):
         for name, change, reason in (
                 ("a heartbeat threshold of 1", lambda x: x["heartbeat_signers"].update(threshold=1), "heartbeat_signers.threshold must be from 2"),

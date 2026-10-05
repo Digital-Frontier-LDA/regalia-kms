@@ -994,6 +994,7 @@ class ProposeGenesis(unittest.TestCase):
         self.assertEqual([n["state"] for n in candidate["nodes"]], ["ACTIVE"] * 3)
         self.assertEqual(candidate["owner_keys"], [{"alg": "ed25519", "key": self.owner_a}, {"alg": "ed25519", "key": self.owner_b}])
         self.assertEqual((candidate["heartbeat_max_lifetime_s"], candidate["owner_heartbeat_lifetime_s"]), (21600, 3600))
+        self.assertEqual(candidate["recovery_authorization_max_s"], 604800)                 # #432: 7 days by default
         self.assertEqual(candidate["heartbeat_signers"], {"threshold": 2, "parties": ["a", "b", "c", "owner"]})
         self.assertEqual(candidate["revocation_signers"], [{"threshold": 2, "parties": ["a", "b", "c"]}, {"threshold": 1, "parties": ["owner"]}])
         envelope = {"manifest": candidate, "signature": {"signer": "root", "key": self.root,
@@ -1120,6 +1121,14 @@ class ProposeGenesis(unittest.TestCase):
     def test_a_policy_override_below_its_floor_is_refused(self):
         self.refused("owner_heartbeat_lifetime_s must be an integer from 300", self.propose, policy={"owner_heartbeat_lifetime_s": 100})
         self.assertEqual(self.propose(policy={"heartbeat_max_lifetime_s": 7200})["heartbeat_max_lifetime_s"], 7200)
+
+    def test_the_recovery_authorization_bound_is_lowered_never_raised_past_its_range(self):
+        """#432: --recovery-authorization-max-s lowers the genesis default; 1 h and 7 days are the inclusive bounds."""
+        for value in (3600, 86400, 604800):
+            self.assertEqual(self.propose(policy={"recovery_authorization_max_s": value})["recovery_authorization_max_s"], value)
+        for value in (3599, 604801):
+            self.refused("recovery_authorization_max_s must be an integer from 3600 to 604800", self.propose,
+                         policy={"recovery_authorization_max_s": value})
 
     def state(self, *records):
         """The ceremony laptop's state directory (#403): the marker naming the pinned root, and a signing record holding a
