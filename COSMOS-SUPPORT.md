@@ -54,6 +54,10 @@ uses chains and does not validate them.
 
   The SignDoc must carry **exactly** those values: the chain ID, the account number, the sequence, and every
   message's signer. If any differs, the request is refused before the hardware.
+  - **The signer is the key (d9).** The custody manifest pins the key's compressed public key
+    (`cosmos_public_key`). The messages' signer must be bech32(RIPEMD160(SHA256(that key))) before the chain is
+    asked, and once the account has signed, the key the chain holds for it must be that key. A cosmos-account
+    key with no pinned public key signs nothing.
   - **The chain arbitrates the sequence.** The KMS keeps no sequence high-water for such a key. Two servers
     signing for one account at once both get a signature, and the chain takes one transaction per sequence.
   - **On one server,** a key's requests are serialised from the chain's answer to the result, so two requests

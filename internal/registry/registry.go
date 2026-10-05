@@ -130,6 +130,9 @@ type custodyObject struct {
 	// chain and sequence equal what the chain says before signing, and keeps no high-water state. A property of
 	// the key, fixed when it is made; not of its policy, which may be edited.
 	SigningProfile string `json:"signing_profile,omitempty"`
+	// CosmosPublicKey is the key's compressed secp256k1 public key, hex: what a cosmos-account signature is checked
+	// against, so the messages' signer is this key's account and not whatever a request names (d9 on #499).
+	CosmosPublicKey string `json:"cosmos_public_key,omitempty"`
 }
 
 // The signing profiles (#432).
@@ -166,6 +169,9 @@ type Route struct {
 	Binding        Binding
 	// SigningProfile is the key's (ProfileCosmosAccount for every secp256k1 key today), "" for any other key.
 	SigningProfile string
+	// CosmosPublicKey is the key's pinned compressed public key (33 bytes), nil when the manifest pins none: a
+	// cosmos-account signature is then refused.
+	CosmosPublicKey []byte
 }
 
 // sealEligibleStates is the set of binding states seal-envelope accepts. The release path's
@@ -465,7 +471,7 @@ func Load(reader io.Reader, site string, health BackendHealth) (*Registry, error
 				ObjectID: object.ID, Purpose: object.Purpose, Algorithm: object.Algorithm,
 				PolicyID: object.PolicyID, Environment: object.Environment,
 				KEKAlgorithm: selected.KEKAlgorithm, KEKVersion: selected.KEKVersion,
-				EnvelopeMaxAge: maxEnvelopeAge, Binding: selected, SigningProfile: profile,
+				EnvelopeMaxAge: maxEnvelopeAge, Binding: selected, SigningProfile: profile, CosmosPublicKey: cosmosKey(object),
 			},
 			operations: operations,
 			assigned:   found,
@@ -686,10 +692,19 @@ func validateFIDOContinuity(object *custodyObject) error {
 // round high-water marks (#432).
 func signingProfile(object *custodyObject) (string, error) {
 	if object.Algorithm != "secp256k1" {
+		if object.CosmosPublicKey != "" {
+			return "", fmt.Errorf("cosmos_public_key is for a secp256k1 (Cosmos) key, not %s", object.Algorithm)
+		}
 		if object.SigningProfile != "" {
 			return "", fmt.Errorf("signing_profile %q is for a secp256k1 (Cosmos) key, not %s", object.SigningProfile, object.Algorithm)
 		}
 		return "", nil
+	}
+	if object.CosmosPublicKey != "" {
+		key, err := hex.DecodeString(object.CosmosPublicKey)
+		if err != nil || len(key) != 33 || (key[0] != 2 && key[0] != 3) || strings.ToLower(object.CosmosPublicKey) != object.CosmosPublicKey {
+			return "", errors.New("cosmos_public_key must be a compressed secp256k1 public key: 66 lowercase hex, 02 or 03 first")
+		}
 	}
 	switch object.SigningProfile {
 	case "", ProfileCosmosAccount:
@@ -1412,4 +1427,13 @@ func (registry *Registry) RoutedTo(backend string) []RoutedObject {
 	}
 	sort.Slice(routed, func(i, j int) bool { return routed[i].ObjectID < routed[j].ObjectID })
 	return routed
+}
+
+// cosmosKey is the object's pinned Cosmos public key, as validated by signingProfile.
+func cosmosKey(object *custodyObject) []byte {
+	key, _ := hex.DecodeString(object.CosmosPublicKey)
+	if len(key) != 33 {
+		return nil
+	}
+	return key
 }

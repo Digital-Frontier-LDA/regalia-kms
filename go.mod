@@ -7,12 +7,12 @@ require (
 	github.com/go-piv/piv-go/v2 v2.6.0
 	github.com/google/go-tpm v0.9.8
 	github.com/miekg/pkcs11 v1.1.2
+	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.48.0
 )
 
 require (
 	github.com/golang/protobuf v1.5.4 // indirect
-	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect

@@ -55,7 +55,7 @@ func TestTheChainSaysTheAccountNumberAndSequence(t *testing.T) {
 	c := &chain{network: "cosmoshub-4", account: baseAccountJSON(address, "42", "7")}
 	client, _ := c.serve(t)
 	got, err := client.Account(context.Background(), "cosmoshub-4", address)
-	if err != nil || got != (Account{Address: address, AccountNumber: 42, Sequence: 7}) {
+	if err != nil || got.Address != address || got.AccountNumber != 42 || got.Sequence != 7 || got.PubKey != nil {
 		t.Fatalf("%+v %v", got, err)
 	}
 	// a vesting account: its base account inside
@@ -123,5 +123,21 @@ func TestEndpointsAreHTTPSAndRedirectsAreNotFollowed(t *testing.T) {
 	var into any
 	if err := client.get(context.Background(), "cosmoshub-4", "/redirect", &into); err == nil || !strings.Contains(err.Error(), "redirects are not followed") {
 		t.Fatalf("a redirect: %v", err)
+	}
+}
+
+// The account's key on chain, once it has signed: a secp256k1 key is passed on; any other kind is refused.
+func TestTheAccountsKeyOnChain(t *testing.T) {
+	g := "Anm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeY" // base64 of the compressed generator point
+	c := &chain{network: "cosmoshub-4", account: `{"account":{"@type":"/cosmos.auth.v1beta1.BaseAccount","address":"` + address +
+		`","pub_key":{"@type":"/cosmos.crypto.secp256k1.PubKey","key":"` + g + `"},"account_number":"1","sequence":"2"}}`}
+	client, _ := c.serve(t)
+	got, err := client.Account(context.Background(), "cosmoshub-4", address)
+	if err != nil || len(got.PubKey) != 33 || got.PubKey[0] != 2 {
+		t.Fatalf("%x %v", got.PubKey, err)
+	}
+	c.account = strings.Replace(c.account, "/cosmos.crypto.secp256k1.PubKey", "/cosmos.crypto.multisig.LegacyAminoPubKey", 1)
+	if _, err := client.Account(context.Background(), "cosmoshub-4", address); !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "not a secp256k1 key") {
+		t.Fatalf("a multisig account: %v", err)
 	}
 }

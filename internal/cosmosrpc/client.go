@@ -39,6 +39,8 @@ type Account struct {
 	Address       string
 	AccountNumber uint64
 	Sequence      uint64
+	// PubKey is the account's public key on chain (compressed secp256k1), nil while the account has never signed.
+	PubKey []byte
 }
 
 // Client asks each configured chain's endpoint.
@@ -138,6 +140,10 @@ type baseAccount struct {
 	Address       string `json:"address"`
 	AccountNumber string `json:"account_number"`
 	Sequence      string `json:"sequence"`
+	PubKey        *struct {
+		Type string `json:"@type"`
+		Key  []byte `json:"key"` // base64 in the JSON
+	} `json:"pub_key"`
 }
 
 // Account fetches what `chain` says of `address`: /cosmos/auth/v1beta1/accounts/{address}. A BaseAccount, or the
@@ -167,7 +173,14 @@ func (c *Client) Account(ctx context.Context, chain, address string) (Account, e
 	if err1 != nil || err2 != nil {
 		return Account{}, fmt.Errorf("%w: %s answered an account number or sequence that is not a whole number", ErrUnavailable, chain)
 	}
-	return Account{Address: address, AccountNumber: number, Sequence: sequence}, nil
+	var key []byte
+	if base.PubKey != nil {
+		if base.PubKey.Type != "/cosmos.crypto.secp256k1.PubKey" || len(base.PubKey.Key) != 33 {
+			return Account{}, fmt.Errorf("%w: %s says the account's key is a %q of %d bytes, not a secp256k1 key", ErrUnavailable, chain, base.PubKey.Type, len(base.PubKey.Key))
+		}
+		key = base.PubKey.Key
+	}
+	return Account{Address: address, AccountNumber: number, Sequence: sequence, PubKey: key}, nil
 }
 
 func baseOf(raw json.RawMessage) (baseAccount, error) {

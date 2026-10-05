@@ -3,6 +3,7 @@
 package operations
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -304,6 +305,12 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 				}
 				source = message.Source
 			}
+			// THE SIGNER IS THIS KEY (d9 on #499): the messages' signer must be the account of the key's pinned
+			// public key, before the chain is asked about it; otherwise "the signer" is whatever the request names
+			if err := cosmosrpc.MatchesKey(source, route.CosmosPublicKey); err != nil {
+				coordinator.recordOrCount(ctx, request, route, "deny", "cosmos-signer-not-key", started, false, policyRequest.VerifiedApprovers)
+				return api.Result{}, failure("DENIED", http.StatusForbidden, false)
+			}
 			if coordinator.chain == nil {
 				coordinator.recordOrCount(ctx, request, route, "deny", "cosmos-chain-unconfigured", started, false, policyRequest.VerifiedApprovers)
 				return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, false)
@@ -312,6 +319,11 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 			if err != nil {
 				coordinator.recordOrCount(ctx, request, route, "deny", "cosmos-chain-unavailable", started, false, policyRequest.VerifiedApprovers)
 				return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
+			}
+			// once the account has signed, the chain holds its key: it must be this key
+			if account.PubKey != nil && !bytes.Equal(account.PubKey, route.CosmosPublicKey) {
+				coordinator.recordOrCount(ctx, request, route, "deny", "cosmos-pubkey-mismatch", started, false, policyRequest.VerifiedApprovers)
+				return api.Result{}, failure("DENIED", http.StatusForbidden, false)
 			}
 			// the endpoint for parsed.ChainID was checked to serve that chain (cosmosrpc's node_info): the fact
 			// names it so policy compares all three values alike
