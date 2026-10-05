@@ -30,6 +30,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Accepted, once #387 lands:** a one-peer recovery cannot see a revocation that was made after the
   signing laptop last synced, if the surviving peer withholds it and the audit collector has no
   receipt for it. The owner is asked before signing ([`deploy/baremetal/MEMBERSHIP-RECOVERY.md`](deploy/baremetal/MEMBERSHIP-RECOVERY.md)).
+- **Under a v4 chain an owner-written anchor is still accepted** (#242 B3, waiting on #386). A definer never lays down
+  the owner-written layout under v4 (B2b), but a node whose anchor is already owner-written still reads and writes
+  it under v4. Its writes then need only the owner authorization, not the approved image. B3 makes that layout
+  Unusable under a v4 tip (a re-anchor repairs it) and refuses the v3 → v4 step over it.
 - **TPM owner authorization: built (#242 step C), with these limits.**
   - The owner authorization crosses the TPM bus in clear when used (password sessions, #414). A discrete TPM can
     be sniffed by someone with physical access during enrolment, a re-anchor or a recount.
