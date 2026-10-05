@@ -12,6 +12,7 @@ import pathlib
 import shutil
 import tempfile
 import unittest
+import unittest.mock
 
 from deploy.baremetal import enrol, membership as m, ownerauth
 import tests.test_baremetal_heartbeat as hbt
@@ -53,9 +54,9 @@ class Case(unittest.TestCase):
 
 
 class TheFirstCounter(Case):
-    def define(self, probed, bootstrap=False, owner_auth="given"):
+    def define(self, probed, bootstrap=False, owner_auth="given", now=hbt.T0 + 60):
         return enrol.define_first_counter(self.config, self.man, probed, self.d, self.auth if owner_auth == "given" else owner_auth,
-                                          bootstrap, run=self.tpm)
+                                          bootstrap, run=self.tpm, now=lambda: now)
 
     def test_from_a_heartbeat_the_root_parent_verifies(self):
         self.assertEqual(self.define(([{"source": "b", "envelope": hbt.beat(self.man, 7)}], [])), 6)
@@ -73,6 +74,22 @@ class TheFirstCounter(Case):
                   {"source": "x", "envelope": hbt.beat(self.man, 50, key=hbt.OTHER)}]
         self.assertEqual(self.define((probed, [])), 8)
 
+    def test_an_old_valid_heartbeat_does_not_lower_the_start(self):
+        """regalia-kms-d9: the probe chooses what it returns; one valid but no longer live counts for nothing."""
+        old = hbt.beat(self.man, 3, issued=hbt.T0 - 2 * 86400)                       # validly signed, long expired
+        with self.assertRaisesRegex(enrol.Refused, "EXPIRED"):
+            self.define(([{"source": "b", "envelope": old}], []))
+        self.assertEqual(self.present(*self.counter_indices()), [])
+        live = hbt.beat(self.man, 40)
+        self.assertEqual(self.define(([{"source": "b", "envelope": old}, {"source": "c", "envelope": live}], [])), 39)
+
+    def test_a_planted_counter_is_not_adopted(self):
+        lo, hi = self.counter_indices()
+        for index in (lo, hi):
+            self.tpm.nv[index] = [0x2 | 0x20000 | 0x40000 | 0x4, b"\x00" * 8, 8]     # ordinary, authwrite: not a counter
+        with self.assertRaises((m.Refused, m.Unusable)):
+            self.define(([], []))
+
     def test_at_zero_only_at_a_bootstrap(self):
         with self.assertRaisesRegex(enrol.Refused, "no source gave a heartbeat that verifies under epoch 1 \\(c: holds none newer\\)"):
             self.define(([], ["c: holds none newer"]))
@@ -88,6 +105,24 @@ class TheFirstCounter(Case):
     def test_only_with_the_owner_authorization(self):
         with self.assertRaisesRegex(m.Refused, "the TPM's owner authorization is set and none was given"):
             self.define(([{"source": "b", "envelope": hbt.beat(self.man, 7)}], []), owner_auth=None)
+
+
+class NoSyncProcess(unittest.TestCase):
+    """regalia-kms-d9 on #435: commit defines as root only while no process of regalia-sync runs (its service's locks are
+    not root's); a host with no such user yet has none."""
+
+    def answer(self, rc, out="", err=""):
+        return lambda argv, **kw: unittest.mock.Mock(returncode=rc, stdout=out, stderr=err)
+
+    def test_none_running_or_no_such_user(self):
+        enrol._no_sync_process(self.answer(1))
+        enrol._no_sync_process(self.answer(2, err="pgrep: invalid user name: regalia-sync\n"))
+
+    def test_one_running_or_no_answer(self):
+        with self.assertRaisesRegex(enrol.Refused, "a process of regalia-sync is running"):
+            enrol._no_sync_process(self.answer(0, out="4242\n"))
+        with self.assertRaisesRegex(enrol.Refused, "cannot tell whether a process of regalia-sync is running"):
+            enrol._no_sync_process(self.answer(2, err="pgrep: something else\n"))
 
 
 class TheAnchors(Case):

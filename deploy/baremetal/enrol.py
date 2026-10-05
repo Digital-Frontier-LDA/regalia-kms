@@ -1138,7 +1138,10 @@ def define_anchors(config_path, chain, directory, owner_auth, run=subprocess.run
     for name, held, indices in (("anchor", hw, hw._indices()), ("signing counter", signing, (signing.index, signing.base_index))):
         present = [i for i in indices if held._tpm("nvreadpublic", i).returncode == 0]
         if len(present) == len(indices):
-            continue                                       # a resumed commit: anchor_and_store checks they are its own
+            # a resumed commit: adopted only as this definer lays it down (HighWater._as_defined: the attributes, and an
+            # authPolicy that is the node's approved-image policy), never an index planted with another (regalia-kms-d9)
+            held.value()
+            continue
         require(not present, "the TPM holds part of the %s's indices (%s): not as an enrolment leaves them; enrolment does not "
                 "take them over" % (name, ", ".join(present)))
         held.define()
@@ -1172,15 +1175,18 @@ def probe_heartbeats(config_path, run=subprocess.run):
     return envelopes, failures
 
 
-def define_first_counter(config_path, manifest, probed, directory, owner_auth, bootstrap=False, run=subprocess.run):
+def define_first_counter(config_path, manifest, probed, directory, owner_auth, bootstrap=False, run=subprocess.run, now=None):
     """#419, as ROOT, under v4: the heartbeat counter's one definition, from heartbeats the root parent VERIFIES ITSELF
     (heartbeat.verify under `manifest`, pure: no network, no owner authorization; regalia-kms-24). `probed` is what
     probe_heartbeats fetched, as regalia-sync: (envelopes, failures). Defined at max(highest verified sequence - 1, 0), so
     the node's own sync takes that heartbeat at its first pull, as new (one above the counter, within the jump bound).
     With nothing verified: at 0 only at a network's BOOTSTRAP (`bootstrap`, epoch 1, no source holding one); otherwise
     refused, nothing defined (a counter at 0 on a running network would strand the node past the jump bound, #279).
-    A compromised probe can only withhold, which refuses; it cannot lower the start. Already defined: left. Returns
-    (the value it was defined at, or None when it was there already)."""
+    Only a LIVE heartbeat counts: issued and unexpired by authenticated time (`now`, default authtime's, the check sync
+    applies, Freshness._live). So a probe that withholds the newest and returns an older valid one can lower the start
+    by at most one heartbeat lifetime, within the jump bound by construction; one that returns nothing live makes it
+    refuse (regalia-kms-d9). Already defined: adopted only as defined here. Returns the value it was defined at, or None
+    when it was there already."""
     from deploy.baremetal import heartbeat, node as node_module
     with open(config_path, "rb") as f:
         cfg = node_module.validate(membership.load(f.read(node_module.MAX_BYTES + 1), node_module.MAX_BYTES))
@@ -1189,13 +1195,22 @@ def define_first_counter(config_path, manifest, probed, directory, owner_auth, b
                                 image_key=lambda: node_module.image_key(cfg, manifest=manifest), owner_auth=owner_auth)
     present = [i for i in (counter.index, counter.base_index) if counter._tpm("nvreadpublic", i).returncode == 0]
     if len(present) == 2:
-        return None                                        # a resumed commit
+        counter.value()                                    # a resumed commit: adopted only as defined here (see define_anchors)
+        return None
     require(not present, "the heartbeat counter is half defined (%s): that is recount.py's case, not enrolment's" % ", ".join(present))
     envelopes, failures = probed
-    verified = []
+    verified, seconds = [], None
     for item in envelopes:
         try:
-            verified.append(heartbeat.verify(item["envelope"], manifest)["sequence"])
+            beat = heartbeat.verify(item["envelope"], manifest)
+            if seconds is None:                            # authenticated time, as sync judges a heartbeat (fail closed)
+                if now is not None:
+                    seconds = now()
+                else:
+                    n = node_module.Node(cfg, run)
+                    seconds, _ = heartbeat.authenticated_now(n.clock(), n.tpm_clock(), None)
+            heartbeat.Freshness._live(beat, seconds)       # issued, and not expired: an old valid one does not count
+            verified.append(beat["sequence"])
         except (Refused, membership.Refused, KeyError, TypeError) as refusal:
             failures = failures + ["%s: %s" % (item.get("source", "?"), refusal)]
     if verified:
@@ -1216,6 +1231,8 @@ def _no_sync_process(run):
     enrolment's regalia-sync step is readable by every process of that uid (/proc/<pid>/fd) while the step runs, so
     none may be there. A residual race with a process starting meanwhile stays (stated; #419 removes the handoff)."""
     done = run(["pgrep", "-u", SYNC_USER], capture_output=True, text=True)
+    if done.returncode == 2 and "invalid user name" in (done.stderr or ""):
+        return                                          # no such user (yet): no process of it
     require(done.returncode == 1, "a process of %s is running (%s): the owner authorization is handed to enrolment's %s step "
             "only while none is (stop regalia-sync and its services first; pgrep -u %s)" % (
                 SYNC_USER, (done.stdout or "pgrep failed").split()[:5], SYNC_USER, SYNC_USER) if done.returncode == 0 else
@@ -2021,6 +2038,9 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     journal.started("anchor")
     production = manifest["schema"] == membership.SCHEMA_V4
     if production:                                  # #419: the owner's definitions here, as root; the sync step gets none
+        # no regalia-sync process meanwhile: its service's locks are not these, so only that keeps its writers out
+        # while root defines (regalia-kms-d9); it was also the handoff's guard
+        _no_sync_process(run)
         defined = define_anchors(prefix + NODE_JSON, chain, directory, owner_auth, run)
         if defined:
             print("DEFINED as root, under the node's policy: %s" % ", ".join(defined), file=out)
