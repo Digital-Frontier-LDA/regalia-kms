@@ -37,6 +37,9 @@ findutils | find | os_probe's world-writable search
 libc-bin | getent | os_probe's account checks
 procps | pgrep | enrol refuses while a regalia-sync process runs (#418)
 chrony | /usr/sbin/chronyd | authenticated time, two NTS sources (authtime, #155)
+# DATA FILES a program reads (the scan cannot see them: listed by path, and the builder checks each exists in the tree)
+tzdata-legacy | /usr/share/zoneinfo/right/UTC | chrony's leap seconds: authtime renders `leapsectz right/UTC` (authtime.LEAP_ZONE; Debian 13 moved right/ here)
+ca-certificates | /etc/ssl/certs/ca-certificates.crt | chronyd validates its NTS-KE servers' TLS certificates against the system store (authtime's config has no ntstrustedcerts)
 tpm2-tools | tpm2_* | attestation, the anchor and counters, the owner authorization, enrolment, heartbeats
 libtss2-tcti-device0t64 | - | tpm2-tools' device TCTI (/dev/tpmrm0)
 cryptsetup-bin | cryptsetup /usr/sbin/cryptsetup | the root volume's keyslots (host_probe, unlock, recovery-reconcile)
