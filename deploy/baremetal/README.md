@@ -1085,7 +1085,7 @@ the reason itself goes to the time trail.
 |---|---|---|
 | `regalia-authtime` | `/run/regalia-metrics/authtime/authtime.prom` | `regalia_time_authenticated{cause}`, `regalia_chrony_latch_set` |
 | `regalia-sync` | `/run/regalia-metrics/sync/heartbeat.prom`, `unlock.prom` | the heartbeat watch's `regalia_heartbeat_*`; the unlock listener's `regalia_unlock_refused_total{cause=rate\|connections}`, each refusal counted (the trail records the first of a window) |
-| `regalia-admission` | `/run/regalia-metrics/admission/lease.prom` | `regalia_admission_serving`, `regalia_admission_lease_seconds_left` |
+| `regalia-admission` | `/run/regalia-metrics/admission/lease.prom` | `regalia_admission_serving`, `regalia_admission_lease_seconds_left`, `regalia_admission_recovery` |
 | `regalia-audit-ship@<trail>` | `/run/regalia-metrics/audit-ship/<trail>.prom` | `regalia_audit_trail_*{trail}` |
 
 - **Who can read the files.** Each directory is its writer's, group `regalia-metrics`, setgid, 2750
