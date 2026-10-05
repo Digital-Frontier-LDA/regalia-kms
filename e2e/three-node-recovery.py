@@ -400,6 +400,10 @@ def scenario(cluster):
     # records its state at its first round after every start (its recorded state begins unknown), so the first
     # serving-state line in the window must be a DENY, and none an ALLOW. A RETIRED or stolen node's reason is not
     # matched: it is off the peers' tunnels, or told only "refused"; its lines are printed instead
+    def admission_lines(n):
+        path = cluster._trail_path(n, "admission")
+        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+
     def window(n, start, end):
         return [e for e in cluster.audit_has(n, "admission", since=start, event="admission-serving") if e.get("at", 0) <= int(end) + 1]
     # A QUARANTINED node is still identified, so its peers tell it why (sync: a terminal state hears only "refused"):
@@ -412,8 +416,12 @@ def scenario(cluster):
     stopped = {"%s %s@%d" % (n, st, ep): stays_down(n, st, ep, start, end) for n, st, ep, start, end in victims}
     ok(len(victims) == 3 and all(stopped.values()),
        "each step-7 victim's not serving, within its own start and stop, is in its own admission stream, and no change to serving %s" % stopped,
-       {"%s %s@%d" % (n, st, ep): [{k: e.get(k) for k in ("at", "outcome", "peer", "reason")} for e in window(n, start, end)][:4]
-        for n, st, ep, start, end in victims})
+       {"windows": {"%s %s@%d [%d, %d]" % (n, st, ep, int(start), int(end)): [{k: e.get(k) for k in ("at", "outcome", "peer", "reason")}
+                                                                               for e in window(n, start, end)][:4]
+                    for n, st, ep, start, end in victims},
+        # the trail FILES themselves (not the collector): whether a line was never written, or written and not matched
+        "trail files": {n: [{k: e.get(k) for k in ("at", "event", "outcome", "reason")} for e in admission_lines(n)][-8:] for n in ("a", "b")},
+        "journals": {n: cluster.journal(n, "admission")[-600:] for n in ("a", "b")}})
 
 
 def main():

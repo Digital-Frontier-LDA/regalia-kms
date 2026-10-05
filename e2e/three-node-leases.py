@@ -199,7 +199,13 @@ def scenario(cluster):
        "in each one's own stream: a's renewal by %s (step 2, %d), a's revocation committed %s, b's refusals of the revoked a by "
        "name (%d), and a's admission no longer serving after it (%d)" % (renewal_by, len(renewed_in), committed, len(refused_a), len(a_stopped)),
        {"a's admission since the revocation": [{k: e.get(k) for k in ("at", "outcome", "reason")}
-                                                for e in cluster.audit_has("a", "admission", since=revoked_at, event="admission-serving")][-3:]})
+                                                for e in cluster.audit_has("a", "admission", since=revoked_at, event="admission-serving")][-3:],
+        "revoked at, stopped at": (int(revoked_at), int(stop_at)),
+        # the trail FILE (not the collector): whether the stop was never written, or written and not matched
+        "a's admission trail file": [{k: e.get(k) for k in ("at", "event", "outcome", "reason")} for e in (
+            [json.loads(line) for line in cluster._trail_path("a", "admission").read_text().splitlines() if line.strip()]
+            if cluster._trail_path("a", "admission").exists() else [])][-8:],
+        "a's admission journal": cluster.journal("a", "admission")[-600:]})
 
 
 def main():
