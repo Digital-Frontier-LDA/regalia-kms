@@ -127,6 +127,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     out: re-run `enrol commit`, which resumes from its journal (the anchor step is a no-op on a chain
     already held, and the rendered files are replaced); or let `regalia-esp-advance` run at boot, which
     writes the published chain to the ESP.
+- **The ESP advance's trigger is edge-triggered.** `regalia-esp-advance.path` uses `PathChanged=`, and systemd folds
+  a publication that lands during a run into that run, starting nothing afterwards. `esp_advance_settled` (#471)
+  therefore re-reads the published chain after each run and runs again while it changed (at most 5 runs, then a
+  refusal that the unit's `Restart=` retries). A publication that lands between a run's last read and its exit is the
+  remaining window: the next publication, or the unit's next start, catches it up. `RegaliaMembershipAnchorBehind`
+  warns if that window ever holds for 15 minutes.
 - **One transient TPM error fails an anchor read.** `HighWater` reads the anchor's NV indices with one
   `tpm2_nvread` each and refuses on any failure, with no retry inside the tool. The services' units restart
   (the ESP advance every 15 s; sync and admission on their own schedules) and the next run reads again. CI's
