@@ -79,7 +79,7 @@ import tempfile
 import threading
 import time
 
-from deploy.baremetal import (admission, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
+from deploy.baremetal import (activation, admission, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
                               measurements, membership, metrics, signkey, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
@@ -770,6 +770,10 @@ class Sync:
         self.trail = Trail(node.path("sync-audit.jsonl"), "sync")
         self.signer = lease.TpmSigner(node.tcti, node.run)
         self._beat_signer = None        # beat.Signer, made at the first heartbeat signed (beat_signer())
+        # #432: the activation signer, made at the first activation co-signed; d9's boot rule (pulled since THIS start from
+        # every node that may authorize, or an epoch newer than the one it started with); the start's authenticated time
+        self._activation_signer, self._started = None, None
+        self.pulled, self.boot_epoch = set(), None
         self.published = None
         # the unlock listener's refusals, by cause (#317), in regalia-sync's metrics directory
         self.refusals = metrics.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", metrics.UNLOCK_CAUSES)
@@ -794,7 +798,8 @@ class Sync:
                                enrolpeer.tpm_identity(self.node.tcti, self.node.run), enrolpeer.tpm_activate(self.node.tcti, self.node.run))
         # attester_for itself: each request is judged under the manifest held then, by that manifest's document (#332)
         return sync.Server(self.node.node_id, self.store, self.freshness, self.node.attester_for, self.signer,
-                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents(), cosigner=self.cosign)
+                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents(), cosigner=self.cosign,
+                           activator=self.activate)
 
     # ---- heartbeats signed by the nodes (#199, beat.py) ----
 
@@ -807,6 +812,35 @@ class Sync:
     def cosign(self, manifest, caller, body, signature):
         """sync.Server's cosigner: beat.cosign with this node's parts."""
         return beat.cosign(manifest, self.node.node_id, caller, body, signature, self.freshness, self.node.clock(), self.beat_signer())
+
+    # ---- activation by quorum (#432, activation.py) ----
+
+    def started(self):
+        """This start's authenticated time, read once, at the first authenticated reading after the start (a later reading
+        only lengthens the grant record's busy window: the safe side)."""
+        if self._started is None:
+            seconds, authenticated = self.node.clock()()
+            require(authenticated is True, "time is not authenticated: no activation is signed")
+            self._started = int(seconds)
+        return self._started
+
+    def activation_signer(self):
+        if self._activation_signer is None:
+            self._activation_signer = node_activation_signer(self.node, self.started())
+        return self._activation_signer
+
+    def synced(self):
+        """d9's boot rule: since this start, a pull answered by every other node the current manifest lets authorize, or an
+        epoch newer than the one this start began with."""
+        manifest = self.manifest()
+        if self.boot_epoch is not None and manifest["epoch"] > self.boot_epoch:
+            return True
+        others = [n["node_id"] for n in manifest["nodes"] if n["node_id"] != self.node.node_id and membership.may(manifest, n["node_id"], "authorize")]
+        return all(o in self.pulled for o in others)
+
+    def activate(self, manifest, caller, lease):
+        """sync.Server's activator: activation.cosign with this node's parts."""
+        return activation.cosign(manifest, self.node.node_id, caller, lease, self.node.clock(), self.activation_signer(), self.synced)
 
     def proposer(self):
         def ask(peer, body, signature):
@@ -852,9 +886,12 @@ class Sync:
         sources = self.node.sources(self.manifest())
         client = sync.Client(self.node.node_id, self.store, self.freshness, sources, self.trail, documents=self.node.documents())
         changed = False
+        if self.boot_epoch is None:
+            self.boot_epoch = self.manifest()["epoch"]
         for name in sorted(sources):
             with contextlib.suppress(Refused):
                 client.pull(name)
+                self.pulled.add(name)                  # answered since this start (d9's boot rule, synced())
             changed = self.publish() or changed
         return changed
 

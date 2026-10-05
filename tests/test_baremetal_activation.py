@@ -2,6 +2,7 @@
 share a node, whose grant record refuses an overlap); the owner only on the recovery path, with the other node
 parties stopped in the current manifest, never alone; each node's grant record counted on its TPM, standing only
 while it matches, and busy for the recovery wait after a start without it."""
+import contextlib
 import os
 import pathlib
 import re
@@ -407,6 +408,62 @@ class OwnerCommand(unittest.TestCase):
         self.assertIn("this is a KMS node", "".join(str(c) for c in err.write.call_args_list))
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
             owner.main(argv + ["--how", "powered off"])           # the attestation is typed at the terminal only
+
+
+class OverSync(Record):
+    """activate-sign through sync.Server and sync.Client: the tunnel names the caller, who may only ask for its own lease,
+    and the op has its own rate class, spent before the TPM is touched."""
+    node, clock = Issuance.node, Issuance.clock
+
+    def test_activate_sign_over_the_wire(self):
+        from deploy.baremetal import sync
+        from tests.test_baremetal_beat import FakeStore
+        wg = {n["node_id"]: n["wg_service_pub"] for n in self.m1["nodes"]}
+        at = {"addr-" + k: v for k, v in wg.items()}
+        b, events = self.node("b"), []
+        activator = lambda man, caller, body: act.cosign(man, "b", caller, body, self.clock(), b, lambda: True)
+        server = sync.Server("b", FakeStore(self.m1), None, None, None, lambda man, source: at[source], events.append,
+                             sync.Buckets(clock=lambda: 0.0), activator=activator)
+        client = sync.Client("a", FakeStore(self.m1), None, {"b": lambda raw: server.handle(raw, "addr-a")}, events.append)
+        body = lease(self.m1, activation_epoch=1)
+        theirs = client.activate_sign("b", body)
+        self.assertEqual(theirs["party"], "b")
+        a_sig = signed(body, "a")["signatures"][0]
+        self.assertEqual(act.verify({"lease": body, "signatures": [a_sig, theirs]}, self.m1), body)
+        # c's tunnel asking for a's lease: refused by name, nothing granted
+        mallory = sync.Client("c", FakeStore(self.m1), None, {"b": lambda raw: server.handle(raw, "addr-c")}, events.append)
+        self.refused("a node proposes only its own", mallory.activate_sign, "b", lease(self.m1, activation_epoch=2))
+        self.assertEqual(b.record.counter.v, 1)
+        # six a minute from one caller (the class), then refused before the TPM is touched
+        for i in range(2, 7):                                  # a's 2nd to 6th request this minute
+            with contextlib.suppress(m.Refused):
+                client.activate_sign("b", lease(self.m1, activation_epoch=i))
+        self.refused("RATE", client.activate_sign, "b", lease(self.m1, activation_epoch=9))
+        # a node without an activator signs nothing
+        plain = sync.Server("b", FakeStore(self.m1), None, None, None, lambda man, source: at[source], events.append)
+        lone = sync.Client("a", FakeStore(self.m1), None, {"b": lambda raw: plain.handle(raw, "addr-a")}, events.append)
+        self.refused("co-signs no activations", lone.activate_sign, "b", body)
+
+
+class BootRule(unittest.TestCase):
+    """d9's rule on node.Sync: after a start, no co-signature until every other node that may authorize has answered a
+    pull, or the node holds an epoch newer than the one it started with."""
+
+    def sync_(self, man, pulled=(), boot_epoch=1):
+        from deploy.baremetal import node as node_module
+        s = node_module.Sync.__new__(node_module.Sync)
+        s.node = type("N", (), {"node_id": "b"})()
+        s.manifest, s.pulled, s.boot_epoch = (lambda: man), set(pulled), boot_epoch
+        return s
+
+    def test_synced_only_once_every_authorizing_peer_answered_or_the_epoch_moved(self):
+        m1 = manifest4(1, "", nodes4(), activation_signers=dict(RULE))
+        self.assertFalse(self.sync_(m1).synced())
+        self.assertFalse(self.sync_(m1, pulled={"a"}).synced())                 # c not heard from: two fenced nodes stay silent
+        self.assertTrue(self.sync_(m1, pulled={"a", "c"}).synced())
+        m2 = manifest4(2, m.digest(m1), nodes4(c="QUARANTINED"), activation_signers=dict(RULE))
+        self.assertTrue(self.sync_(m2, pulled={"a"}, boot_epoch=2).synced())     # c may not authorize: not waited for
+        self.assertTrue(self.sync_(m2, boot_epoch=1).synced())                  # a newer epoch than at the start
 
 
 if __name__ == "__main__":
