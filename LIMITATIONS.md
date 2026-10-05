@@ -26,6 +26,20 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **The lone survivor (ADR-0002 D32 item 6): the owner's authorization and directive only** (#432 item (e);
+  `deploy/baremetal/survivor.py`, `owner.py sign-survivor` and `sign-directive`). Built:
+  - one owner authorization, held only at the quarantine epoch (any new epoch ends it), with every other server stopped
+    and the owner's typed fencing attestation, for at most 7 days;
+  - the owner's directive, which only disables or destroys a key and never enables one, and the survivor's store of
+    applied directives, in which a key's state only ever rises.
+  Not built yet:
+  - the survivor's admission mode: recovery only with no unexpired normal lease, left at the first normal lease;
+  - the daemon serving stateless operations only in that mode, and refusing keys under a directive (ed);
+  - installing the authorization on the node;
+  - the majority committing a directive as a key-state change on its return;
+  - the cap coming from the manifest's `recovery_authorization_max_s` (#459, stacked on #438; it is a constant here).
+  **Accepted** (D28.6 amendment 5, D32.6): a false fencing attestation holds for the authorization's life. While it
+  holds, the survivor uses key state that may be up to that old, except what a directive disabled.
 - **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
   refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
   its verification under the current manifest's `activation_signers`, each node's grant record and
