@@ -50,6 +50,10 @@ v3's fields without `revocation_keys`, and:
     signature comes from a present human, never a daemon: a setting of the token, which no signature
     shows, and which the ceremony enforces. No owner key (nor any signing_key) may be a pinned root key
     (accept() refuses it): one device is never both the payload root and a quorum party;
+  * `recovery_authorization_max_s`: the longest life of the owner's recovery authorization (#432 amendment 5: the owner
+    and ONE surviving node activate a site while the other node parties are quarantined, the survivor renewing its own
+    leases under that one authorization): an integer from RECOVERY_AUTH_MIN_S to RECOVERY_AUTH_MAX_S (1 h to 7 days),
+    the root's to change;
   * `owner_heartbeat_lifetime_s`: the longest life of a heartbeat whose counting signatures include the
     owner's (an emergency credential), from 300 s to heartbeat_max_lifetime_s. Such a heartbeat is always
     the owner AND at least one node: the heartbeat threshold is at least 2 and the owner is one party
@@ -136,6 +140,7 @@ SCHEMA_V4 = "regalia.membership/v4"
 SCHEMAS = (SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4)          # in order: a chain never goes back
 HEARTBEAT_MIN_S, HEARTBEAT_HARD_MAX_S = 3600, 7 * 24 * 3600      # what a v2 manifest may set as heartbeat_max_lifetime_s
 OWNER_HEARTBEAT_MIN_S = 300                                      # the least a v4 manifest may set as owner_heartbeat_lifetime_s
+RECOVERY_AUTH_MIN_S, RECOVERY_AUTH_MAX_S = 3600, 7 * 24 * 3600   # recovery_authorization_max_s's range (#432 amendment 5)
 OWNER = "owner"                                                  # the owner's party name in a v4 signer rule (never a node_id)
 HEARTBEAT_FLOOR = NODE_RULE_FLOOR = 2                            # no single party keeps a cluster alive or revokes alone,
                                                                  # except the owner's own revocation rule (1 of owner)
@@ -166,7 +171,7 @@ IDENTITY_KEYS = ("ek_name", "ak_name", "wg_boot_pub", "wg_service_pub")
 V2_MANIFEST_KEYS = MANIFEST_KEYS + ("heartbeat_max_lifetime_s",)
 V2_NODE_KEYS = NODE_KEYS + ("ssh_host_pub",)
 V2_IDENTITY_KEYS = IDENTITY_KEYS + ("ssh_host_pub",)
-SIGNER_FIELDS = ("owner_heartbeat_lifetime_s", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers")
+SIGNER_FIELDS = ("owner_heartbeat_lifetime_s", "recovery_authorization_max_s", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers")
 # #361/#405: K_A (immutable, every signer) and the card ceremony's record that names owner_keys (the root's)
 V4_ONLY_FIELDS = ("anchor_policy_key", "card_record")
 MAX_CARD_SEQUENCE = 2 ** 31 - 1                                  # exact in every JSON reader
@@ -386,6 +391,9 @@ def _signer_rules(manifest, by_id, seen):
     require(isinstance(owner_life, int) and not isinstance(owner_life, bool)
             and OWNER_HEARTBEAT_MIN_S <= owner_life <= manifest["heartbeat_max_lifetime_s"],
             "owner_heartbeat_lifetime_s must be an integer from %d to heartbeat_max_lifetime_s" % OWNER_HEARTBEAT_MIN_S)
+    recovery = manifest["recovery_authorization_max_s"]
+    require(type(recovery) is int and RECOVERY_AUTH_MIN_S <= recovery <= RECOVERY_AUTH_MAX_S,
+            "recovery_authorization_max_s must be an integer from %d to %d" % (RECOVERY_AUTH_MIN_S, RECOVERY_AUTH_MAX_S))
 
     def rule(value, label, owner_alone):
         exact(value, ("threshold", "parties"), label)

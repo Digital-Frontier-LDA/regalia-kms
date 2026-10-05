@@ -21,8 +21,10 @@ import (
 const (
 	SchemaV4          = "regalia.membership/v4"
 	ownerHeartbeatMin = 300
-	ownerParty        = "owner" // the owner's party name in a signer rule (never a node_id)
-	heartbeatFloor    = 2       // no single party keeps a cluster alive, or (naming a node) revokes, alone
+	recoveryAuthMin   = 3600          // membership.RECOVERY_AUTH_MIN_S (#432 amendment 5)
+	recoveryAuthMax   = 7 * 24 * 3600 // membership.RECOVERY_AUTH_MAX_S
+	ownerParty        = "owner"       // the owner's party name in a signer rule (never a node_id)
+	heartbeatFloor    = 2             // no single party keeps a cluster alive, or (naming a node) revokes, alone
 	nodeRuleFloor     = 2
 	maxOwnerKeys      = 8
 	maxRules          = 4
@@ -34,7 +36,7 @@ var (
 	signingKeyAlgs      = []string{"ecdsa-p256"}            // a TPM has no Ed25519
 	ownerKeyAlgs        = []string{"ed25519", "ecdsa-p256"} // the approval YubiKeys' OpenPGP applet (#126), or P-256
 	anchorPolicyKeyAlgs = []string{"ecdsa-p256"}            // K_A (#361): a key the TPM loads (tpm2_loadexternal)
-	signerFields        = []string{"owner_heartbeat_lifetime_s", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers"}
+	signerFields        = []string{"owner_heartbeat_lifetime_s", "recovery_authorization_max_s", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers"}
 	// #361/#405: K_A (immutable, every signer) and the card ceremony's record that names owner_keys (the root's)
 	v4OnlyFields   = []string{"anchor_policy_key", "card_record"}
 	singleRules    = []string{"heartbeat_signers", "activation_signers"} // one rule each; revocation_signers is a list
@@ -110,6 +112,10 @@ func signerRules(manifest map[string]any, byID map[string]map[string]any, seen m
 	most, _ := integer(manifest["heartbeat_max_lifetime_s"])
 	if !isInt || most == nil || life.Cmp(big.NewInt(ownerHeartbeatMin)) < 0 || life.Cmp(most) > 0 {
 		return refuse("owner_heartbeat_lifetime_s must be an integer from %d to heartbeat_max_lifetime_s", ownerHeartbeatMin)
+	}
+	recovery, isInt := integer(manifest["recovery_authorization_max_s"])
+	if !isInt || recovery.Cmp(big.NewInt(recoveryAuthMin)) < 0 || recovery.Cmp(big.NewInt(recoveryAuthMax)) > 0 {
+		return refuse("recovery_authorization_max_s must be an integer from %d to %d", recoveryAuthMin, recoveryAuthMax)
 	}
 	rule := func(value any, label string, ownerAlone bool) error {
 		object, err := exact(value, []string{"threshold", "parties"}, label)

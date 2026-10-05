@@ -98,6 +98,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -121,7 +122,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -129,12 +130,12 @@
      {
       "party": "a",
       "public": "043a2f765da17a71c4881b06c9da4ed8f402bd06715fe7c6f919cc6508e7ea0578edcc9a810a89b58440ed9a1107f81984316565b041447bbcf0a17fcddf72eba0",
-      "sig": "639bc20e3dd28fa3ab1d50744d3e1a5146f36f20f2ebf4a000eea8a3f3e226561b0f717b71b16f37840e062b38e7a788e047f1c5e8904fdee1b52454b1059411"
+      "sig": "97297c4bb82cda24428716938a370b5202839382428ac7f682fae3aae7dc243c1f462fcc2fdff0ec3e61dc920a450100fa9169a460fa6a32ab65e5b5a8ce4d7f"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "904c2ce79a656ae5ec7ae4e4a17fa905d84d8dbbf73c04c1ef2cb4e927fbd8242fedb95044b0724a9c84f091437272717a8c279df0ac2eeb524439f6c3bc0918"
+      "sig": "1055002b565171e380444ad640379195630d09dc12068f35a24c20c0074840b46ccc12cdc5408bce423e9ac91551c72149b587a82f5c8ec25285d72e8c3cae2c"
      }
     ]
    },
@@ -238,6 +239,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -261,7 +263,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -269,12 +271,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "0f2fe56d93cf197e7d860c27f67442a7abf62f6408de5fe00ad428c26b6251be098f24eadcb07a4e41cdcddd89d0f5aec92c65f122c709b26847c8d7b5a286c5"
+      "sig": "4965c4a733a5c98309cb05f3defbead80969332aa0bcb9952fe70d0569f7879128466037486010f44e4bca207fa310a4dbff6959f9d7031ddec852b3a7b26cdd"
      },
      {
       "party": "owner",
       "public": "043a2f765da17a71c4881b06c9da4ed8f402bd06715fe7c6f919cc6508e7ea0578edcc9a810a89b58440ed9a1107f81984316565b041447bbcf0a17fcddf72eba0",
-      "sig": "77c38fba6d0ebb80499444fda407203635b8e54a67ac6f9b637c2b7a8c8902c13f180bb938c129dcac440a7cf7ee04cdf00b3d729ee7b4e2a0f7dd19813754ac"
+      "sig": "53484a1223489b49d85fd7379d26762994161b6da8593988784a22333f47a40e44c67000fd1a107bfa87acd1c06362f1e534a20bf369379476379cc895c5259b"
      }
     ]
    },
@@ -378,6 +380,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -401,7 +404,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -409,12 +412,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "0fee4757905b83e4f0c89da4d22b93d4caf6ef1f4a0313c86f18b210c0797af7ca715e6ee6a0296ba66f3028feaff5962eff797f8552b6ba4471ecb29addf644"
+      "sig": "7d799b2c4c35d527604e2d60b608ad3d3dee446f8b6823c036aa8eff5d404643e00f23a90a67ca465f1ebeeddee538ec2cae53eb415614b271a7191cda6dcef2"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "e059df502d63f52de4afde83145fc7224d602b2b4ec63fb97352c4f24fb2e2388b6ce638ee0be72b46ced3d0e01780ac2611aaf815017fa4c02b00dfc0181e8f"
+      "sig": "98946a353c3771f6405951ec2ca4881b740afc73478b1d13d650bbacd5f8c4aa96a3744b40edefae27bc9dc84a49cd56724306530a5419600e455c06362e16f5"
      }
     ]
    },
@@ -426,7 +429,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T15:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+    "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -526,6 +529,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -549,7 +553,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -557,12 +561,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "ea5612e7cacea8ca3b14446eb29ccd0e95cb5958f737e4b0ad7d75f69e7a8275772663b4c460809cc2fdc5f71894523b6c0ee90f2528c51d33a0adbc0b946f49"
+      "sig": "7d7c98cd00a4ed642672e412fa8914a3f1d172249505074b874e97d22fdad89337b3c38f038fff52c8212ead104eed2ed0335f4a8f8eff2e4938ba31816411b4"
      },
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "bac4b3526d7f89a6b15f6269f7af1fc8342cc693243c832b0792af19eda76009ab38405dc43974b8aa973901836c4c469ffe2bb4b009a921b773b1909133a708"
+      "sig": "a6fef98be159265cc6afdd13f59072d6fdf51a76861a9e2b90ea8e811dd8a483b77b58eb5a809224b7a5b6052d4d70b1d576fdd2e9d280211c14bedca855ff04"
      }
     ]
    },
@@ -665,6 +669,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -688,7 +693,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T20:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -696,12 +701,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7799686da167eaa225f18bc95e80c9f7d41003e413614a54306b9e9c0d3b95052f71d33cee6681b9009f4490b018f4b4f5d99b970ff1c93bb1cb5a1d3ec15ecc"
+      "sig": "11fc9547acf780407c2b43d02d78819f61606a25059f13917b48e30b25565b2476ecf2ffe1afb0a63e26bc207b91d5b3d03ca3ae861718d2f10b3a7985f05588"
      },
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "79e2fa78306de3789bdd99f20e0cb0f83752af09ec0ac47b5ba4429c4a832afac214f30a3484113bb6b2d7c827ea1d2a8a56aefda13b52bead492568e5569004"
+      "sig": "e2bbe79cf1f2c3606901d12f04af91743643d8754c323bcee8856825b5c9ac8263e7018d417d628e1be0a581974207d9076e68d8a17b118210377e54a04dd201"
      }
     ]
    },
@@ -805,6 +810,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -828,7 +834,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T20:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -836,17 +842,17 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "f5be164d85dd12361c4250d17fdbc8433165ffd3f1ded666a287d8c19c98b14431fbe05698f8644adf5acbeb50ec12102b8a6f429e4c4c9024e5c491e14a33f3"
+      "sig": "995024b588e79765ce8da7a4fff7c7bb03414d7d12c0bb44f40a2a57b210a3c75aa8249fdcb6dc8ad6fb085705d9064334eea0b08a6847f5b96f5f8bd178c4ee"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "a2919e46a87e6f1fee79725bdf543668b4e152048361b52c8ebd6214d50f76e65341a1959bc2b53263c3c53b0f33f2bc2b3c7a3e3f504e4d2a27b32276561bcd"
+      "sig": "c78491df3eb08501b02188d5e842da7d33dc02fc465bf9996fe5ccac7c6cb08750eaf2659f3f6e19e19ad1fda56fa848953fa7d6455e97c465a0b38547432a21"
      },
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "79e2fa78306de3789bdd99f20e0cb0f83752af09ec0ac47b5ba4429c4a832afac214f30a3484113bb6b2d7c827ea1d2a8a56aefda13b52bead492568e5569004"
+      "sig": "e2bbe79cf1f2c3606901d12f04af91743643d8754c323bcee8856825b5c9ac8263e7018d417d628e1be0a581974207d9076e68d8a17b118210377e54a04dd201"
      }
     ]
    },
@@ -949,6 +955,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -972,7 +979,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "f845e358af76f987e56655b23f9e4bd198a762eaf59ee25e169df94279e882ae",
+     "manifest_digest": "6150b9c921316471f93f82b3e17f56edffb6cca17eb09d53b012820c2b4d44f8",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -980,12 +987,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "d8fd245a42c16bfc1541d0e7e1ca10ac5bdc0e0581bac9e4531fad23b0a75abd2edf956c035afb050909968d43058bf96cb897b61c868aa971af4b5b4d6c9d69"
+      "sig": "d02514cc2cc81e5f17b51e61f87668610acf0c8bb08f30e29075450346108c1750df3038b3c76b8d74fb8031651bf99c31b00a8336ca17e48bfcebc8ed02decd"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "86fbd1264297f5c4a8e8db66ca643fa1a00a9ed5137c799b012cfa79d2575566282bc920199640bac208f14c0edd4bf016057c9b88c4e7751de23765105af7c0"
+      "sig": "d9119192c443fe4e1a7d26250a752ab04490059fce05e83633b0e821b688f185233eb03892cec2e4e27fbf8c0c90fd3de64222c738a6e50ce381dfc9c50a1402"
      }
     ]
    },
@@ -997,7 +1004,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T15:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "f845e358af76f987e56655b23f9e4bd198a762eaf59ee25e169df94279e882ae",
+    "manifest_digest": "6150b9c921316471f93f82b3e17f56edffb6cca17eb09d53b012820c2b4d44f8",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -1096,6 +1103,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -1119,7 +1127,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "f845e358af76f987e56655b23f9e4bd198a762eaf59ee25e169df94279e882ae",
+     "manifest_digest": "6150b9c921316471f93f82b3e17f56edffb6cca17eb09d53b012820c2b4d44f8",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1127,12 +1135,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "999aaeee33f9420b6fbd433193454c69b755bb5f9fd044e8be069b4ef9df24fa2bb2c379c86da0122017175a489dc92d5fec4590af9dad2ffe87809aad3c298f"
+      "sig": "51b269c8a646d49f115f21a538b7cc7d49ba4305d06cc83f963b843547b10b9f14f9c336866680deab3d50939bf459b545360625d1ab2851934c23eef93b26b0"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "af9566094f42dfc1c0767cf0dd8764dfafbbead51c3f64b4b1d7230329bfdf051dde19c8f9d57998017a02a5a2eec4edfd452c64c7f936fd445f6051171514de"
+      "sig": "772dacf09ab8da82adcba0961e2ccfa72f8806f3346baf039e4c7625c8a75d162d9d8471620245c37a3f26bcb386bef294458267aed7a0445f8d86dcb9b34887"
      }
     ]
    },
@@ -1235,6 +1243,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -1258,7 +1267,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "aa60d9f918d43a4042d8fc7ad56b24a59e328812f8f68ef71d044df012f8b4ee",
+     "manifest_digest": "3367a666534e12c3ceaf7e5dcfe7be5225dab5e8fc5c2f497af67dce693c13a5",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1266,12 +1275,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "860f79380271c3c7e83a240251130c0bffd2628006f0b374c014955e76ec0a41194a2623902b8192392e163ff9c993151707335a97b8c55c6f35aa9d7e5f3add"
+      "sig": "6e249939b1e0af609ba3ef0dbc541c3fe133254a4981f4f326fc674a30ca5672077aa12d425a08f4cdb0e36dc825a9209235ee72e06bab770973ea59d012fa62"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "7c35508b742aac69607421108299733172b27d0b5db299f00865601f3517e8137853f5cd9d825dee6584027a607e711e5761c54e0e7e39ae638a56f15827fa71"
+      "sig": "1dbc10b10891d1f8a093c8735d57bb28c5893fa1076678ccc646c3c5dc6c08d269ef3e5d1180d7b3bfb6f716253ba1d5ff6bc3b42aeae1aabeb18dfe98371944"
      }
     ]
    },
@@ -1283,7 +1292,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T15:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "aa60d9f918d43a4042d8fc7ad56b24a59e328812f8f68ef71d044df012f8b4ee",
+    "manifest_digest": "3367a666534e12c3ceaf7e5dcfe7be5225dab5e8fc5c2f497af67dce693c13a5",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -1383,6 +1392,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -1406,7 +1416,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "aa60d9f918d43a4042d8fc7ad56b24a59e328812f8f68ef71d044df012f8b4ee",
+     "manifest_digest": "3367a666534e12c3ceaf7e5dcfe7be5225dab5e8fc5c2f497af67dce693c13a5",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1414,12 +1424,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7f785929fdd8a518fe9fe015c7a58aa0e9dc8bd0eac98231946a9d03e80605c3454dc41bca143a1c2e5c11e9c1ca4121a26593e472c26a8279137b7cc9ca9bd1"
+      "sig": "79516b9b670f647236ebb7d39e973f40850948922c92702af48dc6f6a252636f20b0f07416a944ad95a99e200320bd9956ab8cd26e5c147f8dc2f191747aced1"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "f84abc6729aacf2ba3cf2efecbcfd3703d327e40b746b1b7cab5aad0794f741e60a3bcb2f698f0e5ddedcf2e9b090329d0355e7247e9e2ab46b419459dc74d90"
+      "sig": "722cb5910eb22d1bbbb692237291ba86ef0eeeb43657dab6d64600dbf1a1463f09453ab6f0ef953042b2d4bbced348ca7a3ed52cd793f157845c809ec138b5db"
      }
     ]
    },
@@ -1522,6 +1532,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -1545,7 +1556,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "58758d4ef385272ae7d7b094e0ba31d6e63d0b0c9292828d398ec8705c217c7b",
+     "manifest_digest": "cbdaed6e833eebf7f7a6bd73a97507a4b2e645027fd49a67ccb03a53c05fbd6e",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1553,12 +1564,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "189747946a28dfe985ee2fc8fbfc1dfd459b3cd9a441b450485745868ed579623c1cbd4e0759b4860cb681ba4acfa5c3c55393fcf85fd7edfaa9497432e434f4"
+      "sig": "1baecea2dd1601c4b86062de8bad8b0bdd4311f41f2b8d2873e3565e7c3749e45eca1b980ea1d8178b882cd6dc6aa6fc3954cd081355acc991f605823a3db47b"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "d208e457947efd908ad0fe6540672273f7511d3d04c7d0ff44b6b98d1b48a85f5c084cc4d070d748ff5cacb4cc0ee3aeb00203a434f572c703c259923a706f14"
+      "sig": "e9e1ad855eeb3137e2fb88095a2b4a33cef250ab904ce6c480bf893b310715c846a1b64125b982c6253129d4bd04de9e94450bdb1d3152dea3dea2b691edb5ac"
      }
     ]
    },
@@ -1570,7 +1581,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T15:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "58758d4ef385272ae7d7b094e0ba31d6e63d0b0c9292828d398ec8705c217c7b",
+    "manifest_digest": "cbdaed6e833eebf7f7a6bd73a97507a4b2e645027fd49a67ccb03a53c05fbd6e",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -1670,6 +1681,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -1693,7 +1705,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "58758d4ef385272ae7d7b094e0ba31d6e63d0b0c9292828d398ec8705c217c7b",
+     "manifest_digest": "cbdaed6e833eebf7f7a6bd73a97507a4b2e645027fd49a67ccb03a53c05fbd6e",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1701,12 +1713,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "9934b5e1cf359d9e268856499468aeae50f0d4c939fad9de95cd4c9d6a9229934bb85f6e4fb3f5a3b4b49c457089dee8c5fbe2df32255a0d53854047563f30df"
+      "sig": "acf979ae9456ce94040becd0cda89c9944523f2a40bb64ad8228b79e0970d6b655d21eaa0f2ea82f94029b8d76e08902967e281e47602e453fc8b45202806956"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "3bdaa2ae1de8369ab16264153b3bf7c875080b7f22a9b0a29607c3c2a3b3b83f03e0e3d1507bc3dfdf4714bab4c176b5af550035b2d2ff37d26bbc8ecfd7eeed"
+      "sig": "c60da9cdfb417c4089657c4ba55269d4d0053cf1c5f50e237b49fa4f4504148f61a4eae5cfc43b3bc354da493de90b15635284d6da53fd8efd144a21cbe3fa55"
      }
     ]
    },
@@ -1809,6 +1821,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -1832,7 +1845,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "b2c7cfc1d402ead11fafdb243795d2d146223ce9192f2fc880237b7b60ee3ab0",
+     "manifest_digest": "e29b811c2a2e1cdbce3d321408d5aed6f6fbf0c1a62c50c2436b080da106e11b",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1840,12 +1853,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "b7f6681130ef63e430d25b62b9abeb2db7eeebfb3640f42cad379f988202887a1de4eaace6b5e25afb4d6e811c0834845567a4ba532b0a30c5076286546fdbe9"
+      "sig": "3c6ab40d6722bf9587d19d3919fe1d7ccb6ba07721c5f27551f9d1a1bfecc3cd32e0e86461b2044cf679c2bea44d698e478fe4221a5a6885b934f3b3c0f3e45f"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "3d98e09df4d26e5364b049d4a19595dcd0f66a9383bf12392adca14c86a4335d671a08bec85b6a75d1bcac17b4bfc640313ecac42b7a7477d0f484993d022844"
+      "sig": "bb122a7d69f1855e7f17f121c321d397b839139df8e9dcf541dbb5e3f4fa884b3f8c5495256a6632a64c96aaeb6c0a8e3c5e469330fb44c8f0b280f28b27bb1f"
      }
     ]
    },
@@ -1857,7 +1870,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T15:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "b2c7cfc1d402ead11fafdb243795d2d146223ce9192f2fc880237b7b60ee3ab0",
+    "manifest_digest": "e29b811c2a2e1cdbce3d321408d5aed6f6fbf0c1a62c50c2436b080da106e11b",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -1957,6 +1970,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -1980,7 +1994,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "b2c7cfc1d402ead11fafdb243795d2d146223ce9192f2fc880237b7b60ee3ab0",
+     "manifest_digest": "e29b811c2a2e1cdbce3d321408d5aed6f6fbf0c1a62c50c2436b080da106e11b",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1988,12 +2002,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "bd307d1ed63019efb85019f78c3f4521f6aea34f8405bd3f00a3a133ed83a95e4ca2128211ee48ea5c5efffc415221bbfb07c72ba064322fe4ccb88ded5dc953"
+      "sig": "1420f5e2eb506c81e94584f751d28dbb0d7105cd17c7dce7d84d5f67327060ea6aa8456ebb67d6080a002201d02e86de2cb39658cdd325b9121ab47668ac7853"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "cd794bc187e324457c03356cf2b3e1d0cf10457910dc4d6729bc704dae63edc3627d31cfba86e112c5399b393c90e54a3261b91a62bd73ad90d0c83f944bb845"
+      "sig": "34ea1ed6993bd746bf52c16065f18216c545fc35c89780aa15581b0d9af579c2161c490ce385041a47caa980175a12d03868d5cf71371f349d53fd589bbd49d7"
      }
     ]
    },
@@ -2096,6 +2110,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -2119,7 +2134,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2127,12 +2142,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "de873fdc29cb79b36e6de5a76bb8e1da1a54a4e1d2522656b8e68f71b467c6e358998b5547bfb0170d7903102c9f2ee4e5338a5e907095f142e51942717ae5f6"
+      "sig": "f55355d4d569b201e9d8366b9d797958a0b2b1f3294e7c6e1b82c2f97d6cee224d21afe00d24201cb90bc904d28106b3acd5daff1df1be84a3e2fbede864a0c7"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "a3e8bf907ad500ddd3f8c2cfe33fa67fba5b9fd3e6e331bd1e673d1c7b1f2c7918f3dde626c78165859682ed1e42dd0f66cc54f68cea613160162f34eecaac6d"
+      "sig": "c0d7d70a4bdafabfbf9e0059ae01b5e3d73fa0335e7d32c27e9b0c01e6f9a36926e2c0041f7376548e1b59e8f38af5d175c06f9654b2dd2b0c4f9c8721ae8c4d"
      }
     ]
    },
@@ -2236,6 +2251,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -2259,7 +2275,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "aa60d9f918d43a4042d8fc7ad56b24a59e328812f8f68ef71d044df012f8b4ee",
+     "manifest_digest": "3367a666534e12c3ceaf7e5dcfe7be5225dab5e8fc5c2f497af67dce693c13a5",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2267,17 +2283,17 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "52c4bf8f03a93702a61d3f6214dc5f8562a1aa572fbfd3e5812c6d8e15c1518342673d584ce48c6efecd559ca272e8b0dca7b513dce0cb194f3e1bc02c9007d8"
+      "sig": "2eaa278b21afcb0a8fc27f8996909775839c7ffe59074d09245e71c28043267643b5695e6f03eb8814d251c052d485a01f69cab39aefbc2f46ab2014285fd87a"
      },
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "44c3cf73639774654785612c221bb7c422fdfa9a264d4c3d787bc2aeddea4c4618e9080a024f5d1bae2cd7b00105eaa6856d3e2173e4414e614876827e8e3802"
+      "sig": "8cd348d982fc639b5c57cbc2e603c9d3db1998438a09605177c3c4d1381024a8db16ca3a9dfe81e9c4130c387997736f77be5ae3ba1bb6e5ccf15ea405de4e09"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "5f3e64f921f4ae3a45ee1daf96d7cb9c7a2ba8830f724ca0136fff71f8d97de5150139a15eb4f4c61be3f67f701052c1d0a9c037faf511afc68c4c8203149960"
+      "sig": "e5503f08786cc2b8ef72c3ccef5f0cfcda45a7639578ed419e42e1c255818137328e441c7b5f9b6596c2e3b87c538507ebc81f22c33275d0c69aaa319e0ddf47"
      }
     ]
    },
@@ -2289,7 +2305,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T15:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "aa60d9f918d43a4042d8fc7ad56b24a59e328812f8f68ef71d044df012f8b4ee",
+    "manifest_digest": "3367a666534e12c3ceaf7e5dcfe7be5225dab5e8fc5c2f497af67dce693c13a5",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -2389,6 +2405,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -2412,7 +2429,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "aa60d9f918d43a4042d8fc7ad56b24a59e328812f8f68ef71d044df012f8b4ee",
+     "manifest_digest": "3367a666534e12c3ceaf7e5dcfe7be5225dab5e8fc5c2f497af67dce693c13a5",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2420,17 +2437,17 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "af3ad63b38cffb078f73018cad864812515cf7480747e705139c82819bc312891633e668f7da6b35868866d451076253bdc65082b8b7b288d30cfabe9b76e042"
+      "sig": "3379c9d9ba35ce7ef31d6f26b748b899f4035aae0d3d15e2cedeecada734c4a81cf409df546fcc662cbcf31d90675e303e9ea6ab3edee5a420dcffe00e9f6b3a"
      },
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "44c3cf73639774654785612c221bb7c422fdfa9a264d4c3d787bc2aeddea4c4618e9080a024f5d1bae2cd7b00105eaa6856d3e2173e4414e614876827e8e3802"
+      "sig": "8cd348d982fc639b5c57cbc2e603c9d3db1998438a09605177c3c4d1381024a8db16ca3a9dfe81e9c4130c387997736f77be5ae3ba1bb6e5ccf15ea405de4e09"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "ae77c8bd21c7138064132ecc5009356c9b31edd31fc91dc18c24c4422250fc386bc05ddbc1521583908a5fe03c2026cf36d5d1e3a1a51197765095d746feedd2"
+      "sig": "e5d4e1c53e264ab24b8d0a55c2aed92393583b275cbea4bb84ec2e4d3ad6de2826b98b101d99c00a9895b61295d22cab85db892172864edfeda1aead60774e47"
      }
     ]
    },
@@ -2533,6 +2550,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -2556,7 +2574,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2564,7 +2582,7 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "e18855e9d7669339dab1719243ca1873ba1c12f9b522d8b11862b4eaeefde79e1f5f01bf5fb8a461be056bad51cd349258d8c405097b6bf250aefbafd31a32ff"
+      "sig": "7cc8a9c61da1b624784ce1b3aa01e373978c861d7785489c6a847c9e512d1e4b0f0f26b6d7f3f66f69a3dbb835a4d3e7e3761f33a064169d4fb1ff3a8e4cb531"
      }
     ]
    },
@@ -2668,6 +2686,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -2691,7 +2710,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2699,7 +2718,7 @@
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "bac4b3526d7f89a6b15f6269f7af1fc8342cc693243c832b0792af19eda76009ab38405dc43974b8aa973901836c4c469ffe2bb4b009a921b773b1909133a708"
+      "sig": "a6fef98be159265cc6afdd13f59072d6fdf51a76861a9e2b90ea8e811dd8a483b77b58eb5a809224b7a5b6052d4d70b1d576fdd2e9d280211c14bedca855ff04"
      }
     ]
    },
@@ -2803,6 +2822,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -2826,7 +2846,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2834,12 +2854,12 @@
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "bac4b3526d7f89a6b15f6269f7af1fc8342cc693243c832b0792af19eda76009ab38405dc43974b8aa973901836c4c469ffe2bb4b009a921b773b1909133a708"
+      "sig": "a6fef98be159265cc6afdd13f59072d6fdf51a76861a9e2b90ea8e811dd8a483b77b58eb5a809224b7a5b6052d4d70b1d576fdd2e9d280211c14bedca855ff04"
      },
      {
       "party": "owner",
       "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
-      "sig": "baf4dcba9a600bbf2419de3e938e65ce7ad78bf28d9b7abd95976486ea60c65d6ba3cd62c5df0c7ea3322bbe32f8d6303d15cbd9404a482a0c9988f0a6c0c80e"
+      "sig": "6c83c8ff988c90c5cee0ae8cf2f2f1b8e79d19f4133a59405aeca3cd5db9dbc0ad55fdad3797e9883321874ac614b6039631fbdec7df0205f9cbe42c880afa09"
      }
     ]
    },
@@ -2943,6 +2963,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -2966,7 +2987,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T20:13:21Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2974,12 +2995,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "041537afd7bec16df74aa29b491c70526e1ed871ec6be0e7e018cf8ec6f7ecb77e1229277f621a752dbb94d0edab728cdd0f088c896aff62d488861b819c08db"
+      "sig": "71f1548d266a4789869d2f1f28ac28498ff430bc3123688f5dd822b624586ccf29135f04c0eb104257ed32f0aad86b8159976d4d77ccaf2347553dc8b7a91fc4"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "e902baae2448d7020492d82ad8a9788c6d521c6c3e68f10c6997ba23862ce9091464d176bceac6289799396a2cd994312207c497465e0ffc5d958056019e13e3"
+      "sig": "225e73f1715faf6d19d664f987ec85b17645d19c44360dc8a13d8d7269d9873a39b798f762de435c675c70571bb13494bb6c4d8a7c26b7c3924ac6fa185c8873"
      }
     ]
    },
@@ -3083,6 +3104,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -3106,13 +3128,13 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
     "signature": {
      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-     "sig": "539e1c1b889598534d9d424e088cf4347c1cdc7630df95ff69a8e8d6496eda265147d3be04a652054127d31ba8fb9e7309781117d18f341ef6a2c87526c5dc75"
+     "sig": "21f132327fd438a33c37ba0ab17242ca31236abf1ae5cea3a17976e2cb227cd204b9391cc8ea6d77e45fc273c7a07b711dacc4091b7468adeae5ee9a09ac61c1"
     }
    },
    "name": "Quorum.test_the_single_key_form_is_not_a_v4_heartbeat #1",
@@ -3123,7 +3145,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T20:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+    "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -3223,6 +3245,7 @@
     ],
     "policy_version": "p1",
     "prev_digest": "",
+    "recovery_authorization_max_s": 604800,
     "revocation_signers": [
      {
       "parties": [
@@ -3246,7 +3269,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T20:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
+     "manifest_digest": "f2b18e240a307c80d483081e1ebd904f37997ddca55c15ae4117dda10a72f945",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -3254,12 +3277,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "66634c0314fee4dd78e75eb69ef0de05bfd07ab3867200b5f550b2cfd0afdf9d5b78a946b120ab83186ef3b36d3172928c2c25be9bb93e78a0c613ab542ad5ac"
+      "sig": "2a022d4be01c8ed933be89ec9974696f48461fe1e24082fa182f397b9223dc531e7b7bf9254864b57110070505208c03c2d4e08878177f1be71f5827d4ef944e"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "7d0be3c37227505f7694f081611509c6c19968e6882b1bcabcfe527e2b8e3f0966bf66ab9fec27ee5119e017bed76523ab7aeb5b26ef19f6fdd19b15768c59aa"
+      "sig": "4a499ec64160ae6a10903b43204b1c8c06087bc7b73ae593aee3fc85137b7e583a8b17bd18983939a84342d8a3b1dc661e7d69d5345e98c9bd84ac55c3111d73"
      }
     ]
    },

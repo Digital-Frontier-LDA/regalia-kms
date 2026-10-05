@@ -71,7 +71,7 @@ def nodes4(**states):
 
 def manifest4(epoch, prev, nodes, **fields):
     man = {"schema": m.SCHEMA_V4, "epoch": epoch, "prev_digest": prev, "policy_version": "p1", "issued_at": "2026-10-04T09:00:00Z",
-           "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "owner_keys": [typed(k) for k in OWNER_KEYS],
+           "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "recovery_authorization_max_s": 604800, "owner_keys": [typed(k) for k in OWNER_KEYS],
            "heartbeat_signers": {"threshold": 2, "parties": ["a", "b", "c", "owner"]},
            "activation_signers": {"threshold": 2, "parties": ["a", "b", "c"]},
            "revocation_signers": [{"threshold": 2, "parties": ["a", "b", "c"]}, {"threshold": 1, "parties": ["owner"]}],
@@ -180,7 +180,14 @@ class Format(Case):
                 ("no owner heartbeat bound", lambda x: x.pop("owner_heartbeat_lifetime_s"), "manifest fields mismatch"),
                 ("an owner heartbeat bound below 300 s", lambda x: x.update(owner_heartbeat_lifetime_s=299), "owner_heartbeat_lifetime_s must be an integer from 300"),
                 ("an owner heartbeat bound above the heartbeat bound", lambda x: x.update(owner_heartbeat_lifetime_s=21601), "to heartbeat_max_lifetime_s"),
-                ("an owner heartbeat bound true", lambda x: x.update(owner_heartbeat_lifetime_s=True), "owner_heartbeat_lifetime_s must be an integer")):
+                ("an owner heartbeat bound true", lambda x: x.update(owner_heartbeat_lifetime_s=True), "owner_heartbeat_lifetime_s must be an integer"),
+                ("no recovery authorization bound", lambda x: x.pop("recovery_authorization_max_s"), "manifest fields mismatch"),
+                ("a recovery authorization bound below 1 h", lambda x: x.update(recovery_authorization_max_s=3599),
+                 "recovery_authorization_max_s must be an integer from 3600 to 604800"),
+                ("a recovery authorization bound above 7 days", lambda x: x.update(recovery_authorization_max_s=604801),
+                 "recovery_authorization_max_s must be an integer from 3600 to 604800"),
+                ("a recovery authorization bound true", lambda x: x.update(recovery_authorization_max_s=True),
+                 "recovery_authorization_max_s must be an integer")):
             with self.subTest(name):
                 self.invalid(reason, change)
 
@@ -303,6 +310,7 @@ class Quorum(Case):
                 ("a revocation rule dropped", lambda x: x["revocation_signers"].pop(), "cannot change revocation_signers"),
                 ("an owner key added", lambda x: x["owner_keys"].append(typed(STRANGER)), "cannot change owner_keys"),
                 ("the owner's heartbeat bound", lambda x: x.update(owner_heartbeat_lifetime_s=7200), "cannot change owner_heartbeat_lifetime_s"),
+                ("the recovery authorization bound", lambda x: x.update(recovery_authorization_max_s=7200), "cannot change recovery_authorization_max_s"),
                 ("the heartbeat bound", lambda x: x.update(heartbeat_max_lifetime_s=7200, owner_heartbeat_lifetime_s=3600), "cannot change heartbeat_max_lifetime_s"),
                 ("the policy", lambda x: x.update(policy_version="p2"), "cannot change the policy version"),
                 ("a signing key", lambda x: x["nodes"][0].update(signing_key=typed(STRANGER)), "cannot change signing_key of a"),

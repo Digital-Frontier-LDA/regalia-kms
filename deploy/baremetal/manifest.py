@@ -160,7 +160,7 @@ def propose_states(current, changes, issued_at):
 # --owner-heartbeat-lifetime-s); membership.validate still refuses a value below its floors. The owner is ONE party,
 # so "2 of {a, b, c, owner}" already means at least one node signs every heartbeat and activation lease. The proposed
 # D31 director party (not decided) would make that floor explicit; there is deliberately no director field here.
-GENESIS_POLICY = {"heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600}
+GENESIS_POLICY = {"heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "recovery_authorization_max_s": 604800}
 OWNER_PARTY = membership.OWNER
 # what `enrol entry` prints for a node (#358, #371 and its ssh_host_pub): the v4 entry is these and state ACTIVE
 ENTRY_FIELDS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key", "hsm_serials", "ssh_host_pub")
@@ -643,7 +643,8 @@ def _propose_genesis(args, root, confirm=None, say=print):
     document = measurements.load(_raw(args.measurements, measurements.MAX_BYTES))
     pcr7_judged = judge_enrolled(document, enrolled)
     policy = {k: v for k, v in (("heartbeat_max_lifetime_s", args.heartbeat_max_lifetime_s),
-                                ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s)) if v is not None}
+                                ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s),
+                                ("recovery_authorization_max_s", args.recovery_authorization_max_s)) if v is not None}
     anchor_policy, generated = offline_keys_record(read_json(args.offline_keys_record, membership.MAX_BYTES), root)
     candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy, anchor_policy, cards)
     require(not os.path.lexists(args.out), "%s exists: nothing is overwritten" % args.out)
@@ -758,6 +759,8 @@ def main(argv=None):
                    "life of the genesis")
     c.add_argument("--heartbeat-max-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["heartbeat_max_lifetime_s"])
     c.add_argument("--owner-heartbeat-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["owner_heartbeat_lifetime_s"])
+    c.add_argument("--recovery-authorization-max-s", type=int, help="--genesis: the owner's recovery authorization's longest life "
+                   "(#432), override the default %d (7 days; 3600 at least)" % GENESIS_POLICY["recovery_authorization_max_s"])
     c.add_argument("--from-rollout", metavar="R.json", help="the output of `rollout propose --json`")
     c.add_argument("--set-state", action="append", default=[], metavar="NODE=STATE", help="change a node's state; repeat")
     c.add_argument("--issued-at", metavar="YYYY-MM-DDTHH:MM:SSZ")
@@ -802,7 +805,7 @@ def main(argv=None):
             require(args.chain is not None, "give --chain (or --genesis)")
             require(not (args.node or args.system_pub or args.measurements or args.card_record or args.state_dir or args.offline_keys_record
                          or args.heartbeat_max_lifetime_s
-                         or args.owner_heartbeat_lifetime_s), "--node, --system-pub, --measurements, --card-record, --state-dir, "
+                         or args.owner_heartbeat_lifetime_s or args.recovery_authorization_max_s), "--node, --system-pub, --measurements, --card-record, --state-dir, "
                     "--offline-keys-record and the lifetimes are for --genesis only")
         if args.command == "sign" and args.genesis:
             # the first ceremony: no chain at all, the offline root only (see GENESIS above)
