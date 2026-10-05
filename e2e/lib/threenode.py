@@ -95,10 +95,12 @@ def sh(*argv, check=True, **kw):
 
 
 def show_state(unit):
-    """(ActiveState, Result) of a unit: a oneshot that ran to success is ("inactive", "success")."""
-    out = sh("systemctl", "show", unit, "-p", "ActiveState,Result", check=False).stdout
+    """(LoadState, ActiveState, Result, InvocationID) of a unit. A oneshot that ran to success is loaded, inactive, success;
+    a unit that is NOT loaded also reads inactive/success (systemd's defaults), hence LoadState (regalia-kms-48), and a run
+    is told from an earlier one by its InvocationID."""
+    out = sh("systemctl", "show", unit, "-p", "LoadState,ActiveState,Result,InvocationID", check=False).stdout
     props = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
-    return props.get("ActiveState"), props.get("Result")
+    return props.get("LoadState"), props.get("ActiveState"), props.get("Result"), props.get("InvocationID")
 
 
 def until(what, seconds, interval=1.0):
@@ -723,8 +725,13 @@ class Cluster:
         # a failed start is restarted by the unit itself (Restart=on-failure): what is waited for is a run that succeeded,
         # within the bound, not the first attempt (main's three-node-recovery once read "cannot read 8 bytes from NV index"
         # on the shared software TPM, and the fixture gave up where the host's unit would have tried again)
+        before = show_state(unit)[3]
         started = sh("systemctl", "start", unit, check=False).returncode == 0
-        if not started and not until(lambda: show_state(unit) == ("inactive", "success"), 60, 1):
+
+        def succeeded():
+            load, active, result, invocation = show_state(unit)
+            return load == "loaded" and active == "inactive" and result == "success" and invocation not in ("", before)
+        if not started and until(succeeded, 60, 1) is not True:
             raise RuntimeError("%s's regalia-esp-advance failed at start and on its retries: %s"
                                % (n.name, self.journal(n.name, "esp-watch")[-1500:]))
 
