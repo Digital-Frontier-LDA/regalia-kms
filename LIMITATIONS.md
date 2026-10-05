@@ -26,6 +26,22 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **etcd's configuration from the manifest: the renderer only** (#432, ADR-0002 D32; `deploy/baremetal/etcdconf.py`).
+  Built:
+  - who is a member (the manifest's ACTIVE, MAINTENANCE and DRAINING nodes);
+  - each member's certificate bound once by the signing key the manifest pins for it (no CA). The latest binding that
+    verifies wins, and a rendered one is never gone back on;
+  - the timings from the measured p99 round trip (a commissioning failure above 500 ms);
+  - the configuration (unix-socket clients only, peers on the mesh over TLS 1.3, certificates both ways, keys from the
+    unit's credentials) and a check of each of those settings.
+  Not built yet:
+  - enrolment making the peer and server keys (into `systemd-creds`), the self-signed certificates and the binding;
+  - the bindings travelling by sync;
+  - the daemon's client certificate (`clients.pem`);
+  - writing the files, and the reconciler that adds or removes a running member after a root-signed epoch;
+  - where the measured round trip comes from (an input today).
+  **Accepted:** a member re-enrolled on the same TPM keeps its signing key, so an older binding still verifies. Renderers
+  that have seen the newer one refuse to go back, but a renderer starting fresh takes the newest binding it is shown.
 - **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
   refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
   its verification under the current manifest's `activation_signers`, each node's grant record and
