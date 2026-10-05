@@ -886,16 +886,20 @@ Six systemd units in `deploy/baremetal/units/`, all run from one configuration, 
 **Provisioning a node (#190), PARTLY BUILT: `python3 -Es -m deploy.baremetal.enrol`.** Two phases, as root at
 the console; every step is journalled in `/var/lib/regalia-enrol` (root, 0700), and a rerun resumes,
 removing only what it can prove it made.
-- `init --node-id X --system-pub PEM` makes the EK and AK in the TPM, the signing key (#199: at 0x81010003,
-  usable only under PolicyAuthorize of the system-phase PCR key, `signkey.py`) with the AK's certification of
-  it, the WG-SERVICE key (`/etc/regalia/wg-service.key`, 0600) and the WG-BOOT key, and writes the identity
-  bundle (public values) for the manifest ceremony.
+- `init --node-id X --system-pub PEM --anchor-policy FILE` makes the EK and AK in the TPM, the rotation counter
+  (#361 C1: at 0x01500020, under PolicyAuthorize(Name(K_A), "rotation"), first incremented with K_A's approval from
+  FILE, `regalia.anchor-policy-first/v1`; before `enrol ownerauth`, while the owner authorization is empty), the
+  signing key (#199: at 0x81010003, usable only under PolicyAuthorize of the system-phase PCR key, `signkey.py`)
+  with the AK's certification of it, the WG-SERVICE key (`/etc/regalia/wg-service.key`, 0600) and the WG-BOOT key,
+  and writes the identity bundle (public values) for the manifest ceremony. The bundle names the rotation counter's
+  index, Name and first value; the AK quotes them with the identity, and `manifest propose --genesis` refuses a
+  node whose counter is not under the genesis manifest's K_A.
 - The root's side, on its own machine and without a TPM, in three steps:
   - `challenge --bundle B --out CRED --keep KEEP` makes a credential to the bundle's EK and AK Name. KEEP holds only
     the secret's SHA-256.
   - `activate --credential CRED --out ACTIVATION`, run as root on the node, writes the secret its TPM releases
     and, with it, the AK's quote of PCRs 7 and 11 over the node's identity fields (its bundle.json: both
-    WireGuard keys, the signing key, the token serials, the SSH host key), bound to this challenge by the secret's
+    WireGuard keys, the signing key, the token serials, the SSH host key, the rotation counter), bound to this challenge by the secret's
     SHA-256 (#399). Only the TPM that holds that EK and that AK can release the secret, which proves the AK is the
     EK's; the quote then says every other field is what that TPM's node stated now, on the image it booted. The
     activation holds no lasting secret: the answer opens this one challenge only.

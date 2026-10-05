@@ -2,6 +2,7 @@
 own (tests/vectors/anchor-policy-v1.json, measured on swtpm by tests/vectors/make-anchor-policy-v1.py)."""
 import json
 import os
+import re
 import unittest
 
 from deploy.baremetal import anchorpolicy as ap
@@ -81,6 +82,34 @@ class Refusals(unittest.TestCase):
             ap.approved(bytes(34), bytes(34), True)
         with self.assertRaisesRegex(m.Refused, "n is a 64-bit count"):
             ap.increment_from(bytes(34), -1)
+
+    def test_the_anchor_policy_file_is_read_by_name(self):
+        """#361 C1: `enrol init --anchor-policy`'s file. K_A's approval of R's first increment is verified under the K_A the
+        file names before any TPM is asked; each guard by an input only it refuses."""
+        from tests.test_baremetal_enrol import FIRST, K_A_POINT, first_file
+        point, der = ap.read_first(FIRST)
+        self.assertEqual(point, K_A_POINT)
+        bad, _ = first_file(0x0BAD)
+        sig = FIRST["increment_first"]
+        high = "%s%064x" % (sig[:64], m.P256_ORDER - int(sig[64:], 16))              # the high-S twin of a valid signature
+        for name, doc, reason in (
+                ("another schema", dict(FIRST, schema="x"), "the anchor-policy file is not a regalia.anchor-policy-first/v1"),
+                ("an extra field", dict(FIRST, note=1), "the anchor-policy file fields mismatch"),
+                ("an Ed25519 K_A", dict(FIRST, anchor_policy_key={"alg": "ed25519", "key": "00" * 32}), "alg must be one of ecdsa-p256"),
+                ("another key's signature", dict(FIRST, increment_first=bad["increment_first"]), "increment_first does not verify under the K_A it names"),
+                ("the high-S twin", dict(FIRST, increment_first=high), "increment_first is not a low-S P-256 signature"),
+                ("a short signature", dict(FIRST, increment_first="ab"), "increment_first is not a P-256 signature (128 lowercase hex"),
+                ("not an object", [], "the anchor-policy file is not an object")):
+            with self.subTest(name), self.assertRaisesRegex(m.Refused, re.escape(reason)):
+                ap.read_first(doc)
+        # an approval for another class (the anchor's) does not start R: the TPM would refuse it, and so does this check
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+        key = ec.derive_private_key(0x361C1, ec.SECP256R1())
+        r, s_ = decode_dss_signature(key.sign(ap.authorize_message(ap.increment_first(), "anchor"), ec.ECDSA(hashes.SHA256())))
+        with self.assertRaisesRegex(m.Refused, "does not verify under the K_A it names"):
+            ap.read_first(dict(FIRST, increment_first="%064x%064x" % (r, min(s_, m.P256_ORDER - s_))))
 
     def test_classes_never_share_a_policy(self):
         policies = {ap.class_policy(V["k_a"]["point"], c) for c in ap.REFS}

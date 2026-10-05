@@ -441,14 +441,17 @@ class ProducersWriterRun(unittest.TestCase):
         args = ["propose", "--genesis", *args, "--root-key", self.root, "--card-record", str(self.here / "card-record-2.record.json"),
                 "--state-dir", self.state, "--measurements", os.path.join(d, "doc.json"), "--out", os.path.join(d, "e1.json"),
                 "--issued-at", "2026-10-04T12:00:00Z", "--system-pub", os.path.join(d, "system.pem")]
+        from deploy.baremetal import anchorpolicy
+        rotation = lambda e: {"index": anchorpolicy.ROTATION_INDEX, "value": 3,          # noqa: E731  (#361 C1: R under K_A)
+                              "name": anchorpolicy.rotation_name(int(anchorpolicy.ROTATION_INDEX, 16), typed(K_A)["key"]).hex()}
         for e in entries:                   # each node as `enrol` proves it (#399; stubbed here: its proof is enrol's own test)
             path = os.path.join(d, "bundle-%s.json" % e["node_id"])
             with open(path, "w") as f:
-                json.dump(e, f)
+                json.dump(dict(e, rotation=rotation(e)), f)
             args += ["--node", path, path, path]
         out, err = io.StringIO(), io.StringIO()
         with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch.object(tool.keyfd, "tty_line", lambda p: "40000001 40000002"), \
-                mock.patch.object(tool.enrol, "proven_entry", lambda bundle, pub, keep, act, run=None: (bundle, {"7": "00" * 32, "11": "bb" * 32})), \
+                mock.patch.object(tool.enrol, "proven_entry", lambda bundle, pub, keep, act, run=None: ({k: v for k, v in bundle.items() if k != "rotation"}, {"7": "00" * 32, "11": "bb" * 32})), \
                 mock.patch.object(tool, "offline_keys_record", lambda envelope, root: (typed(K_A), generated)):
             self.assertEqual(tool.main(args), 0, err.getvalue())
         self.assertIn("card record 2 of 2 (the newest on this laptop's signing record)", out.getvalue())
