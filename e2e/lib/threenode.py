@@ -94,6 +94,13 @@ def sh(*argv, check=True, **kw):
     return done
 
 
+def show_state(unit):
+    """(ActiveState, Result) of a unit: a oneshot that ran to success is ("inactive", "success")."""
+    out = sh("systemctl", "show", unit, "-p", "ActiveState,Result", check=False).stdout
+    props = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    return props.get("ActiveState"), props.get("Result")
+
+
 def until(what, seconds, interval=1.0):
     """`what()` until it is true or the time is up; its last value (or the exception it raised)."""
     deadline, last = time.monotonic() + seconds, None
@@ -700,8 +707,12 @@ class Cluster:
     def _esp_watch(self, n):
         """#66 B3: regalia-esp-advance.path's stand-in, at every new published chain: the chain to the node's ESP, then
         the TPM anchor. A run that fails is in its journal; anchored() says where the anchor is."""
+        # retried on failure as the installed unit is (Restart=on-failure, StartLimitIntervalSec=0): a transient TPM error on
+        # the shared software TPM must not leave the anchor behind until the next chain, as it would not on a host. 2 s
+        # here, where the unit waits 15 s, so the fixture's 60 s wait for the anchor holds several retries
         self._run(n, "esp-advance", unit=self.unit(n.name, "esp-watch"), args=self._esp_args(n),
-                  extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
+                  extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot",
+                         "-p", "Restart=on-failure", "-p", "RestartSec=2s", "-p", "StartLimitIntervalSec=0"])
 
     def _esp_advance(self, n):
         """regalia-esp-advance's run at start (its unit is WantedBy=multi-user.target), once sync has published: the path
@@ -709,8 +720,13 @@ class Cluster:
         if not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
             raise RuntimeError("%s's sync published no chain" % n.name)
         unit = self.unit(n.name, "esp-watch") + ".service"
-        if sh("systemctl", "start", unit, check=False).returncode != 0:
-            raise RuntimeError("%s's regalia-esp-advance failed at start: %s" % (n.name, self.journal(n.name, "esp-watch")[-1500:]))
+        # a failed start is restarted by the unit itself (Restart=on-failure): what is waited for is a run that succeeded,
+        # within the bound, not the first attempt (main's three-node-recovery once read "cannot read 8 bytes from NV index"
+        # on the shared software TPM, and the fixture gave up where the host's unit would have tried again)
+        started = sh("systemctl", "start", unit, check=False).returncode == 0
+        if not started and not until(lambda: show_state(unit) == ("inactive", "success"), 60, 1):
+            raise RuntimeError("%s's regalia-esp-advance failed at start and on its retries: %s"
+                               % (n.name, self.journal(n.name, "esp-watch")[-1500:]))
 
     def anchored(self, name):
         """The node's TPM anchor epoch (read as root)."""
