@@ -607,7 +607,7 @@ class Reboot(Case):
         self.refused("a updates first", self.ask, "c", self.state(a="image-1", b="image-1"))
 
     def test_a_lease_from_before_a_fallback_is_for_another_boot_and_is_refused(self):
-        """a booted NEXT, both peers vouched, and within the five minutes a fell back to CURRENT. Its leases
+        """a booted NEXT, both peers vouched, and within the lease lifetime a fell back to CURRENT. Its leases
         are still valid signatures; b's record still says a is on NEXT, so b would pass. a must not."""
         from_the_other_boot = [self.lease_for("a", peer, session_id=lt.OTHER_SESSION) for peer in ("b", "c")]
         why = self.refused("WAIT: no valid lease from b (its lease is for another boot session of a: that peer has not seen this boot)",
@@ -1238,7 +1238,7 @@ class OnSwtpm(unittest.TestCase):
             self.refused("the subject's attestation is refused: the quoted PCR digest is not the expected PCR values", self.unlock, peer, "c")
             self.refused("the quoted PCR digest is not the expected PCR values", self.vouch, peer, "c")
             self.assertEqual(self.seen(peer, "c"), "image-2")             # a refusal does not rewrite the record
-        # the lease c held from before the retirement was issued under epoch 2 and is still inside its five minutes:
+        # the lease c held from before the retirement was issued under epoch 2 and is still inside its lease lifetes:
         # the lease bound, as lease.py states it. It is not renewed.
         self.assertGreater(lease.verify(old_lease_for_c, m3, self.now), 0)
         self.offset += lease.MAX_LIFETIME
