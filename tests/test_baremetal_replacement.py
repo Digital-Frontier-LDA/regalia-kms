@@ -245,12 +245,12 @@ class Decisions(Case):
         request = self.new_holder.request()
         envelope = lease.issue(self.m2, "b", request, b["attester"], self.quote(b["attester"], "a2", "a2", binding=lease.request_binding(lt.STATE)), b["freshness"], b["signer"],
                                lt.primed_floor())
-        self.assertEqual(self.new_holder.install(envelope, self.m2), 300)
-        self.assertEqual(self.new_holder.check(self.m2), 300)
+        self.assertEqual(self.new_holder.install(envelope, self.m2), lease.MAX_LIFETIME)
+        self.assertEqual(self.new_holder.check(self.m2), lease.MAX_LIFETIME)
         self.assertTrue(m.may(self.m2, "a2", "authorize"))
         # a lease signed by a2's AK, as issuer, is good: the new node is a full peer
         by_a2 = lt.sign(dict(self.body(self.m2), node_id="c", ak_name=self.keys["c"].ak_name, issuer="a2"), self.keys["a2"])
-        self.assertEqual(lease.verify(by_a2, self.m2, self.now), 300)
+        self.assertEqual(lease.verify(by_a2, self.m2, self.now), lease.MAX_LIFETIME)
 
     def test_poc_16_5_the_old_hardware_is_refused_by_every_decision(self):
         for terminal in ("RETIRED", "REVOKED_STOLEN"):
@@ -446,7 +446,7 @@ class OnSwtpm(unittest.TestCase):
         holder = lease.Holder("a2", SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a2"]), self.d + "/a2-lease.json", **lt.SOURCES)
         envelope = lease.issue(m2, "b", holder.request(), after, self.evidence(after, "a2", "a2", SESSION, m2, lease.request_binding(lt.STATE)), self.freshness, self.signer,
                                lt.primed_floor())
-        self.assertEqual(holder.install(envelope, m2), 300)
+        self.assertEqual(holder.install(envelope, m2), lease.MAX_LIFETIME)
 
         # 16.5: old a, hardware intact, historical credentials valid
         self.refused("unknown node", after.nonce, "a", error=attest.Refused)                                   # it is not attested as itself
@@ -465,7 +465,7 @@ class OnSwtpm(unittest.TestCase):
         self.refused("a may not serve under epoch 2", lease.verify, old_lease, m2, self.now)
         vouching = {"schema": lease.SCHEMA, "node_id": "a2", "ak_name": self.names["a2"]["ak"], "issuer": "a", "epoch": 2, **lt.STATE,
                     "manifest_digest": m.digest(m2), "session_id": SESSION, "nonce": "44" * 32,
-                    "issued_at": hbt.stamp(self.now), "expires_at": hbt.stamp(self.now + 300)}
+                    "issued_at": hbt.stamp(self.now), "expires_at": hbt.stamp(self.now + lease.MAX_LIFETIME)}
         old_tpm = lease.TpmSigner(tcti=self.tcti["a"])
         self.refused("a may not authorize under epoch 2", lease.verify, {"lease": vouching, "signature": old_tpm(lease.signed_digest(vouching))}, m2, self.now)
         as_b = dict(vouching, issuer="b")

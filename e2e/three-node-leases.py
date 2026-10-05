@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """#74 (Phase 14), tier N: runtime leases on three nodes (e2e/lib/threenode.py, v4 since #199: the nodes sign their own
-heartbeats; no authority host): the real regalia-admission asking the real peers' sync, leases of at most 300 s
+heartbeats; no authority host): the real regalia-admission asking the real peers' sync, leases of at most lease.MAX_LIFETIME (30 s)
 (lease.MAX_LIFETIME) renewed at a third of their life, and a running node revoked by two nodes (revoke.py).
 
     REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-leases.py
@@ -15,7 +15,7 @@ whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
   4  renewals go on, on the heartbeats the nodes sign themselves
   5  a cut off from one peer (its service mesh): it renews through the other
   6  14.3: running a revoked by b and c, each at its own console (revoke.py); both peers refuse its renewals (it is off their service tunnels; by name through a
-     tunnel forced open), and a's admission stops serving by itself when its lease ends (measured against 300 s)
+     tunnel forced open), and a's admission stops serving by itself when its lease ends (measured against lease.MAX_LIFETIME)
 
 The KMS daemon's own refusal at the lease's end and on revocation is e2e/runtime-admission.py's (two nodes, the
 real daemon: steps 1, 3 and 6); the three-node daemon waits with 14.4. Clock skew is not here: the namespaces share

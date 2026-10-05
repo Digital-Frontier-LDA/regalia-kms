@@ -78,7 +78,7 @@ Refused, require = membership.Refused, membership.require
 SCHEMA = "regalia.admission/v2"
 FIELDS = ("schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "hsm_serials", "lease_issued_at",
           "requested_boottime_ms", "serve_until_boottime_ms", "reason")
-MARGIN = 10                # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
+MARGIN = 5                 # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
 NEVER = "1970-01-01T00:00:00Z"
 # The daemon reads this file with a limit of 4096 bytes (internal/admission/admission.go, maxFileBytes) and
 # refuses a larger one as "oversized", which would hide the reason. So the reason here is bounded well below
@@ -86,7 +86,11 @@ NEVER = "1970-01-01T00:00:00Z"
 # answer (node.admission_service, "admission-renew"), and each change between serving and not serving with its reason
 # ("admission-serving", Service below).
 ADMISSION_REASON_LIMIT = 1024
-RETRY_FIRST, RETRY_MAX = 5, 60     # seconds between renewal attempts while they fail: 5, 10, 20, 40, 60, 60, ...
+# seconds each connection of a renewal may take (sync's transport: connect, ask, answer). A renewal is two asks to a
+# peer (nonce, lease) and goes to the next peer on failure, so a round with both peers silent ends within
+# 2 * 2 * RENEW_TIMEOUT: inside the window between a renewal falling due and the margin (#432, 3e's #473 finding)
+RENEW_TIMEOUT = 3
+RETRY_FIRST, RETRY_MAX = 2, 10     # seconds between renewal attempts while they fail: 2, 4, 8, 10, 10, ... (within a 30 s lease)
 BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 MAX_REQUESTS = 16
 MAX_SERIALS = 16           # tokens one node may hold that the daemon will serve from (its reader's bound too)
@@ -288,16 +292,21 @@ class Service:
                           ("regalia_admission_lease_seconds_left", {}, max(0, int(left)) if serve_until else 0)])
         return document
 
-    def run(self, stop, interval=5):
-        """step() every `interval` seconds until `stop()` is true. An error other than a refusal (the disk,
-        the TPM) is not swallowed into a stale file: zero is written, then the error is raised."""
+    def run(self, stop, interval=5, sleep=time.sleep):
+        """step() every `interval` seconds until `stop()` is true, and once more just after the admission it wrote
+        runs out, so the change to not serving is on file and on the trail at the lapse, not up to `interval`
+        later (the daemon itself stops at serve_until on its own clock either way). An error other than a refusal
+        (the disk, the TPM) is not swallowed into a stale file: zero is written, then the error is raised."""
         while not stop():
             try:
-                self.step()
+                document = self.step()
             except Exception as failure:
                 write(self.path, self._document(None, None, 0, "the lease service failed: %s" % failure))
                 raise
-            time.sleep(interval)
+            wait = interval
+            if document["serve_until_boottime_ms"]:
+                wait = min(interval, max(0.05, (document["serve_until_boottime_ms"] - self.boottime()) / 1000 + 0.05))
+            sleep(wait)
 
 
 def read(path):
