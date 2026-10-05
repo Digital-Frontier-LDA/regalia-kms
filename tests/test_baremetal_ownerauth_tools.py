@@ -204,6 +204,36 @@ class TheValueOffTheBus(unittest.TestCase):
         self.assertEqual(enrol.enrolled_ek_name(d, "a"), self.tpm.ek_name.hex())
 
 
+class OnlyMeasuredTools(unittest.TestCase):
+    """regalia-kms-d9 on #423: the value stays off the TPM bus because tpm2-tools opens its own HMAC session for -P,
+    measured for ownerauth.MEASURED_TOOLS only; another version is refused before any owner call with a value."""
+
+    def version(self, text, rc=0):
+        return lambda argv, **kw: unittest.mock.Mock(returncode=rc, stdout=text.encode(), stderr=b"")
+
+    def test_the_version_is_read_and_held_to_the_measured_set(self):
+        measured = ownerauth.MEASURED_TOOLS[0]
+        self.assertEqual(ownerauth.tools_version(self.version('tool="tpm2_createprimary" version="%s" tctis="x"' % measured)), measured)
+        ownerauth.require_measured_tools(self.version('version="%s"' % measured))
+        with self.assertRaisesRegex(m.Refused, "tpm2-tools 4.3 is not a version measured to keep the owner authorization off the TPM bus"):
+            ownerauth.require_measured_tools(self.version('version="4.3"'))
+        with self.assertRaisesRegex(m.Refused, "cannot tell tpm2-tools' version"):
+            ownerauth.require_measured_tools(self.version("", rc=1))
+
+    def test_a_proof_whose_key_cannot_be_flushed_says_so(self):
+        tpm = FakeTpm()
+        auth = ownerauth.from_envelope(value("a"), RECORD, PIN, "a")
+        ownerauth.set_owner(auth, tpm.ek_name.hex(), run=tpm)
+
+        def run(argv, **kw):
+            if argv[:2] == ["tpm2_flushcontext", "-t"]:
+                return unittest.mock.Mock(returncode=1, stdout=b"", stderr=b"ERROR: the TPM said no")
+            return tpm(argv, **kw)
+        with self.assertRaisesRegex(m.Refused, "the proof's transient key could not be flushed"):
+            ownerauth.holds(auth, tcti="swtpm:path=/x", run=run)          # a simulator: no resource manager flushes it
+        self.assertTrue(ownerauth.holds(auth, tcti="device:/dev/tpmrm0", run=run))   # the kernel's manager does
+
+
 class ReanchorTakesIt(unittest.TestCase):
     """reanchor: the value on standard input, judged under --root-key before anything; the anchor built with it."""
 
@@ -232,7 +262,8 @@ class ReanchorTakesIt(unittest.TestCase):
         err = io.StringIO()
         argv = ["--membership", d + "/m.json", "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "a",
                 "--authority", d + "/authority.json", "--peer", "c=%s/c.json" % d, "--ownerauth", record]
-        with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err):
+        with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
+                unittest.mock.patch.object(ownerauth, "require_measured_tools", lambda run=None: None):
             rc = reanchor.main(argv, ask=lambda prompt: None, highwater=highwater)
         self.assertEqual(rc, 1)
         self.assertIn("stop after the anchor is built", err.getvalue())
@@ -242,7 +273,8 @@ class ReanchorTakesIt(unittest.TestCase):
         stdin = unittest.mock.Mock(buffer=value("b"))
         stdin.buffer.isatty = lambda: False
         err = io.StringIO()
-        with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err):
+        with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
+                unittest.mock.patch.object(ownerauth, "require_measured_tools", lambda run=None: None):
             self.assertEqual(reanchor.main(argv, ask=lambda prompt: None, highwater=highwater), 1)
         self.assertIn("is not a's", err.getvalue())
         self.assertEqual(built, {})
@@ -274,7 +306,8 @@ class RecountTakesIt(unittest.TestCase):
         err = io.StringIO()
         run = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, b"inactive\n", b"")
         with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
-                unittest.mock.patch.object(node, "heartbeat_counter", counter), unittest.mock.patch.dict(os.environ, {}, clear=False):
+                unittest.mock.patch.object(node, "heartbeat_counter", counter), unittest.mock.patch.dict(os.environ, {}, clear=False), \
+                unittest.mock.patch.object(ownerauth, "require_measured_tools", lambda run=None: None):
             os.environ.pop("TPM2TOOLS_TCTI", None)
             rc = recount.main(["--config", config, "--audit-log", d + "/audit.jsonl", "--ownerauth", record], ask=lambda p: None, run=run)
         self.assertEqual(rc, 1, err.getvalue())

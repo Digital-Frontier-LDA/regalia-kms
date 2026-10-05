@@ -16,6 +16,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -408,6 +409,70 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual((hw.value(), hw.record()[0]), (2, 2))
         hw.redefine(4, "04" * 32)
         self.assertEqual(hw.value(), 4)
+
+
+@unittest.skipUnless(shutil.which("swtpm") and shutil.which("tpm2_changeauth"), "needs swtpm and tpm2-tools")
+class OnTheWire(unittest.TestCase):
+    """#414, measured on every run: what the TPM receives (swtpm's level-20 log of each command it reads) never holds
+    the owner authorization, and no owner call is a password session (TPM_RS_PW), for THIS tpm2-tools. A version that
+    sent -P as a password session fails here (regalia-kms-d9), and ownerauth.MEASURED_TOOLS names those measured."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        sock, self.log = self.d + "/swtpm.sock", self.d + "/swtpm.log"
+        r = subprocess.run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=" + self.d, "--server", "type=unixio,path=" + sock,
+                            "--ctrl", "type=unixio,path=" + sock + ".ctrl", "--flags", "not-need-init,startup-clear", "--daemon",
+                            "--pid", "file=%s/pid" % self.d, "--log", "file=%s,level=20" % self.log], capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stderr.decode(errors="replace"))
+        with open(self.d + "/pid") as f:
+            self.addCleanup(os.kill, int(f.read()), 15)
+        time.sleep(0.5)
+        self.tcti = "swtpm:path=" + sock
+        self.env = dict(os.environ, TPM2TOOLS_TCTI=self.tcti)
+        self.auth = ownerauth.Auth(bytes.fromhex("5a5a5a5aa5a5a5a5" + "11223344556677889900aabbccddeeff" + "c3c3c3c3c3c3c3c3"))
+
+    def commands(self, mark):
+        """Every command the TPM read since `mark` (a log offset), reassembled from swtpm's hex dump."""
+        with open(self.log, "rb") as f:
+            f.seek(mark)
+            text = f.read().decode("latin-1")
+        out, cur = [], None
+        for line in text.splitlines():
+            if "SWTPM_IO_Read" in line:
+                cur = bytearray()
+                out.append(cur)
+            elif cur is not None and re.fullmatch(r"\s*(?:[0-9A-Fa-f]{2}\s+)*[0-9A-Fa-f]{2}\s*", line):
+                cur.extend(bytes.fromhex(line.replace(" ", "")))
+            else:
+                cur = None
+        return [bytes(c) for c in out]
+
+    def test_the_value_never_crosses_and_no_owner_call_is_a_password_session(self):
+        version = ownerauth.tools_version()
+        raw = self.auth._raw
+        for argv in (["tpm2_createek", "-c", ownerauth.EK_HANDLE, "-G", "rsa", "-u", self.d + "/ek.pub"],
+                     ["tpm2_readpublic", "-c", ownerauth.EK_HANDLE, "-n", self.d + "/ek.name"],
+                     ["tpm2_createprimary", "-C", "o", "-c", self.d + "/srk.ctx"],
+                     ["tpm2_evictcontrol", "-C", "o", "-c", self.d + "/srk.ctx", ownerauth.SRK], ["tpm2_flushcontext", "-t"]):
+            self.assertEqual(subprocess.run(argv, env=self.env, capture_output=True).returncode, 0, argv)
+        with open(self.d + "/ek.name", "rb") as f:
+            ek_name = f.read().hex()
+        mark = os.path.getsize(self.log)
+        ownerauth.set_owner(self.auth, ek_name, self.tcti)               # the salted set, then the createprimary proof
+        sent = self.commands(mark)
+        self.assertTrue(sent, "swtpm logged no command: the wire test proves nothing")
+        self.assertFalse(any(raw in c for c in sent), "tpm2-tools %s: setting the owner authorization sent it" % version)
+        mark = os.path.getsize(self.log)
+        m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock", owner_auth=self.auth).define()
+        sent = self.commands(mark)
+        defines = [c for c in sent if int.from_bytes(c[6:10], "big") == 0x12A]     # TPM_CC_NV_DefineSpace
+        self.assertTrue(defines)
+        self.assertFalse(any(raw in c for c in sent), "tpm2-tools %s: an owner call sent the owner authorization" % version)
+        self.assertFalse(any(b"\x40\x00\x00\x09" in c[14:] for c in defines),
+                         "tpm2-tools %s authorizes an owner call with a password session (TPM_RS_PW): the value crosses the "
+                         "bus in clear; it must not be in ownerauth.MEASURED_TOOLS" % version)
+        print("\ntpm2-tools %s: the owner authorization never crossed the bus (%d commands read)" % (version, len(sent)), file=sys.stderr)
 
 
 if __name__ == "__main__":

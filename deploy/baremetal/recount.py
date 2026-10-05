@@ -227,6 +227,8 @@ def main(argv=None, ask=None, run=None):
             # the owner authorization the recount deletes and defines with (#242), from the node's envelope on standard
             # input, judged now; the phrase is then typed at the terminal itself
             owner_auth = ownerauth.from_arguments(args, cfg["root_key"], cfg["node_id"])
+            if owner_auth is not None:
+                ownerauth.require_measured_tools()         # the value stays off the TPM bus only on measured tools (#414)
             if owner_auth is not None and ask is None:
                 ask = ownerauth.console
             counter = node.heartbeat_counter(cfg, run, owner_auth)  # the service's own construction and lock
