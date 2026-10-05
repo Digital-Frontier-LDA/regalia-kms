@@ -395,5 +395,19 @@ class RecoveryPath(Record):
         self.refused("OVERLAP", act.recovery_cosign, self.m2, "c", stale, self.clock(now), c)
 
 
+class OwnerCommand(unittest.TestCase):
+    def test_sign_activation_runs_off_the_nodes_and_takes_no_attestation_on_its_command_line(self):
+        from unittest import mock
+        from deploy.baremetal import owner
+        argv = ["sign-activation", "--chain", "c.json", "--root-key", "00" * 32, "--survivor", "c", "--site", "site-c",
+                "--registry-digest", "sha256:" + "ab" * 32, "--record", "r.json", "--journal-head", "0", "--out", "o.json",
+                "--module", "/x.so", "--serial", "1"]
+        with mock.patch.object(owner.os.path, "exists", return_value=True), mock.patch("sys.stderr") as err:
+            self.assertEqual(owner.main(argv), 1)
+        self.assertIn("this is a KMS node", "".join(str(c) for c in err.write.call_args_list))
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            owner.main(argv + ["--how", "powered off"])           # the attestation is typed at the terminal only
+
+
 if __name__ == "__main__":
     unittest.main()
