@@ -893,9 +893,13 @@ def part2(work, binaries, user, ctx, servers, status):
     esp_trail = pathlib.Path(trails.where(node.ESP_TRAIL))
     lines = [json.loads(line) for line in esp_trail.read_text().splitlines()] if esp_trail.exists() else []
     allowed = [e for e in lines if e.get("event") == "esp-advance" and e.get("outcome") == "ALLOW" and e.get("epoch") == 2]
-    ok(bool(allowed) and grp.getgrgid(esp_trail.stat().st_gid).gr_name == trails.TRAILS[node.ESP_TRAIL][3]
+    # and the run's REQUEST before it, written before the ESP or the anchor changed (regalia-kms-3e)
+    requested = [e for e in lines if e.get("event") == "esp-advance-requested" and e.get("epoch") == 2
+                 and allowed and e.get("seq", 0) < allowed[-1].get("seq", 0)]
+    ok(bool(allowed) and bool(requested) and grp.getgrgid(esp_trail.stat().st_gid).gr_name == trails.TRAILS[node.ESP_TRAIL][3]
        and allowed[-1]["manifest_digest"] == membership.digest(m2),
-       "its trail holds the run (ALLOW, epoch 2, the manifest's digest), in the group its shipper reads through", lines[-3:])
+       "its trail holds the run, a request then its ALLOW (epoch 2, the manifest's digest), in the group its shipper reads through",
+       lines[-3:])
     # regalia-sync and the path units keep running from here, beside regalia-admission, as on a host
 
     header("8  the KMS daemon, and a lease from b over the tunnel")
