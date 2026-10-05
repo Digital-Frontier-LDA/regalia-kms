@@ -94,7 +94,7 @@ def key_state(state, after=None, **over):
     """A key's state, version 1 or the one after `after` (the entry it replaces), under the current approver set."""
     entry = {"schema": opstate.SCHEMA, "kind": "key-state", "at": AT, "object_id": "release-signing", "state": state,
              "version": after["version"] + 1 if after else 1, "prev_digest": opstate.entry_digest(after) if after else "",
-             "approver_set": CURRENT_SET}
+             "approver_set": CURRENT_SET, "signing_profile": "cosmos-account"}
     entry.update(over)
     return entry
 
@@ -178,6 +178,9 @@ case("a destroyed key enabled again", by_approvers(key_state("enabled", DESTROYE
 case("REPLAY: the old approved enabled put back after a disable", by_approvers(ENABLED, "alice", "bob"), False, previous=DISABLED)
 case("a later version that names another previous", by_approvers(key_state("enabled", DISABLED, prev_digest="11" * 32), "alice", "bob"),
      False, previous=DISABLED)
+case("a key's signing profile changed", by_approvers(key_state("disabled", ENABLED, signing_profile="cosmos-validator"), "alice", "bob"),
+     False, previous=ENABLED)
+case("a signing profile that is not a name", by_approvers(key_state("enabled", signing_profile="Cosmos Account"), "alice", "bob"), False)
 case("a version that skips one", by_approvers(key_state("enabled", DISABLED, version=4), "alice", "bob"), False, previous=DISABLED)
 case("version 2 where the key has no state", by_approvers(DISABLED, "alice", "bob"), False)
 case("version 1 that names a previous", by_approvers(key_state("enabled", prev_digest="11" * 32), "alice", "bob"), False)

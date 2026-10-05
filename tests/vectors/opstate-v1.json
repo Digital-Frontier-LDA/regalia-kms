@@ -1066,6 +1066,7 @@
       "object_id": "release-signing",
       "prev_digest": "",
       "schema": "regalia.opstate/v1",
+      "signing_profile": "cosmos-account",
       "state": "enabled",
       "version": 1
      },
@@ -1076,19 +1077,20 @@
        "at": "2026-10-05T12:00:00Z",
        "kind": "key-state",
        "object_id": "release-signing",
-       "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+       "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
        "schema": "regalia.opstate/v1",
+       "signing_profile": "cosmos-account",
        "state": "disabled",
        "version": 2
       },
       "signatures": [
        {
         "party": "alice",
-        "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
+        "sig": "ef72d4c765a6950260303d42c31ec39e9ecd7b9afe9b5ee6569eae1620e67360e850f51dee64fdb4d20f6d8bd2e2b6caeba4e692567cdb9e50b8e90e3373fc05"
        },
        {
         "party": "bob",
-        "sig": "51df0dee7935af2d8cbb25fe7ba901a1092ab1cdde91810d3d1586496ed443f79372160296650facf6b7a95b062179abcc7939de7c86f5d21c747a4286d9d108"
+        "sig": "dd9bf60f086951e6ede06aae665d0ae67574c4e290b33451d12b789a8941c52a3b4c4d107c45761e06dc60243fea54526d65d0a98bdeaec99baf574c5447090b"
        }
       ]
      }
@@ -3289,17 +3291,18 @@
      "object_id": "release-signing",
      "prev_digest": "",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "enabled",
      "version": 1
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "5877c6116bb4af11a8ed8f5624bf4eddcb1c619889281cf33832a8f3b8f6c8ae4901d712c040b2430262fe2fb35cd25d9222ab4fb0bdd2cb7f771b88021caf09"
+      "sig": "526b272897eea77671206f3094bf40d7632dbc926d83e73b6fe568d55e7ad7bfae230573b752040707585d82b7665e09174454eb40f1292440263ae0c135ab0f"
      },
      {
       "party": "bob",
-      "sig": "32113e5e9339d9ce2211f10113d9ecc91879ac68c46c7f95ab89c74081fbbad5d081f30674a032a79ca943b4646ac1d336677acf6b4e9259b706c7c2ed2a0f07"
+      "sig": "7d936737d16aea0d994a2d856bf1f67ff5460fdeaf264059c139d386543fdf94857db821e952f37d25ae6895e0307bdf40fcbc4fc6b4f7beea45b26033a9a108"
      }
     ]
    }
@@ -3314,6 +3317,7 @@
     "object_id": "release-signing",
     "prev_digest": "",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "enabled",
     "version": 1
    },
@@ -3325,19 +3329,20 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "disabled",
      "version": 2
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
+      "sig": "ef72d4c765a6950260303d42c31ec39e9ecd7b9afe9b5ee6569eae1620e67360e850f51dee64fdb4d20f6d8bd2e2b6caeba4e692567cdb9e50b8e90e3373fc05"
      },
      {
       "party": "bob",
-      "sig": "51df0dee7935af2d8cbb25fe7ba901a1092ab1cdde91810d3d1586496ed443f79372160296650facf6b7a95b062179abcc7939de7c86f5d21c747a4286d9d108"
+      "sig": "dd9bf60f086951e6ede06aae665d0ae67574c4e290b33451d12b789a8941c52a3b4c4d107c45761e06dc60243fea54526d65d0a98bdeaec99baf574c5447090b"
      }
     ]
    }
@@ -3350,8 +3355,9 @@
     "at": "2026-10-05T12:00:00Z",
     "kind": "key-state",
     "object_id": "release-signing",
-    "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+    "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "disabled",
     "version": 2
    },
@@ -3363,19 +3369,20 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "54776b27f44c2ab6b272addc00374a50b7508a5f18b0f0f357f968980263a6a3",
+     "prev_digest": "29ba9dbe062424090d4b2c66b22a894d2ae518e31acc85a782a9e65b254ef6b6",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "enabled",
      "version": 3
     },
     "signatures": [
      {
       "party": "bob",
-      "sig": "1b121a659bb9f07902597435e28607f499daaa139db810bbc12625ab72334d3ad2191385196cbb15c6c0933625540c3b516fc7305dd20c895aff0aa75a17510a"
+      "sig": "5458b5cad0c6b3c8fe3dcd5b0060e28a97e198422642a0889f6a60e9a675f7a16e31260cbb3f05c49dbf8e4d578306217e882151d1a4bf159c00d5ff71c29d0c"
      },
      {
       "party": "alice",
-      "sig": "1fcb7acc454bc815033f1952f5ecf4de1301039f26eca18c362163b65e3811fce8ac23acce17aecdf1b85a037e8ff2fcc4af07c92413c30a282f7ee981d60707"
+      "sig": "18e89525d21cd4148b48600be91f5a07d51d4be2156afe8a652cb0b846723ba9d04c3ff94b959083bfa880d496fdf241e0620226a0365bbf57a096e10304be06"
      }
     ]
    }
@@ -3388,8 +3395,9 @@
     "at": "2026-10-05T12:00:00Z",
     "kind": "key-state",
     "object_id": "release-signing",
-    "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+    "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "disabled",
     "version": 2
    },
@@ -3401,19 +3409,20 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "54776b27f44c2ab6b272addc00374a50b7508a5f18b0f0f357f968980263a6a3",
+     "prev_digest": "29ba9dbe062424090d4b2c66b22a894d2ae518e31acc85a782a9e65b254ef6b6",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "destroyed",
      "version": 3
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "2aa78712c12c65c56eb378aade35e8b3beb33643839a3509c5751fbd057a10aef5b722939217f9f09014acb4658d423a2b735187f2c7dc28ff7fdfbe07cdd20c"
+      "sig": "3414540f51592dde1c3dbf6b97a886f2dacac45cacff0acd67e72f972875a7a3f4b370772e5c601ff734b76700f07b493ce7e527e8c2ba87c05a84b256e69005"
      },
      {
       "party": "bob",
-      "sig": "92d68e6db4357b10baac5dd2bcb2cf210f75dd6d1787d42d9c396bb2df3352f0e6ca84b401a66db414e15a4df6f231f25c2928b70be922eafd129242f4002b0f"
+      "sig": "eb6ed23b188552c45d438507148e4c23b709d2452200fa3d55ab40dda971e281a3f8acb61aec34f858473a63c7ccc1f367b479c5de65c1419e7e07a180d56607"
      }
     ]
    }
@@ -3428,6 +3437,7 @@
     "object_id": "release-signing",
     "prev_digest": "",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "enabled",
     "version": 1
    },
@@ -3439,15 +3449,16 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "disabled",
      "version": 2
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "a7b8f5a219edbb9d8314ea62c2bf831e7e43d4c708c708e2712ef8c9d3e00856c08a758a4515e93707988825a80e537c34fd22e618bea2641456bd2c7248b107"
+      "sig": "2b3bf67a9a5734c2d0853981fac4ca71a2b6093bd070a24a6943c39ec1efba0989007d04c0c5797f65a12c648e2ac2c9fc45e5df8d1f555edbd6002351c3ce0b"
      }
     ]
    }
@@ -4454,6 +4465,7 @@
     "object_id": "release-signing",
     "prev_digest": "",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "enabled",
     "version": 1
    },
@@ -4465,15 +4477,16 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "disabled",
      "version": 2
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
+      "sig": "ef72d4c765a6950260303d42c31ec39e9ecd7b9afe9b5ee6569eae1620e67360e850f51dee64fdb4d20f6d8bd2e2b6caeba4e692567cdb9e50b8e90e3373fc05"
      }
     ]
    }
@@ -4488,6 +4501,7 @@
     "object_id": "release-signing",
     "prev_digest": "",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "enabled",
     "version": 1
    },
@@ -4499,19 +4513,20 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "disabled",
      "version": 2
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
+      "sig": "ef72d4c765a6950260303d42c31ec39e9ecd7b9afe9b5ee6569eae1620e67360e850f51dee64fdb4d20f6d8bd2e2b6caeba4e692567cdb9e50b8e90e3373fc05"
      },
      {
       "party": "alice",
-      "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
+      "sig": "ef72d4c765a6950260303d42c31ec39e9ecd7b9afe9b5ee6569eae1620e67360e850f51dee64fdb4d20f6d8bd2e2b6caeba4e692567cdb9e50b8e90e3373fc05"
      }
     ]
    }
@@ -4526,6 +4541,7 @@
     "object_id": "release-signing",
     "prev_digest": "",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "enabled",
     "version": 1
    },
@@ -4537,19 +4553,20 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "disabled",
      "version": 2
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
+      "sig": "ef72d4c765a6950260303d42c31ec39e9ecd7b9afe9b5ee6569eae1620e67360e850f51dee64fdb4d20f6d8bd2e2b6caeba4e692567cdb9e50b8e90e3373fc05"
      },
      {
       "party": "mallory",
-      "sig": "fc3525fbb30a8d6377b334543e375be74ea69a4cc470c06050ae1e3711b2de19c14a427ab0a972180babbeb3a9f9b36d55f3a67cc197ab876ae73e400c5e1508"
+      "sig": "b48df027cca92e55d55b5651539b21e37cc3971ab1caf97a348e6bd9fa0bc43608063ed5b9589407e9d6748f0f833c04b6a19f50ef394b9ed527456878d80c03"
      }
     ]
    }
@@ -4564,6 +4581,7 @@
     "object_id": "release-signing",
     "prev_digest": "",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "enabled",
     "version": 1
    },
@@ -4575,15 +4593,16 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "disabled",
      "version": 2
     },
     "signatures": [
      {
       "party": "bob",
-      "sig": "7adf34fef75d297b5a914329232dad67da3f6b5b15a90180531b6fe6befcbc036ababb741d9e10c22d2fd7e6a61b502879461120b9ca2da82e6c4793d1e1af01"
+      "sig": "f267303da48b395667d7c6ad8662a40e22ff99417a0731d934d69b4bd0829825c4b948be74255ff60106277bbea6bc774b1817ca58b4cebe240cd1d69c7b640d"
      }
     ]
    }
@@ -4598,6 +4617,7 @@
     "object_id": "release-signing",
     "prev_digest": "",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "enabled",
     "version": 1
    },
@@ -4609,19 +4629,20 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "disabled",
      "version": 2
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "15b8f887b560969350c74905c69cc8aed9a4da0ca0ec204ecaa0526c72f7c89d6fe4edaf0b16d8905bd312c3938bed8311fd1bb6068c371e0d25f45fa781c10e"
+      "sig": "b6e7e8a30839f907e3e6e2d39c0f7bafc47ba4bc3d95533da58bedb38eebcf2265ebb5bbd41f71d9d4de70a033ce3dfd89a18191961ad79b6b3caf87cb81a408"
      },
      {
       "party": "bob",
-      "sig": "cf6e197ad2c672ba09770492b6be1fb3d4a7799287ad944a3bcd1543a8c83f749f8278953c58bf8c66807c65a4d8c1edbb82e72d84d599abd0c8cde45a7bf802"
+      "sig": "6149de751ee87a2ce0e5f63d0db69d4259cee1ec9fe7bcd4792ade77cf991d6f3589e50ad41e21425eff4d41d5e7d79b04302ff286bea8372f2957e4d7b13a05"
      }
     ]
    }
@@ -4634,8 +4655,9 @@
     "at": "2026-10-05T12:00:00Z",
     "kind": "key-state",
     "object_id": "release-signing",
-    "prev_digest": "54776b27f44c2ab6b272addc00374a50b7508a5f18b0f0f357f968980263a6a3",
+    "prev_digest": "29ba9dbe062424090d4b2c66b22a894d2ae518e31acc85a782a9e65b254ef6b6",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "destroyed",
     "version": 3
    },
@@ -4647,19 +4669,20 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "c3607f730ed2c9d35c888ad293052929e53b067d168e2524d46bf49511329b40",
+     "prev_digest": "4cd6238f4ff7da9c699442bc8ec34f1d25c83703c425ccb46862623c5f79f5b6",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "enabled",
      "version": 4
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "dfe094adce03380d0f94bbe3388f173665c2f3b21f7e3e3305b1a59ba66587e8486b2dcbbb762daf4e4352a2479a8cf9150a34eb126af9735298d554e3c63e0d"
+      "sig": "9a5d3b979d986132fb873e31e03b3a29fc5611f836749fcff50ddb8522b202af9f3e54bd7590bdad9bfd7cebc48d3721db6710df90104405de2db24131eb190c"
      },
      {
       "party": "bob",
-      "sig": "b96381041e8dbb574e1ff70ed95dde1919c4d1824d699a626e442bd71ce2ce5444c59fa81891b3daba4f3936078d52c197c6c47f44534f925f3efb1fdcb08504"
+      "sig": "730bfb69718d9b13764f72b75a10b3b72b18fe9405cda4d9cb5a0f1dc05f1b8824f8e32371dae7693f8f27d49097b77d5282147a4a75675be27811ee6f546208"
      }
     ]
    }
@@ -4672,8 +4695,9 @@
     "at": "2026-10-05T12:00:00Z",
     "kind": "key-state",
     "object_id": "release-signing",
-    "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+    "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "disabled",
     "version": 2
    },
@@ -4687,17 +4711,18 @@
      "object_id": "release-signing",
      "prev_digest": "",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "enabled",
      "version": 1
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "5877c6116bb4af11a8ed8f5624bf4eddcb1c619889281cf33832a8f3b8f6c8ae4901d712c040b2430262fe2fb35cd25d9222ab4fb0bdd2cb7f771b88021caf09"
+      "sig": "526b272897eea77671206f3094bf40d7632dbc926d83e73b6fe568d55e7ad7bfae230573b752040707585d82b7665e09174454eb40f1292440263ae0c135ab0f"
      },
      {
       "party": "bob",
-      "sig": "32113e5e9339d9ce2211f10113d9ecc91879ac68c46c7f95ab89c74081fbbad5d081f30674a032a79ca943b4646ac1d336677acf6b4e9259b706c7c2ed2a0f07"
+      "sig": "7d936737d16aea0d994a2d856bf1f67ff5460fdeaf264059c139d386543fdf94857db821e952f37d25ae6895e0307bdf40fcbc4fc6b4f7beea45b26033a9a108"
      }
     ]
    }
@@ -4710,8 +4735,9 @@
     "at": "2026-10-05T12:00:00Z",
     "kind": "key-state",
     "object_id": "release-signing",
-    "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+    "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "disabled",
     "version": 2
    },
@@ -4725,17 +4751,88 @@
      "object_id": "release-signing",
      "prev_digest": "1111111111111111111111111111111111111111111111111111111111111111",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "enabled",
      "version": 3
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "4fe7286c224e761ad2e3f529e54fa648ee4dd2fcc1fca794a5c835651c1dc4b1295e2c7636c11f1d0d401af5ffce1be19d4efab676008b588212f67aabc4e701"
+      "sig": "7afd2606fd5bcf61d6857b324cb8a03d56c065fb7ce8281241cc9bd60d78cad5a8b1090f9be8bdef311b962e368a6a6462ed06927cd43bffc6f6eaebfba5650f"
      },
      {
       "party": "bob",
-      "sig": "ed75f05393f8ca7d4cbda5bcb51e45b3ab887e4c2ec93d6b1d1f73a98ebf9b974356b39369471d265fd8d6b4661766bace9fd4a2283b2b0c31637019e5d3c70c"
+      "sig": "d16bbc4f39c58fe6dbd075387f339e3f8fad0bcc0f2ccfb18f55792e11e55c0fc92a12ce70433a836520d5a7430f26a4617c28bf81b804eb3e5320a88ecfc708"
+     }
+    ]
+   }
+  },
+  {
+   "accept": false,
+   "name": "a key's signing profile changed",
+   "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "at": "2026-10-05T12:00:00Z",
+    "kind": "key-state",
+    "object_id": "release-signing",
+    "prev_digest": "",
+    "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
+    "state": "enabled",
+    "version": 1
+   },
+   "public": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
+   "python_reason": "the key release-signing's signing profile is cosmos-account from its creation; cosmos-validator is refused",
+   "value": {
+    "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+     "at": "2026-10-05T12:00:00Z",
+     "kind": "key-state",
+     "object_id": "release-signing",
+     "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
+     "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-validator",
+     "state": "disabled",
+     "version": 2
+    },
+    "signatures": [
+     {
+      "party": "alice",
+      "sig": "d66bf93838cb90bdf2393ffb11fbf98cbac7e2c53fe98c5f44a640d96aded8e6013243a11b651123d9dce9c65b94007247b2174f692ea470024ce3d5313f0101"
+     },
+     {
+      "party": "bob",
+      "sig": "31a034d4e34c2d53eedb3b85c0b803d90123c174d16f034ee0d2df8b2d2356d7f36beeb33ee5fe74fc2fe186400991edcc0d3a7eb6bce3e6d259e42dd9c56105"
+     }
+    ]
+   }
+  },
+  {
+   "accept": false,
+   "name": "a signing profile that is not a name",
+   "previous": null,
+   "public": "/regalia/v1/nonces/0000000000000000000000000000000000000000000000000000000000000000",
+   "python_reason": "signing_profile must be a profile name",
+   "value": {
+    "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+     "at": "2026-10-05T12:00:00Z",
+     "kind": "key-state",
+     "object_id": "release-signing",
+     "prev_digest": "",
+     "schema": "regalia.opstate/v1",
+     "signing_profile": "Cosmos Account",
+     "state": "enabled",
+     "version": 1
+    },
+    "signatures": [
+     {
+      "party": "alice",
+      "sig": "573bd5d7aa8e0e6d3ee8b705cab61c19d638cd4c42961d99657029ba63d3948ea1c54b81fb19a87519a076b2188e7903f2fe04267c888e3372503e15a6513301"
+     },
+     {
+      "party": "bob",
+      "sig": "fb0a0da574979d2ab20ae07dddb2235be519f7b77b0c80e1c999aca1b94ed0e905a07db43ae8d2915e3879a76688f426e2f7342a2c835cfca367edfd43a76d0d"
      }
     ]
    }
@@ -4748,8 +4845,9 @@
     "at": "2026-10-05T12:00:00Z",
     "kind": "key-state",
     "object_id": "release-signing",
-    "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+    "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
     "schema": "regalia.opstate/v1",
+    "signing_profile": "cosmos-account",
     "state": "disabled",
     "version": 2
    },
@@ -4761,19 +4859,20 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "54776b27f44c2ab6b272addc00374a50b7508a5f18b0f0f357f968980263a6a3",
+     "prev_digest": "29ba9dbe062424090d4b2c66b22a894d2ae518e31acc85a782a9e65b254ef6b6",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "enabled",
      "version": 4
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "73819354171c4535e90df06da548f267a0429ba667d29da38998f4dc241e9b485769f9d7c8d80920c831d4cc7ab7f0c42c835ff0fb446846a077bb2c86ee3f0a"
+      "sig": "6b151c30d15a18787fe5fefccd7d1dae32cc77d9d8e10768b1576b36412b812f7a3322cf7ccf3f26d41eee35e4859aeed2d7f79b07fe090933d3399c68518101"
      },
      {
       "party": "bob",
-      "sig": "2858edb63cd9ca977d42d417ac4fa205757df18b58efd9a8ff84e89d694d45c8bbd0a5b1bdb6669472f2825146fc3cf26fab8e68ebe3bff8519f81aa99655907"
+      "sig": "ba0a5c00fffec0cf8bfb72646d07940aa218a5876ed71b1b4263a68066e35b5316dff59632f5136b988866b156c3e3f2ddd8bc42e83c7c2a82d404b5f7c7fb05"
      }
     ]
    }
@@ -4790,19 +4889,20 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "disabled",
      "version": 2
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
+      "sig": "ef72d4c765a6950260303d42c31ec39e9ecd7b9afe9b5ee6569eae1620e67360e850f51dee64fdb4d20f6d8bd2e2b6caeba4e692567cdb9e50b8e90e3373fc05"
      },
      {
       "party": "bob",
-      "sig": "51df0dee7935af2d8cbb25fe7ba901a1092ab1cdde91810d3d1586496ed443f79372160296650facf6b7a95b062179abcc7939de7c86f5d21c747a4286d9d108"
+      "sig": "dd9bf60f086951e6ede06aae665d0ae67574c4e290b33451d12b789a8941c52a3b4c4d107c45761e06dc60243fea54526d65d0a98bdeaec99baf574c5447090b"
      }
     ]
    }
@@ -4821,17 +4921,18 @@
      "object_id": "release-signing",
      "prev_digest": "1111111111111111111111111111111111111111111111111111111111111111",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "enabled",
      "version": 1
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "45e584382b272baa362a589c5f5e7b071e17c65c9ae4fe7ec39c7282958cd5a095150cc2acde4e26b476b55d7eaae27d2a05eb317199889eb5ab992ea6d99403"
+      "sig": "84067759523d45d4df24cc3a9be79d16ff4a9fe51d9da0d1b1b5e6862bfb74398533f24657414856c799114af7ba1ab9c9df49fc36ae06072f8452ecc3541304"
      },
      {
       "party": "bob",
-      "sig": "57b9f81e8dc00f48bb964870ddcbc93ecde610adf55a94dda5f43b32bfb0919e3a75f6d950e31d97492925b1bc40732c6b1708f3e2fe95addc058d5c7459fa01"
+      "sig": "291fc801c3a54ff3b218275e931bc10d563483b36a1c58427a0f58e28cd6340d6d57abe99f537240febd4b5cabf0046840cd2b389158051a55e546a5aca8ae07"
      }
     ]
    }
@@ -4848,8 +4949,9 @@
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
-     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "prev_digest": "bca229c806caebfa667f05653c457fc2250b28f02a5eb8717a5120e30a9896a9",
      "schema": "regalia.opstate/v1",
+     "signing_profile": "cosmos-account",
      "state": "disabled",
      "version": 2
     },
@@ -4858,7 +4960,7 @@
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
       "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-      "sig": "aca2716adc1ab95deedd8fd257dc53b0cf187a594c2eddf9bb4c593257f6d2cc0e8a23b3c819f97d8c96ec0f58c388f12d7c5ab972af74622bc42c139410b801"
+      "sig": "baf0006e5d72fd793148692fcc30d87441637cf65df3b360b5c734199a598acff42297504b258bd85c246583151829ca60cb46e77e88385e10bb9cea05ce7d04"
      }
     ]
    }
@@ -5249,7 +5351,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "0da46bc22b5ecbae216e7e247c1cfa7704ffd640954b8ce2e063efaa58f7b1dc4c7f101b1f71af4d1e5f26612b201674468770f72d3e4d0612b567a78cd7eb02"
+    "signature": "e1ad844c6cff4d028e3c797cdd90bfafa8b657f4fe7c69c210d481cfe50f7a6e6766b7a16f4757ecf2df2ba7035adc42c6ff11516f5e436011b2d8a3f91e014d"
    }
   },
   {
@@ -5265,7 +5367,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618"
     },
-    "signature": "71c3e0ad3662b09b7076422108fe2e458e6b754480e8b287478680f13297d54a23150e94bf2e677eb212a1c747103fb0153cab940991d5e7f23dd4a169925e24"
+    "signature": "2ee7a861f5aeb09f24265ca634aecab99380e4e216aa04941756f6018e5bc85b71a58ba5e182c5ec53e348f5afbee5dc9a49573ff05d4383667d7f00fd7ac551"
    }
   },
   {
@@ -5281,7 +5383,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
     },
-    "signature": "9e0e866da899ee49ddb795ad4c37c97439bef069c5a43c1c77aafc32d7aac7ad6da69cc9d6df732a173d3f2389e0dfdea87527b8c499653e27c5b86d02e8ff09"
+    "signature": "e8cad70f196fe3fce9009aeda60a315ebd3b0f2587b84cfb011e6f21e13f84fe50e19042676e473ccdb7d70de7e965b7f26af44969c484a30e8cb784a7eebb31"
    }
   },
   {
@@ -5297,7 +5399,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "f8870f7a9d38e703ffe31f2fe4e78f31406c7eb7f24229bbe729c47d1b53f31e1db69bcb6d36fe7b6fb798cdf52d9c820869e325103015c80f63c7b6ed6dd06b"
+    "signature": "08e6c55ea6897fc2840d5398e9c2fc09ba8904bcacf32cf846098b7ba2d2d01c7294774d8324e06962d5294f4a3b54ee1b58246b7ed16cfb9075f1bac3a3af17"
    }
   },
   {
@@ -5313,7 +5415,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "1c95013aceb7bd7aab2c81bbbdcb10fa60877b30d630b868cd8c201a8b4aca5b73824edab060faec2991cd5fd768155f0250f838e2e880882ccafae06998ed7d"
+    "signature": "19242c1b4a9e9c0f1f35b94c965a334e8327cc359a9a70107d110f10328723b40026f82118ff04d401b0b7519e4b7cbb7870e8f3f88e95baea5fe55d93336b60"
    }
   },
   {
@@ -5329,7 +5431,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "6674a39e861d45693c3ac3ac21095b8572cbcaea573ab3ae1844184fcd8bdb79263528addf405c74342ef46ac46d595de09c56ff80d334c4754e218b4206c303"
+    "signature": "e20040c5995a7a261ce8a6692fde4af518087c9d38e2dc875ef4989512b7a43d3ee31db4aae92c0a4684a62abc8b01b90925dcea2685d1fcd1ba9dd0fe589f1c"
    }
   },
   {
@@ -5345,7 +5447,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "05f6c1a81f1fbf7f49a4ed7694ac95c74abd1be561ae6ad714642f81cb75a2ef46736ce9762cf94388456b6c46387f035f30318e0fc50f27c819b6230d939056"
+    "signature": "4dad7f80d30b14563878ddab5c915f805d921b488de99fec0fe68fd53fd906b15702b2bca57f3b7afcf5aaf31365166a895832147465ca35b4a9664eff5486b7"
    }
   },
   {
@@ -5361,7 +5463,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "add522d5635182c32362ba7f6a3e95598e2c9825d8f262d758ef24dd10eaa6946ec19a7e75412c9cbdfdb22fd8e4fdb26ded4487f36b710c8c47c5d1c53b1f2e"
+    "signature": "b6a905b1f3633922fd0eb8d2137c33566da28c9916a2e2fa50e443185728864e7c7a401cc8f442adfdce7b4c5516424638fe7f99dc38e1212883a4dcbe28b54b"
    }
   },
   {
@@ -5377,7 +5479,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "00000000000000000000000000000000000000000000000000000000000000"
     },
-    "signature": "f07b3d98ca62a5c83c5f448c1f67691a78a01dc10b38fd671c83b6be8d87d82b7bae0cf08b3414216da440422df53717e2e9495bba914c729c28e3d074b4743c"
+    "signature": "be24a77a5fd76152d25ab34d5922776924a5e30fc34080c28815629aa61ba34210c4b354ce48d3359bc457fbbc8fea4f4f9acb37d954c0024296b968cdf274ff"
    }
   },
   {
@@ -5393,7 +5495,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "00511bab312878b270e3d6e4aef399cf19e4ae1bdd3497f7215195e89dc660f4301b8c54ccc24031296878bf8aaa51e2bf16e8bbbe9c9d008abca89a3456bfbc"
+    "signature": "3636e8f4158b742c8fc8a389bf1f5fafada554299f4ac4be42e7ad92f41fcd7c735eb749251c9e74dc38a8014866ad5ea5397990d726267ba00c3d91fdc23e69"
    }
   }
  ],

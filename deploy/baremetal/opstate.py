@@ -99,7 +99,7 @@ FIELDS = {
                        "approver_set", "approvals_sha256", "node_id", "boot_id", "lease_digest", "lease_expires_at", "expires_at"),
     "sequence": COMMON + ("sequence_key", "value", "nonce_digest", "node_id", "boot_id"),
     "quota": COMMON + ("principal", "utc_date", "counter", "total", "cap", "nonce_digest", "node_id", "boot_id"),
-    "key-state": COMMON + ("object_id", "state", "version", "prev_digest", "approver_set"),
+    "key-state": COMMON + ("object_id", "state", "version", "prev_digest", "approver_set", "signing_profile"),
 }
 
 
@@ -170,6 +170,10 @@ def validate(entry):
         else:
             membership.hex_field(entry["prev_digest"], 64, "prev_digest")
         membership.hex_field(entry["approver_set"], 64, "approver_set")
+        # the key's signing profile (cosmos-account, cosmos-validator, ...: the custody manifest's key object, under the
+        # registry digest), fixed at creation: transition() refuses any change (regalia-kms-ed and d9 on #432)
+        require(isinstance(entry["signing_profile"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", entry["signing_profile"]) is not None,
+                "signing_profile must be a profile name")
     return kind
 
 
@@ -415,6 +419,8 @@ def transition(previous, entry):
         require(entry["total"] > previous["total"], "a quota total only grows within its day (%d, then %d)" % (previous["total"], entry["total"]))
     else:
         require(previous["state"] != "destroyed", "the key %s is destroyed: its state is final" % entry["object_id"])
+        require(entry["signing_profile"] == previous["signing_profile"], "the key %s's signing profile is %s from its creation; "
+                "%s is refused" % (entry["object_id"], previous["signing_profile"], entry["signing_profile"]))
         require(entry["version"] == previous["version"] + 1 and entry["prev_digest"] == entry_digest(previous),
                 "REPLAY: the key %s is at version %d; this entry is version %d over another state" % (entry["object_id"], previous["version"], entry["version"]))
 
