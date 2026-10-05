@@ -100,7 +100,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     node, `ownerauth-<node>.bg.sops`, replaces the ceremony's `.bg.age` envelope. It is encrypted to the post-quantum
     "ownerauth-recovery" identity in offline-keys' D28 key map, under the same SLIP-39 shares. That is
     regalia-ceremony#111's change; until it lands, the ceremony writes `.bg.age`. The record keeps `bg_sha256` as that
-    file's digest, so `ownerauth.verify` is unchanged. The drill's check (`python3 -m deploy.baremetal.ownerauth check`)
+    file's digest, so `ownerauth.verify` is unchanged. The drill's check (`python3 -Es -m deploy.baremetal.ownerauth check`)
     is built. With sops 3.13.1, age 1.3.2 and the test vector it was run by hand without a TPM: the post-quantum
     recipient (an mlkem768x25519 stanza) decrypts byte for byte, and another node's value is refused. That hand run
     split the key with ssss as a stand-in for offline-keys' opening, which rc#111 is building.
