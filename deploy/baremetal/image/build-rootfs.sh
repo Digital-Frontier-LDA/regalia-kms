@@ -42,6 +42,11 @@
 #     reproducibility is measured there, not argued; another builder, another snapshot, another measurement.
 #   * NETWORK: snapshot.debian.org and the Go module proxy and checksum database; no offline build.
 #   * THE BUILD RECORD IS UNSIGNED, as build-initrd.sh's.
+#   * THE TREE BUILDER IS THE BUILDER'S: mmdebstrap (and the apt it drives to fetch) come from the build host, not the
+#     snapshot. Its version is recorded (rootfs-build.json "mmdebstrap"), not pinned; two builds on one host cannot
+#     show a drift there, a rebuild elsewhere would.
+#   * DATA FILES are checked to exist only where packages.txt lists them; one nobody lists is missed until a node
+#     trips on it (#457).
 #   * CHECKED ONCE, USED LATER: the checkout is checked before the build (build-initrd.sh's limitation applies).
 set -euo pipefail
 umask 022
@@ -233,7 +238,10 @@ for w in "${PROVIDES[@]}"; do
   case "$w" in
     py:*) chroot "$ROOT" env -i PATH=/usr/bin:/bin python3 -I -c "import ${w#py:}" 2>/dev/null || missing+=("$w") ;;
     *'*') ls "$ROOT"/usr/bin/"${w%\*}"* >/dev/null 2>&1 || missing+=("$w") ;;
-    /*) [ -x "$ROOT$w" ] || [ -L "$ROOT$w" ] || missing+=("$w") ;;
+    # a program (under a bin or sbin) must be executable, through its link if it is one; a data file (zone data, a
+    # CA bundle: packages.txt's DATA FILES) must exist (regalia-kms-1e on #458)
+    */bin/*|*/sbin/*) [ -x "$ROOT$w" ] || missing+=("$w") ;;
+    /*) [ -e "$ROOT$w" ] || missing+=("$w") ;;
     *) chroot "$ROOT" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin sh -c "command -v '$w'" >/dev/null || missing+=("$w") ;;
   esac
 done
@@ -260,6 +268,8 @@ PY
 {
   echo "schema=$SCHEMA"; echo "commit=$COMMIT"; echo "go=$GO_VERSION"; echo "snapshot=$SNAPSHOT"; echo "source_date_epoch=$EPOCH"
   echo "suite=$SUITE"; echo "packages_requested=$PACKAGES"; echo "build_packages=$BUILD_PACKAGES"
+  # the tree builder is the BUILDER's, not pinned: its version is named, so a later rebuild elsewhere can be compared
+  echo "mmdebstrap=$(mmdebstrap --version 2>/dev/null | head -1)"
   for entry in "${BUILT[@]}"; do read -r source path <<< "$entry"; echo "built=$path $(sha256sum < "$ROOT$path" | cut -d' ' -f1) $source"; done
   for f in "${REPO_FILES[@]}"; do echo "file=$f $(sha256sum < "$f" | cut -d' ' -f1)"; done
   echo "packages_sha256=$(sha256sum < "$W/packages.txt" | cut -d' ' -f1)"
