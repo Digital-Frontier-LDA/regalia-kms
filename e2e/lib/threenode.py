@@ -78,6 +78,7 @@ from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, measur
 import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
 NAMES = ("a", "b", "c")
+RUN_PCR_KEY = signkey.PCR_PUBLIC_KEY_PATH       # where systemd puts the system-phase key on a host: the units' bind target
 RECOVERY = b"cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuuvvcb"     # the TEST recovery key (as the unlock tests')
 MARKER = b"regalia-kms root volume marker"
 SWITCH = "e2e3-sw"
@@ -285,6 +286,11 @@ class Cluster:
             return key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         self.pcr_private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         self.pcr_pem = public(self.pcr_private)
+        # this process reads the nodes' anchors as root on a booted host does (#242 B3: under v4 every index is written by
+        # policy, so a read needs the running image's system-phase key, node.image_policy): the cluster's one such key,
+        # where root's /run/systemd would have it. _as_booted swaps a node's own in, and puts this one back
+        (self.work / "tpm2-pcr-public-key.pem").write_bytes(self.pcr_pem)
+        signkey.PCR_PUBLIC_KEY_PATH = str(self.work / "tpm2-pcr-public-key.pem")
         self.pcr_sigs = {}                            # PCR 11 value -> its signature entry
         initrd_pem = public(rsa.generate_private_key(public_exponent=65537, key_size=2048))
         sb = ec.generate_private_key(ec.SECP256R1())
@@ -623,7 +629,7 @@ class Cluster:
         # where a booted host's systemd-stub puts the image's PCR signatures and its system-phase key: the node's own
         pcr = n.dir / "pcr"
         props += ["BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", signkey.PCR_PUBLIC_KEY_PATH)]
+                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
         return props
 
     def start(self, name, services=("sync", "wg-apply")):
@@ -1296,7 +1302,7 @@ class Cluster:
         pcr = n.dir / "pcr"
         props = ["WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1",
                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", signkey.PCR_PUBLIC_KEY_PATH)]
+                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
         done = sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, "deliver-%d" % envelopes[-1]["manifest"]["epoch"]),
                   *[a for p in props for a in ("-p", p)], *args, check=False,
