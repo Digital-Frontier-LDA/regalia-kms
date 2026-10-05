@@ -3,7 +3,7 @@
 
     sudo python3 -Es e2e/regalia-sync-netns.py
 
-Four throwaway namespaces on one bridge: the nodes a, b and c, and the revocation authority. Each has a real
+Three throwaway namespaces on one bridge: the nodes a, b and c. Each has a real
 WireGuard interface `wg-svc`, configured by wgsvc.reconcile from the manifest it holds, with real keys and
 the addresses derived from them. sync.Server answers on each node's tunnel address; sync.Client asks from
 inside the caller's namespace. Nothing here touches the machine's own network: every interface, address and
@@ -11,12 +11,14 @@ route lives in a namespace that is deleted at the end.
 
 The membership side is the fixture of tests/test_baremetal_sync.py (stores, heartbeats, the lease issuer),
 with the manifest's wg_service_pub set to the real keys. The TPM is the fixtures' stand-in: what is proven
-here is the transport, on the kernel's WireGuard.
+here is the transport, on the kernel's WireGuard. A new epoch enters at b from the fixture's seed chain, in
+process (where revoke.py's commit or a root envelope would put it on a host, #199): every step after that is
+node to node, through the tunnels.
 
   1  the interfaces are what the manifest says, read back from the kernel
   2  a node with nothing pulls the chain and the heartbeat from a peer through the tunnel
   3  a lease is asked for and issued across the tunnel
-  4  the authority revokes c: the peers converge; c is refused by name while its tunnel is still up, and
+  4  c is revoked: the peers converge; c is refused by name while its tunnel is still up, and
      gets no answer at all once the peer's interface is reconciled
   5  an address that is not its key's does not get through WireGuard
   6  a peer list that is not the manifest's is detected by the read-back, and repaired
@@ -33,7 +35,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from deploy.baremetal import convergence, lease, sync, wgsvc             # noqa: E402
+from deploy.baremetal import lease, sync, wgsvc                          # noqa: E402
 from deploy.baremetal import heartbeat as hb                            # noqa: E402
 from deploy.baremetal import membership as m                            # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                            # noqa: E402
@@ -42,8 +44,8 @@ import tests.test_baremetal_sync as st                                  # noqa: 
 
 SFX = "rs%d" % os.getpid()
 NODES = ("a", "b", "c")
-HOSTS = NODES + ("auth",)
-UNDERLAY = {"a": "192.0.2.11", "b": "192.0.2.12", "c": "192.0.2.13", "auth": "192.0.2.50"}
+HOSTS = NODES
+UNDERLAY = {"a": "192.0.2.11", "b": "192.0.2.12", "c": "192.0.2.13"}
 passed, failed = 0, 0
 
 
@@ -149,7 +151,7 @@ def main():
 
 
 def scenario(fixture, stop, threads):
-    # ---- the underlay: one bridge, four hosts -----------------------------------------------------------
+    # ---- the underlay: one bridge, three hosts -----------------------------------------------------------
     sh("ip", "netns", "add", ns("sw"))
     sh("ip", "-n", ns("sw"), "link", "add", "br0", "type", "bridge")
     sh("ip", "-n", ns("sw"), "link", "set", "br0", "up")
@@ -171,18 +173,15 @@ def scenario(fixture, stop, threads):
     Fixture.wg = {name: public[name] for name in NODES}
     fixture.setUp()
     address = {host: wgsvc.address(public[host]) for host in HOSTS}
-    authority = {"key": public["auth"], "underlay": UNDERLAY["auth"], "port": wgsvc.LISTEN_PORT}
-    stores = dict(fixture.stores, auth=fixture.stores["authority"])
+    stores = dict(fixture.stores)
     freshness = {"a": fixture.own, "b": fixture.peers["b"]["freshness"], "c": fixture.peers["c"]["freshness"]}
     events = {host: [] for host in HOSTS}
 
     def reconcile(host, manifest=None):
         """The root side on `host`, under the manifest it holds (or the one given)."""
         manifest = manifest or stores[host].load()
-        if host == "auth":
-            return wgsvc.reconcile(manifest, wgsvc.AUTHORITY, {n: UNDERLAY[n] for n in NODES}, private[host], run=in_ns(host), own_key=public[host])
         others = {n: UNDERLAY[n] for n in NODES if n != host}
-        return wgsvc.reconcile(manifest, host, others, private[host], authority, run=in_ns(host))
+        return wgsvc.reconcile(manifest, host, others, private[host], run=in_ns(host))
 
     def peers_of(host):
         shown = in_ns(host)(["wg", "show", "wg-svc", "allowed-ips"], capture_output=True).stdout.decode()
@@ -195,8 +194,7 @@ def scenario(fixture, stop, threads):
     for host in HOSTS:
         own = reconcile(host)
         ok(own == address[host], "%s: wg-svc is up at the address its key derives, and the kernel's peers are the manifest's" % host, own)
-    ok(peers_of("a") == {public["b"], public["c"], public["auth"]}, "a's peers: b, c and the authority, by the manifest's keys")
-    ok(peers_of("auth") == {public[n] for n in NODES}, "the authority's peers: the three nodes")
+    ok(peers_of("a") == {public["b"], public["c"]}, "a's peers: b and c, by the manifest's keys, and nobody else")
 
     # ---- the servers, each listening on its tunnel address inside its namespace ----------------------------
     servers = {
@@ -204,8 +202,6 @@ def scenario(fixture, stop, threads):
                          wgsvc.key_at, events["b"].append, clock=lambda: fixture.now),
         "c": sync.Server("c", stores["c"], freshness["c"], fixture.peers["c"]["attester"], fixture.peers["c"]["signer"],
                          wgsvc.key_at, events["c"].append, clock=lambda: fixture.now),
-        "auth": sync.Server(convergence.AUTHORITY, stores["auth"], fixture.authority, None, None, wgsvc.key_at, events["auth"].append,
-                            clock=lambda: fixture.now),
     }
     for host, server in servers.items():
         listener = inside(host, lambda host=host: socket.create_server((address[host], sync.PORT), family=socket.AF_INET6))
@@ -220,7 +216,8 @@ def scenario(fixture, stop, threads):
 
     def client(caller, store, fresh):
         sources = {name: transport(caller, name) for name in ("b", "c") if name != caller}
-        sources[convergence.AUTHORITY] = transport(caller, "auth")
+        if caller == "b":                                                 # where a new epoch enters: in process, not a tunnel
+            sources["seed"] = fixture.wire("seed", "b")
         return sync.Client(caller, store, fresh, sources, events[caller].append)
 
     def refusal(fn):
@@ -248,17 +245,14 @@ def scenario(fixture, stop, threads):
     ok(left == lease.MAX_LIFETIME and envelope["lease"]["issuer"] == "b", "b issued a lease for a (%d s), and a's holder installed it" % left, envelope["lease"])
     kinds = [(e["event"], e["outcome"], e["subject"]) for e in events["b"][-2:]]
     ok(kinds == [("sync-lease-nonce", "ALLOW", "a"), ("sync-lease", "ALLOW", "a")], "b's trail: the nonce and the lease, both for a", kinds)
-    said = refusal(lambda: clients["a"].renewer(convergence.AUTHORITY, fixture.quote)(fixture.holder.request()))
-    ok("this source issues no leases" in said, "the authority answers pulls and issues no leases", said)
 
     # ---- 4 ------------------------------------------------------------------------------------------------
-    header("4  the authority revokes c: convergence, and the revoked node's two refusals")
+    header("4  c is revoked: convergence, and the revoked node's two refusals")
     revoked = fixture.revoke(fixture.m1, node="c")["manifest"]
     fixture.sequence += 1
-    fixture.authority.envelope = hbt.beat(revoked, fixture.sequence, issued=fixture.now)
-    now_at, fresh = clients["b"].pull(convergence.AUTHORITY)
-    ok(now_at["epoch"] == 2 and fresh == hb.MAX_LIFETIME, "b pulled epoch 2 and its heartbeat from the authority", (now_at, fresh))
-    ok((events["auth"][-1]["subject"], events["auth"][-1]["outcome"]) == ("b", "ALLOW"), "the authority recorded the caller as node b")
+    fixture.held.envelope = hbt.beat(revoked, fixture.sequence, issued=fixture.now)
+    now_at, fresh = clients["b"].pull("seed")
+    ok(now_at["epoch"] == 2 and fresh == hb.MAX_LIFETIME, "b took epoch 2 and its heartbeat (in process, from the seed chain)", (now_at, fresh))
     now_at, fresh = clients["a"].pull("b")
     ok(now_at["epoch"] == 2 and fresh == hb.MAX_LIFETIME, "a pulled both from b: the revocation travelled peer to peer", (now_at, fresh))
     ok(public["c"] in peers_of("b"), "(b's interface still lists c: it has not been reconciled yet)")
@@ -269,8 +263,7 @@ def scenario(fixture, stop, threads):
        "b recorded the denial against node c, by name, under the current manifest", last)
     reconcile("b")
     reconcile("a")
-    reconcile("auth")
-    ok(public["c"] not in peers_of("b") and public["c"] not in peers_of("a") and public["c"] not in peers_of("auth"),
+    ok(public["c"] not in peers_of("b") and public["c"] not in peers_of("a"),
        "after the root side ran under epoch 2, nobody lists c as a peer")
     before = len(events["b"])
     slow = sync.Client("c", stores["c"], freshness["c"], {"b": transport("c", "b", timeout=3)}, events["c"].append)
@@ -279,19 +272,20 @@ def scenario(fixture, stop, threads):
 
     # ---- 5 ------------------------------------------------------------------------------------------------
     header("5  an address that is not its key's does not get through WireGuard")
-    in_ns("a")(["ip", "-6", "address", "add", address["b"] + "/128", "dev", "wg-svc", "nodad"], capture_output=True, check=True)
-    before = len(events["auth"])
-    forged = sync.Client("a", stores["a"], freshness["a"], {convergence.AUTHORITY: transport("a", "auth", source=address["b"], timeout=3)}, events["a"].append)
-    said = refusal(lambda: forged.pull(convergence.AUTHORITY))
-    ok("did not answer" in said and len(events["auth"]) == before,
-       "a sends from b's tunnel address with its own key: the authority's WireGuard drops it, and the listener never sees a request", said)
-    in_ns("a")(["ip", "-6", "address", "del", address["b"] + "/128", "dev", "wg-svc"], capture_output=True, check=True)
-    now_at, _ = clients["a"].pull(convergence.AUTHORITY)
-    ok(now_at["epoch"] == 2 and events["auth"][-1]["subject"] == "a", "from its own address, a is answered and recorded as a")
+    # c's address (no longer a peer of anyone's) on a's interface: a's packets to b leave from it, with a's key
+    in_ns("a")(["ip", "-6", "address", "add", address["c"] + "/128", "dev", "wg-svc", "nodad"], capture_output=True, check=True)
+    before = len(events["b"])
+    forged = sync.Client("a", stores["a"], freshness["a"], {"b": transport("a", "b", source=address["c"], timeout=3)}, events["a"].append)
+    said = refusal(lambda: forged.pull("b"))
+    ok("did not answer" in said and len(events["b"]) == before,
+       "a sends from c's tunnel address with its own key: b's WireGuard drops it, and the listener never sees a request", said)
+    in_ns("a")(["ip", "-6", "address", "del", address["c"] + "/128", "dev", "wg-svc"], capture_output=True, check=True)
+    now_at, _ = clients["a"].pull("b")
+    ok(now_at["epoch"] == 2 and events["b"][-1]["subject"] == "a", "from its own address, a is answered and recorded as a")
 
     # ---- 6 ------------------------------------------------------------------------------------------------
     header("6  a peer list that is not the manifest's is detected by the read-back, and repaired")
-    text = wgsvc.conf(stores["b"].load(), "b", {"a": UNDERLAY["a"]}, authority)
+    text = wgsvc.conf(stores["b"].load(), "b", {"a": UNDERLAY["a"]})
     wgsvc.verify(text, run=in_ns("b"))
     in_ns("b")(["wg", "set", "wg-svc", "peer", wgsvc.wg_key(public["a"]), "allowed-ips", str(wgsvc.PREFIX)], capture_output=True, check=True)
     said = refusal(lambda: wgsvc.verify(text, run=in_ns("b")))
@@ -309,9 +303,9 @@ def scenario(fixture, stop, threads):
     header("7  a partitioned node catches up in rounds, and authorizes nothing until a heartbeat for the tip arrives")
     sh("ip", "-n", ns("a"), "link", "set", "eth0", "down")
     tip = fixture.advance(70)                                             # 70 more manifests while a is cut off
-    fixture.authority.envelope = None                                     # the authority has not signed a heartbeat for the tip yet
-    now_at, fresh = clients["b"].pull(convergence.AUTHORITY)
-    ok(now_at["epoch"] == 72 and fresh is None, "b caught up to epoch 72 from the authority, in rounds, with no heartbeat for it yet", (now_at, fresh))
+    fixture.held.envelope = None                                          # no heartbeat for the tip has been signed yet
+    now_at, fresh = clients["b"].pull("seed")
+    ok(now_at["epoch"] == 72 and fresh is None, "b caught up to epoch 72, in rounds, with no heartbeat for it yet", (now_at, fresh))
     quick = sync.Client("a", stores["a"], freshness["a"], {"b": transport("a", "b", timeout=3)}, events["a"].append)
     said = refusal(lambda: quick.pull("b"))
     ok("b did not answer" in said, "a is cut off: it reaches nobody", said)
@@ -324,11 +318,11 @@ def scenario(fixture, stop, threads):
     said = refusal(lambda: freshness["a"].check(stores["a"].load()))
     ok("the heartbeat is for epoch 2" in said, "a holds the tip and no heartbeat for it: it authorizes nobody", said)
     fixture.sequence += 1
-    fixture.authority.envelope = hbt.beat(tip, fixture.sequence, issued=fixture.now)
-    clients["b"].pull(convergence.AUTHORITY)
+    fixture.held.envelope = hbt.beat(tip, fixture.sequence, issued=fixture.now)
+    clients["b"].pull("seed")
     now_at, fresh = clients["a"].pull("b")
     ok(fresh == hb.MAX_LIFETIME and freshness["a"].check(stores["a"].load()) == hb.MAX_LIFETIME,
-       "the authority signs a heartbeat for the tip; it reaches b, then a from b: a may authorize again", (now_at, fresh))
+       "a heartbeat for the tip is signed; it reaches b, then a from b: a may authorize again", (now_at, fresh))
 
     print("\nregalia-sync-netns: %d passed, %d failed" % (passed, failed))
     return 1 if failed else 0

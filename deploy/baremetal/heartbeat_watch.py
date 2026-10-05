@@ -3,8 +3,8 @@
 (#69).
 
 A peer whose heartbeat expires authorizes no unlock and issues no lease (heartbeat.py), and from then
-every reboot at a site needs the recovery key. That must not be the first anyone hears of a revocation
-authority that stopped signing. So, at every step():
+every reboot at a site needs the recovery key. That must not be the first anyone hears of nodes that
+stopped signing heartbeats. So, at every step():
 
   * THE METRICS FILE is rewritten (atomically, 0644), in the Prometheus text format, for node_exporter's
     textfile collector or anything that reads it:
@@ -31,13 +31,14 @@ ERROR of a kind is repeated only after the hour; RECOVERED is said only for an o
 and only after two live steps. A reading that alternates between live and unusable at every step
 therefore costs one ERROR an hour and no RECOVERED: the trail goes on saying it is down, which it is.
 
-THE FRACTION IS OF THE HEARTBEAT'S OWN LIFETIME, not of the manifest's bound: an authority that signs
-12-hour heartbeats under a 24-hour bound would otherwise be at "50 % left" the moment each one arrives.
-When the authority signs to the bound, the two are the same number.
+THE FRACTION IS OF THE HEARTBEAT'S OWN LIFETIME, not of the manifest's bound: heartbeats signed for 12
+hours under a 24-hour bound would otherwise be at "50 % left" the moment each one arrives. When they are
+signed to the bound, the two are the same number. (An owner's hand-recovery heartbeat lives at most the manifest's owner_heartbeat_lifetime_s: one hour by
+the genesis default, and a manifest may set it from 300 s up to heartbeat_max_lifetime_s.)
 
-THE CONDITION THIS PUTS ON THE AUTHORITY: it renews before half of a heartbeat's lifetime is used. One that
-renews later has every normal cycle cross the 50 % threshold and warn. (Renewing at a third used, as a
-runtime lease is, never warns.) If the authority's schedule cannot change, the thresholds here can.
+THE CONDITION THIS PUTS ON THE SIGNERS: they renew before half of a heartbeat's lifetime is used. The nodes
+renew every beat_interval_s (15 minutes for 6-hour heartbeats, beat.py), well before. If the schedule cannot
+change, the thresholds here can.
 
 WHAT HAS BEEN SAID IS ON DISK (`state_path`), not in memory: a watcher that restarts, or runs afresh from
 a timer at every step, neither repeats a warning already given nor loses count of the hour.

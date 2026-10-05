@@ -40,3 +40,10 @@ regexes = [
     '''^66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a$''',
     '''^91a28a0b74381593a4d9469579208926afc8ad82c8839b7644359b9eba9a4b3a$''',
 ]
+
+[[allowlists]]
+description = "Ed25519 PUBLIC key of the throwaway Shamir lab root regalia-ceremony#128's writer was run under once, in tests/vectors/card-ceremony-record/writer-run/ (root.hex; its shares were not kept), pinned by value"
+regexTarget = "secret"
+regexes = [
+    '''^76584946437bf4e61a99805663321c864da655197a406063af5e7da0840817da$''',
+]

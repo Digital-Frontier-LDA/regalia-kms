@@ -400,7 +400,7 @@ class Rotation(Case):
         self.assertEqual(report["chained"], 100)
         self.assertGreater(len(self.archives()), 3)
 
-    IDENTITY, SITE, TRAIL = "ab" * 32, "sitea", "authority"                         # authority's trail is audit.jsonl
+    IDENTITY, SITE, TRAIL = "ab" * 32, "sitea", "admission"                         # admission's trail is audit.jsonl
 
     def keys(self, *names):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey

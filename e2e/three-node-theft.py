@@ -45,7 +45,7 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
 import threenode                                     # noqa: E402
-from threenode import AUTH, sh, until                # noqa: E402
+from threenode import sh, until                      # noqa: E402
 from deploy.baremetal import authtime                # noqa: E402
 
 passed, failed = 0, 0
@@ -106,11 +106,11 @@ def scenario(cluster):
 
     header("3  a stolen: powered off and revoked by the owner; b takes the epoch, c does not")
     cluster.stop("a")
-    revoked_at = time.time()
+    revoked_at = time.time()                          # the trail's "at" is whole seconds: compared with int(revoked_at)
     # one node stolen and one cut off: no two nodes can co-sign, so the owner revokes, off the nodes, and b imports it
     cluster.revoke_by_owner("b", "a", "REVOKED_STOLEN", "e2e: a stolen node", pull=[], beat=False)
     b_after = time.time() - revoked_at
-    ok(took_epoch(cluster, "b", 2) and any(e.get("event") == "revoke-commit" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= revoked_at
+    ok(took_epoch(cluster, "b", 2) and any(e.get("event") == "revoke-commit" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= int(revoked_at)
                                            for e in cluster.trail("b")),
        "b holds epoch 2 (a REVOKED_STOLEN, signed by the owner alone off the nodes), committed by its import %.0f s after the start" % b_after)
     tried = until(lambda: [e.get("reason") for e in cluster.trail("c") if e.get("event") == "sync-apply" and e.get("outcome") == "DENY"
@@ -217,7 +217,7 @@ def main():
         print("three-node-theft: refused: this changes the machine (namespaces, interfaces, loop devices, dm-crypt, transient units). "
               "It runs on a GitHub-hosted runner; on another throwaway host set REGALIA_THREE_NODE_HOST_OK to its /etc/machine-id.")
         return 2
-    present = [p for p in ("/run/netns/" + threenode.SWITCH,) + tuple("/run/netns/e2e3-" + n for n in threenode.NAMES + (AUTH,)) if os.path.exists(p)]
+    present = [p for p in ("/run/netns/" + threenode.SWITCH,) + tuple("/run/netns/e2e3-" + n for n in threenode.NAMES) if os.path.exists(p)]
     present += sh("systemctl", "list-units", "--all", "--plain", "--no-legend", threenode.UNIT_PREFIX + "*", check=False).stdout.split()[:1]
     present += [p for p in (os.path.join(authtime.RUN_DIR, "authtime.json"),) if os.path.lexists(p)]
     present += [authtime.RUN_DIR + " (not empty)"] if os.path.isdir(authtime.RUN_DIR) and os.listdir(authtime.RUN_DIR) else []

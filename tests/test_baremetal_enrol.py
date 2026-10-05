@@ -514,7 +514,7 @@ class InitOnSwtpm(unittest.TestCase):
                 from deploy.baremetal import node as nm
                 n = nm.Node(nm.load(config))
                 return enrol.take_first_heartbeat(n.node_id, n.store().load(), n.store(), n.freshness(), {}, lambda e: None, bootstrap)
-            with self.assertRaisesRegex(enrol.Refused, "no peer and no authority gave a heartbeat"):
+            with self.assertRaisesRegex(enrol.Refused, "no peer gave a heartbeat"):
                 enrol.commit(self.dir, rt.sign(man), root, enrol.fingerprint(root), document, nt.SITE, example,
                              as_sync=in_process, out=io.StringIO(), first_beat=first_beat)       # nobody answers: resumable
             epoch, digest = enrol.commit(self.dir, rt.sign(man), root, enrol.fingerprint(root), document, nt.SITE, example,
@@ -660,7 +660,7 @@ class SshHostKey(unittest.TestCase):
 
 
 class ChronyPath(unittest.TestCase):
-    def test_enrolment_and_the_authority_host_install_chrony_s_configuration_in_one_place(self):
+    def test_enrolment_and_authtime_install_chrony_s_configuration_in_one_place(self):
         from deploy.baremetal import authtime
         self.assertEqual(enrol.CHRONY_CONF, authtime.CHRONY_CONF)
 
