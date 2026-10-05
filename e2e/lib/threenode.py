@@ -487,7 +487,8 @@ class Cluster:
         # a signed UKI's set (#199, #242): PCR 11 per phase, read here in the initrd phase (before start), and the keys
         # it is signed with, the system-phase one naming the node's write policy
         initrd = entry["pcrs"].pop("11")
-        entry.update(phases={"initrd": {"11": initrd}, "system": {"11": extended(initrd, LEAVE_INITRD)}}, signing=dict(self.image_signing))
+        entry.update(phases={"initrd": {"11": initrd}, "system": {"11": extended(initrd, LEAVE_INITRD)}}, signing=dict(self.image_signing),
+                     rootfs_sha256="6e" * 32)       # the root it is installed with (#61): a stand-in, no node reads it
         return entry
 
     def _identities_and_chain(self):

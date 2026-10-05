@@ -140,6 +140,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   error text goes to the journal; if it names a transient TPM code (`TPM_RC_RETRY`, `TPM_RC_YIELDED`,
   `TPM_RC_TESTING`, a busy socket), a small bounded retry on those codes alone is the next step. The refusal's own
   text still carries no TPM reason (#450).
+- **The root filesystem is approved, not attested** (#61). A signed image's measurement set names the
+  `rootfs.tar` it is installed with (`rootfs_sha256`), so one root-committed document approves the UKI and
+  its root together. No PCR covers the root: a quote cannot tell two roots apart, a root-only change needs
+  a rebuilt UKI under a new label, and nothing checks the root once installed (LUKS2 keeps it
+  confidential, not unaltered). The installer's check against an approved set is not built yet; dm-verity
+  on `/usr`, its root hash on the UKI's command line, is #61's next design.
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.

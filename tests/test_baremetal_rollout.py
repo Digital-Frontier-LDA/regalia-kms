@@ -263,7 +263,8 @@ class Transition(Case):
         """#267: a set names the keys its image is signed with. The same PCRs re-signed with another initrd key (it is
         not measured) are never "unchanged": refused under its old label, and under a new one."""
         signed = lambda label, initrd: dict(uki(label, "a1", "a2"), signing={"initrd": initrd * 32, "system": "5b" * 32,   # noqa: E731
-                                                                              "secure_boot_cert": "5c" * 32})
+                                                                              "secure_boot_cert": "5c" * 32},
+                                                    rootfs_sha256="6e" * 32)
         before = document("v1", **{n: [signed("image-1", "1a")] for n in "abc"})
         self.assertEqual(measurements.transition(before, dict(copy.deepcopy(before), name="again")), "unchanged")
         # under its old label: a changed image, refused even in an emergency

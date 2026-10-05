@@ -619,7 +619,8 @@ class InitOnSwtpm(unittest.TestCase):
         sb.boot(image)
         signed = {"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32},
                   "phases": {"initrd": {"11": "a1" * 32}, "system": {"11": "b1" * 32}},
-                  "signing": {"initrd": "11" * 32, "system": signkey.pcr_key_fingerprint(pem), "secure_boot_cert": "22" * 32}}
+                  "signing": {"initrd": "11" * 32, "system": signkey.pcr_key_fingerprint(pem), "secure_boot_cert": "22" * 32},
+                  "rootfs_sha256": "6e" * 32}
         document = {"schema": measurements.SCHEMA, "name": "signed-images", "nodes": {n: {"accepted": [signed]} for n in "abc"}}
         man = v4.manifest4(1, "", nodes, policy_version=measurements.version(document))
         envelope, root = tm.sign(man, tm.ROOT), tm.ROOT_PUB
