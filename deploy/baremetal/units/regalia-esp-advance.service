@@ -1,0 +1,72 @@
+# The boot chain on the ESP, then the TPM anchor (#66 B3; deploy/baremetal/node.py esp_advance). The initrd
+# renders the boot configuration from EFI/regalia/membership.json and refuses a chain below the TPM anchor
+# (ROLLBACK): so the ESP must hold an epoch before the anchor reaches it. regalia-sync never moves the anchor;
+# this oneshot, at boot and each time regalia-sync publishes a new chain (regalia-esp-advance.path), reads the
+# published chain, verifies it itself (the root key, the anchor, the render the initrd will do), writes it to
+# the ESP (a temporary file fsynced and renamed, the directory fsynced, read back), and only then anchors it.
+# A crash between the two leaves the ESP ahead of the anchor, which the initrd accepts; the next run completes
+# it. Nothing that parses what a peer sends runs here. Only the chain is written: the measured site
+# credential (loader/credentials/regalia.site.cred) is enrolment's.
+[Unit]
+Description=Regalia KMS: the ESP's membership chain, then the TPM anchor
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+# the ESP at /efi (systemd-gpt-auto-generator's automount, or fstab): mounted before this runs
+RequiresMountsFor=/efi
+
+# Triggered by a file regalia-sync writes: a burst of triggers must not stop the path unit (every run
+# re-verifies the chain and writes only what differs, so running again is harmless).
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+WorkingDirectory=/usr/lib/regalia-kms
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json esp-advance --esp /efi
+User=root
+# the TPM (the anchor) is the tss group's: root without CAP_DAC_OVERRIDE is held to file modes like anyone.
+# A policy-written anchor (#242) is written in a policy session, which needs what this unit can read only by
+# those modes: the image's PCR key and the boot's tpm2-pcr-signature.json (world-readable under /run/systemd),
+# the published chain (chain.json, 0644; sync's store is 0600 and is not read) and the measurement documents
+# (the state directory's measurements/, 0755/0644). Tightening any of those modes stops the advance (regalia-kms-95).
+SupplementaryGroups=tss
+# no capability: the ESP is root's, the TPM the group's
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+# the one place it writes on disk, and its node_exporter textfile directory (deploy/baremetal/metrics.py)
+ReadWritePaths=/efi -/run/regalia-metrics/esp-advance
+# the anchor's writer lock (node.ESP_LOCK): regalia-sync's lock in its state directory is 0600, its own
+RuntimeDirectory=regalia-esp-advance
+RuntimeDirectoryMode=0700
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+# AF_UNIX: tpm2-abrmd, where a host uses it
+RestrictAddressFamilies=AF_UNIX
+# a run that hangs (a TPM call that does not return) must not absorb every later trigger
+TimeoutStartSec=60
+# A failed run (a transient TPM error, the timeout, an ESP not mounted) leaves the anchor where it was and
+# the ESP at or ahead of it: safe to boot. Retried, so the anchor does not stay behind until the chain next
+# changes; the jump bound stops sync running further ahead meanwhile.
+Restart=on-failure
+RestartSec=15s
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0022
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target
