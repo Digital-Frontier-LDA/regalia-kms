@@ -88,6 +88,11 @@ EXTRA = [
      [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_membership_epoch", NODE_B, "5+0x40"),
       ("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "4+0x40")],
      [NODE_B]),
+    # a peer's sync that writes an inflated epoch moves no honest node's alert: the reference is root-read anchors (48)
+    ("RegaliaAnchorBehindFleet", "a peer's sync claims epoch 99; every anchor is at 5", 2100,
+     [("regalia_membership_epoch", NODE_A, "99+0x40"), ("regalia_membership_epoch", NODE_B, "5+0x40"),
+      ("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "5+0x40")],
+     []),
     # the authtime file missing on one node only: that node alone
     ("RegaliaAuthtimeMetricsMissing", "two nodes: only the one without the file", 420,
      [("up", NODE_A, "1+0x10"), ("up", NODE_B, "1+0x10"),
@@ -152,8 +157,8 @@ SCENARIOS = {
         "fault": [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_membership_epoch", NODE_B, "4+0x40")],
         "healthy": [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_membership_epoch", NODE_B, "5+0x40")], "at": 2100},
     "RegaliaAnchorBehindFleet": {
-        "fault": [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "4+0x40")],
-        "healthy": [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "5+0x40")], "at": 2100},
+        "fault": [("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "4+0x40")],
+        "healthy": [("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "5+0x40")], "at": 2100},
     "RegaliaMembershipMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=MEMBERSHIP), "0+60x10")], "at": 420},

@@ -677,8 +677,10 @@ the client are on the console with no kernel argument. It is not secret. When a 
     (regalia-esp-advance never runs, its last `ok` stays 1, and sync's own file can say anything); it is seen
     ACROSS the nodes: `RegaliaMembershipBehindFleet` and `RegaliaAnchorBehindFleet` (the root's reading of the
     anchor, so a sync that writes its peers' epoch does not hide it) warn when a node stays 30 minutes below
-    the highest epoch its peers hold, compared within one scrape job (one cluster). A retired or revoked node
-    lags by design: take it out of the scrape. **What the operator does:** read
+    the highest epoch its peers hold, compared within one scrape job (one cluster); the anchor rule compares
+    root-read anchors on both sides, so no peer's sync can make the honest nodes fire. A node whose sync or
+    ESP advance writes no file at all has no series here: the `*MetricsMissing` rules cover it. A retired or
+    revoked node lags by design: take it out of the scrape. **What the operator does:** read
     `journalctl -u regalia-esp-advance`, fix the cause (mount the ESP, free space), then
     `systemctl start regalia-esp-advance`; check that `regalia-node check` shows `anchor` equal to `epoch`.
     `update.py apply` refuses to reboot a node in that state, and one whose chain the initrd could not render

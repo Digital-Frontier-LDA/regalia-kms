@@ -119,10 +119,11 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.instance }} holds an older membership epoch than its peers: it is cut off from them, or its sync withholds the newer chain."
-      # The same, from the root's own reading of the anchor (esp-advance.prom): this node's sync cannot hide it by writing a
-      # higher epoch in membership.prom than it anchored.
+      # The same, from root's own reading of the anchor (esp-advance.prom) on BOTH sides (regalia-kms-48): this node's sync
+      # cannot hide it by writing a higher epoch in membership.prom than it anchored, and no peer's sync can make every
+      # honest node fire by writing an inflated one. The reference lags membership by the ESP advance (seconds).
       - alert: RegaliaAnchorBehindFleet
-        expr: regalia_esp_anchor_epoch < on(job) group_left max by (job) (regalia_membership_epoch)
+        expr: regalia_esp_anchor_epoch < on(job) group_left max by (job) (regalia_esp_anchor_epoch)
         for: 30m
         labels:
           severity: warning
