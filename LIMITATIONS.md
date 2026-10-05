@@ -26,6 +26,23 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **Activation by quorum: not built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
+  refined by #432; see the ADR. On `main` only the format carries `activation_signers`, and nothing
+  reads it. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
+  the authority for which site signs ([`FENCING.md`](FENCING.md)).
+  **Accepted in the design:**
+  - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
+  - Activation by the owner plus one node is a recovery step behind three conditions, and every renewal
+    on that path repeats all three:
+    1. a quarantine epoch for the other nodes;
+    2. a typed hard-fencing attestation, which holds until the fenced nodes hold that epoch;
+    3. a wait counted from the latest lease expiry any record shows, plus the skew margin.
+  - The owner alone never activates.
+  - Two active sites remain possible only if a fencing attestation is false when it is made, or if an
+    operator rejoins a fenced node before it holds the quarantine epoch.
+  - **Availability cost:** with one node dead and not yet quarantined, an unplanned reboot of a second
+    node stops lease renewals until the owner quarantines the dead one, because of the boot rule. An
+    alert after a set number of minutes unreachable prompts the owner.
 - **Recovery with only one surviving peer: not built.** `recover` and `reanchor` need two peer chains
   today. With one peer left, a node cannot be recovered or re-anchored. The design is decided, with the
   owner co-signing as the second source behind `--one-source` (#387, PR #395). With **both** peers gone,
