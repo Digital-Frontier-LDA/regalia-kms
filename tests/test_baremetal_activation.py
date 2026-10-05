@@ -631,5 +631,138 @@ class Readmission(unittest.TestCase):
         self.assertTrue(s.readmitted())
 
 
+class Running(Record):
+    """Step 2d: only the holder renews, at half-life, never an expired lease; promotion is the operator's and waits for
+    the co-signers' grants; release stops the renewals; under an installed authorization the survivor renews alone."""
+    node, clock = Issuance.node, Issuance.clock
+
+    def setUp(self):
+        super().setUp()
+        self.state = os.path.join(self.d, "state")
+        os.mkdir(self.state)
+        self.a, self.b, self.c = self.node("a"), self.node("b"), self.node("c")
+
+    def ask_from(self, caller, at):
+        signers = {"b": self.b, "c": self.c, "a": self.a}
+        return lambda peer, body: act.cosign(self.m1, peer, caller, body, self.clock(at), signers[peer], lambda: True)
+
+    def test_promote_then_renew_at_half_life_only(self):
+        env = act.promote("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(T0), self.a, self.ask_from("a", T0), ["b"],
+                          self.state, lambda e: None)
+        self.assertEqual(act.read_json(os.path.join(self.state, act.LEASE_FILE)), env)
+        step = lambda at: act.renewal_step("a", self.m1, self.clock(at), self.a, self.ask_from("a", at), ["b"], self.state, lambda e: None)
+        self.assertEqual(step(T0 + 299)["renewed"], False)                     # more than half left
+        got = step(T0 + 300)
+        self.assertEqual((got["holder"], got["renewed"], got["expires"]), (True, True, T0 + 900))
+        self.assertEqual(act.read_json(os.path.join(self.state, act.LEASE_FILE))["lease"]["activation_epoch"], 2)
+
+    def test_no_probing_no_expired_renewal_and_release_lapses(self):
+        step = lambda node, at: act.renewal_step(node, self.m1, self.clock(at), getattr(self, node), self.ask_from(node, at), ["b"],
+                                                 self.state, lambda e: None)
+        self.assertEqual(step("c", T0), {"holder": False, "expires": None, "recovery": False, "renewed": False})   # no lease: nothing
+        act.promote("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(T0), self.a, self.ask_from("a", T0), ["b"], self.state, lambda e: None)
+        self.assertEqual(step("c", T0 + 400)["renewed"], False)               # a's lease, not c's: c never proposes
+        self.assertEqual(step("a", T0 + 600)["renewed"], False)               # expired: promote's, not the timer's
+        open(os.path.join(self.state, act.RELEASE_FILE), "w").close()
+        self.assertEqual(step("a", T0 + 400)["renewed"], False)               # released: it lapses
+        os.unlink(os.path.join(self.state, act.RELEASE_FILE))
+        held = act.read_json(os.path.join(self.state, act.LEASE_FILE))
+        forged = dict(held, lease=dict(held["lease"], site="site-x"))           # hand-edited: its signatures no longer hold
+        act.write_json(os.path.join(self.state, act.LEASE_FILE), forged)
+        events = []
+        got = act.renewal_step("a", self.m1, self.clock(T0 + 400), self.a, self.ask_from("a", T0 + 400), ["b"], self.state, events.append)
+        self.assertEqual((got["holder"], got["renewed"]), (False, False))       # d9: not a holder, no proposal
+        self.assertIn("does not verify", events[-1]["reason"])
+
+    def test_a_second_site_s_promotion_waits_and_says_until_when(self):
+        act.promote("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(T0), self.a, self.ask_from("a", T0), ["b"], self.state, lambda e: None)
+        other = os.path.join(self.d, "c-state")
+        os.mkdir(other)
+        with self.assertRaises(m.Refused) as caught:
+            act.promote("c", "site-c", "sha256:" + "ab" * 32, self.m1, self.clock(T0 + 60), self.c, self.ask_from("c", T0 + 60), ["b"],
+                        other, lambda e: None)
+        self.assertEqual(act.waited_until(caught.exception), T0 + 600 + act.SKEW_S)
+        later = T0 + 600 + 2 * act.SKEW_S
+        env = act.promote("c", "site-c", "sha256:" + "ab" * 32, self.m1, self.clock(later), self.c, self.ask_from("c", later), ["b"],
+                          other, lambda e: None)
+        self.assertEqual(env["lease"]["site"], "site-c")
+
+    def test_under_an_installed_authorization_the_survivor_renews_alone(self):
+        rp = RecoveryPath("setUp")
+        rp.setUp()
+        signed = rp.authorize()
+        act.install_authorization(rp.m2, "c", signed, rp.clock(rp.now), rp.survivor().record)
+        state = os.path.join(rp.d, "c-state")
+        os.mkdir(state)
+        c = rp.survivor()
+        first = act.self_renew("c", rp.m2, rp.clock(rp.now), c, signed, lambda e: None)
+        act.write_json(os.path.join(state, act.LEASE_FILE), first)
+        act.write_json(os.path.join(state, act.RECOVERY_FILE), signed)
+        got = act.renewal_step("c", rp.m2, rp.clock(rp.now + 300), c, None, [], state, lambda e: None)
+        self.assertEqual((got["recovery"], got["renewed"]), (True, True))
+        m3 = manifest4(3, m.digest(rp.m2), nodes4(), activation_signers=dict(RULE))         # a and b back: the authorization ends
+        events = []
+        ended = act.renewal_step("c", m3, rp.clock(rp.now + 600), c, None, [], state, events.append)
+        self.assertEqual((ended["recovery"], ended["holder"], ended["renewed"]), (False, False, False))
+        self.assertIn("the recovery authorization ended with epoch 3", events[-1]["reason"])     # named, for the operator (d9)
+
+
+class Commands(unittest.TestCase):
+    """The operator's commands: typed at root's console, the work handed to regalia-sync with an argv its half parses
+    (#386's lesson), never as root; the busy window from this boot's sync start only."""
+
+    def test_the_hand_over_argv_reaches_the_sync_half_and_never_runs_as_root(self):
+        from unittest import mock
+        import pwd
+        seen = []
+
+        def run(argv, **kw):
+            seen.append(argv)
+            return mock.Mock(returncode=0, stdout='{"released": true}\n', stderr="")
+        self.assertEqual(act._run_as_sync("/etc/regalia/node.json", "_release", {}, run=run), {"released": True})
+        argv = seen[0][seen[0].index("deploy.baremetal.activation") + 1:]
+        self.assertEqual(argv, ["--config", "/etc/regalia/node.json", "_release"])
+        with mock.patch.object(act.os, "geteuid", return_value=0), mock.patch.object(pwd, "getpwnam", return_value=mock.Mock(pw_uid=990)), \
+                mock.patch("sys.stderr") as err:
+            self.assertEqual(act.main(argv), 1)
+        self.assertIn("runs as regalia-sync only", "".join(str(c) for c in err.write.call_args_list))
+        with mock.patch.object(act.os, "geteuid", return_value=1000), mock.patch("sys.stderr"):
+            self.assertEqual(act.main(["--config", "/x.json", "release"]), 2)
+
+    def test_the_busy_window_starts_at_this_boot_s_sync_start_only(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        with self.assertRaisesRegex(m.Refused, "has not started under authenticated time in this boot"):
+            act.sync_started(d, boot="boot-2")
+        act.write_json(os.path.join(d, act.STARTED_FILE), {"boot_id": "boot-1", "started": T0})
+        self.assertEqual(act.sync_started(d, boot="boot-1"), T0)
+        with self.assertRaisesRegex(m.Refused, "in this boot"):
+            act.sync_started(d, boot="boot-2")                              # a stale file from an earlier boot
+
+
+class Vectors(unittest.TestCase):
+    """tests/vectors/activation-v2.json, which the Go Gate (#432 step 3) reads, replayed here: a case the Python no longer
+    decides the same way fails, so the file cannot drift from the code."""
+
+    def test_the_shared_vectors_are_what_this_python_decides(self):
+        import hashlib
+        import json
+        from tests.test_baremetal_membership_v4 import restored
+        path = pathlib.Path(__file__).resolve().parent / "vectors" / "activation-v2.json"
+        cases = json.loads(path.read_text())["cases"]
+        seen = {"accepted": 0, "refused": 0}
+        for case in cases:
+            with self.subTest(case["name"]):
+                try:
+                    lease = act.verify(restored(case["envelope"]), restored(case["current"]))
+                    outcome = {"accepted": hashlib.sha256(act.message(lease)).hexdigest()}
+                except m.Refused as refusal:
+                    outcome = {"refused": str(refusal)}
+                want = {k: case[k] for k in ("accepted", "refused") if k in case}
+                self.assertEqual(outcome, want)
+                seen[next(iter(want))] += 1
+        self.assertTrue(seen["accepted"] >= 8 and seen["refused"] >= 10, seen)
+
+
 if __name__ == "__main__":
     unittest.main()

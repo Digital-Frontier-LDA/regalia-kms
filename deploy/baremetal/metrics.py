@@ -75,6 +75,12 @@ METRICS = {
                                      {"cause": UNLOCK_CAUSES}, "sync"),
     # #66 B3: sync holds and publishes the chain, the ESP advance anchors it; a lasting gap is an ESP advance that fails
     "regalia_membership_epoch": ("gauge", "The epoch of the membership chain this node's sync holds and publishes.", {}, "sync"),
+    # #432 step 2d: activation by quorum, this node's own view (sync)
+    "regalia_activation_holder": ("gauge", "1 when this node holds an unexpired activation lease for itself (#432).", {}, "sync"),
+    "regalia_activation_lease_expires_seconds": ("gauge", "When this node's own activation lease expires (unix seconds), 0 when it holds "
+                                                 "none.", {}, "sync"),
+    "regalia_activation_recovery_active": ("gauge", "1 while an owner recovery authorization holds on this node: it activates its "
+                                           "site alone, the other nodes quarantined (#432 amendment 5).", {}, "sync"),
     "regalia_membership_anchor_epoch": ("gauge", "The epoch of the TPM anchor: the last chain regalia-esp-advance wrote to the ESP "
                                         "and anchored. Rollback protection stands at this epoch.", {}, "sync"),
     # #66 B3, written by regalia-esp-advance itself (root) at every run, success or not

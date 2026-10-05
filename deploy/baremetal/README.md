@@ -1143,7 +1143,14 @@ site field `service_mesh.authority` are gone: a site file that still names one i
   owner with one node only as a fenced recovery step (`activation.py`; `owner.py sign-activation`). Each node counts
   the activation leases it has signed on its own TPM counter, `nv_activation` (node.json), defined at 0 at
   enrolment and written by policy; its record beside it, `activation-grant.json` in the state directory, stands only
-  while it matches. Until the sync ops and the Go Gate land, nothing issues or enforces an activation (LIMITATIONS.md).
+  while it matches. The operator's commands, root at the node's console, each confirmed by a typed line:
+  `python3 -Es -m deploy.baremetal.activation --config /etc/regalia/node.json promote --site S --registry-digest D`
+  activates this node's site (it waits for any other site's lease to end, and says until when); `release` stops
+  renewing, so the site stops signing at the lease's end; `recover --authorization FILE` installs the owner's
+  recovery authorization (`owner.py sign-activation`) when the other nodes are quarantined, after which sync renews
+  the lease alone until the authorization or the epoch ends. sync renews the holder's lease at half its life.
+  `RegaliaActivationRenewalFailing` and `RegaliaActivationRecoveryActive` alert. Until the Go Gate reads the lease,
+  nothing enforces it (LIMITATIONS.md).
 - **The hand recovery** when fewer than two nodes run: `python3 -Es -m deploy.baremetal.owner beat`, as root at
   the node's console. The node proposes and signs, the owner's YubiKey co-signs after the typed confirmation, and the
   heartbeat lives at most the manifest's `owner_heartbeat_lifetime_s` (one hour by the genesis default; a

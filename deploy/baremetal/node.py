@@ -822,6 +822,10 @@ class Sync:
             seconds, authenticated = self.node.clock()()
             require(authenticated is True, "time is not authenticated: no activation is signed")
             self._started = int(seconds)
+            # for the operator's commands (activation promote/recover), which have no start of their own: this boot's
+            # sync start, by boot ID, so a stale file from an earlier boot is never taken (it would shorten the busy window)
+            with contextlib.suppress(OSError):
+                activation.write_json(self.node.path(activation.STARTED_FILE), {"boot_id": activation.boot_id(), "started": self._started}, mode=0o600)
         return self._started
 
     def activation_signer(self):
@@ -886,6 +890,32 @@ class Sync:
         # written whole and fsynced; losing it only makes this node wait again, never shorter (d9)
         activation.write_json(path, state, mode=0o600)
         return state["cleared"]
+
+    def activation_round(self):
+        """One round of activation (#432 step 2d): renewal_step under v4, then its metrics. Never raises: a node that cannot
+        sign (no authenticated time, not a UKI boot) is recorded once per cause, and the metrics say whether it holds."""
+        state = {"holder": False, "expires": None, "recovery": False}
+        try:
+            manifest = self.manifest()
+            if manifest["schema"] == membership.SCHEMA_V4:
+                peers = sorted(n["node_id"] for n in manifest["nodes"] if n["node_id"] != self.node.node_id and membership.may(manifest, n["node_id"], "authorize"))
+
+                def ask(peer, lease):
+                    sources = self.node.sources(self.manifest())
+                    return sync.Client(self.node.node_id, self.store, self.freshness, sources, self.trail).activate_sign(peer, lease)
+                state = activation.renewal_step(self.node.node_id, manifest, self.node.clock(), self.activation_signer(), ask, peers,
+                                                self.node.cfg["state_dir"], self.trail)
+        except (Refused, OSError, ValueError) as refused:
+            if str(refused) != getattr(self, "_activation_unable", None):
+                self._activation_unable = str(refused)
+                with contextlib.suppress(Exception):
+                    self.trail({"event": "activation", "outcome": "DENY", "reason": str(refused)[:240]})
+        with contextlib.suppress(Exception):
+            metrics.publish("sync", [("regalia_activation_holder", {}, 1 if state.get("holder") else 0),
+                                     ("regalia_activation_lease_expires_seconds", {}, state.get("expires") or 0),
+                                     ("regalia_activation_recovery_active", {}, 1 if state.get("recovery") else 0)],
+                            metrics.path("sync", "activation.prom"))
+        return state
 
     def activate(self, manifest, caller, lease):
         """sync.Server's activator: activation.cosign with this node's parts, once it is past a readmission (readmitted())."""
@@ -984,6 +1014,8 @@ class Sync:
                             self.trail({"event": "beat-propose", "outcome": "DENY", "reason": unable[:240]})
                 else:
                     unable = None
+                # #432 step 2d: the holder renews its activation lease (activation.renewal_step); metrics for the alerts
+                self.activation_round()
                 with contextlib.suppress(Refused, OSError):
                     watch.step()
                 self.refusals.flush()

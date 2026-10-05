@@ -29,6 +29,7 @@ AUTHTIME = "/run/regalia-metrics/authtime/authtime.prom"
 HEARTBEAT = "/run/regalia-metrics/sync/heartbeat.prom"
 LEASE = "/run/regalia-metrics/admission/lease.prom"
 MEMBERSHIP = "/run/regalia-metrics/sync/membership.prom"
+ACTIVATION = "/run/regalia-metrics/sync/activation.prom"
 ESP_ADVANCE = "/run/regalia-metrics/esp-advance/esp-advance.prom"
 SHIP = "/run/regalia-metrics/audit-ship/sync.prom"
 NODE_A, NODE_B = {"instance": "a:9100", "job": "regalia-node"}, {"instance": "b:9100", "job": "regalia-node"}
@@ -130,6 +131,12 @@ SCENARIOS = {
     "RegaliaMembershipAnchorBehind": {      # published at 5, anchored at 4 for twenty minutes; healthy: caught up
         "fault": [("regalia_membership_epoch", {}, "5+0x30"), ("regalia_membership_anchor_epoch", {}, "4+0x30")],
         "healthy": [("regalia_membership_epoch", {}, "5+0x30"), ("regalia_membership_anchor_epoch", {}, "5+0x30")], "at": 1200},
+    "RegaliaActivationRenewalFailing": {     # the holder with 80 s left at the evaluation; healthy: 400 s left
+        "fault": [("regalia_activation_holder", {}, "1+0x5"), ("regalia_activation_lease_expires_seconds", {}, "200+0x5")],
+        "healthy": [("regalia_activation_holder", {}, "1+0x5"), ("regalia_activation_lease_expires_seconds", {}, "520+0x5")], "at": 120},
+    "RegaliaActivationRecoveryActive": {
+        "fault": [("regalia_activation_recovery_active", {}, "1+0x5")],
+        "healthy": [("regalia_activation_recovery_active", {}, "0+0x5")], "at": 120},
     "RegaliaEspAdvanceFailing": {
         "fault": [("regalia_esp_advance_ok", {}, "0+0x30")], "healthy": [("regalia_esp_advance_ok", {}, "1+0x30")], "at": 1200},
     "RegaliaNextBootNeedsRecoveryKey": {
@@ -137,6 +144,9 @@ SCENARIOS = {
     "RegaliaEspAdvanceMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=ESP_ADVANCE), "0+0x10")], "at": 420},
+    "RegaliaActivationMetricsMissing": {
+        "fault": [("up", NODE_A, "1+0x10")],
+        "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=ACTIVATION), "0+60x10")], "at": 420},
     "RegaliaMembershipMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=MEMBERSHIP), "0+60x10")], "at": 420},
