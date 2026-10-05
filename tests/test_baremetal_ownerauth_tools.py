@@ -278,20 +278,24 @@ class ReanchorTakesIt(unittest.TestCase):
                 f.write(m.canonical(chain(3)))
         built = {}
 
-        def highwater(index, tcti, policy=None, define_policy=None, owner_auth=None):
-            built["owner_auth"] = owner_auth
+        def highwater(index, tcti, policy=None, define_policy=None, owner_auth=None, lock_path=None):
+            built["owner_auth"], built["lock_path"] = owner_auth, lock_path
             raise m.Refused("stop after the anchor is built")
         stdin = unittest.mock.Mock(buffer=value("a"))
         stdin.buffer.isatty = lambda: False
         err = io.StringIO()
         argv = ["--membership", d + "/m.json", "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "a",
-                "--peer", "b=%s/b.json" % d, "--peer", "c=%s/c.json" % d, "--ownerauth", record]
+                "--peer", "b=%s/b.json" % d, "--peer", "c=%s/c.json" % d, "--ownerauth", record, "--esp", d + "/esp"]
+        os.makedirs(d + "/esp/EFI/regalia")                         # an enrolled node's ESP: it holds a chain
+        with open(reanchor.esp_chain_path(d + "/esp"), "wb") as f:
+            f.write(m.canonical(chain(2)))
         with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
                 unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
-            rc = reanchor.main(argv, ask=lambda prompt: None, highwater=highwater)
+            rc = reanchor.main(argv, ask=lambda prompt: None, highwater=highwater, active=lambda: [])
         self.assertEqual(rc, 1)
         self.assertIn("stop after the anchor is built", err.getvalue())
         self.assertEqual(built["owner_auth"].check("a"), RECORD["record"]["nodes"]["a"]["check"])
+        self.assertEqual(built["lock_path"], reanchor.anchor_lock(d + "/m.json"))    # the node's own lock (#388)
         # another node's value is refused before anything is read or built
         built.clear()
         stdin = unittest.mock.Mock(buffer=value("b"))
@@ -299,7 +303,7 @@ class ReanchorTakesIt(unittest.TestCase):
         err = io.StringIO()
         with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
                 unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
-            self.assertEqual(reanchor.main(argv, ask=lambda prompt: None, highwater=highwater), 1)
+            self.assertEqual(reanchor.main(argv, ask=lambda prompt: None, highwater=highwater, active=lambda: []), 1)
         self.assertIn("is not a's", err.getvalue())
         self.assertEqual(built, {})
 
