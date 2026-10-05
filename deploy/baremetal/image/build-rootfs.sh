@@ -165,7 +165,7 @@ tree(){   # tree DIR PACKAGES: a minbase tree of Debian $SUITE at the snapshot, 
 # ---- the toolchain and the modules, fetched OUTSIDE the build tree (verified by go.sum and the checksum database)
 echo "### the Go toolchain ($GO_VERSION) and the modules, verified by Go"
 goenv=(env -i PATH="$(dirname "$GO"):$PATH" LC_ALL=C TZ=UTC HOME="$W/go/home" GOPATH="$W/go/path" GOCACHE="$W/go/cache"
-       GOMODCACHE="$W/go/mod" GOTOOLCHAIN="$GO_VERSION" GOFLAGS=-mod=readonly
+       GOMODCACHE="$W/go/mod" GOTOOLCHAIN="$GO_VERSION" GOFLAGS=-mod=readonly GOTELEMETRY=off
        ${CALLER_GOPROXY:+GOPROXY="$CALLER_GOPROXY"} ${CALLER_HTTPS_PROXY:+HTTPS_PROXY="$CALLER_HTTPS_PROXY"})
 "${goenv[@]}" "$GO" mod download >"$W/go-download.log" 2>&1 || { tail -20 "$W/go-download.log"; die "the modules could not be fetched"; }
 # the toolchain GOTOOLCHAIN selected: the one it downloaded into the module cache, or the launching go itself when
@@ -187,7 +187,7 @@ for pair in "$W/go/mod:$BUILD/build/gomod" "$TOOLCHAIN:$BUILD/build/goroot"; do
 done
 for fs in proc dev; do mount --bind "/$fs" "$BUILD/$fs"; MOUNTED+=("$BUILD/$fs"); done
 inbuild(){ chroot "$BUILD" env -i PATH="/build/goroot/bin:/usr/bin:/bin" GOROOT=/build/goroot LC_ALL=C TZ=UTC \
-             HOME=/build/home GOCACHE=/build/cache GOMODCACHE=/build/gomod GOTOOLCHAIN=local GOPROXY=off GOFLAGS=-mod=readonly \
+             HOME=/build/home GOCACHE=/build/cache GOMODCACHE=/build/gomod GOTOOLCHAIN=local GOPROXY=off GOFLAGS=-mod=readonly GOTELEMETRY=off \
              SOURCE_DATE_EPOCH="$EPOCH" "$@"; }
 for entry in "${BUILT[@]}"; do
   read -r source path <<< "$entry"
@@ -201,7 +201,12 @@ for entry in "${BUILT[@]}"; do
   built_by="$(inbuild go version "/build/out/$name" | sed 's/^.*: //')"
   [ "$built_by" = "$GO_VERSION" ] || die "$name was built by $built_by, not $GO_VERSION (go.mod's)"
 done
-for m in "${MOUNTED[@]}"; do umount -R "$m"; done; MOUNTED=()
+# (GOTELEMETRY=off: go's telemetry can leave a child running from the toolchain, which keeps its mount busy; CI's
+# first run. A mount still busy after a few seconds is a refusal, said by name, never a lazy unmount)
+for m in "${MOUNTED[@]}"; do
+  for _ in 1 2 3 4 5; do umount -R "$m" 2>/dev/null && continue 2; sleep 1; done
+  die "$m is still in use after the build: $(fuser -vm "$m" 2>&1 | tail -n +2 | tr -s ' ' | head -3 | tr '\n' ';')"
+done; MOUNTED=()
 
 # ---- the HOST tree: exactly [packages], then this commit's files
 ROOT="$W/root"
