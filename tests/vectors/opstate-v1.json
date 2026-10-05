@@ -245,6 +245,49 @@
     },
     {
      "approver_id": "bob",
+     "expires_at": "2026-10-05T11:59:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+    }
+   ],
+   "name": "an approval that had expired when the request was spent",
+   "python_reason": "bob's approval had expired when the request was spent",
+   "spend": {
+    "approvals_sha256": "7b6cfddef1c7ed57da2ed13d48742727f82208c0b14df29d977e9160eac474c2",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   }
+  },
+  {
+   "accept": false,
+   "approvals": [
+    {
+     "approver_id": "alice",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "nonce": "request-nonce-1",
+     "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+    },
+    {
+     "approver_id": "bob",
      "expires_at": "2026-10-05T13:00:00Z",
      "nonce": "request-nonce-1",
      "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -3513,7 +3556,7 @@
    "name": "a spend signed by a key no lease names",
    "previous": null,
    "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
-   "python_reason": "no verified session entry names that key for a in boot 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+   "python_reason": "no verified session entry names that key for a in boot 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0 at 2026-10-05T12:00:00Z",
    "value": {
     "entry": {
      "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
@@ -3627,10 +3670,49 @@
   },
   {
    "accept": false,
+   "name": "a spend under a session whose window ended at a's key rotation",
+   "previous": null,
+   "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+   "python_reason": "no verified session entry names that key for a in boot 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0 at 2026-10-05T12:00:00Z",
+   "value": {
+    "entry": {
+     "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+     "approvers": [
+      "alice",
+      "bob"
+     ],
+     "at": "2026-10-05T12:00:00Z",
+     "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "environment": "production",
+     "expires_at": "2026-10-05T12:05:00Z",
+     "kind": "spend",
+     "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+     "lease_expires_at": "2026-10-05T12:00:20Z",
+     "node_id": "a",
+     "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+     "object_id": "release-signing",
+     "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+     "principal": "spiffe://regalia/ci/release",
+     "purpose": "sign",
+     "schema": "regalia.opstate/v1"
+    },
+    "signatures": [
+     {
+      "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+      "party": "a",
+      "session_public": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
+      "sig": "03cb9ece87bdbdf9c8104f6718f86b1ec31dc2d00e2d2cc08aad9aa426462117d3f57a38d9f91610cbe6c2b27bf6652cd32701c7add0949111914dde03229608"
+     }
+    ]
+   }
+  },
+  {
+   "accept": false,
    "name": "a spend by a boot with no session on record",
    "previous": null,
    "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
-   "python_reason": "no verified session entry names that key for a in boot 11111111-2222-3333-4444-555555555555",
+   "python_reason": "no verified session entry names that key for a in boot 11111111-2222-3333-4444-555555555555 at 2026-10-05T12:00:00Z",
    "value": {
     "entry": {
      "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
@@ -4743,97 +4825,9 @@
    }
   }
  ],
- "domain": "regalia-opstate/v1\\0",
- "manifest": {
-  "activation_signers": {
-   "parties": [
-    "a",
-    "b",
-    "c"
-   ],
-   "threshold": 2
-  },
-  "epoch": 1,
-  "heartbeat_max_lifetime_s": 21600,
-  "heartbeat_signers": {
-   "parties": [
-    "a",
-    "b",
-    "c",
-    "owner"
-   ],
-   "threshold": 2
-  },
-  "issued_at": "2026-10-04T09:00:00Z",
-  "nodes": [
-   {
-    "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
-    "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
-    "hsm_serials": [
-     "DENK0404100"
-    ],
-    "node_id": "a",
-    "signing_key": {
-     "alg": "ecdsa-p256",
-     "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
-    },
-    "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
-    "state": "ACTIVE",
-    "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
-    "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
-   },
-   {
-    "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
-    "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
-    "hsm_serials": [
-     "DENK0404101"
-    ],
-    "node_id": "b",
-    "signing_key": {
-     "alg": "ecdsa-p256",
-     "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2"
-    },
-    "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
-    "state": "ACTIVE",
-    "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
-    "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
-   },
-   {
-    "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
-    "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
-    "hsm_serials": [
-     "DENK0404102"
-    ],
-    "node_id": "c",
-    "signing_key": {
-     "alg": "ecdsa-p256",
-     "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee"
-    },
-    "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
-    "state": "ACTIVE",
-    "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
-    "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
-   }
-  ],
-  "owner_heartbeat_lifetime_s": 3600,
-  "owner_keys": [
-   {
-    "alg": "ed25519",
-    "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
-   },
-   {
-    "alg": "ed25519",
-    "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
-   },
-   {
-    "alg": "ed25519",
-    "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
-   }
-  ],
-  "policy_version": "p1",
-  "prev_digest": "",
-  "revocation_signers": [
-   {
+ "chain": [
+  {
+   "activation_signers": {
     "parties": [
      "a",
      "b",
@@ -4841,22 +4835,218 @@
     ],
     "threshold": 2
    },
-   {
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
     "parties": [
+     "a",
+     "b",
+     "c",
      "owner"
     ],
-    "threshold": 1
-   }
-  ],
-  "schema": "regalia.membership/v4"
- },
+    "threshold": 2
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    },
+    {
+     "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
+     "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+     "hsm_serials": [
+      "DENK0404101"
+     ],
+     "node_id": "b",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2"
+     },
+     "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
+     "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+     "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
+     "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
+     "hsm_serials": [
+      "DENK0404102"
+     ],
+     "node_id": "c",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee"
+     },
+     "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
+     "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "a",
+      "b",
+      "c"
+     ],
+     "threshold": 2
+    },
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v4"
+  },
+  {
+   "activation_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c"
+    ],
+    "threshold": 2
+   },
+   "epoch": 2,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c",
+     "owner"
+    ],
+    "threshold": 2
+   },
+   "issued_at": "2026-10-05T11:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "044225b303dcd056cc74990f6e70bc522da8140650803607f709d6e7826aca2b803cf17536986eb98b9918f41fe9a44a7bd34eccd2cc3cd5c709c1b20f28a3dce2"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    },
+    {
+     "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
+     "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+     "hsm_serials": [
+      "DENK0404101"
+     ],
+     "node_id": "b",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2"
+     },
+     "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
+     "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+     "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
+     "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
+     "hsm_serials": [
+      "DENK0404102"
+     ],
+     "node_id": "c",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee"
+     },
+     "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
+     "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "policy_version": "p1",
+   "prev_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+   "revocation_signers": [
+    {
+     "parties": [
+      "a",
+      "b",
+      "c"
+     ],
+     "threshold": 2
+    },
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v4"
+  }
+ ],
+ "domain": "regalia-opstate/v1\\0",
  "max_batch": 64,
  "payload_hex": "726567616c69612072656c6561736520312e30206d616e6966657374",
  "schema": "regalia.opstate-vectors/v1",
  "session_checks": [
   {
    "accept": true,
-   "name": "a's session key, vouched for by a's signing key",
+   "name": "a's session key, vouched for by the key a holds since epoch 2",
    "public": "/regalia/v1/sessions/a/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
    "python_reason": "",
    "value": {
@@ -4867,7 +5057,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "0e1ddc7d93d3c7b4edb7f98f7785113e0c8d86807e24f53ecd2f138bfdce594c480c0673aa441e2fe26cc94eeba7e922632642b27c35319a1286acf6387dc691"
+    "signature": "19355ef90e6dd3d029d6ab8dd43c90d5fc61db133d6b9ab546dc7a83a3eaf96241194737a6562d7314f07fb7bc285b4ba4bded76030d6a46ddd3b8f2493da6c6"
    }
   },
   {
@@ -4883,7 +5073,55 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618"
     },
-    "signature": "4d08c6f7c27fa2bf4f62f2218630ee9dd38c68acd758807d8bb3c4c5e00d729523f3d44ea200c1639f1cb43c5265c6d7b84c7fe6ef473c2a4c8bcf2c5254c294"
+    "signature": "2c032fb15325749e3a1df32c560855924b390df792efe610c25f295129d348156c484d205d22f91efc8f8e17451dbd91b0a258914ad5cc9be957a09ef9c59b31"
+   }
+  },
+  {
+   "accept": true,
+   "name": "a session from before the rotation, under the key then in force: valid until the rotation",
+   "public": "/regalia/v1/sessions/a/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
+   "python_reason": "2026-10-05T11:00:00Z",
+   "value": {
+    "entry": {
+     "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "issued_at": "2026-10-05T10:00:00Z",
+     "node_id": "a",
+     "schema": "regalia.opstate-session/v1",
+     "session_public": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
+    },
+    "signature": "33ce0e18412dd4bed1aea32b88ed4fab85b042c85b7b1e8bedd4f80c7bf7b0f6795de025adb5faeddc8a5c053b2deaa7918ee247ccd8c2f254c4e6ffcca1fc7b"
+   }
+  },
+  {
+   "accept": false,
+   "name": "the replaced key vouching for a session dated after the rotation",
+   "public": "/regalia/v1/sessions/a/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+   "python_reason": "the a's session entry signature does not verify",
+   "value": {
+    "entry": {
+     "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "issued_at": "2026-10-05T12:00:00Z",
+     "node_id": "a",
+     "schema": "regalia.opstate-session/v1",
+     "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+    },
+    "signature": "5bb1e3c3891839e91c9aabd845ea742298cc7727169becc6d764e461144b229409f20d90b25245da7a556192c6de5b6cfb53e230f0428d3775c0a2cf66b0be3d"
+   }
+  },
+  {
+   "accept": false,
+   "name": "a session dated before the first manifest",
+   "public": "/regalia/v1/sessions/a/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+   "python_reason": "a's session is dated before the first manifest",
+   "value": {
+    "entry": {
+     "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "issued_at": "2026-10-01T00:00:00Z",
+     "node_id": "a",
+     "schema": "regalia.opstate-session/v1",
+     "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+    },
+    "signature": "a8327d1d83c39b06c4db3cd0a9d9e4f25d91a9ad3285cbaa9ade65e4dda8d354297a0e7006a996e2377cd89c715a7ef1789ddb7119aec82605ef24ef8249cae9"
    }
   },
   {
@@ -4899,7 +5137,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "3ca26c7bd38baab2cea75aa7a2fc7ab1cb18edbba3390bab3679d149adbdb57b7277d0d4582a93065ce4d21f3bcb45881769eaecfb85053a99178d0f94a2ac67"
+    "signature": "7ecf16c2cb4c7cc941bb06c0c6e25ed5232300dcbb0f793c65f30178f12e1d4c02413b4717214b7621e92655e674ef7a57504eaed22ac8b3f19f17fae1c6ea46"
    }
   },
   {
@@ -4915,14 +5153,14 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "2d96890767cbcdb4f9b901820f9a2b4ffe96bcf82d301d753b8e33f9e9221f175a04b3e055b82ce62db42c37b934a01b8b4a1fb88a83690a0e238c210324c827"
+    "signature": "a806519d61cf26a839101861e3264c1d497663a10ff76bd2dff5113d5ae1e2d6729f73842d343dd22804e743dbc187d444e8e8dee8e996a2d0375805a1f44571"
    }
   },
   {
    "accept": false,
    "name": "a node the manifest does not hold",
    "public": "/regalia/v1/sessions/z/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-   "python_reason": "z has no signing key in the manifest at epoch 1",
+   "python_reason": "z had no signing key at epoch 2, when its session is dated",
    "value": {
     "entry": {
      "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
@@ -4931,7 +5169,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "ff1b24d36aebc03dce3941d696e95c2ec97f65bb4ad70c6d95b4cdda291629d350d3f95348e1283458b4124712f2b030fd7c8c8503facfeacf4e6c0a0d5ecc10"
+    "signature": "ffed07ec3ca6f34509674e6a5913f71159f13fbcbc5e5a040bd29d5d51f762ce6c73ccb0e62cab8eea0883853bcf7b27c341a3c468de456699d3362974900d6f"
    }
   },
   {
@@ -4947,7 +5185,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "00000000000000000000000000000000000000000000000000000000000000"
     },
-    "signature": "29bfeff696ebc87530fd1b839e6158944003703a9f5ec38d75aea7e795a90dbe4acf95d27646f9439eddc430b494c31b456cdb31dcc1a087087333fa1430c144"
+    "signature": "8d875afc8a8c9ef1c159b21586f3ee3a1a44ddf960505e33c272dab447916c554c4c9386ccc9887426176e0d13d6a9c9a6ca161ed0171b832067794b57c49fc3"
    }
   },
   {
@@ -4963,13 +5201,22 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "bd79a0282624a41ec58c9ee83e32f31d086d801d8a086780674650428809bf217cd936f7fdaf8a118426fbed349006231ec43c5c415ef408858c2d88ee379dec"
+    "signature": "dd68b58f15d5263ac62ca3964489336a85a142fc1af41235c6b478274c98bc4b01b238a266cbdef204ae2d86353f43f7c4b2165c2a8c038a12642b0a6729dec0"
    }
   }
  ],
  "sessions": {
   "a|0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0": [
-   "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+   {
+    "issued_at": "2026-10-05T11:30:00Z",
+    "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+    "valid_until": null
+   },
+   {
+    "issued_at": "2026-10-05T10:00:00Z",
+    "session_public": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
+    "valid_until": "2026-10-05T11:00:00Z"
+   }
   ]
  },
  "sign_checks": [

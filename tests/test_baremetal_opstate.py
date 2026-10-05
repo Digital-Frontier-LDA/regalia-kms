@@ -31,7 +31,11 @@ def load():
 class Vectors(unittest.TestCase):
     def test_every_case_is_decided_as_the_vector_says(self):
         doc = load()
-        sessions = lambda node, boot, key: key in doc["sessions"].get("%s|%s" % (node, boot), [])      # noqa: E731
+        def sessions(node, boot, key, at):
+            t = heartbeat.parse_time(at, "at")
+            return any(s["session_key"] == key and heartbeat.parse_time(s["issued_at"], "issued_at") <= t
+                       and (s["valid_until"] is None or t < heartbeat.parse_time(s["valid_until"], "valid_until"))
+                       for s in doc["sessions"].get("%s|%s" % (node, boot), []))
         for c in doc["cases"]:
             with self.subTest(c["name"]):
                 try:
@@ -52,8 +56,8 @@ class Vectors(unittest.TestCase):
         for c in doc["session_checks"]:
             with self.subTest(c["name"]):
                 try:
-                    opstate.verify_session(c["key"], c["value"], doc["manifest"])
-                    got, why = True, ""
+                    _, until = opstate.verify_session(c["key"], c["value"], doc["chain"])
+                    got, why = True, until or ""
                 except m.Refused as refused:
                     got, why = False, str(refused)
                 self.assertEqual((got, why), (c["accept"], c["python_reason"]))

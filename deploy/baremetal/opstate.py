@@ -201,19 +201,34 @@ def session_message(entry):
     return SESSION_DOMAIN + membership.canonical(entry)
 
 
-def verify_session(key, value, manifest):
-    """The session entry at `key` if its node's signing_key in the CURRENT `manifest` signed it, else Refused. Not judged
-    by the node's state: a node revoked later keeps its earlier spends verifiable (their nonces stay spent); whether a
-    node may serve NOW is its lease's question, not its past entries'."""
+def _signing_key(manifest, node_id):
+    node = membership.validate(manifest).get(node_id)
+    if node is None or "signing_key" not in node:
+        return None
+    return membership.typed_key(node["signing_key"], "%s's signing_key" % node_id, membership.SIGNING_KEY_ALGS)
+
+
+def verify_session(key, value, chain):
+    """The session at `key`, if the signing_key its node held WHEN IT WAS ISSUED signed it: (entry, valid_until), else
+    Refused. `chain` is the verified membership chain, oldest first. The key in force at the session's issued_at is the
+    newest manifest's issued at or before it (regalia-kms-1e on #492: judged by the CURRENT key alone, a key rotated
+    later would make every earlier spend of that node unverifiable). The session vouches only until its node's key was
+    replaced (`valid_until`: the issued_at of the first later manifest naming another key for the node, or None): a key
+    replaced because it leaked cannot vouch for a session dated back before the replacement and be used after it, since
+    verify() takes an entry only inside its session's window. Not judged by the node's state: a node revoked later keeps
+    its earlier spends verifiable (their nonces stay spent); whether it may serve NOW is its lease's question."""
     membership.exact(value, ("entry", "signature"), "the session value")
     entry = value["entry"]
     require(key == session_key_path(entry), "the session entry belongs under %s, not %s" % (session_key_path(entry), key))
-    nodes = membership.validate(manifest)
-    node = nodes.get(entry["node_id"])
-    require(node is not None and "signing_key" in node, "%s has no signing key in the manifest at epoch %d" % (entry["node_id"], manifest["epoch"]))
-    alg, pub = membership.typed_key(node["signing_key"], "%s's signing_key" % entry["node_id"], membership.SIGNING_KEY_ALGS)
-    membership.verify_revocation(alg, pub, session_message(entry), value["signature"], "%s's session entry" % entry["node_id"])
-    return entry
+    require(isinstance(chain, list) and chain, "a session is judged against the membership chain")
+    issued = heartbeat.parse_time(entry["issued_at"], "issued_at")
+    at = [m for m in chain if heartbeat.parse_time(m["issued_at"], "a manifest's issued_at") <= issued]
+    require(at, "%s's session is dated before the first manifest" % entry["node_id"])
+    in_force = _signing_key(at[-1], entry["node_id"])
+    require(in_force is not None, "%s had no signing key at epoch %d, when its session is dated" % (entry["node_id"], at[-1]["epoch"]))
+    membership.verify_revocation(*in_force, session_message(entry), value["signature"], "%s's session entry" % entry["node_id"])
+    later = [m for m in chain[chain.index(at[-1]) + 1:] if _signing_key(m, entry["node_id"]) != in_force]
+    return entry, (later[0]["issued_at"] if later else None)
 
 
 def approvals_digest(approvals):
@@ -250,8 +265,9 @@ def check_approvals(spend, approvals, approver_sets):
         require(who in named["approvers"] and who not in counted, "%s is not an approver of the set, or counted twice" % membership.printable(who))
         require(isinstance(a["nonce"], str) and nonce_digest(a["nonce"]) == spend["nonce_digest"], "%s approved another request's nonce" % who)
         require(a["payload_digest"] == spend["payload_sha256"], "%s approved another payload" % who)
-        require(heartbeat.parse_time(a["expires_at"], "an approval's expires_at") <= heartbeat.parse_time(spend["expires_at"], "expires_at"),
-                "%s's approval outlives the request" % who)
+        expires = heartbeat.parse_time(a["expires_at"], "an approval's expires_at")
+        require(expires <= heartbeat.parse_time(spend["expires_at"], "expires_at"), "%s's approval outlives the request" % who)
+        require(expires > heartbeat.parse_time(spend["at"], "at"), "%s's approval had expired when the request was spent" % who)
         try:
             sig = base64.b64decode(a["signature"], validate=True)
             Ed25519PublicKey.from_public_bytes(bytes.fromhex(named["approvers"][who])).verify(sig, binding_bytes(spend, a["nonce"]))
@@ -269,6 +285,7 @@ def may_sign(spend, now, held_lease_digest, held_lease_expires_at):
     otherwise: the spend is burned and the request approved again."""
     validate(spend)
     require(spend["kind"] == "spend", "only a spend is signed under")
+    # both expiries are the lease envelope's own text (the spend copied it), so they compare as strings
     require(held_lease_digest == spend["lease_digest"] and held_lease_expires_at == spend["lease_expires_at"],
             "BURNED: this node no longer holds the lease the spend was committed under")
     require(now < heartbeat.parse_time(spend["lease_expires_at"], "lease_expires_at"), "BURNED: the lease the spend names has lapsed")
@@ -319,8 +336,9 @@ def _ed25519(key_hex, sig_hex, raw, label):
 
 def verify(key, value, sessions, approver_sets=None):
     """The entry stored at etcd key `key` as `value`, if it verifies, else Refused (and the entry is unavailable).
-    `sessions(node_id, boot_id, session_key)` is true when a verified session entry (verify_session) names that key for
-    that node and boot: a daemon start makes a key, so one boot may have several.
+    `sessions(node_id, boot_id, session_key, at)` is true when a verified session entry (verify_session) names that key
+    for that node and boot and `at` (the entry's) lies in its window: from its issued_at, before its valid_until. A
+    daemon start makes a key, so one boot may have several.
     `approver_sets` ({digest: {"approvers": {ID: Ed25519 key hex}, "required": n}}, every set the policy has had)
     judges a key-state entry (D25) by the set it names."""
     membership.exact(value, ("entry", "signatures"), "the opstate value")
@@ -335,8 +353,8 @@ def verify(key, value, sessions, approver_sets=None):
         require(sig["party"] == entry["node_id"] and sig["boot_id"] == entry["boot_id"],
                 "the entry is signed as %s, boot %s; it names %s, boot %s" % (sig["party"], sig["boot_id"], entry["node_id"], entry["boot_id"]))
         membership.hex_field(sig["session_key"], 64, "the signature's session_key")
-        require(sessions(entry["node_id"], entry["boot_id"], sig["session_key"]),
-                "no verified session entry names that key for %s in boot %s" % (entry["node_id"], entry["boot_id"]))
+        require(sessions(entry["node_id"], entry["boot_id"], sig["session_key"], entry["at"]),
+                "no verified session entry names that key for %s in boot %s at %s" % (entry["node_id"], entry["boot_id"], entry["at"]))
         _ed25519(sig["session_key"], sig["sig"], raw, "%s's session" % entry["node_id"])
         return entry
     named = (approver_sets or {}).get(entry["approver_set"])
