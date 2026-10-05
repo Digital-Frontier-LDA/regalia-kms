@@ -182,7 +182,7 @@ KNOWN = (
     # stdlib-only and run as a standalone script (e2e/tpm-attest-swtpm.sh): the lab's CLI and the three-node fixture.
     # Production enrolment persists its AK through enrol.identity, which takes the owner authorization
     ("deploy/baremetal/attest.py", 'tpm2("evictcontrol", "-C", "o"'),
-    # #242 C2: seal-hsm-pin.sh takes the value from the envelope there
+    # seal-hsm-pin.sh (shell, no ownerauth.py): --ownerauth-stdin, the value through a root-only tmpfs file (#242 C2)
     ("deploy/seal-hsm-pin.sh", "tpm2_evictcontrol -Q -C o"),
     ("deploy/seal-hsm-pin.sh", "tpm2_createprimary -Q -C o"),
 )
@@ -232,7 +232,7 @@ class OwnerCallsGiveIt(unittest.TestCase):
 
     def test_the_anchor_is_defined_written_and_redefined_only_with_it(self):
         bare = m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.tpm)
-        with self.assertRaisesRegex(m.Refused, "cannot define"):
+        with self.assertRaisesRegex(m.Refused, "the TPM's owner authorization is set and none was given"):
             bare.define()
         hw = m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.tpm, owner_auth=self.auth)
         hw.define()
@@ -257,7 +257,7 @@ class OwnerCallsGiveIt(unittest.TestCase):
 
     def test_a_wrong_value_is_refused_by_the_tpm(self):
         other = ownerauth.from_envelope(value("b"), RECORD, PIN, "b")
-        with self.assertRaisesRegex(m.Refused, "cannot define"):
+        with self.assertRaisesRegex(m.Refused, "the TPM refused the owner authorization given: it is not this TPM's"):
             m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.tpm, owner_auth=other).define()
 
 
@@ -375,6 +375,13 @@ class OnSwtpm(unittest.TestCase):
 
     def test_set_check_and_the_anchor(self):
         self.assertEqual(ownerauth.posture(self.tcti), {"owner": False, "lockout": False})
+        with self.assertRaisesRegex(m.Refused, "systemd's storage root key \\(0x81000001\\) is not persistent"):
+            ownerauth.set_owner(self.auth, self.tcti)
+        # the SRK, as systemd-tpm2-setup persists it at boot (its default template), while the owner auth is empty
+        env = dict(os.environ, TPM2TOOLS_TCTI=self.tcti)
+        for argv in (["tpm2_createprimary", "-C", "o", "-c", self.d + "/srk.ctx"], ["tpm2_evictcontrol", "-C", "o", "-c", self.d + "/srk.ctx", ownerauth.SRK]):
+            self.assertEqual(subprocess.run(argv, env=env, capture_output=True).returncode, 0, argv)
+        subprocess.run(["tpm2_flushcontext", "-t"], env=env, capture_output=True)
         ownerauth.set_owner(self.auth, self.tcti)
         self.assertEqual(ownerauth.posture(self.tcti)["owner"], True)
         self.assertTrue(ownerauth.holds(self.auth, self.tcti))
@@ -382,7 +389,7 @@ class OnSwtpm(unittest.TestCase):
         self.assertFalse(ownerauth.holds(prefix, self.tcti))
         with self.assertRaisesRegex(m.Refused, "already set"):
             ownerauth.set_owner(self.auth, self.tcti)
-        with self.assertRaisesRegex(m.Refused, "cannot define"):
+        with self.assertRaisesRegex(m.Refused, "the TPM's owner authorization is set and none was given"):
             m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock").define()
         hw = m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock", owner_auth=self.auth)
         hw.define()
