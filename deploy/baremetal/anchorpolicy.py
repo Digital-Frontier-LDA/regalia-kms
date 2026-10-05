@@ -108,27 +108,39 @@ def rotation_class(node_id):
     return "rotation/" + node_id
 
 
-def _ref(cls):
-    """The policyRef of a class: REFS for the shared classes; a node's rotation counter's, a 32-byte digest of its ID."""
+# The shared "rotation" class is #437's VECTORS' only (measured on swtpm before R was per node): no production path takes it
+# (regalia-kms-95 on #462). class_policy and authorize_message refuse it; _shared_* below give it to the vector tests.
+SHARED_ROTATION = "rotation"
+
+
+def _ref(cls, shared=False):
+    """The policyRef of a class: REFS for the object classes; a node's rotation counter's, a 32-byte digest of its ID. The
+    shared "rotation" class is refused unless `shared` (the vectors)."""
     if isinstance(cls, str) and cls.startswith("rotation/"):
         node_id = cls[len("rotation/"):]
         require(NODE_ID.fullmatch(node_id) is not None, "no policy class %r" % (cls,))
         return hashlib.sha256(ROTATION_DOMAIN + node_id.encode()).digest()
-    require(cls in REFS, "no policy class %r" % (cls,))
+    require(cls in REFS and (shared or cls != SHARED_ROTATION),
+            "no policy class %r%s" % (cls, " (the shared rotation class is the vectors' only: a node's is rotation/<node_id>)"
+                                      if cls == SHARED_ROTATION else ""))
     return REFS[cls]
 
 
-def class_policy(k_a_point, cls):
+def class_policy(k_a_point, cls, shared=False):
     """The authPolicy an object of class `cls` is defined under: PolicyAuthorize(Name(K_A), its policyRef)."""
-    return policy_authorize(k_a_name(k_a_point), _ref(cls))
+    return policy_authorize(k_a_name(k_a_point), _ref(cls, shared))
 
 
-def rotation_name(index, k_a_point, written=True, node_id=None):
-    """R's Name, as defined (policywrite only) and, once incremented, WRITTEN: under the node's own class
-    ("rotation/<node_id>", rotation_class) when `node_id` is given, else under the shared "rotation" class (#437's
-    vectors, measured on swtpm; a node's R is always the former)."""
-    cls = rotation_class(node_id) if node_id is not None else "rotation"
-    return nv_name(index, ROTATION_ATTRIBUTES | (NV_WRITTEN if written else 0), class_policy(k_a_point, cls), ROTATION_SIZE)
+def rotation_name(index, k_a_point, node_id, written=True):
+    """`node_id`'s R's Name, as defined (policywrite only, under its own class rotation/<node_id>) and, once incremented,
+    WRITTEN. The node is required: there is no shared form on a production path (regalia-kms-95)."""
+    return nv_name(index, ROTATION_ATTRIBUTES | (NV_WRITTEN if written else 0), class_policy(k_a_point, rotation_class(node_id)), ROTATION_SIZE)
+
+
+def _shared_rotation_name(index, k_a_point, written=True):
+    """R's Name under the shared "rotation" class: #437's vectors only (anchor-policy-v1.json, measured on swtpm)."""
+    return nv_name(index, ROTATION_ATTRIBUTES | (NV_WRITTEN if written else 0), class_policy(k_a_point, SHARED_ROTATION, shared=True),
+                   ROTATION_SIZE)
 
 
 def _count(value, what):
@@ -263,7 +275,7 @@ def read_rotation(index, run=None):
 
 
 def start_rotation(index, point, approval_der, node_id, run=None):
-    """Define R at `index` under PolicyAuthorize(Name(K_A), "rotation") and make its first increment under K_A's approval,
+    """Define R at `index` under PolicyAuthorize(Name(K_A), rotation/<node_id>) and make its first increment under K_A's approval,
     finishing what an interrupted run left (regalia-kms-95's cases):
       * R absent: K_A's approval is checked by the TPM first (loadexternal, verifysignature: no R is defined for a wrong
         one), then R is defined, then incremented;
@@ -275,8 +287,8 @@ def start_rotation(index, point, approval_der, node_id, run=None):
     import os
     import tempfile
     cls = rotation_class(node_id)
-    unwritten = rotation_name(int(index, 16), point, written=False, node_id=node_id).hex()
-    written = rotation_name(int(index, 16), point, node_id=node_id).hex()
+    unwritten = rotation_name(int(index, 16), point, node_id, written=False).hex()
+    written = rotation_name(int(index, 16), point, node_id).hex()
     held = nv_name_of(index, run)
     require(held in (None, unwritten, written), "NV index %s holds an index that is not this enrolment's rotation counter under the "
             "K_A given (Name %s): it is refused and left as it is" % (index, held))

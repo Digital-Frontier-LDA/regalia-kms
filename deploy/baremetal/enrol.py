@@ -535,11 +535,14 @@ def rotation_shape(bundle):
 
 def rotation_of(bundle, k_a_point):
     """The genesis's judgement of a node's rotation counter (regalia-kms-95): its AK-quoted Name must be the one a counter at
-    its index has under PolicyAuthorize(Name(K_A), "rotation") once written, K_A the genesis manifest's anchor_policy_key.
+    its index has under PolicyAuthorize(Name(K_A), rotation/<node_id>) once written, K_A the genesis manifest's anchor_policy_key.
     A node whose R was made under another K_A (a rehearsal's file) is refused here. Returns {index, name, value}: the value
     is the G start K_A's approvals for this node are made against."""
     r = rotation_shape(bundle)
-    want = anchorpolicy.rotation_name(int(r["index"], 16), k_a_point, node_id=bundle.get("node_id")).hex()
+    node_id = bundle.get("node_id")
+    require(isinstance(node_id, str) and NODE_ID.fullmatch(node_id) is not None, "the bundle names no node ID: its rotation counter cannot "
+            "be judged")
+    want = anchorpolicy.rotation_name(int(r["index"], 16), k_a_point, node_id).hex()
     require(r["name"] == want, "%s's rotation counter is not under this genesis's K_A: its quoted Name is %s, not %s (it was enrolled "
             "with another anchor-policy file)" % (bundle.get("node_id"), r["name"], want))
     return dict(r)
@@ -789,7 +792,7 @@ OPENSC_MODULE = "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so"
 
 
 def rotation(journal, anchor_policy, node_id, run):
-    """#361 C1: the rotation counter R, defined under PolicyAuthorize(Name(K_A), "rotation") and first incremented with
+    """#361 C1: the rotation counter R, defined under PolicyAuthorize(Name(K_A), rotation/<node_id>) and first incremented with
     K_A's approval (anchorpolicy.start_rotation), before the anchor, the counters and `enrol ownerauth`. The TPM's owner
     authorization must still be empty (ownerauth.posture): after `enrol ownerauth` this step is refused, not attempted.
     Recorded in the journal; a re-run requires the TPM to hold the same R, at the same value."""
@@ -800,7 +803,7 @@ def rotation(journal, anchor_policy, node_id, run):
         require(now == facts["name"] and anchorpolicy.read_rotation(facts["index"], run) == facts["value"],
                 "the rotation counter this enrolment made (%s, value %d) is not as recorded: it was redefined or advanced since"
                 % (facts["index"], facts["value"]))
-        require(facts["name"] == anchorpolicy.rotation_name(int(facts["index"], 16), point, node_id=node_id).hex(),
+        require(facts["name"] == anchorpolicy.rotation_name(int(facts["index"], 16), point, node_id).hex(),
                 "the rotation counter this enrolment made is under another K_A than the anchor-policy file names")
         return {k: facts[k] for k in ("index", "name", "value")}
     if anchorpolicy.nv_name_of(anchorpolicy.ROTATION_INDEX, run) is None:
