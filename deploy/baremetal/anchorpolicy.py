@@ -507,6 +507,96 @@ def increment_document(key, k_a_point, node_id, n):
     return {"schema": INCREMENT_SCHEMA, "node_id": node_id, "from": n, "signature": sig}
 
 
+# ---- C4: a node's catch-up (the retire bump, applied on the node; regalia-kms-1e's shape, agreed by d9 on #361) ----
+#
+# The measurements document carries, per node, `rotations`: a list of {"from": n, "signature": r||s}, one per retire
+# this node has been through, each K_A's single-use increment_from(Name(R_node), n) (increment_document). G_pub, the
+# generation the root has published for the node, is the last entry's from + 1. A node whose R is below it bumps FIRST
+# (catch_up) and refuses every write under K_A and every signature until it has (require_current).
+
+
+def published(rotations, label="rotations"):
+    """G_pub from `rotations` (their form: each {"from", "signature"}, `from` a count rising by exactly 1), or None when
+    the node has been through no retire."""
+    require(isinstance(rotations, list), "%s is not a list" % label)
+    previous = None
+    for i, entry in enumerate(rotations):
+        require(isinstance(entry, dict) and sorted(entry) == ["from", "signature"], "%s[%d] is not {from, signature}" % (label, i))
+        _count(entry["from"], "%s[%d].from" % (label, i))
+        require(previous is None or entry["from"] == previous + 1, "%s[%d].from is %d, not %d: a retire moves R by exactly 1"
+                % (label, i, entry["from"], (previous or 0) + 1))
+        previous = entry["from"]
+    return None if previous is None else previous + 1
+
+
+def bump(index, point, node_id, n, signature, run=None):
+    """K_A's single-use approval `signature` of R's increment from `n`, checked in software, then applied in the TPM:
+    PolicyCommandCode(NV_Increment), PolicyNV(R == n), PolicyAuthorize(K_A, rotation/<node_id>). R is read back at n + 1."""
+    import os
+    import tempfile
+    cls = rotation_class(node_id)
+    rotation = rotation_name(int(index, 16), point, node_id)
+    approved_ = increment_from(rotation, n)
+    der = verify_approval(point, approved_, cls, signature, "K_A's approval of %s's rotation counter from %d" % (node_id, n))
+    with tempfile.TemporaryDirectory(prefix="regalia-rotation-") as d:
+        path = lambda name: os.path.join(d, name)                             # noqa: E731
+        for name, data in (("ka.pem", k_a_pem(point)), ("sig.der", der), ("approved", approved_),
+                           ("message", authorize_message(approved_, cls)), ("n", n.to_bytes(8, "big"))):
+            with open(path(name), "wb") as f:
+                f.write(data)
+        _tpm(run, "flushcontext", "-t")
+        _must(_tpm(run, "loadexternal", "-C", "o", "-G", "ecc", "-u", path("ka.pem"), "-c", path("ka.ctx"), "-n", path("ka.name")), "loading K_A")
+        with open(path("ka.name"), "rb") as f:
+            require(f.read() == k_a_name(point), "the TPM's Name of K_A is not the one computed for it")
+        _must(_tpm(run, "verifysignature", "-c", path("ka.ctx"), "-g", "sha256", "-m", path("message"), "-s", path("sig.der"),
+                   "-f", "ecdsa", "-t", path("ticket")), "the TPM's check of K_A's approval of the bump from %d" % n)
+        _tpm(run, "flushcontext", "-t")
+        _must(_tpm(run, "startauthsession", "--policy-session", "-S", path("s.ctx")), "a policy session")
+        try:
+            _must(_tpm(run, "policycommandcode", "-S", path("s.ctx"), "TPM2_CC_NV_Increment"), "PolicyCommandCode")
+            _must(_tpm(run, "policynv", "-S", path("s.ctx"), "-i", path("n"), index, "eq"),
+                  "PolicyNV(R == %d): the rotation counter is not at the value this approval bumps from" % n)
+            _must(_tpm(run, "policyauthorize", "-S", path("s.ctx"), "-i", path("approved"), "-n", path("ka.name"),
+                       "-q", _ref(cls).hex(), "-t", path("ticket")), "PolicyAuthorize(K_A, %s)" % cls)
+            _must(_tpm(run, "nvincrement", index, "-C", index, "-P", "session:" + path("s.ctx")), "the rotation counter's bump from %d" % n)
+        finally:
+            _tpm(run, "flushcontext", path("s.ctx"))
+    now = read_rotation(index, run)
+    require(now == n + 1, "the rotation counter %s reads %d after the bump from %d, not %d" % (index, now, n, n + 1))
+    return now
+
+
+def catch_up(index, point, node_id, rotations, booted_generation, run=None):
+    """Bring this node's R up to G_pub (published(rotations)) by applying, in order, each entry from R on. Refused, with R
+    as it was, when an entry at R is missing, or when the set the node is BOOTED on carries approvals below G_pub
+    (`booted_generation`, its anchor_approvals.generation): a bump would leave it no approval to write with, so it keeps
+    the old one, still valid, until it boots an image approved at G_pub (local no-stranding). Returns R."""
+    target, r = published(rotations), read_rotation(index, run)
+    if target is None or r >= target:
+        return r
+    by_from = {e["from"]: e for e in rotations}
+    require(r in by_from, "%s's rotation counter is %d and the document's rotations start at %d: an entry is missing, nothing "
+            "is bumped" % (node_id, r, rotations[0]["from"]))
+    require(isinstance(booted_generation, int) and booted_generation >= target,
+            "%s is booted on an image whose approvals are at generation %s, below the published %d: bumping would leave it no "
+            "approval to write with, so it keeps its current one until it boots an image approved at %d"
+            % (node_id, booted_generation, target, target))
+    while r < target:
+        r = bump(index, point, node_id, r, by_from[r]["signature"], run)
+    return r
+
+
+def require_current(index, node_id, rotations, run=None):
+    """Refused unless this node's R has reached G_pub: a node behind on R writes nothing under K_A and signs nothing
+    (heartbeats, activations), since an approval the retire meant to revoke may still open its objects."""
+    target = published(rotations)
+    if target is None:
+        return
+    r = read_rotation(index, run)
+    require(r >= target, "%s's rotation counter is %d, below the published %d: it bumps first (catch-up), and writes or signs "
+            "nothing under the anchor-policy authority until it has" % (node_id, r, target))
+
+
 def main(argv=None, out=None):
     import argparse
     import json
