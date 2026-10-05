@@ -325,5 +325,75 @@ class Issuance(Record):
         self.assertIn("co-signed by b, refused by this node's own record", events[-1]["reason"])
 
 
+
+class OwnerKey:
+    def __init__(self, key):
+        self.key = key
+
+    def public(self):
+        return pub(self.key)
+
+    def sign(self, raw):
+        return self.key.sign(raw)
+
+
+class RecoveryPath(Record):
+    """The owner and one node, only once the other node parties stopped counting, after the wait, with the line typed."""
+    node, clock = Issuance.node, Issuance.clock               # the helpers only, not Issuance's tests
+
+    def setUp(self):
+        super().setUp()
+        self.m2 = manifest4(2, m.digest(self.m1), nodes4(a="QUARANTINED", b="QUARANTINED"), activation_signers=dict(RULE))
+        self.shown = []
+
+    def owner_half(self, typed=None, tip=None, record=None, now=None, journal=0, key=OWNER_KEYS[0], witness=None):
+        tip = tip or self.m2
+        record = record if record is not None else {"activation_epoch": 40, "expires_at": T0}
+        now = now if now is not None else T0 + act.RECOVERY_WAIT_S
+        want = typed if typed is not None else "activate c site-c %d" % (max(record.get("activation_epoch", 0), journal) + 1)
+        return act.owner_recovery_lease(tip, "c", "site-c", "sha256:" + "ab" * 32, record, journal, "powered off at the PDU", now,
+                                        lambda text: (self.shown.append(text), want)[1], lambda: OwnerKey(key), witness_latest=witness)
+
+    def test_the_owner_and_the_survivor_activate_it_and_the_gate_accepts(self):
+        env = self.owner_half(journal=55)
+        self.assertEqual(env["lease"]["activation_epoch"], 56)                # above the daemon's journal head (ed)
+        self.assertIn("they will not rejoin until they hold epoch 2", env["lease"]["recovery"]["fenced"])
+        self.assertIn("NOT consulted", self.shown[0])
+        c = self.node("c")
+        done = act.recovery_cosign(self.m2, "c", env, self.clock(T0 + act.RECOVERY_WAIT_S), c)
+        self.assertEqual(sorted(s["party"] for s in done["signatures"]), ["c", m.OWNER])
+        self.assertEqual(act.verify(done, self.m2)["node_id"], "c")
+
+    def test_what_the_owner_s_tool_refuses_with_nothing_signed(self):
+        m2b = manifest4(2, m.digest(self.m1), nodes4(a="QUARANTINED"), activation_signers=dict(RULE))
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        self.refused("quarantine b first", lambda: self.owner_half(tip=m2b))
+        self.refused("wait until", lambda: self.owner_half(now=T0 + act.RECOVERY_WAIT_S - 1))
+        self.refused("wait until", lambda: self.owner_half(witness=T0 + 100))     # the collector knows a later grant
+        self.refused("not this activation's", lambda: self.owner_half(typed="activate c site-c 1"))
+        self.refused("not one of the tip manifest's owner_keys", lambda: self.owner_half(key=Ed25519PrivateKey.generate()))
+        self.refused("does not count toward activation", act.owner_recovery_lease, self.m2, "a", "site-a", "sha256:" + "ab" * 32,
+                     {}, 0, "x", T0 + 9999, lambda t: "", lambda: OwnerKey(OWNER_KEYS[0]))
+
+    def test_what_the_survivor_refuses(self):
+        env = self.owner_half()
+        now = T0 + act.RECOVERY_WAIT_S
+        self.refused("is for c, not this node (a)", act.recovery_cosign, self.m2, "a", env, self.clock(now), self.node("a"))
+        forged = dict(env, signatures=[dict(env["signatures"][0], sig=OWNER_KEYS[1].sign(b"other").hex(), key=pub(OWNER_KEYS[1]))])
+        with self.assertRaises(m.Refused):
+            act.recovery_cosign(self.m2, "c", forged, self.clock(now), self.node("c"))
+        # a "recovery" lease signed by a node instead of the owner is refused BEFORE the survivor records anything
+        c0 = self.node("c")
+        by_node = {"lease": env["lease"], "signatures": signed(env["lease"], "a")["signatures"]}
+        self.refused("must carry the owner's signature", act.recovery_cosign, self.m2, "c", by_node, self.clock(now), c0)
+        self.assertEqual(c0.record.counter.v, 0)
+        # the survivor's own LIVE grant record still binds when the owner's export was stale: it granted site-a on a
+        # until later than the export said
+        stale = self.owner_half(record={"activation_epoch": 60, "expires_at": T0})
+        c = self.node("c")
+        c.record.record(lease(self.m1, activation_epoch=60, expires_at=stamp(now + 300), not_before=stamp(now - 200)), now + 300)
+        self.refused("OVERLAP", act.recovery_cosign, self.m2, "c", stale, self.clock(now), c)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -323,3 +323,69 @@ def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers,
     trail({"event": "activation", "outcome": "DENY", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site,
            "reason": "; ".join(refusals)[:240]})
     raise Refused("no node co-signed this activation: %s" % "; ".join(refusals))
+
+
+# ---- the recovery path (#432 §2): the owner and one node, after fencing ----
+
+def recovery_text(others, how, epoch):
+    """The attestation the owner's tool records: what was done to the other nodes, and that it lasts until they hold
+    the quarantine epoch (d9: "hard-fenced" must hold until they have taken it, not only now)."""
+    require(isinstance(how, str) and how.strip() and how.isprintable(), "say how the other nodes are fenced (printable text)")
+    return "%s: %s; they will not rejoin until they hold epoch %d" % (", ".join(others), how.strip(), epoch)
+
+
+def owner_recovery_lease(tip, survivor, site, registry_digest, survivor_record, journal_head, how, now, confirm, open_signer,
+                         witness_latest=None):
+    """The owner's half of a recovery activation (owner.py sign-activation, off the nodes), or Refused. `tip` is the
+    newest manifest of the survivor's chain, verified from the pinned root by the caller. Refused unless:
+      * every node party of activation_signers other than `survivor` is QUARANTINED, REVOKED_STOLEN or RETIRED in `tip`
+        (the quarantine epoch is the tip's: the owner may make it alone, by revocation);
+      * at least RECOVERY_WAIT_S has passed since the latest expires_at any record shows: the survivor's grant record
+        ({"activation_epoch", "expires_at"}, exported from the node) and the audit collector's latest, when consulted;
+      * the operator types the line naming the survivor, the site and the epoch, after reading the attestation.
+    The activation epoch is above both the survivor's last grant and its daemon's epoch-journal head (ed). Returns the
+    envelope with the owner's signature only; the survivor's own co-signature completes it (recovery_cosign)."""
+    rule = tip["activation_signers"]
+    nodes = membership.validate(tip)
+    require(survivor in rule["parties"] and survivor in nodes and nodes[survivor]["state"] not in membership.NOT_COUNTING,
+            "%s does not count toward activation under epoch %d" % (survivor, tip["epoch"]))
+    others = [p for p in rule["parties"] if p not in (membership.OWNER, survivor)]
+    loose = [p for p in others if p in nodes and nodes[p]["state"] not in membership.NOT_COUNTING]
+    require(not loose, "quarantine %s first (a revocation the owner may sign alone): the recovery path is open only once every "
+            "other node party has stopped counting" % ", ".join(loose))
+    latest = max([int(survivor_record.get("expires_at", 0))] + ([int(witness_latest)] if witness_latest else []))
+    require(now >= latest + RECOVERY_WAIT_S, "the latest grant known expires at %d: wait until %d (%d s from now)"
+            % (latest, latest + RECOVERY_WAIT_S, latest + RECOVERY_WAIT_S - now))
+    epoch = max(int(survivor_record.get("activation_epoch", 0)), int(journal_head)) + 1
+    text = recovery_text(others, how, tip["epoch"])
+    lease = {"schema": SCHEMA, "node_id": survivor, "site": site, "registry_digest": registry_digest, "activation_epoch": epoch,
+             "manifest_epoch": tip["epoch"], "manifest_digest": membership.digest(tip), "not_before": _stamp(now),
+             "expires_at": _stamp(now + MAX_LEASE_S), "recovery": {"fenced": text, "quarantine_epoch": tip["epoch"]}}
+    validate(lease)
+    want = "activate %s %s %d" % (survivor, site, epoch)
+    shown = ("A RECOVERY ACTIVATION of %s (site %s) by the owner and that node alone, under epoch %d:\n"
+             "  attested: %s\n  latest known grant expired at %d%s\n"
+             "  If any of %s is alive and can reach another node, STOP: two sites would sign.\n"
+             "Type exactly: %s\n> " % (survivor, site, tip["epoch"], text, latest,
+                                       "" if witness_latest else " (the audit collector NOT consulted)", ", ".join(others), want))
+    require((confirm(shown) or "").strip() == want, "the line typed is not this activation's: nothing is signed")
+    owners = {e["key"] for e in tip["owner_keys"] if e["alg"] == "ed25519"}
+    signer = open_signer()
+    require(signer.public() in owners, "the token's key is not one of the tip manifest's owner_keys: nothing is signed")
+    return {"lease": lease, "signatures": [{"party": membership.OWNER, "key": signer.public(), "sig": signer.sign(message(lease)).hex()}]}
+
+
+def recovery_cosign(manifest, me, envelope, clock, signer):
+    """The survivor's half (as root at its console): the owner's lease for THIS node, checked against this node's current
+    manifest and its own grant record, then recorded and signed. Returns the complete envelope, verified."""
+    membership.exact(envelope, ("lease", "signatures"), "the owner's recovery lease")
+    lease = envelope["lease"]
+    validate(lease)
+    require(lease["node_id"] == me, "the recovery lease is for %s, not this node (%s)" % (lease["node_id"], me))
+    require("recovery" in lease, "not a recovery lease")
+    parties = membership.counting_parties(manifest, message(lease), envelope["signatures"], "recovery lease")
+    require(parties == {membership.OWNER}, "the recovery lease must carry the owner's signature, and only it")
+    own = signer(lease, manifest, _now(clock))                # its grant record: overlap, epochs, busy
+    done = {"lease": lease, "signatures": envelope["signatures"] + [own]}
+    verify(done, manifest)                                    # the other node parties stopped, the threshold met
+    return done
