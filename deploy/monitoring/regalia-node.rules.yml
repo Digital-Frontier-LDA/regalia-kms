@@ -108,6 +108,29 @@ groups:
           severity: warning
         annotations:
           summary: "The TPM anchor is behind the membership chain this node holds: regalia-esp-advance keeps failing, and the next boot renders from an older chain."
+      # ACROSS THE NODES (regalia-kms-48 on #410): a node whose held epoch stays below the highest its peers hold is cut off
+      # from them or WITHHOLDING (a compromised sync that stops publishing, which no rule on that node alone can see).
+      # Compared within one job (one cluster). Thirty minutes is many pull rounds (60 s) and ESP advances (seconds). A
+      # node retired or revoked stops receiving epochs by design: take it out of the scrape.
+      - alert: RegaliaMembershipBehindFleet
+        expr: regalia_membership_epoch < on(job) group_left max by (job) (regalia_membership_epoch)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} holds an older membership epoch than its peers: it is cut off from them, or its sync withholds the newer chain."
+          description: "deploy/baremetal/README.md §7: compare `regalia-node check` on every node of the cluster; a node behind whose sync is running and reaches its peers is withholding."
+      # The same, from root's own reading of the anchor (esp-advance.prom) on BOTH sides (regalia-kms-48): this node's sync
+      # cannot hide it by writing a higher epoch in membership.prom than it anchored, and no peer's sync can make every
+      # honest node fire by writing an inflated one. The reference lags membership by the ESP advance (seconds).
+      - alert: RegaliaAnchorBehindFleet
+        expr: regalia_esp_anchor_epoch < on(job) group_left max by (job) (regalia_esp_anchor_epoch)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }}'s TPM anchor is older than the epoch its peers hold: its rollback protection and next boot lag the cluster."
+          description: "deploy/baremetal/README.md §7: read `journalctl -u regalia-esp-advance` and `regalia-node check` on that node; fix the ESP, then `systemctl start regalia-esp-advance`."
       # regalia-esp-advance's own file (root; regalia-kms-48): a sync that lies in membership.prom does not silence these.
       - alert: RegaliaEspAdvanceFailing
         expr: regalia_esp_advance_ok == 0
@@ -162,6 +185,15 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.instance }} is scraped but has no esp-advance.prom: regalia-esp-advance has not run since boot (its unit runs at boot)."
+      # the file can be there without the anchor's series: esp_metrics leaves it out when the TPM read fails after a run
+      # that otherwise succeeded, and RegaliaAnchorBehindFleet then has nothing to compare for that node (CodeRabbit)
+      - alert: RegaliaEspAnchorEpochMissing
+        expr: up{job="regalia-node"} == 1 unless on(instance) regalia_esp_anchor_epoch
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but exports no regalia_esp_anchor_epoch: its TPM anchor could not be read at regalia-esp-advance's last run, and the fleet cannot compare it."
       - alert: RegaliaLeaseMetricsMissing
         expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?lease\\.prom"}
         for: 5m
