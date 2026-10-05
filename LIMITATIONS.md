@@ -50,12 +50,20 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Accepted, once #387 lands:** a one-peer recovery cannot see a revocation that was made after the
   signing laptop last synced, if the surviving peer withholds it and the audit collector has no
   receipt for it. The owner is asked before signing ([`deploy/baremetal/MEMBERSHIP-RECOVERY.md`](deploy/baremetal/MEMBERSHIP-RECOVERY.md)).
-- **Under a v4 chain an owner-written anchor is still accepted** (#242 B3, waiting on #410). A definer never lays down
-  the owner-written layout under v4 (B2b), but a node whose anchor is already owner-written still reads it under v4.
-  Its writes take the owner authorization, not the approved image. On a host whose owner authorization is set, the
-  node's own services hold none (`Node.anchor()` has no `owner_auth`), so a sync that must advance or repair it fails
-  closed until the node is re-anchored. Anyone holding the owner authorization can write it from any image. B3 makes
-  that layout Unusable under a v4 tip (a re-anchor repairs it) and refuses the v3 → v4 step over it.
+- **Under a v4 chain the anchor is written by policy only (#242 B3), with these limits.** An owner-written counter
+  or slot is Unusable under a v4 tip. load, commit, restore and the ESP advance all judge it by the tip of the chain
+  they hold, fetch or anchor, and refuse it before the disk or the ESP is written. The Go initrd reader
+  (`membership.Anchored`) judges alike, by the tip of the chain it reads, held to the same vectors.
+  - **A node whose anchor is owner-written stops advancing under v4 until it is re-anchored by policy.** Such an
+    anchor is a lab node's, or one laid down before B2b. sync refuses the next chain, and the ESP advance reports
+    `regalia_esp_advance_ok 0`. The repair is `reanchor` (MEMBERSHIP-RECOVERY.md), which needs two peer chains
+    (see the one-peer limit above).
+  - **The v3 → v4 step is refused on such a node, with nothing moved.** Every node must be re-anchored by policy
+    before the root signs the first v4 manifest. No tool checks the whole fleet's layout first; each node's refusal is
+    what tells.
+  - Under a v1–v3 (lab) chain both layouts still read, by design: lab images write with the owner authorization.
+  - Anyone holding the owner authorization can still undefine the indices. That is a denial (Unusable), which a
+    re-anchor repairs; it cannot write them under v4.
 - **TPM owner authorization: built (#242 step C), with these limits.**
   - On the TPM bus (#414, measured): the owner authorization itself is never sent. Owner calls use tpm2-tools'
     own HMAC sessions. Setting it uses a session salted to the enrolled EK (its Name checked) with parameter

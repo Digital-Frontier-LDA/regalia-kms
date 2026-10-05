@@ -60,6 +60,9 @@ type highWater struct {
 	index, base uint32
 	slots       [2]uint32
 	policy      *lazyPolicy
+	// v4: the chain read against this anchor ends in a v4 manifest, under which the counter and the slots are written
+	// by policy only (#242 B3): an owner-written one is Unusable, which a re-anchor repairs
+	v4 bool
 }
 
 // lazyPolicy is this node's approved-image write policy, asked for only when a policy-written index is met
@@ -115,7 +118,8 @@ func (h highWater) read8(index uint32) (uint64, error) {
 }
 
 // asDefined is HighWater._as_defined: the index's attributes are this anchor's, owner-written or, for the
-// counter and the slots, written under a policy that must be this node's approved-image policy (#242 B).
+// counter and the slots, written under a policy that must be this node's approved-image policy (#242 B). Under a
+// v4 chain tip the counter and the slots are written by policy only (#242 B3).
 func (h highWater) asDefined(index uint32, attributes uint32, authPolicy []byte, kind string) error {
 	mask := attributes &^ nvState
 	if written, ok := policyAttributes[kind]; ok && mask == written {
@@ -137,6 +141,9 @@ func (h highWater) asDefined(index uint32, attributes uint32, authPolicy []byte,
 	} else if want := anchorAttributes[kind]; mask != want {
 		return &Unusable{Reason: fmt.Sprintf("NV index %s does not have this anchor's attributes (0x%x, not 0x%x): it can be "+
 			"written or read otherwise than this software defines", name(index), mask, want)}
+	} else if _, policyKind := policyAttributes[kind]; policyKind && h.v4 {
+		return &Unusable{Reason: fmt.Sprintf("NV index %s is owner-written: under %s the anchor is written by policy only (re-anchor it)",
+			name(index), SchemaV4)}
 	}
 	if kind == "base" {
 		return requireAnchor(attributes&nvWriteLocked != 0, "base index %s is not write-locked", name(index))
@@ -344,6 +351,8 @@ func ReadChain(envelopes []any, root any) ([]map[string]any, error) {
 // read. Returns the high-water.
 func Anchored(nv NV, manifests []map[string]any, policy func() ([]byte, error)) (uint64, error) {
 	h := newHighWater(nv, HighWaterIndex, policy)
+	// judged by the tip of the chain read (#242 B3), as the Python Store judges by its own chain's (Store._judge_by)
+	h.v4 = len(manifests) > 0 && manifests[len(manifests)-1]["schema"] == SchemaV4
 	hw, err := h.value()
 	if err != nil {
 		return 0, err

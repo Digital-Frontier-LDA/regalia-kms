@@ -256,7 +256,11 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
     CAP_DAC_OVERRIDE; sync no longer writes the anchor, and systemd runs one start of this unit at a time."""
     from deploy.baremetal import bootcreds, enrol
     envelopes = read_published(node.path(PUBLISHED))
-    anchor = node.anchor(lock_path=lock_path)
+    # judged by the chain it anchors (#242 B3, regalia-kms-ed): under a v4 tip an owner-written anchor is Unusable, refused
+    # before the ESP is written (the unit's ok=0); a re-anchor repairs it
+    require(isinstance(envelopes, list) and envelopes, "the membership chain must be a non-empty list of envelopes")
+    tip = membership.accept_chain(None, envelopes, node.cfg["root_key"])
+    anchor = node.anchor(lock_path=lock_path, schema=tip["schema"])
     manifest = bootcreds.anchored(envelopes, node.cfg["root_key"], anchor)
     chain = membership.canonical(envelopes)
     require(len(chain) <= membership.MAX_CHAIN_BYTES, "the membership chain is over %d bytes" % membership.MAX_CHAIN_BYTES)
@@ -468,6 +472,15 @@ def _chain_tip(cfg):
     return membership.accept_chain(None, envelopes, cfg["root_key"])
 
 
+def _tip_schema(cfg):
+    """The schema of the verified chain tip this node holds (_chain_tip), which its anchor and heartbeat counter are judged
+    by (#242 B3); None before it holds any chain (an anchor defined at enrolment, before its first commit: the Store then
+    judges by the chain it commits). A chain that is held but does not verify is refused, never None."""
+    if not any(os.path.lexists(os.path.join(cfg["state_dir"], name)) for name in ("membership.json", PUBLISHED)):
+        return None
+    return _chain_tip(cfg)["schema"]
+
+
 def heartbeat_counter(cfg, run=subprocess.run, owner_auth=None):
     """This node's heartbeat sequence counter, with the lock its users take: the one construction the
     services and the recovery command (recount.py) share. Written by policy like the anchor (#242)."""
@@ -475,7 +488,8 @@ def heartbeat_counter(cfg, run=subprocess.run, owner_auth=None):
                              policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg),
                              # its one definition, define_at (a first heartbeat, a replacement's, recount's floor), is
                              # laid down under the node's policy when its signed images name one (define_policy)
-                             define_policy=lambda: define_policy(cfg), owner_auth=owner_auth)
+                             define_policy=lambda: define_policy(cfg), owner_auth=owner_auth,
+                             schema=lambda: _tip_schema(cfg))
 
 
 # ---- the node ----
@@ -507,13 +521,17 @@ class Node:
     def tpm_clock(self):
         return heartbeat.TpmClock(self.tcti, self.run)
 
-    def anchor(self, lock_path=None):
+    def anchor(self, lock_path=None, schema=None):
         """The membership epoch anchor: membership.HighWater on its own index (and the pair and slots after it),
-        with this node's approved-image write policy (image_policy) for an index written by policy (#242).
+        with this node's approved-image write policy (image_policy) for an index written by policy (#242), judged by the
+        schema of the chain tip this node holds (_tip_schema, #242 B3).
         `lock_path`: the writer's lock. The run-time writer is esp_advance, with its own (ESP_LOCK); the default, in
-        the state directory, is for the hand tools that build an anchoring store (enrolment). sync only reads."""
+        the state directory, is for the hand tools that build an anchoring store (enrolment). sync only reads.
+        `schema`: the schema of the chain this anchor is judged by, for a caller holding another chain than the node's
+        (esp_advance: the published one it anchors); default, the chain tip this node holds."""
         return membership.HighWater(self.cfg["nv_epoch"], self.tcti, self.run, lock_path=lock_path or self.path("highwater.lock"),
-                                    policy=lambda: image_policy(self.cfg), image_key=lambda: image_key(self.cfg))
+                                    policy=lambda: image_policy(self.cfg), image_key=lambda: image_key(self.cfg),
+                                    schema=schema or (lambda: _tip_schema(self.cfg)))
 
     def manifest(self, patience=2.0, step=0.25):
         """The current manifest, by the published chain, verified (the root services' view).
