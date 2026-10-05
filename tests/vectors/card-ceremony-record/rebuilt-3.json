@@ -1,0 +1,74 @@
+{
+ "record": {
+  "at": "2026-10-06T12:00:00Z",
+  "event": "card-ceremony",
+  "owner_keys": [
+   {
+    "alg": "ed25519",
+    "attestation_sha256": {
+     "dec": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+     "sig": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+    },
+    "attested": true,
+    "key": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
+    "role": "dev-main",
+    "serial": "40000001"
+   },
+   {
+    "alg": "ed25519",
+    "attestation_sha256": {
+     "dec": "e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",
+     "sig": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+    },
+    "attested": true,
+    "key": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d",
+    "role": "dev-backup",
+    "serial": "40000002"
+   }
+  ],
+  "ownerauth_recipients": [
+   {
+    "primary": "A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1",
+    "serial": "40000001",
+    "subkey": "B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1B1"
+   },
+   {
+    "primary": "A2A2A2A2A2A2A2A2A2A2A2A2A2A2A2A2A2A2A2A2",
+    "serial": "40000002",
+    "subkey": "B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2B2"
+   }
+  ],
+  "release_key": {
+   "alg": "ed25519",
+   "attested": false,
+   "cards": [
+    "40000003",
+    "40000004"
+   ],
+   "fingerprint": "C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3C3",
+   "imported": true,
+   "key": "91a28a0b74381593a4d9469579208926afc8ad82c8839b7644359b9eba9a4b3a"
+  },
+  "root_entry": {
+   "alg": "ed25519",
+   "key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+  },
+  "root_fingerprint": "34750f98bd59fcfc946da45aaabe933be154a4b5094e1c4abf42866505f3c97e",
+  "schema": "regalia.card-ceremony-record/v1",
+  "sequence": 3,
+  "session": "00112233445566778899aabbccddeeff",
+  "ssh_signers": [
+   {
+    "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINVCB9oZSXfc9Grb/sK8LnW1LVqKQhhP7f3AACTw4+ja",
+    "serial": "40000001"
+   },
+   {
+    "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFEcNKGiy1Id8WuyRrjejnmXziNcfnayKj11A6JIGd2K",
+    "serial": "40000002"
+   }
+  ],
+  "supersedes": "3cc298a4d4466a5941e0c19e7e5dd5b95a9724fd1a8584117d167174da008acb",
+  "tool": "card-ceremony-vectors/1"
+ },
+ "signature": "d8e9a36abbf90f8798e3e96ed032446e1f70b24e6dc420121ff6480758b3007933ff6a995de8de9bc856287e2190c616ed98388024815ce46aa974ec01db9406"
+}
