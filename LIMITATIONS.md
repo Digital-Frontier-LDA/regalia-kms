@@ -26,9 +26,15 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
-- **Activation by quorum: not built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
-  refined by #432; see the ADR. On `main` only the format carries `activation_signers`, and nothing
-  reads it. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
+- **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
+  refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
+  its verification under the current manifest's `activation_signers`, each node's grant record and
+  signer, and the co-signer's and proposer's checks, as a library with unit tests. **Nothing issues or
+  enforces an activation in the running system yet:** no `nv_activation` index is defined at
+  enrolment, sync has no activation ops, there is no `owner.py sign-activation`, and the Go Gate still
+  takes `regalia-fence`'s single key. By the rule, a new cluster's first activation waits about 11 minutes
+  (`RECOVERY_WAIT_S`): every node starts with no grant record, so each is busy for that long after it
+  starts. Expected at first bring-up, not a fault. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
   the authority for which site signs ([`FENCING.md`](FENCING.md)).
   **Accepted in the design:**
   - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
@@ -223,6 +229,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   recovery scenarios (#402). Outage, leases and replace are not covered. The time trail and the update trail
   are never checked end to end in a three-node scenario. In recovery, "each node's change to serving" is not
   tied to a step, and the victims' not-serving lines are not checked.
+- **`regalia-sync` says nothing in the journal about its rounds** (#470). Its decisions (pulls, applies,
+  refusals and their reasons) are only in its hash-chained trail. `journalctl -u regalia-sync` shows systemd's
+  start and stop lines, so an operator asking why a node is behind its peers must read the trail. In the
+  three-node fixture, `advance()` now prints the puller's trail when a node doesn't take an epoch (#469).
 - **Collector receipts carry no signed time** (#398), so a stale receipt still verifies. This matters
   for the one-peer recovery witness (#387).
 
