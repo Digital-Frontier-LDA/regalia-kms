@@ -18,7 +18,8 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
   3  PoC 10.2-10.4: for each survivor, the two others power-cycled and both unlocked through the survivor
      before either starts (the survivor the only source); both then hold leases the survivor issued
   4  PoC 10.5: two returners ask one survivor at the same time: both get their key from it
-  5  PoC 10.5, the session binding: b's initrd, unlocked once, runs its client again in the same TPM boot with
+  5  PoC 10.5: b crashed in its running system (the same boot) asks and is refused for its phase (#397); then the
+     session binding: b's initrd, unlocked once, runs its client again in the same TPM boot with
      a second session and a gives it nothing, while c, in a new boot, unlocks through a at the same time; b
      power-cycled then unlocks through a
   6  PoC 10.5, the rate limits: b's lease requests to a, its admission stopped and its bucket full: the
@@ -199,6 +200,21 @@ def scenario(cluster):
     # a new session; c, power-cycled (a new boot), asks the same survivor at the same time. In its initrd: an unlock is
     # judged in the initrd phase (#396), so a booted system that crashed is refused for its phase before its session
     survivor, crashed, rebooted = "a", "b", "c"
+    # #397, first: b crashes in its RUNNING system (its services stop, its TPM does not: PCR 11 in the system phase) and
+    # a client asks for its disk with a new session. Refused for its PHASE, before any session is judged: a booted
+    # system that crashed never gets its disk key back without a reboot
+    cluster.stop(crashed, power=None)
+    for interface in ("wg-unlock", "wg-svc"):                 # its running system's tunnels down (wg-boot takes wg-unlock's port)
+        cluster.nodes[crashed].in_ns("ip", "link", "del", interface, check=False)
+    (cluster.nodes[crashed].run / "boot-session").unlink(missing_ok=True)   # so the client asks rather than standing down
+    since = time.time()
+    got = cluster.unlock(crashed, timeout=90, rounds=2)
+    phase = "the node is in the system phase"                   # the survivor's attestation refusal, in its unlock trail
+    denied = [e.get("reason") for e in cluster.trail(survivor) if e.get("event") == "unlock" and e.get("subject") == crashed
+              and e.get("outcome") == "DENY" and e.get("at", 0) >= since - 1]
+    ok("error" not in got and got.get("rc") != 0 and got.get("peer") is None and any(phase in (r or "") for r in denied),
+       "N: %s, crashed in its running system (the same boot, PCR 11 in the system phase), gets no key from %s, which says "
+       "why: %s" % (crashed, survivor, phase), {"client": got, "denied": denied})
     cluster.stop(rebooted)
     cluster.stop(crashed)                                       # a new boot, never started: PCR 11 in the initrd phase
     first = cluster.unlock(crashed)
