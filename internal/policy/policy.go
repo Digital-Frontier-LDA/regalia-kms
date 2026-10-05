@@ -98,7 +98,22 @@ type Request struct {
 	Nonce             string
 	VerifiedApprovers []string
 	Cosmos            *CosmosTransaction
+	// SigningProfile is the key's (registry.Route.SigningProfile). For "cosmos-account", CosmosChain is what the
+	// chain said of the signer before signing, and the SignDoc must carry exactly that (#432, d9's hole 3).
+	SigningProfile string
+	CosmosChain    *CosmosChainFacts
 }
+
+// CosmosChainFacts is what a chain's endpoint said of the signing account just before signing.
+type CosmosChainFacts struct {
+	ChainID       string
+	Address       string
+	AccountNumber uint64
+	Sequence      uint64
+}
+
+// ProfileCosmosAccount is registry.ProfileCosmosAccount (policy does not import the registry).
+const ProfileCosmosAccount = "cosmos-account"
 
 type Reservation struct {
 	PolicyID string `json:"policy_id"`
@@ -294,13 +309,38 @@ func (engine *Engine) Evaluate(ctx context.Context, request Request) Decision {
 	} else if request.Cosmos != nil {
 		return decision.deny("unexpected-domain-data")
 	}
+	// THE CHAIN IS THE ARBITER for a cosmos-account key: the SignDoc must name exactly the chain, the account
+	// number and the sequence the chain said just before signing. A lying endpoint can then only deny service
+	// (equality, never substitution). The KMS keeps no sequence high-water for such a key: two servers signing
+	// for one account at once are arbitrated by the chain, which takes one per sequence.
+	accountProfile := request.Cosmos != nil && request.SigningProfile == ProfileCosmosAccount
+	if accountProfile {
+		facts := request.CosmosChain
+		switch {
+		case facts == nil:
+			return decision.deny("cosmos-chain-unknown")
+		case facts.ChainID != request.Cosmos.ChainID:
+			return decision.deny("cosmos-chain-id-mismatch")
+		case facts.AccountNumber != request.Cosmos.AccountNumber:
+			return decision.deny("cosmos-account-number-mismatch")
+		case facts.Sequence != request.Cosmos.Sequence:
+			return decision.deny("cosmos-sequence-mismatch")
+		}
+		for _, message := range request.Cosmos.Messages {
+			if message.Source != facts.Address {
+				return decision.deny("cosmos-signer-mismatch")
+			}
+		}
+	} else if request.Cosmos != nil && request.SigningProfile != "" {
+		return decision.deny("cosmos-profile-unknown")
+	}
 	var sequence *uint64
-	if request.Cosmos != nil {
+	if request.Cosmos != nil && !accountProfile {
 		value := request.Cosmos.Sequence
 		sequence = &value
 	}
 	sequenceKey := ""
-	if request.Cosmos != nil {
+	if sequence != nil {
 		sequenceKey = request.Cosmos.ChainID + "\x00" + strconv.FormatUint(request.Cosmos.AccountNumber, 10)
 	}
 	err := engine.state.Reserve(ctx, Reservation{
