@@ -17,6 +17,9 @@ var errPOCProfile = errors.New("synthetic issuing profile refused")
 var pocECDSASHA256 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 2}
 
 func pocTBSFields(data []byte) ([]asn1.RawValue, error) {
+	if len(data) == 0 || len(data) > 32<<10 {
+		return nil, errPOCProfile
+	}
 	var sequence asn1.RawValue
 	rest, err := asn1.Unmarshal(data, &sequence)
 	if err != nil || len(rest) != 0 || sequence.Class != 0 || sequence.Tag != 16 || !sequence.IsCompound {
@@ -46,7 +49,7 @@ func pocExtensions(extensions []pkix.Extension, allowed map[string]bool) bool {
 	seen := map[string]bool{}
 	for _, e := range extensions {
 		oid := e.Id.String()
-		if !allowed[oid] || seen[oid] {
+		if !allowed[oid] || seen[oid] || !pocExtensionValueDER(e) {
 			return false
 		}
 		seen[oid] = true
@@ -92,7 +95,7 @@ func pocDNSOnlySAN(cert *x509.Certificate) bool {
 
 func pocInspectCertificate(data []byte, issuer *x509.Certificate, now time.Time) (*x509.Certificate, error) {
 	fields, err := pocTBSFields(data)
-	if err != nil || len(fields) != 8 || fields[0].Class != 2 || fields[0].Tag != 0 || fields[7].Class != 2 || fields[7].Tag != 3 {
+	if err != nil || len(fields) != 8 || fields[0].Class != 2 || fields[0].Tag != 0 || fields[7].Class != 2 || fields[7].Tag != 3 || !pocCertificateDERFields(fields) {
 		return nil, errPOCProfile // v3 with extensions; no unique IDs/extra fields.
 	}
 	encoded, err := pocSignedStructure(data)
@@ -108,7 +111,7 @@ func pocInspectCertificate(data []byte, issuer *x509.Certificate, now time.Time)
 		return nil, errPOCProfile
 	}
 	key, ok := cert.PublicKey.(*ecdsa.PublicKey)
-	if !ok || key.Curve.Params().BitSize != 256 || !pocExtensions(cert.Extensions, map[string]bool{"2.5.29.14": true, "2.5.29.15": true, "2.5.29.17": true, "2.5.29.19": true, "2.5.29.35": true, "2.5.29.37": true}) || !pocDNSOnlySAN(cert) {
+	if !ok || key.Curve.Params().BitSize != 256 || !pocExtensionDERFields(fields[7], cert.Extensions) || !pocExtensions(cert.Extensions, map[string]bool{"2.5.29.14": true, "2.5.29.15": true, "2.5.29.17": true, "2.5.29.19": true, "2.5.29.35": true, "2.5.29.37": true}) || !pocDNSOnlySAN(cert) {
 		return nil, errPOCProfile
 	}
 	var subject pkix.RDNSequence

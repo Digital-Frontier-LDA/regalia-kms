@@ -22,6 +22,7 @@ func pocInspectCRL(data []byte, issuer *x509.Certificate, now time.Time) (*x509.
 		!bytes.Equal(crl.RawIssuer, issuer.RawSubject) || !bytes.Equal(crl.AuthorityKeyId, issuer.SubjectKeyId) ||
 		crl.Number == nil || crl.Number.Sign() < 0 || crl.Number.BitLen() > 64 || crl.ThisUpdate.Before(now.Add(-time.Minute)) || crl.ThisUpdate.After(now.Add(10*time.Second)) ||
 		!crl.NextUpdate.After(now) || !crl.NextUpdate.After(crl.ThisUpdate) || crl.ThisUpdate.Before(issuer.NotBefore) || crl.NextUpdate.After(issuer.NotAfter) || crl.NextUpdate.Sub(crl.ThisUpdate) > time.Hour || len(crl.RevokedCertificateEntries) > 100 ||
+		!pocCRLEntryDER(fields, len(crl.RevokedCertificateEntries)) || !pocExtensionDERFields(fields[len(fields)-1], crl.Extensions) ||
 		!pocExtensions(crl.Extensions, map[string]bool{"2.5.29.35": true, "2.5.29.20": true, "2.5.29.27": true}) {
 		return nil, errPOCProfile
 	}
