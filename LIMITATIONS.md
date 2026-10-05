@@ -45,8 +45,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     alert after a set number of minutes unreachable prompts the owner.
 - **Recovery with only one surviving peer: built (#387), not measured.** `recover apply --one-source`
   and `reanchor --one-source` take one peer's chain and a short-lived statement that the owner signs off
-  the nodes (`owner.py sign-recovery`). They are unit-tested only: the three-node run is #391, and
-  nothing has run with a real YubiKey or on a DL360 TPM. With **both** peers gone, recovery is a new
+  the nodes (`owner.py sign-recovery`). They are unit-tested only: no three-node scenario runs the one-source path yet (#391 rehearsed
+  the total-outage re-anchor; the one-source case follows this PR), and nothing has run with a real YubiKey or on
+  a DL360 TPM. With **both** peers gone, recovery is a new
   root ceremony, by design.
 - **Accepted:** a one-peer recovery cannot see a revocation that two nodes signed after the signing
   laptop's last record if the surviving peer withholds it and the audit collector holds no receipt
