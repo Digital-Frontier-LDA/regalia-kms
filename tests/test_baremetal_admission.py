@@ -573,6 +573,25 @@ class RunsAtTheLapse(Case):
         self.assertEqual([(e["outcome"]) for e in self.trail], ["ALLOW", "DENY"])
         self.assertIsNone(service.lapse())                              # the bound of a zero admission: nothing more
 
+    def test_lapse_reads_the_manifest_and_publishes_under_the_one_lock(self):
+        """CodeRabbit on #485: with the lock released between the bound and the publication, a renewal step() published
+        meanwhile could be overwritten, or judged by an older manifest."""
+        service = self.recording()
+        service.step()
+        self.later(lease.MAX_LIFETIME)
+        held = []
+        real = service.manifest
+
+        def manifest():
+            got = service.lock.acquire(blocking=False)      # from inside lapse(): the lock must already be held
+            if got:
+                service.lock.release()
+            held.append(not got)
+            return real()
+        service.manifest = manifest
+        self.assertEqual(service.lapse()["serve_until_boottime_ms"], 0)
+        self.assertEqual(held, [True])
+
     def test_a_round_held_by_a_silent_peer_does_not_hold_the_lapse(self):
         """The round's renewal runs outside the lock: the watcher, on its own thread, writes at the bound meanwhile."""
         import threading

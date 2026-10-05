@@ -354,11 +354,15 @@ def drill(serial, label, pin, w, runtime, key_id, processes):
     lease()
     check(wait(200) == 200 and sign() == (200, True), "under a lease asked for after its return: it serves")
     say("### G2  pulled and put back BETWEEN two requests, nothing asking meanwhile")
-    lease()                                          # alive across the operator's wait below (a 25 s lease)
+    lease()
     check(sign() == (200, True), "serving before")
+    before_pull = admission.boottime_ms() - 1
     operator("PULL token %s and PUT IT BACK within ten seconds" % serial)
     time.sleep(3)
     confirm(serial)          # also: listed again, so a slow re-enumeration is not what refuses the next request
+    # alive again across the operator's wait (a 25 s lease), with its request time from BEFORE the pull: so the refusal
+    # below is the reader watcher's, never a lapsed lease nor a fresh request (CodeRabbit on #485)
+    lease(asked=before_pull)
     # Nothing asked the daemon since the last request: it has no background health check (a binding's health is
     # evaluated only when a request routes or readiness is asked, internal/registry), so the refusal below is the
     # reader watcher's, not an absence some other look saw.
