@@ -78,7 +78,6 @@ boot. Nothing here has run with a hardware token.
 import argparse
 import base64
 import contextlib
-import functools
 import hashlib
 import json
 import os
@@ -1715,11 +1714,12 @@ def _inputs(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="python3 -m deploy.baremetal.uki", description=__doc__.split("\n\n")[0], allow_abbrev=False)
+    parser = argparse.ArgumentParser(prog="python3 -m deploy.baremetal.uki", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    # regalia-kms-51: offline-keys allow-lists the exact flags; an abbreviation (--sig, --key-f) or a repeat after the
-    # allowed one would otherwise be taken (argparse: the last one wins). No subcommand takes abbreviations.
-    sub.add_parser = functools.partial(sub.add_parser, allow_abbrev=False)
+    # regalia-kms-51, 95: offline-keys allow-lists the exact flags; an abbreviation (--sig, --key-f) or a second occurrence
+    # of a flag after the allowed one would otherwise be taken (argparse: the last one wins). keyfd.exact refuses both,
+    # for the parser and every subcommand.
+    keyfd.exact(parser, sub)
 
     def input_args(c):
         for key in INPUTS:

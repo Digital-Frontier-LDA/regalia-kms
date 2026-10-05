@@ -95,7 +95,6 @@ CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.m
 import argparse
 import datetime
 import getpass
-import functools
 import hashlib
 import hmac
 import json
@@ -644,11 +643,12 @@ def _pin_reader(name):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="regalia-manifest", description=__doc__.split("\n\n")[0], allow_abbrev=False)
+    parser = argparse.ArgumentParser(prog="regalia-manifest", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    # regalia-kms-51: offline-keys allow-lists the exact flags; an abbreviation (--sig, --key-f) or a repeat after the
-    # allowed one would otherwise be taken (argparse: the last one wins). No subcommand takes abbreviations.
-    sub.add_parser = functools.partial(sub.add_parser, allow_abbrev=False)
+    # regalia-kms-51, 95: offline-keys allow-lists the exact flags; an abbreviation (--sig, --key-f) or a second occurrence
+    # of a flag after the allowed one would otherwise be taken (argparse: the last one wins). keyfd.exact refuses both,
+    # for the parser and every subcommand.
+    keyfd.exact(parser, sub)
 
     def chain(c):
         c.add_argument("--chain", required=True, metavar="CHAIN.json", help="the signed chain (a JSON list of envelopes)")
