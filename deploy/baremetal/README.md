@@ -935,8 +935,11 @@ removing only what it can prove it made.
   - `seal-hsm-pin.sh` passes the value to tpm2-tools as a file in a root-only directory on /run (tmpfs), removed on
     exit. A run killed outright leaves it until reboot. The script doesn't check it against the record: a wrong
     value is refused by the TPM.
-  - **Rotation** (`enrol ownerauth --rotate-from CURRENT_RECORD --record NEW_RECORD`): standard input carries the current
-    value, then the new one (`(gpg --decrypt current.yk.gpg; gpg --decrypt new.yk.gpg) | sudo ...`). Both are checked
+  - **Rotation**, as regalia-ceremony#137 prints it for each node:
+    `cd /usr/lib/regalia-kms && (gpg --decrypt <current set>/ownerauth-X.yk.gpg; gpg --decrypt ownerauth-X.yk.gpg) | sudo python3 -Es -m deploy.baremetal.enrol ownerauth --rotate-from <current set>/ownerauth.record.json --record ownerauth.record.json --node-id X --root-key ROOT`.
+    Standard input carries the CURRENT value, then the NEW one (the `cd` is the units' WorkingDirectory, which `-m`
+    needs to find the package). A node set before the node held its record runs `--check --adopt --record <current
+    set>/ownerauth.record.json` once first, with the current value on standard input. Both are checked
     against their records under the pinned root before the TPM is touched. The new record must be strictly later
     (`at`; both are root-signed): a rotation never goes back to an older record, whose envelopes retired or lost cards
     may open (regalia-kms-51). The change is one `tpm2_changeauth` in a session salted to the enrolled EK, where the
