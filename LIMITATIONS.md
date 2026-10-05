@@ -34,7 +34,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   enrolment, sync has no activation ops, there is no `owner.py sign-activation`, and the Go Gate still
   takes `regalia-fence`'s single key. By the rule, a new cluster's first activation waits about 11 minutes
   (`RECOVERY_WAIT_S`): every node starts with no grant record, so each is busy for that long after it
-  starts. Expected at first bring-up, not a fault. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
+  starts. Expected at first bring-up, not a fault. **The runtime lease (`lease.py`) is the one serving lease under D32: 30 s, renewed at a third (every 10 s)**, issued by **one** peer over the subject's re-attested TPM. A node cut off from both peers stops within 30 s, less the 5 s admission margin. Each renewal is a re-attestation and a quote on two TPMs (no NV write), so a node's TPM does one or two quotes every 10 s. While renewals fail they back off 2 s doubling to 10 s, so a healed node is serving again within about 10 s. A peer whose authenticated time is more than 5 s fast issues leases the others refuse (`FUTURE_SKEW`). It does not yet carry `state_revision` or the session key (95's v2, #432). Runtime leases are issued by **one** active peer, and `regalia-fence` is still
   the authority for which site signs ([`FENCING.md`](FENCING.md)).
   **Accepted in the design:**
   - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)

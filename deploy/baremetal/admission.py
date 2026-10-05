@@ -78,7 +78,7 @@ Refused, require = membership.Refused, membership.require
 SCHEMA = "regalia.admission/v2"
 FIELDS = ("schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "hsm_serials", "lease_issued_at",
           "requested_boottime_ms", "serve_until_boottime_ms", "reason")
-MARGIN = 10                # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
+MARGIN = 5                 # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
 NEVER = "1970-01-01T00:00:00Z"
 # The daemon reads this file with a limit of 4096 bytes (internal/admission/admission.go, maxFileBytes) and
 # refuses a larger one as "oversized", which would hide the reason. So the reason here is bounded well below
@@ -86,7 +86,7 @@ NEVER = "1970-01-01T00:00:00Z"
 # answer (node.admission_service, "admission-renew"), and each change between serving and not serving with its reason
 # ("admission-serving", Service below).
 ADMISSION_REASON_LIMIT = 1024
-RETRY_FIRST, RETRY_MAX = 5, 60     # seconds between renewal attempts while they fail: 5, 10, 20, 40, 60, 60, ...
+RETRY_FIRST, RETRY_MAX = 2, 10     # seconds between renewal attempts while they fail: 2, 4, 8, 10, 10, ... (within a 30 s lease)
 BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 MAX_REQUESTS = 16
 MAX_SERIALS = 16           # tokens one node may hold that the daemon will serve from (its reader's bound too)

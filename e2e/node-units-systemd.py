@@ -906,7 +906,7 @@ def part2(work, binaries, user, ctx, servers, status):
         json.loads(pathlib.Path(ADMISSION_FILE).read_text())), 120, 2)
     admitted_doc = admitted_doc if isinstance(admitted_doc, dict) else {}
     left = (admitted_doc.get("serve_until_boottime_ms", 0) - admission.boottime_ms()) / 1000
-    ok(admitted_doc.get("epoch") == 2 and 200 < left <= lease.MAX_LIFETIME,
+    ok(admitted_doc.get("epoch") == 2 and lease.MAX_LIFETIME - admission.MARGIN - 10 < left <= lease.MAX_LIFETIME,
        "regalia-admission re-attested to b with a's TPM; b's TPM signed a lease; admitted for %.0f s under epoch 2" % left,
        admitted_doc or json.loads(pathlib.Path(ADMISSION_FILE).read_text()))
     issued = [e for e in events if e.get("event") == "sync-lease" and e.get("subject") == "a"]
