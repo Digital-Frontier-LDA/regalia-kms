@@ -425,6 +425,27 @@ class AnchorPolicyAndCardRecord(Case):
         self.refused("back to the activation threshold (a, b) after an epoch below it", m.accept, nobody, sign(back, ROOT), ROOT_PUB)
         self.assertEqual(m.accept(nobody, sign(dict(back, recovery_ends_by=0), ROOT), ROOT_PUB)["recovery_ends_by"], 0)
 
+    def test_a_second_recovery_never_inherits_the_first_s_end(self):
+        """ed: recovery_ends_by is cleared by the epoch that drops below the activation threshold, whoever signs it; the
+        epoch coming back must state its own."""
+        alone = m.accept(self.first, sign(manifest4(2, m.digest(self.first), nodes4(a="QUARANTINED", b="QUARANTINED")), ROOT), ROOT_PUB)
+        ended = m.accept(alone, sign(manifest4(3, m.digest(alone), nodes4(), recovery_ends_by=1790000000), ROOT), ROOT_PUB)   # T1
+        stale = manifest4(4, m.digest(ended), nodes4(a="QUARANTINED", b="QUARANTINED"), recovery_ends_by=1790000000)
+        self.refused("recovery_ends_by must be null (an earlier recovery's end does not carry over)", m.accept, ended, sign(stale, ROOT), ROOT_PUB)
+        # a quorum may drop below the threshold too (c and the owner quarantine a, then b): it clears the field, and only that
+        by_quorum = manifest4(4, m.digest(ended), nodes4(a="QUARANTINED"), recovery_ends_by=1790000000)
+        one = m.accept(ended, quorum(by_quorum, ("b", NODE_KEYS["b"]), ("c", NODE_KEYS["c"])), ROOT_PUB)       # still at the threshold
+        below = manifest4(5, m.digest(one), nodes4(a="QUARANTINED", b="QUARANTINED"), recovery_ends_by=1790000000)
+        self.refused("recovery_ends_by must be null", m.accept, one, quorum(below, ("b", NODE_KEYS["b"]), ("c", NODE_KEYS["c"])), ROOT_PUB)
+        cleared = m.accept(one, quorum(dict(below, recovery_ends_by=None), ("b", NODE_KEYS["b"]), ("c", NODE_KEYS["c"])), ROOT_PUB)
+        self.assertIsNone(cleared["recovery_ends_by"])
+        back = manifest4(6, m.digest(cleared), nodes4())
+        self.refused("must state recovery_ends_by", m.accept, cleared, sign(back, ROOT), ROOT_PUB)
+        self.assertEqual(m.accept(cleared, sign(dict(back, recovery_ends_by=1790900000), ROOT), ROOT_PUB)["recovery_ends_by"], 1790900000)
+        # a quorum still cannot SET it, nor change it to another value
+        self.refused("cannot change recovery_ends_by", m.accept, ended,
+                     quorum(manifest4(4, m.digest(ended), nodes4(a="QUARANTINED"), recovery_ends_by=1), ("b", NODE_KEYS["b"]), ("c", NODE_KEYS["c"])), ROOT_PUB)
+
     def test_owner_keys_change_only_with_a_new_card_record(self):
         man = self.changed(lambda x: x["owner_keys"].pop())
         self.refused("owner_keys change only with a new card_record", m.accept, self.first, sign(man, ROOT), ROOT_PUB)

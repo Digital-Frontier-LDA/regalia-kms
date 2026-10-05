@@ -478,6 +478,9 @@ func restrictive(current, candidate map[string]any, signer string) error {
 	}
 	names := map[string]string{"policy_version": "the policy version", "revocation_keys": "the revocation keys"}
 	for _, k := range rootFields {
+		if k == "recovery_ends_by" && candidate[k] == nil {
+			continue // clearing it is not a widening: a recovery's end is stated again by the root
+		}
 		if !equal(candidate[k], current[k]) {
 			name := names[k]
 			if name == "" {
@@ -643,6 +646,10 @@ func Accept(current map[string]any, envelope any, root any) (map[string]any, err
 	if bothV4 && !equal(candidate["anchor_policy_key"], current["anchor_policy_key"]) {
 		return nil, refuse("anchor_policy_key is set at genesis and never changes, for any signer: every node's TPM objects " +
 			"are defined under it (a new one is a new genesis)")
+	}
+	if bothV4 && !belowQuorum(current) && belowQuorum(candidate) && candidate["recovery_ends_by"] != nil {
+		return nil, refuse("this epoch drops the counting nodes below the activation threshold: recovery_ends_by must be " +
+			"null (an earlier recovery's end does not carry over)")
 	}
 	if signer != "root" {
 		if err := restrictive(current, candidate, signer); err != nil {
