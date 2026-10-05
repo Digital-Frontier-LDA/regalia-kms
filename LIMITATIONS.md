@@ -103,9 +103,14 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       TPM_RC_AUTH_FAIL and raises `TPM_PT_LOCKOUT_COUNTER`. So the rotation proves the current value first, and makes
       the changeauth only with `min(3, max)` tries left (at the max, the node's DA-protected keys lock out). Until the
       DL360's TPM is measured, each failed owner check is treated as a possible strike.
-    - The node holds which record it is on (`ownerauth.json`) and refuses a rotation from another. The other
-      owner-authorized tools (`enrol commit`, `reanchor`, `recount`, `seal-hsm-pin.sh`) do not check it yet: a stale
-      `--ownerauth` record there is refused by the TPM, not before it (#460, agreed with regalia-kms-d9).
+    - The node holds which record it is on (`/var/lib/regalia-enrol/ownerauth.json`). A rotation from another is
+      refused, and so is any other record given to `enrol commit`, `reanchor` or `recount` (`--ownerauth`), by name and
+      before the TPM (#460). A node that holds none (set up before #456) refuses them all until
+      `enrol ownerauth --check --adopt` records the one its TPM answers to. A held file that can't be trusted (not
+      root's 0600, a link, malformed) is refused the same way, with that recovery named. After the TPM has answered,
+      adopt (or a set from empty) replaces it and keeps the old one for inspection under the first free name
+      (`ownerauth.json.untrusted`, then `.untrusted.2`, …), never over an earlier one (regalia-kms-d9). **`seal-hsm-pin.sh` still takes the value
+      alone** (`--ownerauth-stdin`, no record), so a stale value there is refused by the TPM, not before it.
     - The rollback guard orders records by their root-signed `at`, the laptop's clock. Ordering by the card record the
       owner-authorization record encrypted to (a ceremony schema change, after #438) is #461.
     - Measured on swtpm with tpm2-tools 5.7, not on the DL360's TPM.
