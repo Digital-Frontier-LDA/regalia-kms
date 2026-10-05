@@ -604,6 +604,8 @@ def _restrictive(current, candidate, signer="revocation"):
     who = "a revocation key" if signer == "revocation" else "a revocation quorum"
     names = {"policy_version": "the policy version", "revocation_keys": "the revocation keys"}
     for k in ROOT_FIELDS:
+        if k == "recovery_ends_by" and candidate.get(k) is None:
+            continue                         # clearing it is not a widening: a recovery's end is stated again by the root
         require(candidate.get(k) == current.get(k), "%s cannot change %s" % (who, names.get(k, k)))
     old, new = validate(current), validate(candidate)
     require(set(old) == set(new), "%s cannot add or remove nodes" % who)
@@ -686,6 +688,11 @@ def transition(current, candidate, signer):
         # root-signed, is where it is first set.)
         require(candidate["anchor_policy_key"] == current["anchor_policy_key"], "anchor_policy_key is set at genesis "
                 "and never changes, for any signer: every node's TPM objects are defined under it (a new one is a new genesis)")
+    if current["schema"] == candidate["schema"] == SCHEMA_V4 and not below_quorum(current) and below_quorum(candidate):
+        # every signer (ed): an epoch dropping below the activation threshold clears recovery_ends_by, so an epoch coming
+        # back from below can only carry a value stated for THIS run, never an earlier recovery's
+        require(candidate["recovery_ends_by"] is None, "this epoch drops the counting nodes below the activation threshold: "
+                "recovery_ends_by must be null (an earlier recovery's end does not carry over)")
     if signer != "root":
         _restrictive(current, candidate, signer)
     elif current["schema"] == candidate["schema"] == SCHEMA_V4:

@@ -63,6 +63,15 @@ class Revoke(unittest.TestCase):
         self.refused("c is already QUARANTINED", revoke.candidate, quarantined, "c", "QUARANTINED", T0)
         self.refused("needs a regalia.membership/v4 manifest", revoke.candidate, dict(self.m1, schema=m.SCHEMA_V3), "c", "QUARANTINED", T0)
 
+    def test_dropping_below_the_activation_threshold_clears_the_last_recovery_s_end(self):
+        """#432 (ed): a revocation that leaves fewer counting nodes than the activation threshold clears recovery_ends_by;
+        one that does not, leaves it as it was."""
+        ended = manifest4(5, "ab" * 32, nodes4(), recovery_ends_by=1790000000)
+        one = revoke.candidate(ended, "a", "QUARANTINED", T0)
+        self.assertEqual(one["recovery_ends_by"], 1790000000)                 # b and c still count: at the threshold
+        two = revoke.candidate(one, "b", "QUARANTINED", T0)
+        self.assertIsNone(two["recovery_ends_by"])                            # c alone: below it
+
     def test_two_nodes_each_at_its_console_revoke_and_a_store_commits_it(self):
         half = self.half()
         enough, parties = revoke.met(self.m1, {"manifest": half["manifest"], "signatures": half["signatures"]})
