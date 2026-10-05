@@ -102,6 +102,8 @@ class Rendered(Case):
         cases = [("only over the unix socket", ["listen-client-urls"], "http://127.0.0.1:2379"),
                  ("not on the service mesh", ["listen-peer-urls"], "https://[2001:db8::1]:2380"),
                  ("not on the service mesh", ["initial-advertise-peer-urls"], "http://[fd72:6567:6c61::1]:2380"),
+                 ("initial-cluster %s is not on the service mesh", ["initial-cluster"], None),
+                 ("names each member once", ["initial-cluster"], "dup"),
                  ("must require certificates", ["peer-transport-security", "client-cert-auth"], False),
                  ("must require certificates", ["peer-transport-security", "auto-tls"], True),
                  ("from the unit's credentials", ["peer-transport-security", "key-file"], "/etc/regalia/etcd/peer.key"),
@@ -114,8 +116,13 @@ class Rendered(Case):
                  ("TLS 1.3", ["tls-min-version"], "TLS1.2"),
                  ("ten heartbeats", ["election-timeout"], 500)]
         for reason, path, value in cases:
-            with self.subTest(path):
+            with self.subTest(path + [str(value)]):
                 doc = json.loads(json.dumps(good))
+                if path == ["initial-cluster"] and value is None:      # one member's URL off the mesh
+                    value = good["initial-cluster"] + ",d=https://[2001:db8::1]:2380"
+                    reason = "is not on the service mesh"
+                elif path == ["initial-cluster"]:                       # one member named twice
+                    value = good["initial-cluster"] + "," + good["initial-cluster"].split(",")[0]
                 target = doc
                 for k in path[:-1]:
                     target = target[k]

@@ -190,8 +190,10 @@ PEER_TLS_KEYS = ("cert-file", "key-file", "client-cert-auth", "trusted-ca-file",
 
 
 def check(text):
-    """The safety settings of a rendered configuration, or Refused naming the first that is not as it must be: no
-    client on a TCP port, peers only on the mesh, both sides authenticated by certificate, no automatic TLS."""
+    """The safety settings of a rendered configuration, or Refused naming the first that is not as it must be: exactly
+    the keys render writes, no client on a TCP port and no client TLS (the socket's group is the client boundary), every
+    peer URL on the mesh over TLS, peers authenticated by certificate against the rendered bundle only, no automatic
+    TLS, periodic compaction, an explicit quota, the corruption checks."""
     config = json.loads(text)
     require("client-transport-security" not in config, "no client TLS block: etcd ignores it on a unix socket, and it would only look like "
             "protection")
@@ -201,8 +203,13 @@ def check(text):
     membership.exact(config["peer-transport-security"], PEER_TLS_KEYS, "etcd's peer-transport-security")
     require(config["listen-client-urls"] == CLIENT_URL and config["advertise-client-urls"] == CLIENT_URL,
             "clients connect only over the unix socket")
-    for key in ("listen-peer-urls", "initial-advertise-peer-urls"):
-        for url in config[key].split(","):
+    members = [part.split("=", 1) for part in config["initial-cluster"].split(",")]
+    require(all(len(p) == 2 for p in members), "initial-cluster is name=url, comma-separated")
+    names = [p[0] for p in members]
+    require(len(set(names)) == len(names) and config["name"] in names, "initial-cluster names each member once, this one included")
+    for key, urls in (("listen-peer-urls", config["listen-peer-urls"].split(",")), ("initial-advertise-peer-urls",
+                      config["initial-advertise-peer-urls"].split(",")), ("initial-cluster", [p[1] for p in members])):
+        for url in urls:
             found = re.fullmatch(r"https://\[([0-9a-f:]+)\]:%d" % PEER_PORT, url)
             require(found is not None and found.group(1).startswith("fd72:6567:6c61:"), "%s %s is not on the service mesh over TLS" % (key, url))
     peer = config["peer-transport-security"]
