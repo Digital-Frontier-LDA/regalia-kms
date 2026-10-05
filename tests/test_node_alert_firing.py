@@ -162,6 +162,9 @@ SCENARIOS = {
     "RegaliaAnchorBehindFleet": {
         "fault": [("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "4+0x40")],
         "healthy": [("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "5+0x40")], "at": 2100},
+    "RegaliaEspAnchorEpochMissing": {
+        "fault": [("up", NODE_A, "1+0x10")],
+        "healthy": [("up", NODE_A, "1+0x10"), ("regalia_esp_anchor_epoch", NODE_A, "5+0x10")], "at": 420},
     "RegaliaMembershipMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=MEMBERSHIP), "0+60x10")], "at": 420},

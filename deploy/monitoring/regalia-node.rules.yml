@@ -185,6 +185,15 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.instance }} is scraped but has no esp-advance.prom: regalia-esp-advance has not run since boot (its unit runs at boot)."
+      # the file can be there without the anchor's series: esp_metrics leaves it out when the TPM read fails after a run
+      # that otherwise succeeded, and RegaliaAnchorBehindFleet then has nothing to compare for that node (CodeRabbit)
+      - alert: RegaliaEspAnchorEpochMissing
+        expr: up{job="regalia-node"} == 1 unless on(instance) regalia_esp_anchor_epoch
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but exports no regalia_esp_anchor_epoch: its TPM anchor could not be read at regalia-esp-advance's last run, and the fleet cannot compare it."
       - alert: RegaliaLeaseMetricsMissing
         expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?lease\\.prom"}
         for: 5m
