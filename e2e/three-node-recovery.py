@@ -30,12 +30,13 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
      control first (a node that may still ask opens its volume: the setup works), then the epoch given to one
      survivor and taken by the others with their sync; the survivors' wg-unlock drops the node; it gets no key,
      and no lease, with the reason (a survivor's DENY naming its state, or it is off wg-svc)
-  8  #340: every line of every node's sync and admission trail is in the audit collector (a real collector and each
+  8  #340: every line of every node's sync, admission and time trail is in the audit collector (a real collector and each
      node's real shipper: Cluster(audit=True)), and the decisions this scenario turns on are there by name, in the
      stream of the node that made them: every directed unlock of step 2, a's refusal of b's second session (5), a's
-     refusal of b's seventh lease request (6), the lone node's refused proposal and its hand recovery (7), and each
-     node's change to serving. Not here: the time trail (the fixture's time stand-in writes none) and the update
-     trail (1b's call writes none)
+     refusal of b's seventh lease request (6), the lone node's refused proposal and its hand recovery (7), each
+     node's change to serving on the lease of the peer that restored it in step 2, and each step-7 victim's not
+     serving after its start (and no change to serving). The time trail is covered by audit_complete too
+     (the fixture's authtime records each transition). Not here: the update trail (1b's call writes none)
 
 L always: a live lease in the node's admission, whose holder names the peer as issuer, and that peer's trail
 saying it issued one.
@@ -162,6 +163,7 @@ def scenario(cluster):
 
     header("2  PoC 10.1: every directed relationship, X restored by P alone")
     step2 = time.time()
+    restored = []                                       # (target, peer, from, to) for step 8: its change to serving, by peer
     for target, peer in itertools.permutations(names, 2):
         third = next(n for n in names if n not in (target, peer))
         cluster.stop(target)
@@ -172,6 +174,7 @@ def scenario(cluster):
         cluster.start(target, SERVICES)
         ok(until(lambda: leased(cluster, target, peer, since), 120, 2) is True, "L: %s holds a lease %s issued" % (target, peer),
            cluster.journal(target, "admission")[-600:])
+        restored.append((target, peer, since, time.time()))
         cluster.start(third, SERVICES)
         until(lambda: cluster.lease(third), 120, 2)
 
@@ -289,6 +292,7 @@ def scenario(cluster):
 
     header("7  N: a quarantined, then retired; b reported stolen: no key, no lease, and why")
     alone_at = []                                       # (node, epoch, since) of each hand recovery, for step 8
+    victims = []                                        # (node, state, epoch, its start, its stop) of each one that may not serve
     for victim, signer, state in (("a", "owner", "QUARANTINED"), ("a", "root", "RETIRED"), ("b", "owner", "REVOKED_STOLEN")):
         before = cluster.manifest
         survivors = [n for n in names if n != victim and may(before, n, "authorize")]
@@ -354,12 +358,22 @@ def scenario(cluster):
         reason = until(why, 90, 3)
         ok(bool(reason) and not cluster.lease(victim) and not any(leased_by(cluster, s, victim, since) for s in survivors),
            "N: and no lease, because %s" % reason, cluster.journal(victim, "admission")[-400:])
+        # its admission's first round must END before it is stopped, or that round records nothing: a node off its peers'
+        # tunnels waits out each renewal's timeout first (CI on #473: RETIRED and stolen victims, stopped 2 s after their
+        # start, had recorded no line). Waited for, bounded, on the trail file; step 8 judges what the collector holds
+        def recorded(victim=victim, since=since):
+            path = cluster._trail_path(victim, "admission")
+            lines = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+            return [e for e in lines if e.get("event") == "admission-serving" and e.get("at", 0) >= int(since)]
+        until(recorded, 240, 3)
+        print("  MEASURED: %s's admission recorded its state %.0f s after its start" % (victim, time.time() - since))
         cluster.stop(victim)
+        victims.append((victim, state, manifest["epoch"], since, time.time()))
 
-    header("8  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
+    header("8  #340: every line of every node's sync, admission and time trail is in the audit collector, for the node that recorded it")
     wrong = cluster.audit_complete()
-    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t in ("sync", "admission")}
-    ok(wrong == {}, "every node's sync and admission trail is written and in the collector line for line: sequence from 1, chained from "
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t, _, _ in threenode.AUDIT_TRAILS}
+    ok(wrong == {}, "every node's sync, admission and time trail is written and in the collector line for line: sequence from 1, chained from "
        "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
        {"%s.%s" % k: v for k, v in wrong.items()})
     # within step 2's own time (later steps unlock too): strictly before the second step 3 began
@@ -380,8 +394,43 @@ def scenario(cluster):
             for n, e, t in alone_at}
     ok(bool(hand) and all(all(v) for v in hand.values()),
        "the lone node's refused proposal and its hand recovery (owner-beat) in step 7 are in its own stream %s" % hand, cluster.beat_events(names))
-    serving = {n: bool(cluster.audit_has(n, "admission", event="admission-serving", outcome="ALLOW")) for n in names}
-    ok(all(serving.values()), "each node's change to serving is in its own admission stream", serving)
+    # tied to step 2 (LIMITATIONS.md, Audit and monitoring): each target restored by one peer alone records its change to
+    # serving on THAT peer's lease, within that pair's own window (whole seconds, both ends inclusive)
+    def served(target, peer, start, end):
+        # strictly after start's second (regalia-kms-1e on #473): `start` is taken after the target stopped, and its last
+        # change to serving before that cannot share the second; the volume's unlock alone takes seconds
+        return [e for e in cluster.audit_has(target, "admission", since=start, event="admission-serving", outcome="ALLOW", peer=peer)
+                if int(start) < e.get("at", 0) <= int(end)]
+    serving = {"%s<-%s" % (t, p): len(served(t, p, start, end)) for t, p, start, end in restored}
+    ok(len(restored) == 6 and all(serving.values()),
+       "each node's change to serving in step 2, on the lease of the one peer that restored it, is in its own admission stream", serving)
+    # and the victims of step 7: each, started under an epoch that says it may not serve, records that it does not serve
+    # and never that it serves, WITHIN ITS OWN start..stop (regalia-kms-1e on #473: a is a victim twice). Admission
+    # records its state at its first round after every start (its recorded state begins unknown), so the first
+    # serving-state line in the window must be a DENY, and none an ALLOW. A RETIRED or stolen node's reason is not
+    # matched: it is off the peers' tunnels, or told only "refused"; its lines are printed instead
+    def admission_lines(n):
+        path = cluster._trail_path(n, "admission")
+        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+
+    def window(n, start, end):
+        return [e for e in cluster.audit_has(n, "admission", since=start, event="admission-serving") if e.get("at", 0) <= int(end) + 1]
+    # A QUARANTINED node is still identified, so its peers tell it why (sync: a terminal state hears only "refused"):
+    # its own not-serving line must then name its own epoch (regalia-kms-24 on #473)
+    def stays_down(n, st, ep, start, end):
+        lines = window(n, start, end)
+        first = lines[0] if lines else {}
+        named = st != "QUARANTINED" or ("may not serve under epoch %d" % ep) in (first.get("reason") or "")
+        return bool(lines) and first.get("outcome") == "DENY" and named and all(e.get("outcome") != "ALLOW" for e in lines)
+    stopped = {"%s %s@%d" % (n, st, ep): stays_down(n, st, ep, start, end) for n, st, ep, start, end in victims}
+    ok(len(victims) == 3 and all(stopped.values()),
+       "each step-7 victim's not serving, within its own start and stop, is in its own admission stream, and no change to serving %s" % stopped,
+       {"windows": {"%s %s@%d [%d, %d]" % (n, st, ep, int(start), int(end)): [{k: e.get(k) for k in ("at", "outcome", "peer", "reason")}
+                                                                               for e in window(n, start, end)][:4]
+                    for n, st, ep, start, end in victims},
+        # the trail FILES themselves (not the collector): whether a line was never written, or written and not matched
+        "trail files": {n: [{k: e.get(k) for k in ("at", "event", "outcome", "reason")} for e in admission_lines(n)][-8:] for n in ("a", "b")},
+        "journals": {n: cluster.journal(n, "admission")[-600:] for n in ("a", "b")}})
 
 
 def main():

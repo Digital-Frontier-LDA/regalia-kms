@@ -3,7 +3,8 @@
 (e2e/lib/threenode.py, v4 since #199: each node its real services in its own namespace against its own TPM, the nodes
 signing their own heartbeats; no authority host).
 
-    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-replace.py
+    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> REGALIA_AUDIT_BIN=<dir with built regalia-audit-ship, regalia-audit-collector> \
+        sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN python3 -Es e2e/three-node-replace.py
 
 IT CHANGES THE MACHINE (namespaces, interfaces, loop devices, dm-crypt mappings, transient units), so it runs
 only on a GitHub-hosted runner, or on a throwaway host whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
@@ -24,6 +25,10 @@ with new identities and keeps c as RETIRED, a tombstone whose identities are nev
      lease; and through a service tunnel forced open by hand, a's sync refuses it by name (RETIRED). Its TPM posing
      as c2 (refused on the EK and AK the manifest pins for c2) is NOT covered here: replacement.py's unit tests
      cover it (test_poc_16_5_the_old_hardware_is_refused_by_every_decision).
+  6  #340: every line of every node's sync, admission and time trail (c2's and the old c's included) is in the audit
+     collector (a real collector and each node's real shipper: Cluster(audit=True)), and the decisions this scenario
+     turns on are there by name, in the stream of the node that made them: b's apply of the replacement from a (step
+     2), the leases a and b issued c2 (step 3), and a's refusal of the RETIRED c (step 5)
 
 Not here: restoring the service keys onto c2's HSM (the DKEK domain, #64); `enrol --replace` as the operator's
 command (#279, merged: the fixture enrolls c2 as it enrolls every node, and starts its heartbeat counter at 0, so it
@@ -84,6 +89,7 @@ def scenario(cluster):
         ok(bool(until(lambda: cluster.lease(name), 150, 3)), "%s holds a lease" % name, cluster.journal(name, "admission")[-400:])
 
     header("2  PoC 16.1-16.4: c fails for good; c2 replaces it in one root-signed manifest")
+    step2 = time.time()
     cluster.stop("c")                                 # gone: it stays off
     cluster.add_node("c2")
     current, current_document = cluster.manifest, cluster.document
@@ -111,6 +117,7 @@ def scenario(cluster):
        cluster.beat_events(["a", "b"]))
 
     header("3  c2 enrolled through a and b, opens its volume through each, and is leased")
+    step3 = time.time()                               # step 6: b's apply of the replacement is step 2's (regalia-kms-1e on #473)
     for name in ("a", "b"):                           # the fixture writes their stores: their services stop meanwhile
         cluster.stop(name, power=None)
     cluster.disk("c2")
@@ -169,6 +176,22 @@ def scenario(cluster):
                            and "c is RETIRED under epoch 2" in e.get("reason", "") and e.get("at", 0) >= since], 120, 3)
     ok(bool(named) and not cluster.lease("c"), "and through a tunnel forced open by hand, a's sync refuses c's requests by name: c is RETIRED under epoch 2",
        {"a denied": named, "c": cluster.journal("c", "admission")[-300:]})
+    refused_since = since
+
+    header("6  #340: every line of every node's sync, admission and time trail is in the audit collector, for the node that recorded it")
+    everyone = list(cluster.nodes)
+    wrong = cluster.audit_complete()
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in everyone for t, _, _ in threenode.AUDIT_TRAILS}
+    ok(wrong == {} and "c2" in everyone, "every node's trails, c2's and the old c's included, are written and in the collector line for "
+       "line: sequence from 1, chained from genesis, each DENY a deny, and its head as the collector's signed receipt and the "
+       "shipper's head file state it %s" % counts, {"%s.%s" % k: v for k, v in wrong.items()})
+    applied = [e for e in cluster.audit_has("b", "sync", since=step2, event="sync-apply", peer="a", outcome="ALLOW", epoch=1)
+               if e.get("at", 0) <= int(step3)]
+    leased_c2 = {p: len(cluster.audit_has(p, "sync", event="sync-lease", subject="c2", outcome="ALLOW")) for p in ("a", "b")}
+    retired = cluster.audit_has("a", "sync", since=refused_since, outcome="DENY", reason=lambda r: bool(r) and "c is RETIRED under epoch 2" in r)
+    ok(bool(applied) and all(leased_c2.values()) and bool(retired),
+       "in each one's own stream: b's apply of the replacement from a (decided under epoch 1, %d), the leases a and b issued "
+       "c2 %s, and a's refusals of the RETIRED c by name (%d)" % (len(applied), leased_c2, len(retired)))
 
 
 def main():
@@ -187,11 +210,13 @@ def main():
     if present:
         print("three-node-replace: refused: %s exists: another run's leftovers, or this host's own, are here" % ", ".join(present))
         return 2
-    if os.geteuid() != 0 or not os.access(os.environ.get("REGALIA_UNLOCK_BIN", "/nonexistent"), os.X_OK):
-        print("three-node-replace: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
+    if os.geteuid() != 0 or not os.access(os.environ.get("REGALIA_UNLOCK_BIN", "/nonexistent"), os.X_OK) or not all(
+            os.access(os.path.join(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"), b), os.X_OK) for b in ("regalia-audit-ship", "regalia-audit-collector")):
+        print("three-node-replace: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock and REGALIA_AUDIT_BIN a directory "
+              "with the built regalia-audit-ship and regalia-audit-collector (#340)")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work)
+    cluster = threenode.Cluster(work, audit=True)                    # the nodes' trails shipped to a real collector (#340)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once

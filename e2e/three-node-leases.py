@@ -3,7 +3,8 @@
 heartbeats; no authority host): the real regalia-admission asking the real peers' sync, leases of at most 300 s
 (lease.MAX_LIFETIME) renewed at a third of their life, and a running node revoked by two nodes (revoke.py).
 
-    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-leases.py
+    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> REGALIA_AUDIT_BIN=<dir with built regalia-audit-ship, regalia-audit-collector> \
+        sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN python3 -Es e2e/three-node-leases.py
 
 IT CHANGES THE MACHINE (namespaces, interfaces, loop devices, dm-crypt mappings, transient units; an nftables table
 inside one node's namespace, never the host's), so it runs only on a GitHub-hosted runner, or on a throwaway host
@@ -16,6 +17,10 @@ whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
   5  a cut off from one peer (its service mesh): it renews through the other
   6  14.3: running a revoked by b and c, each at its own console (revoke.py); both peers refuse its renewals (it is off their service tunnels; by name through a
      tunnel forced open), and a's admission stops serving by itself when its lease ends (measured against 300 s)
+  7  #340: every line of every node's sync, admission and time trail is in the audit collector (a real collector and each
+     node's real shipper: Cluster(audit=True)), and the decisions this scenario turns on are there by name, in the
+     stream of the node that made them: a's renewal by its issuer (step 2), a's revocation committed (step 6), b's
+     refusal of the revoked a by name, and a's admission stopping after the revocation
 
 The KMS daemon's own refusal at the lease's end and on revocation is e2e/runtime-admission.py's (two nodes, the
 real daemon: steps 1, 3 and 6); the three-node daemon waits with 14.4. Clock skew is not here: the namespaces share
@@ -101,11 +106,13 @@ def scenario(cluster):
     first, issuer, _ = held(cluster, "a")
     since = time.time()
     got = until(lambda: renewed(cluster, "a", first), renewal + 60, 3)
+    renewal_by, renewal_since = (got[1] if got else issuer), since          # for step 7
     ok(bool(got) and any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
                          for e in cluster.trail(got[1] if got else issuer)),
        "a's lease is renewed (issued %s, then %s, by %s), and its issuer's trail holds the ALLOW" % (first, got and got[0], got and got[1]), got)
 
     header("3  14.2: a's issuer crashes; the other peer renews, and a never stops serving")
+    step3 = time.time()                               # step 7: step 2's renewal ends here (regalia-kms-1e on #473)
     current, issuer, _ = held(cluster, "a")
     other = next(n for n in ("b", "c") if n != issuer)
     cluster.stop(issuer, power=None)
@@ -174,6 +181,42 @@ def scenario(cluster):
     ok(not any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= revoked_at
                for p in ("b", "c") for e in cluster.trail(p)), "and nobody issued a a lease after the revocation")
 
+    header("7  #340: every line of every node's sync, admission and time trail is in the audit collector, for the node that recorded it")
+    # admission records its change to not serving at the end of its next round; that round may be held by renewal
+    # attempts to a peer that does not answer, so the line can come after the lease's end (CI on #473: 110 s after).
+    # Waited for, bounded, on the trail file, before audit_complete snapshots it
+    def stop_line():
+        path = cluster._trail_path("a", "admission")
+        lines = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+        return [e for e in lines if e.get("event") == "admission-serving" and e.get("at", 0) >= int(revoked_at)]
+    until(stop_line, 300, 3)
+    print("  MEASURED: a's admission recorded its stop %.0f s after it stopped serving" % (time.time() - stop_at))
+    names = list(cluster.nodes)
+    wrong = cluster.audit_complete()
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t, _, _ in threenode.AUDIT_TRAILS}
+    ok(wrong == {}, "every node's trails are written and in the collector line for line: sequence from 1, chained from genesis, "
+       "each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
+       {"%s.%s" % k: v for k, v in wrong.items()})
+    renewed_in = [e for e in cluster.audit_has(renewal_by, "sync", since=renewal_since, event="sync-lease", subject="a", outcome="ALLOW")
+                  if e.get("at", 0) <= int(step3)]
+    committed = {n: bool(cluster.audit_has(n, "sync", event="revoke-commit", outcome="ALLOW", epoch=2)) for n in ("b", "c")}
+    refused_a = cluster.audit_has("b", "sync", since=revoked_at, outcome="DENY", reason=lambda r: bool(r) and "a is REVOKED_STOLEN under epoch 2" in r)
+    # a's FIRST change of serving state after the revocation is the stop (it served until then)
+    after = cluster.audit_has("a", "admission", since=revoked_at, event="admission-serving")
+    # within the bounded wait above: admission's own round records it, possibly well after the lease's end
+    a_stopped = after[:1] if after and after[0].get("outcome") == "DENY" and after[0].get("at", 0) <= int(stop_at) + 300 else []
+    ok(bool(renewed_in) and any(committed.values()) and bool(refused_a) and bool(a_stopped),
+       "in each one's own stream: a's renewal by %s (step 2, %d), a's revocation committed %s, b's refusals of the revoked a by "
+       "name (%d), and a's admission no longer serving after it (%d)" % (renewal_by, len(renewed_in), committed, len(refused_a), len(a_stopped)),
+       {"a's admission since the revocation": [{k: e.get(k) for k in ("at", "outcome", "reason")}
+                                                for e in cluster.audit_has("a", "admission", since=revoked_at, event="admission-serving")][-3:],
+        "revoked at, stopped at": (int(revoked_at), int(stop_at)),
+        # the trail FILE (not the collector): whether the stop was never written, or written and not matched
+        "a's admission trail file": [{k: e.get(k) for k in ("at", "event", "outcome", "reason")} for e in (
+            [json.loads(line) for line in cluster._trail_path("a", "admission").read_text().splitlines() if line.strip()]
+            if cluster._trail_path("a", "admission").exists() else [])][-8:],
+        "a's admission journal": cluster.journal("a", "admission")[-600:]})
+
 
 def main():
     try:
@@ -191,11 +234,13 @@ def main():
     if present:
         print("three-node-leases: refused: %s exists: another run's leftovers, or this host's own, are here" % ", ".join(present))
         return 2
-    if os.geteuid() != 0 or not os.access(os.environ.get("REGALIA_UNLOCK_BIN", "/nonexistent"), os.X_OK):
-        print("three-node-leases: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
+    if os.geteuid() != 0 or not os.access(os.environ.get("REGALIA_UNLOCK_BIN", "/nonexistent"), os.X_OK) or not all(
+            os.access(os.path.join(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"), b), os.X_OK) for b in ("regalia-audit-ship", "regalia-audit-collector")):
+        print("three-node-leases: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock and REGALIA_AUDIT_BIN a directory "
+              "with the built regalia-audit-ship and regalia-audit-collector (#340)")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work)
+    cluster = threenode.Cluster(work, audit=True)                    # the nodes' trails shipped to a real collector (#340)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once

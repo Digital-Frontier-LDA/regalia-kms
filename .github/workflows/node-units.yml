@@ -181,8 +181,8 @@ jobs:
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
             sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-recovery.py | tee "$RUNNER_TEMP/recovery.log"
-          grep -q '^three-node-recovery: 65 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
-            echo "::error::the three-node recovery test did not pass all 65 checks" >&2; exit 1; }
+          grep -q '^three-node-recovery: 66 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
+            echo "::error::the three-node recovery test did not pass all 66 checks" >&2; exit 1; }
 
   # #75 (Phase 15), tier N: a new image rolled through the three nodes while CURRENT and NEXT are both accepted
   # (an image is PCR 11, extended after a power cycle); may_reboot on live leases as update.py asks it; the retire
@@ -233,15 +233,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
-      - name: Build the pre-root client
-        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
       - name: A total outage, one node by hand, the rest through it
         run: |
           set -o pipefail
-          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-outage.py | tee "$RUNNER_TEMP/outage.log"
-          grep -q '^three-node-outage: 34 passed, 0 failed$' "$RUNNER_TEMP/outage.log" || {
-            echo "::error::the three-node outage test did not pass all 34 checks" >&2; exit 1; }
+          grep -q '^three-node-outage: 37 passed, 0 failed$' "$RUNNER_TEMP/outage.log" || {
+            echo "::error::the three-node outage test did not pass all 37 checks" >&2; exit 1; }
 
   # #388: a re-anchor in a total outage. One node's TPM anchor unusable; the other two opened by hand, each with its own
   # recovery key; reanchor from their two chains at the node's terminal; the node serves again (MEMBERSHIP-RECOVERY.md).
@@ -287,15 +291,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
-      - name: Build the pre-root client
-        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
       - name: A node replaced, and its retired hardware refused
         run: |
           set -o pipefail
-          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-replace.py | tee "$RUNNER_TEMP/replace.log"
-          grep -q '^three-node-replace: 16 passed, 0 failed$' "$RUNNER_TEMP/replace.log" || {
-            echo "::error::the three-node replacement test did not pass all 16 checks" >&2; exit 1; }
+          grep -q '^three-node-replace: 18 passed, 0 failed$' "$RUNNER_TEMP/replace.log" || {
+            echo "::error::the three-node replacement test did not pass all 18 checks" >&2; exit 1; }
 
   # #69 (Phase 9): a stolen node revoked by the owner off the nodes (revoke.py), the revocation spreading, and the window a
   # partition leaves (an nftables table inside one node's namespace only).
@@ -348,15 +356,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
-      - name: Build the pre-root client
-        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
       - name: Runtime leases, renewal and failover, a running node revoked
         run: |
           set -o pipefail
-          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-leases.py | tee "$RUNNER_TEMP/leases.log"
-          grep -q '^three-node-leases: 12 passed, 0 failed$' "$RUNNER_TEMP/leases.log" || {
-            echo "::error::the three-node lease test did not pass all 12 checks" >&2; exit 1; }
+          grep -q '^three-node-leases: 14 passed, 0 failed$' "$RUNNER_TEMP/leases.log" || {
+            echo "::error::the three-node lease test did not pass all 14 checks" >&2; exit 1; }
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.

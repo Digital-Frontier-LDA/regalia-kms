@@ -225,10 +225,23 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   [`deploy/baremetal/MONITORING.md`](deploy/baremetal/MONITORING.md)). The real service has not been
   chosen or deployed. The audit collector's conformance suite runs against the reference collector in
   CI. **Monitoring has no conformance command** (MONITORING.md section 5: not built).
-- **Audit completeness is checked in some scenarios only.** `audit_complete` runs in the theft, rolling and
-  recovery scenarios (#402). Outage, leases and replace are not covered. The time trail and the update trail
-  are never checked end to end in a three-node scenario. In recovery, "each node's change to serving" is not
-  tied to a step, and the victims' not-serving lines are not checked.
+- **Audit completeness: every three-node scenario but netns and reanchor.** `audit_complete` runs in theft,
+  rolling, recovery (#402), outage, leases and replace. Each also finds the decisions it turns on by name in the
+  deciding node's own stream. In recovery, each node's change to serving is tied to the step-2 pair that restored it
+  (that peer's lease, in that pair's window), and each step-7 victim's not-serving line is checked. Not covered:
+  netns (no audit decisions of its own) and the re-anchor rehearsal (its trail is the operator tool's, checked
+  line by line there, not shipped). The time trail is shipped and checked too: the fixture's authtime records each
+  transition on a per-node trail, and outage names a's switch to "not authenticated" in it.
+- **Admission's "stopped serving" line can come well after the node stopped serving.** The node stops when its
+  lease's bound passes (the admission file, and the daemon's own check). The admission trail records the change at
+  the end of admission's next round, and a round can be held by renewal attempts to a peer that doesn't answer:
+  about 110 s after the stop in CI (#473). The trail is late, never wrong; serving itself stops on time (the daemon
+  refuses by the lease's own bound, internal/admission). A node stopped before that round ends records no line for
+  that start, so the trail alone doesn't show that start.
+- **The update trail is not shipped end to end in tier N** (#476). `update.py apply`'s lease and verdict path and its
+  REQUEST/ALLOW lines are covered by unit tests (`tests/test_baremetal_update.py`); firmware and image measurement
+  by tier Q (#442, OVMF with real UKIs). The three-node fixture has no real UKIs, and a scenario that stood in for
+  the image's measurement would prove less than it appears to.
 - **`regalia-sync` says nothing in the journal about its rounds** (#470). Its decisions (pulls, applies,
   refusals and their reasons) are only in its hash-chained trail. `journalctl -u regalia-sync` shows systemd's
   start and stop lines, so an operator asking why a node is behind its peers must read the trail. In the
