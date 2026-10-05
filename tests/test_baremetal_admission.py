@@ -77,21 +77,37 @@ class OneLeaseBound(unittest.TestCase):
         self.assertLess(admission.MARGIN + admission.RETRY_MAX, lease.MAX_LIFETIME * 2 // 3)
         self.assertLessEqual(lease.FUTURE_SKEW, admission.MARGIN)
 
+    def test_a_lease_issued_at_the_skew_edge_is_still_inside_the_go_bound(self):
+        """3e on #485: a lease issued FUTURE_SKEW ahead lives MAX_LIFETIME from then; less the margin, the admission
+        reaches exactly MaxAheadMilliseconds ahead, which Go accepts (it refuses only beyond). A one-sided change
+        to any of the four fails here, not on the fleet."""
+        import pathlib
+        import re
+        source = (pathlib.Path(__file__).resolve().parents[1] / "internal" / "admission" / "admission.go").read_text()
+        go = int(re.search(r"MaxAheadMilliseconds = ([0-9_]+)", source).group(1).replace("_", ""))
+        self.assertIn("if document.ServeUntilBoottimeMs-now > MaxAheadMilliseconds {", source)
+        self.assertLessEqual((lease.FUTURE_SKEW + lease.MAX_LIFETIME - admission.MARGIN) * 1000, go)
 
-class RunsAtTheLapse(Case):
-    def test_the_service_wakes_just_after_the_admission_it_wrote_runs_out(self):
-        """3e on #473 / 24: the change to not serving is written at the lapse, not up to `interval` later."""
-        waits, first = [], iter([False, True])                         # one round, then stop
-        self.service.run(lambda: next(first), interval=5, sleep=waits.append)
-        left = (self.on_disk()["serve_until_boottime_ms"] - self.ticks) / 1000
-        self.assertEqual(left, lease.MAX_LIFETIME - admission.MARGIN)
-        self.assertEqual(waits, [5])                                  # a lease far from its lapse: the interval
-        self.later(lease.MAX_LIFETIME - admission.MARGIN - 2)          # two seconds before serve_until
-        self.peer_up = False
-        waits[:] = []
-        once = iter([False, True])
-        self.service.run(lambda: next(once), interval=5, sleep=waits.append)
-        self.assertEqual(waits, [2.05])                               # woken 50 ms after the lapse, not 5 s
+
+class StalledPeer(Case):
+    def test_a_stalled_peer_and_a_healthy_one_leave_no_gap_in_serving(self):
+        """3e on #485: b takes the nonce and stalls on the lease, each ask cut at RENEW_TIMEOUT; c answers. Two
+        minutes at the service's 5 s step, b stalling on every renewal: the node serves at every step."""
+        gaps = []
+
+        def renew(request):
+            self.later(2 * admission.RENEW_TIMEOUT)                     # b: the nonce, then the lease ask, both cut
+            if os.path.exists(self.path) and self.on_disk()["serve_until_boottime_ms"] <= self.ticks:   # it ran out during the stall
+                gaps.append((self.ticks, "lapsed while b stalled"))
+            return self.issue("c", manifest=self.manifest_now, request=request)
+        self.service.renew = renew
+        for _ in range(120 // 5):
+            document = self.service.step()
+            if not document["serve_until_boottime_ms"] > self.ticks:
+                gaps.append((self.ticks, document["reason"]))
+            self.later(5)
+        self.assertEqual(gaps, [])
+        self.assertEqual(self.holder.held()["lease"]["issuer"], "c")
 
 
 class Backoff(Case):
@@ -535,6 +551,65 @@ class DaemonStart(Case):
         with mock.patch.object(os, "sysconf", lambda name: 250):
             self.refused("the kernel clock tick is not 100 Hz", admission.process_started_ms, os.getpid())
             self.assertIsNone(admission.unit_started(run=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, b"%d\n" % os.getpid(), b""))())
+
+
+class RunsAtTheLapse(Case):
+    """#486 (3e, from #473's trails): "not serving" is written and recorded at the admission's bound, by lapse(), which
+    the lapse watcher calls every half second, even while a renewal round waits on a silent peer."""
+    recording = Recorded.recording
+
+    def test_at_the_bound_lapse_writes_and_records_not_serving_and_before_it_nothing(self):
+        service = self.recording()
+        first = service.step()
+        self.assertGreater(first["serve_until_boottime_ms"], 0)
+        self.peer_up = False
+        self.later(lease.MAX_LIFETIME - admission.MARGIN - 1)
+        self.assertIsNone(service.lapse())                              # a second before the bound: nothing
+        self.assertEqual(self.on_disk(), first)
+        self.later(1)
+        written = service.lapse()
+        self.assertEqual((written["serve_until_boottime_ms"], self.on_disk()), (0, written))
+        self.assertIn("the admission ran out at its bound", written["reason"])
+        self.assertEqual([(e["outcome"]) for e in self.trail], ["ALLOW", "DENY"])
+        self.assertIsNone(service.lapse())                              # the bound of a zero admission: nothing more
+
+    def test_a_round_held_by_a_silent_peer_does_not_hold_the_lapse(self):
+        """The round's renewal runs outside the lock: the watcher, on its own thread, writes at the bound meanwhile."""
+        import threading
+        service = self.recording()
+        service.step()
+        self.later(lease.MAX_LIFETIME // 3)                              # due
+        seen = {}
+
+        def stalled(request):
+            self.later(lease.MAX_LIFETIME)                               # the peer holds the round past the bound
+            watcher = threading.Thread(target=lambda: seen.update(written=service.lapse()))
+            watcher.start()
+            watcher.join(timeout=5)
+            seen["alive"] = watcher.is_alive()
+            raise ConnectionError("peer b did not answer")
+        service.renew = stalled
+        service.step()
+        self.assertFalse(seen["alive"], "lapse() waited for the round")
+        self.assertEqual(seen["written"]["serve_until_boottime_ms"], 0)
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY"])   # recorded at the bound, once
+
+    def test_run_s_watcher_writes_at_the_bound_between_rounds_and_stops_with_run(self):
+        import threading
+        import time as real_time
+        service = self.recording()
+        service.step()                                                     # serving
+        self.peer_up = False                                               # no renewal from here
+        once = iter([False, True])                                         # one round, then stop
+
+        def interval(seconds):                                             # between rounds: past the bound, and a moment
+            self.later(lease.MAX_LIFETIME)                                 # for the watcher (every 10 ms here)
+            real_time.sleep(0.3)
+        service.run(lambda: next(once), interval=5, sleep=interval, watch=0.01)
+        self.assertEqual(self.on_disk()["serve_until_boottime_ms"], 0)    # written by the watcher: no round ran after
+        self.assertIn("the admission ran out at its bound", self.on_disk()["reason"])
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY"])
+        self.assertFalse([t for t in threading.enumerate() if t.name == "admission-lapse"])
 
 
 if __name__ == "__main__":
