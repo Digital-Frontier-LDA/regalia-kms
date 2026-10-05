@@ -5,6 +5,7 @@ before anything changes, typed at a terminal, recorded (and INCOMPLETE said when
 import ast
 import contextlib
 import copy
+import errno
 import glob
 import io
 import json
@@ -536,6 +537,17 @@ class Command(Case):
         self.assertEqual(trails.verify(self.d + "/audit.jsonl")["chained"], 2)            # #278: a hash-chained trail
         self.assertEqual(trails.where("reanchor"), "/var/log/regalia/reanchor.jsonl")     # --audit-log's default
 
+    def test_a_refusal_still_gives_back_what_root_made(self):
+        # regalia-kms-1e on #391: the plan takes the node's anchor lock as root, which makes it 0600 root's when it did not
+        # exist. A refusal ("nothing was changed") must give it back too, or the node's sync could not take its own lock
+        self.lose_record()
+        calls = []
+        with mock.patch.object(reanchor, "_give_back", side_effect=lambda path, done=True: calls.append((path, done)) or True):
+            rc, asked = self.program(typed="no")
+        self.assertEqual((rc, len(asked)), (1, 1))
+        self.assertEqual(calls, [(self.path, False)])
+        self.assertIn("NOT DONE, nothing was changed", self.said.getvalue())
+
     def node_configs(self):
         example = json.loads((pathlib.Path(__file__).resolve().parent.parent / "deploy" / "baremetal" / "node.example.json").read_text())
         another = self.d + "/node-a.json"
@@ -888,7 +900,33 @@ class HandBack(unittest.TestCase):
         err = io.StringIO()
         with mock.patch.object(reanchor, "hand_back", side_effect=PermissionError("not permitted")), contextlib.redirect_stderr(err):
             self.assertFalse(reanchor._give_back(self.path))
-        self.assertIn("chown --reference=%s %s" % (self.d, self.path), err.getvalue())
+        # -h: the chown acts on a link itself, never on what it names (regalia-kms-1e on #391)
+        self.assertIn("chown -h --reference=%s -- %s" % (self.d, self.path), err.getvalue())
+        self.assertIn("the anchor is written", err.getvalue())
+        err = io.StringIO()
+        with mock.patch.object(reanchor, "hand_back", side_effect=PermissionError("not permitted")), contextlib.redirect_stderr(err):
+            self.assertFalse(reanchor._give_back(self.path, done=False))
+        self.assertIn("nothing was changed", err.getvalue())
+        self.assertNotIn("the anchor is written", err.getvalue())
+
+    def test_no_command_is_printed_for_a_planted_file(self):
+        # regalia-kms-1e on #391: hand_back refuses a link (ELOOP from O_NOFOLLOW), a second name or a third user's file.
+        # Those are entries regalia-sync controls: root's chown of membership.json -> /etc/shadow would give the target
+        # away. No chown is printed for them, -h or not, only what to look at
+        os.unlink(self.path)
+        os.symlink("/etc/shadow", self.path)
+        for failure in (OSError(errno.ELOOP, "Too many levels of symbolic links", self.path),
+                        m.Refused("%s is not a regular file with one name: it is not given back" % self.path),
+                        m.Refused("%s belongs to uid 4242, neither root nor the owner of %s: it is not given back" % (self.path, self.d))):
+            err = io.StringIO()
+            with mock.patch.object(reanchor, "hand_back", side_effect=failure), contextlib.redirect_stderr(err):
+                self.assertFalse(reanchor._give_back(self.path))
+            self.assertNotIn("chown", err.getvalue().replace("do NOT chown it", ""), failure)
+            self.assertIn("do NOT chown it", err.getvalue())
+
+    def test_a_missing_state_directory_has_nothing_to_give_back(self):
+        # a refusal before anything was made, the directory not there (a typo in --membership): nothing, no error
+        self.assertEqual(reanchor.hand_back(os.path.join(self.d, "absent", "membership.json"), euid=lambda: 0), [])
 
     def test_the_lock_is_the_one_the_nodes_own_services_take(self):
         from deploy.baremetal import node

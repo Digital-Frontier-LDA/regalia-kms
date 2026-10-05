@@ -48,6 +48,7 @@ so it is the one an attacker would want, and it is fenced accordingly:
 It needs the TPM's owner authorization, as defining the anchor did at commissioning.
 """
 import argparse
+import errno
 import os
 import re
 import stat
@@ -179,7 +180,10 @@ def hand_back(membership_path, euid=os.geteuid, chown=os.fchown):
     by the directory's owner already, never a third user's; only one whose owner is not the directory's is changed, and
     only when root runs this and the directory is not root's. Returns the paths changed."""
     directory = os.path.dirname(os.path.abspath(membership_path))
-    owner = os.stat(directory)
+    try:
+        owner = os.stat(directory)
+    except FileNotFoundError:                       # refused before anything was made: nothing to give back
+        return []
     if euid() != 0 or owner.st_uid == 0:
         return []
     changed = []
@@ -341,6 +345,9 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
         return 4
     except (OSError, Refused) as failure:
         print("reanchor: NOT DONE, nothing was changed: %s" % failure, file=sys.stderr)
+        # the plan took the node's anchor lock (and the store its own) as root: one that did not exist was made 0600 by
+        # root, and the node's sync could not take it (regalia-kms-1e on #391)
+        _give_back(args.membership, done=False)
         return 1
     if not _give_back(args.membership):
         return 5
@@ -348,19 +355,29 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
     return 0
 
 
-def _give_back(membership_path):
-    """hand_back, said: True when every file is its directory owner's (or nothing needed it); else the command to run."""
+def _give_back(membership_path, done=True):
+    """hand_back, said: True when every file is its directory owner's (or nothing needed it); else False, with what to do.
+    A file refused for what it IS (a link, a second name, a third user's: Refused, or ELOOP from O_NOFOLLOW) gets no
+    command: regalia-sync controls those entries, and a chown, even with -h, is not what a planted file needs. Any other
+    failure prints the chown, with -h (never through a link) and after `--`."""
     try:
         for path in hand_back(membership_path):
             print("reanchor: %s given back to the owner of its directory" % path)
         return True
     except (OSError, Refused) as failure:
         directory = os.path.dirname(os.path.abspath(membership_path))
-        print("reanchor: the anchor is written, but the membership file could not be given back to the owner of %s (%s): the node's "
-              "sync cannot read it until it is. Run:  chown --reference=%s %s %s.lock %s" % (
-                  directory, failure, directory, membership_path, membership_path, anchor_lock(membership_path)), file=sys.stderr)
+        what = ("the anchor is written, but the membership file or a lock" if done else
+                "nothing was changed, but a lock or file this run made as root")
+        if isinstance(failure, Refused) or getattr(failure, "errno", None) == errno.ELOOP:
+            print("reanchor: %s could not be given back to the owner of %s: %s. It is not a regular file of root's or of the "
+                  "directory's owner with one name: do NOT chown it. Look at it (ls -l %s), find out what made it, remove the "
+                  "entry by name if it is not this node's, and run the command again." % (what, directory, failure, directory),
+                  file=sys.stderr)
+            return False
+        print("reanchor: %s could not be given back to the owner of %s (%s): the node's sync cannot use it until it is. "
+              "Run:  chown -h --reference=%s -- %s %s.lock %s" % (
+                  what, directory, failure, directory, membership_path, membership_path, anchor_lock(membership_path)), file=sys.stderr)
         return False
-
 
 if __name__ == "__main__":
     sys.exit(main())
