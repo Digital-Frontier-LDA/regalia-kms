@@ -5,6 +5,8 @@ before anything changes, typed at a terminal, recorded (and INCOMPLETE said when
 import ast
 import contextlib
 import copy
+import errno
+import fcntl
 import glob
 import io
 import json
@@ -494,7 +496,25 @@ class Command(Case):
         self.assertEqual(self.run_reanchor(self.sources())["epoch"], 3)              # run again: it completes
         self.assertEqual(self.outcomes()[-1], ("reanchor", "ALLOW"))
 
-    def program(self, *extra, typed=None, peers=(OTHER, "c"), upto=3, log="audit.jsonl", ask="given", tty=None, owner_check=reanchor._owner_check):
+    def esp(self, upto=2):
+        """b's ESP stand-in as enrolment and the advances left it: the chain up to `upto` (below what the peers give)."""
+        esp = self.d + "/esp"
+        if not os.path.isdir(esp):
+            os.makedirs(esp + "/EFI/regalia")
+            for directory in (esp, esp + "/EFI", esp + "/EFI/regalia"):   # as an ESP's: closed to group and others
+                os.chmod(directory, 0o755)
+            with open(reanchor.esp_chain_path(esp), "wb") as f:
+                f.write(m.canonical(self.envs[:upto]))
+        return esp
+
+    def on_esp(self):
+        with open(reanchor.esp_chain_path(self.esp()), "rb") as f:
+            return f.read()
+
+    def program(self, *extra, typed=None, peers=(OTHER, "c"), upto=3, log="audit.jsonl", ask="given", tty=None, active=lambda: [],
+                owner_check=reanchor._owner_check):
+        if "--esp" not in extra:
+            extra = ("--esp", self.esp()) + tuple(extra)
         for name in peers:
             with open("%s/%s.json" % (self.d, name), "wb") as f:
                 f.write(m.canonical(self.envs[:upto]))
@@ -513,8 +533,8 @@ class Command(Case):
             return typed if typed is not None else prompt.split("Type exactly: ")[1].split("\n")[0]
         self.said = io.StringIO()
         with contextlib.redirect_stderr(self.said), contextlib.redirect_stdout(self.said):
-            rc = reanchor.main(argv + list(extra), ask=answer if ask == "given" else None, tty=tty, owner_check=owner_check,
-                               highwater=lambda index, tcti, policy=None, define_policy=None: m.HighWater(index, lock_path=self.d + "/hw.lock", run=self.run_tpm, policy=policy, define_policy=define_policy))
+            rc = reanchor.main(argv + list(extra), ask=answer if ask == "given" else None, tty=tty, active=active, owner_check=owner_check,
+                               highwater=lambda index, tcti, policy=None, define_policy=None, lock_path=None: m.HighWater(index, lock_path=self.d + "/hw.lock", run=self.run_tpm, policy=policy, define_policy=define_policy))
         return rc, asked
 
     def one_source(self, verdict, peers=(OTHER,), extra=()):
@@ -595,6 +615,129 @@ class Command(Case):
         self.assertEqual(os.stat(self.d + "/audit.jsonl").st_mode & 0o777, 0o640)           # #283: its shipper reads it through the group
         self.assertEqual(trails.verify(self.d + "/audit.jsonl")["chained"], 2)            # #278: a hash-chained trail
         self.assertEqual(trails.where("reanchor"), "/var/log/regalia/reanchor.jsonl")     # --audit-log's default
+
+    def test_a_refusal_still_gives_back_what_root_made(self):
+        # regalia-kms-1e on #391: the plan takes the node's anchor lock as root, which makes it 0600 root's when it did not
+        # exist. A refusal ("nothing was changed") must give it back too, or the node's sync could not take its own lock
+        self.lose_record()
+        calls = []
+        with mock.patch.object(reanchor, "_give_back", side_effect=lambda path, done=True: calls.append((path, done)) or True):
+            rc, asked = self.program(typed="no")
+        self.assertEqual((rc, len(asked)), (1, 1))
+        self.assertEqual(calls, [(self.path, False)])
+        self.assertIn("NOT DONE, nothing was changed", self.said.getvalue())
+
+    def test_the_esp_is_written_before_the_anchor_moves(self):
+        # regalia-kms-24 on #391: #410's order. Anchored first, a reboot in between would find the ESP below the anchor
+        self.lose_record()
+        order = []
+        write, redefine = reanchor.write_esp, m.Store.reanchor
+        with unittest.mock.patch.object(reanchor, "write_esp", lambda *a: (order.append("esp"), write(*a))[1]), \
+                unittest.mock.patch.object(m.Store, "reanchor", lambda store, *a: (order.append("anchor"), redefine(store, *a))[1]):
+            rc, asked = self.program()
+        self.assertEqual((rc, order), (0, ["esp", "anchor"]))
+        self.assertEqual(self.on_esp(), m.canonical(self.envs[:3]))
+        self.assertEqual(self.hw.record(), (3, self.digest(3)))
+
+    def test_a_crash_after_the_esp_and_before_the_anchor_is_run_again(self):
+        # the ESP ahead of an anchor that is still unusable: the boot is no worse (it asked for the recovery key already),
+        # and the command run again completes, the ESP already right
+        self.lose_record()
+        before = self.hw.slots()
+        with unittest.mock.patch.object(m.Store, "reanchor", side_effect=OSError("power lost")):
+            rc, _ = self.program()
+        self.assertEqual(rc, 1)
+        self.assertEqual((self.on_esp(), self.hw.slots()), (m.canonical(self.envs[:3]), before))
+        rc, _ = self.program()
+        self.assertEqual((rc, self.on_esp(), self.hw.record()), (0, m.canonical(self.envs[:3]), (3, self.digest(3))))
+
+    def test_no_chain_on_the_esp_refuses_before_anything_is_asked(self):
+        # an ESP not mounted at --esp: written there, the boot would still read the old chain below the new anchor
+        self.lose_record()
+        before = self.hw.slots()
+        os.makedirs(self.d + "/unmounted")
+        rc, asked = self.program("--esp", self.d + "/unmounted")
+        self.assertEqual((rc, asked, self.hw.slots()), (1, [], before))
+        self.assertIn("holds no boot chain", self.said.getvalue())
+        self.assertIn("is the ESP mounted there?", self.said.getvalue())
+        self.assertFalse(os.path.exists(self.d + "/unmounted/EFI"))
+
+    def test_a_chain_on_the_esp_that_does_not_verify_refuses_before_anything_is_asked(self):
+        # regalia-kms-1e on #391: a stray file on an unmounted /efi, or another network's ESP, is not this node's
+        self.lose_record()
+        before = self.hw.slots()
+        esp = self.esp()
+        forged = json.loads(m.canonical(self.envs[:2]))
+        forged[-1]["signature"] = "00" * 64
+        for content in (b"not a chain", m.canonical(forged)):
+            with open(reanchor.esp_chain_path(esp), "wb") as f:
+                f.write(content)
+            rc, asked = self.program()
+            self.assertEqual((rc, asked, self.hw.slots()), (1, [], before))
+            self.assertIn("does not verify under --root-key", self.said.getvalue())
+
+    def test_refused_while_the_nodes_units_run(self):
+        # regalia-kms-24 on #391: nothing but reanchor may touch the anchor; regalia-esp-advance writes it at run time
+        self.lose_record()
+        before = self.hw.slots()
+        rc, asked = self.program(active=lambda: ["regalia-esp-advance.path", "regalia-sync.service"])
+        self.assertEqual((rc, asked), (1, []))
+        self.assertIn("regalia-esp-advance.path, regalia-sync.service are running: stop regalia-esp-advance.path regalia-sync.service first",
+                      self.said.getvalue())
+        self.assertEqual(self.hw.slots(), before)
+
+    def esp_lock(self):
+        os.makedirs(self.d + "/run-esp", exist_ok=True)
+        return self.d + "/run-esp/highwater.lock"
+
+    def test_refused_while_esp_advance_holds_its_lock(self):
+        self.lose_record()
+        before = self.hw.slots()
+        path = self.esp_lock()
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)                     # a running regalia-esp-advance, between two of its anchor calls
+        rc, asked = self.program("--esp-lock", path)
+        self.assertEqual((rc, asked), (1, []))
+        self.assertIn("regalia-esp-advance holds the anchor's lock %s: it is running" % path, self.said.getvalue())
+        self.assertEqual(self.hw.slots(), before)
+
+    def test_the_esp_lock_is_held_for_the_whole_run(self):
+        # taken before the plan and kept until the anchor is written: an advance started meanwhile waits for it
+        self.lose_record()
+        path, tried = self.esp_lock(), []
+
+        def typed(prompt):
+            fd = os.open(path, os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                tried.append("free")
+            except BlockingIOError:
+                tried.append("held")
+            finally:
+                os.close(fd)
+            return prompt.split("Type exactly: ")[1].split("\n")[0]
+        rc, asked = self.program("--esp-lock", path, typed=typed)
+        self.assertEqual((rc, tried), (0, ["held"]))
+        fd = os.open(path, os.O_RDWR)                      # and given up when it is done
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_the_esp_lock_is_never_taken_through_a_link(self):
+        self.lose_record()
+        path, target = self.esp_lock(), self.d + "/not-created"
+        os.symlink(target, path)
+        rc, asked = self.program("--esp-lock", path)
+        self.assertEqual((rc, asked), (1, []))
+        self.assertIn("is a symbolic link", self.said.getvalue())
+        self.assertFalse(os.path.lexists(target))
+
+    def test_no_esp_lock_when_its_directory_is_not_there(self):
+        # a stopped regalia-esp-advance leaves no RuntimeDirectory; nothing is created in its place
+        self.lose_record()
+        rc, _ = self.program("--esp-lock", self.d + "/absent/highwater.lock")
+        self.assertEqual(rc, 0)
+        self.assertFalse(os.path.exists(self.d + "/absent"))
 
     def node_configs(self):
         example = json.loads((pathlib.Path(__file__).resolve().parent.parent / "deploy" / "baremetal" / "node.example.json").read_text())
@@ -834,16 +977,25 @@ class OnSwtpm(_Swtpm):
         for name in (OTHER, "c"):
             with open("%s/%s.json" % (self.d, name), "wb") as f:
                 f.write(m.canonical(envs))
+        esp = self.d + "/esp"                                                     # as enrolment left it: the chain to epoch 3
+        os.makedirs(esp + "/EFI/regalia")
+        for directory in (esp, esp + "/EFI", esp + "/EFI/regalia"):
+            os.chmod(directory, 0o755)
+        with open(reanchor.esp_chain_path(esp), "wb") as f:
+            f.write(m.canonical(envs[:3]))
         argv = ["--membership", path, "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "b",
-                "--peer", "a=%s/a.json" % self.d, "--peer", "c=%s/c.json" % self.d, "--audit-log", self.d + "/audit.jsonl", "--tcti", self.tcti]
+                "--peer", "a=%s/a.json" % self.d, "--peer", "c=%s/c.json" % self.d, "--audit-log", self.d + "/audit.jsonl", "--tcti", self.tcti,
+                "--esp", esp]
         os.environ.pop("TPM2TOOLS_TCTI", None)
-        make = lambda index, tcti, policy=None, define_policy=None: m.HighWater(index, tcti=tcti, lock_path=self.d + "/hw.lock", policy=policy, define_policy=define_policy)
+        make = lambda index, tcti, policy=None, define_policy=None, lock_path=None: m.HighWater(index, tcti=tcti, lock_path=self.d + "/hw.lock", policy=policy, define_policy=define_policy)
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(reanchor.main(argv, ask=lambda prompt: "no", highwater=make), 1)
+            self.assertEqual(reanchor.main(argv, ask=lambda prompt: "no", highwater=make, active=lambda: []), 1)
             self.assertEqual(self.hw.slots(), [None, None])                          # refused: the TPM as it was
-            self.assertEqual(reanchor.main(argv, ask=lambda prompt: prompt.split("Type exactly: ")[1].split("\n")[0], highwater=make), 0)
+            self.assertEqual(reanchor.main(argv, ask=lambda prompt: prompt.split("Type exactly: ")[1].split("\n")[0], highwater=make, active=lambda: []), 0)
         digest4 = m.digest(envs[3]["manifest"])
         self.assertEqual((self.hw.value(), self.hw.slots(), self.hw.pinned(), self.hw.unusable()), (4, [(4, digest4)] * 2, True, None))
+        with open(reanchor.esp_chain_path(esp), "rb") as f:
+            self.assertEqual(f.read(), m.canonical(envs))                       # the ESP at the anchor's epoch, written first
         new_base = subprocess.run(["tpm2_nvread", "0x1500017", "-C", "o", "-s", "8"], env=self.env, capture_output=True, check=True).stdout
         new_counter = subprocess.run(["tpm2_nvread", "0x1500016", "-C", "o", "-s", "8"], env=self.env, capture_output=True, check=True).stdout
         self.assertGreater(int.from_bytes(new_counter, "big"), int.from_bytes(old_counter, "big"))
@@ -860,6 +1012,170 @@ class OnSwtpm(_Swtpm):
         gone = m.HighWater("0x1500016", tcti="swtpm:path=%s/absent.sock" % self.d, lock_path=self.d + "/x.lock")
         with self.assertRaisesRegex(m.Refused, "the TPM does not answer"):
             gone.unusable()
+
+
+class AnchorUnits(unittest.TestCase):
+    """#391 (regalia-kms-24): the units reanchor waits for, and regalia-esp-advance's lock, as the node defines them."""
+
+    def test_the_esp_lock_is_the_nodes(self):
+        from deploy.baremetal import node
+        self.assertEqual(reanchor.ESP_LOCK, node.ESP_LOCK)
+
+    def test_every_unit_named_ships(self):
+        units = pathlib.Path(reanchor.__file__).resolve().parent / "units"
+        for unit in reanchor.ANCHOR_UNITS:
+            self.assertTrue((units / unit).is_file(), unit)
+
+    def test_active_units_reads_systemctl(self):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 3, stdout="inactive\nactive\nfailed\nactivating\n")
+        self.assertEqual(reanchor.active_units(run), ["regalia-esp-advance.service", "regalia-admission.service"])
+        self.assertEqual(calls, [["systemctl", "is-active"] + list(reanchor.ANCHOR_UNITS)])
+
+        # 4: units that are not installed at all (a runner, a machine that is not a node): each still "inactive". The
+        # three-node rehearsal's first final run failed on this (#391 at 47f600a)
+        self.assertEqual(reanchor.active_units(lambda argv, **kw: subprocess.CompletedProcess(argv, 4, stdout="inactive\n" * 4,
+                                                                                              stderr="Unit regalia-sync.service could not be found.")), [])
+
+        def missing(argv, **kw):
+            raise FileNotFoundError("systemctl")
+        self.assertEqual(reanchor.active_units(missing), [])
+
+    def test_a_systemctl_that_cannot_answer_is_a_refusal(self):
+        # regalia-kms-1e on #391: "Failed to connect to bus" (a recovery boot, a chroot) is not "nothing runs"
+        for code, out, err in ((1, "", "Failed to connect to bus: No such file or directory"),
+                               (3, "inactive\ninactive\n", ""),                      # fewer states than units
+                               (3, "inactive\ninactive\ninactive\nweird\n", ""),       # a state it does not know
+                               (1, "inactive\ninactive\ninactive\ninactive\n", ""),      # not is-active's own status
+                               (4, "inactive\nactive\ninactive\ninactive\n", "")):       # 4 (one missing) beside a running one
+            with self.assertRaisesRegex(m.Refused, "cannot ask systemd which of .* run .*: stop them and run this on the booted node"):
+                reanchor.active_units(lambda argv, **kw: subprocess.CompletedProcess(argv, code, stdout=out, stderr=err))
+
+
+class HandBack(unittest.TestCase):
+    """#388: a re-anchor is run by root, and the node's sync (regalia-sync, enrol._hand_over) owns the state directory. What
+    root wrote there is given back, or the node could not read its own chain after the recovery; and the anchor's lock is
+    the one the node's own services take."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d)
+        self.path = os.path.join(self.d, "membership.json")
+        for name in ("membership.json", "membership.json.lock", "highwater.lock"):
+            with open(os.path.join(self.d, name), "w") as f:
+                f.write("x")
+        self.chowned = []
+
+    def owned_by(self, uid, gid):
+        """The state directory as its owner would have it: (uid, gid); the files are this test's user's."""
+        real = os.stat
+
+        def fake(path, *a, **kw):
+            held = real(path, *a, **kw)
+            if os.path.abspath(path) == self.d:
+                return mock.Mock(st_uid=uid, st_gid=gid, st_mode=held.st_mode)
+            return held
+        return mock.patch.object(reanchor.os, "stat", side_effect=fake)
+
+    def hand_back(self, euid=0):
+        return reanchor.hand_back(self.path, euid=lambda: euid, chown=lambda fd, uid, gid: self.chowned.append((os.fstat(fd).st_ino, uid, gid)))
+
+    def test_root_gives_the_file_and_its_locks_back_to_the_owner_of_the_state_directory(self):
+        # the files are this test's user's, standing for the directory's owner; the directory's group is another one
+        with self.owned_by(os.getuid(), 4343):
+            changed = self.hand_back()
+        self.assertEqual(sorted(changed), sorted(os.path.join(self.d, n) for n in ("membership.json", "membership.json.lock", "highwater.lock")))
+        self.assertEqual(sorted(self.chowned), sorted((os.stat(p).st_ino, os.getuid(), 4343) for p in changed))
+
+    def test_a_third_users_file_is_never_given_away(self):
+        # owned neither by root nor by the directory's owner (4242): not root's to give
+        with self.owned_by(4242, 4343), self.assertRaisesRegex(m.Refused, "neither root nor the owner"):
+            self.hand_back()
+        self.assertEqual(self.chowned, [])
+
+    def test_a_hard_link_in_place_of_the_file_is_refused(self):
+        other = os.path.join(self.d, "elsewhere")
+        with open(other, "w") as f:
+            f.write("not the chain")
+        os.unlink(self.path)
+        os.link(other, self.path)                    # regalia-sync controls the directory's entries
+        with self.owned_by(os.getuid(), 4343), self.assertRaisesRegex(m.Refused, "one name"):
+            self.hand_back()
+        self.assertEqual(self.chowned, [])
+
+    def test_nothing_is_changed_when_not_root_when_the_directory_is_roots_or_the_owner_is_already_right(self):
+        with self.owned_by(4242, 4343):
+            self.assertEqual(self.hand_back(euid=1000), [])
+        with self.owned_by(0, 0):
+            self.assertEqual(self.hand_back(), [])
+        with self.owned_by(os.getuid(), os.getgid()):
+            self.assertEqual(self.hand_back(), [])
+        self.assertEqual(self.chowned, [])
+
+    def test_a_link_in_place_of_the_file_is_never_followed(self):
+        os.unlink(self.path)
+        os.symlink(os.path.join(self.d, "highwater.lock"), self.path)
+        with self.owned_by(os.getuid(), 4343), self.assertRaises(OSError):
+            self.hand_back()
+        self.assertEqual(self.chowned, [])
+
+    def test_a_lock_is_never_opened_or_created_through_a_link(self):
+        # #388 (regalia-kms-1e): root takes the anchor's lock in regalia-sync's directory; a link planted there must not
+        # make root open, or create, its target
+        target = os.path.join(self.d, "target-not-created")
+        os.unlink(os.path.join(self.d, "highwater.lock"))
+        os.symlink(target, os.path.join(self.d, "highwater.lock"))
+        with self.assertRaisesRegex(m.Refused, "symbolic link"):
+            with m._exclusive(os.path.join(self.d, "highwater.lock")):
+                pass
+        self.assertFalse(os.path.lexists(target))
+        os.link(self.path, os.path.join(self.d, "linked.lock"))
+        with self.assertRaisesRegex(m.Refused, "one name"):
+            with m._exclusive(os.path.join(self.d, "linked.lock")):
+                pass
+
+    def test_main_says_the_command_to_run_when_the_file_cannot_be_given_back(self):
+        err = io.StringIO()
+        with mock.patch.object(reanchor, "hand_back", side_effect=PermissionError("not permitted")), contextlib.redirect_stderr(err):
+            self.assertFalse(reanchor._give_back(self.path))
+        # -h: the chown acts on a link itself, never on what it names (regalia-kms-1e on #391)
+        self.assertIn("chown -h --reference=%s -- %s" % (self.d, self.path), err.getvalue())
+        self.assertIn("the anchor is written", err.getvalue())
+        err = io.StringIO()
+        with mock.patch.object(reanchor, "hand_back", side_effect=PermissionError("not permitted")), contextlib.redirect_stderr(err):
+            self.assertFalse(reanchor._give_back(self.path, done=False))
+        self.assertIn("nothing was changed", err.getvalue())
+        self.assertNotIn("the anchor is written", err.getvalue())
+
+    def test_no_command_is_printed_for_a_planted_file(self):
+        # regalia-kms-1e on #391: hand_back refuses a link (ELOOP from O_NOFOLLOW), a second name or a third user's file.
+        # Those are entries regalia-sync controls: root's chown of membership.json -> /etc/shadow would give the target
+        # away. No chown is printed for them, -h or not, only what to look at
+        os.unlink(self.path)
+        os.symlink("/etc/shadow", self.path)
+        for failure in (OSError(errno.ELOOP, "Too many levels of symbolic links", self.path),
+                        m.Refused("%s is not a regular file with one name: it is not given back" % self.path),
+                        m.Refused("%s belongs to uid 4242, neither root nor the owner of %s: it is not given back" % (self.path, self.d))):
+            err = io.StringIO()
+            with mock.patch.object(reanchor, "hand_back", side_effect=failure), contextlib.redirect_stderr(err):
+                self.assertFalse(reanchor._give_back(self.path))
+            self.assertNotIn("chown", err.getvalue().replace("do NOT chown it", ""), failure)
+            self.assertIn("do NOT chown it", err.getvalue())
+
+    def test_a_missing_state_directory_has_nothing_to_give_back(self):
+        # a refusal before anything was made, the directory not there (a typo in --membership): nothing, no error
+        self.assertEqual(reanchor.hand_back(os.path.join(self.d, "absent", "membership.json"), euid=lambda: 0), [])
+
+    def test_the_lock_is_the_one_the_nodes_own_services_take(self):
+        from deploy.baremetal import node
+        with open(os.path.join(os.path.dirname(os.path.abspath(reanchor.__file__)), "node.example.json")) as f:
+            cfg = dict(json.load(f), state_dir=self.d)
+        here = node.Node.__new__(node.Node)            # only what path() and anchor() read: no site, no TPM
+        here.cfg, here.state, here.tcti, here.run = cfg, self.d, None, subprocess.run
+        self.assertEqual(reanchor.anchor_lock(here.path("membership.json")), here.anchor().lock_path)
 
 
 if __name__ == "__main__":

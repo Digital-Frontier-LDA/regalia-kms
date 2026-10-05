@@ -24,7 +24,7 @@ AmbientCapabilities=
 
 # kms_apparmor_enforced: no leading "-". With "-regalia-kms" systemd starts the service UNCONFINED
 # when the profile is not loaded; without it the service refuses to start, which is the point.
-# The profile is deploy/baremetal/apparmor/usr.local.sbin.regalia-kms. It is parser-checked only:
+# The profile is deploy/baremetal/apparmor/usr.sbin.regalia-kms. It is parser-checked only:
 # run it in complain mode on the lab host first (#61, PoC 1.2). This control fails until it is
 # loaded and enforcing.
 AppArmorProfile=regalia-kms
