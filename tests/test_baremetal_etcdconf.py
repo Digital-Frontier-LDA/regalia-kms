@@ -103,8 +103,14 @@ class Rendered(Case):
                  ("not on the service mesh", ["listen-peer-urls"], "https://[2001:db8::1]:2380"),
                  ("not on the service mesh", ["initial-advertise-peer-urls"], "http://[fd72:6567:6c61::1]:2380"),
                  ("must require certificates", ["peer-transport-security", "client-cert-auth"], False),
-                 ("must require certificates", ["client-transport-security", "auto-tls"], True),
+                 ("must require certificates", ["peer-transport-security", "auto-tls"], True),
                  ("from the unit's credentials", ["peer-transport-security", "key-file"], "/etc/regalia/etcd/peer.key"),
+                 ("never a system CA bundle", ["peer-transport-security", "trusted-ca-file"], "/etc/ssl/certs/ca-certificates.crt"),
+                 ("never a system CA bundle", ["peer-transport-security", "cert-file"], "/tmp/peer.crt"),
+                 ("only look like protection", ["client-transport-security"], {"client-cert-auth": True}),
+                 ("periodic compaction", ["auto-compaction-mode"], "revision"),
+                 ("an explicit quota", ["quota-backend-bytes"], 0),
+                 ("the corruption checks are on", ["feature-gates"], ""),
                  ("TLS 1.3", ["tls-min-version"], "TLS1.2"),
                  ("ten heartbeats", ["election-timeout"], 500)]
         for reason, path, value in cases:

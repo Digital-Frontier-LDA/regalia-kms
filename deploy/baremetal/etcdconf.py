@@ -49,6 +49,9 @@ MIN_HEARTBEAT_MS = 100                             # etcd's default: never below
 MAX_RTT_MS = 500                                   # above: a commissioning failure (election timeout would pass 5 s)
 MAX_ELECTION_MS = 50000                            # etcd refuses more
 MAX_PEM_BYTES = 16 * 1024
+QUOTA_BYTES = 2 * 1024 ** 3                        # etcd's backend quota, explicit: an alert fires well before it (ETCD.md)
+COMPACTION_RETENTION = "1h"                        # periodic: the history kept for watches to resume, then compacted
+CORRUPTION_GATES = "InitialCorruptCheck=true,CompactHashCheck=true"   # v3.6 feature gates: check at start, and hashes
 
 
 def cert_der(pem):
@@ -149,7 +152,6 @@ def render(manifest, me, genesis_digest, certs, rtt_p99_ms, state="new"):
     beat, election = timings(rtt_p99_ms)
     for pem in certs.values():
         cert_der(pem)
-    tls = {"cert-file": "%s/%%s.crt" % CERT_DIR, "key-file": "%s/etcd-%%s.key" % CREDENTIALS}
     config = {
         "name": me,
         "data-dir": DATA_DIR,
@@ -165,10 +167,14 @@ def render(manifest, me, genesis_digest, certs, rtt_p99_ms, state="new"):
         "strict-reconfig-check": True,
         "enable-pprof": False,
         "tls-min-version": "TLS1.3",
-        "client-transport-security": {"cert-file": tls["cert-file"] % "server", "key-file": tls["key-file"] % "server",
-                                      "client-cert-auth": True, "trusted-ca-file": "%s/clients.pem" % CERT_DIR, "auto-tls": False},
-        "peer-transport-security": {"cert-file": tls["cert-file"] % "peer", "key-file": tls["key-file"] % "peer",
+        # no client TLS: on a unix:// client URL etcd ignores it (measured on v3.6.15 by regalia-kms-d9, #491), so it would
+        # only look like protection. The client boundary is the socket's group (regalia-etcd-client, ETCD.md)
+        "peer-transport-security": {"cert-file": "%s/peer.crt" % CERT_DIR, "key-file": "%s/etcd-peer.key" % CREDENTIALS,
                                     "client-cert-auth": True, "trusted-ca-file": "%s/peers.pem" % CERT_DIR, "auto-tls": False},
+        "auto-compaction-mode": "periodic",
+        "auto-compaction-retention": COMPACTION_RETENTION,
+        "quota-backend-bytes": QUOTA_BYTES,
+        "feature-gates": CORRUPTION_GATES,
         "logger": "zap",
         "log-outputs": ["stderr"],
     }
@@ -186,9 +192,16 @@ def check(text):
         for url in config[key].split(","):
             found = re.fullmatch(r"https://\[([0-9a-f:]+)\]:%d" % PEER_PORT, url)
             require(found is not None and found.group(1).startswith("fd72:6567:6c61:"), "%s %s is not on the service mesh over TLS" % (key, url))
-    for side in ("client-transport-security", "peer-transport-security"):
-        require(config[side]["client-cert-auth"] is True and config[side]["auto-tls"] is False, "%s must require certificates, no auto TLS" % side)
-        require(config[side]["key-file"].startswith(CREDENTIALS + "/"), "%s's key must come from the unit's credentials" % side)
+    require("client-transport-security" not in config, "no client TLS block: etcd ignores it on a unix socket, and it would only look like "
+            "protection")
+    peer = config["peer-transport-security"]
+    require(peer["client-cert-auth"] is True and peer["auto-tls"] is False, "peer-transport-security must require certificates, no auto TLS")
+    require(peer["key-file"] == CREDENTIALS + "/etcd-peer.key", "the peer key must come from the unit's credentials")
+    require(peer["trusted-ca-file"] == CERT_DIR + "/peers.pem" and peer["cert-file"] == CERT_DIR + "/peer.crt",
+            "the peer trust is the rendered bundle of bound certificates, never a system CA bundle")
+    require(config["auto-compaction-mode"] == "periodic" and config["auto-compaction-retention"] == COMPACTION_RETENTION
+            and config["quota-backend-bytes"] == QUOTA_BYTES, "periodic compaction and an explicit quota")
+    require(config["feature-gates"] == CORRUPTION_GATES, "the corruption checks are on")
     require(config["tls-min-version"] == "TLS1.3" and config["enable-pprof"] is False and config["strict-reconfig-check"] is True,
             "TLS 1.3, no pprof, strict reconfiguration checks")
     require(config["election-timeout"] >= 10 * config["heartbeat-interval"] >= 10 * MIN_HEARTBEAT_MS, "the election timeout is ten heartbeats")
