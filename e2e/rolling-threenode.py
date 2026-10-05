@@ -115,8 +115,13 @@ DECIDE = (
 
 def decide(cluster, name):
     n = cluster.nodes[name]
-    return json.loads(n.in_ns("env", "PYTHONDONTWRITEBYTECODE=1", "/usr/bin/python3", "-Es", "-c", DECIDE,
-                              input=json.dumps({"cfg": str(n.cfg_path)}), cwd=str(cluster.code)).stdout)
+    # as root in its namespace with its /run/systemd, as update.py runs on its host (#242 B3: its read of the node's anchor,
+    # written by policy, needs the system-phase key)
+    done = cluster.as_root(name, "decide-%d" % time.monotonic_ns(), ["/usr/bin/python3", "-Es", "-c", DECIDE],
+                           input=json.dumps({"cfg": str(n.cfg_path)}), in_ns=True)
+    if done.returncode != 0:
+        raise RuntimeError("update.py's decision on %s failed (%d): %s" % (name, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
+    return json.loads(done.stdout)
 
 
 def states(cluster):
