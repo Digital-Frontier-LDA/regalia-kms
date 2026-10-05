@@ -72,6 +72,8 @@ def v4_chain(length):
                     "heartbeat_signers": {"threshold": 2, "parties": ["n1", "n2", "n3", "owner"]},
                     "activation_signers": {"threshold": 2, "parties": ["n1", "n2", "n3"]},
                     "revocation_signers": [{"threshold": 2, "parties": ["n1", "n2", "n3"]}, {"threshold": 1, "parties": ["owner"]}],
+                    # #361/#405: K_A (a fixed public test point) and the card record's pin
+                    "anchor_policy_key": {"alg": "ecdsa-p256", "key": p256(60)}, "card_record": {"sequence": 1, "digest": "ca" * 32},
                     "nodes": nodes}
         envelopes.append(envelope(manifest))
         prev = m.digest(manifest)
@@ -132,8 +134,9 @@ class Tpm:
 
 
 def decide(hw, manifests):
-    """Store._load before its writes, judged by the tip's schema as the Store judges it (#242 B3, Store._judge_by)."""
-    hw._schema = manifests[-1]["schema"]
+    """Store._load before its writes, judged by the tip as the Store judges it (#242 B3, Store._judge_by): its schema, and
+    under v4 its anchor_policy_key (#361)."""
+    hw.judge_by_tip(manifests[-1])
     try:
         high = hw.value()
         epoch = manifests[-1]["epoch"]
@@ -299,12 +302,38 @@ case("a policy-written slot with an empty authPolicy", 3, "main", 3, both(by_pol
      then="(none)")
 case("a policy-written base", 3, "main", 3, by_policy("0x1500017"), policy=POLICY, then="attributes")
 case("an owner-written anchor read by a node with a policy", 3, "main", 3, policy=POLICY, then="high_water")
-# #242 B3: under a v4 chain tip the anchor is written by policy only; v1-v3 keep both layouts (the cases above)
+# #242 B3: under a v4 chain tip the anchor is written by policy only; v1-v3 keep both layouts (the cases above).
+# #361 C: and by the anchor-policy authority only: the counter under PolicyAuthorize(Name(K_A), "anchor"), the slots under
+# PolicyAuthorize(Name(K_A), "slots"), K_A the tip's anchor_policy_key. The image key's policy is refused (no fallback).
+from deploy.baremetal import anchorpolicy  # noqa: E402
+
+K_A = CHAINS["v4"][0]["manifest"]["anchor_policy_key"]["key"]
+UNDER_K_A = {INDEX: anchorpolicy.class_policy(K_A, "anchor").hex(), **{s_: anchorpolicy.class_policy(K_A, "slots").hex() for s_ in SLOTS}}
+
+
+def by_k_a(*indices, wrong_class=()):
+    """Each index policy-written under K_A's policy for its class, or for the OTHER class when named in `wrong_class`."""
+    swapped = {INDEX: UNDER_K_A[SLOTS[0]], SLOTS[0]: UNDER_K_A[INDEX], SLOTS[1]: UNDER_K_A[INDEX]}
+
+    def change(tpm, hw):
+        for index in indices:
+            nv(tpm, index)[0] |= FakeTpm.BITS["policywrite"]
+            tpm.tpm.policies[index] = swapped[index] if index in wrong_class else UNDER_K_A[index]
+    return change
+
+
 case("a v4 chain, an owner-written anchor", 3, "v4", 3, anchored_on="v4", policy=POLICY, then="is owner-written: under regalia.membership/v4")
-case("a v4 chain, a policy-written anchor", 3, "v4", 3, by_policy(*ALL), anchored_on="v4", policy=POLICY, then="high_water")
-case("a v4 chain, owner-written slots beside a policy-written counter", 3, "v4", 3, by_policy(INDEX), anchored_on="v4", policy=POLICY,
+case("a v4 chain, an anchor under K_A's classes", 3, "v4", 3, by_k_a(*ALL), anchored_on="v4", then="high_water")
+case("a v4 chain ahead of an anchor under K_A's classes", 3, "v4", 5, by_k_a(*ALL), anchored_on="v4", then="high_water")
+case("a v4 chain, a restored disk under K_A's classes", 3, "v4", 2, by_k_a(*ALL), anchored_on="v4", then="ROLLBACK")
+case("a v4 chain, an anchor under the image key's policy (no fallback)", 3, "v4", 3, by_policy(*ALL), anchored_on="v4", policy=POLICY,
+     then="0x1500016 (the anchor class) is not defined under the anchor-policy authority")
+case("a v4 chain, a slot under K_A's anchor class", 3, "v4", 3, by_k_a(*ALL, wrong_class=(SLOTS[1],)), anchored_on="v4",
+     then="0x150001b (the slots class) is not defined under the anchor-policy authority")
+case("a v4 chain, a slot with an empty authPolicy", 3, "v4", 3, both(by_k_a(*ALL), by_policy(SLOTS[0], policy="")), anchored_on="v4",
+     then="its authPolicy is (none)")
+case("a v4 chain, owner-written slots beside a counter under K_A", 3, "v4", 3, by_k_a(INDEX), anchored_on="v4",
      then="0x150001a is owner-written")
-case("a v4 chain ahead of a policy-written anchor", 3, "v4", 5, by_policy(*ALL), anchored_on="v4", policy=POLICY, then="high_water")
 
 shutil.rmtree(scratch)
 print(json.dumps({"about": __doc__.strip().split("\n\n")[0], "root_public": root_pub,

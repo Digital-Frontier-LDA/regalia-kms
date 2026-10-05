@@ -1153,6 +1153,17 @@ class PolicyLayout(unittest.TestCase):
         self.assertNotIn("0x150001b", self.tpm.policies)
 
 
+def _k_a_point():
+    """test_baremetal_membership_v4's K_A (p256(60)), derived here: that module imports this one."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    return ec.derive_private_key(0x5EED0000 + 60, ec.SECP256R1()).public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()
+
+
+K_A_POINT = _k_a_point()
+
+
 class PolicyOnlyUnderV4(unittest.TestCase):
     """#242 B3: under a v4 chain tip (production) the anchor is written by policy only: an owner-written counter or slot is
     Unusable, which a re-anchor repairs; under v1-v3 (a lab image's chain) both layouts read. The tip's schema is the one
@@ -1182,24 +1193,78 @@ class PolicyOnlyUnderV4(unittest.TestCase):
                          "policy only (re-anchor it)")
         self.assertIn("is owner-written", self.hw(m.SCHEMA_V4).unusable())        # what a re-anchor is for
 
+    def under_k_a(self, *indices, wrong=()):
+        """#361 C: each index policy-written under K_A's policy for its class (the counter "anchor", a slot "slots"), or
+        for the other class when named in `wrong`."""
+        from deploy.baremetal import anchorpolicy
+        classes = {"0x1500016": "anchor", "0x150001a": "slots", "0x150001b": "slots"}
+        for index in indices:
+            cls = classes[index] if index not in wrong else {"anchor": "slots", "slots": "anchor"}[classes[index]]
+            self.tpm.nv[index][0] |= FakeTpm.BITS["policywrite"]
+            self.tpm.policies[index] = anchorpolicy.class_policy(K_A_POINT, cls).hex()
+
     def test_the_tip_is_asked_for_once_and_only_for_an_owner_written_index(self):
         asked = []
+        self.under_k_a("0x1500016", "0x150001a", "0x150001b")
+        hw = self.hw(lambda: asked.append(1) or m.SCHEMA_V4, anchor_key=K_A_POINT)
+        self.assertEqual((hw.value(), hw.record()[0], len(asked)), (3, 3, 1))          # asked once, whatever the indices
+        self.tpm.nv["0x150001b"][0] &= ~FakeTpm.BITS["policywrite"]                   # one owner-written slot
+        hw = self.hw(lambda: asked.append(1) or m.SCHEMA_V4, anchor_key=K_A_POINT)
+        self.assertIn("0x150001b is owner-written", hw.unusable())
+        self.assertEqual(len(asked), 2)
+
+    def test_a_re_anchor_under_v4_lays_the_anchor_down_under_k_a(self):
+        """#361 C: under a v4 tip the definer lays the counter and the slots down under PolicyAuthorize(Name(K_A), class),
+        whatever approved-image policy it was given (that is v1-v3's)."""
+        from deploy.baremetal import anchorpolicy
+        hw = self.hw(m.SCHEMA_V4, define_policy=POLICY, anchor_key=K_A_POINT)
+        self.assertIsNotNone(hw.unusable())
+        hw.redefine(4, self.digest(4))
+        reader = self.hw(m.SCHEMA_V4, anchor_key={"alg": "ecdsa-p256", "key": K_A_POINT})        # the tip's typed entry
+        self.assertEqual((reader.value(), reader.unusable()), (4, None))
+        self.assertEqual([self.tpm.policies.get(i) for i in ("0x1500016", "0x150001a", "0x150001b")],
+                         [anchorpolicy.class_policy(K_A_POINT, c).hex() for c in ("anchor", "slots", "slots")])
+
+    def test_under_v4_the_image_key_s_policy_is_refused_with_no_fallback(self):
+        """ed and 1e (#361 C): the Go reader's text, word for word; the node's approved-image policy does not rescue it."""
+        from deploy.baremetal import anchorpolicy
         for index in ("0x1500016", "0x150001a", "0x150001b"):
             self.tpm.nv[index][0] |= FakeTpm.BITS["policywrite"]
             self.tpm.policies[index] = POLICY
-        hw = self.hw(lambda: asked.append(1) or m.SCHEMA_V4, policy=POLICY)
-        self.assertEqual((hw.value(), hw.record()[0], asked), (3, 3, []))              # every index policy-written: never asked
-        self.tpm.nv["0x150001b"][0] &= ~FakeTpm.BITS["policywrite"]                   # one owner-written slot
-        hw = self.hw(lambda: asked.append(1) or m.SCHEMA_V4, policy=POLICY)
-        self.assertIn("0x150001b is owner-written", hw.unusable())
-        self.assertEqual(len(asked), 1)
+        with self.assertRaises(m.Unusable) as caught:
+            self.hw(m.SCHEMA_V4, policy=POLICY, anchor_key=K_A_POINT).value()
+        self.assertEqual(str(caught.exception), "NV index 0x1500016 (the anchor class) is not defined under the anchor-policy authority: its "
+                         "authPolicy is %s, not PolicyAuthorize(K_A %s\u2026, \"anchor\") = %s"
+                         % (POLICY, K_A_POINT[:16], anchorpolicy.class_policy(K_A_POINT, "anchor").hex()))
+        # and under v3 the same anchor reads by the image key's policy, as before
+        self.assertEqual(self.hw(m.SCHEMA_V3, policy=POLICY).value(), 3)
 
-    def test_a_re_anchor_under_v4_lays_the_anchor_down_by_policy(self):
-        hw = self.hw(m.SCHEMA_V4, define_policy=POLICY)
-        self.assertIsNotNone(hw.unusable())
-        hw.redefine(4, self.digest(4))
-        self.assertEqual((self.hw(m.SCHEMA_V4, policy=POLICY).value(), self.hw(m.SCHEMA_V4, policy=POLICY).unusable()), (4, None))
-        self.assertEqual({self.tpm.policies.get(i) for i in ("0x1500016", "0x150001a", "0x150001b")}, {POLICY})
+    def test_under_v4_each_index_holds_its_own_class(self):
+        self.under_k_a("0x1500016", "0x150001a", "0x150001b", wrong=("0x150001b",))
+        self.assertIn("NV index 0x150001b (the slots class) is not defined under the anchor-policy authority",
+                      self.hw(m.SCHEMA_V4, anchor_key=K_A_POINT).unusable())
+        self.under_k_a("0x150001b")
+        self.tpm.policies["0x150001a"] = ""
+        self.assertIn("NV index 0x150001a (the slots class) is not defined under the anchor-policy authority: its authPolicy is (none)",
+                      self.hw(m.SCHEMA_V4, anchor_key=K_A_POINT).unusable())
+
+    def test_a_v4_tip_without_k_a_is_refused(self):
+        self.under_k_a("0x1500016", "0x150001a", "0x150001b")
+        with self.assertRaisesRegex(m.Refused, "the v4 chain tip names no anchor_policy_key: the anchor cannot be judged"):
+            self.hw(m.SCHEMA_V4).value()
+
+    def test_the_store_takes_k_a_from_its_own_chain_s_tip(self):
+        """The Store judges by its verified chain's tip: its schema AND its anchor_policy_key, never the caller's."""
+        import tests.test_baremetal_membership_v4 as v4
+        hw = m.HighWater("0x1500030", lock_path=self.d + "/k.lock", run=self.tpm, schema=m.SCHEMA_V4, anchor_key=K_A_POINT)
+        hw.define()
+        self.assertEqual([self.tpm.policies.get(i) for i in ("0x1500030", "0x1500034", "0x1500035")],
+                         [__import__("deploy.baremetal.anchorpolicy", fromlist=["x"]).class_policy(K_A_POINT, c).hex()
+                          for c in ("anchor", "slots", "slots")])
+        reader = m.HighWater("0x1500030", lock_path=self.d + "/k.lock", run=self.tpm, anchor_key="04" + "11" * 64)   # the caller's: ignored
+        store = m.Store(self.d + "/k.json", ROOT_PUB, reader)
+        store._judge_by([v4.manifest4(1, "", v4.nodes4())])
+        self.assertEqual((reader.tip_schema(), reader.tip_anchor_key()), (m.SCHEMA_V4, K_A_POINT))
 
     def test_the_store_judges_by_its_own_chain_s_tip(self):
         """A Store whose verified chain is v4 refuses an owner-written anchor though its caller named no schema."""

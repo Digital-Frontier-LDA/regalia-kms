@@ -180,6 +180,41 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   judgement assumes the host had finished booting (systemd-pcrphase "ready" extended) when `activate`
   ran, which a software TPM cannot show: a bench item (#297), and the refusal says to re-run once
   `systemctl is-system-running` reports running. Run only on software TPMs so far.
+- **K_A and the card record are pinned in the v4 manifest** (#361, #405).
+  `anchor_policy_key` is set at genesis and no signer, the root included, changes it: every node's
+  anchor, counters and signing key will be defined under it, so losing or replacing K_A means a new
+  genesis and re-enrolling every node (its Shamir backup, D28, guards the loss). `card_record` pins the card ceremony record's sequence
+  and digest, never the record itself: a node cannot read a card record (it has no laptop signing
+  record to judge it by), so it holds only that the root moved to a later one whenever owner_keys
+  changed, not what that record says.
+- **The rotation counter R is made at `enrol init`** (#361 C1). Each node defines R
+  under PolicyAuthorize(Name(K_A), its own 32-byte policyRef, SHA-256("regalia-rotation/v1\0" || node ID)), so R's
+  Name and every approval naming it are that node's alone (a shared Name would let one node's public approval at a
+  higher G open another's objects after a retire). Its first increment uses K_A's approval for that node. Its
+  Name and first value are AK-quoted, and the genesis requires the Name under the manifest's K_A. Every write
+  under K_A checks R through PolicyNV(R <= G) (C3, below). Its value
+  is the TPM's saved highest count, so it differs per node (regalia-kms-95). Measured on swtpm only. A node
+  enrolled before C1 has no R and is refused at the genesis ("made before #361 C1").
+- **Under a v4 tip, every policy-written object is defined and written under K_A** (#361 C3). The anchor
+  counter and slots, the heartbeat and signing counters, and the node signing key each sit under
+  PolicyAuthorize(Name(K_A), their class). A run-time write opens the composite session: PolicyPCR(11), then
+  PolicyAuthorize(K_sys), then PolicyNV(this node's R <= G), then PolicyAuthorize(K_A, class) with K_A's
+  approval from the node's set. Shown on swtpm: the production enrolment, a retire bump revoking the old
+  approval in the TPM, and one session per command. Not on a hardware TPM. Approvals are checked at three
+  points: by form when the document is loaded, by signature by the signer, and by signature for the node's
+  own set before each write (another node's is refused by name before the TPM is asked). A set names K_sys
+  only by fingerprint, so another node's approvals can't be checked at load, only at use (regalia-kms-d9).
+  Definitions, a re-anchor and a recount still write with the owner's authorization (the indices keep
+  ownerwrite). The membership anchor (its counter and slots) writes only when judged by a verified chain tip,
+  and presents the approval from THAT tip's document: a Store's commit, `enrol init` and esp_advance each judge
+  by the chain they write, and an unjudged write is refused before any approval is looked up. The heartbeat
+  and signing counters commit no epoch and take the held chain's approvals. The retire bump and catch-up are
+  C4 and not built: nothing yet moves R, so no approval is revoked outside a test.
+- **K_A is taken from the sealed set's generation record** (`--offline-keys-record`, regalia-kms-95 on
+  #438). It is verified under the pinned root, and its published key must equal the entry. Its private
+  half is shown only by the record's `operation_proof` ("verified": the generating tool's own check of a
+  challenge signature, vouched for by the root's signature on the record). It is not re-proven at
+  genesis: a sealed file damaged after generation is found only at the first approval K_A signs.
 - **Card attestation: not built** (#400). Nothing yet produces the YubiKeys' OpenPGP attestation
   certificates (`ykman openpgp keys attest`). The card record's `attestation_sha256` values are
   placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is

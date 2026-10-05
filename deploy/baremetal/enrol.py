@@ -70,7 +70,7 @@ import sys
 import tempfile
 import time
 
-from deploy.baremetal import attest, espcreds, measurements, membership, ownerauth, signkey
+from deploy.baremetal import anchorpolicy, attest, espcreds, measurements, membership, ownerauth, signkey
 
 SCHEMA_JOURNAL = "regalia.enrol-journal/v1"
 SCHEMA_BUNDLE = "regalia.enrol-bundle/v1"
@@ -255,7 +255,7 @@ def identity(journal, directory, run, owner_auth=None):
     return facts
 
 
-def signing_key(journal, directory, system_pub, ids, run, owner_auth=None):
+def signing_key(journal, directory, system_pub, ids, run, owner_auth=None, k_a=None):
     """The signing key (signkey.py) at signkey.HANDLE, made once and certified by the AK. #234's rules: an object at
     the handle is removed only when the journal recorded its Name before it was made persistent (a crash between the
     two); anything else there is refused, never evicted."""
@@ -280,11 +280,12 @@ def signing_key(journal, directory, system_pub, ids, run, owner_auth=None):
         _atomic_json(journal.path, journal.doc)
 
     journal.started("signing_key")
-    blob = signkey.create(system_pub, run=run, record=record, owner_auth=owner_auth)
+    # #361 C3: made under K_A's "signing" class (k_a, from the anchor-policy file), so a K_sys rotation keeps it
+    blob = signkey.create(system_pub, run=run, record=record, owner_auth=owner_auth, k_a=k_a)
     info, sig = signkey.certify(run=run)
-    entry = signkey.verify_certification(blob, info, sig, bytes.fromhex(ids["ak_public"]), ids["ek_name"], system_pub, run=run)
+    entry = signkey.verify_certification(blob, info, sig, bytes.fromhex(ids["ak_public"]), ids["ek_name"], system_pub, run=run, k_a=k_a)
     facts = {"signing_public": blob.hex(), "signing_certify": info.hex(), "signing_sig": sig.hex(), "signing_key": entry["key"],
-             "signing_name": signkey.identity(blob, system_pub)[0].hex(), "system_pkfp": signkey.pcr_key_fingerprint(system_pub)}
+             "signing_name": signkey.identity(blob, system_pub, k_a)[0].hex(), "system_pkfp": signkey.pcr_key_fingerprint(system_pub)}
     journal.done("signing_key", **facts)
     return facts
 
@@ -424,7 +425,8 @@ ENTRY_KEYS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", 
 CHALLENGE_SCHEMA = "regalia.enrol-challenge/v1"
 # #399: the node's identity as its AK quotes it at `activate`, and what activate gives back
 IDENTITY_SCHEMA = "regalia.enrol-identity/v1"
-IDENTITY_FIELDS = ("node_id", "ek_name", "ak_name", "signing_key", "wg_service_pub", "wg_boot_pub", "hsm_serials", "ssh_host_pub")
+# #361 C1: the rotation counter R ({index, name, value}) is quoted too: its Name binds it to K_A, its value is this node's G start
+IDENTITY_FIELDS = ("node_id", "ek_name", "ak_name", "signing_key", "wg_service_pub", "wg_boot_pub", "hsm_serials", "ssh_host_pub", "rotation")
 IDENTITY_PCRS = (7, 11)                 # the Secure Boot state and the image, as booted when the node was enrolled
 ACTIVATION_SCHEMA = "regalia.enrol-activation/v1"
 ACTIVATION_FIELDS = ("schema", "node_id", "answer", "pcr_values", "quote", "signature")
@@ -506,7 +508,7 @@ def activate(credential, bundle, run=subprocess.run):
             "quote": quote.hex(), "signature": signature.hex()}
 
 
-def entry(bundle, system_pub, keep, activation, run=subprocess.run):
+def entry(bundle, system_pub, keep, activation, run=subprocess.run, k_a=None):
     """The root's side, on its own machine and without a TPM: a node's identity fields as a v4 manifest entry carries
     them, from its bundle, once everything in it that can be checked is. The EK and AK Names are recomputed from their
     public areas, and the signing key is accepted only as signkey.verify_certification accepts it: certified by THIS
@@ -517,10 +519,37 @@ def entry(bundle, system_pub, keep, activation, run=subprocess.run):
     EK and this AK could release. Without it the AK's certification proves nothing, and nothing is printed. With it, the
     AK's quote over the bundle's identity fields, bound to this challenge (#399), says every printed field is what THAT
     TPM's node stated at activation: a WireGuard key, SSH host key or serial changed on the way is refused."""
-    return proven_entry(bundle, system_pub, keep, activation, run)[0]
+    return proven_entry(bundle, system_pub, keep, activation, run, k_a)[0]
 
 
-def proven_entry(bundle, system_pub, keep, activation, run=subprocess.run):
+def rotation_shape(bundle):
+    """The bundle's rotation counter, by form: exactly {index, name, value}, at anchorpolicy.ROTATION_INDEX, a 68-hex Name
+    and a value from 1 (it has had its first increment). Its Name is judged against K_A at the genesis (rotation_of)."""
+    r = bundle.get("rotation")
+    require(isinstance(r, dict), "the bundle has no rotation counter: it was made before #361 C1")
+    membership.exact(r, ("index", "name", "value"), "the bundle's rotation")
+    require(r["index"] == anchorpolicy.ROTATION_INDEX, "the bundle's rotation counter is at %s, not %s" % (r["index"], anchorpolicy.ROTATION_INDEX))
+    require(isinstance(r["name"], str) and re.fullmatch(r"000b[0-9a-f]{64}", r["name"]) is not None, "the bundle's rotation Name is not a SHA-256 Name")
+    require(type(r["value"]) is int and 1 <= r["value"] < 2 ** 64, "the bundle's rotation value is not a count from 1")
+    return r
+
+
+def rotation_of(bundle, k_a_point):
+    """The genesis's judgement of a node's rotation counter (regalia-kms-95): its AK-quoted Name must be the one a counter at
+    its index has under PolicyAuthorize(Name(K_A), rotation/<node_id>) once written, K_A the genesis manifest's anchor_policy_key.
+    A node whose R was made under another K_A (a rehearsal's file) is refused here. Returns {index, name, value}: the value
+    is the G start K_A's approvals for this node are made against."""
+    r = rotation_shape(bundle)
+    node_id = bundle.get("node_id")
+    require(isinstance(node_id, str) and NODE_ID.fullmatch(node_id) is not None, "the bundle names no node ID: its rotation counter cannot "
+            "be judged")
+    want = anchorpolicy.rotation_name(int(r["index"], 16), k_a_point, node_id).hex()
+    require(r["name"] == want, "%s's rotation counter is not under this genesis's K_A: its quoted Name is %s, not %s (it was enrolled "
+            "with another anchor-policy file)" % (bundle.get("node_id"), r["name"], want))
+    return dict(r)
+
+
+def proven_entry(bundle, system_pub, keep, activation, run=subprocess.run, k_a=None):
     """entry(), and the PCR 7 and 11 values the node's AK quoted when it was activated ({"7": hex, "11": hex}), for the
     genesis to judge against the measurements (manifest propose --genesis, #399)."""
     for k in ("wg_service_pub", "wg_boot_pub", "signing_public", "signing_certify", "signing_sig"):
@@ -533,6 +562,7 @@ def proven_entry(bundle, system_pub, keep, activation, run=subprocess.run):
             and len(set(serials)) == len(serials), "the bundle has no hsm_serials, or a malformed list: it was made before #363")
     require(isinstance(bundle.get("ssh_host_pub"), str) and re.fullmatch(r"[0-9a-f]{64}", bundle["ssh_host_pub"]) is not None,
             "the bundle has no ssh_host_pub (64 hex): it was made before #371")
+    rotation_shape(bundle)
     require(isinstance(keep, dict) and keep.get("schema") == CHALLENGE_SCHEMA, "the kept challenge is not one `enrol challenge` wrote")
     require((keep.get("node_id"), keep.get("ek_name"), keep.get("ak_name")) == (bundle["node_id"], bundle["ek_name"], bundle["ak_name"]),
             "the kept challenge was made for another bundle")
@@ -545,8 +575,12 @@ def proven_entry(bundle, system_pub, keep, activation, run=subprocess.run):
     import hmac
     require(hmac.compare_digest(hashlib.sha256(bytes.fromhex(answer)).hexdigest(), keep.get("secret_sha256", "")),
             "the answer is not the challenge's secret: the AK is not proven to be in the TPM this EK names")
+    # #361 C3: a bundle with a rotation counter (C1 on) made its signing key under K_A's "signing" class: judged under the
+    # K_A the caller verified (the genesis's), never one the bundle names
+    require(k_a is not None, "%s's signing key is made under the anchor-policy authority: give K_A (the root-verified offline-keys "
+            "record) to judge it" % bundle.get("node_id"))
     signing = signkey.verify_certification(bytes.fromhex(bundle["signing_public"]), bytes.fromhex(bundle["signing_certify"]),
-                                           bytes.fromhex(bundle["signing_sig"]), ak_public, bundle["ek_name"], system_pub, run=run)
+                                           bytes.fromhex(bundle["signing_sig"]), ak_public, bundle["ek_name"], system_pub, run=run, k_a=k_a)
     for k in ("quote", "signature"):
         require(isinstance(activation[k], str) and re.fullmatch(r"(?:[0-9a-f]{2})+", activation[k]) is not None, "the activation's %s is not hex" % k)
     quoted = attest.verify_identity(identity_payload(bundle), hashlib.sha256(bytes.fromhex(answer)).digest(), ak_public, bundle["ek_name"],
@@ -762,16 +796,45 @@ def _safe_directory(directory):
 OPENSC_MODULE = "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so"
 
 
+def rotation(journal, anchor_policy, node_id, run):
+    """#361 C1: the rotation counter R, defined under PolicyAuthorize(Name(K_A), rotation/<node_id>) and first incremented with
+    K_A's approval (anchorpolicy.start_rotation), before the anchor, the counters and `enrol ownerauth`. The TPM's owner
+    authorization must still be empty (ownerauth.posture): after `enrol ownerauth` this step is refused, not attempted.
+    Recorded in the journal; a re-run requires the TPM to hold the same R, at the same value."""
+    _, point, approval = anchorpolicy.read_first(anchor_policy, node_id)
+    if journal.state("rotation") == "done":
+        facts = journal.get("rotation")
+        now = anchorpolicy.nv_name_of(facts["index"], run)
+        require(now == facts["name"] and anchorpolicy.read_rotation(facts["index"], run) == facts["value"],
+                "the rotation counter this enrolment made (%s, value %d) is not as recorded: it was redefined or advanced since"
+                % (facts["index"], facts["value"]))
+        require(facts["name"] == anchorpolicy.rotation_name(int(facts["index"], 16), point, node_id).hex(),
+                "the rotation counter this enrolment made is under another K_A than the anchor-policy file names")
+        return {k: facts[k] for k in ("index", "name", "value")}
+    if anchorpolicy.nv_name_of(anchorpolicy.ROTATION_INDEX, run) is None:
+        held = ownerauth.posture(run=run)
+        require(not held["owner"], "the TPM's owner authorization is already set (enrol ownerauth ran): the rotation counter is "
+                "defined by `enrol init` before it. Start the enrolment again on a cleared TPM, in order: init, then ownerauth")
+    journal.started("rotation")
+    facts = anchorpolicy.start_rotation(anchorpolicy.ROTATION_INDEX, point, approval, node_id, run)
+    journal.done("rotation", **facts)
+    return facts
+
+
 def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout, module=OPENSC_MODULE,
-         ssh_host_key=SSH_HOST_KEY):
-    """`system_pub`: the system-phase PCR public key (PEM bytes) the signing key's policy names."""
+         ssh_host_key=SSH_HOST_KEY, anchor_policy=None):
+    """`system_pub`: the system-phase PCR public key (PEM bytes) the signing key's policy names. `anchor_policy`: the
+    ceremony's anchor-policy file (anchorpolicy.FIRST_SCHEMA: K_A and its approval of the rotation counter's first
+    increment, #361 C1), as a parsed document."""
     require(NODE_ID.fullmatch(node_id or ""), "a node ID is a lower-case name, such as a")
     signkey.pcr_key_name(system_pub)                 # an RSA-2048 PEM, before anything is made
+    anchorpolicy.read_first(anchor_policy, node_id)  # K_A's approval, for THIS node, checked before anything is made
     _safe_directory(directory)
     journal = Journal(directory, node_id)
     ids = identity(journal, directory, run)
+    rotated = rotation(journal, anchor_policy, node_id, run)  # before the anchor, the counters and ownerauth (regalia-kms-95)
     cert = ek_certificate(journal, directory, run)
-    signing = signing_key(journal, directory, system_pub, ids, run)     # after the EK checks: nothing more is made on a refusal
+    signing = signing_key(journal, directory, system_pub, ids, run, k_a=anchorpolicy.read_first(anchor_policy, node_id)[1])  # after the EK checks
     hsm_serials = tokens(journal, module, run)
     ssh_key = ssh_host(journal, ssh_host_key)
     service = wg_key(journal, "wg_service", wg_service_key, run)
@@ -783,7 +846,7 @@ def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY
               "wg_service_pub": service, "wg_boot_pub": boot,
               "signing_public": signing["signing_public"], "signing_certify": signing["signing_certify"],
               "signing_sig": signing["signing_sig"], "signing_key": signing["signing_key"],
-              "hsm_serials": hsm_serials, "ssh_host_pub": ssh_key, "tpm_firmware_version": firmware_version(run)}
+              "hsm_serials": hsm_serials, "ssh_host_pub": ssh_key, "tpm_firmware_version": firmware_version(run), "rotation": rotated}
     _atomic_json(os.path.join(directory, "bundle.json"), bundle)
     os.chmod(os.path.join(directory, "bundle.json"), 0o644)
     print("ENROL INIT: node %s, identity bundle %s (public values only; take it to the manifest ceremony)"
@@ -1034,15 +1097,22 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     # by that same policy. Owner-written when they name none.
     tip = membership.accept_chain(None, envelopes, cfg["root_key"])
     policy = lambda: node_module.define_policy(cfg, manifest=tip)
+    # under a v4 genesis the anchor is defined under K_A, the tip's anchor_policy_key (#361), not under the image policy
     hw = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=n.path("highwater.lock"), define_policy=policy,
-                              image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth)
+                              image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth,
+                              schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"),
+                              approvals=lambda cls, manifest=None: node_module.anchor_approval(cfg, cls, manifest=manifest or tip))
+    hw.judge_by_tip(tip)                          # #361 C4: the anchor is written under the chain it is given
+    under_k_a = dict(schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"))      # the counters too (#361 C3)
     store = membership.Store(n.path("membership.json"), cfg["root_key"], hw, documents=n.documents().require_for)
     counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"), policy=policy,
-                                owner_auth=owner_auth)
+                                owner_auth=owner_auth, classes={"counter": "heartbeat"}, **under_k_a)
     # the signing counter (#199: the highest heartbeat sequence this node has signed): defined HERE, at 0, under the same
     # policy as the anchor, since a node that has signed nothing starts there
     signing = heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=n.path("signing-counter.lock"), define_policy=policy,
-                                image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth)
+                                image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth,
+                                classes={"counter": "signing-counter"},
+                                approvals=lambda cls, manifest=None: node_module.anchor_approval(cfg, cls, manifest=manifest or tip), **under_k_a)
 
     def defined(owner, indices):
         return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]
@@ -1417,8 +1487,11 @@ def write_record(journal, directory, node, manifest, peers, run=subprocess.run, 
     hw = node.anchor()
     from deploy.baremetal import heartbeat
     from deploy.baremetal.node import image_policy
+    from deploy.baremetal.node import _tip_anchor_key, _tip_schema
     counter = heartbeat.Counter(node.cfg["nv_heartbeat"], node.tcti, run, lock_path=node.path("heartbeat-counter.lock"),
-                                policy=lambda: image_policy(node.cfg))      # read with the node's policy (#242)
+                                policy=lambda: image_policy(node.cfg),      # read with the node's policy (#242), under K_A at v4 (#361)
+                                schema=lambda: _tip_schema(node.cfg), anchor_key=lambda: _tip_anchor_key(node.cfg),
+                                classes={"counter": "heartbeat"})
     paths = []
     for peer in peers:
         fact = journal.get("path:" + peer)
@@ -2038,6 +2111,8 @@ def main(argv=None):
     p.add_argument("--pkcs11-module", default=OPENSC_MODULE, help="the PKCS#11 module that reads the SmartCard-HSM's serial")
     p.add_argument("--system-pub", required=True, help="the system-phase PCR key's public half (PEM): the signing key is usable "
                    "only under PCR 11 policies it signed")
+    p.add_argument("--anchor-policy", required=True, help="the ceremony's anchor-policy file (%s): K_A and its approval of the "
+                   "rotation counter's first increment (#361); checked at the genesis against the manifest's K_A" % anchorpolicy.FIRST_SCHEMA)
     o = sub.add_parser("ownerauth", help="set this TPM's owner authorization from the node's envelope, on standard input (#242)")
     o.add_argument("--node-id", required=True)
     o.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex: the record is verified under it")
@@ -2058,6 +2133,8 @@ def main(argv=None):
     e.add_argument("--system-pub", required=True, help="the root's own copy of the system-phase PCR key's public half (PEM)")
     e.add_argument("--keep", required=True, help="the file `challenge` kept")
     e.add_argument("--activation", required=True, help="the file `activate` wrote on the node")
+    e.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex: the offline-keys record is verified under it")
+    e.add_argument("--offline-keys-record", required=True, help="offline-keys.record.json: K_A, which the signing key is made under (#361)")
     c = sub.add_parser("check", help="check the root-signed manifest against this host, writing nothing")
     c.add_argument("--manifest", required=True, help="the root-signed epoch-1 envelope, or a JSON list of the "
                    "envelopes from epoch 1 to the one that first names this host")
@@ -2256,8 +2333,11 @@ def main(argv=None):
                 keep = membership.load(f.read(4096))
             with open(args.activation, "rb") as f:
                 activation = membership.load(f.read(65536))
+            from deploy.baremetal import manifest
+            k_a = manifest.offline_keys_record(manifest.read_json(args.offline_keys_record, membership.MAX_BYTES),
+                                               manifest.root_key(args.root_key))[0]["key"]
             with open(args.system_pub, "rb") as f:
-                got, pcrs = proven_entry(document, f.read(65536), keep, activation)
+                got, pcrs = proven_entry(document, f.read(65536), keep, activation, k_a=k_a)
             print(json.dumps(got, indent=1, sort_keys=True))
             print("quoted at activation (informational; the genesis judges them): PCR 7 %s, PCR 11 %s" % (pcrs["7"], pcrs["11"]), file=sys.stderr)
         except (Refused, membership.Refused, attest.Refused, OSError, ValueError, KeyError, TypeError) as error:
@@ -2269,7 +2349,10 @@ def main(argv=None):
         return 2
     try:
         with open(args.system_pub, "rb") as f:
-            init(args.node_id, f.read(65536), args.enrol_dir, args.wg_service_key, module=args.pkcs11_module)
+            system_pub = f.read(65536)
+        with open(args.anchor_policy, "rb") as f:
+            first = json.loads(f.read(65536))
+        init(args.node_id, system_pub, args.enrol_dir, args.wg_service_key, module=args.pkcs11_module, anchor_policy=first)
     except (Refused, attest.Refused, OSError, ValueError) as error:       # json.JSONDecodeError is a ValueError
         print("REFUSED: %s" % error, file=sys.stderr)
         return 1

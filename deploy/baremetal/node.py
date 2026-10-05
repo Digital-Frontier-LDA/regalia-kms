@@ -80,7 +80,7 @@ import tempfile
 import threading
 import time
 
-from deploy.baremetal import (admission, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
+from deploy.baremetal import (admission, anchorpolicy, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
                               measurements, membership, metrics, signkey, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
@@ -117,7 +117,9 @@ def validate(doc):
     # slots; the heartbeat counter and the signing counter (#199): counter and base each), never retyped here
     taken = {"nv_epoch": membership.HighWater(_index(doc["nv_epoch"], "nv_epoch")).indices(),
              "nv_heartbeat": heartbeat.Counter(_index(doc["nv_heartbeat"], "nv_heartbeat")).indices(),
-             "nv_signing": heartbeat.Counter(_index(doc["nv_signing"], "nv_signing")).indices()}
+             "nv_signing": heartbeat.Counter(_index(doc["nv_signing"], "nv_signing")).indices(),
+             # #361 C1: the rotation counter, at a fixed index on every node (enrol init defines it before node.json exists)
+             "the rotation counter": {int(anchorpolicy.ROTATION_INDEX, 16)}}
     names = list(taken)
     for i, one in enumerate(names):
         for other in names[i + 1:]:
@@ -261,7 +263,8 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
     # before the ESP is written (the unit's ok=0); a re-anchor repairs it
     require(isinstance(envelopes, list) and envelopes, "the membership chain must be a non-empty list of envelopes")
     tip = membership.accept_chain(None, envelopes, node.cfg["root_key"])
-    anchor = node.anchor(lock_path=lock_path, schema=tip["schema"])
+    anchor = node.anchor(lock_path=lock_path, schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"))
+    anchor.judge_by_tip(tip)          # #361 C4: its write presents K_A's approval from THIS tip's document, not the held chain's
     manifest = bootcreds.anchored(envelopes, node.cfg["root_key"], anchor)
     chain = membership.canonical(envelopes)
     require(len(chain) <= membership.MAX_CHAIN_BYTES, "the membership chain is over %d bytes" % membership.MAX_CHAIN_BYTES)
@@ -446,7 +449,10 @@ def signing_counter(cfg, run=subprocess.run):
     replay to itself. Written by policy like the heartbeat counter (#242): the service advances it with no owner
     authorization; enrolment defines it."""
     return heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "signing-counter.lock"),
-                             policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg))
+                             policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg),
+                             # #361 C3: under a v4 tip, the "signing-counter" class under K_A
+                             schema=lambda: _tip_schema(cfg), anchor_key=lambda: _tip_anchor_key(cfg),
+                             classes={"counter": "signing-counter"}, approvals=lambda cls, manifest=None: anchor_approval(cfg, cls, manifest=manifest))
 
 
 def node_beat_signer(node, pem_path=None):
@@ -460,8 +466,11 @@ def node_beat_signer(node, pem_path=None):
     except FileNotFoundError:
         raise Refused("no system-phase PCR public key at %s: this boot is not a UKI with a signed PCR policy" % path) from None
     tcti, run = node.tcti, node.run
-    point = signkey.identity(signkey.public(tcti, run), pem)[1]
-    return beat.Signer(node.node_id, signing_counter(node.cfg, run), lambda message: signkey.sign(message, pem, tcti, run), point)
+    k_a = _tip_anchor_key(node.cfg)                       # under a v4 tip the key was made under K_A's "signing" class (#361)
+    point = signkey.identity(signkey.public(tcti, run), pem, k_a["key"] if k_a else None)[1]
+    # #361 C3: under a v4 tip the signing key is used under K_A's approval of the "signing" class for this node
+    approval = (lambda: anchor_approval(node.cfg, "signing", pem_path)) if _tip_schema(node.cfg) == membership.SCHEMA_V4 else (lambda: None)
+    return beat.Signer(node.node_id, signing_counter(node.cfg, run), lambda message: signkey.sign(message, pem, tcti, run, anchor=approval()), point)
 
 
 def image_policy(cfg, pem_path=None, manifest=None):
@@ -518,6 +527,17 @@ def _image(cfg, pem_path=None, manifest=None):
     return measurements.approved_image_policy(manifest, document, cfg["node_id"], pem), pem
 
 
+def anchor_approval(cfg, cls, pem_path=None, manifest=None):
+    """#361 C3: K_A's approval of class `cls` for this node, as signkey.policy_session's `anchor`, from root-signed
+    sources only, as image_policy: the chain's tip (its K_A), the measurements document it commits to (the node's set
+    for the running image's key, and that set's anchor_approvals), and the running image's key."""
+    _, pem = _image(cfg, pem_path, manifest)
+    if manifest is None:
+        manifest = _chain_tip(cfg)
+    document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
+    return measurements.anchor_approval(manifest, document, cfg["node_id"], pem, cls)
+
+
 def _chain_tip(cfg):
     """The newest manifest of the chain in the state directory (sync's store, else the published chain), verified
     under the pinned root."""
@@ -543,6 +563,14 @@ def _tip_schema(cfg):
     return _chain_tip(cfg)["schema"]
 
 
+def _tip_anchor_key(cfg):
+    """K_A, the anchor_policy_key of the verified chain tip this node holds (#361), which its anchor is judged and defined
+    under under v4; None before it holds any chain, or under v1-v3 (no such field)."""
+    if not any(os.path.lexists(os.path.join(cfg["state_dir"], name)) for name in ("membership.json", PUBLISHED)):
+        return None
+    return _chain_tip(cfg).get("anchor_policy_key")
+
+
 def heartbeat_counter(cfg, run=subprocess.run, owner_auth=None):
     """This node's heartbeat sequence counter, with the lock its users take: the one construction the
     services and the recovery command (recount.py) share. Written by policy like the anchor (#242)."""
@@ -551,7 +579,8 @@ def heartbeat_counter(cfg, run=subprocess.run, owner_auth=None):
                              # its one definition, define_at (a first heartbeat, a replacement's, recount's floor), is
                              # laid down under the node's policy when its signed images name one (define_policy)
                              define_policy=lambda: define_policy(cfg), owner_auth=owner_auth,
-                             schema=lambda: _tip_schema(cfg))
+                             schema=lambda: _tip_schema(cfg), anchor_key=lambda: _tip_anchor_key(cfg),
+                             classes={"counter": "heartbeat"}, approvals=lambda cls, manifest=None: anchor_approval(cfg, cls, manifest=manifest))
 
 
 # ---- the node ----
@@ -583,7 +612,7 @@ class Node:
     def tpm_clock(self):
         return heartbeat.TpmClock(self.tcti, self.run)
 
-    def anchor(self, lock_path=None, schema=None):
+    def anchor(self, lock_path=None, schema=None, anchor_key=None):
         """The membership epoch anchor: membership.HighWater on its own index (and the pair and slots after it),
         with this node's approved-image write policy (image_policy) for an index written by policy (#242), judged by the
         schema of the chain tip this node holds (_tip_schema, #242 B3).
@@ -593,7 +622,9 @@ class Node:
         (esp_advance: the published one it anchors); default, the chain tip this node holds."""
         return membership.HighWater(self.cfg["nv_epoch"], self.tcti, self.run, lock_path=lock_path or self.path("highwater.lock"),
                                     policy=lambda: image_policy(self.cfg), image_key=lambda: image_key(self.cfg),
-                                    schema=schema or (lambda: _tip_schema(self.cfg)))
+                                    schema=schema or (lambda: _tip_schema(self.cfg)),
+                                    anchor_key=anchor_key or (lambda: _tip_anchor_key(self.cfg)),
+                                    approvals=lambda cls, manifest=None: anchor_approval(self.cfg, cls, manifest=manifest))
 
     def manifest(self, patience=2.0, step=0.25):
         """The current manifest, by the published chain, verified (the root services' view).

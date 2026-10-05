@@ -77,6 +77,9 @@ SET_KEYS = ("label", "tpm_firmware_version", "pcrs")
 # a signed image's keys, by fingerprint (optional, and only with "phases"): the two PCR-signing keys' pkfp and the
 # Secure Boot certificate's SHA-256, as uki.py's signed record names them
 SIGNING_KEYS = ("initrd", "system", "secure_boot_cert")
+# #361 C2: K_A's approvals of the set's system-phase key for THIS node, one per class an approved image writes or signs
+# under at run time (anchorpolicy.REFS less "rotation", whose increments are approved one at a time)
+APPROVAL_CLASSES = ("anchor", "slots", "heartbeat", "signing-counter", "signing")
 # The phases a node is judged in, and what it may ask for there: "initrd" an unlock (replacement.may_unlock),
 # "system" a runtime lease (lease.issue). Which systemd phase path each one is belongs to the image's build
 # record (#57): enter-initrd, and enter-initrd:leave-initrd:sysinit:ready.
@@ -281,10 +284,25 @@ def validate_set(entry, label):
         # the keys a signed image's PCR 11 policy and Secure Boot signature are made with (uki.py's signed record):
         # a peer judges PCR values and never reads them; whoever SEALS to a PCR-signing key (enrol, #190) takes
         # only a key the approved set names, so a re-signed copy of an approved image is no approved image
-        signing = exact_keys(entry["signing"], SIGNING_KEYS, "%s.signing" % label)
+        signing = exact_keys(entry["signing"], SIGNING_KEYS + (("anchor_approvals",) if "anchor_approvals" in entry["signing"] else ()),
+                             "%s.signing" % label)
         for name in SIGNING_KEYS:
             require(is_hex(signing[name], 64), "%s.signing.%s must be 64 lowercase hex" % (label, name))
         require(len({signing["initrd"], signing["system"]}) == 2, "%s.signing: the two phases' PCR keys must be two keys" % label)
+        if "anchor_approvals" in signing:
+            validate_approvals(signing["anchor_approvals"], "%s.signing.anchor_approvals" % label)
+
+
+def validate_approvals(approvals, label):
+    """#361 C2, by form only: {generation, classes}, G a count from 1, one K_A signature (r||s, 128 hex) per class of
+    APPROVAL_CLASSES. Whether each is K_A's, over THIS key and THIS node's rotation counter at G, is checked where K_A
+    and the key are known (anchorpolicy.check_approvals): the signer, and the node before it writes."""
+    exact_keys(approvals, ("generation", "classes"), label)
+    generation = approvals["generation"]
+    require(type(generation) is int and 1 <= generation < 2 ** 64, "%s.generation must be a count from 1" % label)
+    classes = exact_keys(approvals["classes"], APPROVAL_CLASSES, "%s.classes" % label)
+    for name in APPROVAL_CLASSES:
+        require(is_hex(classes[name], 128), "%s.classes.%s must be 128 lowercase hex (K_A's r||s)" % (label, name))
 
 
 def selection(entry):

@@ -57,7 +57,14 @@ v3's fields without `revocation_keys`, and:
   * `heartbeat_signers`: {"threshold", "parties"}, the parties node IDs or "owner";
   * `activation_signers`: the same form, for activation leases (#199: a node quorum, signed by the nodes
     once the lease side lands; in the format now so that it needs no further schema);
-  * `revocation_signers`: one to four such rules, any one of which signs a restrictive change.
+  * `revocation_signers`: one to four such rules, any one of which signs a restrictive change;
+  * `anchor_policy_key`: {"alg": "ecdsa-p256", "key": <130 hex>}, K_A, the anchor-policy authority (#361): an offline
+    Shamir software key (D28) under whose PolicyAuthorize every node's anchor, counters and signing key are defined at
+    enrolment (anchorpolicy.py). Set at genesis and NEVER changed, by any signer, the root included: a node's TPM
+    objects name it, so a new one is a new genesis. Distinct from every other key here and from the pinned root;
+  * `card_record`: {"sequence", "digest"}, the card ceremony's record (cardrecord.py, #405) that names owner_keys:
+    its sequence (an integer from 1) and the SHA-256 of its canonical form (64 hex). Only the root changes it; when
+    it changes its sequence rises, and owner_keys change only together with it.
   THE FLOORS ARE THE FORMAT'S: the heartbeat and activation thresholds are at least 2, a revocation rule that names a node
   needs at least 2, and only a rule naming the owner alone may be 1; no threshold exceeds its parties.
   A quorum-signed envelope is {"manifest", "signatures": [{"party", "key", "sig"}, ...]}: every signature
@@ -160,11 +167,14 @@ V2_MANIFEST_KEYS = MANIFEST_KEYS + ("heartbeat_max_lifetime_s",)
 V2_NODE_KEYS = NODE_KEYS + ("ssh_host_pub",)
 V2_IDENTITY_KEYS = IDENTITY_KEYS + ("ssh_host_pub",)
 SIGNER_FIELDS = ("owner_heartbeat_lifetime_s", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers")
+# #361/#405: K_A (immutable, every signer) and the card ceremony's record that names owner_keys (the root's)
+V4_ONLY_FIELDS = ("anchor_policy_key", "card_record")
+MAX_CARD_SEQUENCE = 2 ** 31 - 1                                  # exact in every JSON reader
 SINGLE_RULES = ("heartbeat_signers", "activation_signers")       # one rule each; revocation_signers is a list of them
-V4_MANIFEST_KEYS = tuple(k for k in V2_MANIFEST_KEYS if k != "revocation_keys") + SIGNER_FIELDS
+V4_MANIFEST_KEYS = tuple(k for k in V2_MANIFEST_KEYS if k != "revocation_keys") + SIGNER_FIELDS + V4_ONLY_FIELDS
 V4_NODE_KEYS = V2_NODE_KEYS + ("signing_key",)
 # What only the root may change: a quorum (or a v1-v3 revocation key) leaves every one as it was.
-ROOT_FIELDS = ("policy_version", "revocation_keys", "heartbeat_max_lifetime_s") + SIGNER_FIELDS
+ROOT_FIELDS = ("policy_version", "revocation_keys", "heartbeat_max_lifetime_s") + SIGNER_FIELDS + ("card_record",)
 # A node that is retired, revoked or quarantined is named in a signer rule but does not count.
 NOT_COUNTING = ("RETIRED", "REVOKED_STOLEN", "QUARANTINED")
 
@@ -325,7 +335,7 @@ def root_entries(root, label="the root key"):
     return out
 
 
-SIGNING_KEY_ALGS, OWNER_KEY_ALGS = ("ecdsa-p256",), ("ed25519", "ecdsa-p256")
+SIGNING_KEY_ALGS, OWNER_KEY_ALGS, ANCHOR_POLICY_KEY_ALGS = ("ecdsa-p256",), ("ed25519", "ecdsa-p256"), ("ecdsa-p256",)
 
 
 def typed_key(entry, label, algs):
@@ -424,6 +434,15 @@ def _signer_rules(manifest, by_id, seen):
     require(isinstance(rules, list) and 1 <= len(rules) <= MAX_RULES, "revocation_signers must be a list of one to %d rules" % MAX_RULES)
     for i, r in enumerate(rules):
         rule(r, "revocation_signers[%d]" % i, owner_alone=True)
+    # K_A (#361): a P-256 key, as tpm2_loadexternal loads it, and no other key of this manifest (checked last, after the
+    # nodes' identities and owner_keys: `seen` holds them all)
+    key = typed_key(manifest["anchor_policy_key"], "anchor_policy_key", ANCHOR_POLICY_KEY_ALGS)[1]
+    require(key not in seen, "anchor_policy_key is already used (%s)" % seen.get(key))
+    record = manifest["card_record"]
+    exact(record, ("sequence", "digest"), "card_record")
+    seq = record["sequence"]
+    require(type(seq) is int and 1 <= seq <= MAX_CARD_SEQUENCE, "card_record.sequence must be an integer from 1 to %d" % MAX_CARD_SEQUENCE)
+    hex_field(record["digest"], 64, "card_record.digest")
 
 
 def counting_parties(current, message, signatures, what):
@@ -548,6 +567,7 @@ def _apart_from_root(manifest, root_key):
     roots = {key for _, key in root_entries(root_key)}
     keys = [("owner_keys[%d]" % i, e["key"]) for i, e in enumerate(manifest["owner_keys"])]
     keys += [("signing_key of %s" % n["node_id"], n["signing_key"]["key"]) for n in manifest["nodes"] if "signing_key" in n]
+    keys += [("anchor_policy_key", manifest["anchor_policy_key"]["key"])]
     for label, key in keys:
         require(key not in roots, "%s is a pinned root key: the payload root is never a quorum party" % label)
 
@@ -676,9 +696,27 @@ def transition(current, candidate, signer):
                 "only moves forward" % (candidate["schema"], current["schema"]))
         require(signer == "root", "only the root can change the schema (%s to %s)" % (current["schema"], candidate["schema"]))
     _tombstones(current, candidate)        # every signer: the one rule the root cannot override
+    if current["schema"] == candidate["schema"] == SCHEMA_V4:
+        # K_A is named by every node's TPM objects (#361): no signer changes it; a new K_A is a new genesis. (v3 -> v4,
+        # root-signed, is where it is first set.)
+        require(candidate["anchor_policy_key"] == current["anchor_policy_key"], "anchor_policy_key is set at genesis "
+                "and never changes, for any signer: every node's TPM objects are defined under it (a new one is a new genesis)")
     if signer != "root":
         _restrictive(current, candidate, signer)
+    elif current["schema"] == candidate["schema"] == SCHEMA_V4:
+        _card_record_rules(current, candidate)
     return candidate
+
+
+def _card_record_rules(current, candidate):
+    """The root's own v4 rules for card_record (#405): a new card record has a higher sequence, and owner_keys, which
+    the card ceremony's record names, change only with a new one. (A quorum changes neither: ROOT_FIELDS.)"""
+    old, new = current["card_record"], candidate["card_record"]
+    if new != old:
+        require(new["sequence"] > old["sequence"], "card_record changes only to a later card ceremony's record (sequence %d "
+                "after %d)" % (new["sequence"], old["sequence"]))
+    elif candidate["owner_keys"] != current["owner_keys"]:
+        raise Refused("owner_keys change only with a new card_record: the card ceremony's record names them")
 
 
 def accept_chain(current, envelopes, root_key):
@@ -804,7 +842,8 @@ class HighWater:
     POLICY_ATTRIBUTES = {"counter": 0x0006001A, "slot": 0x0006000A}
 
     def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_indices=None, policy=None,
-                 image_key=None, signatures=None, define_policy=None, owner_auth=None, schema=None):
+                 image_key=None, signatures=None, define_policy=None, owner_auth=None, schema=None, anchor_key=None, classes=None,
+                 approvals=None):
         """`policy`: the node's approved-image write policy, PolicyAuthorize(system-phase PCR key), as 64 hex
         (the digest a policy-written index must hold as its authPolicy), or a function that returns it (the
         node's: measurements.approved_image_policy over its signed chain and the running image's key), called
@@ -839,7 +878,12 @@ class HighWater:
         self._image_key, self._signatures, self._define_policy = image_key, signatures, define_policy
         self._policy_asked = False
         self._owner_auth = owner_auth
-        self._schema = schema
+        self._schema, self._anchor_key = schema, anchor_key
+        # #361 C3: the class each kind of index is defined and written under K_A (the anchor's by default; a heartbeat
+        # counter "heartbeat", the signing counter "signing-counter"), and K_A's approvals for them (a function of the
+        # class, returning signkey.policy_session's `anchor`: node.anchor_approval)
+        self.anchor_classes = dict(self.ANCHOR_CLASSES, **(classes or {}))
+        self._approvals = approvals
         self.base_index = base_index or "0x%x" % (int(index, 16) + 1)
         # index + 2 and + 3 are left to the heartbeat's pair (0x1500018/0x1500019 beside 0x1500016)
         self.record_indices = tuple(record_indices or ("0x%x" % (int(index, 16) + 4), "0x%x" % (int(index, 16) + 5))) if self.RECORD else ()
@@ -907,8 +951,12 @@ class HighWater:
         """Define one index of this anchor: the counter and the record slots in the policy-written layout when the
         definer gave a policy (define_policy, #242), with that policy as their authPolicy; otherwise, and the base
         always, owner-written. They keep ownerwrite either way, so a re-anchor from a recovery boot (no approved
-        image, no policy session) still writes them with the owner's authorization."""
-        policy = self._defining_policy() if kind in self.POLICY_WORDS else None
+        image, no policy session) still writes them with the owner's authorization. UNDER A v4 TIP (#361) the counter
+        and the slots are defined under the anchor-policy authority instead: PolicyAuthorize(Name(K_A), their class)."""
+        if kind in self.POLICY_WORDS and self.tip_schema() == SCHEMA_V4:
+            policy = self._class_policy(kind)
+        else:
+            policy = self._defining_policy() if kind in self.POLICY_WORDS else None
         if policy is not None:                  # None from a function: no policy for this node, owner-written
             hex_field(policy, 64, "the approved-image write policy to define under")
             with tempfile.TemporaryDirectory(prefix="regalia-highwater-") as d:
@@ -935,6 +983,23 @@ class HighWater:
         require(callable(self._image_key), "NV index %s is written by policy and this anchor has no image key to open a policy "
                 "session with" % index)
         pem = self._image_key()
+        if self.tip_schema() == SCHEMA_V4:
+            # #361 C3: under K_A, through the composite session with K_A's approval of this index's class for this node
+            require(index == self.index or index in self.record_indices, "NV index %s is not one this anchor writes by policy" % index)
+            kind = "slot" if index in self.record_indices else "counter"
+            require(callable(self._approvals), "NV index %s is written under the anchor-policy authority and this anchor has no "
+                    "K_A approvals to present" % index)
+            judged = getattr(self, "_tip_manifest", None)
+            # the membership anchor commits an epoch: its write presents the approval of the manifest it is judged by,
+            # never one looked up from whatever chain the node happens to hold (regalia-kms-95/d9 on #467, C4)
+            require(judged is not None or self.anchor_classes[kind] not in ("anchor", "slots"),
+                    "NV index %s (the %s class) is written under the anchor-policy authority only when the anchor is judged "
+                    "by a verified chain tip (judge_by_tip): nothing is written" % (index, self.anchor_classes[kind]))
+            anchor = self._approvals(self.anchor_classes[kind], judged)
+            require(anchor.get("k_a") == self.tip_anchor_key(), "K_A's approval names another K_A than the chain tip's: nothing is written")
+            tcti = (self.env or {}).get("TPM2TOOLS_TCTI")
+            with signkey.policy_session(pem, tcti, self.run, self._signatures, anchor=anchor) as session:
+                return self._tpm(tool, index, "-C", index, "-P", "session:" + session, *args, input=input)
         require(signkey.policy(pem).hex() == self.policy, "the running image's PCR key is not the one this node's write policy names: "
                 "NV index %s is not written" % index)
         tcti = (self.env or {}).get("TPM2TOOLS_TCTI")
@@ -946,6 +1011,38 @@ class HighWater:
         if callable(self._schema):
             self._schema = self._schema()
         return self._schema
+
+    # #361: the class of each kind of index, the policyRef K_A's approvals name (anchorpolicy.REFS)
+    ANCHOR_CLASSES = {"counter": "anchor", "slot": "slots"}
+
+    def tip_anchor_key(self):
+        """K_A, the v4 tip's anchor_policy_key (`anchor_key`: its typed entry or point, or a function), resolved once."""
+        if callable(self._anchor_key):
+            self._anchor_key = self._anchor_key()
+        key = self._anchor_key
+        return key.get("key") if isinstance(key, dict) else key
+
+    def _class_policy(self, kind):
+        """The authPolicy an index of `kind` holds under a v4 tip: PolicyAuthorize(Name(K_A), its class), 64 hex."""
+        from deploy.baremetal import anchorpolicy           # here: anchorpolicy imports this module
+        key = self.tip_anchor_key()
+        require(key is not None, "the v4 chain tip names no anchor_policy_key: the anchor cannot be judged (#361)")
+        return anchorpolicy.class_policy(key, self.anchor_classes[kind]).hex()
+
+    def tip_state(self):
+        """What the anchor is judged by (the tip's schema, K_A and the manifest itself), to put back when a candidate is
+        refused."""
+        return self._schema, self._anchor_key, getattr(self, "_tip_manifest", None)
+
+    def judge_by_tip(self, manifest):
+        """Judge the anchor by `manifest`, a verified chain's tip: its schema, under v4 its anchor_policy_key, and the
+        manifest itself, whose document K_A's approvals for a write are taken from (regalia-kms-95 on #467: a commit
+        writes under the epoch it commits, so after a retire bump its G+1 approval, which only the NEW epoch's document
+        carries, is the one that opens the TPM)."""
+        self._schema, self._anchor_key, self._tip_manifest = manifest["schema"], manifest.get("anchor_policy_key"), manifest
+
+    def restore_tip(self, state):
+        self._schema, self._anchor_key, self._tip_manifest = state
 
     def _auth_policy(self, index):
         """An index's authPolicy as tpm2_nvreadpublic reports it (64 lowercase hex), or "" when it has none."""
@@ -1084,7 +1181,13 @@ class HighWater:
         authPolicy, which must then be this node's approved-image policy. Either way readable by the owner and
         by its own empty authorization, no authwrite or ppwrite, no locks that come and go."""
         want, mask = self.ATTRIBUTES[kind], attributes & ~self.STATE
-        if mask == self.POLICY_ATTRIBUTES.get(kind):
+        if mask == self.POLICY_ATTRIBUTES.get(kind) and self.tip_schema() == SCHEMA_V4:
+            # #361: under v4 only K_A's class policy, with no fallback to the image key's (ed and 1e, the Go reader alike)
+            held, want = self._auth_policy(index), self._class_policy(kind)
+            require_anchor(held == want, "NV index %s (the %s class) is not defined under the anchor-policy authority: its authPolicy is %s, "
+                           "not PolicyAuthorize(K_A %s\u2026, \"%s\") = %s" % (index, self.anchor_classes[kind], held or "(none)",
+                                                                       self.tip_anchor_key()[:16], self.anchor_classes[kind], want))
+        elif mask == self.POLICY_ATTRIBUTES.get(kind):
             held, policy = self._auth_policy(index), self.policy
             require_anchor(policy is not None and held == policy,
                            "the anchor's write policy is not this node's approved-image policy: NV index %s is written by policy %s, %s"
@@ -1421,7 +1524,7 @@ class Store:
         only), whatever its caller named (HighWater(schema=...)): the chain the Store holds is the one the anchor guards.
         A Store with no chain yet leaves the caller's."""
         if manifests:
-            self.hw._schema = manifests[-1]["schema"]
+            self.hw.judge_by_tip(manifests[-1])
 
     def envelopes(self, after_epoch=0):
         """The signed envelopes above `after_epoch`, in order: what a peer at that epoch lacks. Verified and
@@ -1454,7 +1557,7 @@ class Store:
                 current = nxt
             # judged by the FETCHED chain's tip (#242 B3, regalia-kms-ed): a v4 chain is never restored over an owner-written
             # anchor (whatever the disk held, or did not), which only a re-anchor repairs
-            previous = self.hw._schema
+            previous = self.hw.tip_state()
             self._judge_by(manifests)
             try:
                 hw = self.hw.value()
@@ -1477,7 +1580,7 @@ class Store:
                     self.documents(current)
                 self._write(copy.deepcopy(envelopes))
             except BaseException:
-                self.hw._schema = previous                 # refused before the disk holds it: judged by the chain held (regalia-kms-ed)
+                self.hw.restore_tip(previous)                 # refused before the disk holds it: judged by the chain held (regalia-kms-ed)
                 raise
             if self.anchors:                            # else: the ESP advance anchors it, ESP first
                 self.hw.anchor(current["epoch"], self._digests(manifests))
@@ -1512,7 +1615,7 @@ class Store:
                 manifests.append(nxt)
                 current = nxt
             digest_of = self._digests(manifests)
-            previous = self.hw._schema
+            previous = self.hw.tip_state()
             self._judge_by(manifests)
             try:
                 require(self.hw.unusable() is not None, "the TPM anchor is usable: it is not reset. A chain that is rolled back, lost or "
@@ -1528,7 +1631,7 @@ class Store:
                 self.reanchor_began = True
                 self._write(copy.deepcopy(envelopes))
             except BaseException:
-                self.hw._schema = previous                 # refused before the disk holds it: judged by the chain held (regalia-kms-ed)
+                self.hw.restore_tip(previous)                 # refused before the disk holds it: judged by the chain held (regalia-kms-ed)
                 raise
             self.hw.redefine(current["epoch"], digest_of(current["epoch"]))
             self.hw.check(current["epoch"])
@@ -1570,7 +1673,7 @@ class Store:
         # judged by the NEW tip before the disk is written (#242 B3): a move to v4 over an owner-written anchor is refused
         # here, with nothing moved, instead of leaving a v4 chain on the disk over an anchor it then refuses. The same for
         # a store that never anchors (#66 B3): the ESP advance would refuse that anchor only after the disk had moved
-        previous = self.hw._schema
+        previous = self.hw.tip_state()
         self._judge_by(self.manifests + [nxt])
         try:
             hw = self.hw.value()
@@ -1580,7 +1683,7 @@ class Store:
                         "%d until the ESP advance anchors what is held" % (nxt["epoch"], nxt["epoch"] - hw, self.hw.MAX_JUMP))
             self._write(self.chain + [envelope])
         except BaseException:
-            self.hw._schema = previous                 # refused before the disk holds it: judged by the chain held (regalia-kms-ed)
+            self.hw.restore_tip(previous)                 # refused before the disk holds it: judged by the chain held (regalia-kms-ed)
             raise
         if self.anchors:
             self.hw.anchor(nxt["epoch"], self._digests(self.manifests + [nxt]))

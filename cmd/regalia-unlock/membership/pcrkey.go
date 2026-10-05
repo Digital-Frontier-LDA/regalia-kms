@@ -1,10 +1,12 @@
 package membership
 
 import (
+	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/pem"
 	"math/big"
 )
@@ -84,10 +86,74 @@ func tpmName(modulus *big.Int) []byte {
 // policyAuthorize is the digest of a trial session that ran only TPM2_PolicyAuthorize for keyName with an
 // empty policyRef: H(H(0^32 || TPM_CC_PolicyAuthorize || keyName) || policyRef).
 func policyAuthorize(keyName []byte) []byte {
+	return PolicyAuthorizeRef(keyName, nil)
+}
+
+// PolicyAuthorizeRef is the digest of a trial session that ran only TPM2_PolicyAuthorize for keyName with the
+// policyRef `ref`: H(H(0^32 || TPM_CC_PolicyAuthorize || keyName) || ref). The anchor-policy authority's indices
+// carry one per class (#361: "anchor" for the counter, "slots" for the record slots, ...).
+func PolicyAuthorizeRef(keyName, ref []byte) []byte {
 	step := binary.BigEndian.AppendUint32(make([]byte, sha256.Size), ccPolicyAuthorize)
 	first := sha256.Sum256(append(step, keyName...))
-	second := sha256.Sum256(first[:]) // policyRef is empty
+	second := sha256.Sum256(append(first[:], ref...))
 	return second[:]
+}
+
+// The anchor-policy authority K_A (#361): a P-256 key the manifest pins (anchor_policy_key, a typed ecdsa-p256 key,
+// 130 hex: 04 || X || Y). Its TPM Name is the TPM's for this public area loaded by TPM2_LoadExternal: type ECC,
+// nameAlg SHA-256, attributes 0x00060040 (sign, decrypt, userWithAuth), an empty authPolicy, no symmetric algorithm,
+// no scheme, curve NIST P-256, no KDF, then X and Y. Held to tests/vectors/anchor-policy-v1.json, measured on swtpm.
+const (
+	algECC        = 0x0023
+	curveNISTP256 = 0x0003
+	anchorKeyHex  = 130
+)
+
+// AnchorPolicyKeyName is K_A's TPM Name (nameAlg || SHA-256(TPMT_PUBLIC)) from its 130-hex uncompressed point.
+// A point that is not on P-256 is refused.
+func AnchorPolicyKeyName(keyHex string) ([]byte, error) {
+	if err := hexField(keyHex, anchorKeyHex, "anchor_policy_key: an ecdsa-p256 key (04 || X || Y)"); err != nil {
+		return nil, err
+	}
+	raw, _ := hex.DecodeString(keyHex)
+	if raw[0] != 0x04 {
+		return nil, refuse("anchor_policy_key: an ecdsa-p256 key must be an uncompressed point")
+	}
+	x, y := new(big.Int).SetBytes(raw[1:33]), new(big.Int).SetBytes(raw[33:])
+	if !elliptic.P256().IsOnCurve(x, y) {
+		return nil, refuse("anchor_policy_key: the point is not on P-256")
+	}
+	public := anchorPolicyPublic(raw[1:33], raw[33:])
+	digest := sha256.Sum256(public)
+	return append(binary.BigEndian.AppendUint16(nil, algSHA256), digest[:]...), nil
+}
+
+// anchorPolicyPublic is K_A's TPMT_PUBLIC (without the TPM2B size), as tpm2_loadexternal builds it.
+func anchorPolicyPublic(x, y []byte) []byte {
+	var public []byte
+	u16 := func(v uint16) { public = binary.BigEndian.AppendUint16(public, v) }
+	u16(algECC)
+	u16(algSHA256)
+	public = binary.BigEndian.AppendUint32(public, pcrKeyAttributes)
+	u16(0)       // authPolicy: empty
+	u16(algNull) // symmetric: none
+	u16(algNull) // scheme: none
+	u16(curveNISTP256)
+	u16(algNull) // kdf: none
+	u16(uint16(len(x)))
+	public = append(public, x...)
+	u16(uint16(len(y)))
+	return append(public, y...)
+}
+
+// AnchorPolicy is the authPolicy an index of class `ref` carries when it is defined under K_A (#361):
+// PolicyAuthorize(Name(K_A), ref).
+func AnchorPolicy(keyHex string, ref string) ([]byte, error) {
+	name, err := AnchorPolicyKeyName(keyHex)
+	if err != nil {
+		return nil, err
+	}
+	return PolicyAuthorizeRef(name, []byte(ref)), nil
 }
 
 func trimSpace(b []byte) []byte {

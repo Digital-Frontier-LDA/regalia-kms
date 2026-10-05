@@ -2253,13 +2253,13 @@
      },
      "0x150001a": {
       "attributes": 537264130,
-      "data": "0000000000000003ab748021ebebfec2e260d13a50746e1ec88a712365c7eec0b72fa946dbaab49c3e6516c512ff817a",
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
       "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
-      "data": "00000000000000025086e564b3bb36e88b89b95c39c781595daa53b5372d32a2b1278fe0bb3728f208d20e040fe999ee",
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
       "policy": null,
       "size": 48
      }
@@ -2273,15 +2273,15 @@
    "chain": "v4",
    "high_water": 3,
    "length": 3,
-   "name": "a v4 chain, a policy-written anchor",
-   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "name": "a v4 chain, an anchor under K_A's classes",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264154,
       "data": "000000000000002d",
-      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
       "size": 8
      },
      "0x1500017": {
@@ -2292,14 +2292,90 @@
      },
      "0x150001a": {
       "attributes": 537264138,
-      "data": "0000000000000003ab748021ebebfec2e260d13a50746e1ec88a712365c7eec0b72fa946dbaab49c3e6516c512ff817a",
-      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264138,
-      "data": "00000000000000025086e564b3bb36e88b89b95c39c781595daa53b5372d32a2b1278fe0bb3728f208d20e040fe999ee",
-      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "v4",
+   "high_water": 3,
+   "length": 5,
+   "name": "a v4 chain ahead of an anchor under K_A's classes",
+   "policy": null,
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "v4",
+   "length": 2,
+   "name": "a v4 chain, a restored disk under K_A's classes",
+   "policy": null,
+   "refused": "ROLLBACK: the membership on disk is epoch 2 but the TPM high-water is 3; fetch the chain from a peer",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
       "size": 48
      }
     },
@@ -2310,7 +2386,7 @@
   {
    "chain": "v4",
    "length": 3,
-   "name": "a v4 chain, owner-written slots beside a policy-written counter",
+   "name": "a v4 chain, an anchor under the image key's policy (no fallback)",
    "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
    "tpm": {
     "broken": false,
@@ -2328,14 +2404,128 @@
       "size": 8
      },
      "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x1500016 (the anchor class) is not defined under the anchor-policy authority: its authPolicy is a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7, not PolicyAuthorize(K_A 04513e008b2441b2\u2026, \"anchor\") = 82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb"
+  },
+  {
+   "chain": "v4",
+   "length": 3,
+   "name": "a v4 chain, a slot under K_A's anchor class",
+   "policy": null,
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x150001b (the slots class) is not defined under the anchor-policy authority: its authPolicy is 82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb, not PolicyAuthorize(K_A 04513e008b2441b2\u2026, \"slots\") = 1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7"
+  },
+  {
+   "chain": "v4",
+   "length": 3,
+   "name": "a v4 chain, a slot with an empty authPolicy",
+   "policy": null,
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x150001a (the slots class) is not defined under the anchor-policy authority: its authPolicy is (none), not PolicyAuthorize(K_A 04513e008b2441b2\u2026, \"slots\") = 1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7"
+  },
+  {
+   "chain": "v4",
+   "length": 3,
+   "name": "a v4 chain, owner-written slots beside a counter under K_A",
+   "policy": null,
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
       "attributes": 537264130,
-      "data": "0000000000000003ab748021ebebfec2e260d13a50746e1ec88a712365c7eec0b72fa946dbaab49c3e6516c512ff817a",
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
       "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
-      "data": "00000000000000025086e564b3bb36e88b89b95c39c781595daa53b5372d32a2b1278fe0bb3728f208d20e040fe999ee",
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
       "policy": null,
       "size": 48
      }
@@ -2344,44 +2534,6 @@
     "unreadable": []
    },
    "unusable": "NV index 0x150001a is owner-written: under regalia.membership/v4 the anchor is written by policy only (re-anchor it)"
-  },
-  {
-   "chain": "v4",
-   "high_water": 3,
-   "length": 5,
-   "name": "a v4 chain ahead of a policy-written anchor",
-   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
-   "tpm": {
-    "broken": false,
-    "nv": {
-     "0x1500016": {
-      "attributes": 537264154,
-      "data": "000000000000002d",
-      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
-      "size": 8
-     },
-     "0x1500017": {
-      "attributes": 537274370,
-      "data": "000000000000002a",
-      "policy": null,
-      "size": 8
-     },
-     "0x150001a": {
-      "attributes": 537264138,
-      "data": "0000000000000003ab748021ebebfec2e260d13a50746e1ec88a712365c7eec0b72fa946dbaab49c3e6516c512ff817a",
-      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
-      "size": 48
-     },
-     "0x150001b": {
-      "attributes": 537264138,
-      "data": "00000000000000025086e564b3bb36e88b89b95c39c781595daa53b5372d32a2b1278fe0bb3728f208d20e040fe999ee",
-      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
-      "size": 48
-     }
-    },
-    "public_fails": [],
-    "unreadable": []
-   }
   }
  ],
  "chains": {
@@ -3230,6 +3382,14 @@
       ],
       "threshold": 2
      },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
+     },
      "epoch": 1,
      "heartbeat_max_lifetime_s": 21600,
      "heartbeat_signers": {
@@ -3319,7 +3479,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "6f7d11b563e46c068197f7071cf5a58acd400b0b283aee8af529936817453e091b845eb41b978bb9005eb8d0ee72235aefd1918f5fc00eb4c3d7242dbd837a07"
+    "sig": "713982fa5c9e55087bc3a994619f73af40b9640fc8bcf78ad38625d2e7be28d01f9bb3979eec59a7de7030ecd1ae97b1364ee13f24586a563b765a5a0b32bd03"
    },
    {
     "manifest": {
@@ -3330,6 +3490,14 @@
        "n3"
       ],
       "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
      },
      "epoch": 2,
      "heartbeat_max_lifetime_s": 21600,
@@ -3401,7 +3569,7 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "a458bc46f2dc937eabe31bb738d1fcca636b5074d6c0d2fbf18cdf9bdd1e738a",
+     "prev_digest": "357eaa7d135a221ec1356d0a5796735497b04b96fb861d9c806cd711f3852376",
      "revocation_signers": [
       {
        "parties": [
@@ -3420,7 +3588,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "86d9b91e92f1b1c11e606024cd3c9ebb042772fb970bb0ab69bccff6734cf9e420138b3169ed59eb789fbbb5cd649429a1181b2fe8360a957ddf9c5adc3a1f0b"
+    "sig": "b43f3c84e14e74b6695d0e39b09f9c9d567ae8c77a087d4960bdfec16f988e72d9ca4fa89148f1e2fc0bbb765d5e997bf633e739a2d3a2fd9d4db27458448502"
    },
    {
     "manifest": {
@@ -3431,6 +3599,14 @@
        "n3"
       ],
       "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
      },
      "epoch": 3,
      "heartbeat_max_lifetime_s": 21600,
@@ -3502,7 +3678,7 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "5086e564b3bb36e88b89b95c39c781595daa53b5372d32a2b1278fe0bb3728f2",
+     "prev_digest": "c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638b",
      "revocation_signers": [
       {
        "parties": [
@@ -3521,7 +3697,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "2273b298097c8deb8cade110f82320cdb510e1dcbe1e1e2e553ee2592344c3a82f963122034ee435fed183d619212463deb5459a81efb49bf0d1db00decdb206"
+    "sig": "54510dabf7fbd0cca740beaff3e0b01f56cfd9feac21b025ba18e98fa38bfa02897df429391b30cecceeeac0e4e86d1afdf40e298f5a519b359a7f6e21315f0c"
    },
    {
     "manifest": {
@@ -3532,6 +3708,14 @@
        "n3"
       ],
       "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
      },
      "epoch": 4,
      "heartbeat_max_lifetime_s": 21600,
@@ -3603,7 +3787,7 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "ab748021ebebfec2e260d13a50746e1ec88a712365c7eec0b72fa946dbaab49c",
+     "prev_digest": "007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f9931",
      "revocation_signers": [
       {
        "parties": [
@@ -3622,7 +3806,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "428084eb1491bbb483adb11a30ee2243c9e9c6bf797a2f202e1307617c94fff26441ce8d00c98a8fae3142e069df384779d1127b29e7aba4b356b8970e1a1c06"
+    "sig": "1b068d962c6df90107ab0c0c2af52fa5ac66264deb15dda547a77ae23e6d5dbefdd56ae064f2592b58368306075a6d08f36a5ca973fde1b78ed19156d8b98a01"
    },
    {
     "manifest": {
@@ -3633,6 +3817,14 @@
        "n3"
       ],
       "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
      },
      "epoch": 5,
      "heartbeat_max_lifetime_s": 21600,
@@ -3704,7 +3896,7 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "b30ab6776d03c2b5ee6e319f64a8be9f93dc20e08a7e30b2126aa07676982153",
+     "prev_digest": "9d7188bb425b4968389cc4e8aaa1907f10b23e52ea6ce54540dd381b1a6166a1",
      "revocation_signers": [
       {
        "parties": [
@@ -3723,7 +3915,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "468c5c801847bd1b4a1c62cdc59ffd23eadce5a899133ab4cc3e337729ef6ffd44c107aa29c9c30e951a12b3c3d8bbfb1cae2fdaaf701cb62658b4e8c9db8707"
+    "sig": "272c20d7a41e15d1132009b54c9858053ca40292eaaa99ba7586ebc42b677ecf9d18dd56f3807eda37973ee48ed32b3589d7e0ee8fbfd4c75eac531d9861cf0f"
    },
    {
     "manifest": {
@@ -3734,6 +3926,14 @@
        "n3"
       ],
       "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
      },
      "epoch": 6,
      "heartbeat_max_lifetime_s": 21600,
@@ -3805,7 +4005,7 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "a145fdd0bb65289d8234306918f041b037ec25acbd73600910c8c9fb1488d0b6",
+     "prev_digest": "1f0b90c49b963d5cac7db05c17fbbe000f1209816a9724af43725d899a719917",
      "revocation_signers": [
       {
        "parties": [
@@ -3824,7 +4024,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "fd3ef6b3d9124d46263b1b0938842297ae4de88a5f303ce383c8c75909bec1c66cfe6e7a65c78fb0cb0ffe286e7acbc5a397d2fbe9dd6bb28d7c71fae9851e03"
+    "sig": "394d2daf44ac56d26ab0ef58170cf549974a826fde7d5a16acf32055ec329ea1b454cb8032477196ba15e206a81e8c82cc39bc824505a827307a4a2610d08606"
    }
   ]
  },
