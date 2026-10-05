@@ -72,6 +72,12 @@ groups:
           severity: critical
         annotations:
           summary: This node holds no runtime lease; the KMS daemon does not serve.
+      - alert: RegaliaSurvivorRecoveryActive
+        expr: regalia_admission_recovery == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "This node serves ALONE under the owner's survivor authorization (ADR-0002 D32.6): stateless operations only, the other servers fenced. It holds for as long as the authorization is in force."
       - alert: RegaliaAuditTrailBehind
         expr: regalia_audit_trail_backlog > 0 and (time() - regalia_audit_trail_last_success_seconds) > 900
         labels:
