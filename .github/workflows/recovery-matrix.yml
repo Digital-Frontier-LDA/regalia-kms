@@ -11,6 +11,13 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# One run per pull request: a new push cancels its own superseded run (seven sessions' pushes starved the hosted
+# runners, 2026-10-05). Anything else (main, a schedule) is a group of its own run: GitHub cancels an older PENDING
+# run of a group even without cancel-in-progress, and every main run must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # #175: each mode's level-1 scenarios in eight shards (position modulo 8; one eighth of replace took
   # 32 minutes on 2 CPUs with level 2, so a slow runner still has room in 60), each shard running
