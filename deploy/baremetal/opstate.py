@@ -83,6 +83,11 @@ MAX_BATCH = 64                # entries in one Reserve's transaction; etcd allow
 RETRIES = 3                   # a transaction that lost a race: read again and retry, at most this often, then refuse
 MAX_ENTRY_BYTES = 4096
 MAX_APPROVERS = 64            # internal/approval.MaxApprovals
+# the longest a request may still be spendable after it is spent (expires_at - at). A lone survivor's full scope
+# (#432, the owner's one-server decision) waits attested_at + MAX_REQUEST_LIFE_S + SKEW_S, so every request the
+# fenced far side could have spent before the owner attested it fenced has expired (regalia-kms-1e): a cap Reserve
+# enforces, or there would be nothing to wait out
+MAX_REQUEST_LIFE_S = 900
 NAME = re.compile(r"[\x21-\x7e]{1,256}")        # a principal, object, purpose, environment, counter or sequence key
 DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 BOOT_ID = re.compile(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")
@@ -140,7 +145,10 @@ def validate(entry):
         membership.hex_field(entry["approvals_sha256"], 64, "approvals_sha256")
         at = heartbeat.parse_time(entry["at"], "at")
         require(heartbeat.parse_time(entry["lease_expires_at"], "lease_expires_at") > at, "the signing node's lease had run out when it spent")
-        require(heartbeat.parse_time(entry["expires_at"], "expires_at") > at, "the request had expired when it was spent")
+        expires = heartbeat.parse_time(entry["expires_at"], "expires_at")
+        require(expires > at, "the request had expired when it was spent")
+        require(expires - at <= MAX_REQUEST_LIFE_S, "the request stays spendable %d s after it is spent, more than %d s: refused (a lone "
+                "survivor's wait is bounded by this)" % (expires - at, MAX_REQUEST_LIFE_S))
     elif kind == "sequence":
         _name(entry["sequence_key"], "sequence_key")
         _count(entry["value"], "value")

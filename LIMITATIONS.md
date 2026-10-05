@@ -45,6 +45,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     entry, because every entry carries its own signatures. A whole-cluster rollback is caught by the revision in the
     signed heartbeats (planned, #432).
   - A transaction that loses a race is retried at most three times, one round trip each, then refused.
+  - A request stays spendable at most 900 s after it is spent (`MAX_REQUEST_LIFE_S`, enforced on every spend). A lone
+    survivor's full scope waits that long, plus 60 s, from the owner's attestation that the others are fenced, so
+    nothing the far side spent before it was fenced can be spent again (regalia-kms-1e).
   - A spend's key is collected by an etcd lease of `(expires_at - at) + 60 s`, on the etcd leader's clock. A leader whose
     clock runs more than 60 s ahead of the signer's could collect it before the request expires, and the nonce could
     then be spent again. Authenticated time (NTS) on every server bounds that, and `may_sign` refuses a request that
