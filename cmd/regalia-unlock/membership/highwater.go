@@ -63,7 +63,14 @@ type highWater struct {
 	// v4: the chain read against this anchor ends in a v4 manifest, under which the counter and the slots are written
 	// by policy only (#242 B3): an owner-written one is Unusable, which a re-anchor repairs
 	v4 bool
+	// anchorKey: under a v4 tip, the anchor-policy authority K_A the tip pins (anchor_policy_key, 130 hex, #361): a
+	// policy-written counter or slot must carry PolicyAuthorize(Name(K_A), its class), and nothing else (no fallback to
+	// the image key's policy, which an anchor defined under an older image would pass)
+	anchorKey string
 }
+
+// anchorClasses are the policyRef of each anchor index written by policy under K_A (#361; tests/vectors/anchor-policy-v1.json)
+var anchorClasses = map[string]string{"counter": "anchor", "slot": "slots"}
 
 // lazyPolicy is this node's approved-image write policy, asked for only when a policy-written index is met
 // and at most once (HighWater.policy): nil source when the node has none configured.
@@ -122,7 +129,21 @@ func (h highWater) read8(index uint32) (uint64, error) {
 // v4 chain tip the counter and the slots are written by policy only (#242 B3).
 func (h highWater) asDefined(index uint32, attributes uint32, authPolicy []byte, kind string) error {
 	mask := attributes &^ nvState
-	if written, ok := policyAttributes[kind]; ok && mask == written {
+	if written, ok := policyAttributes[kind]; ok && mask == written && h.anchorKey != "" {
+		class := anchorClasses[kind]
+		want, err := AnchorPolicy(h.anchorKey, class)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(authPolicy, want) {
+			held := "(none)"
+			if len(authPolicy) > 0 {
+				held = hex.EncodeToString(authPolicy)
+			}
+			return &Unusable{Reason: fmt.Sprintf("NV index %s (the %s class) is not defined under the anchor-policy authority: its authPolicy "+
+				"is %s, not PolicyAuthorize(K_A %s…, \"%s\") = %s", name(index), class, held, h.anchorKey[:16], class, hex.EncodeToString(want))}
+		}
+	} else if written, ok := policyAttributes[kind]; ok && mask == written {
 		policy, err := h.policy.get() // a policy that cannot be established refuses: never a guess, never Unusable
 		if err != nil {
 			return err
@@ -353,6 +374,10 @@ func Anchored(nv NV, manifests []map[string]any, policy func() ([]byte, error)) 
 	h := newHighWater(nv, HighWaterIndex, policy)
 	// judged by the tip of the chain read (#242 B3), as the Python Store judges by its own chain's (Store._judge_by)
 	h.v4 = len(manifests) > 0 && manifests[len(manifests)-1]["schema"] == SchemaV4
+	if h.v4 {
+		// a validated v4 manifest always holds it (#361 B): the K_A whose PolicyAuthorize every policy-written index carries
+		h.anchorKey = manifests[len(manifests)-1]["anchor_policy_key"].(map[string]any)["key"].(string)
+	}
 	hw, err := h.value()
 	if err != nil {
 		return 0, err
