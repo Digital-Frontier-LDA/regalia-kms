@@ -571,6 +571,9 @@ class Readmission(unittest.TestCase):
         clock = lambda: (now[0], True)
         s = self.sync_({"b": 3, "c": 2}, clock, d)                           # c, the survivor, still at epoch 2
         self.assertFalse(s.readmitted())
+        now[0] = T0 + 3 * act.RECOVERY_WAIT_S                                # however long c stays behind, a waits
+        self.assertFalse(s.readmitted())
+        now[0] = T0
         s.peer_epochs["c"] = 3                                               # c took the re-admitting epoch: it stops
         self.assertFalse(s.readmitted())                                     # seen all at T0: the wait starts
         now[0] = T0 + act.RECOVERY_WAIT_S - 1
