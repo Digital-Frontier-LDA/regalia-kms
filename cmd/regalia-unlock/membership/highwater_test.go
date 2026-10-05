@@ -118,7 +118,7 @@ func TestEveryAnchorIsReadAlike(t *testing.T) {
 	for name, value := range vector["chains"].(map[string]any) {
 		for _, e := range value.([]any) {
 			e := e.(map[string]any)
-			chains[name] = append(chains[name], map[string]any{"manifest": e["manifest"],
+			chains[name] = append(chains[name], map[string]any{"manifest": restoreTyped(e["manifest"]),
 				"signature": map[string]any{"signer": "root", "key": rootKey, "sig": e["sig"]}})
 		}
 	}
@@ -210,7 +210,7 @@ func TestThePolicyIsAskedForLazilyAndOnce(t *testing.T) {
 		var envelopes []any
 		for _, e := range vector["chains"].(map[string]any)[c["chain"].(string)].([]any) {
 			e := e.(map[string]any)
-			envelopes = append(envelopes, map[string]any{"manifest": e["manifest"], "signature": map[string]any{"signer": "root", "key": rootKey, "sig": e["sig"]}})
+			envelopes = append(envelopes, map[string]any{"manifest": restoreTyped(e["manifest"]), "signature": map[string]any{"signer": "root", "key": rootKey, "sig": e["sig"]}})
 		}
 		manifests, err := ReadChain(envelopes[:int(asInt64(c["length"]).(int64))], rootKey)
 		if err != nil {

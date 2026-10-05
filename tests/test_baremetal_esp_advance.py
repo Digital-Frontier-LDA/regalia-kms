@@ -56,6 +56,17 @@ class EspAdvance(EspCase):
         self.assertEqual(self.n.anchor().value(), 2)
         self.assertEqual(self.advance()[1:], (sha, False, None))                    # again: nothing to write, the anchor already there
 
+    def test_a_v4_chain_over_an_owner_written_anchor_is_refused_before_the_esp(self):
+        """#242 B3 (regalia-kms-ed): the anchor is judged by the published chain esp_advance anchors, not by sync's store:
+        a v4 tip over an owner-written anchor is Unusable, refused with the ESP unwritten and the anchor where it was."""
+        import tests.test_baremetal_membership_v4 as v4
+        with open(self.n.path(node.PUBLISHED), "wb") as f:
+            f.write(m.canonical([self.e1, rt.sign(v4.manifest4(2, m.digest(self.m1), v4.nodes4()))]))
+        with self.assertRaisesRegex(m.Unusable, "is owner-written: under regalia.membership/v4"):
+            self.advance()
+        self.assertFalse(os.path.exists(os.path.join(self.esp, bootcreds.CHAIN_ON_ESP)))
+        self.assertEqual(self.n.anchor().value(), 1)
+
     def test_a_crash_between_the_write_and_the_anchor_is_completed_by_the_next_run(self):
         self.sync.commit(self.e2)
         node.publish(self.sync, self.n.path(node.PUBLISHED))
