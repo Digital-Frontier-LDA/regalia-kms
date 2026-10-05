@@ -36,6 +36,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   (`RECOVERY_WAIT_S`): every node starts with no grant record, so each is busy for that long after it
   starts. Expected at first bring-up, not a fault. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
   the authority for which site signs ([`FENCING.md`](FENCING.md)).
+  **A lease costs no TPM NV write** (D32, #432; 30 s leases renewed every 10 s): `lease.TpmSigner` signs by a quote of
+  the issuer's AK, reading its public area and quoting, nothing else, held by a unit test and on swtpm (NV state
+  unchanged across ten signatures). TPM NV endures a bounded number of writes and a TPM throttles them, so nothing on
+  the lease path may bump a counter per lease. Limit: the TPM saves its clock to NV at an interval of its own (an
+  occasional write, not per lease), not measured on the DL360.
   **Accepted in the design:**
   - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
   - Activation by the owner plus one node is a recovery step behind three conditions, and every renewal

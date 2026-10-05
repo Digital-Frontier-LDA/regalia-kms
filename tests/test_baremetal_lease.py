@@ -642,6 +642,28 @@ class Hold(Case):
         self.refused("session_id must be 64 lowercase hex", lease.Holder, "a", "x", self.clock, lambda: 0, "x")
 
 
+class NoNvWritePerLease(unittest.TestCase):
+    """D32 (multi-active, 30 s leases renewed every 10 s; #432): signing a lease must cost no TPM NV write. NV endures a
+    bounded number of writes and a TPM throttles them (TPM_RC_NV_RATE); a counter bumped per lease would wear it out
+    within a year (95 on #432). TpmSigner asks the TPM for its AK's public area and a quote, nothing else."""
+
+    def test_the_signer_reads_the_ak_and_quotes_only(self):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv[0])
+            for i, a in enumerate(argv):                     # the outputs the signer reads back
+                if a in ("-o", "-m", "-s") and i + 1 < len(argv) and argv[i + 1].startswith("/"):
+                    with open(argv[i + 1], "wb") as f:
+                        f.write(b"\x00")
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
+        signer = lease.TpmSigner(run=run)
+        for _ in range(5):
+            signer(bytes(32))
+        self.assertEqual(sorted(set(calls)), ["tpm2_quote", "tpm2_readpublic"])
+        self.assertFalse([c for c in calls if c.startswith("tpm2_nv") or "write" in c or "increment" in c or c == "tpm2_changeauth"])
+
+
 class OnSwtpm(unittest.TestCase):
     """Two software TPMs: node a re-attests to peer b (attest.py), b signs the lease with its own TPM, a
     holds it; a is revoked; a reboots. Where the tools are provisioned (REGALIA_EXPECT_SWTPM=1) a missing
@@ -689,6 +711,18 @@ class OnSwtpm(unittest.TestCase):
         with open(self.d + "/secret", "rb") as f:
             self.attester.enroll("a", f.read())
         self.signer = lease.TpmSigner(tcti=self.tcti["b"])
+
+    def test_signing_leases_writes_nothing_to_the_tpm_s_nv(self):
+        """D32 (#432): swtpm keeps a TPM's NV in tpm2-00.permall, so an NV write shows as that file changing (95 measured a
+        plain counter's increment changing it every time, an orderly one's never). Ten lease signatures leave it as it was.
+        (The TPM saves its clock to NV now and then, at an interval of its own; ten quotes within a second do not reach it.)"""
+        permall = "%s/tpm-b/tpm2-00.permall" % self.d
+        with open(permall, "rb") as f:
+            before = hashlib.sha256(f.read()).hexdigest()
+        for i in range(10):
+            self.signer(hashlib.sha256(b"lease %d" % i).digest())
+        with open(permall, "rb") as f:
+            self.assertEqual(hashlib.sha256(f.read()).hexdigest(), before)
 
     def boot(self, name):
         """Start (or restart) a node's TPM: TPM2_Startup(CLEAR), as a reboot does."""
