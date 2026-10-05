@@ -276,18 +276,22 @@ def esp_advance(node, esp, lock_path=ESP_LOCK, record=None):
     except enrol.Refused as refused:
         raise Refused(str(refused)) from None
     rewritten = _read_regular(target, len(chain) + 1) != chain
+    manifests = [e["manifest"] for e in envelopes]               # verified by bootcreds.anchored
+    epoch = manifests[-1]["epoch"]
+    facts = {"epoch": epoch, "manifest_digest": membership.digest(manifests[-1]), "chain_sha256": hashlib.sha256(chain).hexdigest(),
+             "esp_rewritten": rewritten, "boot_renderable": unrenderable is None}
+    # THE REQUEST, before the ESP or the anchor changes (#278: never done unrecorded; regalia-kms-3e's read): a trail that
+    # cannot be written changes nothing. The OUTCOME after the anchor is checked: a crash in between leaves a request with
+    # no outcome, read as "may or may not have moved; the next run says", never an ALLOW for a move that did not happen
+    if record is not None:
+        record(dict(facts, event="esp-advance-requested"))
     if rewritten:
         enrol._replace_esp(directory, filename, chain)
         require(_read_regular(target, len(chain) + 1) == chain, "the chain read back from %s is not the one written" % target)
-    manifests = [e["manifest"] for e in envelopes]               # verified by bootcreds.anchored
-    epoch = manifests[-1]["epoch"]
-    # recorded BEFORE the anchor moves (#278: never done unrecorded): a trail that cannot be written leaves the anchor where it
-    # was and the ESP ahead of it, which the initrd accepts; the next run tries again
-    if record is not None:
-        record({"event": "esp-advance", "outcome": "ALLOW", "epoch": epoch, "manifest_digest": membership.digest(manifests[-1]),
-                "chain_sha256": hashlib.sha256(chain).hexdigest(), "esp_rewritten": rewritten, "boot_renderable": unrenderable is None})
     anchor.anchor(epoch, membership.Store._digests(manifests))
     anchor.check(epoch)
+    if record is not None:
+        record(dict(facts, event="esp-advance", outcome="ALLOW"))
     return epoch, hashlib.sha256(chain).hexdigest(), rewritten, unrenderable
 
 
@@ -903,6 +907,8 @@ def main(argv=None):
     parser.add_argument("--config", default="/etc/regalia/node.json")
     parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check", "time-clear", "esp-advance"))
     parser.add_argument("--esp", default="/efi", help="esp-advance only: the ESP's mount point")
+    parser.add_argument("--esp-trail", help="esp-advance only: its trail (default: the registry's, %s; the three-node fixture "
+                        "gives each node its own)" % "trails.where(%r)" % ESP_TRAIL)
     parser.add_argument("--esp-lock", default=ESP_LOCK, help="esp-advance only: the anchor's writer lock (default: the unit's "
                         "RuntimeDirectory; the three-node fixture gives each node its own)")
     parser.add_argument("--reason", help="time-clear only: why chronyd may run again. FIRST compare the declared NTS servers "
@@ -933,7 +939,7 @@ def main(argv=None):
         elif args.service == "wg-apply":
             print("wg-svc and %s applied under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
         elif args.service == "esp-advance":
-            trail = Trail(trails.where(ESP_TRAIL), ESP_TRAIL)
+            trail = Trail(args.esp_trail or trails.where(ESP_TRAIL), ESP_TRAIL)
             try:
                 epoch, sha, rewritten, unrenderable = esp_advance(node, args.esp, lock_path=args.esp_lock, record=trail)
             except BaseException as failure:

@@ -56,22 +56,22 @@ class EspAdvance(EspCase):
         self.assertEqual(self.n.anchor().value(), 2)
         self.assertEqual(self.advance()[1:], (sha, False, None))                    # again: nothing to write, the anchor already there
 
-    def test_each_run_is_recorded_before_the_anchor_moves(self):
-        """#278 for the ESP advance: the trail line comes after the ESP holds the chain and BEFORE the anchor moves; a trail
-        that cannot be written leaves the anchor where it was (the ESP ahead, which the initrd accepts)."""
+    def test_the_request_is_recorded_before_anything_changes_and_the_outcome_after(self):
+        """#278 for the ESP advance (regalia-kms-3e's read): a REQUEST line before the ESP or the anchor changes, the ALLOW
+        after the anchor is checked; a crash in between leaves a request with no outcome, never a false ALLOW."""
         self.sync.commit(self.e2)
         node.publish(self.sync, self.n.path(node.PUBLISHED))
         order, lines = [], []
-        anchor = m.HighWater.anchor
-        with unittest.mock.patch.object(m.HighWater, "anchor", lambda hw, *a: (order.append("anchor"), anchor(hw, *a))[1]):
-            node.esp_advance(self.n, self.esp, lock_path=self.lock, record=lambda event: (order.append("trail"), lines.append(event)))
-        self.assertEqual(order, ["trail", "anchor"])
-        self.assertEqual({k: lines[0][k] for k in ("event", "outcome", "epoch", "manifest_digest", "esp_rewritten", "boot_renderable")},
-                         {"event": "esp-advance", "outcome": "ALLOW", "epoch": 2, "manifest_digest": m.digest(self.m2),
-                          "esp_rewritten": True, "boot_renderable": True})
-        self.assertEqual(lines[0]["chain_sha256"], hashlib.sha256(m.canonical([self.e1, self.e2])).hexdigest())
+        write, anchor = enrol._replace_esp, m.HighWater.anchor
+        with unittest.mock.patch.object(enrol, "_replace_esp", lambda *a: (order.append("esp"), write(*a))[1]), \
+                unittest.mock.patch.object(m.HighWater, "anchor", lambda hw, *a: (order.append("anchor"), anchor(hw, *a))[1]):
+            node.esp_advance(self.n, self.esp, lock_path=self.lock, record=lambda event: (order.append(event["event"]), lines.append(event)))
+        self.assertEqual(order, ["esp-advance-requested", "esp", "anchor", "esp-advance"])
+        facts = {"epoch": 2, "manifest_digest": m.digest(self.m2), "chain_sha256": hashlib.sha256(m.canonical([self.e1, self.e2])).hexdigest(),
+                 "esp_rewritten": True, "boot_renderable": True}
+        self.assertEqual(lines, [dict(facts, event="esp-advance-requested"), dict(facts, event="esp-advance", outcome="ALLOW")])
 
-    def test_a_trail_that_cannot_be_written_moves_no_anchor(self):
+    def test_a_trail_that_cannot_be_written_changes_nothing(self):
         self.sync.commit(self.e2)
         node.publish(self.sync, self.n.path(node.PUBLISHED))
 
@@ -79,7 +79,16 @@ class EspAdvance(EspCase):
             raise OSError("No space left on device")
         with self.assertRaises(OSError):
             node.esp_advance(self.n, self.esp, lock_path=self.lock, record=full)
-        self.assertEqual((self.on_esp(), self.n.anchor().value()), ([self.e1, self.e2], 1))
+        self.assertFalse(os.path.exists(os.path.join(self.esp, bootcreds.CHAIN_ON_ESP)))     # the ESP untouched
+        self.assertEqual(self.n.anchor().value(), 1)
+
+    def test_an_anchor_that_fails_leaves_a_request_and_no_allow(self):
+        self.sync.commit(self.e2)
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+        lines = []
+        with unittest.mock.patch.object(m.HighWater, "anchor", side_effect=OSError("power cut")), self.assertRaises(OSError):
+            node.esp_advance(self.n, self.esp, lock_path=self.lock, record=lines.append)
+        self.assertEqual([e["event"] for e in lines], ["esp-advance-requested"])
 
     def test_main_records_a_refusal_in_the_trail(self):
         import json

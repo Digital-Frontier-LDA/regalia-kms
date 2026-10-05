@@ -100,7 +100,8 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     advance never runs). That is the withholding a compromised sync could always do. A fleet-level rule
     comparing the three nodes' epochs is **not built**.
   - Each run is in its own hash-chained trail (`/var/log/regalia-esp-advance/esp-advances.jsonl`, shipped
-    as `esp-advances`): an ALLOW line before the anchor moves, a DENY line for a refusal. **Accepted:** the
+    as `esp-advances`): a request line before the ESP or the anchor changes, an ALLOW line after the anchor is
+    checked, a DENY line for a refusal; a crash in between leaves a request with no outcome. **Accepted:** the
     DENY line is best effort (a run that cannot write its trail is still refused, and says so in the journal
     and in `regalia_esp_advance_ok`); a refusal by systemd before the unit runs (`/efi` not mounted) writes
     no line, only the unit's failure.

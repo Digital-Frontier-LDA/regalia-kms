@@ -30,7 +30,7 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
      control first (a node that may still ask opens its volume: the setup works), then the epoch given to one
      survivor and taken by the others with their sync; the survivors' wg-unlock drops the node; it gets no key,
      and no lease, with the reason (a survivor's DENY naming its state, or it is off wg-svc)
-  8  #340: every line of every node's sync and admission trail is in the audit collector (a real collector and each
+  8  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector (a real collector and each
      node's real shipper: Cluster(audit=True)), and the decisions this scenario turns on are there by name, in the
      stream of the node that made them: every directed unlock of step 2, a's refusal of b's second session (5), a's
      refusal of b's seventh lease request (6), the lone node's refused proposal and its hand recovery (7), and each
@@ -351,10 +351,10 @@ def scenario(cluster):
            "N: and no lease, because %s" % reason, cluster.journal(victim, "admission")[-400:])
         cluster.stop(victim)
 
-    header("8  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
+    header("8  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector, for the node that recorded it")
     wrong = cluster.audit_complete()
-    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t in ("sync", "admission")}
-    ok(wrong == {}, "every node's sync and admission trail is written and in the collector line for line: sequence from 1, chained from "
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t, _, _ in threenode.AUDIT_TRAILS}
+    ok(wrong == {}, "every node's sync, admission and ESP-advance trail is written and in the collector line for line: sequence from 1, chained from "
        "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
        {"%s.%s" % k: v for k, v in wrong.items()})
     # within step 2's own time (later steps unlock too): strictly before the second step 3 began

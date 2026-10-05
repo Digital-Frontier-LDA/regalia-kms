@@ -683,10 +683,14 @@ the client are on the console with no kernel argument. It is not secret. When a 
     (the next boot would ask for the recovery key).
   - Each run is recorded in its own hash-chained trail (`/var/log/regalia-esp-advance/esp-advances.jsonl`,
     `trails.py`, shipped by `regalia-audit-ship@esp-advances` through the group `regalia-audit-esp-advances`):
-    an ALLOW line (epoch, manifest digest, the chain's SHA-256, whether the ESP was rewritten, whether the next
-    boot renders) after the ESP holds the chain and BEFORE the anchor moves, so a trail that cannot be written
-    leaves the anchor where it was; and a DENY line, best effort, for a refusal. A run systemd refuses before it
-    starts (`/efi` not mounted) writes no line: the unit's failure and the alerts say it.
+    an `esp-advance-requested` line (epoch, manifest digest, the chain's SHA-256, whether the ESP is to be
+    rewritten, whether the next boot renders) BEFORE the ESP or the anchor changes, so a trail that cannot be
+    written changes nothing; an ALLOW line with the same facts after the anchor is checked; and a DENY line, best
+    effort, for a refusal. A crash between the two leaves a request with no outcome ("may or may not have moved;
+    the next run says"), never an ALLOW for a move that did not happen. Every run writes its pair, a run that
+    finds the ESP and the anchor already there included (one at each boot and each path trigger). A run systemd
+    refuses before it starts (`/efi` not mounted) writes no line: the unit's failure and the alerts say it.
+    `--esp-trail` names another file (the three-node fixture gives each node its own).
   - The anchor's run-time writer lock is its own (`/run/regalia-esp-advance/highwater.lock`). Enrolment and
     `reanchor.py`, run by hand, take a different lock, so do not run them while the node's units run.
   - Enrolment still anchors epoch 1 before it writes the ESP: its render verifies the chain against the anchor,
