@@ -266,7 +266,8 @@ class InitOnSwtpm(unittest.TestCase):
         with self.assertRaisesRegex(enrol.Refused, "made for another system-phase PCR key"):
             self.init(system_pub=OTHER_PUB)
         # a bundle whose signing key another TPM certified: the AK's signature does not cover it
-        forged = dict(bundle, signing_public=bundle["signing_public"][:-2] + "00")
+        last = bundle["signing_public"][-2:]                    # always another byte: "00" over a "00" changed nothing (1 in 256)
+        forged = dict(bundle, signing_public=bundle["signing_public"][:-2] + ("00" if last != "00" else "01"))
         with self.assertRaises(membership.Refused):
             enrol.entry(forged, SYSTEM_PUB, keep, activation)
         # another AK of this TPM, named consistently in the bundle (its Name recomputes): the certification is not its
