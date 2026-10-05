@@ -93,15 +93,42 @@ def policy_nv_written(previous, written):
     return _h(previous, struct.pack(">I", CC_POLICY_NV_WRITTEN), b"\x01" if written else b"\x00")
 
 
-def class_policy(k_a_point, cls):
-    """The authPolicy an object of class `cls` is defined under: PolicyAuthorize(Name(K_A), REFS[cls])."""
+# A node's OWN rotation counter (#361, regalia-kms-1e and d9): R is defined under a policyRef that names the node, so its
+# Name differs per node and every approval naming R opens that node's objects only. With one Name for R on every node, an
+# approval at G_y (public, in the measurements document) would open node x's objects whenever R_x <= G_y, and a retire
+# would not revoke an old key on a node whose G is lower. A policyRef is a TPM2B_NONCE, at most the TPM's largest digest
+# (32 bytes on a SHA-256-only TPM: d9), so the node's ref is a digest: SHA-256("regalia-rotation/v1\0" || node_id).
+ROTATION_DOMAIN = b"regalia-rotation/v1\x00"
+NODE_ID = __import__("re").compile(r"[a-z0-9][a-z0-9-]{0,31}")         # membership's node_id
+
+
+def rotation_class(node_id):
+    """The class (and policyRef) of `node_id`'s rotation counter: "rotation/<node_id>"."""
+    require(isinstance(node_id, str) and NODE_ID.fullmatch(node_id) is not None, "%r is not a node ID" % (node_id,))
+    return "rotation/" + node_id
+
+
+def _ref(cls):
+    """The policyRef of a class: REFS for the shared classes; a node's rotation counter's, a 32-byte digest of its ID."""
+    if isinstance(cls, str) and cls.startswith("rotation/"):
+        node_id = cls[len("rotation/"):]
+        require(NODE_ID.fullmatch(node_id) is not None, "no policy class %r" % (cls,))
+        return hashlib.sha256(ROTATION_DOMAIN + node_id.encode()).digest()
     require(cls in REFS, "no policy class %r" % (cls,))
-    return policy_authorize(k_a_name(k_a_point), REFS[cls])
+    return REFS[cls]
 
 
-def rotation_name(index, k_a_point, written=True):
-    """R's Name, as defined (policywrite only, under the "rotation" class) and, once incremented, WRITTEN."""
-    return nv_name(index, ROTATION_ATTRIBUTES | (NV_WRITTEN if written else 0), class_policy(k_a_point, "rotation"), ROTATION_SIZE)
+def class_policy(k_a_point, cls):
+    """The authPolicy an object of class `cls` is defined under: PolicyAuthorize(Name(K_A), its policyRef)."""
+    return policy_authorize(k_a_name(k_a_point), _ref(cls))
+
+
+def rotation_name(index, k_a_point, written=True, node_id=None):
+    """R's Name, as defined (policywrite only) and, once incremented, WRITTEN: under the node's own class
+    ("rotation/<node_id>", rotation_class) when `node_id` is given, else under the shared "rotation" class (#437's
+    vectors, measured on swtpm; a node's R is always the former)."""
+    cls = rotation_class(node_id) if node_id is not None else "rotation"
+    return nv_name(index, ROTATION_ATTRIBUTES | (NV_WRITTEN if written else 0), class_policy(k_a_point, cls), ROTATION_SIZE)
 
 
 def _count(value, what):
@@ -128,16 +155,15 @@ def increment_from(rotation, n):
 
 def authorize_message(policy, cls):
     """What K_A signs (ECDSA P-256 over SHA-256) to approve `policy` for class `cls`: aHash = H(policy || policyRef)."""
-    require(cls in REFS, "no policy class %r" % (cls,))
-    return policy + REFS[cls]
+    return policy + _ref(cls)
 
 
 # ---- the TPM side of the rotation counter R (#361 C1): defined and first incremented at `enrol init` ----
 #
 # R is defined before the anchor and the counters (regalia-kms-95: every class approval names R's WRITTEN Name, so it is
-# written first) and before `enrol ownerauth` (the owner authorization is still empty, as the define needs). Its first
-# increment is made under K_A's public, node-independent approval increment_first (valid only while R is unwritten: a
-# replay is refused by the TPM). Its value after that is this node's G start; its Name and value go into the identity the
+# written first) and before `enrol ownerauth` (the owner authorization is still empty, as the define needs), under the
+# node's OWN class rotation/<node_id> (rotation_class: its Name names the node). Its first increment is made under K_A's
+# approval increment_first for that class (valid only while R is unwritten: a replay is refused by the TPM). Its value after that is this node's G start; its Name and value go into the identity the
 # AK quotes, and the genesis requires that Name to be rotation_name(index, the genesis manifest's K_A).
 
 ROTATION_INDEX = "0x01500020"           # R's NV index on every node: apart from the anchor's, the counters' (node.validate)
@@ -178,16 +204,19 @@ def verify_approval(point, policy, cls, signature, what):
     return der
 
 
-def read_first(doc):
-    """The `--anchor-policy` file: exactly {schema, anchor_policy_key, increment_first}, K_A a typed P-256 entry and its
-    approval of R's first increment verified under it. Unauthenticated here by design: the genesis checks R's quoted Name
-    against the manifest's K_A (regalia-kms-95). Returns (K_A's point hex, the approval's DER)."""
+def read_first(doc, node_id=None):
+    """The `--anchor-policy` file: exactly {schema, node_id, anchor_policy_key, increment_first}, K_A a typed P-256 entry
+    and its approval of THIS node's R's first increment (class rotation/<node_id>) verified under it; the node the file
+    is for must be `node_id` when given. Unauthenticated here by design: the genesis checks R's quoted Name against the
+    manifest's K_A (regalia-kms-95). Returns (node_id, K_A's point hex, the approval's DER)."""
     require(isinstance(doc, dict), "the anchor-policy file is not an object")
-    membership.exact(doc, ("schema", "anchor_policy_key", "increment_first"), "the anchor-policy file")
+    membership.exact(doc, ("schema", "node_id", "anchor_policy_key", "increment_first"), "the anchor-policy file")
     require(doc["schema"] == FIRST_SCHEMA, "the anchor-policy file is not a %s" % FIRST_SCHEMA)
+    cls = rotation_class(doc["node_id"])
+    require(node_id is None or doc["node_id"] == node_id, "the anchor-policy file is for node %s, not %s" % (doc["node_id"], node_id))
     point = membership.typed_key(doc["anchor_policy_key"], "the anchor-policy file's anchor_policy_key", membership.ANCHOR_POLICY_KEY_ALGS)[1]
-    der = verify_approval(point, increment_first(), "rotation", doc["increment_first"], "the anchor-policy file's increment_first")
-    return point, der
+    der = verify_approval(point, increment_first(), cls, doc["increment_first"], "the anchor-policy file's increment_first")
+    return doc["node_id"], point, der
 
 
 def _tpm(run, *argv):
@@ -233,7 +262,7 @@ def read_rotation(index, run=None):
     return int.from_bytes(raw, "big")
 
 
-def start_rotation(index, point, approval_der, run=None):
+def start_rotation(index, point, approval_der, node_id, run=None):
     """Define R at `index` under PolicyAuthorize(Name(K_A), "rotation") and make its first increment under K_A's approval,
     finishing what an interrupted run left (regalia-kms-95's cases):
       * R absent: K_A's approval is checked by the TPM first (loadexternal, verifysignature: no R is defined for a wrong
@@ -241,10 +270,13 @@ def start_rotation(index, point, approval_der, run=None):
       * R present and unwritten, under this K_A: the increment is finished;
       * R present and written, under this K_A: nothing to do;
       * anything else at `index`: refused, never undefined.
-    Needs the TPM's owner authorization to be empty (a define before `enrol ownerauth`). Returns {index, name, value}."""
+    Needs the TPM's owner authorization to be empty (a define before `enrol ownerauth`). R is `node_id`'s own: under
+    the class rotation/<node_id>, so its Name names the node. Returns {index, name, value}."""
     import os
     import tempfile
-    unwritten, written = rotation_name(int(index, 16), point, written=False).hex(), rotation_name(int(index, 16), point).hex()
+    cls = rotation_class(node_id)
+    unwritten = rotation_name(int(index, 16), point, written=False, node_id=node_id).hex()
+    written = rotation_name(int(index, 16), point, node_id=node_id).hex()
     held = nv_name_of(index, run)
     require(held in (None, unwritten, written), "NV index %s holds an index that is not this enrolment's rotation counter under the "
             "K_A given (Name %s): it is refused and left as it is" % (index, held))
@@ -258,7 +290,7 @@ def start_rotation(index, point, approval_der, run=None):
             with open(path("approved"), "wb") as f:
                 f.write(increment_first())
             with open(path("message"), "wb") as f:
-                f.write(authorize_message(increment_first(), "rotation"))
+                f.write(authorize_message(increment_first(), cls))
             _tpm(run, "flushcontext", "-t")
             _must(_tpm(run, "loadexternal", "-C", "o", "-G", "ecc", "-u", path("ka.pem"), "-c", path("ka.ctx"), "-n", path("ka.name")),
                   "loading K_A")
@@ -268,7 +300,7 @@ def start_rotation(index, point, approval_der, run=None):
                        "-f", "ecdsa", "-t", path("ticket")), "the TPM's check of K_A's approval of the rotation counter's first increment")
             if held is None:
                 with open(path("policy"), "wb") as f:
-                    f.write(class_policy(point, "rotation"))
+                    f.write(class_policy(point, cls))
                 _must(_tpm(run, "nvdefine", index, "-C", "o", "-s", "8", "-a", ROTATION_WORDS, "-L", path("policy")),
                       "defining the rotation counter %s (the TPM's owner authorization must still be empty: `enrol init` comes "
                       "before `enrol ownerauth`)" % index)
@@ -278,7 +310,7 @@ def start_rotation(index, point, approval_der, run=None):
                 _must(_tpm(run, "policycommandcode", "-S", path("s.ctx"), "TPM2_CC_NV_Increment"), "PolicyCommandCode")
                 _must(_tpm(run, "policynvwritten", "-S", path("s.ctx"), "c"), "PolicyNvWritten")
                 _must(_tpm(run, "policyauthorize", "-S", path("s.ctx"), "-i", path("approved"), "-n", path("ka.name"),
-                           "-q", REFS["rotation"].hex(), "-t", path("ticket")), "PolicyAuthorize(K_A, \"rotation\")")
+                           "-q", _ref(cls).hex(), "-t", path("ticket")), "PolicyAuthorize(K_A, %s)" % cls)
                 _must(_tpm(run, "nvincrement", index, "-C", index, "-P", "session:" + path("s.ctx")),
                       "the rotation counter's first increment")
             finally:

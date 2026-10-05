@@ -935,7 +935,7 @@ class ProposeGenesis(unittest.TestCase):
         from deploy.baremetal import anchorpolicy
         point = self.anchor(k_a)["key"]
         index = anchorpolicy.ROTATION_INDEX
-        return dict(entry, rotation={"index": index, "name": anchorpolicy.rotation_name(int(index, 16), point).hex(),
+        return dict(entry, rotation={"index": index, "name": anchorpolicy.rotation_name(int(index, 16), point, node_id=entry["node_id"]).hex(),
                                      "value": value or 3 + "abc".index(entry["node_id"])})
 
     def anchor(self, key=None):
@@ -1224,6 +1224,12 @@ class ProposeGenesis(unittest.TestCase):
             self.assertIn("node %s: rotation counter 0x01500020 under K_A" % node_id, out)
             self.assertIn("first value %d (its AK's quote)" % value, out)
         os.unlink(path)
+        # node a's counter claimed by node b's bundle (one Name per node, #361): refused as another K_A's would be
+        from deploy.baremetal import enrol
+        b = self.bundle_of(self.entries[1])
+        swapped = dict(b, rotation=dict(b["rotation"], name=self.bundle_of(self.entries[0])["rotation"]["name"]))
+        with self.assertRaisesRegex(enrol.Refused, "b's rotation counter is not under this genesis's K_A"):
+            enrol.rotation_of(swapped, self.anchor()["key"])
         code, _, err, path = self.run_cli(rotation_k_a={"b": ec.generate_private_key(ec.SECP256R1())})
         self.assertEqual(code, 2)
         self.assertIn("b's rotation counter is not under this genesis's K_A", err)
