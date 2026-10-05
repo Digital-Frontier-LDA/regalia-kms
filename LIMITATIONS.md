@@ -108,6 +108,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     advance never runs). That is the withholding a compromised sync could always do. A fleet-level rule
     comparing the three nodes' epochs is **not built**.
   - Its run is in the journal and its metrics, not in a hash-chained trail (#278).
+  - An anchor read the TPM refuses says only "cannot read 8 bytes from NV index …": `HighWater._read8` drops
+    `tpm2_nvread`'s error text, so an operator diagnosing it gets no TPM reason (#450; the text is pinned by
+    `highwater-v1.json` in both languages, so its fix regenerates that vector).
   - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's and reanchor's
     (see #391): run those by hand only with the node's units stopped.
   - **Accepted:** enrolment (`enrol commit`) still anchors epoch 1 before it writes the ESP: its render
