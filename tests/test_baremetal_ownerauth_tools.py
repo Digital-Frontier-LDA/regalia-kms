@@ -154,11 +154,54 @@ class SetNeedsTheSrk(unittest.TestCase):
         tpm.persistent.discard(ownerauth.SRK)
         auth = ownerauth.from_envelope(value("a"), RECORD, PIN, "a")
         with self.assertRaisesRegex(m.Refused, "systemd's storage root key \\(0x81000001\\) is not persistent"):
-            ownerauth.set_owner(auth, run=tpm)
+            ownerauth.set_owner(auth, tpm.ek_name.hex(), run=tpm)
         self.assertIsNone(tpm.owner_auth)
         tpm.persistent.add(ownerauth.SRK)
-        ownerauth.set_owner(auth, run=tpm)
+        ownerauth.set_owner(auth, tpm.ek_name.hex(), run=tpm)
         self.assertTrue(ownerauth.holds(auth, run=tpm))
+
+
+class TheValueOffTheBus(unittest.TestCase):
+    """#414 (measured on swtpm): changeauth's new value is a parameter, so setting it goes in a session salted to the
+    enrolled EK with parameter encryption; the proof is an owner createprimary, which sends no value."""
+
+    def setUp(self):
+        self.tpm = FakeTpm()
+        self.auth = ownerauth.from_envelope(value("a"), RECORD, PIN, "a")
+
+    def test_set_through_a_session_salted_to_the_enrolled_ek(self):
+        ownerauth.set_owner(self.auth, self.tpm.ek_name.hex(), run=self.tpm)
+        self.assertEqual(self.tpm.salted_with, [self.tpm.ek_name])          # the one changeauth, salted and encrypting
+        self.assertEqual(self.tpm.sessions, {})                              # flushed
+
+    def test_another_ek_is_refused_before_anything_is_sent(self):
+        with self.assertRaisesRegex(m.Refused, "is not the one enrolment recorded"):
+            ownerauth.set_owner(self.auth, "000b" + "00" * 32, run=self.tpm)
+        self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (None, []))
+        self.tpm.ek_name = None
+        with self.assertRaisesRegex(m.Refused, "the TPM holds no EK at 0x81010001: `enrol init` makes it"):
+            ownerauth.set_owner(self.auth, "000b" + "e5" * 32, run=self.tpm)
+
+    def test_the_proof_sends_no_value_as_a_parameter(self):
+        ownerauth.set_owner(self.auth, self.tpm.ek_name.hex(), run=self.tpm)
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv[0])
+            return self.tpm(argv, **kw)
+        self.assertTrue(ownerauth.holds(self.auth, run=run))
+        self.assertNotIn("tpm2_changeauth", calls)
+        self.assertIn("tpm2_createprimary", calls)
+
+    def test_enrol_takes_the_ek_init_recorded(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        with self.assertRaisesRegex(enrol.Refused, "has no finished identity step: run `enrol init` first"):
+            enrol.enrolled_ek_name(d, "a")
+        journal = enrol.Journal(d, "a")
+        journal.started("identity")
+        journal.done("identity", ek_name=self.tpm.ek_name.hex(), ek_public="", ak_public="", ak_name="")
+        self.assertEqual(enrol.enrolled_ek_name(d, "a"), self.tpm.ek_name.hex())
 
 
 class ReanchorTakesIt(unittest.TestCase):

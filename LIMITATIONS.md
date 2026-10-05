@@ -31,15 +31,23 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   signing laptop last synced, if the surviving peer withholds it and the audit collector has no
   receipt for it. The owner is asked before signing ([`deploy/baremetal/MEMBERSHIP-RECOVERY.md`](deploy/baremetal/MEMBERSHIP-RECOVERY.md)).
 - **TPM owner authorization: built (#242 step C), with these limits.**
-  - The owner authorization crosses the TPM bus in clear when used (password sessions, #414). A discrete TPM can
-    be sniffed by someone with physical access during enrolment, a re-anchor or a recount.
+  - On the TPM bus (#414, measured): the owner authorization itself is never sent. Owner calls use tpm2-tools'
+    own HMAC sessions. Setting it uses a session salted to the enrolled EK (its Name checked) with parameter
+    encryption. The proof is an owner createprimary. Residual: an owner call's own parameters (NV attributes and
+    policies, record epochs and digests, none secret) cross in clear, because tpm2-tools' automatic sessions are
+    unsalted. A bus probe on the DL360 sees those, not the value.
   - The value cannot be zeroed in Python memory. While an owner-authorized call runs, the value is readable through
     /proc by root (a memfd; `seal-hsm-pin.sh` uses a root-only file on /run).
   - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path
     is held by unit tests and by swtpm tests of the anchor's owner calls.
   - During `enrol commit` the owner authorization is held by a process of uid regalia-sync, the network-facing
-    sync daemon's user. commit refuses while another process of that uid exists. Moving the owner calls into the
-    root parent is #419.
+    sync daemon's user. **Who could read it, and when:**
+    - Who: root, and any process of uid regalia-sync (through /proc/<pid>/fd, or by attaching to the step where
+      Yama allows).
+    - When: only while commit's `_anchor` and `_first-heartbeat` steps run, seconds each, at enrolment.
+    - commit refuses to start a step while any other process of that uid exists (`pgrep -u regalia-sync`). The race
+      left is a process of that uid starting during a step: at enrolment the node's services are not yet running.
+    - Moving the owner calls into the root parent is #419.
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.

@@ -1935,12 +1935,23 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     return epoch, digest
 
 
-def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None, run=subprocess.run):
+def enrolled_ek_name(directory, node_id):
+    """The Name (hex) of the EK `enrol init` recorded for this host: what the owner authorization's salted session is
+    salted to (#414). Refused before init has run (or finished)."""
+    journal = Journal(directory, node_id)
+    require(journal.state("identity") == "done", "%s has no finished identity step: run `enrol init` first (its EK salts "
+            "the session the owner authorization is set in)" % directory)
+    return journal.get("identity")["ek_name"]
+
+
+def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None, run=subprocess.run, directory=ENROL_DIR,
+                  ek_name=None):
     """`enrol ownerauth` (#242 step C): this TPM's owner authorization from the node's envelope, the value on `stream`
     (gpg --decrypt ownerauth-<node>.yk.gpg | ...), checked against ownerauth.record.json verified under the pinned
     root BEFORE the TPM is touched. Sets it from EMPTY only (ownerauth.set_owner refuses one already set, never
     overwriting it). `check`: changes nothing, and proves in ONE owner-authorized call that the TPM's owner
-    authorization is this node's envelope value. Returns what to print."""
+    authorization is this node's envelope value. The value is set in a session salted to the EK `enrol init` recorded
+    (`ek_name`, else read from `directory`'s journal; #414). Returns what to print."""
     with open(record_path, "rb") as f:
         envelope = membership.load(f.read(membership.MAX_BYTES + 1), membership.MAX_BYTES)
     auth = ownerauth.from_envelope(stream, envelope, root_key, node_id)
@@ -1950,7 +1961,7 @@ def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None
         require(ownerauth.holds(auth, tcti, run), "the TPM's owner authorization is NOT %s's envelope value: this TPM was "
                 "provisioned otherwise, or the envelope is another node's. Nothing was changed" % node_id)
         return "the TPM's owner authorization is %s's envelope value" % node_id
-    ownerauth.set_owner(auth, tcti, run)
+    ownerauth.set_owner(auth, ek_name or enrolled_ek_name(directory, node_id), tcti, run)
     return "the TPM's owner authorization is set to %s's envelope value, and answers to it; keep the envelope, never the value" % node_id
 
 
@@ -1969,6 +1980,7 @@ def main(argv=None):
     o.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex: the record is verified under it")
     o.add_argument("--record", required=True, help="the ceremony's ownerauth.record.json")
     o.add_argument("--check", action="store_true", help="change nothing: prove the TPM's owner authorization is this envelope's")
+    o.add_argument("--enrol-dir", default=ENROL_DIR, help="the enrolment directory: the EK `init` recorded salts the session")
     g = sub.add_parser("challenge", help="(the root's side, no TPM) a credential to the bundle's EK and AK, for `activate`")
     g.add_argument("--bundle", required=True)
     g.add_argument("--out", required=True, help="the credential, to carry to the node")
@@ -2026,7 +2038,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.command == "ownerauth":
         try:
-            print(set_ownerauth(args.node_id, args.root_key, args.record, sys.stdin.buffer, check=args.check))
+            print(set_ownerauth(args.node_id, args.root_key, args.record, sys.stdin.buffer, check=args.check, directory=args.enrol_dir))
         except (Refused, membership.Refused, OSError, ValueError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
