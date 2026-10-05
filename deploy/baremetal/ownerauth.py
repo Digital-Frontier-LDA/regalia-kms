@@ -59,6 +59,7 @@ import hashlib
 import hmac
 import os
 import re
+import stat
 import subprocess
 
 from deploy.baremetal import membership
@@ -80,6 +81,8 @@ HEX64 = re.compile(r"[0-9a-f]{64}")
 OPENPGP_FPR = re.compile(r"[0-9A-F]{40}")
 NODE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 OWNER = ("-C", "o")                    # the one place this argument pair is written (see the module text)
+HELD_DIR = "/var/lib/regalia-enrol"    # enrol.ENROL_DIR: where `enrol ownerauth` keeps the record the TPM answers to
+HELD_FILE = "ownerauth.json"
 
 
 class Auth:
@@ -248,11 +251,52 @@ def read_arguments(args, stream=None):
     return read_value(stream), envelope
 
 
-def from_arguments(args, root, node_id, stream=None):
-    """The node's Auth from --ownerauth and standard input, judged against the record under the pinned root; None
-    without --ownerauth (the owner authorization is empty)."""
+def record_digest(envelope):
+    """What the node holds of a record: the SHA-256 of its canonical envelope."""
+    return hashlib.sha256(membership.canonical(envelope)).hexdigest()
+
+
+def held(directory=None):
+    """The SHA-256 of the owner-authorization record this node's TPM answers to, as `enrol ownerauth` last set, rotated
+    or adopted it (`directory`/ownerauth.json, default HELD_DIR; root's, 0600; regalia-kms-d9 on #456), or None when none
+    is held (a node set up before #456, or none set)."""
+    path = os.path.join(HELD_DIR if directory is None else directory, HELD_FILE)
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) & 0o077 == 0,
+            "%s is not a regular file of root's that only root reads: the node's owner-authorization state cannot be trusted" % path)
+    with open(path, "rb") as f:
+        doc = membership.load(f.read(4096), 4096)
+    require(isinstance(doc, dict) and sorted(doc) == ["current"] and isinstance(doc["current"], str)
+            and HEX64.fullmatch(doc["current"]) is not None, "%s is not {\"current\": <64 hex>}" % path)
+    return doc["current"]
+
+
+def require_held(envelope, directory=None):
+    """Refused unless `envelope` is the record this node holds (#460, agreed by regalia-kms-d9 and 95 on #456): every
+    owner-authorized tool (enrol commit, reanchor, recount) checks it before the TPM, so a record left over from before a
+    rotation is refused by name, not by an authorization failure. With none held, the way on is the one-time adopt."""
+    path = os.path.join(HELD_DIR if directory is None else directory, HELD_FILE)
+    current = held(directory)
+    require(current is not None, "this node holds no record of which owner-authorization record its TPM answers to (%s): "
+            "prove it once with `enrol ownerauth --check --adopt --record RECORD` (its value on standard input). Nothing "
+            "was changed" % path)
+    given = record_digest(envelope)
+    require(given == current, "the --ownerauth record is not the one this node is on (%s..., the node holds %s...): after "
+            "a rotation every owner-authorized tool takes the new record. Nothing was changed" % (given[:16], current[:16]))
+
+
+def from_arguments(args, root, node_id, stream=None, directory=None):
+    """The node's Auth from --ownerauth and standard input, judged against the record under the pinned root, and the
+    record the one the node holds (require_held, `directory` default HELD_DIR); None without --ownerauth (the owner
+    authorization is empty)."""
     pending = read_arguments(args, stream)
-    return None if pending is None else confirm(pending[0], pending[1], root, node_id)
+    if pending is None:
+        return None
+    require_held(pending[1], directory)
+    return confirm(pending[0], pending[1], root, node_id)
 
 
 def console(prompt, tty="/dev/tty"):

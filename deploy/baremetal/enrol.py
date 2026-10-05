@@ -2056,11 +2056,14 @@ def render_credentials(journal, esp, site, chain, root_key, anchor, device=None)
     return record
 
 
-def commit_owner_auth(manifest, given, root_key, node_id, run=subprocess.run):
+def commit_owner_auth(manifest, given, root_key, node_id, run=subprocess.run, directory=None):
     """The owner authorization enrolment commits with (#242): `given` (Auth, record), read from standard input before
     the fingerprint was typed, judged against the record under `root_key` (the typed fingerprint's by now). Under v4
     (production) the TPM's owner and lockout authorizations must both be SET, and the value given: refused otherwise,
-    before anything is written. None: an empty owner authorization (a v1-v3 lab chain without --ownerauth)."""
+    before anything is written. None: an empty owner authorization (a v1-v3 lab chain without --ownerauth). The record
+    given must be the one the node holds (`directory`'s ownerauth.json, #460): a stale one is refused before the TPM."""
+    if given is not None:
+        ownerauth.require_held(given[1], directory)
     owner_auth = None if given is None else ownerauth.confirm(given[0], given[1], root_key, node_id)
     if manifest["schema"] == membership.SCHEMA_V4:
         ownerauth.require_production(run=run)
@@ -2089,7 +2092,7 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
     recheck_signing_key(journal, directory, run)                    # and the signing key at its own (#199; CodeRabbit on #358)
     manifest = check_manifest(directory, chain, root_key, typed, document, replace)
-    owner_auth = commit_owner_auth(manifest, ownerauth_given, root_key, journal.doc["node_id"], run)
+    owner_auth = commit_owner_auth(manifest, ownerauth_given, root_key, journal.doc["node_id"], run, directory)
     note = signing_note(directory, manifest)
     if note:
         print(note, file=out)
@@ -2159,25 +2162,12 @@ def enrolled_ek_name(directory, node_id):
     return journal.get("identity")["ek_name"]
 
 
-OWNERAUTH_STATE = "ownerauth.json"
+OWNERAUTH_STATE = ownerauth.HELD_FILE
 
 
 def ownerauth_current(directory):
-    """The SHA-256 of the owner-authorization record this node's TPM answers to, as `enrol ownerauth` last set, rotated
-    or adopted it (`directory`/ownerauth.json, root's 0600; regalia-kms-d9 on #456), or None when none is held (a node set
-    up before this, or none set)."""
-    path = os.path.join(directory, OWNERAUTH_STATE)
-    try:
-        st = os.lstat(path)
-    except FileNotFoundError:
-        return None
-    require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) & 0o077 == 0,
-            "%s is not a regular file of root's that only root reads: the node's owner-authorization state cannot be trusted" % path)
-    with open(path, "rb") as f:
-        doc = membership.load(f.read(4096), 4096)
-    require(isinstance(doc, dict) and sorted(doc) == ["current"] and isinstance(doc["current"], str)
-            and re.fullmatch(r"[0-9a-f]{64}", doc["current"]) is not None, "%s is not {\"current\": <64 hex>}" % path)
-    return doc["current"]
+    """The SHA-256 of the owner-authorization record this node's TPM answers to (ownerauth.held), or None."""
+    return ownerauth.held(directory)
 
 
 def _ownerauth_hold(directory, digest):
@@ -2201,7 +2191,7 @@ def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None
     and only after the TPM answered to the record given. Returns what to print."""
     require(not (check and rotate_from), "--check and --rotate-from are different commands: give one")
     require(not adopt or check, "--adopt goes with --check: it records the record the TPM answers to")
-    digest_of = lambda envelope: hashlib.sha256(membership.canonical(envelope)).hexdigest()
+    digest_of = ownerauth.record_digest
     held = ownerauth_current(directory)
     if rotate_from is not None:
         # both values in one read: read_value reads one byte past its 65 to see trailing input, which would eat the
