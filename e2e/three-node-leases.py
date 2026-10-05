@@ -160,6 +160,9 @@ def scenario(cluster):
     watcher.start()
     # #199: by two nodes, each at its own console (revoke.py propose on b, cosign on c, which commits it)
     cluster.revoke_by_nodes("b", "c", "a", "REVOKED_STOLEN", "e2e: revoked while running")
+    # committed and spread to b and c from here: a renewal every 10 s (D32) can land while the two-node flow above runs, so
+    # "no lease after" and the lease's bound are judged from here, not from before the flow began (#485's CI)
+    committed_at = time.time()
     off = until(lambda: all(service_a not in cluster.wg_peers(p, "wg-svc") for p in ("b", "c")), 90, 2)
     ok(off is True, "b's and c's service tunnels drop a: its renewals cannot reach them")
     a_address = threenode.wgsvc.address(cluster.keys["a"]["service"][1])
@@ -172,14 +175,14 @@ def scenario(cluster):
     done, stop_at = stop[0] is not None, stop[0] or time.time()
     took = stop_at - revoked_at
     due = (expiry[0] - admission.MARGIN) if expiry[0] else None
-    ok(done is True and due is not None and expiry[0] - revoked_at <= lease.MAX_LIFETIME and abs(stop_at - due) <= 3,
+    ok(done is True and due is not None and expiry[0] - committed_at <= lease.MAX_LIFETIME and abs(stop_at - due) <= 3,
        "a's admission stopped serving by itself %.0f s after the revocation: at its last lease's end less the %d s margin "
        "(expected %.0f s; that lease had at most %d s left)" % (took, admission.MARGIN, (due or 0) - revoked_at, lease.MAX_LIFETIME),
        {"stop_minus_due": round(stop_at - due, 1) if due else None, "held": held(cluster, "a")})
     print("  MEASURED: running a revoked -> it stops serving: %.0f s (its last lease's end less the margin; MAX_LIFETIME %d s)"
           % (took, lease.MAX_LIFETIME))
-    ok(not any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= revoked_at
-               for p in ("b", "c") for e in cluster.trail(p)), "and nobody issued a a lease after the revocation")
+    ok(not any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) > committed_at
+               for p in ("b", "c") for e in cluster.trail(p)), "and nobody issued a a lease after the revocation was committed")
 
 
 def main():

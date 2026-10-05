@@ -277,10 +277,14 @@ def scenario(cluster):
     time.sleep(61)
     count, per = sync.RATE["lease"]                      # deploy/baremetal/sync.py
     since = rated = time.time()
-    answers = cluster.ask("b", "a", "lease-nonce", times=count + 1, node_id="b")
-    ok([a.get("ok") for a in answers] == [True] * count + [False]
-       and "RATE: more than %d lease requests in %d s from b" % (count, per) in answers[-1].get("refused", ""),
-       "a answered b's first %d lease requests in a minute and refused the next: %s" % (count, answers[-1].get("refused")), answers[-2:])
+    # a few past the bucket: at 18 a minute it refills one every 3.3 s while the asks run (#485's CI), so the refusal comes
+    # within the next few, never before the bucket's size
+    answers = cluster.ask("b", "a", "lease-nonce", times=count + 5, node_id="b")
+    refused = [a for a in answers[count:] if a.get("ok") is False]
+    ok([a.get("ok") for a in answers[:count]] == [True] * count and refused
+       and "RATE: more than %d lease requests in %d s from b" % (count, per) in refused[0].get("refused", ""),
+       "a answered b's first %d lease requests in a minute and refused one of the next five: %s" % (count, refused and refused[0].get("refused")),
+       answers[count - 1:])
     ok(any(e.get("event") == "sync-lease-nonce" and e.get("subject") == "b" and e.get("outcome") == "DENY" and "RATE" in e.get("reason", "")
            and e.get("at", 0) >= since - 1 for e in cluster.trail("a")), "a's trail records the refusal")
     answers = cluster.ask("c", "a", "lease-nonce", node_id="c")
