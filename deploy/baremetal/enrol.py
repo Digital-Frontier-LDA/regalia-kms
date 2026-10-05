@@ -1292,7 +1292,10 @@ def define_first_counter(config_path, manifest, probed, directory, owner_auth, b
 def _no_sync_process(run):
     """Refused while any process of uid regalia-sync exists (regalia-kms-d9 on #418): the owner authorization handed to
     enrolment's regalia-sync step is readable by every process of that uid (/proc/<pid>/fd) while the step runs, so
-    none may be there. A residual race with a process starting meanwhile stays (stated; #419 removes the handoff)."""
+    none may be there. A residual race with a process starting meanwhile stays (stated; #419 removes the handoff).
+    Under v4 (#419) no authorization is handed, and the reason is the definitions: commit defines the anchor and counter
+    indices as root, whose locks are not the service's, so only no regalia-sync process keeps its writers out meanwhile
+    (regalia-kms-d9 on #435). A non-C locale's translated pgrep message refuses (fails closed)."""
     done = run(["pgrep", "-u", SYNC_USER], capture_output=True, text=True)
     if done.returncode == 2 and "invalid user name" in (done.stderr or ""):
         return                                          # no such user (yet): no process of it
