@@ -424,8 +424,8 @@ class LeapZone(Publishing):
 
 
 class EntryPoint(unittest.TestCase):
-    """authtime.py serve/chrony-conf (#71): the one entry point for a node and the authority host, from a
-    configuration's run_dir and time_servers alone."""
+    """authtime.py serve/chrony-conf (#71): the one entry point, from a node configuration's run_dir and
+    time_servers alone."""
 
     def setUp(self):
         self.d = tempfile.mkdtemp()
@@ -437,13 +437,14 @@ class EntryPoint(unittest.TestCase):
             json.dump(doc, f)
         return path
 
-    def test_a_node_s_and_the_authority_s_configuration_alike(self):
+    def test_only_run_dir_and_time_servers_are_read(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         node_example = os.path.join(root, "deploy", "baremetal", "node.example.json")
         self.assertEqual(authtime.configured(node_example), ("/run/regalia", ("nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com")))
-        authority = self.config(schema="regalia.authority/v1", run_dir="/run/regalia", time_servers=["nts.netnod.se", "time.cloudflare.com"],
-                                signer={"kind": "file", "path": "/var/lib/regalia-authority/revocation.pem"})
-        self.assertEqual(authtime.configured(authority), ("/run/regalia", ("nts.netnod.se", "time.cloudflare.com")))
+        # any other key, of any schema, is not authtime's to judge
+        other = self.config(schema="some.other/v1", run_dir="/run/regalia", time_servers=["nts.netnod.se", "time.cloudflare.com"],
+                            signer={"kind": "file", "path": "/var/lib/elsewhere/key.pem"})
+        self.assertEqual(authtime.configured(other), ("/run/regalia", ("nts.netnod.se", "time.cloudflare.com")))
 
     def test_what_it_refuses(self):
         for doc, reason in (({"time_servers": ["nts.netnod.se", "time.cloudflare.com"]}, "run_dir must be an absolute path"),

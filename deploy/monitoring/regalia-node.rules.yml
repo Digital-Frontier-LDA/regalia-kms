@@ -43,15 +43,15 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: The freshness heartbeat has under half its lifetime left; the revocation authority has not renewed it.
+          summary: The freshness heartbeat has under half its lifetime left; no quorum of the nodes has signed a newer one.
       # The held heartbeat's AGE, not a fraction of its life (#69): with the production lifetime (6 h, renewed every 15 min)
-      # "under half left" would wait 3 h; two hours without a renewal is already eight missed rounds of the authority.
+      # "under half left" would wait 3 h; two hours without a renewal is already eight missed rounds of the nodes' signing (#199).
       - alert: RegaliaHeartbeatNotRenewed
         expr: regalia_heartbeat_live == 1 and (regalia_heartbeat_lifetime_seconds - regalia_heartbeat_seconds_left) > 7200
         labels:
           severity: warning
         annotations:
-          summary: The freshness heartbeat this peer holds was issued over two hours ago; the revocation authority has not renewed it.
+          summary: The freshness heartbeat this peer holds was issued over two hours ago; no quorum of the nodes has signed a newer one.
       - alert: RegaliaHeartbeatAboutToExpire
         expr: regalia_heartbeat_live == 1 and regalia_heartbeat_seconds_left < 0.25 * regalia_heartbeat_lifetime_seconds
         labels:

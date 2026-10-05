@@ -14,11 +14,12 @@ so it is the one an attacker would want, and it is fenced accordingly:
 
   * AN OPERATOR, ON THE HOST. It is this command, run by hand. Nothing calls reanchor() from a service, and
     the code that talks to peers (convergence.py) has no re-anchor in it.
-  * THE AUTHORITY AND A PEER. Whole chains from at least two sources that agree at every epoch they share.
-    One of them must be the revocation authority (convergence.AUTHORITY), and the chain anchored is the
-    AUTHORITY'S: two peers alone cannot re-anchor a node, and a peer that is ahead of the authority is
-    refused (its newest epochs would rest on that peer alone). Every source must be one the newest
-    manifest trusts, and none may be the node being re-anchored.
+  * TWO OTHER NODES. Whole chains from at least two other nodes, each one the newest manifest lets
+    authorize, agreeing at every epoch, and ALL ending at the same epoch: a node that is ahead of the others
+    is refused, since its newest epochs would rest on that node alone. Two nodes are the quorum everything
+    else in the cluster rests on (#199: there is no authority host any more; two compromised nodes could
+    already sign heartbeats and revocations, which is the accepted trade-off on #199). None may be the node
+    being re-anchored.
   * A USABLE ANCHOR IS NEVER RESET. If the counter reads and the record is valid and in step, this refuses.
   * A TPM THAT DOES NOT ANSWER IS NOT RE-ANCHORED. "The index is not defined", said by the TPM, is an
     unusable anchor. A TPM or a tool that fails says nothing about the anchor, and this refuses.
@@ -38,7 +39,7 @@ so it is the one an attacker would want, and it is fenced accordingly:
     changed), or INCOMPLETE (the anchor was being replaced and it did not finish: run it again).
 
     python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.json --root-key HEX \\
-        --tpm-index 0x1500016 --node-id b --authority authority-chain.json --peer c=c-chain.json \\
+        --tpm-index 0x1500016 --node-id b --peer a=a-chain.json --peer c=c-chain.json \\
         --audit-log /var/log/regalia/reanchor.jsonl
 
 It needs the TPM's owner authorization, as defining the anchor did at commissioning.
@@ -49,7 +50,7 @@ import re
 import sys
 import time
 
-from deploy.baremetal import convergence, membership, trails
+from deploy.baremetal import convergence, membership, ownerauth, trails
 
 Refused, require = membership.Refused, membership.require
 
@@ -71,11 +72,10 @@ def plan(store, sources, node_id):
     """What a re-anchor would do, having verified everything that can be verified without changing anything:
     {"reason": why the anchor is unusable, "counter": the old counter's epoch or None, "records": the record
     slots that still hold a valid record, "epoch", "manifest_digest" and "manifest": the newest manifest of
-    the chain to anchor, "chain": that chain (the AUTHORITY's), "sources": who gave one}."""
+    the chain to anchor, "chain": that chain (every source's), "sources": who gave one}."""
     require(isinstance(node_id, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node_id) is not None, "node_id must be a node ID")
     require(isinstance(sources, dict), "sources must map each source to the chain it gave")
-    require(convergence.AUTHORITY in sources, "re-anchoring needs the revocation authority's chain: peers alone cannot re-anchor a node")
-    require(len(sources) >= 2, "re-anchoring needs the authority's chain and at least one peer's (%d source given)" % len(sources))
+    require(len(sources) >= 2, "re-anchoring needs whole chains from at least two other nodes (%d source given)" % len(sources))
     require(node_id not in sources, "%s cannot be a source for its own re-anchor: the peer's chain comes from another node" % node_id)
     reason = store.hw.unusable()             # Refused, not a reason, when the TPM does not answer
     require(reason is not None, "the TPM anchor is usable: it is not reset. A chain that is rolled back, lost or substituted is "
@@ -83,20 +83,21 @@ def plan(store, sources, node_id):
     counter, records = store.hw.remains()
     floor = max([counter or 0] + [epoch for epoch, _ in records])
     longest, newest = convergence.agreed(store.root_key, sources, 2, floor)
-    # The chain anchored is the authority's. A peer may be behind it; a peer AHEAD of it would have its
-    # newest epochs vouched for by that peer alone.
-    require(len(sources[convergence.AUTHORITY]) == len(longest), "a peer's chain ends at epoch %d and the authority's at epoch %d: the chain "
-            "anchored must be the authority's; fetch the authority's current chain" % (len(longest), len(sources[convergence.AUTHORITY])))
+    # Every source gave the same whole chain: one AHEAD of the others would have its newest epochs vouched
+    # for by that node alone.
+    ends = {source: len(chain) for source, chain in sources.items()}
+    require(len(set(ends.values())) == 1, "the nodes' chains end at different epochs (%s): every source must give the same whole chain; "
+            "fetch each node's current chain" % ", ".join("%s at %d" % (k, v) for k, v in sorted(ends.items())))
     require(node_id in membership.validate(newest), "%s is not a node of the chain being anchored" % node_id)
     return {"reason": reason, "counter": counter, "records": records, "epoch": newest["epoch"], "manifest_digest": membership.digest(newest),
-            "manifest": newest, "chain": sources[convergence.AUTHORITY], "sources": sorted(sources)}
+            "manifest": newest, "chain": longest, "sources": sorted(sources)}
 
 
 def phrase(node_id, planned):
     return "re-anchor %s at epoch %d %s" % (node_id, planned["epoch"], planned["manifest_digest"][:8])
 
 
-def reanchor(store, sources, node_id, typed, sink):
+def reanchor(store, sources, node_id, typed, sink, prepare=None):
     """Plan, record the request, check what the operator typed, re-anchor, record the outcome. Returns
     {"epoch", "manifest_digest"} of what the node now holds.
 
@@ -104,7 +105,9 @@ def reanchor(store, sources, node_id, typed, sink):
     and manifest BEFORE anything is asked or changed (if that cannot be written, nothing is done), then the
     outcome: ALLOW; DENY (refused, nothing changed); or INCOMPLETE (the anchor was being replaced and it
     did not finish: Incomplete is raised, and the command is run again). `typed` is a callable given the
-    plan and returning what the operator typed, so nothing is asked before the plan exists."""
+    plan and returning what the operator typed, so nothing is asked before the plan exists. `prepare(planned)`, if
+    given, runs once the plan exists and before anything is recorded as requested, asked or changed (the define policy
+    from the manifest being anchored, NodePolicies.prepare): a refusal there is a DENY with nothing changed."""
     def event(kind, planned, **more):
         return dict({"event": kind, "subject": convergence._printable(node_id), "peer": "operator",
                      "epoch": planned.get("epoch", 0), "manifest_digest": planned.get("manifest_digest", ""),
@@ -116,6 +119,14 @@ def reanchor(store, sources, node_id, typed, sink):
     except Refused as refusal:
         sink(event("reanchor", {}, outcome="DENY", reason=convergence._printable(refusal)))
         raise
+    if prepare is not None:
+        try:
+            prepare(planned)
+        except (Refused, OSError, ValueError, KeyError) as refusal:     # a held document unreadable, an odd config: a DENY
+            sink(event("reanchor", planned, outcome="DENY", reason=convergence._printable(refusal)))
+            if isinstance(refusal, Refused):
+                raise
+            raise Refused("the re-anchor's define policy cannot be established: %s" % refusal) from refusal
     sink(event("reanchor-requested", planned))
     store.reanchor_began = False
     try:
@@ -145,8 +156,8 @@ def _chain(path):
         return membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), limit=membership.MAX_CHAIN_BYTES)
 
 
-def _highwater(index, tcti, policy=None, define_policy=None):
-    return membership.HighWater(index, tcti=tcti, policy=policy, define_policy=define_policy)
+def _highwater(index, tcti, policy=None, define_policy=None, owner_auth=None):
+    return membership.HighWater(index, tcti=tcti, policy=policy, define_policy=define_policy, owner_auth=owner_auth)
 
 
 def node_policy(path, node_id):
@@ -164,18 +175,45 @@ def node_policy(path, node_id):
     return policy
 
 
-def node_define_policy(path, node_id):
-    """What a re-anchor lays the new indices down under (#242): the node's policy when its signed measurements name a
-    system-phase key for it (node.define_policy), else None (owner-written). Without --node-config, owner-written: a
-    re-anchor with no node configuration is the one from before #242, and B3 refuses that layout."""
-    def policy():
-        if path is None:
-            return None
-        from deploy.baremetal import node
-        cfg = node.load(path)
-        require(cfg["node_id"] == node_id, "--node-config is %s's, not %s's" % (cfg["node_id"], node_id))
-        return node.define_policy(cfg)
-    return policy
+class NodePolicies:
+    """The policies a re-anchor reads and defines the anchor by (#242), from --node-config. The configuration is loaded
+    and checked to be this node's UP FRONT (a typo, an unreadable file, another node's: refused with nothing changed).
+    The define policy is resolved by `prepare`, which reanchor() calls once the plan exists and before anything is
+    asked or changed, from the MANIFEST BEING ANCHORED (node.define_policy(cfg, manifest=planned tip)), never from the
+    chain on disk: a node re-anchored because its state was lost has none, and an old chain on disk may commit to
+    another document (regalia-kms-48 on #416). Its measurements document must be held (measurements.held): refused
+    cleanly, with nothing changed, otherwise. Without --node-config: node_policy's lazy refusal for a policy-written
+    index, and owner-written new indices (as before #242)."""
+
+    def __init__(self, path, node_id):
+        self.path, self.node_id, self.cfg, self.defined, self.prepared = path, node_id, None, None, False
+        if path is not None:
+            from deploy.baremetal import node                  # here: node imports the services, which a re-anchor does not need
+            try:
+                self.cfg = node.load(path)
+            except (OSError, ValueError) as error:
+                raise Refused("--node-config %s cannot be loaded: %s" % (path, error)) from None
+            require(self.cfg["node_id"] == node_id, "--node-config is %s's, not %s's" % (self.cfg["node_id"], node_id))
+
+    def prepare(self, planned):
+        if self.cfg is not None:
+            from deploy.baremetal import node
+            self.defined = node.define_policy(self.cfg, manifest=planned["manifest"])
+        self.prepared = True
+
+    def define(self):
+        """HighWater's define_policy: what prepare resolved (None: owner-written new indices)."""
+        require(self.prepared, "the define policy is asked for before the re-anchor's plan: nothing is defined before it")
+        return self.defined
+
+    def reader(self):
+        """HighWater's policy, for a HighWater that has not resolved its reader yet (it resolves it once): the planned one
+        once prepare has run; before that (the plan reading a policy-written old anchor), the node's image policy from
+        the chain it holds, as node_policy does, and then that value stays (after the redefinition the new indices are
+        read by the define policy's own check; see the PR's limitations)."""
+        if self.prepared and self.defined is not None:
+            return self.defined
+        return node_policy(self.path, self.node_id)()
 
 
 def main(argv=None, ask=None, highwater=_highwater, tty=None):
@@ -186,12 +224,12 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
     ap.add_argument("--root-key", required=True, help="the pinned membership root key, 64 hex")
     ap.add_argument("--tpm-index", required=True, help="the NV index of this node's epoch counter (0x1500016)")
     ap.add_argument("--node-id", required=True, help="this node's ID")
-    ap.add_argument("--authority", required=True, metavar="CHAIN.json", help="the whole chain, as the revocation authority gave it")
-    ap.add_argument("--peer", action="append", default=[], metavar="NODE=CHAIN.json", help="the whole chain ANOTHER node gave; at least one, repeat for more")
+    ap.add_argument("--peer", action="append", default=[], metavar="NODE=CHAIN.json", help="the whole chain ANOTHER node gave; at least two")
     ap.add_argument("--audit-log", default=trails.where("reanchor"),
                     help="the audit trail (default %(default)s, its place in trails.py's registry)")
     ap.add_argument("--tcti", help="the TPM to re-anchor, as a TCTI (e.g. device:/dev/tpmrm0); default: tpm2-tools' default TPM")
     ap.add_argument("--node-config", help="this node's node.json: needed when its anchor is written by its approved-image policy (#242)")
+    ownerauth.add_arguments(ap)
     args = ap.parse_args(argv)
     # The TPM is named on the command line or is the default, never taken from the environment: a
     # TPM2TOOLS_TCTI left over in the shell would re-anchor ANOTHER TPM, which would truthfully say that the
@@ -211,7 +249,7 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
         for epoch, held in planned["records"]:
             print("A record slot still holds epoch %d, manifest %s: the chain carries that manifest at that epoch." % (epoch, held))
         print("Sources that agree: %s." % ", ".join(planned["sources"]))
-        print("The authority's chain ends at epoch %d, manifest %s:" % (planned["epoch"], planned["manifest_digest"]))
+        print("The chain ends at epoch %d, manifest %s:" % (planned["epoch"], planned["manifest_digest"]))
         for node in planned["manifest"]["nodes"]:
             print("    %-32s %s" % (node["node_id"], node["state"]))
         print("Re-anchoring DELETES this node's membership anchor and defines a new one on this chain.")
@@ -227,17 +265,25 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
         membership.hex_field(args.root_key, 64, "--root-key")
         # The phrase is a deliberate act at this host's terminal, not a line in a script or a pipe. (It is not a
         # secret: what authorizes the change is the TPM's owner authorization.)
+        # the owner authorization re-anchoring deletes and defines with (#242), from the node's envelope on standard
+        # input, judged now; the phrase is then typed at the terminal itself
+        owner_auth = ownerauth.from_arguments(args, args.root_key, args.node_id)
+        if owner_auth is not None and ask is None:
+            ask = ownerauth.console
         require(ask is not None or (tty or sys.stdin.isatty)(), "the phrase must be typed at a terminal: standard input is not one")
-        sources = {convergence.AUTHORITY: _chain(args.authority)}
+        sources = {}
         for item in args.peer:
             node_id, sep, path = item.partition("=")
             require(sep and node_id and path, "--peer takes NODE=CHAIN.json, not %r" % item)
             require(node_id not in sources, "--peer names %s twice" % node_id)
             sources[node_id] = _chain(path)
-        store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti,
-                                                                          policy=node_policy(args.node_config, args.node_id),
-                                                                          define_policy=node_define_policy(args.node_config, args.node_id)))
-        now_at = reanchor(store, sources, args.node_id, typed, record)
+        # a node configuration that cannot be loaded, or another node's, refuses here; its define policy is resolved
+        # from the manifest being anchored, after the plan and before anything changes (NodePolicies.prepare)
+        policies = NodePolicies(args.node_config, args.node_id)
+        extra = {} if owner_auth is None else {"owner_auth": owner_auth}
+        store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti, policy=policies.reader,
+                                                                          define_policy=policies.define, **extra))
+        now_at = reanchor(store, sources, args.node_id, typed, record, prepare=policies.prepare)
     except Incomplete as failure:
         print("reanchor: INCOMPLETE: the anchor was being replaced and it did not finish: %s\nRun this command again with the same "
               "chains. Until it completes, this node's membership does not load." % failure, file=sys.stderr)

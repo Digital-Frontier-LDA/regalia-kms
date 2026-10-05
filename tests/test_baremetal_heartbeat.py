@@ -68,16 +68,60 @@ class FakeTpm:
     BITS = {"ownerwrite": 0x2, "authwrite": 0x4, "policywrite": 0x8, "ppwrite": 0x1, "writedefine": 0x2000, "ownerread": 0x20000, "authread": 0x40000,
             "no_da": 0x2000000, "orderly": 0x4000000, "clear_stclear": 0x8000000}
 
-    def __init__(self, highest=0):
+    def __init__(self, highest=0, owner_auth=None):
         self.nv, self.highest, self.broken = {}, highest, False
         self.policies = {}                                   # index -> authPolicy (hex), for an index defined with one (-L)
+        # the owner authorization (32 bytes, #242 C), None while it is empty. Set, an owner call (-C o) must give it as
+        # the real channel does (-P file:/dev/fd/N, the pipe holding "hex:<64 hex>"), else the TPM says no
+        self.owner_auth, self.lockout_set = owner_auth, False
+        self.persistent = {"0x81000001"}                     # systemd's SRK, as systemd-tpm2-setup leaves it at boot
+
+    @staticmethod
+    def _from_fd(where, kw):
+        """What an auth argument names through the channel (a passed pipe fd), or None for anything else (a value on argv)."""
+        if not isinstance(where, str) or not where.startswith("file:/dev/fd/"):
+            return None
+        fd = int(where[len("file:/dev/fd/"):])
+        return os.read(fd, 200) if fd in kw.get("pass_fds", ()) else None
+
+    def _held(self):
+        return None if self.owner_auth is None else b"hex:" + self.owner_auth.hex().encode()
+
+    def _owner_ok(self, argv, kw):
+        """An owner-authorized call carries the authorization the TPM holds, through the channel (none while it is empty)."""
+        if "-P" not in argv:
+            return self.owner_auth is None
+        return self._held() is not None and self._from_fd(argv[argv.index("-P") + 1], kw) == self._held()
 
     def __call__(self, argv, input=None, **kw):
         tool, index = argv[0][len("tpm2_"):], argv[1]
         ok = lambda out=b"": subprocess.CompletedProcess(argv, 0, out, b"")
         no = subprocess.CompletedProcess(argv, 1, b"", b"the TPM said no")
+        # what tpm2-tools prints for a wrong authorization (TPM_RC_BAD_AUTH, session 1), as on swtpm
+        bad_auth = subprocess.CompletedProcess(argv, 1, b"", b"ERROR: Esys_HierarchyChangeAuth(0x9A2) - tpm:session(1):"
+                                               b"authorization failure without DA implications")
         if self.broken:
             return no
+        if tool == "getcap" and index == "properties-variable":
+            return ok(("TPM2_PT_PERMANENT:\n  ownerAuthSet:              %d\n  endorsementAuthSet:        0\n  lockoutAuthSet:            %d\n"
+                       % (self.owner_auth is not None, self.lockout_set)).encode())
+        if tool == "changeauth" and argv[1:3] == ["-c", "o"]:   # [-p OLD] NEW, both through the channel
+            rest, old = argv[3:], None
+            if rest[:1] == ["-p"]:
+                old, rest = self._from_fd(rest[1], kw), rest[2:]
+                if old is None:
+                    return no
+            new = self._from_fd(rest[0], kw) if len(rest) == 1 else None
+            if new is None or not new.startswith(b"hex:") or len(new) != 68:
+                return no
+            if old != self._held():
+                return bad_auth
+            self.owner_auth = bytes.fromhex(new[4:].decode())
+            return ok()
+        if "-C" in argv and argv[argv.index("-C") + 1] == "o" and tool != "loadexternal" and not self._owner_ok(argv, kw):
+            return bad_auth                                  # the owner authorization not given, or not the one held
+        if tool == "getcap" and index == "handles-persistent":
+            return ok("".join("- %s\n" % h for h in sorted(self.persistent)).encode())
         if tool == "getcap":                                 # tpm2_getcap handles-nv-index: what the TPM says it holds
             return ok("".join("- %s\n" % name for name in sorted(self.nv)).encode()) if index == "handles-nv-index" else no
         if tool == "nvdefine":
@@ -526,7 +570,7 @@ class Sequence(Case):
         self.assertEqual(self.counter.value(), 1001)
 
     def test_a_node_back_from_a_month_away_catches_up(self):
-        """#199: an authority signing every 900 s has moved 2880 sequences in 30 days. The bound grows by one
+        """#199: nodes signing every 900 s have moved 2880 sequences in 30 days. The bound grows by one
         per MIN_INTERVAL_S since the last accepted heartbeat, so the node accepts, and the counter steps the
         whole distance (what it would have stepped had it stayed online)."""
         self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
@@ -778,7 +822,7 @@ class Sequence(Case):
 
     def test_a_planted_heartbeat_cannot_push_the_counter_forward(self):
         """check() finishes an interrupted accept, so what is on disk must pass every check before the
-        counter moves: otherwise a planted file strands the node above the authority's sequence."""
+        counter moves: otherwise a planted file strands the node above the network's sequence."""
         self.f.accept(beat(self.m1, 1), self.m1)
         with open(self.state) as f:
             state = json.load(f)

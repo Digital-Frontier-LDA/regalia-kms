@@ -11,7 +11,8 @@
 # (KERNEL-UPDATE.md, step 1.0).
 #
 # THE INPUTS, all pinned, all named in the build record it writes:
-#   the commit        this repository's HEAD, which must be clean (no change, no untracked file): the client's
+#   the commit        this repository's HEAD, which must be clean (no change, and no untracked file, not even one an
+#                     ignore rule hides, nor Python bytecode: repo_git_clean, #404): the client's
 #                     source, its units, the boot mesh script, the dracut module, and this script itself
 #   the Go toolchain  the exact release go.mod names (its toolchain line, else its go line), fetched and
 #                     checksum-verified by Go itself (GOTOOLCHAIN): `--go` (default: the `go` on PATH) only
@@ -41,12 +42,35 @@
 # Debian's signed chain by deploy/baremetal/debverify.py, #246), the record moved in last; a refusal leaves DIR empty.
 # Measured on two runners and a Debian 13 container, in two directories and in a hostile environment
 # (e2e/initrd-reproducible.sh): byte-identical.
+#
+# THE CHECKOUT is read with git as its owner, never as root on someone else's clone, and a clone whose own git
+# configuration could run a command is refused (deploy/baremetal/initrd/repo-git.sh, #382, #390).
+#
+# CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
+#   * NETWORK. A build needs snapshot.debian.org (the archive at --snapshot) and the Go module proxy and checksum
+#     database (the toolchain go.mod names). There is no offline build: the air-gapped ceremony laptop does not run
+#     this; the builders do, and the laptop signs what two of them agree on.
+#   * TRUST ROOTS it does not check further: Debian's archive keyring (pinned by hash), snapshot.debian.org serving
+#     the archive as it was, and Go's checksum database (sum.golang.org) for the toolchain.
+#   * MEASURED ONLY WHERE STATED: byte-identical on GitHub's runners and a Debian 13 container, for snapshot
+#     20261003T121500Z, on two days (#248). Not yet on the builders that will build the production image, nor on
+#     the DL360s' own hardware; another snapshot is another build, to be measured again.
+#   * THE BUILD RECORD IS UNSIGNED. Its provenance is checked at signing time against the signer's own clean clone
+#     at the record's commit (uki.py check_provenance, #266), and two builders' records must be identical; nothing
+#     authenticates who produced a record.
+#   * A ROOT READ OF A ROOT-OWNED CHECKOUT (top and .git both root's) is checked by repo_git_root_safe, but that
+#     path is exercised only with a stubbed filesystem (root-owned fixtures need sudo): CI's checkouts are the
+#     runner's, read as the runner.
+#   * CHECKED ONCE, USED LATER. "Clean at HEAD" is checked before the build; the checkout's owner (when not root) can
+#     still change a file between that check and its use (go build, the checkout's Python run as root). The files
+#     REPO_FILES names are hashed into the record, and the signer re-checks those against its own clone; every other
+#     file is not. Build from a clone no one else can write while the build runs.
 set -euo pipefail
 umask 022
 CALLER_GO="$(command -v go || true)"
 CALLER_GOPROXY="${GOPROXY:-}" CALLER_HTTPS_PROXY="${HTTPS_PROXY:-${https_proxy:-}}"
 export LC_ALL=C TZ=UTC PATH="/usr/sbin:/usr/bin:/sbin:/bin"
-REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd -P)"     # the real path: what is checked is what is read (#390)
 HERE="$REPO"          # the repository root: the module path deploy.baremetal is imported from
 cd "$REPO"
 SCRIPT="deploy/baremetal/initrd/build-initrd.sh"
@@ -85,17 +109,18 @@ python3 -I -c 'import cryptography' 2>/dev/null || die "python3-cryptography is 
 
 # the commit, clean: what this builder compiles and installs is exactly what the commit holds. The checkout is
 # read as its OWNER, never as root, and one whose own git configuration could run a command is refused first
-# (#382, repo-git.sh); git reads without taking the index lock, so nothing under .git becomes root's
+# (#382, repo-git.sh); git reads without taking the index lock, so nothing under .git becomes root's. The
+# checkout's Python runs below with -B: it never writes bytecode into the checkout (as root), so a second build
+# from the same clone is still clean
 # shellcheck source=deploy/baremetal/initrd/repo-git.sh
 . "$REPO/deploy/baremetal/initrd/repo-git.sh"
 repo_git_check || die "the checkout is refused (above)"
 echo "build-initrd: the checkout is read as uid $(repo_git_uid) (top $(stat -c %u "$REPO"), .git $(stat -c %u "$REPO/.git"))"
 COMMIT="$(repo_git rev-parse --verify HEAD)" || die "$REPO is not a git checkout"
-[ -z "$(repo_git status --porcelain --untracked-files=all)" ] \
-  || die "the checkout has changes or untracked files: build from a clean clone at the agreed commit"
+repo_git_clean || die "the checkout is not exactly commit $COMMIT (above)"
 # the root, as the client will read it (membership.LoadRoot): well-formed, and canonical as given. Checked only
 # NOW, with the checkout's own Python: as root, nothing of the working tree runs before it is the clean commit
-env -i PATH="$PATH" LC_ALL=C TZ=UTC PYTHONPATH="$HERE" python3 -Ps - "$ROOT_KEY" <<'PY' || die "--root-key $ROOT_KEY is not a membership root in canonical form"
+env -i PATH="$PATH" LC_ALL=C TZ=UTC PYTHONPATH="$HERE" python3 -BPs - "$ROOT_KEY" <<'PY' || die "--root-key $ROOT_KEY is not a membership root in canonical form"
 import sys
 from deploy.baremetal import membership
 raw = open(sys.argv[1], "rb").read(65537)
@@ -198,13 +223,13 @@ inroot dpkg-query -W -f '${Package}=${Version}\n' | sort > "$W/packages.txt"
 # class and reviewed under another.
 echo "### every package file of the initrd, against its .deb (#246)"
 INVENTORY=deploy/baremetal/initrd/initrd-inventory.txt
-python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/stage/initrd.img" --root "$ROOT" > "$W/inventory.txt" \
+python3 -BEs -m deploy.baremetal.uki initrd-inventory --initrd "$W/stage/initrd.img" --root "$ROOT" > "$W/inventory.txt" \
   || die "the initrd's inventory could not be written"
 if ! grep -v '^#' "$INVENTORY" | cmp -s - "$W/inventory.txt"; then
   diff <(grep -v '^#' "$INVENTORY") "$W/inventory.txt" | head -60 || true
   die "this initrd's inventory is not $INVENTORY (the lines above: < committed, > built)"
 fi
-python3 -Es -m deploy.baremetal.debverify --inventory "$INVENTORY" --keyring "$KEYRING" --cache "$W/debs" --out "$W/verified.json" \
+python3 -BEs -m deploy.baremetal.debverify --inventory "$INVENTORY" --keyring "$KEYRING" --cache "$W/debs" --out "$W/verified.json" \
   --source "$MAIN" "$SUITE" --source "$MAIN" "$SUITE-updates" --source "$SECURITY" "$SUITE-security" >"$W/debverify.log" 2>&1 \
   || { tail -40 "$W/debverify.log"; die "a package file of the initrd is not what its .deb holds"; }
 tail -1 "$W/debverify.log"

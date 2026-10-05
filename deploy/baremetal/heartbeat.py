@@ -3,8 +3,9 @@
 (#69, Phase 9 of #59; THREE-SITE-THREAT-MODEL.md design question 1).
 
 A newer manifest proves ordering, not that nothing restrictive happened since. A peer cut off from the
-revocation authority would go on helping a node that was revoked an hour ago. So the authority signs a
-short-lived statement that a manifest is still the current one, and a peer without a live one refuses.
+others would go on helping a node that was revoked an hour ago. So the nodes sign, by quorum (beat.py,
+#199), a short-lived statement that a manifest is still the current one, and a peer without a live one
+refuses. (Before v4 one revocation key signed it, the form below; #199 retired the authority host.)
 
     envelope  = {"heartbeat": {...}, "signature": {"key": "<hex revocation key, as the manifest names it>", "sig": "<hex signature>"}}
 
@@ -49,8 +50,8 @@ other order would leave the counter above the disk and the peer refusing until t
 authorize(manifest, peer, requester, freshness) is the whole decision: the peer is ACTIVE, the requester
 may be unlocked, and the peer's heartbeat is live.
 
-WHAT THE BOUND TRADES. It is how long a peer cut off from the revocation authority goes on authorizing a
-node that was revoked meanwhile, and equally how long the authority may be down before every peer stops.
+WHAT THE BOUND TRADES. It is how long a peer cut off from the others goes on authorizing a node that was
+revoked meanwhile, and equally how long the nodes may fail to co-sign before every peer stops.
 Once it has run out, each reboot needs the recovery key until a heartbeat arrives. A longer bound buys
 tolerance of a signer outage with a longer window for a stolen node at a partitioned peer.
 heartbeat_watch.py says how much is left, and warns while it runs out.
@@ -85,8 +86,7 @@ STEP_BACK = 5              # an authenticated clock may be corrected backwards b
 # its elapsed time counts toward the floor. To be confirmed on the DL360s' TPMs.
 TPM_CLOCK_RATE = 0.85
 MAX_BYTES = 16 * 1024
-# The shortest interval an authority may sign heartbeats at (authority.py enforces it, times the number of
-# authorities sharing the sequence). A node accepts a sequence jump of Counter.MAX_JUMP plus one per
+# The shortest interval heartbeats may be signed at (node.json's beat_interval_s is never below it, #199). A node accepts a sequence jump of Counter.MAX_JUMP plus one per
 # MIN_INTERVAL_S of issue time since the last heartbeat it accepted: a node back from a month's repair
 # catches up (the counter steps what it would have stepped online), while a sequence that runs faster
 # than real time is still an anomaly. Decided on #199.
@@ -273,16 +273,16 @@ class Counter(membership.HighWater):
                     "the counter %s is already defined (its base is written and locked): it is not redefined" % self.index)
         for index in (self.index, self.base_index):
             if int(index, 16) in defined:
-                require(self._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
+                require(self._owner("nvundefine", index).returncode == 0, "cannot delete NV index %s" % index)
         r = self._nvdefine(self.index, 8, "counter")
         require(r.returncode == 0, "cannot define the NV counter %s" % self.index)
-        require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
+        require(self._owner("nvincrement", self.index).returncode == 0, "cannot increment the NV counter")
         base = (self._read8(self.index) - sequence) % self.WRAP
         r = self._nvdefine(self.base_index, 8, "base")
         require(r.returncode == 0, "cannot define the base index %s" % self.base_index)
-        r = self._tpm("nvwrite", self.base_index, "-C", "o", "-i", "-", input=base.to_bytes(8, "big"))
+        r = self._owner("nvwrite", self.base_index, "-i", "-", input=base.to_bytes(8, "big"))
         require(r.returncode == 0, "cannot write the base index")
-        require(self._tpm("nvwritelock", self.base_index, "-C", "o").returncode == 0, "cannot write-lock the base index")
+        require(self._owner("nvwritelock", self.base_index).returncode == 0, "cannot write-lock the base index")
         value = self._epoch(self._base())
         require(value == sequence, "the counter reads %d after define_at(%d)" % (value, sequence))
         return value

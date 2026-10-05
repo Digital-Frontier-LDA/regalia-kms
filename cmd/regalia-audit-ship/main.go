@@ -1,4 +1,4 @@
-// Command regalia-audit-ship ships one of a node's (or the revocation authority's) audit trails to
+// Command regalia-audit-ship ships one of a node's audit trails to
 // the audit collector (#278): one audit event a trail line, on the stream "<site>.<trail>". The rules
 // are internal/audit/trail.go's; this is the loop around them.
 //
