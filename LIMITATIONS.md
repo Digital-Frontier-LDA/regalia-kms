@@ -35,7 +35,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   takes `regalia-fence`'s single key. By the rule, a new cluster's first activation waits about 11 minutes
   (`RECOVERY_WAIT_S`): every node starts with no grant record, so each is busy for that long after it
   starts. Expected at first bring-up, not a fault. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
-  the authority for which site signs ([`FENCING.md`](FENCING.md)).
+  the authority for which site signs ([`FENCING.md`](FENCING.md)). **Since 2026-10-05 (ADR-0002 D32)
+  every server serves.** The single-active rules in this entry (the grant record, the busy window, the 11-minute
+  first activation) are superseded and go with #432's rework. FENCING.md states the new contract.
   **Accepted in the design:**
   - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
   - Activation by the owner plus one node is a recovery step behind three conditions, and every renewal
