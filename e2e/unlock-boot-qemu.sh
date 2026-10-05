@@ -57,6 +57,10 @@
 #           The order reversed, the ESP at 1 under an anchor at 2: a ROLLBACK, the recovery key. The ESP is
 #           written here by the test, not by node.esp_advance (tests/test_baremetal_esp_advance.py), and the
 #           peers stay at epoch 1, so these boots show the render, not an unlock under epoch 2.
+#   boot 13 #75 TIER Q, Q2: NEXT UNDER A NEW EPOCH. The peers take epoch 2, which approves CURRENT and NEXT (boot 2k's
+#           other kernel); the guest's ESP and anchor hold it: NEXT boots unattended, rendered under epoch 2 (high-water
+#           2), its own initrd-phase PCR 11 on the console, the key given by a peer under epoch 2. Q3 (NEXT not
+#           approved) is boot 2k-unapproved.
 #
 # The guest is built here from Debian's own packages (mmdebstrap). REGALIA_BOOT_ROOTFS names a directory
 # to use instead: the one variable to change when the appliance image of #61 exists.

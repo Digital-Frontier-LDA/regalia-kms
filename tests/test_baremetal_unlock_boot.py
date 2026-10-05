@@ -763,6 +763,28 @@ class OnQemu(tub.OnSwtpm):
         no_shell(self, said)
         self.assertEqual([e for e in self.events[since:] if e.get("event") == "unlock"], [])
 
+        # boot 13, #75 TIER Q, Q2: NEXT BOOTS UNDER A NEW EPOCH, AND THE PEERS UNLOCK IT. The root's epoch 2 approves
+        # CURRENT and NEXT (the other kernel of boot 2k); the peers take it (their stores and a heartbeat for it); the
+        # guest's ESP holds it, its anchor already at 2 (boot 11). NEXT then boots unattended: the initrd renders under
+        # epoch 2 with the TPM high-water at 2, the client says NEXT's own initrd-phase PCR 11, and a peer under epoch 2
+        # gives the key. (Q3, NEXT not approved, is boot 2k-unapproved.)
+        for peer in ("b", "c"):
+            self.stores[peer].commit(two[1])
+            self.fresh[peer].accept(tub.hbt.beat(m2, 2, issued=self.now), m2)
+        self.assertTrue(all(self.stores[p].load()["epoch"] == 2 for p in ("b", "c")))
+        self.chain = two
+        self.reference = reference(expected["pcr12"], (("e2e", record), ("e2e-k2", other_kernel)))
+        since = len(self.events)
+        said = self.boot("13-next-under-epoch-2", credentials, image="e2e-k2")
+        print("boot 13: the peers' decisions: %s" % [(e.get("event"), e.get("peer"), e.get("outcome"), (e.get("reason") or "")[:160])
+                                                     for e in self.events[since:]], file=sys.stderr)
+        self.assertIn("regalia-unlock: rendered the boot configuration of a under manifest epoch 2 (TPM high-water 2)", said)
+        unattended(self, said)
+        self.assertEqual(initrd_pcr11(said), other_kernel["pcr11"]["initrd"])
+        allowed = [e for e in self.events[since:] if e.get("event") == "unlock" and e.get("outcome") == "ALLOW"]
+        self.assertTrue(allowed and all(e.get("epoch") == 2 for e in allowed), "no peer under epoch 2 gave the key: %s" % allowed)
+        no_shell(self, said)
+
     def anchor_guest(self, envelopes):
         """The guest's TPM anchor moved to the tip of `envelopes` while the guest is off (what regalia-esp-advance
         does on a running host, after the ESP holds the chain: node.esp_advance)."""
