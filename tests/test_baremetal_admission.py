@@ -135,7 +135,7 @@ class Recovery(Case):
         self.peer_up = False                                                   # no peer: no lease, ever, here
         document = service.step()
         self.assertEqual((document["mode"], document["serve_until_boottime_ms"]), ("recovery", self.ticks + (lease.MAX_LIFETIME - admission.MARGIN) * 1000))
-        self.assertEqual(document["requested_boottime_ms"], self.ticks)
+        self.assertEqual(document["requested_boottime_ms"], 0)        # no peer vouched: never satisfies #72's re-authorization
         self.assertTrue(document["reason"].startswith("RECOVERY: serving alone under the owner's survivor authorization"))
         self.assertEqual([(e["outcome"], e["reason"][:9]) for e in self.trail], [("ALLOW", "RECOVERY:")])
         self.assertEqual(self.samples["regalia_admission_recovery"], 1)
@@ -162,6 +162,25 @@ class Recovery(Case):
                 document = self.surviving([answer]).step()
                 self.assertEqual((document["serve_until_boottime_ms"], document["mode"]), (0, "lease"))
                 self.assertIn(said, document["reason"])
+
+    def test_a_lease_still_alive_inside_its_margin_is_not_replaced_by_recovery(self):
+        """ed on #494: recovery only with NO unexpired normal lease."""
+        service = self.surviving([3600])
+        self.assertEqual(service.step()["mode"], "lease")
+        self.peer_up = False
+        self.later(lease.MAX_LIFETIME - admission.MARGIN)                   # into the margin: the lease is alive, not served on
+        document = service.step()
+        self.assertEqual((document["serve_until_boottime_ms"], document["mode"], self.asked), (0, "lease", []))
+        self.later(admission.MARGIN)                                         # it has run out: now recovery may begin
+        self.assertEqual(service.step()["mode"], "recovery")
+
+    def test_a_node_the_manifest_does_not_let_serve_is_never_admitted_in_recovery(self):
+        for state in ("QUARANTINED", "REVOKED_STOLEN", "MAINTENANCE"):
+            with self.subTest(state):
+                self.manifest_now = self.manifest(2, m.digest(self.m1), a=state)
+                self.peer_up = False
+                document = self.surviving([3600]).step()
+                self.assertEqual((document["serve_until_boottime_ms"], self.asked), (0, []))
 
     def test_recovery_is_bounded_by_the_authorization_s_own_end(self):
         self.peer_up = False
