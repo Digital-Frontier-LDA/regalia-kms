@@ -845,7 +845,9 @@ class Sync:
         co-signs nothing until EVERY other node its current manifest lets authorize, the survivor of a recovery included,
         has answered a pull at or past that epoch, and RECOVERY_WAIT_S after that, on its authenticated clock: a survivor
         still self-renewing under the epoch before holds it back instead of overlapping it. Progress is kept in
-        READMISSION (the epoch, when all were seen, cleared), so a restart neither forgets the wait nor redoes a cleared one."""
+        READMISSION (the epoch, when all were seen, cleared), so a restart neither forgets the wait nor redoes a cleared one.
+        A survivor that does not count in the restoring epoch (it may never answer) is waited out until that epoch's
+        recovery_ends_by, judged on THIS node's authenticated clock (ed), then the usual wait."""
         self.store.load()
         epoch = activation.readmission_epoch(self.store.manifests, self.node.node_id)
         if epoch is None:
@@ -861,19 +863,28 @@ class Sync:
         if state.get("cleared") is True:
             return True
         manifest = self.manifest()
-        others = [n["node_id"] for n in manifest["nodes"] if n["node_id"] != self.node.node_id and membership.may(manifest, n["node_id"], "authorize")]
-        if not all(self.peer_epochs.get(o, 0) >= epoch for o in others):
-            return False
+        restoring = next(mm for mm in self.store.manifests if mm["epoch"] == epoch)
+        others = {n["node_id"] for n in manifest["nodes"] if n["node_id"] != self.node.node_id and membership.may(manifest, n["node_id"], "authorize")}
+        survivors = activation.recovery_survivors(self.store.manifests, epoch) - {self.node.node_id}
+        # the survivor of the recovery is waited for whatever its state now (d9); one that may never answer (it does not
+        # count in the restoring epoch) is waited out instead: until recovery_ends_by, the owner's last authorization's end
+        unheard = {s for s in survivors if self.peer_epochs.get(s, 0) < epoch}
+        silent = {s for s in unheard if s not in membership.activation_counting(restoring)}
         seconds, authenticated = self.node.clock()()
         if authenticated is not True:
+            return False
+        if silent:
+            ends = restoring.get("recovery_ends_by")
+            if ends is None or int(seconds) < ends:
+                return False
+            unheard -= silent                            # waited out: from here the usual wait runs from now
+        if unheard or not all(self.peer_epochs.get(o, 0) >= epoch for o in others):
             return False
         if state.get("seen_all_at") is None:
             state["seen_all_at"] = int(seconds)
         state["cleared"] = int(seconds) >= state["seen_all_at"] + activation.RECOVERY_WAIT_S
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(state, f)
-        os.replace(tmp, path)
+        # written whole and fsynced; losing it only makes this node wait again, never shorter (d9)
+        activation.write_json(path, state, mode=0o600)
         return state["cleared"]
 
     def activation_round(self):

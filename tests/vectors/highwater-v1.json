@@ -2253,13 +2253,13 @@
      },
      "0x150001a": {
       "attributes": 537264130,
-      "data": "0000000000000003b395d73bb93981f6aba405a4d82587244b0a71e7909650da0d7f632ecb3e36713822fdf28f467517",
+      "data": "0000000000000003983cb4247205c8f09847fd54a7b7ff9184b636db0d96812653e800eaf94561fa8ead497fd1cf0bb8",
       "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
-      "data": "000000000000000210ef65ed3000d312e5a1c97100d779bdff9d9112ce9618023b1ef950bcfac5201056d917ef06696b",
+      "data": "000000000000000203ce5418738f718e16fd3bddb138247c2c4c65605291cae2120cdd362db93c0d1ed3805ab865554b",
       "policy": null,
       "size": 48
      }
@@ -2292,13 +2292,13 @@
      },
      "0x150001a": {
       "attributes": 537264138,
-      "data": "0000000000000003b395d73bb93981f6aba405a4d82587244b0a71e7909650da0d7f632ecb3e36713822fdf28f467517",
+      "data": "0000000000000003983cb4247205c8f09847fd54a7b7ff9184b636db0d96812653e800eaf94561fa8ead497fd1cf0bb8",
       "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264138,
-      "data": "000000000000000210ef65ed3000d312e5a1c97100d779bdff9d9112ce9618023b1ef950bcfac5201056d917ef06696b",
+      "data": "000000000000000203ce5418738f718e16fd3bddb138247c2c4c65605291cae2120cdd362db93c0d1ed3805ab865554b",
       "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
       "size": 48
      }
@@ -2329,13 +2329,13 @@
      },
      "0x150001a": {
       "attributes": 537264130,
-      "data": "0000000000000003b395d73bb93981f6aba405a4d82587244b0a71e7909650da0d7f632ecb3e36713822fdf28f467517",
+      "data": "0000000000000003983cb4247205c8f09847fd54a7b7ff9184b636db0d96812653e800eaf94561fa8ead497fd1cf0bb8",
       "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
-      "data": "000000000000000210ef65ed3000d312e5a1c97100d779bdff9d9112ce9618023b1ef950bcfac5201056d917ef06696b",
+      "data": "000000000000000203ce5418738f718e16fd3bddb138247c2c4c65605291cae2120cdd362db93c0d1ed3805ab865554b",
       "policy": null,
       "size": 48
      }
@@ -2368,13 +2368,13 @@
      },
      "0x150001a": {
       "attributes": 537264138,
-      "data": "0000000000000003b395d73bb93981f6aba405a4d82587244b0a71e7909650da0d7f632ecb3e36713822fdf28f467517",
+      "data": "0000000000000003983cb4247205c8f09847fd54a7b7ff9184b636db0d96812653e800eaf94561fa8ead497fd1cf0bb8",
       "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264138,
-      "data": "000000000000000210ef65ed3000d312e5a1c97100d779bdff9d9112ce9618023b1ef950bcfac5201056d917ef06696b",
+      "data": "000000000000000203ce5418738f718e16fd3bddb138247c2c4c65605291cae2120cdd362db93c0d1ed3805ab865554b",
       "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
       "size": 48
      }
@@ -3310,6 +3310,7 @@
      "policy_version": "p1",
      "prev_digest": "",
      "recovery_authorization_max_s": 604800,
+     "recovery_ends_by": null,
      "revocation_signers": [
       {
        "parties": [
@@ -3328,7 +3329,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "22d6f15e810c09eba5d648dbd3710871796df938a02530c6dc94f73c820238b8695bd69806aeb5250a04df900fab74664a9a46b89374ad2921ada75d0b8f110a"
+    "sig": "875520669b57d0693a4c329e0706462283505ea6d76e660def50d178248c28dfbea509ac83f425f79d11233b318bd4b1e530407b014077399eff417dbaffaf0b"
    },
    {
     "manifest": {
@@ -3418,8 +3419,9 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "155fbb3e3068d274f765e71e59e52432c002715de727b8dce495ef67470a029d",
+     "prev_digest": "3c0a70dc75f8e28fd343de8d48ef9e91f773072329259aa00ee3b35f0d3b650a",
      "recovery_authorization_max_s": 604800,
+     "recovery_ends_by": null,
      "revocation_signers": [
       {
        "parties": [
@@ -3438,7 +3440,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "620e7c8501a16ff00e4bd747998742f684eef01565bcc34e1ec154a56323e0441722d8a8d40a044c293f658ad8a0eff3199cbe830f9df1a0a26df7bd67d0b801"
+    "sig": "7663a74069a7076e77b9023507e10d2dc3aea911be19e0585d5df0ce093b914c84c41a0b355b7ec56e27ede7d73298af5cf616f240b9c974010bf5c4f217c70a"
    },
    {
     "manifest": {
@@ -3528,8 +3530,9 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "10ef65ed3000d312e5a1c97100d779bdff9d9112ce9618023b1ef950bcfac520",
+     "prev_digest": "03ce5418738f718e16fd3bddb138247c2c4c65605291cae2120cdd362db93c0d",
      "recovery_authorization_max_s": 604800,
+     "recovery_ends_by": null,
      "revocation_signers": [
       {
        "parties": [
@@ -3548,7 +3551,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "2572414150099b3f59f53d25530b1683c40faadd805d8fdf9818d29913bc10abeaccb583a06863b0b7499fc5ab31bddd103bf1093893c0176f29009b9cc1d309"
+    "sig": "79845eb6a952e4fc41c49e38a469804efbdec34ad6bd7bd710322b38b245890fd906ccacb50bf8c12b4274fd288e1df81d2ee037f40cf2d08cba1bec5b83ad00"
    },
    {
     "manifest": {
@@ -3638,8 +3641,9 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "b395d73bb93981f6aba405a4d82587244b0a71e7909650da0d7f632ecb3e3671",
+     "prev_digest": "983cb4247205c8f09847fd54a7b7ff9184b636db0d96812653e800eaf94561fa",
      "recovery_authorization_max_s": 604800,
+     "recovery_ends_by": null,
      "revocation_signers": [
       {
        "parties": [
@@ -3658,7 +3662,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "13d7d41853938e83c376bd303b6cb78c59e85a5b8b233256c2d91ec45b3fb2e031c45d1519310e629ffd73e120e60d8b28ad2babb790636c26f33925986e9506"
+    "sig": "ceb1444ffdaa30f6a9f25bbb2604dfb4d703eef163d29d428070782c70f3f0a1e353bf6c0d598f7854ed341a13dbacd5d1684fa21bf5dc2255e2a4a8c857b205"
    },
    {
     "manifest": {
@@ -3748,8 +3752,9 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "99c5aad50e56dd294bbc1fe14b26f99f52b91578e2f53385c34228fbcd5dcc80",
+     "prev_digest": "1b7a5a8006f8fc09570ca6c4ecd4d801491b538aa5007c730a9db3510875dbe1",
      "recovery_authorization_max_s": 604800,
+     "recovery_ends_by": null,
      "revocation_signers": [
       {
        "parties": [
@@ -3768,7 +3773,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "07884a62c0e80eb620e357ee88ccf5c029550cd71c3adc9e11c5faccac3a670148837048b09afb608b6d234ad9394a4c463be014b38eaeadc04360ac8001d007"
+    "sig": "a83ae5bd327014d3369bc6ba3d39240395cbe6cdade0318e0d9f1908aa1d7891bb5069fe5969f50234d4498f5d754f909241fa3dba47746c4cf59817293c3404"
    },
    {
     "manifest": {
@@ -3858,8 +3863,9 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "ce61d720b5c060e252b295ae54d77aba7bc32f6294173366fbe654cc52373426",
+     "prev_digest": "b5de1aaca58cf870cee25ac2b80c6fcac984843f6511c66724b1675efad289d7",
      "recovery_authorization_max_s": 604800,
+     "recovery_ends_by": null,
      "revocation_signers": [
       {
        "parties": [
@@ -3878,7 +3884,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "f97f80684a643dad10ab35b1fc9aef961f40b8410b811c2e82864a63b20a79dc4e8fe97f156f889b03dae9004300bc13bbdff5275a7cc79772ff91f881e7ee07"
+    "sig": "e22da0cb5918ac01c6efb6b64ced319561ac70aa9767fbe6fc9f225ac9469a1aa1cda83a254d9c12e0a673203c44592fc05c99bbdc8b2309e7c5d09115639707"
    }
   ]
  },

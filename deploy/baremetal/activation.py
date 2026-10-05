@@ -296,6 +296,23 @@ class Signer:
             return {"party": self.node_id, "key": self.key, "sig": self._sign(message(lease))}
 
 
+def write_json(path, value, mode=0o644):
+    """Replaced atomically (a temporary file, fsynced, renamed, the directory fsynced): readers see whole files only."""
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
+    with os.fdopen(fd, "w") as f:
+        json.dump(value, f, sort_keys=True)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+    dirfd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+    try:
+        os.fsync(dirfd)
+    finally:
+        os.close(dirfd)
+
+
 # ---- leaving recovery (#432 amendment 5, rule 6; d9) ----
 
 def counts(manifest, node_id):
@@ -303,6 +320,21 @@ def counts(manifest, node_id):
     nodes = membership.validate(manifest)
     return (node_id in manifest.get("activation_signers", {}).get("parties", ()) and node_id in nodes
             and nodes[node_id]["state"] not in membership.NOT_COUNTING)
+
+
+def recovery_survivors(manifests, epoch):
+    """The survivors of the recovery that may have run before `epoch` (#432 amendment 5, d9): walking back from the epoch
+    before through every epoch BELOW the activation threshold (membership.below_quorum), each node party that counted
+    ALONE in one of them. A node coming back at `epoch` must see each at or past it, whatever its state in `epoch`: a
+    survivor still on an old epoch may still be self-renewing (N alone, N+1 nobody, N+2 back still waits for N's)."""
+    by_epoch = {mm["epoch"]: mm for mm in manifests}
+    out, e = set(), epoch - 1
+    while e in by_epoch and by_epoch[e].get("schema") == membership.SCHEMA_V4 and membership.below_quorum(by_epoch[e]):
+        alone = membership.activation_counting(by_epoch[e])
+        if len(alone) == 1:
+            out |= alone
+        e -= 1
+    return out
 
 
 def readmission_epoch(manifests, node_id):
@@ -455,6 +487,24 @@ def owner_recovery_authorization(tip, survivor, site, registry_digest, survivor_
     require(signer.public() in owners, "the token's key is not one of the tip manifest's owner_keys: nothing is signed")
     return {"authorization": auth, "signature": {"party": membership.OWNER, "key": signer.public(),
                                                  "sig": signer.sign(authorization_message(auth)).hex()}}
+
+
+AUTHORIZATIONS = "activation-authorizations.jsonl"   # the owner's record (manifest.py's AUTHORIZATIONS, the same file)
+
+
+def issuable(record_lines, quarantine_epoch):
+    """Refused when the owner's record shows `quarantine_epoch` CLOSED (an epoch after it already stated recovery_ends_by,
+    manifest.py): an authorization issued for it now could outlive the time that epoch promised (d9)."""
+    closed = [line["through_epoch"] for line in record_lines if line.get("event") == "closed"]
+    require(not closed or quarantine_epoch > max(closed), "the record shows recovery epochs up to %d closed (recovery_ends_by "
+            "stated): no authorization is issued for epoch %d" % (max(closed) if closed else 0, quarantine_epoch))
+
+
+def issued_line(signed):
+    """The record line of an authorization the owner's tool issued (manifest.py's recovery_ends_by reads it)."""
+    auth = signed["authorization"]
+    return {"event": "issued", "quarantine_epoch": auth["quarantine_epoch"], "node_id": auth["node_id"], "site": auth["site"],
+            "expires_at": heartbeat.parse_time(auth["expires_at"], "expires_at")}
 
 
 def install_authorization(manifest, me, signed, clock, record):
