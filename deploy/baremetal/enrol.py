@@ -70,7 +70,7 @@ import sys
 import tempfile
 import time
 
-from deploy.baremetal import attest, espcreds, measurements, membership, ownerauth, signkey
+from deploy.baremetal import anchorpolicy, attest, espcreds, measurements, membership, ownerauth, signkey
 
 SCHEMA_JOURNAL = "regalia.enrol-journal/v1"
 SCHEMA_BUNDLE = "regalia.enrol-bundle/v1"
@@ -424,7 +424,8 @@ ENTRY_KEYS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", 
 CHALLENGE_SCHEMA = "regalia.enrol-challenge/v1"
 # #399: the node's identity as its AK quotes it at `activate`, and what activate gives back
 IDENTITY_SCHEMA = "regalia.enrol-identity/v1"
-IDENTITY_FIELDS = ("node_id", "ek_name", "ak_name", "signing_key", "wg_service_pub", "wg_boot_pub", "hsm_serials", "ssh_host_pub")
+# #361 C1: the rotation counter R ({index, name, value}) is quoted too: its Name binds it to K_A, its value is this node's G start
+IDENTITY_FIELDS = ("node_id", "ek_name", "ak_name", "signing_key", "wg_service_pub", "wg_boot_pub", "hsm_serials", "ssh_host_pub", "rotation")
 IDENTITY_PCRS = (7, 11)                 # the Secure Boot state and the image, as booted when the node was enrolled
 ACTIVATION_SCHEMA = "regalia.enrol-activation/v1"
 ACTIVATION_FIELDS = ("schema", "node_id", "answer", "pcr_values", "quote", "signature")
@@ -520,6 +521,33 @@ def entry(bundle, system_pub, keep, activation, run=subprocess.run):
     return proven_entry(bundle, system_pub, keep, activation, run)[0]
 
 
+def rotation_shape(bundle):
+    """The bundle's rotation counter, by form: exactly {index, name, value}, at anchorpolicy.ROTATION_INDEX, a 68-hex Name
+    and a value from 1 (it has had its first increment). Its Name is judged against K_A at the genesis (rotation_of)."""
+    r = bundle.get("rotation")
+    require(isinstance(r, dict), "the bundle has no rotation counter: it was made before #361 C1")
+    membership.exact(r, ("index", "name", "value"), "the bundle's rotation")
+    require(r["index"] == anchorpolicy.ROTATION_INDEX, "the bundle's rotation counter is at %s, not %s" % (r["index"], anchorpolicy.ROTATION_INDEX))
+    require(isinstance(r["name"], str) and re.fullmatch(r"000b[0-9a-f]{64}", r["name"]) is not None, "the bundle's rotation Name is not a SHA-256 Name")
+    require(type(r["value"]) is int and 1 <= r["value"] < 2 ** 64, "the bundle's rotation value is not a count from 1")
+    return r
+
+
+def rotation_of(bundle, k_a_point):
+    """The genesis's judgement of a node's rotation counter (regalia-kms-95): its AK-quoted Name must be the one a counter at
+    its index has under PolicyAuthorize(Name(K_A), rotation/<node_id>) once written, K_A the genesis manifest's anchor_policy_key.
+    A node whose R was made under another K_A (a rehearsal's file) is refused here. Returns {index, name, value}: the value
+    is the G start K_A's approvals for this node are made against."""
+    r = rotation_shape(bundle)
+    node_id = bundle.get("node_id")
+    require(isinstance(node_id, str) and NODE_ID.fullmatch(node_id) is not None, "the bundle names no node ID: its rotation counter cannot "
+            "be judged")
+    want = anchorpolicy.rotation_name(int(r["index"], 16), k_a_point, node_id).hex()
+    require(r["name"] == want, "%s's rotation counter is not under this genesis's K_A: its quoted Name is %s, not %s (it was enrolled "
+            "with another anchor-policy file)" % (bundle.get("node_id"), r["name"], want))
+    return dict(r)
+
+
 def proven_entry(bundle, system_pub, keep, activation, run=subprocess.run):
     """entry(), and the PCR 7 and 11 values the node's AK quoted when it was activated ({"7": hex, "11": hex}), for the
     genesis to judge against the measurements (manifest propose --genesis, #399)."""
@@ -533,6 +561,7 @@ def proven_entry(bundle, system_pub, keep, activation, run=subprocess.run):
             and len(set(serials)) == len(serials), "the bundle has no hsm_serials, or a malformed list: it was made before #363")
     require(isinstance(bundle.get("ssh_host_pub"), str) and re.fullmatch(r"[0-9a-f]{64}", bundle["ssh_host_pub"]) is not None,
             "the bundle has no ssh_host_pub (64 hex): it was made before #371")
+    rotation_shape(bundle)
     require(isinstance(keep, dict) and keep.get("schema") == CHALLENGE_SCHEMA, "the kept challenge is not one `enrol challenge` wrote")
     require((keep.get("node_id"), keep.get("ek_name"), keep.get("ak_name")) == (bundle["node_id"], bundle["ek_name"], bundle["ak_name"]),
             "the kept challenge was made for another bundle")
@@ -762,14 +791,43 @@ def _safe_directory(directory):
 OPENSC_MODULE = "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so"
 
 
+def rotation(journal, anchor_policy, node_id, run):
+    """#361 C1: the rotation counter R, defined under PolicyAuthorize(Name(K_A), rotation/<node_id>) and first incremented with
+    K_A's approval (anchorpolicy.start_rotation), before the anchor, the counters and `enrol ownerauth`. The TPM's owner
+    authorization must still be empty (ownerauth.posture): after `enrol ownerauth` this step is refused, not attempted.
+    Recorded in the journal; a re-run requires the TPM to hold the same R, at the same value."""
+    _, point, approval = anchorpolicy.read_first(anchor_policy, node_id)
+    if journal.state("rotation") == "done":
+        facts = journal.get("rotation")
+        now = anchorpolicy.nv_name_of(facts["index"], run)
+        require(now == facts["name"] and anchorpolicy.read_rotation(facts["index"], run) == facts["value"],
+                "the rotation counter this enrolment made (%s, value %d) is not as recorded: it was redefined or advanced since"
+                % (facts["index"], facts["value"]))
+        require(facts["name"] == anchorpolicy.rotation_name(int(facts["index"], 16), point, node_id).hex(),
+                "the rotation counter this enrolment made is under another K_A than the anchor-policy file names")
+        return {k: facts[k] for k in ("index", "name", "value")}
+    if anchorpolicy.nv_name_of(anchorpolicy.ROTATION_INDEX, run) is None:
+        held = ownerauth.posture(run=run)
+        require(not held["owner"], "the TPM's owner authorization is already set (enrol ownerauth ran): the rotation counter is "
+                "defined by `enrol init` before it. Start the enrolment again on a cleared TPM, in order: init, then ownerauth")
+    journal.started("rotation")
+    facts = anchorpolicy.start_rotation(anchorpolicy.ROTATION_INDEX, point, approval, node_id, run)
+    journal.done("rotation", **facts)
+    return facts
+
+
 def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout, module=OPENSC_MODULE,
-         ssh_host_key=SSH_HOST_KEY):
-    """`system_pub`: the system-phase PCR public key (PEM bytes) the signing key's policy names."""
+         ssh_host_key=SSH_HOST_KEY, anchor_policy=None):
+    """`system_pub`: the system-phase PCR public key (PEM bytes) the signing key's policy names. `anchor_policy`: the
+    ceremony's anchor-policy file (anchorpolicy.FIRST_SCHEMA: K_A and its approval of the rotation counter's first
+    increment, #361 C1), as a parsed document."""
     require(NODE_ID.fullmatch(node_id or ""), "a node ID is a lower-case name, such as a")
     signkey.pcr_key_name(system_pub)                 # an RSA-2048 PEM, before anything is made
+    anchorpolicy.read_first(anchor_policy, node_id)  # K_A's approval, for THIS node, checked before anything is made
     _safe_directory(directory)
     journal = Journal(directory, node_id)
     ids = identity(journal, directory, run)
+    rotated = rotation(journal, anchor_policy, node_id, run)  # before the anchor, the counters and ownerauth (regalia-kms-95)
     cert = ek_certificate(journal, directory, run)
     signing = signing_key(journal, directory, system_pub, ids, run)     # after the EK checks: nothing more is made on a refusal
     hsm_serials = tokens(journal, module, run)
@@ -783,7 +841,7 @@ def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY
               "wg_service_pub": service, "wg_boot_pub": boot,
               "signing_public": signing["signing_public"], "signing_certify": signing["signing_certify"],
               "signing_sig": signing["signing_sig"], "signing_key": signing["signing_key"],
-              "hsm_serials": hsm_serials, "ssh_host_pub": ssh_key, "tpm_firmware_version": firmware_version(run)}
+              "hsm_serials": hsm_serials, "ssh_host_pub": ssh_key, "tpm_firmware_version": firmware_version(run), "rotation": rotated}
     _atomic_json(os.path.join(directory, "bundle.json"), bundle)
     os.chmod(os.path.join(directory, "bundle.json"), 0o644)
     print("ENROL INIT: node %s, identity bundle %s (public values only; take it to the manifest ceremony)"
@@ -2038,6 +2096,8 @@ def main(argv=None):
     p.add_argument("--pkcs11-module", default=OPENSC_MODULE, help="the PKCS#11 module that reads the SmartCard-HSM's serial")
     p.add_argument("--system-pub", required=True, help="the system-phase PCR key's public half (PEM): the signing key is usable "
                    "only under PCR 11 policies it signed")
+    p.add_argument("--anchor-policy", required=True, help="the ceremony's anchor-policy file (%s): K_A and its approval of the "
+                   "rotation counter's first increment (#361); checked at the genesis against the manifest's K_A" % anchorpolicy.FIRST_SCHEMA)
     o = sub.add_parser("ownerauth", help="set this TPM's owner authorization from the node's envelope, on standard input (#242)")
     o.add_argument("--node-id", required=True)
     o.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex: the record is verified under it")
@@ -2269,7 +2329,10 @@ def main(argv=None):
         return 2
     try:
         with open(args.system_pub, "rb") as f:
-            init(args.node_id, f.read(65536), args.enrol_dir, args.wg_service_key, module=args.pkcs11_module)
+            system_pub = f.read(65536)
+        with open(args.anchor_policy, "rb") as f:
+            first = json.loads(f.read(65536))
+        init(args.node_id, system_pub, args.enrol_dir, args.wg_service_key, module=args.pkcs11_module, anchor_policy=first)
     except (Refused, attest.Refused, OSError, ValueError) as error:       # json.JSONDecodeError is a ValueError
         print("REFUSED: %s" % error, file=sys.stderr)
         return 1

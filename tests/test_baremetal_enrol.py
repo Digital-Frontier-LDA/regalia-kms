@@ -20,7 +20,7 @@ import unittest.mock
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from deploy.baremetal import attest, enrol, membership, signkey
+from deploy.baremetal import anchorpolicy, attest, enrol, membership, signkey
 
 
 def _rsa_pem():
@@ -30,6 +30,24 @@ def _rsa_pem():
 
 SYSTEM_PUB, OTHER_PUB = _rsa_pem(), _rsa_pem()          # the system-phase PCR key the signing key is made for, and another
 TOKENS = ["DENK0500001", "35718625"]                    # a SmartCard-HSM's PKCS#11 serial and a YubiKey's
+
+
+def first_file(scalar=0x361C1, node_id="a"):
+    """The ceremony's anchor-policy file (#361 C1) for `node_id` and a TEST K_A of a fixed scalar: K_A's typed entry and its
+    signature over that node's rotation counter's first-increment approval. Returns (the document, K_A's point hex)."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    key = ec.derive_private_key(scalar, ec.SECP256R1())
+    point = key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()
+    r, s_ = decode_dss_signature(key.sign(anchorpolicy.authorize_message(anchorpolicy.increment_first(), anchorpolicy.rotation_class(node_id)),
+                                          ec.ECDSA(hashes.SHA256())))
+    s_ = min(s_, membership.P256_ORDER - s_)
+    return ({"schema": anchorpolicy.FIRST_SCHEMA, "node_id": node_id, "anchor_policy_key": {"alg": "ecdsa-p256", "key": point},
+             "increment_first": "%064x%064x" % (r, s_)}, point)
+
+
+FIRST, K_A_POINT = first_file()
 
 
 class Crash(BaseException):
@@ -77,7 +95,8 @@ class InitOnSwtpm(unittest.TestCase):
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", self.ssh], check=True)
 
     def init(self, run=subprocess.run, node_id="a", system_pub=None):
-        return enrol.init(node_id, system_pub or SYSTEM_PUB, self.dir, self.wg, run=run, out=io.StringIO(), ssh_host_key=self.ssh + ".pub")
+        return enrol.init(node_id, system_pub or SYSTEM_PUB, self.dir, self.wg, run=run, out=io.StringIO(), ssh_host_key=self.ssh + ".pub",
+                          anchor_policy=first_file(node_id=node_id)[0])
 
     def test_init_makes_the_keys_on_the_host_and_names_them_in_the_bundle(self):
         bundle = self.init()
@@ -233,6 +252,82 @@ class InitOnSwtpm(unittest.TestCase):
             with self.subTest(reason=reason), self.assertRaisesRegex((attest.Refused, enrol.Refused), reason):
                 enrol.entry(bundle, SYSTEM_PUB, keep, forged)
 
+    def test_the_rotation_counter_is_made_quoted_and_judged_against_the_genesis_k_a(self):
+        """#361 C1: init defines R under PolicyAuthorize(Name(K_A), "rotation") and makes its first increment; the bundle names
+        it, the AK quotes it with the identity, and the genesis takes it only under the genesis manifest's K_A."""
+        bundle = self.init()
+        r = bundle["rotation"]
+        self.assertEqual((r["index"], r["name"]), (anchorpolicy.ROTATION_INDEX, anchorpolicy.rotation_name(int(r["index"], 16), K_A_POINT, node_id="a").hex()))
+        self.assertEqual((anchorpolicy.nv_name_of(r["index"]), anchorpolicy.read_rotation(r["index"])), (r["name"], r["value"]))
+        self.assertGreaterEqual(r["value"], 1)
+        keep, activation = self.proven(bundle)
+        enrol.proven_entry(bundle, SYSTEM_PUB, keep, activation)
+        self.assertEqual(enrol.rotation_of(bundle, K_A_POINT), r)
+        # quoted: a value or Name changed on the way is refused by the quote, as every identity field is
+        for changed in (dict(r, value=r["value"] + 1), dict(r, name="000b" + "77" * 32)):
+            with self.subTest(changed=changed), self.assertRaisesRegex(attest.Refused, "the quote does not sign this identity under this challenge"):
+                enrol.entry(dict(bundle, rotation=changed), SYSTEM_PUB, keep, activation)
+        # the genesis's K_A, not the file's: an R made under a rehearsal's K_A is refused by name
+        _, other = first_file(0x0BAD)
+        with self.assertRaisesRegex(enrol.Refused, "a's rotation counter is not under this genesis's K_A"):
+            enrol.rotation_of(bundle, other)
+        with self.assertRaisesRegex(enrol.Refused, "it was made before #361 C1"):
+            enrol.entry({k: v for k, v in bundle.items() if k != "rotation"}, SYSTEM_PUB, keep, activation)
+        # the same command again: the same R, nothing new
+        self.assertEqual(self.init()["rotation"], r)
+
+    def test_the_rotation_counter_s_refusals(self):
+        """regalia-kms-95's cases: a wrong K_A approval leaves no R behind; anything else at R's index is refused and left;
+        an R advanced or redefined after init is not taken as the recorded one."""
+        bad, _ = first_file(0x0BAD)
+        wrong = dict(FIRST, increment_first=bad["increment_first"])               # another key's signature, this K_A's entry
+        with self.assertRaisesRegex(membership.Refused, "increment_first does not verify under the K_A it names"):
+            enrol.init("a", SYSTEM_PUB, self.dir, self.wg, out=io.StringIO(), ssh_host_key=self.ssh + ".pub", anchor_policy=wrong)
+        self.assertIsNone(anchorpolicy.nv_name_of(anchorpolicy.ROTATION_INDEX), "a refused file left an index behind")
+        self.assertNotIn(attest.AK_HANDLE.lower(), enrol.persistent_handles(subprocess.run), "a refused file let init make its keys")
+        # a counter that is not this enrolment's R at its index: refused, left as it is
+        subprocess.run(["tpm2_nvdefine", anchorpolicy.ROTATION_INDEX, "-C", "o", "-s", "8", "-a", "nt=counter|ownerwrite|ownerread|authread"],
+                       check=True, capture_output=True)
+        foreign = anchorpolicy.nv_name_of(anchorpolicy.ROTATION_INDEX)
+        with self.assertRaisesRegex(membership.Refused, "holds an index that is not this enrolment's rotation counter"):
+            self.init()
+        self.assertEqual(anchorpolicy.nv_name_of(anchorpolicy.ROTATION_INDEX), foreign)
+        subprocess.run(["tpm2_nvundefine", anchorpolicy.ROTATION_INDEX, "-C", "o"], check=True, capture_output=True)
+        # made, then redefined behind its back (it starts above: another value): not the recorded one
+        bundle = self.init()
+        subprocess.run(["tpm2_nvundefine", anchorpolicy.ROTATION_INDEX, "-C", "o"], check=True, capture_output=True)
+        anchorpolicy.start_rotation(anchorpolicy.ROTATION_INDEX, K_A_POINT, anchorpolicy.read_first(FIRST)[2], "a")
+        self.assertNotEqual(anchorpolicy.read_rotation(anchorpolicy.ROTATION_INDEX), bundle["rotation"]["value"])
+        with self.assertRaisesRegex(enrol.Refused, "is not as recorded: it was redefined or advanced since"):
+            self.init()
+
+    def test_another_node_s_approval_is_refused_by_the_tpm(self):
+        """d9 on #361: node b's approval of its first increment, presented for node a's R, is refused by the TPM itself
+        (verifysignature over a's policyRef), before anything is defined."""
+        theirs, _ = first_file(node_id="b")
+        der = anchorpolicy.read_first(theirs)[2]
+        with self.assertRaisesRegex(membership.Refused, "the TPM's check of K_A's approval of the rotation counter's first increment failed"):
+            anchorpolicy.start_rotation(anchorpolicy.ROTATION_INDEX, K_A_POINT, der, "a")
+        self.assertIsNone(anchorpolicy.nv_name_of(anchorpolicy.ROTATION_INDEX))
+        a = anchorpolicy.start_rotation(anchorpolicy.ROTATION_INDEX, K_A_POINT, anchorpolicy.read_first(FIRST)[2], "a")
+        self.assertEqual(a["name"], anchorpolicy.rotation_name(int(anchorpolicy.ROTATION_INDEX, 16), K_A_POINT, node_id="a").hex())
+        self.assertNotEqual(a["name"], anchorpolicy.rotation_name(int(anchorpolicy.ROTATION_INDEX, 16), K_A_POINT, node_id="b").hex())
+
+    def test_the_rotation_counter_is_made_before_the_owner_authorization_is_set(self):
+        """95: R is defined with the owner's EMPTY authorization, before `enrol ownerauth`; once it is set, init says how to go on."""
+        self.init()                                     # the identity made (it too needs the owner's empty value), then R lost
+        subprocess.run(["tpm2_nvundefine", anchorpolicy.ROTATION_INDEX, "-C", "o"], check=True, capture_output=True)
+        with open(self.dir + "/journal.json") as f:
+            journal = json.load(f)
+        del journal["steps"]["rotation"]
+        with open(self.dir + "/journal.json", "w") as f:
+            json.dump(journal, f)
+        subprocess.run(["tpm2_changeauth", "-c", "o", "owner-test-value"], check=True, capture_output=True)
+        self.addCleanup(subprocess.run, ["tpm2_changeauth", "-c", "o", "-p", "owner-test-value"], capture_output=True)
+        with self.assertRaisesRegex(enrol.Refused, "the TPM's owner authorization is already set \\(enrol ownerauth ran\\)"):
+            self.init()
+        self.assertIsNone(anchorpolicy.nv_name_of(anchorpolicy.ROTATION_INDEX))
+
     def test_commit_rechecks_the_signing_key_before_it_writes(self):
         """CodeRabbit on #358: commit re-checks the signing key at its handle by the Name the journal recorded, and that
         bundle.json still names it, before its first write."""
@@ -314,6 +409,7 @@ class InitOnSwtpm(unittest.TestCase):
                     os.unlink(self.wg)
                 for handle in (attest.AK_HANDLE, attest.EK_HANDLE, signkey.HANDLE):
                     subprocess.run(["tpm2_evictcontrol", "-C", "o", "-c", handle], capture_output=True)
+                subprocess.run(["tpm2_nvundefine", anchorpolicy.ROTATION_INDEX, "-C", "o"], capture_output=True)
                 seen = []
 
                 def crashing(argv, *a, **kw):
@@ -661,7 +757,9 @@ class InitOnSwtpm(unittest.TestCase):
             listed = {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", subprocess.run(["tpm2_getcap", "handles-nv-index"],
                                                                                          capture_output=True, text=True).stdout)}
             enrolment = {int(example[k], 16) + d for k in ("nv_epoch", "nv_heartbeat", "nv_signing") for d in range(6)}
+            enrolment -= {int(anchorpolicy.ROTATION_INDEX, 16)}      # the rotation counter is init's, before commit (#361 C1)
             self.assertEqual(listed & enrolment, set())          # nothing defined: no anchor, slot or counter index (1e)
+            self.assertIn(int(anchorpolicy.ROTATION_INDEX, 16), listed)
             epoch, digest = enrol.commit(self.dir, envelope, root, enrol.fingerprint(root), document, nt.SITE, example,
                                          as_sync=in_process, out=io.StringIO(), first_beat=first_beat, bootstrap=True,
                                          ownerauth_given=given)
