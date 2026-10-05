@@ -102,7 +102,7 @@ Commissioning has two halves:
 - **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`).
   This is for **attestation**: TPM quotes over PCR 10 and the IMA log let another host or an
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
-  `ima_policy_loaded`, which also requires the newest IMA entry for `/usr/local/sbin/regalia-kms` to
+  `ima_policy_loaded`, which also requires the newest IMA entry for `/usr/sbin/regalia-kms` to
   carry the digest of the binary there now (start the service first).
 - **The PIN, and the TPM's half of each disk path, are sealed to PCR 7** (Secure Boot state and the keys
   it trusts). A kernel or KMS update does not change PCR 7, so nothing is stranded; turning Secure Boot
@@ -166,9 +166,9 @@ Commissioning has two halves:
   in `/etc/hosts`. The profile is parser-checked only, so load it in complain mode first, correct it
   from the kernel log, and only then enforce (the full sequence is in the file's header):
   ```sh
-  sudo install -m 0644 deploy/baremetal/apparmor/usr.local.sbin.regalia-kms /etc/apparmor.d/
-  sudo apparmor_parser -r -C /etc/apparmor.d/usr.local.sbin.regalia-kms   # complain: logs, refuses nothing
-  sudo apparmor_parser -r /etc/apparmor.d/usr.local.sbin.regalia-kms      # enforce, once the log is clean
+  sudo install -m 0644 deploy/baremetal/apparmor/usr.sbin.regalia-kms /etc/apparmor.d/
+  sudo apparmor_parser -r -C /etc/apparmor.d/usr.sbin.regalia-kms   # complain: logs, refuses nothing
+  sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.regalia-kms      # enforce, once the log is clean
   ```
   Restart regalia-kms after each load. Measured: `kms_apparmor_enforced` (enforce mode only).
 - **Runtime admission.** A production configuration states `"runtime_admission": "required"` with
