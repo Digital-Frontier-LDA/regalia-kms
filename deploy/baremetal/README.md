@@ -942,7 +942,7 @@ removing only what it can prove it made.
     may open (regalia-kms-51). The change is one `tpm2_changeauth` in a session salted to the enrolled EK, where the
     current value authorizes (never sent) and the new one is the encrypted parameter; then the new value is proven.
     A rerun after a stop is idempotent. The ceremony's rotation run, with fresh values and envelopes to the current
-    owner cards only, is regalia-ceremony#135. Measured on swtpm.
+    owner cards only, is regalia-ceremony#135 (rc#137, its step t, in review). Measured on swtpm.
     The node remembers which record it is on (`/var/lib/regalia-enrol/ownerauth.json`, root's 0600: the record's
     SHA-256, written by set and rotate once the TPM answers). A rotation from another record is refused before the TPM.
     A node set up before this records its current one with `enrol ownerauth --check --adopt`, one way and only after

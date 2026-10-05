@@ -85,7 +85,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - **Rotating a set owner authorization: built, with these limits** (`enrol ownerauth --rotate-from`).
-    - The ceremony's rotation run, which makes the fresh values and the new record, is regalia-ceremony#135 (51), not
+    - The ceremony's rotation run, which makes the fresh values and the new record, is regalia-ceremony#135 (51; built as regalia-ceremony#137, in review), not
       yet built. Until then no new record exists to rotate to.
     - Dictionary attack, measured on swtpm: a wrong owner value through the proof (`holds`, tpm2-tools' unsalted HMAC
       session) is TPM_RC_BAD_AUTH and raises nothing; the same value as the auth of the EK-salted changeauth is
