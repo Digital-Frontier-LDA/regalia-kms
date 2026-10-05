@@ -20,9 +20,22 @@ ADR-0002 D32 (regalia#571): every server serves, and the three servers keep thei
 **Updating:** change `etcd.pin` (the tag, its commit, upstream's Go release) in a pull request that names the changelog entries it brings. The build refuses a mismatch on any of the three.
 
 ## How it runs: `deploy/baremetal/units/regalia-etcd.service`
-- **User `regalia-etcd`** (sysusers), with no capability, `NoNewPrivileges`, `ProtectSystem=strict` and `MemoryDenyWriteExecute`. The system-call filter is `@system-service` minus `@privileged @resources`. `systemd-analyze security` scores it 1.2.
+- **User `regalia-etcd`** (sysusers), with no capability, `NoNewPrivileges`, `ProtectSystem=strict` and `MemoryDenyWriteExecute`. The system-call filter is `@system-service` minus `@privileged @resources`, and a denied call fails with `EPERM` rather than killing etcd (Go's runtime may call setrlimit). `systemd-analyze security` scores it 1.2.
+- **Starting:** `Type=notify` with `TimeoutStartSec=infinity`. etcd only reports ready once a majority has a leader, so a lone survivor waits rather than restart-looping, and its clients connect lazily.
 - **Data:** `/var/lib/regalia-etcd` (StateDirectory, 0700), holding the WAL and the snapshots. Under the dm-verity design (#61) `/var` is the only persistent filesystem, the encrypted volume.
-- **Network:** peers on the WireGuard mesh only (`IPAddressAllow=fd72:6567:6c61::/48`, mutual TLS). Local clients use a unix socket in `/run/regalia-etcd`.
+- **Network:** peers on the WireGuard mesh only (`IPAddressAllow=fd72:6567:6c61::/48`, mutual TLS).
+- **Local clients use a unix socket, `/run/regalia-etcd/client.sock:0`.**
+  - etcd takes no absolute unix path, so it's `unix://client.sock:0` with the directory as the working directory.
+  - The directory is a tmpfiles line, `2750 regalia-etcd:regalia-etcd-client`, not a `RuntimeDirectory=`, which would take the unit's own group. The setgid bit gives the socket the client group, and `UMask=0007` makes it 0770. Only members of `regalia-etcd-client` connect; a client's unit joins the group with `SupplementaryGroups=`.
+  - **Measured with v3.6.15 under umask 0007:**
+    - the db, the WAL and every directory are 0600/0700;
+    - the Raft `.snap` files are 0660, but group `regalia-etcd` has no other member and they sit in 0700 directories;
+    - a socket left by a killed etcd is replaced at the next start.
+  - **CI** (`e2e/etcd-unit-sandbox.sh`, in the rootfs job) runs the image's own etcd under the image's own unit. It checks:
+    - a start that reaches ready with no restart and no killed system call;
+    - the socket's mode and group;
+    - a client in the group served, and one outside it refused;
+    - nothing in the data directory open to others.
 - **Keys:** the peer and server TLS keys are `LoadCredentialEncrypted` (sealed to the host's TPM), read from `/run/credentials/regalia-etcd.service/`.
 - **Configuration:** `/etc/regalia/etcd.conf.yml`, rendered at enrolment. It holds the member name, the initial cluster from the root-signed manifest, the certificate paths, and the heartbeat and election timeout from the measured round trip (D32 item 5). Until it exists the unit is **skipped**, not failed.
 
@@ -49,5 +62,12 @@ cd / && rm -r /var/lib/regalia-etcd-fio
 ## Limitations (also in LIMITATIONS.md)
 - **Built and pinned, not yet run on a host.** No cluster has been formed. The configuration renderer, the certificates issued at enrolment, member add/remove from the manifest and the netem scenario are #432's build (48 leads).
 - **etcd tolerates crashes, not malicious members (D32).** Every entry carries its own authorization and is verified before it's applied.
+- **The TLS trust has no CA** (regalia-kms-ed on #484, agreed). Each member's certificate is self-signed at enrolment and pinned by its SHA-256 in the root-signed manifest. The trusted bundle each member loads is rendered from the manifest, so a member the root didn't approve can't join. The manifest field is to be agreed with 48 and 95 on #432.
+- **Not built yet:**
+  - generating the member's key in a pipe straight into `systemd-creds encrypt`, never written in clear;
+  - which PCRs that credential is sealed to (7 and 11, as the other node credentials; to confirm with 95);
+  - a test of the rendered configuration that asserts its safety settings (client URL is the unix socket only, peer URLs on the mesh, `client-cert-auth` and `peer-client-cert-auth` true, the tuned heartbeat and election timeout).
+
+  These come with the renderer (#432).
 - **Under the hermetic /usr design (#61),** `/etc/regalia/etcd.conf.yml` and `/etc/credstore.encrypted` must move to `/var` (the /etc inventory).
 - **The disk measurement above hasn't been made.** It needs the DL360s.

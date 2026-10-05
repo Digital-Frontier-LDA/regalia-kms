@@ -587,6 +587,8 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends mmdebstrap debian-archive-keyring
       - name: Build the root filesystem twice from nothing (the second in a hostile environment); both must be identical
         run: sudo REGALIA_GO="$(command -v go)" bash e2e/rootfs-reproducible.sh "$RUNNER_TEMP/rootfs" 2
+      - name: The image's etcd, run under the image's regalia-etcd.service sandbox (#484)
+        run: sudo bash e2e/etcd-unit-sandbox.sh "$RUNNER_TEMP/rootfs/build-1/rootfs.tar"
       - name: Make the builds readable
         if: always()
         run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/rootfs" || true

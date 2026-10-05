@@ -241,10 +241,12 @@ for entry in "${BUILT[@]}"; do
   built_by="$(inbuild go version "/build/out/$name" | sed 's/^.*: //')"
   [ "$built_by" = "$GO_VERSION" ] || die "$name was built by $built_by, not $GO_VERSION (go.mod's)"
 done
+# GOAMD64 named, not defaulted: the instruction-set level is part of what was built (v1: any x86-64, the DL360s' too)
+ETCD_GOAMD64=v1
 # etcd, as upstream's scripts/build_lib.sh builds it (static, -trimpath, GitSHA stamped), by its own Go release
 inetcd(){ chroot "$BUILD" env -i PATH="/build/etcd-goroot/bin:/usr/bin:/bin" GOROOT=/build/etcd-goroot LC_ALL=C TZ=UTC \
             HOME=/build/home GOCACHE=/build/etcd-cache GOMODCACHE=/build/etcd-mod GOTOOLCHAIN=local GOPROXY=off GOFLAGS=-mod=readonly \
-            GOTELEMETRY=off SOURCE_DATE_EPOCH="$EPOCH" "$@"; }
+            GOTELEMETRY=off GOAMD64="$ETCD_GOAMD64" SOURCE_DATE_EPOCH="$EPOCH" "$@"; }
 for p in "${ETCD_PROGRAMS[@]}"; do
   echo "### ${p#*:} (etcd $ETCD_TAG, CGO_ENABLED=0), by $ETCD_GO"
   inetcd sh -c "cd /build/etcd/${p%%:*} && CGO_ENABLED=0 go build -trimpath -buildvcs=false \
@@ -339,7 +341,7 @@ PY
   # the tree builder is the BUILDER's, not pinned: its version is named, so a later rebuild elsewhere can be compared
   echo "mmdebstrap=$(mmdebstrap --version 2>/dev/null | head -1)"
   for entry in "${BUILT[@]}"; do read -r source path <<< "$entry"; echo "built=$path $(sha256sum < "$ROOT$path" | cut -d' ' -f1) $source"; done
-  echo "etcd=$ETCD_TAG $ETCD_COMMIT $ETCD_GO"
+  echo "etcd=$ETCD_TAG $ETCD_COMMIT $ETCD_GO $ETCD_GOAMD64"
   for p in "${ETCD_PROGRAMS[@]}"; do echo "etcd_program=/usr/bin/${p#*:} $(sha256sum < "$ROOT/usr/bin/${p#*:}" | cut -d' ' -f1)"; done
   for f in "${REPO_FILES[@]}"; do echo "file=$f $(sha256sum < "$f" | cut -d' ' -f1)"; done
   echo "packages_sha256=$(sha256sum < "$W/packages.txt" | cut -d' ' -f1)"
@@ -356,7 +358,7 @@ for line in open(sys.argv[1]):
         path, digest = value.split(" ")
         files[path] = digest
     elif key == "etcd":
-        etcd["tag"], etcd["commit"], etcd["go"] = value.split(" ")
+        etcd["tag"], etcd["commit"], etcd["go"], etcd["goamd64"] = value.split(" ")
     elif key == "etcd_program":
         path, digest = value.split(" ")
         etcd["programs"][path] = digest

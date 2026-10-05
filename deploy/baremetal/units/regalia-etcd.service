@@ -1,7 +1,8 @@
 # etcd, the three servers' operational-state store (ADR-0002 D32, regalia-kms#432; deploy/baremetal/ETCD.md): the
 # servers' leases, key state, spent approvals and per-key high-water marks, replicated by Raft over the WireGuard
 # mesh. It holds NO secret and is not the authority to serve (the TPM-held lease is). Peers over mutual TLS on the
-# mesh only; local clients over a unix socket in its RuntimeDirectory. Not root, no capability.
+# mesh only; local clients over a unix socket, /run/regalia-etcd/client.sock:0, that only the group
+# regalia-etcd-client may connect to (regalia.tmpfiles.conf: the directory is setgid to that group). Not root, no capability.
 # Started only once enrolment has rendered its configuration (the member name, the initial cluster from the
 # root-signed manifest, the tuned heartbeat and election timeout): skipped, never failed, before that.
 [Unit]
@@ -15,10 +16,14 @@ Wants=regalia-wg-apply.service
 # etcd tells systemd when it has joined (sd_notify)
 Type=notify
 Environment=PATH=/usr/sbin:/usr/bin
+# the client socket is made in the working directory: etcd takes no absolute unix path (unix://client.sock:0)
+WorkingDirectory=/run/regalia-etcd
 ExecStart=/usr/bin/etcd --config-file /etc/regalia/etcd.conf.yml
 Restart=always
 RestartSec=5s
-TimeoutStartSec=120
+# etcd says it is ready only once a majority has elected a leader: a lone survivor waits, it does not restart-loop
+# (regalia-kms-ed on #484). Its clients connect lazily
+TimeoutStartSec=infinity
 User=regalia-etcd
 Group=regalia-etcd
 # the peer and client TLS keys, sealed to this host's TPM (systemd-creds): read by etcd from
@@ -32,9 +37,9 @@ ProtectSystem=strict
 # the data directory (the WAL and the snapshots): /var/lib/regalia-etcd, its own and nobody else's
 StateDirectory=regalia-etcd
 StateDirectoryMode=0700
-# the client socket
-RuntimeDirectory=regalia-etcd
-RuntimeDirectoryMode=0750
+# the client socket's directory: regalia.tmpfiles.conf's (2750, regalia-etcd:regalia-etcd-client), not a
+# RuntimeDirectory=, which would take this unit's group. It is etcd's only writable path besides its state
+ReadWritePaths=/run/regalia-etcd
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
@@ -59,7 +64,12 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
-UMask=0077
+# a call the filter denies fails with EPERM, never kills: Go's runtime may try setrlimit (@resources)
+SystemCallErrorNumber=EPERM
+# 0007, not 0077: the socket must be 0770 for the client group. Measured with v3.6.15 under 0007: the db, the WAL
+# and every directory are 0600/0700 (etcd's own modes); the Raft .snap files are 0660, group regalia-etcd (its own
+# group, no other member), inside 0700 directories in a 0700 StateDirectory: no one else reaches them
+UMask=0007
 LimitCORE=0
 LimitNOFILE=65536
 

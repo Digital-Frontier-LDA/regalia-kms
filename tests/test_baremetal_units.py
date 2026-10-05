@@ -269,7 +269,16 @@ class EtcdUnit(unittest.TestCase):
         self.assertEqual((service["NoNewPrivileges"], service["ProtectSystem"], service["LimitCORE"]), ("yes", "strict", "0"))
         # its data (the WAL) under /var, its own; nothing else writable
         self.assertEqual((service["StateDirectory"], service["StateDirectoryMode"]), ("regalia-etcd", "0700"))
-        self.assertNotIn("ReadWritePaths", service)
+        # ... and its socket's directory, the only other writable path (regalia-kms-ed on #484): setgid to the client
+        # group, so the socket (0770 under UMask=0007) admits that group alone; never a RuntimeDirectory=, which takes
+        # the unit's group
+        self.assertEqual((service["ReadWritePaths"], service["WorkingDirectory"], service["UMask"]),
+                         ("/run/regalia-etcd", "/run/regalia-etcd", "0007"))
+        self.assertNotIn("RuntimeDirectory", service)
+        self.assertIn("d /run/regalia-etcd 2750 regalia-etcd regalia-etcd-client -", (UNITS / "regalia.tmpfiles.conf").read_text())
+        self.assertIn("g regalia-etcd-client -", (UNITS / "regalia.sysusers.conf").read_text())
+        # a denied call fails, it does not kill (Go may setrlimit); a lone survivor waits for a majority, not a restart loop
+        self.assertEqual((service["SystemCallErrorNumber"], service["TimeoutStartSec"]), ("EPERM", "infinity"))
         # peers on the mesh only; no device, no TPM (the lease key is not etcd's)
         self.assertEqual((service["IPAddressDeny"], service["IPAddressAllow"]), ("any", "fd72:6567:6c61::/48"))
         self.assertEqual((service["PrivateDevices"], service["DevicePolicy"]), ("yes", "closed"))
