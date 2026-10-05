@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sync"
@@ -73,31 +72,5 @@ func writeApplied(dir string, document appliedDocument) error {
 	if err != nil {
 		return err
 	}
-	temporary, err := os.CreateTemp(dir, "."+AppliedFile+".")
-	if err != nil {
-		return fmt.Errorf("the applied-revision file cannot be written: %w", err)
-	}
-	name := temporary.Name()
-	ok := false
-	defer func() {
-		if !ok {
-			_ = os.Remove(name)
-		}
-	}()
-	if _, err := temporary.Write(append(encoded, '\n')); err != nil {
-		temporary.Close()
-		return fmt.Errorf("the applied-revision file cannot be written: %w", err)
-	}
-	if err := temporary.Chmod(0o644); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(name, filepath.Join(dir, AppliedFile)); err != nil {
-		return fmt.Errorf("the applied-revision file cannot be replaced: %w", err)
-	}
-	ok = true
-	return nil
+	return replaceFile(dir, AppliedFile, append(encoded, '\n'))
 }
