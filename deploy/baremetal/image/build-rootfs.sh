@@ -240,6 +240,10 @@ chroot "$ROOT" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C SOURCE_DATE_EP
 rm -rf -- "$ROOT/var/lib/apt/lists" "$ROOT/var/cache/apt" "$ROOT/var/log/apt" "$ROOT/var/log/dpkg.log" "$ROOT/var/log/alternatives.log"
 mkdir -p "$ROOT/var/lib/apt/lists/partial" "$ROOT/var/cache/apt/archives/partial"
 rm -f -- "$ROOT"/etc/ssh/ssh_host_*_key "$ROOT"/etc/ssh/ssh_host_*_key.pub
+# no apt sources in the image: a host is updated by a new image, never by apt (#61's design). mmdebstrap left the
+# builder's own sources, which name the keyring at this build's temporary path (CI's third run: the one difference)
+rm -f -- "$ROOT"/etc/apt/sources.list.d/*
+printf '# The KMS host image is updated by a new image, never by apt (regalia-kms#61): no sources.\n' > "$ROOT/etc/apt/sources.list"
 
 # the in-tree check: every command packages.txt says a package provides is there and executable (#457's
 # limitation, closed from this side: a scan can miss a command, the image cannot)
