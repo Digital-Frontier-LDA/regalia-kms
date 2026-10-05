@@ -144,8 +144,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   `rootfs.tar` it is installed with (`rootfs_sha256`), so one root-committed document approves the UKI and
   its root together. No PCR covers the root: a quote cannot tell two roots apart, a root-only change needs
   a rebuilt UKI under a new label, and nothing checks the root once installed (LUKS2 keeps it
-  confidential, not unaltered). The installer's check against an approved set is not built yet; dm-verity
-  on `/usr`, its root hash on the UKI's command line, is #61's next design.
+  confidential, not unaltered). Once an approved set retires, the same PCRs with a new root can be
+  approved again under a new label, and a node still on the old root attests as the new set. Until
+  dm-verity, the installer's check against an approved set (not built yet) is the only gate on the root.
+  **dm-verity on `/usr`, its root hash on the UKI's command line, must land before the first ceremony**
+  (owner, 2026-10-05; #297).
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.

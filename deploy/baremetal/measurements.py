@@ -261,7 +261,8 @@ def _key(entry):
     the initrd key is not measured) is ANOTHER set, never "unchanged": under the old label it is a changed image,
     and under a new one it can neither sit beside the old set (attest refuses two sets of the same measurements)
     nor replace it in an emergency (the dropped measurements would still be accepted). A key rotation therefore
-    comes with a rebuilt image, a new PCR 11 (#267, 51's read)."""
+    comes with a rebuilt image, a new PCR 11 (#267, 51's read). So is the root filesystem it is installed with
+    (#61): the same UKI with another root is another set, never a rename."""
     return (entry["tpm_firmware_version"], tuple(sorted(entry["pcrs"].items())),
             tuple((phase, tuple(sorted(pcrs.items()))) for phase, pcrs in sorted(entry.get("phases", {}).items())),
             tuple(sorted(entry.get("signing", {}).items())), entry.get("rootfs_sha256"))
