@@ -249,7 +249,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 ## Tests
 
 - The failure drills' pass criteria (#495) are code in `e2e/lib/drills.py`, shared by tier N and the real-hardware
-  runner, and tested on synthetic evidence. Nothing calls them yet: the runner (`drill.py`, regalia-kms-3e), the load
+  runner, and tested on synthetic evidence; empty evidence fails (a dead load generator or a node never seen serving again cannot pass). Nothing calls them yet: the runner (`drill.py`, regalia-kms-3e), the load
   generator's log (regalia-kms-ed), the gate's `gate-serving` lines (ed) and the tier-N callers (#480's WAN scenario)
   come next. Ordering inside a node is judged by its journal's sequence. Across nodes it is judged by timestamps, which
   assumes the nodes' authenticated clocks agree within a second.

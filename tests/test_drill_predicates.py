@@ -22,10 +22,19 @@ class Predicates(unittest.TestCase):
         good = [req(9.9, "a", "failed", end=10.4), req(11, "b")]
         self.assertTrue(drills.failures_only_in_flight(good, 10)[0])
         self.failed(drills.failures_only_in_flight(good + [req(12, "b", "failed")], 10), "not in flight at the injection")
+        self.failed(drills.failures_only_in_flight([], 10), "no request at all")
+
+    def test_the_load_ran_throughout(self):
+        log = [req(t, "a") for t in (1, 31, 61)]
+        self.assertTrue(drills.load_throughout(log, 0, 90)[0])
+        self.failed(drills.load_throughout(log[:2], 0, 90), "no request between 60.0 and 90.0")
+        self.assertTrue(drills.load_throughout(log, 0, 95)[0])           # a 5 s tail is not judged alone
 
     def test_zero_failures(self):
         self.assertTrue(drills.zero_failures([req(1, "a"), req(2, "b")])[0])
         self.failed(drills.zero_failures([req(1, "a"), req(2, "b", "failed")]), "1 of 2 requests failed")
+        self.failed(drills.zero_failures([]), "no evidence to judge")
+        self.failed(drills.zero_failures([req(1, "a")], at_least=10), "fewer than the 10")
 
     def test_stateful_continues_on_each_up_node(self):
         log = [req(11, "a", stateful=True), req(12, "b", stateful=True)]
@@ -36,6 +45,7 @@ class Predicates(unittest.TestCase):
         log = [req(t, "a", stateful=True) for t in (1, 31, 61)]
         self.assertTrue(drills.stateful_in_every_window(log, 0, 90)[0])
         self.failed(drills.stateful_in_every_window([log[0], log[2]], 0, 90), "between 30.0 and 60.0")
+        self.assertTrue(drills.stateful_in_every_window(log, 0, 93)[0])  # the 3 s tail is not a false fail
 
     def test_silent_after_the_lease_bound(self):
         bound = drills.LEASE_S + drills.MARGIN_S + drills.WATCH_S
@@ -51,19 +61,36 @@ class Predicates(unittest.TestCase):
         self.failed(drills.caught_up_before_serving(early), "with the gate not serving")
         behind = [dict(good[1], applied_revision=39), good[2]]
         self.failed(drills.caught_up_before_serving(behind), "below the lease's 40")
+        self.failed(drills.caught_up_before_serving(good[:2]), "not seen serving again")
         stopped = good + [{"seq": 4, "event": "gate-not-serving", "reason": "watch-stalled"}, {"seq": 5, "event": "served"}]
         self.failed(drills.caught_up_before_serving(stopped), "seq 5")
 
     def test_survivor_full_scope(self):
         profile = {"acct": "cosmos-account", "val": "cosmos-validator"}.get
-        log = [req(5, "a"), req(1000, "a", stateful=True, key="acct")]
-        self.assertTrue(drills.survivor_full_scope(log, "a", {"b", "c"}, 1, 960, profile)[0])
-        self.failed(drills.survivor_full_scope(log + [req(900, "a", stateful=True, key="acct")], "a", {"b", "c"}, 1, 960, profile),
-                    "before full scope")
-        self.failed(drills.survivor_full_scope(log + [req(1001, "a", stateful=True, key="val")], "a", {"b", "c"}, 1, 960, profile),
-                    "cosmos-validator key")
-        self.failed(drills.survivor_full_scope(log + [req(2, "b")], "a", {"b", "c"}, 1, 960, profile), "after its power readback")
-        self.failed(drills.survivor_full_scope([req(5, "a")], "a", {"b", "c"}, 1, 960, profile), "everything did not stay active")
+        stateless = [req(t, "a") for t in range(5, 1030, 20)]
+        log = stateless + [req(1000, "a", stateful=True, key="acct")]
+        run = lambda extra, rows=None: drills.survivor_full_scope((rows if rows is not None else log) + extra, "a", {"b", "c"}, 1, 960, profile, 1030)  # noqa: E731
+        self.assertTrue(run([])[0])
+        self.failed(run([req(900, "a", stateful=True, key="acct")]), "before full scope")
+        self.failed(run([req(1001, "a", stateful=True, key="val")]), "cosmos-validator key")
+        self.failed(run([req(2, "b")]), "after its power readback")
+        self.failed(run([], stateless), "everything did not stay active")
+        gap = [r for r in log if not (300 <= r["start"] < 400)]
+        self.failed(run([], gap), "answered no stateless request")
+
+    def test_the_load_generator_s_line_becomes_a_request(self):
+        line = {"ts": 1700000000123, "run": "r1", "op": "spend", "key": "canary-approve", "node": "b", "outcome": "ABORTED",
+                "latency": 250, "attempt": 1}
+        r = drills.from_loadgen(line, {"spend", "cosmos-sign"})
+        self.assertEqual((r["start"], r["end"], r["outcome"], r["stateful"], r["node"]), (1700000000.123, 1700000000.373, "failed", True, "b"))
+
+    def test_the_bounds_are_deploy_s(self):
+        """3e on #497: drills.py may not import deploy; these hold its copies equal to the source."""
+        import inspect
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        from deploy.baremetal import admission, lease
+        self.assertEqual((drills.LEASE_S, drills.MARGIN_S), (lease.MAX_LIFETIME, admission.MARGIN))
+        self.assertEqual(drills.WATCH_S, inspect.signature(admission.Service.run).parameters["watch"].default)
 
 
 if __name__ == "__main__":
