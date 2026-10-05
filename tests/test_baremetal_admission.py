@@ -68,10 +68,30 @@ class OneLeaseBound(unittest.TestCase):
         go = int(re.search(r"MaxAheadMilliseconds = ([0-9_]+)", source).group(1).replace("_", ""))
         self.assertEqual((lease.MAX_LIFETIME, go), (30, lease.MAX_LIFETIME * 1000))
 
+    def test_a_round_with_both_peers_silent_ends_before_the_margin(self):
+        # due at a third used; two peers, two asks each (nonce, lease), each connection at most RENEW_TIMEOUT
+        self.assertLess(2 * 2 * admission.RENEW_TIMEOUT, lease.MAX_LIFETIME * 2 // 3 - admission.MARGIN)
+
     def test_the_margin_and_the_back_off_fit_inside_one_lease(self):
         # renewal is due at a third used; the margin and the longest wait between attempts leave room for retries
         self.assertLess(admission.MARGIN + admission.RETRY_MAX, lease.MAX_LIFETIME * 2 // 3)
         self.assertLessEqual(lease.FUTURE_SKEW, admission.MARGIN)
+
+
+class RunsAtTheLapse(Case):
+    def test_the_service_wakes_just_after_the_admission_it_wrote_runs_out(self):
+        """3e on #473 / 24: the change to not serving is written at the lapse, not up to `interval` later."""
+        waits, first = [], iter([False, True])                         # one round, then stop
+        self.service.run(lambda: next(first), interval=5, sleep=waits.append)
+        left = (self.on_disk()["serve_until_boottime_ms"] - self.ticks) / 1000
+        self.assertEqual(left, lease.MAX_LIFETIME - admission.MARGIN)
+        self.assertEqual(waits, [5])                                  # a lease far from its lapse: the interval
+        self.later(lease.MAX_LIFETIME - admission.MARGIN - 2)          # two seconds before serve_until
+        self.peer_up = False
+        waits[:] = []
+        once = iter([False, True])
+        self.service.run(lambda: next(once), interval=5, sleep=waits.append)
+        self.assertEqual(waits, [2.05])                               # woken 50 ms after the lapse, not 5 s
 
 
 class Backoff(Case):
@@ -552,6 +572,7 @@ class Renewals(unittest.TestCase):
         fake = unittest.mock.Mock(node_id="a", runtime="/run/regalia", run=None)
         fake.manifest.return_value = manifest
         fake.sources.return_value = {"b": None, "c": None}
+        self.fake = fake
         for patcher in (mock.patch.object(node, "boot_session", return_value=("ab" * 32, b"pub")), mock.patch.object(node, "Trail", Trail),
                         mock.patch.object(sync, "Client", Client), mock.patch.object(node.membership, "digest", return_value="d" * 64),
                         mock.patch.object(node.lease, "Holder")):
@@ -565,6 +586,13 @@ class Renewals(unittest.TestCase):
         self.assertEqual([(e["event"], e["peer"], e["outcome"]) for e in self.trail], [("admission-renew", "b", "DENY"), ("admission-renew", "c", "ALLOW")])
         self.assertIn("REVOKED_STOLEN", self.trail[0]["reason"])
         self.assertEqual((self.trail[1]["subject"], self.trail[1]["epoch"]), ("a", 3))
+
+    def test_each_connection_of_a_renewal_is_bounded_by_renew_timeout(self):
+        """3e on #473: a renewal to a peer that does not answer held a round for about 110 s. With a 30 s lease the
+        transports a renewal uses carry RENEW_TIMEOUT, not sync's DEADLINE."""
+        service = self.service({"b": m.Refused("b did not answer (TimeoutError)"), "c": {"lease": "envelope"}})
+        service.renew({"nonce": "n"})
+        self.fake.sources.assert_called_with({"epoch": 3, "nodes": []}, timeout=admission.RENEW_TIMEOUT)
 
     def test_no_peer_gave_a_lease(self):
         service = self.service({"b": m.Refused("b refused"), "c": m.Refused("c did not answer")})
