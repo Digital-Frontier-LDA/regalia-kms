@@ -64,16 +64,14 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     unsalted. A bus probe on the DL360 sees those, not the value.
   - The value cannot be zeroed in Python memory. While an owner-authorized call runs, the value is readable through
     /proc by root (a memfd; `seal-hsm-pin.sh` uses a root-only file on /run).
-  - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path
-    is held by unit tests and by swtpm tests of the anchor's owner calls.
-  - During `enrol commit` the owner authorization is held by a process of uid regalia-sync, the network-facing
-    sync daemon's user. **Who could read it, and when:**
-    - Who: root, and any process of uid regalia-sync (through /proc/<pid>/fd, or by attaching to the step where
-      Yama allows).
-    - When: only while commit's `_anchor` and `_first-heartbeat` steps run, seconds each, at enrolment.
-    - commit refuses to start a step while any other process of that uid exists (`pgrep -u regalia-sync`). The race
-      left is a process of that uid starting during a step: at enrolment the node's services are not yet running.
-    - Moving the owner calls into the root parent is #419.
+  - `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420, `InitOnSwtpm`), from
+    `enrol ownerauth`'s salted set to epoch 1. Its regalia-sync steps run in-process there, not through `runuser`
+    as that user (that needs root and the user, a CI e2e).
+  - Under v4 the owner authorization never enters a process of regalia-sync (#419): `enrol commit` makes every
+    owner-authorized definition itself, as root, and its regalia-sync steps commit by policy. With a lab chain
+    (v1–v3, owner-written) the value is still handed to them (a memfd, refused while another process of that uid
+    runs). Under v4 the node is fresh at its sync's first pull (10–60 s after enrolment), not at once: the heartbeat
+    counter is defined one below the highest heartbeat the root parent verified.
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.

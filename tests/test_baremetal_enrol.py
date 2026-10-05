@@ -536,6 +536,12 @@ class InitOnSwtpm(unittest.TestCase):
                                           as_sync=in_process, out=io.StringIO(), first_beat=first_beat), (1, digest))
 
 
+    def _record_file(self, record):
+        path = self.d + "/ownerauth.record.json"
+        with open(path, "w") as f:
+            json.dump(record, f)
+        return path
+
     def test_commit_under_v4_with_the_owner_authorization_set(self):
         """#420: the production enrolment, on a real TPM whose owner and lockout authorizations are set (#242). init on
         this TPM; the root's challenge, activate and entry; a v4 manifest naming this host; the measurements naming the
@@ -578,13 +584,16 @@ class InitOnSwtpm(unittest.TestCase):
         for argv in (["tpm2_createprimary", "-C", "o", "-c", self.d + "/srk.ctx"],
                      ["tpm2_evictcontrol", "-C", "o", "-c", self.d + "/srk.ctx", ownerauth.SRK], ["tpm2_flushcontext", "-t"]):
             self.assertEqual(subprocess.run(argv, capture_output=True).returncode, 0, argv)
-        for hierarchy in ("o", "l"):
-            with open(self.d + "/auth", "w") as f:
-                f.write("hex:" + value)
-            self.assertEqual(subprocess.run(["tpm2_changeauth", "-c", hierarchy, "file:" + self.d + "/auth"], capture_output=True).returncode, 0)
-        os.unlink(self.d + "/auth")
         record, record_root = toa.resigned(lambda r: None, key=tm.ROOT)     # the envelope's record, under this chain's root
         self.assertEqual(record_root, root)
+        # the owner authorization set as `enrol ownerauth` sets it (#420): from the envelope, in a session salted to the
+        # EK init recorded (#414); the lockout authorization as tpm-lockout.sh would, test-side
+        print(enrol.set_ownerauth("a", root, self._record_file(record), io.BytesIO((value + "\n").encode()), directory=self.dir),
+              file=io.StringIO())
+        with open(self.d + "/auth", "w") as f:
+            f.write("hex:" + value)
+        self.assertEqual(subprocess.run(["tpm2_changeauth", "-c", "l", "file:" + self.d + "/auth"], capture_output=True).returncode, 0)
+        os.unlink(self.d + "/auth")
         given = (ownerauth.read_value(io.BytesIO((value + "\n").encode())), record)
         etc = self.d + "/etc-regalia/"
         os.makedirs(etc)
@@ -594,8 +603,14 @@ class InitOnSwtpm(unittest.TestCase):
                    "measurements": etc + "measurements.json", "pcrs": [7, 11],
                    "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
 
+        handed = []
+
         def in_process(config, chain, owner_auth=None):         # the regalia-sync step, in process
+            handed.append(owner_auth)                            # #419: under v4 it is given none
             return enrol.anchor_and_store(config, chain, owner_auth=owner_auth)
+
+        def probe(config):                                       # the regalia-sync probe: no source holds a heartbeat
+            return [], ["no source is configured"]
 
         def first_beat(config, bootstrap=False, owner_auth=None):
             from deploy.baremetal import node as nm
@@ -614,8 +629,10 @@ class InitOnSwtpm(unittest.TestCase):
             self.assertEqual(listed & enrolment, set())          # nothing defined: no anchor, slot or counter index (1e)
             epoch, digest = enrol.commit(self.dir, envelope, root, enrol.fingerprint(root), document, nt.SITE, example,
                                          as_sync=in_process, out=io.StringIO(), first_beat=first_beat, bootstrap=True,
-                                         ownerauth_given=given)
+                                         ownerauth_given=given, probe=probe)
             self.assertEqual((epoch, digest), (1, m.digest(man)))
+            # #419: every owner-authorized definition was this process's; the regalia-sync step got no owner authorization
+            self.assertEqual(handed, [None])
             listed = {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", subprocess.run(["tpm2_getcap", "handles-nv-index"],
                                                                                          capture_output=True, text=True).stdout)}
             self.assertTrue({int(example[k], 16) for k in ("nv_epoch", "nv_heartbeat", "nv_signing")} <= listed)   # the control

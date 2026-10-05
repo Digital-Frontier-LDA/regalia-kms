@@ -879,9 +879,11 @@ removing only what it can prove it made.
   - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path is
     held by unit tests: the decision, the handoff to the regalia-sync steps, and every owner call site against a TPM
     stand-in that refuses a missing value. The anchor's owner calls are also proven on swtpm.
-  - While commit's regalia-sync steps run, the owner authorization is held by a process of that uid, the
-    network-facing sync daemon's. commit refuses to hand it over while any other process of the uid exists, which
-    leaves a race with one starting meanwhile; doing the owner calls in the root parent is #419.
+  - Under v4, commit makes every owner-authorized definition itself, as root (#419): the anchor and the signing
+    counter before its regalia-sync step, which then commits by policy with no owner authorization, and the
+    heartbeat counter after that step's probe. The probe only fetches the sources' heartbeats; root verifies them
+    and defines the counter one below the highest, so the node is fresh at its sync's first pull, not at once. With a
+    lab chain (v1–v3) the value is still handed to the regalia-sync steps (a memfd), as before.
   - `seal-hsm-pin.sh` passes the value to tpm2-tools as a file in a root-only directory on /run (tmpfs), removed on
     exit. A run killed outright leaves it until reboot. The script doesn't check it against the record: a wrong
     value is refused by the TPM.
