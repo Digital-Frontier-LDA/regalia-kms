@@ -139,6 +139,17 @@ if [ "$INIT_IMPORT" = 1 ]; then
   # the owner authorization (#242), from its envelope on standard input: into a root-only tmpfs file for tpm2-tools'
   # -P file: (a pipe cannot be seeked, and tpm2-tools seeks it; the value never on argv)
   if [ "$OWNERAUTH_STDIN" = 1 ]; then
+    # only a tpm2-tools measured to keep the owner authorization off the TPM bus (#414): the list is ownerauth.py's
+    # MEASURED_TOOLS, read from it (one source), checked before the value is even read
+    measured="$(sed -n 's/^MEASURED_TOOLS = (\(.*\))$/\1/p' "$(dirname "$0")/baremetal/ownerauth.py" | tr -d '"' | tr ',' ' ' | tr -s ' ')"
+    measured="${measured# }"; measured="${measured% }"
+    [ -n "$measured" ] || fail "cannot read MEASURED_TOOLS from $(dirname "$0")/baremetal/ownerauth.py"
+    tools="$(tpm2_createprimary --version 2>/dev/null | sed -n 's/.*version="\([^"]*\)".*/\1/p')"
+    [ -n "$tools" ] || fail "cannot tell tpm2-tools' version (tpm2_createprimary --version)"
+    case " $measured " in
+      *" $tools "*) ;;
+      *) fail "tpm2-tools ${tools:-?} is not a version measured to keep the owner authorization off the TPM bus ($measured): measure it and add it to ownerauth.MEASURED_TOOLS (#414). Nothing was done" ;;
+    esac
     [ -t 0 ] && fail "standard input is a terminal: with --ownerauth-stdin it carries the decrypted envelope, never typed"
     IFS= read -r oa || fail "nothing could be read from standard input"
     [[ "$oa" =~ ^[0-9a-f]{64}$ ]] || { oa=""; fail "standard input does not hold 64 lowercase hex and a newline (the decrypted envelope)"; }

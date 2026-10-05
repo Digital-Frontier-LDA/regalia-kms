@@ -917,5 +917,24 @@ class CommandLine(unittest.TestCase):
                     self.assertIn(reason, err.getvalue())
 
 
+class QuoteLabels(unittest.TestCase):
+    """#399 (regalia-kms-d9): every purpose a node's AK quotes for has its own label, so a quote made for one never
+    verifies for another by construction, not by every reader checking a schema. (The identity's qualifying data also
+    has a third field, the challenge secret's hash, so it could not equal a record's even under one label: the label
+    is the structural guard, the field count a second one.)"""
+
+    def test_the_labels_are_distinct(self):
+        labels = [attest.TRANSCRIPT_LABEL, attest.BINDING_LABEL, attest.RECORD_LABEL, attest.IDENTITY_LABEL]
+        self.assertEqual(len(set(labels)), len(labels), labels)
+
+    def test_an_identity_is_bound_to_its_challenge(self):
+        payload = b'{"schema":"regalia.enrol-identity/v1"}'
+        one, two = attest.identity_qualifying(payload, b"\x01" * 32), attest.identity_qualifying(payload, b"\x02" * 32)
+        self.assertNotEqual(one, two)
+        self.assertNotEqual(one, attest.record_qualifying(payload))
+        with self.assertRaisesRegex(attest.Refused, "the challenge secret's SHA-256 is 32 bytes"):
+            attest.identity_qualifying(payload, b"\x01" * 31)
+
+
 if __name__ == "__main__":
     unittest.main()

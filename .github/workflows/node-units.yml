@@ -172,8 +172,8 @@ jobs:
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
             sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-recovery.py | tee "$RUNNER_TEMP/recovery.log"
-          grep -q '^three-node-recovery: 64 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
-            echo "::error::the three-node recovery test did not pass all 64 checks" >&2; exit 1; }
+          grep -q '^three-node-recovery: 65 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
+            echo "::error::the three-node recovery test did not pass all 65 checks" >&2; exit 1; }
 
   # #75 (Phase 15), tier N: a new image rolled through the three nodes while CURRENT and NEXT are both accepted
   # (an image is PCR 11, extended after a power cycle); may_reboot on live leases as update.py asks it; the retire
