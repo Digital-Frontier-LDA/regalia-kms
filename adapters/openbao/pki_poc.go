@@ -6,6 +6,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"encoding/asn1"
+	"errors"
 	"math/big"
 
 	"github.com/openbao/go-kms-wrapping/v2/kms"
@@ -61,8 +62,16 @@ func (k *pkiPOCKey) Sign(ctx context.Context, opts *kms.SignOptions) ([]byte, er
 	if err != nil {
 		return nil, errOperation
 	}
-	sig, err := k.client.nativeCall(call, req, "sign", versionedRequest{ContentType: "application/vnd.regalia.x509-tbs", Payload: input}, "application/octet-stream", 4096)
+	// CA execution errors can be ambiguous even when the server labels them
+	// retryable. This experiment sends one attempt and never advertises a retry.
+	sig, err := k.client.nativeAttempt(call, req, "sign", versionedRequest{ContentType: "application/vnd.regalia.x509-tbs", Payload: input}, "application/octet-stream", 4096)
 	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			safe := *apiErr
+			safe.Retryable = false
+			return nil, &safe
+		}
 		return nil, err
 	}
 	defer clear(sig)
