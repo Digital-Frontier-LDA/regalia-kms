@@ -567,7 +567,7 @@ class Cluster:
 
     def _write_applied(self, n):
         self._write_as_daemon(n.dir / "run-state" / os.path.basename(lease.APPLIED_PATH),
-                              {"cluster_id": self.STATE_CLUSTER, "revision": self.state_revision, "boot_id": lease.this_boot(),
+                              {"cluster_id": self.STATE_CLUSTER, "state_epoch": 0, "revision": self.state_revision, "boot_id": lease.this_boot(),
                                "boottime_ns": time.clock_gettime_ns(time.CLOCK_BOOTTIME)})
 
     def _state_writer(self):

@@ -56,7 +56,7 @@ class Case(ct.Case):
         p = self.peers[name]
         return sync.Server(name, self.stores[name], p["freshness"], p["attester"], p["signer"], self.identify, self.events.append,
                            sync.Buckets(clock=lambda: self.tick), clock=lambda: self.now,
-                           floor=p["floor"], applied=lambda: (lt.CLUSTER, self.revision))      # D32: the issuer's floor
+                           floor=p["floor"], applied=lambda: (lt.CLUSTER, lt.STATE_EPOCH, self.revision))      # D32: the issuer's floor
 
     def client_of(self, name, store, freshness, sources=("b", "c", "seed")):
         transports = {s: self.wire(s, name) for s in sources}
