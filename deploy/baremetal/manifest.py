@@ -897,6 +897,12 @@ def main(argv=None):
                 lines = _authorization_lines(args.state_dir)
                 run_max = run_authorization_bound([e["manifest"] for e in chain_doc], current) if current.get("schema") == membership.SCHEMA_V4 else None
                 ends, closing = recovery_ends_by(current, trial, args.recovery_ends_by, lines, run_max)
+                if args.recovery_ends_by is not None and ends is not None and run_max is not None:
+                    bound = heartbeat.parse_time(trial["issued_at"], "issued_at") + run_max
+                    # what a typed value gives up (d9): the record-free bound always holds; a shorter value is the owner's word
+                    print("recovery_ends_by: you typed %d; the record-free bound is %d (%s)" % (
+                        ends, bound, "the same or later: safe without a record" if ends >= bound else
+                        "%d s EARLIER: it holds only if the owner issued nothing for these epochs ending later" % (bound - ends)))
                 candidate = propose_states(current, changes, args.issued_at or utc_now(), ends)
                 if closing is not None and args.state_dir:
                     # the record closes the epochs before: the owner's tool issues no authorization for them again (d9)
