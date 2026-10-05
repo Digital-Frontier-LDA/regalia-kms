@@ -602,8 +602,8 @@ def _genesis(test, root, record, state, attestations=None):
 
 
 class ProducersWriterRun(unittest.TestCase):
-    """The producer's REAL output, not a vector: regalia-ceremony#128's writer (offline-keys card-record, head d74a7aa: the
-    D30.7 owner pair) run once, 2026-10-05, by regalia-kms-1e through that PR's test_card_record_writer.Writer setup: a 2-of-3 Shamir lab
+    """The producer's REAL output, not a vector: regalia-ceremony#128's writer (offline-keys card-record, head bd61e02: the
+    D30.7 owner pair, attestation_sha256 {sig, dec, aut} of make.py's stand-in cards) run once, 2026-10-05, by regalia-kms-1e through that PR's test_card_record_writer.Writer setup: a 2-of-3 Shamir lab
     root (ok.generate, real age; the shares not kept), then card_record(first=True) and card_record(). Kept: the state
     directory it left (marker, signing-record.jsonl with card-record lines 1 and 2) and both records
     (tests/vectors/card-ceremony-record/writer-run/). Its output is not byte-reproducible, so it is a fixture made once,
@@ -653,7 +653,8 @@ class ProducersWriterRun(unittest.TestCase):
             f.write("stub\n")
         args = ["propose", "--genesis", "--root-key", self.root, "--card-record", str(self.here / "card-record-2.record.json"),
                 "--state-dir", self.state, "--measurements", os.path.join(d, "doc.json"), "--out", os.path.join(d, "e1.json"),
-                "--issued-at", "2026-10-04T12:00:00Z", "--system-pub", os.path.join(d, "system.pem")]
+                "--issued-at", "2026-10-04T12:00:00Z", "--system-pub", os.path.join(d, "system.pem"),
+                "--attestations", str(self.here.parent / "attestations")]      # make.py's stand-in cards, the writer's input
         for e in entries:                   # each node as `enrol` proves it (#399; stubbed here: its proof is enrol's own test)
             path = os.path.join(d, "bundle-%s.json" % e["node_id"])
             with open(path, "w") as f:
@@ -661,9 +662,12 @@ class ProducersWriterRun(unittest.TestCase):
             args += ["--node", path, path, path]
         out, err = io.StringIO(), io.StringIO()
         with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch.object(tool.keyfd, "tty_line", lambda p: "40000001 40000002"), \
-                mock.patch.object(tool.enrol, "proven_entry", lambda bundle, pub, keep, act, run=None: (bundle, {"7": "00" * 32, "11": "bb" * 32})):
+                mock.patch.object(tool.enrol, "proven_entry", lambda bundle, pub, keep, act, run=None: (bundle, {"7": "00" * 32, "11": "bb" * 32})), \
+                mock.patch("deploy.baremetal.opgpattest.trust", lambda: standin_trust(str(self.here.parent))):
             self.assertEqual(tool.main(args), 0, err.getvalue())
         self.assertIn("card record 2 of 2 (the newest on this laptop's signing record)", out.getvalue())
+        self.assertIn("attestations: each owner card's SIG, DEC and AUT keys generated on that card, touch fixed, under Yubico's "
+                      "pinned root (verified)", out.getvalue())
         with open(os.path.join(d, "e1.json")) as f:
             written = json.load(f)
         owners = self.record(2)["record"]["owner_keys"]
