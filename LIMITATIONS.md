@@ -225,6 +225,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   recovery scenarios (#402). Outage, leases and replace are not covered. The time trail and the update trail
   are never checked end to end in a three-node scenario. In recovery, "each node's change to serving" is not
   tied to a step, and the victims' not-serving lines are not checked.
+- **`regalia-sync` says nothing in the journal about its rounds** (#470). Its decisions (pulls, applies,
+  refusals and their reasons) are only in its hash-chained trail. `journalctl -u regalia-sync` shows systemd's
+  start and stop lines, so an operator asking why a node is behind its peers must read the trail. In the
+  three-node fixture, `advance()` now prints the puller's trail when a node doesn't take an epoch (#469).
 - **Collector receipts carry no signed time** (#398), so a stale receipt still verifies. This matters
   for the one-peer recovery witness (#387).
 
