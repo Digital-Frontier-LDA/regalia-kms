@@ -34,7 +34,9 @@ class Registry(unittest.TestCase):
     def test_the_heartbeat_watch_writes_registered_names_only(self):
         text = heartbeat_watch.metrics({"seconds_left": 1, "live": True, "lifetime": 2, "max_lifetime": 3}, 4)
         names = set(re.findall(r"^(regalia_\w+) ", text, re.M))
-        self.assertEqual(names, {name for name, entry in m.METRICS.items() if entry[3] == "sync"} - {"regalia_unlock_refused_total", "regalia_membership_epoch", "regalia_membership_anchor_epoch"})   # unlock.prom, membership.prom
+        self.assertEqual(names, {name for name, entry in m.METRICS.items() if entry[3] == "sync"} - {"regalia_unlock_refused_total", "regalia_membership_epoch", "regalia_membership_anchor_epoch",
+                                                                                              "regalia_activation_holder", "regalia_activation_lease_expires_seconds",
+                                                                                              "regalia_activation_recovery_active"})   # unlock.prom, membership.prom, activation.prom
         for name in names:
             self.assertIn("# HELP %s %s\n" % (name, m.METRICS[name][1]), text)      # one help text, the registry's
 

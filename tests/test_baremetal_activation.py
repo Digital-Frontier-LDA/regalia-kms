@@ -584,5 +584,72 @@ class Readmission(unittest.TestCase):
         self.assertTrue(restarted.readmitted())
 
 
+class Running(Record):
+    """Step 2d: only the holder renews, at half-life, never an expired lease; promotion is the operator's and waits for
+    the co-signers' grants; release stops the renewals; under an installed authorization the survivor renews alone."""
+    node, clock = Issuance.node, Issuance.clock
+
+    def setUp(self):
+        super().setUp()
+        self.state = os.path.join(self.d, "state")
+        os.mkdir(self.state)
+        self.a, self.b, self.c = self.node("a"), self.node("b"), self.node("c")
+
+    def ask_from(self, caller, at):
+        signers = {"b": self.b, "c": self.c, "a": self.a}
+        return lambda peer, body: act.cosign(self.m1, peer, caller, body, self.clock(at), signers[peer], lambda: True)
+
+    def test_promote_then_renew_at_half_life_only(self):
+        env = act.promote("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(T0), self.a, self.ask_from("a", T0), ["b"],
+                          self.state, lambda e: None)
+        self.assertEqual(act.read_json(os.path.join(self.state, act.LEASE_FILE)), env)
+        step = lambda at: act.renewal_step("a", self.m1, self.clock(at), self.a, self.ask_from("a", at), ["b"], self.state, lambda e: None)
+        self.assertEqual(step(T0 + 299)["renewed"], False)                     # more than half left
+        got = step(T0 + 300)
+        self.assertEqual((got["holder"], got["renewed"], got["expires"]), (True, True, T0 + 900))
+        self.assertEqual(act.read_json(os.path.join(self.state, act.LEASE_FILE))["lease"]["activation_epoch"], 2)
+
+    def test_no_probing_no_expired_renewal_and_release_lapses(self):
+        step = lambda node, at: act.renewal_step(node, self.m1, self.clock(at), getattr(self, node), self.ask_from(node, at), ["b"],
+                                                 self.state, lambda e: None)
+        self.assertEqual(step("c", T0), {"holder": False, "expires": None, "recovery": False, "renewed": False})   # no lease: nothing
+        act.promote("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(T0), self.a, self.ask_from("a", T0), ["b"], self.state, lambda e: None)
+        self.assertEqual(step("c", T0 + 400)["renewed"], False)               # a's lease, not c's: c never proposes
+        self.assertEqual(step("a", T0 + 600)["renewed"], False)               # expired: promote's, not the timer's
+        open(os.path.join(self.state, act.RELEASE_FILE), "w").close()
+        self.assertEqual(step("a", T0 + 400)["renewed"], False)               # released: it lapses
+
+    def test_a_second_site_s_promotion_waits_and_says_until_when(self):
+        act.promote("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(T0), self.a, self.ask_from("a", T0), ["b"], self.state, lambda e: None)
+        other = os.path.join(self.d, "c-state")
+        os.mkdir(other)
+        with self.assertRaises(m.Refused) as caught:
+            act.promote("c", "site-c", "sha256:" + "ab" * 32, self.m1, self.clock(T0 + 60), self.c, self.ask_from("c", T0 + 60), ["b"],
+                        other, lambda e: None)
+        self.assertEqual(act.waited_until(caught.exception), T0 + 600 + act.SKEW_S)
+        later = T0 + 600 + 2 * act.SKEW_S
+        env = act.promote("c", "site-c", "sha256:" + "ab" * 32, self.m1, self.clock(later), self.c, self.ask_from("c", later), ["b"],
+                          other, lambda e: None)
+        self.assertEqual(env["lease"]["site"], "site-c")
+
+    def test_under_an_installed_authorization_the_survivor_renews_alone(self):
+        rp = RecoveryPath("setUp")
+        rp.setUp()
+        signed = rp.authorize()
+        act.install_authorization(rp.m2, "c", signed, rp.clock(rp.now), rp.survivor().record)
+        state = os.path.join(rp.d, "c-state")
+        os.mkdir(state)
+        c = rp.survivor()
+        first = act.self_renew("c", rp.m2, rp.clock(rp.now), c, signed, lambda e: None)
+        act.write_json(os.path.join(state, act.LEASE_FILE), first)
+        act.write_json(os.path.join(state, act.RECOVERY_FILE), signed)
+        got = act.renewal_step("c", rp.m2, rp.clock(rp.now + 300), c, None, [], state, lambda e: None)
+        self.assertEqual((got["recovery"], got["renewed"]), (True, True))
+        m3 = manifest4(3, m.digest(rp.m2), nodes4(), activation_signers=dict(RULE))         # a and b back: the authorization ends
+        ended = act.renewal_step("c", m3, rp.clock(rp.now + 600), c, None, [], state, lambda e: None)
+        self.assertEqual((ended["recovery"], ended["renewed"]), (False, False))
+        self.assertIn("no node co-signed", ended["failed"])                  # back on the normal path, nobody to co-sign: recorded
+
+
 if __name__ == "__main__":
     unittest.main()

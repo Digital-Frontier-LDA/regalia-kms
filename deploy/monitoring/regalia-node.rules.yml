@@ -108,6 +108,22 @@ groups:
           severity: warning
         annotations:
           summary: "The TPM anchor is behind the membership chain this node holds: regalia-esp-advance keeps failing, and the next boot renders from an older chain."
+      # #432: the active site's lease is renewed at half its life; a quarter left means renewals are failing (24), and the
+      # site stops signing when it runs out
+      - alert: RegaliaActivationRenewalFailing
+        expr: regalia_activation_holder == 1 and (regalia_activation_lease_expires_seconds - time()) < 150
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} holds its activation lease with under a quarter of its life left: its renewals are failing (no co-signer answers, or it cannot sign), and the site stops signing when it expires."
+      # the recovery path (#432 amendment 5): one node activates alone under the owner's authorization, the others
+      # quarantined. It fires for as long as it lasts (24): the accepted risk (a false fencing attestation) runs with it.
+      - alert: RegaliaActivationRecoveryActive
+        expr: regalia_activation_recovery_active == 1
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} activates its site ALONE under the owner's recovery authorization: bring the other nodes back, or replace them, so that two of three sign again. MEMBERSHIP-RECOVERY.md."
       # regalia-esp-advance's own file (root; regalia-kms-48): a sync that lies in membership.prom does not silence these.
       - alert: RegaliaEspAdvanceFailing
         expr: regalia_esp_advance_ok == 0
@@ -155,6 +171,13 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.instance }} is scraped but has no membership.prom: regalia-sync never wrote it, so a TPM anchor left behind is not seen."
+      - alert: RegaliaActivationMetricsMissing
+        expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?activation\\.prom"}
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but has no activation.prom: regalia-sync never wrote it, so a failing activation renewal or a recovery in force is not seen."
       - alert: RegaliaEspAdvanceMetricsMissing
         expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?esp-advance\\.prom"}
         for: 5m

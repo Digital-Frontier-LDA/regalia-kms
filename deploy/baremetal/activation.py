@@ -496,3 +496,96 @@ def self_renew(node_id, manifest, clock, signer, signed, trail):
     trail({"event": "activation-recovery", "outcome": "ALLOW", "epoch": manifest["epoch"], "activation_epoch": epoch,
            "site": auth["site"], "until": auth["expires_at"]})
     return done
+
+
+# ---- running it (#432 step 2d, agreed: 24, d9, ed): the holder renews; promotion and release are the operator's ----
+
+LEASE_FILE = "activation-lease.json"          # in the state directory: sync writes it, the KMS daemon's Gate only reads it
+RECOVERY_FILE = "activation-recovery.json"    # the installed owner authorization (activation recover)
+RELEASE_FILE = "activation-release"           # present: the holder stops renewing, and its lease lapses at its expiry
+
+
+def read_json(path, limit=65536):
+    """A small JSON file, never through a link, or None when absent."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(fd, "rb") as f:
+        return json.loads(f.read(limit + 1)[:limit])
+
+
+def write_json(path, value, mode=0o644):
+    """Replaced atomically (a temporary file, fsynced, renamed, the directory fsynced): the Gate reads whole files only."""
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
+    with os.fdopen(fd, "w") as f:
+        json.dump(value, f, sort_keys=True)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+    dirfd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+    try:
+        os.fsync(dirfd)
+    finally:
+        os.close(dirfd)
+
+
+def renewal_step(node_id, manifest, clock, signer, ask, peers, state_dir, trail):
+    """One round of the holder's renewal (node.Sync's loop). Renews only when this node HOLDS a lease for itself that has
+    not expired and has less than half its life left (no probing: a node without a lease never proposes on a timer,
+    ed); an expired lease is never renewed here: that is `promote`'s (d9). Under an installed recovery authorization that
+    holds against the current manifest, the survivor renews alone (self_renew); otherwise two nodes (propose), for the
+    same site and registry. Nothing while the release marker is present. Returns the state, for metrics:
+    {"holder": bool, "expires": int or None, "recovery": bool, "renewed": bool[, "failed": why]}: a failed renewal is
+    returned, never raised (the loop goes on; RegaliaActivationRenewalFailing fires as the lease runs out)."""
+    lease_path, recovery_path = os.path.join(state_dir, LEASE_FILE), os.path.join(state_dir, RECOVERY_FILE)
+    state = {"holder": False, "expires": None, "recovery": False, "renewed": False}
+    signed_auth = read_json(recovery_path)
+    if signed_auth is not None:
+        try:
+            _authorization_holds(signed_auth, manifest, node_id=node_id)
+            state["recovery"] = True
+        except Refused:
+            signed_auth = None                       # a new epoch ended it: the node goes back to the normal path
+    held = read_json(lease_path)
+    if held is None or not isinstance(held, dict) or not isinstance(held.get("lease"), dict) or held["lease"].get("node_id") != node_id:
+        return state
+    try:
+        start, expires = validate(held["lease"])
+    except Refused:
+        return state
+    now = _now(clock)
+    state.update(holder=now < expires, expires=expires)
+    if os.path.exists(os.path.join(state_dir, RELEASE_FILE)) or now >= expires or expires - now > (expires - start) / 2:
+        return state
+    lease = held["lease"]
+    try:
+        if signed_auth is not None:
+            done = self_renew(node_id, manifest, clock, signer, signed_auth, trail)
+        else:
+            done = propose(node_id, lease["site"], lease["registry_digest"], manifest, clock, signer, ask, peers, trail)
+    except Refused as refused:                       # recorded (propose trails its DENY); the loop goes on, the alert sees it
+        state["failed"] = str(refused)[:240]
+        return state
+    write_json(lease_path, done)
+    state.update(expires=heartbeat.parse_time(done["lease"]["expires_at"], "expires_at"), renewed=True)
+    return state
+
+
+def promote(node_id, site, registry_digest, manifest, clock, signer, ask, peers, state_dir, trail):
+    """The operator's promotion of THIS node to `site` (root at its console, typed; FENCING.md: never on looks). One
+    propose(): every co-signer that granted another site refuses until that grant has expired plus SKEW_S, and the
+    refusals say until when (24: printed and recorded). Clears a release marker. Returns the envelope, written."""
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(os.path.join(state_dir, RELEASE_FILE))
+    done = propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers, trail)
+    write_json(os.path.join(state_dir, LEASE_FILE), done)
+    return done
+
+
+def waited_until(refusal):
+    """From propose()'s refusal, the latest "until N" its co-signers named (an OVERLAP: when promotion may succeed), or None."""
+    found = [int(n) for n in re.findall(r"until (\d+)", str(refusal))]
+    return max(found) + SKEW_S if found else None
