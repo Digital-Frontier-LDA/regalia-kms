@@ -917,7 +917,11 @@ removing only what it can prove it made.
   `python3 -Es offline-keys.py open-recovery-identity --sealed offline-keys.sealed.json --out /dev/shm/ownerauth-recovery.key`
   (k offline shares on standard input, then Ctrl-D; it writes a NEW mode-0600 file on a RAM filesystem), then
   `SOPS_AGE_KEY_FILE=/dev/shm/ownerauth-recovery.key sops decrypt --input-type binary --output-type binary ownerauth-X.bg.sops | sudo ...`,
-  then `shred -u -- /dev/shm/ownerauth-recovery.key`. On a disk, removing a file does not destroy it. It must be a binary SOPS file, not a YAML map: `sops decrypt --extract` drops the newline
+  then `shred -u -- /dev/shm/ownerauth-recovery.key`. On a disk, removing a file does not destroy it. On the laptop
+  offline-keys can also check a decrypted value without regalia-kms:
+  `... | python3 -Es offline-keys.py ownerauth-check --record ownerauth.record.json --node X --sealed offline-keys.sealed.json`.
+  It refuses a record that is not signed by the sealed set's own root (regalia-ceremony#133). The ceremony's drill
+  checks every node. It must be a binary SOPS file, not a YAML map: `sops decrypt --extract` drops the newline
   that the value's form requires (measured with sops 3.13.1). The drill, at the ceremony rehearsal, checks a
   decrypted value with no TPM: `... | python3 -Es -m deploy.baremetal.ownerauth check --node-id X --root-key ROOT
   --record ownerauth.record.json`. ROOT is the network's pinned root, from a node's node.json or the root card's
