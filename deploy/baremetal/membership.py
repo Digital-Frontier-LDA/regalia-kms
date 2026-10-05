@@ -960,7 +960,13 @@ class HighWater:
             kind = "slot" if index in self.record_indices else "counter"
             require(callable(self._approvals), "NV index %s is written under the anchor-policy authority and this anchor has no "
                     "K_A approvals to present" % index)
-            anchor = self._approvals(self.anchor_classes[kind], getattr(self, "_tip_manifest", None))
+            judged = getattr(self, "_tip_manifest", None)
+            # the membership anchor commits an epoch: its write presents the approval of the manifest it is judged by,
+            # never one looked up from whatever chain the node happens to hold (regalia-kms-95/d9 on #467, C4)
+            require(judged is not None or self.anchor_classes[kind] not in ("anchor", "slots"),
+                    "NV index %s (the %s class) is written under the anchor-policy authority only when the anchor is judged "
+                    "by a verified chain tip (judge_by_tip): nothing is written" % (index, self.anchor_classes[kind]))
+            anchor = self._approvals(self.anchor_classes[kind], judged)
             require(anchor.get("k_a") == self.tip_anchor_key(), "K_A's approval names another K_A than the chain tip's: nothing is written")
             tcti = (self.env or {}).get("TPM2TOOLS_TCTI")
             with signkey.policy_session(pem, tcti, self.run, self._signatures, anchor=anchor) as session:

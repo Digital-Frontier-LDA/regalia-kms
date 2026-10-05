@@ -1102,6 +1102,7 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
                               image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth,
                               schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"),
                               approvals=lambda cls, manifest=None: node_module.anchor_approval(cfg, cls, manifest=manifest or tip))
+    hw.judge_by_tip(tip)                          # #361 C4: the anchor is written under the chain it is given
     under_k_a = dict(schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"))      # the counters too (#361 C3)
     store = membership.Store(n.path("membership.json"), cfg["root_key"], hw, documents=n.documents().require_for)
     counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"), policy=policy,

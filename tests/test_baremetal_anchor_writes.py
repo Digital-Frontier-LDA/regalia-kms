@@ -136,6 +136,28 @@ class CompositeSession(unittest.TestCase):
         hw.anchor(2, digest)                                                      # judged by epoch 2: G + 1's approval
         self.assertEqual((hw.value(), hw.record()[0]), (2, 2))
 
+    def test_an_anchor_write_with_no_judged_tip_writes_nothing(self):
+        """#361 C4: under v4 the membership anchor writes only when judged by a verified tip; an anchor told only the
+        schema and K_A (no judge_by_tip) is refused before any approval is looked up, with nothing written."""
+        asked = []
+
+        def approvals(cls, manifest=None):
+            asked.append(cls)
+            return self.approval(cls=cls)
+        hw = m.HighWater("0x01500040", tcti=self.tcti, lock_path=self.d + "/hw.lock", schema=m.SCHEMA_V4, anchor_key=POINT,
+                         image_key=lambda: self.pem, signatures=self.signatures, approvals=approvals)
+        tip = {"schema": m.SCHEMA_V4, "epoch": 1, "anchor_policy_key": {"alg": "ecdsa-p256", "key": POINT}}
+        hw.judge_by_tip(tip)
+        hw.define()
+        hw.anchor(1, lambda epoch: "%02x" % epoch * 32)
+        asked.clear()
+        unjudged = m.HighWater("0x01500040", tcti=self.tcti, lock_path=self.d + "/hw.lock", schema=m.SCHEMA_V4, anchor_key=POINT,
+                               image_key=lambda: self.pem, signatures=self.signatures, approvals=approvals)
+        with self.assertRaisesRegex(m.Refused, r"\(the (anchor|slots) class\) is written under the anchor-policy authority only "
+                                    r"when the anchor is judged by a verified chain tip \(judge_by_tip\): nothing is written"):
+            unjudged.anchor(2, lambda epoch: "%02x" % epoch * 32)
+        self.assertEqual((asked, unjudged.value()), ([], 1))
+
 
 if __name__ == "__main__":
     unittest.main()

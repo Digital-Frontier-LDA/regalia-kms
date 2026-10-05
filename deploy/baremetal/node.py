@@ -263,6 +263,7 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
     require(isinstance(envelopes, list) and envelopes, "the membership chain must be a non-empty list of envelopes")
     tip = membership.accept_chain(None, envelopes, node.cfg["root_key"])
     anchor = node.anchor(lock_path=lock_path, schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"))
+    anchor.judge_by_tip(tip)          # #361 C4: its write presents K_A's approval from THIS tip's document, not the held chain's
     manifest = bootcreds.anchored(envelopes, node.cfg["root_key"], anchor)
     chain = membership.canonical(envelopes)
     require(len(chain) <= membership.MAX_CHAIN_BYTES, "the membership chain is over %d bytes" % membership.MAX_CHAIN_BYTES)
