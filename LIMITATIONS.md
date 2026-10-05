@@ -85,17 +85,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.
-- **Re-anchoring on a real host has three known faults, fixed in #391 (not merged):**
-  - Run as root, `reanchor` writes `membership.json` as root with mode 0600, so the node's `regalia-sync`
-    cannot read its own chain afterwards and the node cannot serve.
-  - **Security:** `membership._exclusive` opens its lock with `O_CREAT` and no `O_NOFOLLOW`. Root
-    running `reanchor`, or any Store or HighWater, in `regalia-sync`'s state directory can be made to
-    open or create any file read-write through a planted symlink.
-  - `reanchor`'s anchor lock (`/run/lock/regalia-highwater-<idx>.lock`) is not the services'
-    (`<state>/highwater.lock`), so the two do not serialize.
-- **No total-outage re-anchor rehearsal** (#391 adds it). The procedure in MEMBERSHIP-RECOVERY.md is not
-  yet the total-outage one, and its example names `/var/lib/regalia/membership.json`, while the store
-  is under `/var/lib/regalia-sync`.
+- **The total-outage re-anchor is rehearsed on software TPMs only** (#391, `e2e/three-node-reanchor.py`). It covers one
+  kind of damage, uses cryptsetup and a pty rather than a console, and doesn't run the operator's source checks.
+  The one-peer and both-peers-destroyed cases aren't rehearsed (MEMBERSHIP-RECOVERY.md, "What the rehearsal does
+  not show").
 - **The ESP advance (#410, #66): what it does not cover.** `regalia-sync` no longer moves the TPM anchor;
   the root oneshot `regalia-esp-advance` writes the published chain to the ESP, then anchors it.
   - **Not measured** on a host: shown by unit tests, a real-systemd e2e on a plain `/efi` directory, the
@@ -111,8 +104,16 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - An anchor read the TPM refuses says only "cannot read 8 bytes from NV index …": `HighWater._read8` drops
     `tpm2_nvread`'s error text, so an operator diagnosing it gets no TPM reason (#450; the text is pinned by
     `highwater-v1.json` in both languages, so its fix regenerates that vector).
-  - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's and reanchor's
-    (see #391): run those by hand only with the node's units stopped.
+  - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's. `reanchor` (#391) refuses
+    while `regalia-esp-advance` (or its path unit, sync or admission) runs, by `systemctl is-active`, and holds the
+    advance's lock for its whole run. On a machine with no `systemctl` it skips the unit check, and the three-node
+    rehearsal can't show it (its units have other names): unit tests only. When the advance's RuntimeDirectory is not
+    there, no lock is taken: a `regalia-esp-advance.service` an operator starts by hand during the re-anchor would run
+    unserialized (the unit check refuses one that already runs). Enrolment takes neither: run it only with the node's
+    units stopped.
+  - `reanchor` writes the ESP before the anchor (#391), as the advance does, but does not try the initrd's render first
+    as the advance does (`boot_renderable`): a chain this node could not boot under is written and anchored without
+    that warning.
   - **Accepted:** enrolment (`enrol commit`) still anchors epoch 1 before it writes the ESP: its render
     verifies the chain against the anchor, so the order is not cheap to swap. A crash in between leaves no
     chain on the ESP. The next boot's render then fails and the console asks for the recovery key, as it
@@ -120,6 +121,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     out: re-run `enrol commit`, which resumes from its journal (the anchor step is a no-op on a chain
     already held, and the rendered files are replaced); or let `regalia-esp-advance` run at boot, which
     writes the published chain to the ESP.
+- **One transient TPM error fails an anchor read.** `HighWater` reads the anchor's NV indices with one
+  `tpm2_nvread` each and refuses on any failure, with no retry inside the tool. The services' units restart
+  (the ESP advance every 15 s; sync and admission on their own schedules) and the next run reads again. CI's
+  three-node fixture showed it intermittently on its shared software TPMs (#448). Since this change the tool's own
+  error text goes to the journal; if it names a transient TPM code (`TPM_RC_RETRY`, `TPM_RC_YIELDED`,
+  `TPM_RC_TESTING`, a busy socket), a small bounded retry on those codes alone is the next step. The refusal's own
+  text still carries no TPM reason (#450).
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
