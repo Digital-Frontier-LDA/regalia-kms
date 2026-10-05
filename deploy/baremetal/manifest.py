@@ -188,22 +188,32 @@ def card_record_keys(envelope, root, signing_state):
 
 def judge_enrolled(document, enrolled):
     """The PCR values each node's AK quoted at `enrol activate` ({node_id: {"7": hex, "11": hex}}, #399), judged against
-    the genesis measurements `document`. Enrolment runs on a BOOTED host, so PCR 11 is the system-phase value of the
-    node's set (its initrd-phase value, or any image the measurements do not accept, is refused: a bench image too). PCR 7
-    (the Secure Boot state) is judged where the set gives it; where it does not, the nodes must agree on it (a stated
+    the genesis measurements `document`. Enrolment runs on a BOOTED host, so PCR 11 must be the system-phase value of one
+    of the node's accepted sets (a genesis document may approve two, CURRENT and NEXT: either is the reviewed image); its
+    initrd-phase value, or any image the measurements do not accept, is refused, a bench image too. PCR 7 (the Secure
+    Boot state) is judged against THAT set where it gives one; where it does not, the nodes must agree on it (a stated
     limitation: compared, not judged). Without this, the identity quote says only that SOME code on that TPM vouched for
-    the fields; with it, the reviewed image did (regalia-kms-d9)."""
+    the fields; with it, the reviewed image did (regalia-kms-d9). Returns {node_id: whether PCR 7 was judged}."""
+    sets = measurements.validate(document)
+    judged = {}
     for node_id, quoted in sorted(enrolled.items()):
-        expected = attest.values(measurements.target(document, node_id), "system")
-        require("11" in expected, "the measurements give %s no PCR 11: the image it was enrolled on cannot be judged" % node_id)
-        require(quoted["11"] == expected["11"], "%s was enrolled booted on PCR 11 %s, not the system-phase value %s the genesis measurements "
-                "accept for it: it was not the reviewed image (an initrd-phase or bench image is refused)" % (node_id, quoted["11"], expected["11"]))
-        if "7" in expected:
-            require(quoted["7"] == expected["7"], "%s was enrolled with PCR 7 (Secure Boot state) %s, not %s as the measurements give"
-                    % (node_id, quoted["7"], expected["7"]))
-    unjudged = sorted(n for n in enrolled if "7" not in attest.values(measurements.target(document, n), "system"))
+        require(node_id in sets, "the measurements have no entry for %s" % node_id)
+        expected = [attest.values(s, "system") for s in sets[node_id]]
+        require(all("11" in e for e in expected), "the measurements give %s no PCR 11: the image it was enrolled on cannot be judged" % node_id)
+        matching = [e for e in expected if e["11"] == quoted["11"]]
+        require(matching, "%s was enrolled booted on PCR 11 %s, not a system-phase value the genesis measurements accept for it (%s): it was "
+                "not the reviewed image, or it had not finished booting (an initrd-phase or bench image is refused; if `systemctl "
+                "is-system-running` was not yet running or degraded, run `enrol activate` again once it is)"
+                % (node_id, quoted["11"], ", ".join(e["11"] for e in expected)))
+        given = [e["7"] for e in matching if "7" in e]
+        if given:
+            require(quoted["7"] in given, "%s was enrolled with PCR 7 (Secure Boot state) %s, not %s as the measurements give"
+                    % (node_id, quoted["7"], " or ".join(given)))
+        judged[node_id] = bool(given)
+    unjudged = sorted(n for n, j in judged.items() if not j)
     require(len({enrolled[n]["7"] for n in unjudged}) <= 1, "the nodes %s were enrolled with different Secure Boot states (PCR 7): "
             "the measurements give no PCR 7 to judge them by, and they must at least agree" % ", ".join(unjudged))
+    return judged
 
 
 def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None):
@@ -557,7 +567,7 @@ def _propose_genesis(args, root, confirm=None, say=print):
         entries.append(entry)
         enrolled[entry["node_id"]] = quoted
     document = measurements.load(_raw(args.measurements, measurements.MAX_BYTES))
-    judge_enrolled(document, enrolled)
+    pcr7_judged = judge_enrolled(document, enrolled)
     policy = {k: v for k, v in (("heartbeat_max_lifetime_s", args.heartbeat_max_lifetime_s),
                                 ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s)) if v is not None}
     candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy)
@@ -567,7 +577,7 @@ def _propose_genesis(args, root, confirm=None, say=print):
     say("measurements: %s (%s)" % (candidate["policy_version"], document["name"]))
     for node_id, quoted in sorted(enrolled.items()):
         say("node %s enrolled booted on PCR 7 %s, PCR 11 %s (its AK's quote at activation; PCR 11 judged against the measurements' "
-            "system phase%s)" % (node_id, quoted["7"], quoted["11"], ", PCR 7 too" if "7" in attest.values(measurements.target(document, node_id), "system") else
+            "system phase%s)" % (node_id, quoted["7"], quoted["11"], ", PCR 7 too" if pcr7_judged[node_id] else
                                  ", PCR 7 compared across the nodes only"))
     say("card record: session %s, made %s, signed by the pinned root" % (cards["session"], cards["at"]))
     say("card record %d of %d (the newest on this laptop's signing record), digest %s, supersedes %s: check both against "

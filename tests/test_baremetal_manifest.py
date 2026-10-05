@@ -1112,7 +1112,8 @@ class ProposeGenesis(unittest.TestCase):
     def test_each_node_was_enrolled_on_the_reviewed_image(self):
         """#399 (regalia-kms-d9): the PCR 11 each node's AK quoted at activation is the SYSTEM-phase value the genesis
         measurements accept for it; its initrd-phase value, or an image they do not list (a bench one), is refused."""
-        for node, value, reason in (("b", "aa" * 32, "b was enrolled booted on PCR 11 %s, not the system-phase value %s" % ("aa" * 32, "bb" * 32)),
+        for node, value, reason in (("b", "aa" * 32, "b was enrolled booted on PCR 11 %s, not a system-phase value the genesis measurements accept for it (%s): it was not the "
+                                                    "reviewed image, or it had not finished booting" % ("aa" * 32, "bb" * 32)),
                                     ("c", "cc" * 32, "c was enrolled booted on PCR 11 %s" % ("cc" * 32))):
             with self.subTest(node=node):
                 self.enrolled[node] = dict(self.enrolled[node], **{"11": value})
@@ -1130,6 +1131,19 @@ class ProposeGenesis(unittest.TestCase):
         self.refused("the nodes a, b, c were enrolled with different Secure Boot states (PCR 7)", tool.judge_enrolled, bare, self.enrolled)
         self.enrolled["a"] = dict(self.enrolled["a"], **{"7": "07" * 32})
         tool.judge_enrolled(bare, self.enrolled)
+
+    def test_a_genesis_that_approves_two_images_accepts_a_node_on_either(self):
+        """regalia-kms-d9: a genesis document may carry two accepted sets per node (CURRENT and NEXT): a node enrolled on
+        either is on a reviewed image, and its PCR 7 is judged against the set it matched."""
+        two = json.loads(json.dumps(self.document))
+        for n in two["nodes"]:
+            two["nodes"][n]["accepted"].append({"label": "image-2", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "17" * 32},
+                                                "phases": {"initrd": {"11": "ca" * 32}, "system": {"11": "cb" * 32}}})
+        self.enrolled["c"] = {"7": "17" * 32, "11": "cb" * 32}                        # c on image-2, the others on image-1
+        self.assertEqual(tool.judge_enrolled(two, self.enrolled), {"a": True, "b": True, "c": True})
+        self.enrolled["c"] = {"7": "07" * 32, "11": "cb" * 32}                        # image-2's PCR 11 with image-1's PCR 7
+        self.refused("c was enrolled with PCR 7 (Secure Boot state) %s, not %s as the measurements give" % ("07" * 32, "17" * 32),
+                     tool.judge_enrolled, two, self.enrolled)
 
     def test_the_summary_shows_what_each_node_booted_and_entry_files_are_gone(self):
         code, out, err, path = self.run_cli()

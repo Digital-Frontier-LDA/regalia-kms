@@ -102,7 +102,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   rests on the EK certificate or, without one, the EK Name copied by hand (#190; the DL360's TPM is
   unknown); that the node was not compromised when it enrolled (enrolment trusts the host at its own
   console); and PCR 7 is only compared across the nodes where the measurements give no expected value.
-  Run only on software TPMs so far.
+  The quote covers bundle.json as the node holds it at `activate`; the enrolment directory is checked
+  to be root's (0700, trusted ancestors), and root on the node at enrolment is trusted. The PCR 11
+  judgement assumes the host had finished booting (systemd-pcrphase "ready" extended) when `activate`
+  ran, which a software TPM cannot show: a bench item (#297), and the refusal says to re-run once
+  `systemctl is-system-running` reports running. Run only on software TPMs so far.
 - **Card attestation: not built** (#400). Nothing yet produces the YubiKeys' OpenPGP attestation
   certificates (`ykman openpgp keys attest`). The card record's `attestation_sha256` values are
   placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is

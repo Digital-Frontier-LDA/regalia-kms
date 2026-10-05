@@ -2220,11 +2220,12 @@ def main(argv=None):
         return 0
     if args.command == "activate":
         try:
+            _safe_directory(args.directory)                      # root's, 0700, trusted ancestors: what is quoted is the node's own
             with open(os.path.join(args.directory, "bundle.json"), "rb") as f:
                 bundle = membership.load(f.read(membership.MAX_BYTES + 1))
             with open(args.credential, "rb") as f:
                 done = activate(f.read(4096), bundle)
-            with open(os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+            with open(os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600), "w") as f:
                 f.write(json.dumps(done, sort_keys=True) + "\n")
             print("WRITTEN: the activation %s (to the root's machine, beside the kept challenge). PCR 7 %s, PCR 11 %s, as booted now"
                   % (args.out, done["pcr_values"]["7"], done["pcr_values"]["11"]))
