@@ -171,15 +171,21 @@ def scenario(cluster, work):
     got = cluster.recover(b)
     ok(got["rc"] == 0 and got["peer"] is None and got["marker"], "b's volume opened by hand with its recovery key", got)
     # it boots, and its services start by themselves; they are stopped before anything touches the anchor (the procedure's
-    # step 5): its sync refuses its membership first, for the reason above
-    cluster.start(b, SERVICES)
+    # step 5): its sync refuses its membership first, for the reason above. Its wg-apply refuses too (it reads the anchor
+    # before it applies a chain), and the fixture's start raises on a oneshot that fails: on a host that is a failed unit
+    # and the boot goes on, so the refusal is taken here, and must be the anchor's
     reason = "not defined" if "not defined" in (said or "") else (said or "")[:40]
+    try:
+        cluster.start(b, SERVICES)
+        refused_at_start = None
+    except RuntimeError as failure:
+        refused_at_start = str(failure)
     seen = until(lambda: reason in cluster.journal(b, "sync"), 60, 2)
     cluster.stop(b, power=None)
     states = {u: sh("systemctl", "is-active", cluster.unit(b, u), check=False).stdout.strip() for u in ("sync", "admission")}
-    ok(seen is True and all(v != "active" for v in states.values()),
+    ok(seen is True and all(v != "active" for v in states.values()) and (refused_at_start is None or reason in refused_at_start),
        "b's services, started by its boot, refuse its membership (%r); stopped, and inactive (%s), before the re-anchor" % (reason, states),
-       cluster.journal(b, "sync")[-400:])
+       {"sync": cluster.journal(b, "sync")[-400:], "start": (refused_at_start or "")[-600:]})
     shutil.copyfile(cluster.nodes[b].state / node.PUBLISHED, d / "b-chain.json")
     trail = d / "b-reanchor.jsonl"
 

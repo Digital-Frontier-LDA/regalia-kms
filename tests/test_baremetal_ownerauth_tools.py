@@ -278,8 +278,8 @@ class ReanchorTakesIt(unittest.TestCase):
                 f.write(m.canonical(chain(3)))
         built = {}
 
-        def highwater(index, tcti, policy=None, define_policy=None, owner_auth=None):
-            built["owner_auth"] = owner_auth
+        def highwater(index, tcti, policy=None, define_policy=None, owner_auth=None, lock_path=None):
+            built["owner_auth"], built["lock_path"] = owner_auth, lock_path
             raise m.Refused("stop after the anchor is built")
         stdin = unittest.mock.Mock(buffer=value("a"))
         stdin.buffer.isatty = lambda: False
@@ -292,6 +292,7 @@ class ReanchorTakesIt(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("stop after the anchor is built", err.getvalue())
         self.assertEqual(built["owner_auth"].check("a"), RECORD["record"]["nodes"]["a"]["check"])
+        self.assertEqual(built["lock_path"], reanchor.anchor_lock(d + "/m.json"))    # the node's own lock (#388)
         # another node's value is refused before anything is read or built
         built.clear()
         stdin = unittest.mock.Mock(buffer=value("b"))
