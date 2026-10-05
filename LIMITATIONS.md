@@ -33,7 +33,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Accepted, once #387 lands:** a one-peer recovery cannot see a revocation that was made after the
   signing laptop last synced, if the surviving peer withholds it and the audit collector has no
   receipt for it. The owner is asked before signing ([`deploy/baremetal/MEMBERSHIP-RECOVERY.md`](deploy/baremetal/MEMBERSHIP-RECOVERY.md)).
-- **Under a v4 chain an owner-written anchor is still accepted** (#242 B3, waiting on #386). A definer never lays down
+- **Under a v4 chain an owner-written anchor is still accepted** (#242 B3, waiting on #410). A definer never lays down
   the owner-written layout under v4 (B2b), but a node whose anchor is already owner-written still reads it under v4.
   Its writes take the owner authorization, not the approved image. On a host whose owner authorization is set, the
   node's own services hold none (`Node.anchor()` has no `owner_auth`), so a sync that must advance or repair it fails
