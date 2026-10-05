@@ -379,5 +379,6 @@ def _give_back(membership_path, done=True):
                   what, directory, failure, directory, membership_path, membership_path, anchor_lock(membership_path)), file=sys.stderr)
         return False
 
+
 if __name__ == "__main__":
     sys.exit(main())
