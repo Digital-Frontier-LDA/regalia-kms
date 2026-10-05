@@ -287,3 +287,232 @@ def start_rotation(index, point, approval_der, run=None):
     require(name == written, "the rotation counter %s is not written under this K_A after its first increment (Name %s, not %s)"
             % (index, name, written))
     return {"index": index, "name": name, "value": read_rotation(index, run)}
+
+
+# ---- K_A's approvals (#361 C2): one per node, per class, per approved system-phase key, in the measurements set ----
+#
+# A signed set (one naming signing.system) carries, inside its `signing`, "anchor_approvals": {"generation": G,
+# "classes": {class: r||s}} (attest.validate_approvals: the form). Each signature is K_A's over
+# authorize_message(approved(Name(K_sys), Name(R), G), class): K_sys the set's own system-phase key, R THIS node's rotation
+# counter (at ROTATION_INDEX, under K_A), G this node's generation. G is never typed: at the genesis it is the node's
+# AK-quoted first value of R; at a rotation it is the current set's G + 1 (R moves only at a retire, by exactly 1).
+
+APPROVAL_CLASSES = attest.APPROVAL_CLASSES
+
+
+def sign(key, policy, cls):
+    """K_A's approval of `policy` for class `cls`, with K_A's private key (cryptography's), as r||s low-S hex."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    r, s = decode_dss_signature(key.sign(authorize_message(policy, cls), ec.ECDSA(hashes.SHA256())))
+    return "%064x%064x" % (r, min(s, membership.P256_ORDER - s))
+
+
+def approved_for(k_sys_pem, k_a_point, generation):
+    """P(K_sys, G) for this K_A's rotation counter: what each class's approval signs."""
+    from deploy.baremetal import signkey
+    return approved(signkey.pcr_key_name(k_sys_pem), rotation_name(int(ROTATION_INDEX, 16), k_a_point), generation)
+
+
+def approvals_for(key, k_sys_pem, k_a_point, generation):
+    """A set's anchor_approvals block, signed with K_A's private `key` (the signer's)."""
+    policy = approved_for(k_sys_pem, k_a_point, generation)
+    return {"generation": generation, "classes": {cls: sign(key, policy, cls) for cls in APPROVAL_CLASSES}}
+
+
+def check_approvals(approvals, k_sys_pem, k_a_point, label="anchor_approvals"):
+    """Every class's approval in `approvals` (attest.validate_approvals' form) is K_A's, over THIS key and THIS node's
+    rotation counter at its G: refused by name otherwise. Returns G."""
+    attest.validate_approvals(approvals, label)
+    policy = approved_for(k_sys_pem, k_a_point, approvals["generation"])
+    for cls in APPROVAL_CLASSES:
+        verify_approval(k_a_point, policy, cls, approvals["classes"][cls], "%s.classes.%s" % (label, cls))
+    return approvals["generation"]
+
+
+# ---- the K_A signer (#361 C2): run by regalia-ceremony's offline-keys with K_A in a sealed memfd (51's TOOLS entries) ----
+#
+#   python3 -Es -m deploy.baremetal.anchorpolicy approve-first --root-key ROOT --offline-keys-record REC --key-fd N --offline-session ID
+#   python3 -Es -m deploy.baremetal.anchorpolicy approve --document DOC --system-pub PEM --root-key ROOT --key-fd N --offline-session ID
+#       (--offline-keys-record REC --node BUNDLE KEEP ACTIVATION ...   at the genesis)
+#       (--chain CHAIN --current CURRENT_DOC                            at a rotation)
+#   python3 -Es -m deploy.baremetal.anchorpolicy approve-increment --chain CHAIN --root-key ROOT --node-id X --from N --key-fd N --offline-session ID
+#
+# The K_A source is always explicit (regalia-kms-51: offline-keys records the argv): the root-verified offline-keys record
+# at the genesis, else the chain tip's anchor_policy_key. A key on the fd that is not that K_A is refused, and every
+# signature is verified, low-S, before anything is printed. Output goes to stdout only (offline-keys hashes it into its
+# root-signed session record).
+
+INCREMENT_SCHEMA = "regalia.anchor-increment/v1"
+
+
+def _key_from_fd(fd, k_a_point):
+    """K_A's private key from `fd` (keyfd's rules: a pipe or a sealed memfd, unencrypted PKCS#8 PEM, read to EOF), refused
+    unless it is THE pinned K_A."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from deploy.baremetal import keyfd
+    buffer = keyfd.read(fd, "--key-fd")
+    try:
+        try:
+            key = serialization.load_pem_private_key(bytes(buffer), password=None)
+        except (ValueError, TypeError):
+            raise Refused("--key-fd: not an unencrypted PKCS#8 PEM private key") from None
+    finally:
+        keyfd.zero(buffer)
+    require(isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1), "--key-fd: not a P-256 key (K_A is ECDSA P-256)")
+    point = key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()
+    require(point == k_a_point, "--key-fd: this key is not the pinned K_A (%s…): nothing is signed" % k_a_point[:16])
+    return key
+
+
+def _pinned_at_genesis(root, record_path):
+    from deploy.baremetal import manifest
+    entry, _ = manifest.offline_keys_record(manifest.read_json(record_path, membership.MAX_BYTES), root)
+    return entry["key"]
+
+
+def _pinned_by_chain(root, chain_path):
+    from deploy.baremetal import manifest
+    tip = manifest.verify_chain(manifest.read_json(chain_path, membership.MAX_CHAIN_BYTES), root)
+    require(tip["schema"] == membership.SCHEMA_V4, "the chain's tip is %s: K_A is pinned only under %s" % (tip["schema"], membership.SCHEMA_V4))
+    return tip["anchor_policy_key"]["key"], tip
+
+
+def first_document(key, k_a_point):
+    """The `enrol init --anchor-policy` file: K_A and its approval of the rotation counter's first increment."""
+    doc = {"schema": FIRST_SCHEMA, "anchor_policy_key": {"alg": "ecdsa-p256", "key": k_a_point},
+           "increment_first": sign(key, increment_first(), "rotation")}
+    read_first(doc)                                             # verified before it is printed
+    return doc
+
+
+def fill(document, k_sys_pem, k_a_point, key, generations):
+    """`document` (a measurements document) with every set whose signing.system is K_sys's fingerprint given its node's
+    anchor_approvals at `generations[node_id]`. A node with such a set and no generation is refused. Each block is
+    checked (check_approvals) before the document is returned."""
+    import copy
+    from deploy.baremetal import measurements, signkey
+    out = copy.deepcopy(document)
+    measurements.validate(out)
+    fingerprint = signkey.pcr_key_fingerprint(k_sys_pem)
+    filled = []
+    for node_id, node in sorted(out["nodes"].items()):
+        for i, entry in enumerate(node["accepted"]):
+            if entry.get("signing", {}).get("system") != fingerprint:
+                continue
+            require(node_id in generations, "%s has a set signed by this system-phase key and no generation to approve it at" % node_id)
+            entry["signing"]["anchor_approvals"] = approvals_for(key, k_sys_pem, k_a_point, generations[node_id])
+            check_approvals(entry["signing"]["anchor_approvals"], k_sys_pem, k_a_point, "nodes.%s.accepted[%d].signing.anchor_approvals" % (node_id, i))
+            filled.append(node_id)
+    require(filled, "no set in the document is signed by this system-phase key (%s): nothing to approve" % fingerprint)
+    measurements.validate(out)
+    return out
+
+
+def genesis_generations(document, k_sys_pem, k_a_point, nodes):
+    """At the genesis: each node's G is its AK-quoted first value of R, proven here as `manifest propose --genesis` proves
+    it (enrol.proven_entry, then enrol.rotation_of under THIS K_A). `nodes`: [(bundle, keep, activation)]."""
+    from deploy.baremetal import enrol
+    generations = {}
+    for bundle, keep, activation in nodes:
+        entry, _ = enrol.proven_entry(bundle, k_sys_pem, keep, activation)
+        require(entry["node_id"] not in generations, "--node names %s twice" % entry["node_id"])
+        generations[entry["node_id"]] = enrol.rotation_of(bundle, k_a_point)["value"]
+    return generations
+
+
+def rotation_generations(current, k_sys_pem, k_a_point):
+    """At a rotation: each node's G for K_sys is the one the CURRENT document (the chain tip's, bound) already gives that
+    key, or else one above the highest G any of the node's current sets carries (R moves only at a retire, by one)."""
+    from deploy.baremetal import signkey
+    fingerprint = signkey.pcr_key_fingerprint(k_sys_pem)
+    generations = {}
+    for node_id, node in current["nodes"].items():
+        own = [e["signing"]["anchor_approvals"]["generation"] for e in node["accepted"]
+               if e.get("signing", {}).get("system") == fingerprint and "anchor_approvals" in e["signing"]]
+        known = [e["signing"]["anchor_approvals"]["generation"] for e in node["accepted"] if "anchor_approvals" in e.get("signing", {})]
+        if own:
+            generations[node_id] = own[0]
+        elif known:
+            generations[node_id] = max(known) + 1
+    return generations
+
+
+def increment_document(key, k_a_point, node_id, n):
+    """K_A's single-use approval of the increment that takes `node_id`'s R from `n` (C4's retire)."""
+    _count(n, "--from")
+    rotation = rotation_name(int(ROTATION_INDEX, 16), k_a_point)
+    sig = sign(key, increment_from(rotation, n), "rotation")
+    verify_approval(k_a_point, increment_from(rotation, n), "rotation", sig, "the increment approval")
+    return {"schema": INCREMENT_SCHEMA, "node_id": node_id, "from": n, "signature": sig}
+
+
+def main(argv=None, out=None):
+    import argparse
+    import json
+    import sys
+    from deploy.baremetal import keyfd, manifest, measurements
+    out = out or sys.stdout
+    ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.anchorpolicy", description="K_A's approvals (#361), on the offline laptop")
+    sub = ap.add_subparsers(dest="command", required=True)
+    for name in ("approve-first", "approve", "approve-increment"):
+        c = sub.add_parser(name)
+        c.add_argument("--root-key", required=True, help="the pinned membership root (64 hex)")
+        c.add_argument("--key-fd", type=int, required=True, help="K_A's private key: a sealed memfd or a pipe (offline-keys' {keyfd:anchor-policy})")
+        c.add_argument("--offline-session", required=True, help="the offline-keys session ID (32 hex)")
+        if name == "approve-first":
+            c.add_argument("--offline-keys-record", required=True, help="offline-keys.record.json: K_A, verified under the root")
+        elif name == "approve":
+            c.add_argument("--document", required=True, help="the measurements document to fill")
+            c.add_argument("--system-pub", required=True, help="the system-phase PCR key whose sets are approved (PEM)")
+            c.add_argument("--offline-keys-record", help="at the genesis: K_A, verified under the root")
+            c.add_argument("--node", action="append", default=[], nargs=3, metavar=("BUNDLE", "KEEP", "ACTIVATION"),
+                           help="at the genesis, once per node: its proof, as `manifest propose --genesis` takes it")
+            c.add_argument("--chain", help="at a rotation: the signed chain; K_A is its tip's")
+            c.add_argument("--current", help="at a rotation: the measurements document the chain's tip commits to")
+        else:
+            c.add_argument("--chain", required=True, help="the signed chain; K_A is its tip's")
+            c.add_argument("--node-id", required=True)
+            c.add_argument("--from", dest="from_n", type=int, required=True, help="the node's rotation counter's value before the increment")
+    args = ap.parse_args(argv)
+    try:
+        keyfd.session(args.offline_session)
+        root = manifest.root_key(args.root_key)
+        if args.command == "approve-first":
+            point = _pinned_at_genesis(root, args.offline_keys_record)
+            result = first_document(_key_from_fd(args.key_fd, point), point)
+        elif args.command == "approve-increment":
+            point, tip = _pinned_by_chain(root, args.chain)
+            require(args.node_id in membership.validate(tip), "%s is not a node of the chain's tip" % args.node_id)
+            result = increment_document(_key_from_fd(args.key_fd, point), point, args.node_id, args.from_n)
+        else:
+            genesis = bool(args.offline_keys_record or args.node)
+            require(genesis != bool(args.chain or args.current), "give --offline-keys-record and --node (the genesis), or --chain and "
+                    "--current (a rotation), not both")
+            with open(args.system_pub, "rb") as f:
+                pem = f.read(65536)
+            document = measurements.load(manifest._raw(args.document, measurements.MAX_BYTES))
+            if genesis:
+                require(args.offline_keys_record and args.node, "the genesis needs --offline-keys-record and --node for each node")
+                point = _pinned_at_genesis(root, args.offline_keys_record)
+                generations = genesis_generations(document, pem, point, [
+                    (manifest.read_json(b, membership.MAX_BYTES), manifest.read_json(k, 4096), manifest.read_json(a, 65536)) for b, k, a in args.node])
+            else:
+                require(args.chain and args.current, "a rotation needs --chain and --current")
+                point, tip = _pinned_by_chain(root, args.chain)
+                current = measurements.load(manifest._raw(args.current, measurements.MAX_BYTES))
+                measurements.bind(tip, current)               # the document the tip commits to, and no other
+                generations = rotation_generations(current, pem, point)
+            result = fill(document, pem, point, _key_from_fd(args.key_fd, point), generations)
+    except (Refused, OSError, ValueError) as error:
+        print("anchorpolicy: refused: %s" % error, file=sys.stderr)
+        return 2
+    out.write(json.dumps(result, indent=1, sort_keys=True) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
