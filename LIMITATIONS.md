@@ -210,3 +210,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   would be credited to that peer. In the scenarios only the seed is moved otherwise, and it is never asked (#393).
 - `audit_complete` judges each trail at a snapshot taken when it is called. Lines written after it are checked only
   if the collector already holds them, so a scenario must call it after the events it names (#393, #409).
+- three-node-outage's step 5 (a node without authenticated time signs nothing) allows **one** signature in flight
+  across the switch: a's Proposer reads the authenticated time once per step, so a signature it began before the
+  read saw the switch is legitimate. The check is by position in a's trail: after a's first refusal for want of time,
+  no signature as proposer or co-signer, and at most one between the switch and that refusal.
