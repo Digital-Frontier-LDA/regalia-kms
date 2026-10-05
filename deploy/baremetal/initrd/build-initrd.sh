@@ -49,7 +49,10 @@
 # CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
 #   * NETWORK. A build needs snapshot.debian.org (the archive at --snapshot) and the Go module proxy and checksum
 #     database (the toolchain go.mod names). There is no offline build: the air-gapped ceremony laptop does not run
-#     this; the builders do, and the laptop signs what two of them agree on.
+#     this; the builders do, and the laptop signs what two of them agree on. debverify tries a package fetch that
+#     failed TRANSIENTLY (a dropped connection, TLS cut off, a timeout, HTTP 5xx) again, 4 attempts in all with
+#     backoff (#425); a 404 and every hash or signature mismatch still refuse at once. mmdebstrap's own downloads are
+#     not retried by this script.
 #   * TRUST ROOTS it does not check further: Debian's archive keyring (pinned by hash), snapshot.debian.org serving
 #     the archive as it was, and Go's checksum database (sum.golang.org) for the toolchain.
 #   * MEASURED ONLY WHERE STATED: byte-identical on GitHub's runners and a Debian 13 container, for snapshot
