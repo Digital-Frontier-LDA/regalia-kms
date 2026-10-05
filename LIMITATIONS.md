@@ -26,6 +26,23 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **Activation by quorum: not built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
+  refined by #432; see the ADR. On `main` only the format carries `activation_signers`, and nothing
+  reads it. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
+  the authority for which site signs ([`FENCING.md`](FENCING.md)).
+  **Accepted in the design:**
+  - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
+  - Activation by the owner plus one node is a recovery step behind three conditions, and every renewal
+    on that path repeats all three:
+    1. a quarantine epoch for the other nodes;
+    2. a typed hard-fencing attestation, which holds until the fenced nodes hold that epoch;
+    3. a wait counted from the latest lease expiry any record shows, plus the skew margin.
+  - The owner alone never activates.
+  - Two active sites remain possible only if a fencing attestation is false when it is made, or if an
+    operator rejoins a fenced node before it holds the quarantine epoch.
+  - **Availability cost:** with one node dead and not yet quarantined, an unplanned reboot of a second
+    node stops lease renewals until the owner quarantines the dead one, because of the boot rule. An
+    alert after a set number of minutes unreachable prompts the owner.
 - **Recovery with only one surviving peer: not built.** `recover` and `reanchor` need two peer chains
   today. With one peer left, a node cannot be recovered or re-anchored. The design is decided, with the
   owner co-signing as the second source behind `--one-source` (#387, PR #395). With **both** peers gone,
@@ -33,16 +50,30 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Accepted, once #387 lands:** a one-peer recovery cannot see a revocation that was made after the
   signing laptop last synced, if the surviving peer withholds it and the audit collector has no
   receipt for it. The owner is asked before signing ([`deploy/baremetal/MEMBERSHIP-RECOVERY.md`](deploy/baremetal/MEMBERSHIP-RECOVERY.md)).
+- **Under a v4 chain an owner-written anchor is still accepted** (#242 B3, waiting on #410). A definer never lays down
+  the owner-written layout under v4 (B2b), but a node whose anchor is already owner-written still reads it under v4.
+  Its writes take the owner authorization, not the approved image. On a host whose owner authorization is set, the
+  node's own services hold none (`Node.anchor()` has no `owner_auth`), so a sync that must advance or repair it fails
+  closed until the node is re-anchored. Anyone holding the owner authorization can write it from any image. B3 makes
+  that layout Unusable under a v4 tip (a re-anchor repairs it) and refuses the v3 → v4 step over it.
 - **TPM owner authorization: built (#242 step C), with these limits.**
-  - The owner authorization crosses the TPM bus in clear when used (password sessions, #414). A discrete TPM can
-    be sniffed by someone with physical access during enrolment, a re-anchor or a recount.
+  - On the TPM bus (#414, measured): the owner authorization itself is never sent. Owner calls use tpm2-tools'
+    own HMAC sessions. Setting it uses a session salted to the enrolled EK (its Name checked) with parameter
+    encryption. The proof is an owner createprimary. Residual: an owner call's own parameters (NV attributes and
+    policies, record epochs and digests, none secret) cross in clear, because tpm2-tools' automatic sessions are
+    unsalted. A bus probe on the DL360 sees those, not the value.
   - The value cannot be zeroed in Python memory. While an owner-authorized call runs, the value is readable through
     /proc by root (a memfd; `seal-hsm-pin.sh` uses a root-only file on /run).
   - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path
     is held by unit tests and by swtpm tests of the anchor's owner calls.
   - During `enrol commit` the owner authorization is held by a process of uid regalia-sync, the network-facing
-    sync daemon's user. commit refuses while another process of that uid exists. Moving the owner calls into the
-    root parent is #419.
+    sync daemon's user. **Who could read it, and when:**
+    - Who: root, and any process of uid regalia-sync (through /proc/<pid>/fd, or by attaching to the step where
+      Yama allows).
+    - When: only while commit's `_anchor` and `_first-heartbeat` steps run, seconds each, at enrolment.
+    - commit refuses to start a step while any other process of that uid exists (`pgrep -u regalia-sync`). The race
+      left is a process of that uid starting during a step: at enrolment the node's services are not yet running.
+    - Moving the owner calls into the root parent is #419.
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.
@@ -57,16 +88,30 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **No total-outage re-anchor rehearsal** (#391 adds it). The procedure in MEMBERSHIP-RECOVERY.md is not
   yet the total-outage one, and its example names `/var/lib/regalia/membership.json`, while the store
   is under `/var/lib/regalia-sync`.
-- **Nothing advances the ESP's chain after genesis** (#377 is merged; the fix is #410). The initrd refuses an ESP
-  chain below the TPM anchor, and `regalia-sync` advances the anchor on every accepted manifest, so a
-  node that accepts a second manifest would boot to the recovery prompt. The fix is to write the ESP
-  first and advance the anchor after it, in a root oneshot ("ESP advance", #66). It must land before
-  any node takes a second manifest.
+- **The ESP advance (#410, #66): what it does not cover.** `regalia-sync` no longer moves the TPM anchor;
+  the root oneshot `regalia-esp-advance` writes the published chain to the ESP, then anchors it.
+  - **Not measured** on a host: shown by unit tests, a real-systemd e2e on a plain `/efi` directory, the
+    three-node fixture (an ESP directory per node) and QEMU boots 10-12, whose ESP the test writes.
+  - Only the chain is written. A site change (the measured `regalia.site.cred`) still needs enrolment.
+  - Until a run succeeds the node acts on a chain ahead of its anchor, and rollback protection stands at
+    the anchor's epoch. `RegaliaMembershipAnchorBehind` and `RegaliaEspAdvanceFailing` warn after 15 min;
+    an operator fixes the ESP and restarts the unit (deploy/baremetal/README.md §7). Nothing repairs it alone.
+  - **Accepted:** a compromised `regalia-sync` that stops publishing is not caught by these alerts (the
+    advance never runs). That is the withholding a compromised sync could always do. A fleet-level rule
+    comparing the three nodes' epochs is **not built**.
+  - Its run is in the journal and its metrics, not in a hash-chained trail (#278).
+  - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's and reanchor's
+    (see #391): run those by hand only with the node's units stopped.
+  - **Accepted:** enrolment (`enrol commit`) still anchors epoch 1 before it writes the ESP: its render
+    verifies the chain against the anchor, so the order is not cheap to swap. A crash in between leaves no
+    chain on the ESP. The next boot's render then fails and the console asks for the recovery key, as it
+    does at every boot until `enrol paths` has enrolled the peers' paths. Not stranding, two tooled ways
+    out: re-run `enrol commit`, which resumes from its journal (the anchor step is a no-op on a chain
+    already held, and the rendered files are replaced); or let `regalia-esp-advance` run at boot, which
+    writes the published chain to the ESP.
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
-- **Refusing a crashed node in the wrong boot phase: no end-to-end test** (#397). It is covered by unit
-  tests only.
 - **`recover` is a Python call, not a command** (#387). `reanchor` is a command.
 
 ## Tokens and the HSM gate (#72)
@@ -97,10 +142,19 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 
 - **Not measured**: `propose`/`sign --genesis`, the card-record verifier and build provenance have run
   only with software keys, software TPMs and in CI.
-- **Genesis node entries are not signed** (#399). `propose --genesis` cannot tell a node's
-  `enrol entry` file from an edited copy. A mismatch is caught by that node's `enrol check`, but only
-  after the root has signed, so the cost is redoing the genesis, not a silent acceptance. Until then the
-  operator carries the files and reads the printed diff.
+- **Genesis node identities are bound to each node's TPM, not to its hardware** (#399). `propose
+  --genesis` takes each node's bundle, kept challenge and activation and proves them itself: the AK is
+  in the TPM its EK names, and the AK quoted every identity field (both WireGuard keys, the signing
+  key, the token serials, the SSH host key) bound to that very challenge, booted on PCR 11 the genesis
+  measurements accept (system phase). What it cannot show: that the TPM is a genuine vendor TPM, which
+  rests on the EK certificate or, without one, the EK Name copied by hand (#190; the DL360's TPM is
+  unknown); that the node was not compromised when it enrolled (enrolment trusts the host at its own
+  console); and PCR 7 is only compared across the nodes where the measurements give no expected value.
+  The quote covers bundle.json as the node holds it at `activate`; the enrolment directory is checked
+  to be root's (0700, trusted ancestors), and root on the node at enrolment is trusted. The PCR 11
+  judgement assumes the host had finished booting (systemd-pcrphase "ready" extended) when `activate`
+  ran, which a software TPM cannot show: a bench item (#297), and the refusal says to re-run once
+  `systemctl is-system-running` reports running. Run only on software TPMs so far.
 - **Card attestation: not built** (#400). Nothing yet produces the YubiKeys' OpenPGP attestation
   certificates (`ykman openpgp keys attest`). The card record's `attestation_sha256` values are
   placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is
@@ -156,3 +210,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   would be credited to that peer. In the scenarios only the seed is moved otherwise, and it is never asked (#393).
 - `audit_complete` judges each trail at a snapshot taken when it is called. Lines written after it are checked only
   if the collector already holds them, so a scenario must call it after the events it names (#393, #409).
+- three-node-outage's step 5 (a node without authenticated time signs nothing) allows **one** signature in flight
+  across the switch: a's Proposer reads the authenticated time once per step, so a signature it began before the
+  read saw the switch is legitimate. The check is by position in a's trail: after a's first refusal for want of time,
+  no signature as proposer or co-signer, and at most one between the switch and that refusal.
