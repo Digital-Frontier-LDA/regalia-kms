@@ -138,8 +138,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   (regalia-kms-d9 on #451). Both records are root-signed, so only a ceremony mistake can make them
   differ, for example step a encrypting to an export that is not the two owner cards the card record
   names. D30.7 makes that likely at the first ceremony, because the export used to be the developer
-  cards'. `enrol ownerauth` does not take the card record. regalia-ceremony's ownerauth step is to refuse
-  unless its two DEC subkeys equal the card record's `ownerauth_recipients`.
+  cards'. `enrol ownerauth` does not take the card record. regalia-ceremony's ownerauth step refuses
+  unless its `--yk-keys` DEC subkeys equal the root-signed card record's `ownerauth_recipients`
+  (rc#133, not merged).
 - **Not measured: touch-required behaviour** on the owner and release keys. It needs the owner at
   the bench.
 - **Accepted:** a release card stolen together with its PIN can sign a release. Mitigations: touch is
