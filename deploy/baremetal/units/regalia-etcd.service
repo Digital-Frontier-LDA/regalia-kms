@@ -26,10 +26,10 @@ RestartSec=5s
 TimeoutStartSec=infinity
 User=regalia-etcd
 Group=regalia-etcd
-# the peer and client TLS keys, sealed to this host's TPM (systemd-creds): read by etcd from
-# /run/credentials/regalia-etcd.service/, never from a file on the disk
+# the peer TLS key, sealed to this host's TPM (systemd-creds): read by etcd from
+# /run/credentials/regalia-etcd.service/, never from a file on the disk. One key: clients have no TLS. etcd ignores
+# client TLS on a unix socket (measured, v3.6.15), so a client is admitted by the socket's group alone (#491)
 LoadCredentialEncrypted=etcd-peer.key:/etc/credstore.encrypted/regalia-etcd-peer.key
-LoadCredentialEncrypted=etcd-server.key:/etc/credstore.encrypted/regalia-etcd-server.key
 CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes

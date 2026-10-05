@@ -36,7 +36,7 @@ ADR-0002 D32 (regalia#571): every server serves, and the three servers keep thei
     - the socket's mode and group;
     - a client in the group served, and one outside it refused;
     - nothing in the data directory open to others.
-- **Keys:** the peer and server TLS keys are `LoadCredentialEncrypted` (sealed to the host's TPM), read from `/run/credentials/regalia-etcd.service/`.
+- **Keys:** one, the peer TLS key, `LoadCredentialEncrypted` (sealed to the host's TPM), read from `/run/credentials/regalia-etcd.service/`. Clients have no TLS: etcd ignores client TLS and `client-cert-auth` on a `unix://` URL (measured with v3.6.15, #491), so the socket's group is the client's admission. The renderer's `check()` refuses a client TLS block.
 - **Configuration:** `/etc/regalia/etcd.conf.yml`, rendered at enrolment. It holds the member name, the initial cluster from the root-signed manifest, the certificate paths, and the heartbeat and election timeout from the measured round trip (D32 item 5). Until it exists the unit is **skipped**, not failed.
 
 ## The disks: an fdatasync measurement plan for the DL360s (before production)

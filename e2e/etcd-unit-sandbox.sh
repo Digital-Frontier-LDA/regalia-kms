@@ -7,7 +7,7 @@
 # the real binary under it: a denied call would kill etcd, a 0700 socket would lock every client out (regalia-kms-ed on
 # #484). So, on this machine's systemd: etcd, etcdctl and the unit are taken from ROOTFS_TAR (the unit with its
 # ExecStart pointed at the extracted binary, nothing else changed), the user, group and socket directory made as the
-# image's sysusers.d and tmpfiles.d make them, a one-member configuration written, and the two TLS key credentials
+# image's sysusers.d and tmpfiles.d make them, a one-member configuration written, and the peer TLS key credential
 # encrypted with this machine's credential key. Then:
 #   the unit starts, reaches ready (sd_notify) and stays up, with no restart and no killed system call;
 #   the socket is /run/regalia-etcd/client.sock:0, mode 0770, group regalia-etcd-client;
@@ -30,7 +30,7 @@ passed=0 failed=0
 ok(){ if [ "$1" = 0 ]; then passed=$((passed + 1)); echo "  PASS $2"; else failed=$((failed + 1)); echo "  FAIL $2"; fi; }
 cleanup(){
   systemctl stop regalia-etcd.service 2>/dev/null || true
-  rm -f -- "$UNIT" "$CONF" "$CRED/regalia-etcd-peer.key" "$CRED/regalia-etcd-server.key"
+  rm -f -- "$UNIT" "$CONF" "$CRED/regalia-etcd-peer.key"
   [ "$made_regalia_dir" = 1 ] && rmdir /etc/regalia 2>/dev/null
   [ "$made_cred_dir" = 1 ] && rmdir "$CRED" 2>/dev/null
   systemctl daemon-reload || true
@@ -64,9 +64,7 @@ initial-cluster: sandbox=http://127.0.0.1:23890
 initial-cluster-state: new
 EOF
 [ -d "$CRED" ] || { mkdir -p "$CRED"; made_cred_dir=1; }
-for k in peer server; do
-  head -c 32 /dev/urandom | systemd-creds encrypt --with-key=host --name="etcd-$k.key" - "$CRED/regalia-etcd-$k.key"
-done
+head -c 32 /dev/urandom | systemd-creds encrypt --with-key=host --name=etcd-peer.key - "$CRED/regalia-etcd-peer.key"
 systemctl daemon-reload
 
 set +e

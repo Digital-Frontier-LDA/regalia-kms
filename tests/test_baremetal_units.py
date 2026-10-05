@@ -284,7 +284,10 @@ class EtcdUnit(unittest.TestCase):
         self.assertEqual((service["PrivateDevices"], service["DevicePolicy"]), ("yes", "closed"))
         self.assertNotIn("SupplementaryGroups", service)
         # the TLS keys come sealed, as credentials, never as files in its configuration's directory
-        self.assertEqual(open(UNITS / "regalia-etcd.service").read().count("LoadCredentialEncrypted="), 2)
+        # one: the peer key. Clients have no TLS (ignored on a unix socket, #491): the socket's group admits them
+        with open(UNITS / "regalia-etcd.service") as f:
+            self.assertEqual([line for line in f.read().splitlines() if line.startswith("LoadCredentialEncrypted=")],
+                             ["LoadCredentialEncrypted=etcd-peer.key:/etc/credstore.encrypted/regalia-etcd-peer.key"])
 
     def test_the_image_builds_the_etcd_it_runs(self):
         packages = (UNITS.parent / "image" / "packages.txt").read_text()
