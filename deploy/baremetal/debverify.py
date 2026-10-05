@@ -98,7 +98,9 @@ def fetch(url, cache, opener=urllib.request.urlopen, sleep=None):
     """`url`'s bytes, kept in `cache` under its own sha256 name so a rerun does not fetch again. Never trusted
     for what it is: every caller checks the bytes against a hash from the signed chain. A transient error
     (_transient) is tried again, FETCH_ATTEMPTS times in all, with backoff; any other error is raised at once, and
-    the last transient one naming the attempts, so the caller refuses as before."""
+    the last transient one naming the attempts, so the caller refuses as before. A body shorter than the
+    Content-Length the server declared counts as transient. The cache is keyed by URL, so an entry once written is
+    read again for ever: the builder gives each build its own cache ($W/debs), and the callers check every byte."""
     os.makedirs(cache, exist_ok=True)
     path = os.path.join(cache, hashlib.sha256(url.encode()).hexdigest())
     if os.path.exists(path):
@@ -108,6 +110,11 @@ def fetch(url, cache, opener=urllib.request.urlopen, sleep=None):
         try:
             with opener(url, timeout=300) as response:
                 data = response.read(MAX_DOWNLOAD + 1)
+                declared = (getattr(response, "headers", None) or {}).get("Content-Length")
+            if declared is not None and declared.isdigit() and len(data) <= MAX_DOWNLOAD and len(data) != int(declared):
+                # the connection dropped mid-body without an error (regalia-kms-d9 on #436): a transport fault, so
+                # tried again here, never left for the callers' hash check to refuse as a verification failure
+                raise http.client.IncompleteRead(data, int(declared) - len(data))
             break
         except Exception as error:   # noqa: BLE001 - classified here: only a transient one is tried again
             if not _transient(error):

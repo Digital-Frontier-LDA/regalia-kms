@@ -271,7 +271,7 @@ class FetchRetries(unittest.TestCase):
             outcome = outcomes.pop(0)
             if isinstance(outcome, BaseException):
                 raise outcome
-            return io.BytesIO(outcome)
+            return outcome if isinstance(outcome, io.BytesIO) else io.BytesIO(outcome)
         return dv.fetch(BASE + "/x.deb", os.path.join(self.d, "cache"), opener, sleep=self.slept.append)
 
     def http(self, code):
@@ -280,6 +280,19 @@ class FetchRetries(unittest.TestCase):
     def test_a_dropped_connection_or_a_tls_cut_is_tried_again(self):
         got = self.fetch(urllib.error.URLError(ssl.SSLError("UNEXPECTED_EOF_WHILE_READING")), ConnectionResetError("reset"), b"the bytes")
         self.assertEqual((got, self.calls, self.slept), (b"the bytes", 3, [2, 4]))
+
+    def test_a_body_cut_short_is_tried_again_not_left_to_the_hash_check(self):
+        """regalia-kms-d9 on #436: a connection that drops mid-body can end the read short WITHOUT an error. Against
+        its Content-Length that is a transport fault, tried again, never handed on as wrong bytes."""
+        class Response(io.BytesIO):
+            def __init__(self, body, length):
+                super().__init__(body)
+                self.headers = {"Content-Length": str(length)}
+        got = self.fetch(Response(b"the", 9), Response(b"the bytes", 9))
+        self.assertEqual((got, self.calls, self.slept), (b"the bytes", 2, [2]))
+        shutil.rmtree(os.path.join(self.d, "cache"))                     # the good bytes were cached: fetch afresh
+        with self.assertRaisesRegex(OSError, "\\(after %d attempts\\)" % dv.FETCH_ATTEMPTS):
+            self.fetch(*[Response(b"the", 9) for _ in range(dv.FETCH_ATTEMPTS)])
 
     def test_a_server_error_is_tried_again(self):
         self.assertEqual(self.fetch(self.http(503), b"the bytes"), b"the bytes")
