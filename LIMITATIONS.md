@@ -144,3 +144,6 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   would be credited to that peer. In the scenarios only the seed is moved otherwise, and it is never asked (#393).
 - `audit_complete` judges each trail at a snapshot taken when it is called. Lines written after it are checked only
   if the collector already holds them, so a scenario must call it after the events it names (#393, #409).
+- The initrd builds verify every package against snapshot.debian.org, and one dropped connection fails the whole
+  build: `debverify` doesn't retry a fetch. That fails closed, but it turned main red once (8eb35a6) with no code
+  at fault. Retrying fetch errors only, never a verification failure, is #425.
