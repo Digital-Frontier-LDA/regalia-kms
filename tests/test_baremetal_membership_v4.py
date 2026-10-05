@@ -409,11 +409,21 @@ class AnchorPolicyAndCardRecord(Case):
         must carry recovery_ends_by; any other epoch may leave it null."""
         recovery = m.accept(self.first, sign(manifest4(2, m.digest(self.first), nodes4(a="QUARANTINED", b="QUARANTINED")), ROOT), ROOT_PUB)
         back = manifest4(3, m.digest(recovery), nodes4(b="QUARANTINED"))                       # a counts again
-        self.refused("lets a count again after a recovery epoch: it must state recovery_ends_by", m.accept, recovery, sign(back, ROOT), ROOT_PUB)
+        self.refused("back to the activation threshold (a, c) after an epoch below it: it must state recovery_ends_by", m.accept,
+                     recovery, sign(back, ROOT), ROOT_PUB)
         stated = m.accept(recovery, sign(dict(back, recovery_ends_by=1790604800), ROOT), ROOT_PUB)
         self.assertEqual(stated["recovery_ends_by"], 1790604800)
         still = manifest4(3, m.digest(recovery), nodes4(a="QUARANTINED", b="QUARANTINED"), policy_version="p2")
         self.assertEqual(m.accept(recovery, sign(still, ROOT), ROOT_PUB)["recovery_ends_by"], None)   # not ending it: null is fine
+
+    def test_the_end_is_required_however_many_epochs_below_the_threshold_came_first(self):
+        """d9: N, c alone (a recovery); N+1, c quarantined too (nobody counts); N+2, a and b back. N+2 must state it: the
+        partitioned c may still be renewing under its epoch-N authorization."""
+        alone = m.accept(self.first, sign(manifest4(2, m.digest(self.first), nodes4(a="QUARANTINED", b="QUARANTINED")), ROOT), ROOT_PUB)
+        nobody = m.accept(alone, sign(manifest4(3, m.digest(alone), nodes4(a="QUARANTINED", b="QUARANTINED", c="QUARANTINED")), ROOT), ROOT_PUB)
+        back = manifest4(4, m.digest(nobody), nodes4(c="QUARANTINED"))
+        self.refused("back to the activation threshold (a, b) after an epoch below it", m.accept, nobody, sign(back, ROOT), ROOT_PUB)
+        self.assertEqual(m.accept(nobody, sign(dict(back, recovery_ends_by=0), ROOT), ROOT_PUB)["recovery_ends_by"], 0)
 
     def test_owner_keys_change_only_with_a_new_card_record(self):
         man = self.changed(lambda x: x["owner_keys"].pop())
