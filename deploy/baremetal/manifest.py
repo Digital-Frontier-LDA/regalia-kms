@@ -633,18 +633,20 @@ def _propose_genesis(args, root, confirm=None, say=print):
     owners, release_key = cards["owners"], cards["release_key"]
     with open(args.system_pub, "rb") as f:
         system_pub = f.read(65536)
-    entries, enrolled = [], {}
+    # K_A first: each node's rotation counter is judged against it as the node is proven (#361 C1, regalia-kms-95)
+    anchor_policy, generated = offline_keys_record(read_json(args.offline_keys_record, membership.MAX_BYTES), root)
+    entries, enrolled, rotations = [], {}, {}
     for bundle_path, keep_path, activation_path in args.node:    # each node proven here: no unsigned entry file in between
-        entry, quoted = enrol.proven_entry(read_json(bundle_path, membership.MAX_BYTES), system_pub, read_json(keep_path, 4096),
-                                           read_json(activation_path, 65536))
+        bundle = read_json(bundle_path, membership.MAX_BYTES)
+        entry, quoted = enrol.proven_entry(bundle, system_pub, read_json(keep_path, 4096), read_json(activation_path, 65536))
         require(entry["node_id"] not in enrolled, "--node names %s twice" % entry["node_id"])
+        rotations[entry["node_id"]] = enrol.rotation_of(bundle, anchor_policy["key"])      # quoted with the identity
         entries.append(entry)
         enrolled[entry["node_id"]] = quoted
     document = measurements.load(_raw(args.measurements, measurements.MAX_BYTES))
     pcr7_judged = judge_enrolled(document, enrolled)
     policy = {k: v for k, v in (("heartbeat_max_lifetime_s", args.heartbeat_max_lifetime_s),
                                 ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s)) if v is not None}
-    anchor_policy, generated = offline_keys_record(read_json(args.offline_keys_record, membership.MAX_BYTES), root)
     candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy, anchor_policy, cards)
     require(not os.path.lexists(args.out), "%s exists: nothing is overwritten" % args.out)
     for line in diff({"nodes": []}, candidate):
@@ -667,6 +669,9 @@ def _propose_genesis(args, root, confirm=None, say=print):
         % (anchor_policy["key"], hashlib.sha256(bytes.fromhex(anchor_policy["key"])).hexdigest()))
     say("K_A is from the offline-keys generation record of %s (sealed set %s, %d of %d shares), signed by the pinned root; its "
         "private half signed a challenge when it was sealed" % (generated["at"], generated["master_id"], generated["threshold"], generated["shares"]))
+    for node_id, r in sorted(rotations.items()):
+        say("node %s: rotation counter %s under K_A (Name %s), first value %d (its AK's quote): K_A's approvals for this node are "
+            "made against it (#361)" % (node_id, r["index"], r["name"], r["value"]))
     typed = (confirm or keyfd.tty_line)("type the two owner cards' serials, as printed ON THE CARDS, in the order above: ").split()
     require(typed == order, "the serials typed are not the owner cards above: nothing was written")
     _write_new(args.out, json.dumps(candidate, indent=2, sort_keys=True).encode() + b"\n")
@@ -855,7 +860,7 @@ def main(argv=None):
              lambda: token_signer(args.key, args.module, args.opensc_conf, pin, os.path.join(state, LATCH)),
              input, args.out, state, args.chain_out, pin_source="env (test)" if args.pin_env else "terminal", step=_step(args))
         return 0
-    except (Refused, attest.Refused, OSError, ValueError) as error:
+    except (Refused, attest.Refused, enrol.Refused, OSError, ValueError) as error:     # enrol's: proven_entry and rotation_of at the genesis
         print("regalia-manifest: refused: %s" % error, file=sys.stderr)
         return 2
 

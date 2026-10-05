@@ -929,6 +929,15 @@ class ProposeGenesis(unittest.TestCase):
                                     "2026-10-04T12:00:00Z", policy, anchor or self.anchor(),
                                     card_record or {"sequence": 1, "digest": "ca" * 32})
 
+    def bundle_of(self, entry, k_a=None, value=None):
+        """A node's bundle as the genesis reads it beside its proof (stubbed here): its entry, and its rotation counter (#361
+        C1) as `enrol init` makes it under K_A (default: the test K_A), at a value of its own."""
+        from deploy.baremetal import anchorpolicy
+        point = self.anchor(k_a)["key"]
+        index = anchorpolicy.ROTATION_INDEX
+        return dict(entry, rotation={"index": index, "name": anchorpolicy.rotation_name(int(index, 16), point, node_id=entry["node_id"]).hex(),
+                                     "value": value or 3 + "abc".index(entry["node_id"])})
+
     def anchor(self, key=None):
         from tests.test_baremetal_membership_v4 import typed
         return typed(key or self.k_a)
@@ -1138,12 +1147,13 @@ class ProposeGenesis(unittest.TestCase):
             os.chmod(os.path.join(state, name), 0o600)
         return state
 
-    def run_cli(self, *extra, typed="40000001 40000002", record=None, root=None, with_record=True, logged=None, with_state=True):
+    def run_cli(self, *extra, typed="40000001 40000002", record=None, root=None, with_record=True, logged=None, with_state=True,
+                rotation_k_a=None):
         record = record or self.card_record()
         nodes = []
         for e in self.entries:                       # each node's three files; their proof is enrol's (stubbed below, tested there)
             files = []
-            for kind, content in (("bundle", e), ("keep", {"node_id": e["node_id"]}), ("activation", {"node_id": e["node_id"]})):
+            for kind, content in (("bundle", self.bundle_of(e, (rotation_k_a or {}).get(e["node_id"]))), ("keep", {"node_id": e["node_id"]}), ("activation", {"node_id": e["node_id"]})):
                 files.append(os.path.join(self.d, "%s-%s.json" % (kind, e["node_id"])))
                 with open(files[-1], "w") as f:
                     json.dump(content, f)
@@ -1171,7 +1181,7 @@ class ProposeGenesis(unittest.TestCase):
 
         def proven(bundle, system_pub, keep, activation, run=None):
             self.assertEqual((system_pub, keep["node_id"], activation["node_id"]), (b"system-phase PCR key (stub)\n",) + (bundle["node_id"],) * 2)
-            return bundle, self.enrolled[bundle["node_id"]]
+            return {k: v for k, v in bundle.items() if k != "rotation"}, self.enrolled[bundle["node_id"]]   # the entry, as proven_entry gives it
         stdout, stderr = io.StringIO(), io.StringIO()
         with unittest.mock.patch("sys.stdout", stdout), unittest.mock.patch("sys.stderr", stderr), \
                 unittest.mock.patch.object(tool.keyfd, "tty_line", lambda prompt: typed), unittest.mock.patch.object(tool.enrol, "proven_entry", proven):
@@ -1203,6 +1213,37 @@ class ProposeGenesis(unittest.TestCase):
         self.assertIn("anchor-policy key K_A (#361; fixed for the life of this genesis: a new one is a new genesis): " + typed(self.k_a)["key"], out)
         self.assertIn("K_A is from the offline-keys generation record of 2026-10-04T10:00:00Z (sealed set " + "ab" * 16 + ", 2 of 3 shares), "
                       "signed by the pinned root", out)
+
+    def test_each_node_s_rotation_counter_is_under_the_genesis_k_a(self):
+        """#361 C1 (regalia-kms-95): the AK-quoted Name of each node's rotation counter must be the one it has under THIS
+        genesis's K_A; a node enrolled with another anchor-policy file is refused by name, and nothing is written."""
+        from cryptography.hazmat.primitives.asymmetric import ec
+        code, out, err, path = self.run_cli()
+        self.assertEqual(code, 0, err)
+        for node_id, value in (("a", 3), ("b", 4), ("c", 5)):
+            self.assertIn("node %s: rotation counter 0x01500020 under K_A" % node_id, out)
+            self.assertIn("first value %d (its AK's quote)" % value, out)
+        os.unlink(path)
+        # node a's counter claimed by node b's bundle (one Name per node, #361): refused as another K_A's would be
+        from deploy.baremetal import enrol
+        b = self.bundle_of(self.entries[1])
+        swapped = dict(b, rotation=dict(b["rotation"], name=self.bundle_of(self.entries[0])["rotation"]["name"]))
+        with self.assertRaisesRegex(enrol.Refused, "b's rotation counter is not under this genesis's K_A"):
+            enrol.rotation_of(swapped, self.anchor()["key"])
+        # regalia-kms-95 on #462: an R under the SHARED "rotation" class (a pre-per-node init, or a tampered one) is
+        # refused, and so is a bundle that names no node: never judged against the shared Name by omission
+        from deploy.baremetal import anchorpolicy
+        shared = dict(b, rotation=dict(b["rotation"], name=anchorpolicy._shared_rotation_name(int(anchorpolicy.ROTATION_INDEX, 16),
+                                                                                               self.anchor()["key"]).hex()))
+        with self.assertRaisesRegex(enrol.Refused, "b's rotation counter is not under this genesis's K_A"):
+            enrol.rotation_of(shared, self.anchor()["key"])
+        for missing in ({k: v for k, v in b.items() if k != "node_id"}, dict(b, node_id=None)):
+            with self.assertRaisesRegex(enrol.Refused, "the bundle names no node ID: its rotation counter cannot be judged"):
+                enrol.rotation_of(missing, self.anchor()["key"])
+        code, _, err, path = self.run_cli(rotation_k_a={"b": ec.generate_private_key(ec.SECP256R1())})
+        self.assertEqual(code, 2)
+        self.assertIn("b's rotation counter is not under this genesis's K_A", err)
+        self.assertFalse(os.path.exists(path))
 
     def test_the_genesis_needs_k_a(self):
         code, _, err, path = self.run_cli("no-anchor")

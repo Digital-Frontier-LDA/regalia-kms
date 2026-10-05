@@ -1,7 +1,9 @@
 """deploy/baremetal/anchorpolicy.py (#361): every Name and policy digest, recomputed without a TPM, equal to the TPM's
 own (tests/vectors/anchor-policy-v1.json, measured on swtpm by tests/vectors/make-anchor-policy-v1.py)."""
+import hashlib
 import json
 import os
+import re
 import unittest
 
 from deploy.baremetal import anchorpolicy as ap
@@ -15,7 +17,7 @@ with open(os.path.join(HERE, "vectors", "anchor-policy-v1.json")) as f:
 class TheTpmsOwnValues(unittest.TestCase):
     def setUp(self):
         self.index = int(V["rotation"]["index"], 16)
-        self.rotation = ap.rotation_name(self.index, V["k_a"]["point"])
+        self.rotation = ap._shared_rotation_name(self.index, V["k_a"]["point"])
 
     def test_k_a_s_name_is_the_one_loadexternal_gives(self):
         self.assertEqual(ap.k_a_name(V["k_a"]["point"]).hex(), V["k_a"]["name"])
@@ -25,10 +27,10 @@ class TheTpmsOwnValues(unittest.TestCase):
         for cls, want in V["refs"].items():
             with self.subTest(cls=cls):
                 self.assertEqual(ap.REFS[cls].hex(), want["policy_ref_hex"])
-                self.assertEqual(ap.class_policy(V["k_a"]["point"], cls).hex(), want["auth_policy"])
+                self.assertEqual(ap.class_policy(V["k_a"]["point"], cls, shared=True).hex(), want["auth_policy"])
 
     def test_the_rotation_counter_s_name_before_and_after_its_first_write(self):
-        self.assertEqual(ap.rotation_name(self.index, V["k_a"]["point"], written=False).hex(), V["rotation"]["name_unwritten"])
+        self.assertEqual(ap._shared_rotation_name(self.index, V["k_a"]["point"], written=False).hex(), V["rotation"]["name_unwritten"])
         self.assertEqual(self.rotation.hex(), V["rotation"]["name_written"])
 
     def test_the_approved_policies_and_the_increment_approvals(self):
@@ -82,8 +84,80 @@ class Refusals(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, "n is a 64-bit count"):
             ap.increment_from(bytes(34), -1)
 
+    def test_the_anchor_policy_file_is_read_by_name(self):
+        """#361 C1: `enrol init --anchor-policy`'s file. K_A's approval of R's first increment is verified under the K_A the
+        file names before any TPM is asked; each guard by an input only it refuses."""
+        from tests.test_baremetal_enrol import FIRST, K_A_POINT, first_file
+        node_id, point, der = ap.read_first(FIRST)
+        self.assertEqual((node_id, point), ("a", K_A_POINT))
+        with self.assertRaisesRegex(m.Refused, "the anchor-policy file is for node a, not b"):
+            ap.read_first(FIRST, "b")
+        bad, _ = first_file(0x0BAD)
+        sig = FIRST["increment_first"]
+        high = "%s%064x" % (sig[:64], m.P256_ORDER - int(sig[64:], 16))              # the high-S twin of a valid signature
+        for name, doc, reason in (
+                ("another schema", dict(FIRST, schema="x"), "the anchor-policy file is not a regalia.anchor-policy-first/v1"),
+                ("an extra field", dict(FIRST, note=1), "the anchor-policy file fields mismatch"),
+                ("an Ed25519 K_A", dict(FIRST, anchor_policy_key={"alg": "ed25519", "key": "00" * 32}), "alg must be one of ecdsa-p256"),
+                ("another key's signature", dict(FIRST, increment_first=bad["increment_first"]), "increment_first does not verify under the K_A it names"),
+                ("the high-S twin", dict(FIRST, increment_first=high), "increment_first is not a low-S P-256 signature"),
+                ("a short signature", dict(FIRST, increment_first="ab"), "increment_first is not a P-256 signature (128 lowercase hex"),
+                ("not an object", [], "the anchor-policy file is not an object")):
+            with self.subTest(name), self.assertRaisesRegex(m.Refused, re.escape(reason)):
+                ap.read_first(doc)
+        # an approval for another class (the anchor's) does not start R: the TPM would refuse it, and so does this check
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+        key = ec.derive_private_key(0x361C1, ec.SECP256R1())
+        r, s_ = decode_dss_signature(key.sign(ap.authorize_message(ap.increment_first(), "anchor"), ec.ECDSA(hashes.SHA256())))
+        # ... and node b's approval does not start node a's R (per-node classes, #361 issuecomment-5996727713)
+        theirs, _ = first_file(node_id="b")
+        with self.assertRaisesRegex(m.Refused, "does not verify under the K_A it names"):
+            ap.read_first(dict(FIRST, increment_first=theirs["increment_first"]))
+        with self.assertRaisesRegex(m.Refused, "does not verify under the K_A it names"):
+            ap.read_first(dict(FIRST, increment_first="%064x%064x" % (r, min(s_, m.P256_ORDER - s_))))
+
+    def test_a_failed_read_is_not_absence(self):
+        """regalia-kms-95 on #462: nv_name_of returns None only when the TPM's list lacks the index."""
+        import subprocess
+
+        def tpm(listed, answers=True):
+            def run(argv, **kw):
+                if argv[0] == "tpm2_nvreadpublic":
+                    return subprocess.CompletedProcess(argv, 1, b"", b"busy")
+                return subprocess.CompletedProcess(argv, 0 if answers else 1, b"- 0x1500016\n" + (b"- 0x1500020\n" if listed else b""), b"no TCTI")
+            return run
+        self.assertIsNone(ap.nv_name_of("0x01500020", tpm(listed=False)))
+        with self.assertRaisesRegex(m.Refused, "the TPM lists NV index 0x01500020 and did not give its public area"):
+            ap.nv_name_of("0x01500020", tpm(listed=True))
+        with self.assertRaisesRegex(m.Refused, "listing the TPM's NV indices \\(the TPM does not answer\\) failed"):
+            ap.nv_name_of("0x01500020", tpm(listed=False, answers=False))
+
+    def test_each_node_s_rotation_counter_has_its_own_name(self):
+        """#361 (1e, d9, 95): R is defined under PolicyAuthorize(Name(K_A), SHA-256("regalia-rotation/v1\\0" || node_id)), so
+        its Name, and every approval naming it, is one node's; the ref is 32 bytes, within any TPM 2.0's TPM2B_NONCE."""
+        index, point = int(ap.ROTATION_INDEX, 16), V["k_a"]["point"]
+        names = {n: ap.rotation_name(index, point, n) for n in ("a", "b", "c", "x" * 32)}
+        self.assertEqual(len(set(names.values())), 4)
+        self.assertNotIn(ap._shared_rotation_name(index, point), names.values())                 # nor the shared class's
+        for n in names:
+            self.assertEqual(len(ap._ref(ap.rotation_class(n))), 32)
+        self.assertEqual(ap._ref("rotation/a"), hashlib.sha256(b"regalia-rotation/v1\x00a").digest())
+        k_sys = bytes.fromhex(V["k_sys"]["name"])
+        self.assertNotEqual(ap.approved(k_sys, names["a"], 7), ap.approved(k_sys, names["b"], 7))
+        # the shared class is the vectors' only: refused on every production path (95)
+        for call in (lambda: ap.class_policy(point, "rotation"), lambda: ap.authorize_message(ap.increment_first(), "rotation")):
+            with self.assertRaisesRegex(m.Refused, "the shared rotation class is the vectors' only"):
+                call()
+        with self.assertRaises(TypeError):
+            ap.rotation_name(index, point)                                              # no node: no Name
+        for bad in ("A", "", "a" * 33, "a/b", None):
+            with self.subTest(bad=bad), self.assertRaisesRegex(m.Refused, "is not a node ID|no policy class"):
+                ap.rotation_class(bad) if bad is not None else ap.rotation_class(bad)
+
     def test_classes_never_share_a_policy(self):
-        policies = {ap.class_policy(V["k_a"]["point"], c) for c in ap.REFS}
+        policies = {ap.class_policy(V["k_a"]["point"], c, shared=True) for c in ap.REFS}
         self.assertEqual(len(policies), len(ap.REFS))
 
 
