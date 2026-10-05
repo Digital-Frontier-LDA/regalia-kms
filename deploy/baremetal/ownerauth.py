@@ -261,16 +261,26 @@ def held(directory=None):
     or adopted it (`directory`/ownerauth.json, default HELD_DIR; root's, 0600; regalia-kms-d9 on #456), or None when none
     is held (a node set up before #456, or none set)."""
     path = os.path.join(HELD_DIR if directory is None else directory, HELD_FILE)
+    recovery = ("inspect it; then `enrol ownerauth --check --adopt --record RECORD` (the value on standard input) proves "
+                "the record the TPM answers to and records it, keeping this file as %s.untrusted. Nothing was changed" % HELD_FILE)
     try:
-        st = os.lstat(path)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)    # no link followed; judged by what was opened
     except FileNotFoundError:
         return None
-    require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) & 0o077 == 0,
-            "%s is not a regular file of root's that only root reads: the node's owner-authorization state cannot be trusted" % path)
-    with open(path, "rb") as f:
-        doc = membership.load(f.read(4096), 4096)
+    except OSError as error:
+        raise Refused("%s cannot be opened (%s): the node's owner-authorization state cannot be trusted; %s"
+                      % (path, error.strerror, recovery)) from None
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) & 0o077 == 0,
+                "%s is not a regular file of root's that only root reads: the node's owner-authorization state cannot be "
+                "trusted; %s" % (path, recovery))
+        try:
+            doc = membership.load(f.read(4096), 4096)
+        except Refused:
+            doc = None
     require(isinstance(doc, dict) and sorted(doc) == ["current"] and isinstance(doc["current"], str)
-            and HEX64.fullmatch(doc["current"]) is not None, "%s is not {\"current\": <64 hex>}" % path)
+            and HEX64.fullmatch(doc["current"]) is not None, "%s is not {\"current\": <64 hex>}: %s" % (path, recovery))
     return doc["current"]
 
 

@@ -2174,6 +2174,13 @@ def _ownerauth_hold(directory, digest):
     _atomic_json(os.path.join(directory, OWNERAUTH_STATE), {"current": digest})
 
 
+def _ownerauth_replace(directory, digest, untrusted):
+    """Hold `digest`, first moving an untrustworthy held file aside (renamed, never followed: a link moves as a link)."""
+    if untrusted:
+        os.replace(os.path.join(directory, OWNERAUTH_STATE), os.path.join(directory, OWNERAUTH_STATE + ".untrusted"))
+    _ownerauth_hold(directory, digest)
+
+
 def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None, run=subprocess.run, directory=ENROL_DIR,
                   ek_name=None, rotate_from=None, adopt=False):
     """`enrol ownerauth` (#242 step C): this TPM's owner authorization from the node's envelope, the value on `stream`
@@ -2192,7 +2199,15 @@ def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None
     require(not (check and rotate_from), "--check and --rotate-from are different commands: give one")
     require(not adopt or check, "--adopt goes with --check: it records the record the TPM answers to")
     digest_of = ownerauth.record_digest
-    held = ownerauth_current(directory)
+    try:
+        held, untrusted = ownerauth_current(directory), False
+    except membership.Refused:
+        # an untrustworthy held file (not root's 0600, a link, malformed): a rotation or a plain check is refused with the
+        # way on, which is this command's adopt, or a set from empty; each replaces it only after the TPM has answered,
+        # keeping it as .untrusted (no stranding by the guard itself: regalia-kms-d9 on #502)
+        if rotate_from is not None or (check and not adopt):
+            raise
+        held, untrusted = None, True
     if rotate_from is not None:
         # both values in one read: read_value reads one byte past its 65 to see trailing input, which would eat the
         # second value's first; so exactly 130 bytes, each half judged by read_value on its own
@@ -2238,13 +2253,14 @@ def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None
             # one way (regalia-kms-d9): missing -> written; a node that already holds another record is not overwritten
             require(held is None or held == digest_of(envelope), "this node already holds another owner-authorization record "
                     "(%s...): --adopt only records one for a node that holds none. Nothing was changed" % (held or "")[:16])
-            _ownerauth_hold(directory, digest_of(envelope))
-            return "the TPM's owner authorization is %s's envelope value; the node now holds this record" % node_id
+            _ownerauth_replace(directory, digest_of(envelope), untrusted)
+            return "the TPM's owner authorization is %s's envelope value; the node now holds this record%s" % (
+                node_id, " (the untrustworthy file it replaced is kept as %s.untrusted)" % OWNERAUTH_STATE if untrusted else "")
         on = ("the node holds this record" if held == digest_of(envelope) else "the node holds NO record of it (--adopt)"
               if held is None else "but the node holds ANOTHER record (%s...)" % held[:16])
         return "the TPM's owner authorization is %s's envelope value; %s" % (node_id, on)
     ownerauth.set_owner(auth, ek_name or enrolled_ek_name(directory, node_id), tcti, run)
-    _ownerauth_hold(directory, digest_of(envelope))
+    _ownerauth_replace(directory, digest_of(envelope), untrusted)
     return "the TPM's owner authorization is set to %s's envelope value, and answers to it; keep the envelope, never the value" % node_id
 
 

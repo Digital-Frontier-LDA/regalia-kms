@@ -449,6 +449,44 @@ class Rotation(unittest.TestCase):
         with self.assertRaisesRegex(enrol.Refused, "--adopt goes with --check"):
             enrol.set_ownerauth("a", self.pin, self.records["new"], io.BytesIO(b""), run=self.tpm, directory=self.d, adopt=True)
 
+    def test_an_untrustworthy_held_file_is_refused_with_its_recovery_and_the_recovery_works(self):
+        """regalia-kms-d9 on #502: no stranding by the guard itself. A held file that is not root's 0600 (or a link, or
+        malformed) is refused everywhere with the way on named, and that way on (--check --adopt, after the TPM answers)
+        replaces it, keeping the old one as .untrusted."""
+        path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
+        check = lambda record, raw, **kw: enrol.set_ownerauth("a", self.pin, self.records[record], io.BytesIO((raw.hex() + "\n").encode()),
+                                                              check=True, run=self.tpm, directory=self.d, **kw)
+
+        def malformed():
+            with open(path, "w") as f:                                     # stays 0600: only its content is wrong
+                f.write("[]")
+        recovery = "then `enrol ownerauth --check --adopt --record RECORD`"
+        for label, spoil in (("readable", lambda: os.chmod(path, 0o644)),
+                             ("a link", lambda: (os.rename(path, path + ".real"), os.symlink(path + ".real", path))),
+                             ("malformed", malformed)):
+            with self.subTest(label):
+                for leftover in (path, path + ".real", path + ".untrusted"):
+                    if os.path.lexists(leftover):
+                        os.unlink(leftover)
+                enrol._ownerauth_hold(self.d, self.digest("current"))
+                spoil()
+                with open(self.records["current"]) as f:
+                    current = json.load(f)
+                with self.assertRaisesRegex(m.Refused, recovery):                    # the tools (enrol commit, reanchor, recount)
+                    ownerauth.require_held(current, self.d)
+                with self.assertRaisesRegex(m.Refused, recovery):                    # a rotation
+                    self.rotate()
+                with self.assertRaisesRegex(m.Refused, recovery):                    # a plain check
+                    check("current", self.current)
+                with self.assertRaisesRegex(enrol.Refused, "is NOT a's envelope value"):     # the TPM must answer first
+                    check("new", self.new, adopt=True)
+                self.assertTrue(os.path.lexists(path) and not os.path.lexists(path + ".untrusted"))
+                self.assertIn("kept as ownerauth.json.untrusted", check("current", self.current, adopt=True))
+                self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+                self.assertTrue(os.path.lexists(path + ".untrusted"))
+                ownerauth.require_held(current, self.d)                              # the tools work again
+        self.assertEqual(self.tpm.salted_with, [])
+
     def test_no_salted_changeauth_near_dictionary_attack_lockout(self):
         """regalia-kms-d9: the one strike-capable call (a changeauth in the EK-salted session) is not made unless the TPM
         has min(3, MAX) tries left: at MAX the node's DA-protected keys lock out."""

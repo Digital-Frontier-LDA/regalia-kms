@@ -106,7 +106,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     - The node holds which record it is on (`/var/lib/regalia-enrol/ownerauth.json`). A rotation from another is
       refused, and so is any other record given to `enrol commit`, `reanchor` or `recount` (`--ownerauth`), by name and
       before the TPM (#460). A node that holds none (set up before #456) refuses them all until
-      `enrol ownerauth --check --adopt` records the one its TPM answers to. **`seal-hsm-pin.sh` still takes the value
+      `enrol ownerauth --check --adopt` records the one its TPM answers to. A held file that can't be trusted (not
+      root's 0600, a link, malformed) is refused the same way, with that recovery named. After the TPM has answered,
+      adopt (or a set from empty) replaces it and keeps the old one as `ownerauth.json.untrusted` for inspection
+      (regalia-kms-d9). **`seal-hsm-pin.sh` still takes the value
       alone** (`--ownerauth-stdin`, no record), so a stale value there is refused by the TPM, not before it.
     - The rollback guard orders records by their root-signed `at`, the laptop's clock. Ordering by the card record the
       owner-authorization record encrypted to (a ceremony schema change, after #438) is #461.
