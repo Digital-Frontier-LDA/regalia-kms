@@ -74,7 +74,7 @@ ADMISSION_DIR_MODE = _state_directory_mode("regalia-admission.service")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
+from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, lease, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
 NAMES = ("a", "b", "c")
@@ -188,6 +188,7 @@ class Cluster:
         self.time = {n: True for n in names}          # authenticated time, per node
         self.stop_threads = False
         self.threads = []
+        self.state_revision = 1                       # D32: the etcd revision every node's stand-in watch has applied
         self.chain = []                               # the signed envelopes, epoch 1 first
         self.manifest = None
         self.keys = {}
@@ -210,6 +211,12 @@ class Cluster:
     def build(self):
         # the services' users and groups, from the shipped file (regalia-sync, regalia-admission, their trails' groups)
         sh("systemd-sysusers", str(ROOT / "deploy" / "baremetal" / "units" / "regalia.sysusers.conf"))
+        # D32 (#432): the daemon's user, which writes /run/regalia-state/applied.json and /run/regalia-kms/session-key.json
+        # on a host (deploy/systemd/regalia-kms.service). No daemon runs here: the fixture writes both as that user would
+        (self.work / "regalia-kms.sysusers.conf").write_text('u regalia-kms - "Regalia KMS daemon (e2e: the fixture writes its files)" - -\n')
+        sh("systemd-sysusers", str(self.work / "regalia-kms.sysusers.conf"))
+        for mount_point in (os.path.dirname(lease.APPLIED_PATH), os.path.dirname(lease.SESSION_KEY_PATH)):
+            os.makedirs(mount_point, exist_ok=True)   # where each node's own directory is bound in its units
         os.chmod(self.work, 0o711)                    # each node's directory is reached through it, read in it only
         # the checkout may sit where the services' users cannot go (a runner's home is 0750): they run a root-owned copy
         shutil.copytree(ROOT / "deploy", self.code / "deploy", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -235,6 +242,11 @@ class Cluster:
             os.chmod(n.state, 0o755)
             sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
             os.chmod(n.admission, ADMISSION_DIR_MODE)
+        for n in self.nodes.values():
+            self._state_files(n)
+        writer = threading.Thread(target=self._state_writer, daemon=True)     # stopped by close() (stop_threads)
+        writer.start()
+        self.threads.append(writer)
         if self.audit:
             self._audit_start()
 
@@ -521,6 +533,55 @@ class Cluster:
         key = key or hbt.ROOT
         return {"manifest": manifest, "signature": {"signer": "root", "key": hbt.pub(key), "sig": key.sign(membership.DOMAIN + membership.canonical(manifest)).hex()}}
 
+    # ---- D32 (#432): what the daemon writes on a host, written here ----
+
+    STATE_CLUSTER = "e2e3e2e3e2e3e2e3"
+
+    def _write_as_daemon(self, path, doc):
+        """`doc` at `path` as the daemon writes it: a temporary file renamed over, the daemon's user's, mode 0644."""
+        import pwd
+        user = pwd.getpwnam(lease.DAEMON_USER)
+        tmp = path.with_name("." + path.name + ".tmp")
+        tmp.write_text(json.dumps(doc))
+        os.chown(tmp, user.pw_uid, user.pw_gid)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+
+    def _state_files(self, n):
+        """The node's stand-ins for /run/regalia-state and /run/regalia-kms (bound in its units: properties, as_root),
+        the daemon's user's: its session key (one per node, as one daemon start) and its applied etcd revision."""
+        import pwd
+        user = pwd.getpwnam(lease.DAEMON_USER)
+        for d in (n.dir / "run-state", n.dir / "run-kms"):
+            d.mkdir(exist_ok=True)
+            os.chown(d, user.pw_uid, user.pw_gid)
+            os.chmod(d, 0o755)
+        key = n.dir / "run-kms" / os.path.basename(lease.SESSION_KEY_PATH)
+        if not key.exists():
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+            public = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(b"e2e3 session key " + n.name.encode()).digest()).public_key()
+            self._write_as_daemon(key, {"boot_id": lease.this_boot(), "daemon_started": 0, "session_key": public.public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()})
+        self._write_applied(n)
+
+    def _write_applied(self, n):
+        self._write_as_daemon(n.dir / "run-state" / os.path.basename(lease.APPLIED_PATH),
+                              {"cluster_id": self.STATE_CLUSTER, "revision": self.state_revision, "boot_id": lease.this_boot(),
+                               "boottime_ns": time.clock_gettime_ns(time.CLOCK_BOOTTIME)})
+
+    def _state_writer(self):
+        """The daemon's etcd watch stand-in: every node's applied.json rewritten every 3 s, so it is never older than a
+        renewal interval (lease.read_applied refuses past 10 s). A node whose stand-ins are not made yet is skipped."""
+        while not self.stop_threads:
+            for n in list(self.nodes.values()):
+                if (n.dir / "run-state").is_dir():
+                    try:
+                        self._write_applied(n)
+                    except OSError:
+                        pass
+            time.sleep(3)
+
     def _configure(self, n):
         example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
         others = [o for o in self.nodes.values() if o is not n]
@@ -638,7 +699,10 @@ class Cluster:
         # where a booted host's systemd-stub puts the image's PCR signatures and its system-phase key: the node's own
         pcr = n.dir / "pcr"
         props += ["BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
+                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY),
+                  # D32: the daemon's etcd state and session key, as the node's own (the fixture writes them: _state_files)
+                  "BindReadOnlyPaths=%s:%s" % (n.dir / "run-state", os.path.dirname(lease.APPLIED_PATH)),
+                  "BindReadOnlyPaths=%s:%s" % (n.dir / "run-kms", os.path.dirname(lease.SESSION_KEY_PATH))]
         return props
 
     def start(self, name, services=("sync", "wg-apply")):
@@ -833,6 +897,7 @@ class Cluster:
         # enrolment ran on the booted system (PCR 11 in its system phase, _leave_initrd); the host reboots before its
         # initrd asks for the disk, so its quote shows the initrd phase the peers admit
         self.power_cycle(new)
+        self._state_files(n)                            # D32: its daemon's stand-in files, as every node's
         sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
@@ -1340,7 +1405,10 @@ class Cluster:
         pcr = n.dir / "pcr"
         props = ["WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1",
                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
+                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY),
+                  # D32: the daemon's etcd state and session key, as the node's own (the fixture writes them: _state_files)
+                  "BindReadOnlyPaths=%s:%s" % (n.dir / "run-state", os.path.dirname(lease.APPLIED_PATH)),
+                  "BindReadOnlyPaths=%s:%s" % (n.dir / "run-kms", os.path.dirname(lease.SESSION_KEY_PATH))]
         props += ["NetworkNamespacePath=/run/netns/" + n.ns] if in_ns else []
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
         return sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, label),
