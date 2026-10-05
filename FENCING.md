@@ -10,8 +10,12 @@
 ## The contract
 
 1. **A server serves only while it holds its own lease, and the lease is not exclusive.**
-   - Two of the three servers co-sign it with their TPM-held signing keys, and the server's own signature
-     must be one of them.
+   - Two of the three servers co-sign it with their TPM-held keys, and the server's own signature must be one
+     of them.
+   - **Still open on #432 (issuecomment-6001366485):** whether this lease is the TPM-attested runtime lease
+     (`lease.py`, already read through the admission file) or a separate activation lease. 48 and 95
+     recommend the runtime lease, with `activation.verify()` / `membership.VerifyActivation` kept only for the
+     owner's recovery lease. This page holds for either.
    - It names the server, its registry site, the registry digest, and the membership manifest it was
      granted under.
    - It lives 30 seconds and is renewed every 10 seconds. A server cut off from the majority can't renew, so
@@ -27,9 +31,12 @@
    - advancing a per-key high-water mark (a chain's sign height or sequence): a repeated or lower value is
      refused, as tmkms and Horcrux do;
    - changing a key's state (enable, disable, destroy): honoured on every server within one lease.
-4. **No server acts on key state older than its lease.** The lease carries `state_revision`: the highest
-   etcd revision any of its signers had applied when it signed (each co-signer stamps its own). A server
-   serves under the lease only once it has applied that revision itself.
+4. **No server acts on key state older than its lease.**
+   - The lease carries one `state_revision`: the subject server's own applied etcd revision, bound into what
+     its co-signers sign.
+   - A co-signer refuses a value below the revision it had itself applied one lease ago.
+   - A co-signer signs nothing until it has one lease of history since its own start, so it fails closed.
+   - The Gate serves under the lease only once its own cache has applied at least `state_revision`.
 5. **The store orders and replicates; it never decides.**
    - The store is etcd: Raft, crash-fault tolerant, not Byzantine-tolerant.
    - Every entry carries its own authorization (the approvers' signatures, the policy authority's, or the
@@ -65,12 +72,13 @@ before the executor admits an operation, before the hardware is used, and before
 2. **The lease file** (`/var/lib/regalia-sync/activation-lease.json`).
    - regalia-sync writes it atomically. The Gate reads it without following a link, and refuses it unless it
      is owned by regalia-sync or root, writable by no one else, and at most 16 KiB.
-   - Its signatures must meet the current manifest's `activation_signers` under the current keys. This is
-     `membership.VerifyActivation`, held to the Python by `tests/vectors/activation-v2.json`.
+   - Its signatures must meet the current manifest's signer rule under the current keys. That's
+     `membership.VerifyActivation` (held to the Python by `tests/vectors/activation-v2.json`) for the owner's
+     recovery lease. For the everyday lease it's whichever verifier #432's one-lease decision names.
    - It must name this server's node, site and registry.
 3. **The lease's window, on two clocks.**
-   - On the wall clock: not before `not_before`, with up to 60 s of slack for a signer whose clock is a
-     little fast, and not at or after `expires_at`.
+   - On the wall clock: not before `not_before`, with up to 5 s of slack for a signer whose clock is a
+     little fast (the signers' own `AHEAD_S`), and not at or after `expires_at`.
    - On CLOCK_BOOTTIME, which nobody can set: at most the lease's own length after this Gate first saw those
      bytes. A server whose wall clock is behind can never keep a lease longer than it lasts. Clock skew can
      shorten a lease; it never lengthens one.
@@ -110,8 +118,8 @@ between the servers (at least 100 ms round trip):
 - a disabled key is refused on every server within one lease;
 - a lease kept past its length by a slow clock is refused (the first-seen fence);
 - a stalled watch stops the server;
-- a server restored from an old disk doesn't serve until it has caught up, because peers co-sign only at the
-  current committed revision;
+- a server restored from an old disk doesn't serve until it has caught up, because peers co-sign only a
+  revision at or above what they had applied one lease ago (equality would flap at 500 km);
 - a lone survivor serves stateless keys only, and only under the owner's authorization.
 
 ## What goes
@@ -136,7 +144,10 @@ That key also verifies the commissioning record (#220). The record moves to the 
   - The external audit collector detects this: every approval-gated signature must name exactly one committed
     spend.
   - The exposure is no larger than before D32, since the PIN credential is already on every server.
-- **Key state can be up to one lease stale** (30 s). Cloud KMSs document a similar bound for theirs.
+- **Key state can be up to one lease stale** (30 s). Cloud KMSs document a similar bound for theirs. The
+  revision floor has the same staleness: a co-signer checks against what it had applied one lease ago.
+- **A server co-signs nothing for one lease after it starts**, because it has no revision history yet.
+  After a restart of all three servers at once, nothing serves for about one lease.
 - **etcd's own keys are files, not TPM keys.** etcd has no PKCS#11 support. The files sit inside the encrypted
   root.
 
