@@ -540,6 +540,8 @@ class OnQemu(tub.OnSwtpm):
         self.reference = reference(expected["pcr12"])
         since = len(self.events)
         said = self.boot("2k-other-kernel-unapproved", credentials, recovery=after_attempt(1), image="e2e-k2")
+        print("boot 2k-unapproved: the peers' decisions: %s" % [(e.get("event"), e.get("peer"), e.get("outcome"), (e.get("reason") or "")[:160])
+                                                                 for e in self.events[since:]], file=sys.stderr)
         self.assertEqual(initrd_pcr11(said), other_kernel["pcr11"]["initrd"])
         self.assertRegex(said, r"regalia-unlock: attempt 1: .*; asking again in ")
         self.assertRegex(said, PROMPT.pattern.decode())
@@ -556,6 +558,9 @@ class OnQemu(tub.OnSwtpm):
         self.reference = reference(expected["pcr12"], (("e2e", record), ("e2e-old", older), ("e2e-k2", other_kernel)))
         since = len(self.events)
         said = self.boot("2k-other-kernel", credentials, image="e2e-k2")
+        # what the peers decided, said whatever happens (a refusal at hello names its reason only here)
+        print("boot 2k: the peers' decisions: %s" % [(e.get("event"), e.get("peer"), e.get("outcome"), (e.get("reason") or "")[:160])
+                                                      for e in self.events[since:]], file=sys.stderr)
         unattended(self, said)                                      # the client's "gave the key" line, through its unit only
         self.assertEqual(initrd_pcr11(said), other_kernel["pcr11"]["initrd"])
         # the test's report lines go to /dev/console themselves (e2e/lib/boot-guest/e2e-report), with no forwarding (#413)
