@@ -661,7 +661,6 @@ class NoNvWritePerLease(unittest.TestCase):
         for _ in range(5):
             signer(bytes(32))
         self.assertEqual(sorted(set(calls)), ["tpm2_quote", "tpm2_readpublic"])
-        self.assertFalse([c for c in calls if c.startswith("tpm2_nv") or "write" in c or "increment" in c or c == "tpm2_changeauth"])
 
 
 class OnSwtpm(unittest.TestCase):
