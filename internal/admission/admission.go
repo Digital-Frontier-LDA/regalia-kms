@@ -6,9 +6,9 @@
 // fact, the admission file; this package reads it. That is the kubelet shape: the agent renews,
 // the server reads the outcome.
 //
-//	{"schema": "regalia.admission/v2", "node_id": ..., "session_id": ..., "boot_id": ...,
+//	{"schema": "regalia.admission/v3", "node_id": ..., "session_id": ..., "boot_id": ...,
 //	 "epoch": ..., "manifest_digest": ..., "hsm_serials": ..., "lease_issued_at": ...,
-//	 "requested_boottime_ms": ..., "serve_until_boottime_ms": ..., "reason": ...}
+//	 "requested_boottime_ms": ..., "serve_until_boottime_ms": ..., "mode": "lease" or "recovery", "reason": ...}
 //
 // NO WALL CLOCK. serve_until_boottime_ms is in this host's CLOCK_BOOTTIME, which runs through
 // suspend and cannot be set. The node is admitted while the daemon's own CLOCK_BOOTTIME is below
@@ -49,7 +49,7 @@ import (
 )
 
 const (
-	Schema = "regalia.admission/v2"
+	Schema = "regalia.admission/v3"
 	// MaxSerials is admission.MAX_SERIALS: the hardware tokens one node may list.
 	MaxSerials = 16
 	// MaxAheadMilliseconds is one lease lifetime (lease.MAX_LIFETIME, 30 s; ADR-0002 D32). The writer
@@ -69,7 +69,7 @@ var (
 	bootIDPattern = regexp.MustCompile(`^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$`)
 	serialPattern = regexp.MustCompile(`^[A-Za-z0-9]{1,32}$`)
 	fields        = []string{"schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "hsm_serials", "lease_issued_at",
-		"requested_boottime_ms", "serve_until_boottime_ms", "reason"}
+		"requested_boottime_ms", "serve_until_boottime_ms", "mode", "reason"}
 )
 
 // Document is the admission file, validated.
@@ -83,8 +83,16 @@ type Document struct {
 	LeaseIssuedAt        time.Time
 	RequestedBoottimeMs  int64
 	ServeUntilBoottimeMs int64
-	Reason               string
+	// Mode is ModeLease (a peer's runtime lease) or ModeRecovery (a lone survivor under the owner's authorization).
+	Mode   string
+	Reason string
 }
+
+// The admission's modes (admission.MODES, schema v3; ADR-0002 D32.6).
+const (
+	ModeLease    = "lease"
+	ModeRecovery = "recovery"
+)
 
 // Status is what the gate last decided.
 type Status struct {
@@ -292,6 +300,12 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 	if err != nil {
 		return refuse("CLOCK_BOOTTIME cannot be read")
 	}
+	if document.ServeUntilBoottimeMs != 0 && document.Mode == ModeRecovery {
+		// ADR-0002 D32.6: a lone survivor serves stateless operations only. Until the daemon can refuse every stateful
+		// operation (a Reserve) and every key a directive disabled, it serves nothing in recovery: fail closed (#432)
+		return refuse("the node is in recovery (a lone survivor under the owner's authorization), and this daemon has no " +
+			"stateless-only gate yet: it serves nothing")
+	}
 	if document.ServeUntilBoottimeMs == 0 {
 		reason := document.Reason
 		if reason == "" {
@@ -483,6 +497,12 @@ func Parse(contents []byte) (Document, error) {
 	}
 	if document.ServeUntilBoottimeMs, err = count("serve_until_boottime_ms"); err != nil {
 		return Document{}, err
+	}
+	if document.Mode, err = text("mode"); err != nil {
+		return Document{}, err
+	}
+	if document.Mode != ModeLease && document.Mode != ModeRecovery {
+		return Document{}, errors.New("the admission file's mode is neither lease nor recovery")
 	}
 	if document.Reason, err = text("reason"); err != nil {
 		return Document{}, err

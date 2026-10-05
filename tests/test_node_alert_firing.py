@@ -111,6 +111,8 @@ SCENARIOS = {
         "fault": [("regalia_heartbeat_live", {}, "0+0x10")], "healthy": [("regalia_heartbeat_live", {}, "1+0x10")], "at": 420},
     "RegaliaNotServing": {
         "fault": [("regalia_admission_serving", {}, "0+0x10")], "healthy": [("regalia_admission_serving", {}, "1+0x10")], "at": 420},
+    "RegaliaSurvivorRecoveryActive": {
+        "fault": [("regalia_admission_recovery", {}, "1+0x10")], "healthy": [("regalia_admission_recovery", {}, "0+0x10")], "at": 60},
     "RegaliaAuditTrailBehind": {
         "fault": [("regalia_audit_trail_backlog", {"trail": "sync"}, "3+0x20"),
                   ("regalia_audit_trail_last_success_seconds", {"trail": "sync"}, "0+0x20")],

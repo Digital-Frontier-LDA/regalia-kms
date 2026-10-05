@@ -26,6 +26,14 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **The survivor's admission mode** (ADR-0002 D32.6, #432 item (e) part 2): admission's v3 document says whether the
+  node serves under a peer's lease (`mode: lease`) or alone under the owner's survivor authorization (`mode: recovery`).
+  - Recovery is entered only while no normal lease holds, is left at the first one, and is bounded by one lease
+    lifetime and by the authorization's end.
+  - It is recorded on the admission trail and raises `RegaliaSurvivorRecoveryActive` for as long as it holds.
+  **The daemon serves nothing in recovery yet:** it refuses `mode: recovery` until its stateless-only gate exists
+  (ed). Not built yet: the node's source of the authorization (installed at the console, survivor.py, #493) and its
+  wiring into the admission service.
 - **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
   refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
   its verification under the current manifest's `activation_signers`, each node's grant record and

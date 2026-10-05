@@ -272,6 +272,7 @@ def drill(serial, label, pin, w, runtime, key_id, processes):
                     "manifest_digest": "d1" * 32, "hsm_serials": serial, "lease_issued_at": day(0),
                     "requested_boottime_ms": (now if asked is None else asked) if serve else 0,
                     "serve_until_boottime_ms": now + (lease_module.MAX_LIFETIME - admission.MARGIN) * 1000 if serve else 0,
+                    "mode": "lease",
                     "reason": "" if serve else "the drill refuses the lease"}
         tmp = runtime / "admission" / ".admission.new"
         tmp.write_text(json.dumps(document) + "\n")
