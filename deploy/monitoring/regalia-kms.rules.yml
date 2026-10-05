@@ -74,7 +74,11 @@ groups:
       # from the load balancer), not on a timer, so an IDLE site whose lease has expired keeps exporting held=1 (48's
       # read). A new site's lease begins at least SKEW_S (60 s) after the old one's expiry, so by then the old site's
       # held=1 is stale and is not counted: a correct promote never pages "two sites". A verdict older than 120 s is
-      # RegaliaFencingEvaluationStale's case.
+      # RegaliaFencingEvaluationStale's case. STATED RESIDUAL (48): freshness compares Prometheus's time() with the
+      # DAEMON's wall clock (last_check). A node clock d seconds AHEAD of Prometheus makes a stale held=1 look fresh
+      # for 60 + d s, so a skew larger than the gap between the old lease's last check and the new site's first held=1
+      # could page "two sites" at a switchover: a spurious page, never a missed one. The nodes' time is NTS-authenticated
+      # (authtime); keep Prometheus's on authenticated time too.
       #
       # No site for 20 minutes. Two planned gaps stay under it:
       #   * a switchover (`activation release`, the lease runs out, `activation promote`): at most one lease life
