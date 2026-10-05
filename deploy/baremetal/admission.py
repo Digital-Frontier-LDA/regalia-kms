@@ -275,15 +275,17 @@ class Service:
     def lapse(self):
         """At the bound of the admission last written: if it has run out, write and record "not serving" now, whatever
         a renewal round is doing (#486). Returns the document written, or None when the bound has not passed."""
+        # the bound, the manifest and the publication under ONE hold of the lock: a renewal step() publishes meanwhile
+        # can neither be overwritten nor judged by an older manifest (CodeRabbit on #485)
         with self.lock:
             last = self.written
             if not last or not last["serve_until_boottime_ms"] or self.boottime() < last["serve_until_boottime_ms"]:
                 return None
-        try:
-            manifest = self.manifest()
-        except Exception:                         # noqa: BLE001 - the check below refuses a missing manifest itself
-            manifest = None
-        return self._publish(manifest, "the admission ran out at its bound")
+            try:
+                manifest = self.manifest()
+            except Exception:                     # noqa: BLE001 - the check below refuses a missing manifest itself
+                manifest = None
+            return self._publish_locked(manifest, "the admission ran out at its bound", False)
 
     def _publish(self, manifest, reason, refused=False):
         """Check the lease held, write the document and record a change, under the lock. `refused`: the round already

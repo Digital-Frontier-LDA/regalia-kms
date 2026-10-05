@@ -802,6 +802,48 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
                              record=trail)                                                     # #340: serving and not, on its trail
 
 
+class RoundLog:
+    """#470: one journal line per source per pull round, saying what happened: an epoch applied, nothing newer, a DENY
+    with the reason the trail records, or a peer that did not answer. The trail (sync-audit.jsonl) stays the record;
+    this is what an operator reads in `journalctl -u regalia-sync`. Rate-bounded per source: a line when the outcome
+    changes, and the same outcome again at most once every REPEAT_S seconds. Nothing in it the trail does not hold
+    already (source names, epochs, the bounded reason), so no secrets."""
+
+    REPEAT_S = 900
+
+    def __init__(self, clock=time.monotonic, out=None):
+        self.clock = clock
+        self.out = out or (lambda line: print("sync: " + line, file=sys.stderr, flush=True))
+        self.last = {}                          # source -> (outcome key, when it was last said)
+
+    def _say(self, source, key, line):
+        now, prev = self.clock(), self.last.get(source)
+        if prev is not None and prev[0] == key and now - prev[1] < self.REPEAT_S:
+            return
+        try:
+            self.out(line)
+        except OSError:                         # the journal is best-effort: a closed stderr never stops a round
+            return
+        self.last[source] = (key, now)
+
+    def pulled(self, source, held, epoch):
+        if held is None or epoch > held:
+            self._say(source, ("applied", epoch), "applied epoch %d from %s (held %s before)" % (epoch, source, "none" if held is None else held))
+        else:
+            self._say(source, ("nothing", epoch), "nothing newer from %s: epoch %d held" % (source, epoch))
+
+    def refused(self, source, refusal, event):
+        text = convergence._printable(refusal, membership.REASON_LIMIT)
+        if text.startswith("%s did not answer (" % source):            # the error class is the whole key
+            self._say(source, ("silent", text), "peer " + text)
+            return
+        kind, reason = (event["event"], event["reason"]) if event is not None else ("pull", text)
+        # printable again, though audited() made them so: a sink event written raw later must not reach the journal
+        kind, reason = convergence._printable(kind, 64), convergence._printable(reason, membership.REASON_LIMIT)
+        # keyed with digit runs collapsed: a reason that carries a count, a time or a sequence is the same outcome
+        self._say(source, ("deny", kind, re.sub(r"[0-9]+", "#", reason)), "DENY %s from %s: %s" % (kind, source, reason))
+
+
 class Sync:
     """The `sync` process: the two listeners, the pull loop and the heartbeat watch, on one store."""
 
@@ -814,6 +856,7 @@ class Sync:
         self.floor = lease.RevisionFloor()  # D32 (#432): fed each round (observe_state); fails closed for one lease after start
         self._beat_signer = None        # beat.Signer, made at the first heartbeat signed (beat_signer())
         self.published = None
+        self.rounds = RoundLog()                # #470: each pull round's outcome, in the journal
         # the unlock listener's refusals, by cause (#317), in regalia-sync's metrics directory
         self.refusals = metrics.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", metrics.UNLOCK_CAUSES)
 
@@ -902,11 +945,25 @@ class Sync:
         chain is published after EACH source, not after all of them: a commit moves the TPM anchor, and
         the root services refuse the published chain until it catches up (Node.manifest)."""
         sources = self.node.sources(self.manifest())
-        client = sync.Client(self.node.node_id, self.store, self.freshness, sources, self.trail, documents=self.node.documents())
+        seen = []
+
+        def sink(event):
+            self.trail(event)                   # the trail first: it is the record, and a sink that fails still stops the round
+            seen.append(event)
+        client = sync.Client(self.node.node_id, self.store, self.freshness, sources, sink, documents=self.node.documents())
         changed = False
         for name in sorted(sources):
-            with contextlib.suppress(Refused):
-                client.pull(name)
+            del seen[:]
+            try:
+                now_at, _ = client.pull(name)
+            except Refused as refused:
+                denied = [e for e in seen if e.get("outcome") == "DENY"]
+                self.rounds.refused(name, refused, denied[-1] if denied else None)
+            else:
+                # the epoch held when this source's pull began: its first sync-apply event was filed under it (no
+                # second store load, and no TPM read, per round: 3e's read)
+                applies = [e["epoch"] for e in seen if e.get("event") == "sync-apply"]
+                self.rounds.pulled(name, applies[0] if applies and applies[0] else None, now_at["epoch"])
             changed = self.publish() or changed
         return changed
 

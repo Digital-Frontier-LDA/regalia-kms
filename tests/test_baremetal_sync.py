@@ -336,23 +336,28 @@ class Bounds(Case):
         named = [e for e in self.events if e["subject"] == "a"]
         self.assertEqual(([e["reason"][:4] for e in named].count("a is"), len(named)), (20, 21))   # twenty by name and one RATE report, over 75 requests
 
-    def test_a_node_has_twenty_requests_a_minute_whatever_address_it_comes_from_and_six_may_ask_for_a_lease(self):
+    def test_a_node_has_its_requests_a_minute_whatever_address_it_comes_from_and_its_lease_asks_apart(self):
+        any_count, lease_count = sync.RATE["any"][0], sync.RATE["lease"][0]
+        self.assertGreaterEqual(lease_count, 2 * 6)            # D32: a renewal every 10 s is two asks (#485), retries on top
+        self.assertLessEqual(lease_count, any_count)           # every lease ask spends the node's "any" too
         self.keys_at["fd72:6567:616c::a:2"] = self.entry("a")["wg_service_pub"]      # a second address of node a's key
-        for _ in range(20):
+        for _ in range(any_count):
             self.assertTrue(self.pull("b")["ok"])
-        self.refusal("RATE: more than 20 any requests in 60 s from a", self.pull("b", caller="fd72:6567:616c::a:2"))   # an admitted node: told why
+        self.refusal("RATE: more than %d any requests in 60 s from a" % any_count, self.pull("b", caller="fd72:6567:616c::a:2"))   # told why
         self.assertEqual(self.last()["subject"], "a")
         self.tick += 3600
-        for _ in range(6):
+        for _ in range(lease_count):
             self.assertTrue(self.ask("b", v=1, op="lease-nonce", node_id="a")["ok"])
-        self.refusal("RATE: more than 6 lease requests in 60 s from a", self.ask("b", v=1, op="lease-nonce", node_id="a"))   # identified: told why
+        self.refusal("RATE: more than %d lease requests in 60 s from a" % lease_count, self.ask("b", v=1, op="lease-nonce", node_id="a"))
         self.assertTrue(self.pull("b")["ok"])                                       # the lease limit does not stop a pull
         self.tick += 3600
+        for _ in range(lease_count - 6):                                            # the bucket, less three nonce-and-lease pairs
+            self.assertTrue(self.ask("b", v=1, op="lease-nonce", node_id="a")["ok"])
         nonces = [self.ask("b", v=1, op="lease-nonce", node_id="a")["nonce"] for _ in range(3)]
-        for nonce in nonces:                                                        # three nonces and three leases: six
+        for nonce in nonces:                                                        # (the verifier holds a few nonces at once)
             self.assertTrue(self.ask("b", v=1, op="lease", request=self.holder.request(), evidence=self.quote(nonce, self.m1))["ok"])
-        nonce = self.peers["b"]["attester"].nonce("a").hex()                        # a seventh, with a nonce b did issue
-        self.refusal("RATE: more than 6 lease requests", self.ask("b", v=1, op="lease", request=self.holder.request(), evidence=self.quote(nonce, self.m1)))
+        nonce = self.peers["b"]["attester"].nonce("a").hex()                        # one more, with a nonce b did issue
+        self.refusal("RATE: more than %d lease requests" % lease_count, self.ask("b", v=1, op="lease", request=self.holder.request(), evidence=self.quote(nonce, self.m1)))
 
     def test_addresses_cannot_crowd_a_node_out_and_a_full_table_is_one_event_a_minute(self):
         """Found by the confirming read: with the address table full, an honest node that had been idle was
