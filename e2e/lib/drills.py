@@ -19,12 +19,22 @@ MARGIN_S = 5          # admission.MARGIN
 WATCH_S = 0.5         # admission.Service.run's lapse watcher interval (#486)
 
 
-def from_loadgen(line, stateful_ops):
-    """One line of the load generator's log (regalia-kms-ed: {ts (ms), run, op, key, node, outcome: "ok" or an API error
-    code, latency (ms), attempt}) as a request here. One adapter for both tiers (3e on #497)."""
-    start = line["ts"] / 1000.0
-    return {"start": start, "end": start + line["latency"] / 1000.0, "op": line["op"], "key": line["key"], "node": line["node"],
-            "outcome": "ok" if line["outcome"] == "ok" else "failed", "stateful": line["op"] in stateful_ops}
+class Malformed(ValueError):
+    """A load-generator line that cannot be judged: refused, never defaulted."""
+
+
+def from_loadgen(line):
+    """One line of the load generator's log, in regalia-kms-ed's format ({start_ms, end_ms (UTC ms), op, key, node,
+    outcome: "ok" or the API code, attempt, drill, stateful: bool, declared by the load generator from the canary key's
+    profile}), as a request here. One adapter for both tiers (3e on #497). No inference (ed): "stateful" is the line's own,
+    and a line without it is refused: a sign with a sequenced Cosmos key must never be read as stateless."""
+    for k in ("start_ms", "end_ms", "op", "key", "node", "outcome", "stateful"):
+        if k not in line:
+            raise Malformed("a load-generator line without %r is refused, never defaulted" % k)
+    if not isinstance(line["stateful"], bool):
+        raise Malformed("a load-generator line's stateful must be true or false, not %r" % (line["stateful"],))
+    return {"start": line["start_ms"] / 1000.0, "end": line["end_ms"] / 1000.0, "op": line["op"], "key": line["key"],
+            "node": line["node"], "outcome": "ok" if line["outcome"] == "ok" else "failed", "stateful": line["stateful"]}
 
 
 def _fail(text):
