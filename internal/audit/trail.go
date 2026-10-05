@@ -2,7 +2,7 @@ package audit
 
 // SHIPPING A NODE'S TRAILS (#278).
 //
-// The node's services and the revocation authority write their trails in Python
+// The node's services and its operator tools write their trails in Python
 // (deploy/baremetal/trails.py): one JSON object a line, chained by "seq" and "prev", the SHA-256 of
 // the previous line's exact bytes. This file ships such a trail to the collector, one audit Event a
 // line, on a stream of its own (site "<site>.<trail>"), so the trail gets what the daemon's journal

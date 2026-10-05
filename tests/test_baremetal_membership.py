@@ -1,5 +1,5 @@
 """deploy/baremetal/membership.py (#68, Phase 8): signed manifests, the capability matrix, root versus
-revocation authority, the epoch chain, and the TPM-backed high-water mark with its manifest-digest record
+revocation keys, the epoch chain, and the TPM-backed high-water mark with its manifest-digest record
 (PoC 8.3 runs on swtpm)."""
 import copy
 import fcntl
@@ -127,7 +127,7 @@ class Manifests(unittest.TestCase):
                 man = manifest(1, "", three(a=state))
                 self.assertEqual(tuple(m.may(man, "a", x) for x in ("serve", "request", "authorize")), caps)
 
-    def test_revocation_authority_is_restrictive_only(self):
+    def test_a_revocation_key_is_restrictive_only(self):
         m2 = m.accept(self.m1, sign(manifest(2, m.digest(self.m1), three(b="QUARANTINED")), REVOKE, "revocation"), ROOT_PUB)
         widen = sign(manifest(3, m.digest(m2), three()), REVOKE, "revocation")              # QUARANTINED -> ACTIVE
         with self.assertRaises(m.Refused):

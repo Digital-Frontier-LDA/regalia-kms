@@ -381,5 +381,70 @@ class ProducersFreshness(unittest.TestCase):
         self.assertIn("the signing record's line 1 is not an object with a kind", str(caught.exception))
 
 
+class ProducersWriterRun(unittest.TestCase):
+    """The producer's REAL output, not a vector: regalia-ceremony#128's writer (offline-keys card-record, head c688584)
+    run once, 2026-10-04, by regalia-kms-1e through that PR's test_card_record_writer.Writer setup: a 2-of-3 Shamir lab
+    root (ok.generate, real age; the shares not kept), then card_record(first=True) and card_record(). Kept: the state
+    directory it left (marker, signing-record.jsonl with card-record lines 1 and 2) and both records
+    (tests/vectors/card-ceremony-record/writer-run/). Its output is not byte-reproducible, so it is a fixture made once,
+    not regenerated. This side must read it as the writer meant it (regalia-kms-24's cross-repo check)."""
+
+    def setUp(self):
+        import pathlib
+        import shutil
+        import tempfile
+        self.here = pathlib.Path(__file__).parent / "vectors" / "card-ceremony-record" / "writer-run"
+        self.root = (self.here / "root.hex").read_text().strip()
+        self.state = tempfile.mkdtemp()                                    # git keeps no modes: as the writer left them
+        self.addCleanup(shutil.rmtree, self.state, True)
+        for source in (self.here / "state").iterdir():
+            shutil.copyfile(source, os.path.join(self.state, source.name))
+            os.chmod(os.path.join(self.state, source.name), 0o600)
+        os.chmod(self.state, 0o700)
+
+    def record(self, n):
+        return json.loads((self.here / ("card-record-%d.record.json" % n)).read_text())
+
+    def test_the_writer_s_second_record_is_the_newest_and_its_first_is_superseded(self):
+        lines = cr.read_signing_state(self.state, self.root)
+        got = cr.verify(self.record(2), self.root, lines)
+        self.assertEqual((got["sequence"], got["of"], got["supersedes"]), (2, 2, cr.digest(self.record(1)["record"])))
+        self.assertEqual(got["roles"], {"dev-main": "40000001", "dev-backup": "40000002"})
+        with self.assertRaises(m.Refused) as caught:
+            cr.verify(self.record(1), self.root, lines)
+        self.assertIn("this card record (sequence 1) is not the newest the root signed (sequence 2", str(caught.exception))
+
+    def test_propose_genesis_takes_the_writer_s_record_and_state(self):
+        import io
+        import shutil
+        import tempfile
+        from unittest import mock
+        from deploy.baremetal import manifest as tool, measurements
+        from tests.test_baremetal_membership_v4 import nodes4
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        entries = [{k: v for k, v in n.items() if k != "state"} for n in nodes4()]
+        doc = {"schema": measurements.SCHEMA, "name": "genesis", "nodes": {
+            e["node_id"]: {"accepted": [{"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32}}]} for e in entries}}
+        with open(os.path.join(d, "doc.json"), "w") as f:
+            json.dump(doc, f)
+        args = ["propose", "--genesis", "--root-key", self.root, "--card-record", str(self.here / "card-record-2.record.json"),
+                "--state-dir", self.state, "--measurements", os.path.join(d, "doc.json"), "--out", os.path.join(d, "e1.json"),
+                "--issued-at", "2026-10-04T12:00:00Z"]
+        for e in entries:
+            path = os.path.join(d, "entry-%s.json" % e["node_id"])
+            with open(path, "w") as f:
+                json.dump(e, f)
+            args += ["--entry", path]
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch.object(tool.keyfd, "tty_line", lambda p: "40000001 40000002"):
+            self.assertEqual(tool.main(args), 0, err.getvalue())
+        self.assertIn("card record 2 of 2 (the newest on this laptop's signing record)", out.getvalue())
+        with open(os.path.join(d, "e1.json")) as f:
+            written = json.load(f)
+        owners = self.record(2)["record"]["owner_keys"]
+        self.assertEqual(written["owner_keys"], [{"alg": "ed25519", "key": k["key"]} for k in sorted(owners, key=lambda k: k["serial"])])
+
+
 if __name__ == "__main__":
     unittest.main()
