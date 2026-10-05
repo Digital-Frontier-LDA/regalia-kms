@@ -14,17 +14,21 @@ are opened by hand too, each with its own recovery key; their published chain.js
 start and b serves again. A server whose two peers are both destroyed has no such path: that is a root ceremony.
 
   1  three nodes, a second epoch delivered by the root (deliver.py, to a running node), every node leased on it
+  1b b down; a third epoch to a and c: b's store, anchor and ESP stay at epoch 2 (so the re-anchor gives it a chain
+     newer than its ESP)
   2  the total outage: all three powered off
   3  b's anchor made unusable: its epoch counter undefined in its TPM (a record slot still holds epoch 2): b's own
      membership no longer loads, and says why
   4  a and c opened by hand with their recovery keys; their chain.json taken, one from each
   5  b opened by hand; its services, started by its boot, refuse its membership and are stopped; the refusals, each
      changing nothing (b's files, its TPM's NV indices, their public areas and contents): one peer only; b's own chain
-     as a peer; the phrase mistyped
-  6  the re-anchor from a's and c's chains: typed at the terminal, done, recorded ALLOW; b's membership loads at epoch 2
+     as a peer; the phrase mistyped; regalia-esp-advance running (its lock held), refused before the phrase
+  6  the re-anchor from a's and c's chains: typed at the terminal, done, recorded ALLOW; b's anchor at epoch 3 and its
+     ESP still at 2 (what its initrd would refuse, ROLLBACK); b's membership loads at epoch 3
      under the new anchor, and the file is regalia-sync's again (#388: written by root, given back); run again, it is
      refused, since the anchor is usable
-  7  the three start: b holds a heartbeat the nodes signed and a lease, and issues one: it serves again
+  7  the three start: b's regalia-esp-advance runs and its ESP reaches its anchor's epoch 3; b holds a heartbeat the
+     nodes signed and a lease, and issues one: it serves again
 
 NOT SHOWN HERE (MEMBERSHIP-RECOVERY.md, "What the rehearsal does not show"):
   * a physical TPM: these are software TPMs, and power is never cut during the redefinition here;
@@ -35,6 +39,7 @@ NOT SHOWN HERE (MEMBERSHIP-RECOVERY.md, "What the rehearsal does not show"):
   * a set TPM owner authorization: the software TPMs keep an empty one, so reanchor runs without --ownerauth;
   * one peer left (the owner as the second source, #387) and both peers destroyed (a root ceremony).
 """
+import fcntl
 import json
 import os
 import pathlib
@@ -138,6 +143,17 @@ def scenario(cluster, work):
     for name in names:
         ok(bool(until(lambda: cluster.lease(name), 150, 3)), "%s holds a lease" % name, cluster.journal(name, "admission")[-600:])
 
+    header("1b  b down; a third epoch to a and c: b's ESP and anchor stay at epoch 2")
+    # so that the re-anchor gives b a chain NEWER than its ESP holds: after it, b's ESP is below its new anchor, which
+    # the initrd refuses (ROLLBACK) until regalia-esp-advance runs (regalia-kms-24 on #391)
+    cluster.stop(b)
+    third, _ = cluster.advance(a)
+    fresh = cluster.fresh([a, c], third["epoch"], timeout=300)
+    ok(third["epoch"] == 3 and all(fresh.values()) and all(cluster.node(n).store().load()["epoch"] == 3 for n in (a, c))
+       and (cluster.node(b).store().load()["epoch"], cluster.anchored(b), cluster.esp_epoch(b)) == (2, 2, 2),
+       "a and c hold epoch 3 with a heartbeat they signed; b, down, still holds epoch 2, its anchor and its ESP too",
+       {"fresh": fresh, "b": (cluster.anchored(b), cluster.esp_epoch(b))})
+
     header("2  the total outage")
     for name in names:
         cluster.stop(name)
@@ -163,8 +179,8 @@ def scenario(cluster, work):
         chains[name] = d / ("%s-chain.json" % name)
         shutil.copyfile(cluster.nodes[name].state / node.PUBLISHED, chains[name])
     held = {n: membership.load(chains[n].read_bytes(), membership.MAX_CHAIN_BYTES) for n in (a, c)}
-    ok(all(len(held[n]) == 2 for n in (a, c)) and membership.digest(held[a][-1]["manifest"]) == membership.digest(held[c][-1]["manifest"]),
-       "a's and c's published chains both end at epoch 2, at one manifest",
+    ok(all(len(held[n]) == 3 for n in (a, c)) and membership.digest(held[a][-1]["manifest"]) == membership.digest(held[c][-1]["manifest"]),
+       "a's and c's published chains both end at epoch 3, at one manifest",
        {n: [e["manifest"]["epoch"] for e in held[n]] for n in (a, c)})
 
     header("5  b opened by hand, its services stopped; what is refused, changing nothing")
@@ -188,11 +204,12 @@ def scenario(cluster, work):
        {"sync": cluster.journal(b, "sync")[-400:], "start": (refused_at_start or "")[-600:]})
     shutil.copyfile(cluster.nodes[b].state / node.PUBLISHED, d / "b-chain.json")
     trail = d / "b-reanchor.jsonl"
+    esp_lock = cluster.nodes[b].run / "esp-advance.lock"          # the lock the fixture's regalia-esp-advance takes (_esp_args)
 
     def reanchor(peers, answer=None):
         argv = ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.reanchor", "--membership", str(cluster.node(b).path("membership.json")),
                 "--root-key", cfg["root_key"], "--tpm-index", index, "--tcti", cluster.nodes[b].tcti, "--node-id", b,
-                "--node-config", str(cluster.nodes[b].cfg_path), "--audit-log", str(trail)]
+                "--node-config", str(cluster.nodes[b].cfg_path), "--audit-log", str(trail), "--esp-lock", str(esp_lock)]
         for peer, path in peers:
             argv += ["--peer", "%s=%s" % (peer, path)]
         return at_console(cluster, b, argv, answer)
@@ -229,18 +246,30 @@ def scenario(cluster, work):
     rc, shown = reanchor([(a, chains[a]), (c, chains[c])], answer="re-anchor b")
     ok(rc == 1 and "not confirmed" in shown and unchanged(), "the phrase mistyped at the terminal: refused (status %s), nothing changed" % rc,
        shown[-400:])
+    # regalia-esp-advance running (its lock held, as between two of its anchor calls): refused before anything is asked
+    fd = os.open(esp_lock, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        rc, shown = reanchor([(a, chains[a]), (c, chains[c])], answer=True)
+    finally:
+        os.close(fd)
+    ok(rc == 1 and "regalia-esp-advance holds the anchor's lock" in shown and "Type exactly" not in shown and unchanged(),
+       "regalia-esp-advance running (its lock held): refused (status %s) before the phrase, nothing changed" % rc, shown[-400:])
 
     header("6  the re-anchor from a's and c's chains, typed at b's terminal")
     rc, shown = reanchor([(a, chains[a]), (c, chains[c])], answer=True)
     digest = membership.digest(held[a][-1]["manifest"])
-    ok(rc == 0 and ("reanchor: done. b now holds epoch 2, manifest %s" % digest) in shown,
-       "done (status %s): b holds epoch 2, manifest %s..., under a new anchor" % (rc, digest[:16]), shown[-800:])
+    ok(rc == 0 and ("reanchor: done. b now holds epoch 3, manifest %s" % digest) in shown,
+       "done (status %s): b holds epoch 3, manifest %s..., under a new anchor" % (rc, digest[:16]), shown[-800:])
+    ok((cluster.anchored(b), cluster.esp_epoch(b)) == (3, 2),
+       "b's new anchor is at epoch 3 and its ESP still at 2: the state its initrd would refuse (ROLLBACK) at the next boot",
+       (cluster.anchored(b), cluster.esp_epoch(b)))
     lines = [json.loads(line) for line in trail.read_text().splitlines() if line.strip()]
     ok([e.get("outcome") for e in lines if e.get("event") == "reanchor"][-1:] == ["ALLOW"]
-       and any(e.get("event") == "reanchor-requested" and e.get("epoch") == 2 for e in lines),
-       "its audit trail records the request at epoch 2, then ALLOW", lines[-3:])
+       and any(e.get("event") == "reanchor-requested" and e.get("epoch") == 3 for e in lines),
+       "its audit trail records the request at epoch 3, then ALLOW", lines[-3:])
     loaded = refusal(lambda: cluster.node(b).store().load())
-    ok(loaded is None and cluster.node(b).store().load()["epoch"] == 2, "b's own membership loads again, at epoch 2", loaded)
+    ok(loaded is None and cluster.node(b).store().load()["epoch"] == 3, "b's own membership loads again, at epoch 3", loaded)
     sync = pwd.getpwnam("regalia-sync")
     held_by = os.stat(cluster.node(b).path("membership.json"))
     ok((held_by.st_uid, held_by.st_gid) == (sync.pw_uid, sync.pw_gid),
@@ -252,8 +281,14 @@ def scenario(cluster, work):
     since = time.time()
     for name in names:
         cluster.start(name, SERVICES)
-    fresh = cluster.fresh(names, 2, timeout=300)
-    ok(all(fresh.values()), "every node holds a heartbeat for epoch 2 the nodes signed (%s)" % fresh, cluster.beat_events(names))
+    # b's start ran its regalia-esp-advance (the fixture's start, as the unit's WantedBy= does on a host; the procedure's
+    # step 6): its ESP holds the chain its new anchor names, and its next boot renders
+    advanced = until(lambda: (cluster.anchored(b), cluster.esp_epoch(b)) == (3, 3), 60, 2)
+    ok(advanced is True and "the ESP's membership chain is epoch 3" in cluster.journal(b, "esp-watch"),
+       "b's regalia-esp-advance ran: its ESP and its anchor both at epoch 3", {"b": (cluster.anchored(b), cluster.esp_epoch(b)),
+                                                                              "esp-watch": cluster.journal(b, "esp-watch")[-600:]})
+    fresh = cluster.fresh(names, 3, timeout=300)
+    ok(all(fresh.values()), "every node holds a heartbeat for epoch 3 the nodes signed (%s)" % fresh, cluster.beat_events(names))
     ok(bool(until(lambda: cluster.lease(b), 150, 3)), "b holds a lease again (from %s)" % cluster.lease_issuer(b), cluster.journal(b, "admission")[-600:])
     issued = until(lambda: [e.get("subject") for e in cluster.trail(b) if e.get("event") == "sync-lease" and e.get("outcome") == "ALLOW"
                             and e.get("at", 0) >= since], 300, 5)

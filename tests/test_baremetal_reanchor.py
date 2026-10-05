@@ -6,6 +6,7 @@ import ast
 import contextlib
 import copy
 import errno
+import fcntl
 import glob
 import io
 import json
@@ -495,7 +496,7 @@ class Command(Case):
         self.assertEqual(self.run_reanchor(self.sources())["epoch"], 3)              # run again: it completes
         self.assertEqual(self.outcomes()[-1], ("reanchor", "ALLOW"))
 
-    def program(self, *extra, typed=None, peers=(OTHER, "c"), upto=3, log="audit.jsonl", ask="given", tty=None):
+    def program(self, *extra, typed=None, peers=(OTHER, "c"), upto=3, log="audit.jsonl", ask="given", tty=None, active=lambda: []):
         for name in peers:
             with open("%s/%s.json" % (self.d, name), "wb") as f:
                 f.write(m.canonical(self.envs[:upto]))
@@ -514,7 +515,7 @@ class Command(Case):
             return typed if typed is not None else prompt.split("Type exactly: ")[1].split("\n")[0]
         self.said = io.StringIO()
         with contextlib.redirect_stderr(self.said), contextlib.redirect_stdout(self.said):
-            rc = reanchor.main(argv + list(extra), ask=answer if ask == "given" else None, tty=tty,
+            rc = reanchor.main(argv + list(extra), ask=answer if ask == "given" else None, tty=tty, active=active,
                                highwater=lambda index, tcti, policy=None, define_policy=None, lock_path=None: m.HighWater(index, lock_path=self.d + "/hw.lock", run=self.run_tpm, policy=policy, define_policy=define_policy))
         return rc, asked
 
@@ -547,6 +548,69 @@ class Command(Case):
         self.assertEqual((rc, len(asked)), (1, 1))
         self.assertEqual(calls, [(self.path, False)])
         self.assertIn("NOT DONE, nothing was changed", self.said.getvalue())
+
+    def test_refused_while_the_nodes_units_run(self):
+        # regalia-kms-24 on #391: nothing but reanchor may touch the anchor; regalia-esp-advance writes it at run time
+        self.lose_record()
+        before = self.hw.slots()
+        rc, asked = self.program(active=lambda: ["regalia-esp-advance.path", "regalia-sync.service"])
+        self.assertEqual((rc, asked), (1, []))
+        self.assertIn("regalia-esp-advance.path, regalia-sync.service are running: stop regalia-esp-advance.path regalia-sync.service first",
+                      self.said.getvalue())
+        self.assertEqual(self.hw.slots(), before)
+
+    def esp_lock(self):
+        os.makedirs(self.d + "/run-esp", exist_ok=True)
+        return self.d + "/run-esp/highwater.lock"
+
+    def test_refused_while_esp_advance_holds_its_lock(self):
+        self.lose_record()
+        before = self.hw.slots()
+        path = self.esp_lock()
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)                     # a running regalia-esp-advance, between two of its anchor calls
+        rc, asked = self.program("--esp-lock", path)
+        self.assertEqual((rc, asked), (1, []))
+        self.assertIn("regalia-esp-advance holds the anchor's lock %s: it is running" % path, self.said.getvalue())
+        self.assertEqual(self.hw.slots(), before)
+
+    def test_the_esp_lock_is_held_for_the_whole_run(self):
+        # taken before the plan and kept until the anchor is written: an advance started meanwhile waits for it
+        self.lose_record()
+        path, tried = self.esp_lock(), []
+
+        def typed(prompt):
+            fd = os.open(path, os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                tried.append("free")
+            except BlockingIOError:
+                tried.append("held")
+            finally:
+                os.close(fd)
+            return prompt.split("Type exactly: ")[1].split("\n")[0]
+        rc, asked = self.program("--esp-lock", path, typed=typed)
+        self.assertEqual((rc, tried), (0, ["held"]))
+        fd = os.open(path, os.O_RDWR)                      # and given up when it is done
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_the_esp_lock_is_never_taken_through_a_link(self):
+        self.lose_record()
+        path, target = self.esp_lock(), self.d + "/not-created"
+        os.symlink(target, path)
+        rc, asked = self.program("--esp-lock", path)
+        self.assertEqual((rc, asked), (1, []))
+        self.assertIn("is a symbolic link", self.said.getvalue())
+        self.assertFalse(os.path.lexists(target))
+
+    def test_no_esp_lock_when_its_directory_is_not_there(self):
+        # a stopped regalia-esp-advance leaves no RuntimeDirectory; nothing is created in its place
+        self.lose_record()
+        rc, _ = self.program("--esp-lock", self.d + "/absent/highwater.lock")
+        self.assertEqual(rc, 0)
+        self.assertFalse(os.path.exists(self.d + "/absent"))
 
     def node_configs(self):
         example = json.loads((pathlib.Path(__file__).resolve().parent.parent / "deploy" / "baremetal" / "node.example.json").read_text())
@@ -791,9 +855,9 @@ class OnSwtpm(_Swtpm):
         os.environ.pop("TPM2TOOLS_TCTI", None)
         make = lambda index, tcti, policy=None, define_policy=None, lock_path=None: m.HighWater(index, tcti=tcti, lock_path=self.d + "/hw.lock", policy=policy, define_policy=define_policy)
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(reanchor.main(argv, ask=lambda prompt: "no", highwater=make), 1)
+            self.assertEqual(reanchor.main(argv, ask=lambda prompt: "no", highwater=make, active=lambda: []), 1)
             self.assertEqual(self.hw.slots(), [None, None])                          # refused: the TPM as it was
-            self.assertEqual(reanchor.main(argv, ask=lambda prompt: prompt.split("Type exactly: ")[1].split("\n")[0], highwater=make), 0)
+            self.assertEqual(reanchor.main(argv, ask=lambda prompt: prompt.split("Type exactly: ")[1].split("\n")[0], highwater=make, active=lambda: []), 0)
         digest4 = m.digest(envs[3]["manifest"])
         self.assertEqual((self.hw.value(), self.hw.slots(), self.hw.pinned(), self.hw.unusable()), (4, [(4, digest4)] * 2, True, None))
         new_base = subprocess.run(["tpm2_nvread", "0x1500017", "-C", "o", "-s", "8"], env=self.env, capture_output=True, check=True).stdout
@@ -812,6 +876,32 @@ class OnSwtpm(_Swtpm):
         gone = m.HighWater("0x1500016", tcti="swtpm:path=%s/absent.sock" % self.d, lock_path=self.d + "/x.lock")
         with self.assertRaisesRegex(m.Refused, "the TPM does not answer"):
             gone.unusable()
+
+
+class AnchorUnits(unittest.TestCase):
+    """#391 (regalia-kms-24): the units reanchor waits for, and regalia-esp-advance's lock, as the node defines them."""
+
+    def test_the_esp_lock_is_the_nodes(self):
+        from deploy.baremetal import node
+        self.assertEqual(reanchor.ESP_LOCK, node.ESP_LOCK)
+
+    def test_every_unit_named_ships(self):
+        units = pathlib.Path(reanchor.__file__).resolve().parent / "units"
+        for unit in reanchor.ANCHOR_UNITS:
+            self.assertTrue((units / unit).is_file(), unit)
+
+    def test_active_units_reads_systemctl(self):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 3, stdout="inactive\nactive\nfailed\nactivating\n")
+        self.assertEqual(reanchor.active_units(run), ["regalia-esp-advance.service", "regalia-admission.service"])
+        self.assertEqual(calls, [["systemctl", "is-active"] + list(reanchor.ANCHOR_UNITS)])
+
+        def missing(argv, **kw):
+            raise FileNotFoundError("systemctl")
+        self.assertEqual(reanchor.active_units(missing), [])
 
 
 class HandBack(unittest.TestCase):

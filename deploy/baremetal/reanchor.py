@@ -48,10 +48,13 @@ so it is the one an attacker would want, and it is fenced accordingly:
 It needs the TPM's owner authorization, as defining the anchor did at commissioning.
 """
 import argparse
+import contextlib
 import errno
+import fcntl
 import os
 import re
 import stat
+import subprocess
 import sys
 import time
 
@@ -205,6 +208,51 @@ def hand_back(membership_path, euid=os.geteuid, chown=os.fchown):
     return changed
 
 
+# The node's one run-time writer of the anchor (#410) and what starts it, with the services that read it: reanchor runs only
+# with all of them stopped (MEMBERSHIP-RECOVERY.md, step 5), and holds regalia-esp-advance's own lock while it runs, so the
+# two can never interleave (regalia-kms-24 on #391). node.ESP_LOCK; tests/test_baremetal_reanchor.py holds the two equal.
+ESP_LOCK = "/run/regalia-esp-advance/highwater.lock"
+ANCHOR_UNITS = ("regalia-esp-advance.path", "regalia-esp-advance.service", "regalia-sync.service", "regalia-admission.service")
+
+
+def active_units(run=subprocess.run):
+    """Which of ANCHOR_UNITS systemd says are running (or starting, or stopping). No systemctl at all (a machine that is
+    not a node, as the unit tests run on): none."""
+    try:
+        done = run(["systemctl", "is-active"] + list(ANCHOR_UNITS), capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return []
+    return [unit for unit, state in zip(ANCHOR_UNITS, done.stdout.split()) if state in ("active", "activating", "reloading", "deactivating")]
+
+
+@contextlib.contextmanager
+def esp_lock_held(path):
+    """regalia-esp-advance's lock (node.ESP_LOCK), taken for the whole re-anchor, without waiting: held by a running
+    advance, the re-anchor is refused. Its directory is that unit's RuntimeDirectory, which exists only while it runs or
+    after it ran; when it does not exist, nothing is taken (and the unit check above has found it stopped). The lock is
+    opened as membership._exclusive opens one: never through a link, a regular file with one name."""
+    if not os.path.isdir(os.path.dirname(path)):
+        yield False
+        return
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as failure:
+        if failure.errno == errno.ELOOP:
+            raise Refused("regalia-esp-advance's lock %s is a symbolic link: it is not taken through one" % path) from None
+        raise
+    try:
+        held = os.fstat(fd)
+        require(stat.S_ISREG(held.st_mode) and held.st_nlink == 1, "regalia-esp-advance's lock %s is not a regular file with one name" % path)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refused("regalia-esp-advance holds the anchor's lock %s: it is running. Stop regalia-esp-advance.path and "
+                          "regalia-esp-advance, then run this again" % path) from None
+        yield True
+    finally:
+        os.close(fd)
+
+
 def node_policy(path, node_id):
     """The approved-image write policy (#242) a policy-written anchor index is read with: from this node's own
     configuration (node.image_policy: its signed chain, the measurements document the chain commits to, and the
@@ -261,7 +309,7 @@ class NodePolicies:
         return node_policy(self.path, self.node_id)()
 
 
-def main(argv=None, ask=None, highwater=_highwater, tty=None):
+def main(argv=None, ask=None, highwater=_highwater, tty=None, active=active_units):
     """Exit status: 0 done; 1 refused, nothing changed; 2 usage; 3 INCOMPLETE, the anchor was being replaced:
     run it again; 4 done, but the outcome could not be written to the audit log; 5 done, but the membership file could not
     be given back to the owner of its directory (hand_back: the command to run is printed)."""
@@ -274,6 +322,8 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
     ap.add_argument("--audit-log", default=trails.where("reanchor"),
                     help="the audit trail (default %(default)s, its place in trails.py's registry)")
     ap.add_argument("--tcti", help="the TPM to re-anchor, as a TCTI (e.g. device:/dev/tpmrm0); default: tpm2-tools' default TPM")
+    ap.add_argument("--esp-lock", default=ESP_LOCK, help="regalia-esp-advance's lock, held for the whole re-anchor "
+                    "(default %(default)s, its RuntimeDirectory's; the three-node fixture gives each node its own)")
     ap.add_argument("--node-config", help="this node's node.json: needed when its anchor is written by its approved-image policy (#242)")
     ownerauth.add_arguments(ap)
     args = ap.parse_args(argv)
@@ -328,11 +378,17 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
         # a node configuration that cannot be loaded, or another node's, refuses here; its define policy is resolved
         # from the manifest being anchored, after the plan and before anything changes (NodePolicies.prepare)
         policies = NodePolicies(args.node_config, args.node_id)
+        # nothing else may touch the anchor while it is replaced: the node's units stopped (the procedure's step 5), and
+        # regalia-esp-advance's own lock held from here to the end (it writes the anchor under that lock, not the node's)
+        running = active()
+        require(not running, "%s %s running: stop %s first (MEMBERSHIP-RECOVERY.md, step 5), so that nothing but this "
+                "command touches the anchor" % (", ".join(running), "is" if len(running) == 1 else "are", " ".join(running)))
         extra = {} if owner_auth is None else {"owner_auth": owner_auth}
-        store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti, policy=policies.reader,
-                                                                          define_policy=policies.define,
-                                                                          lock_path=anchor_lock(args.membership), **extra))
-        now_at = reanchor(store, sources, args.node_id, typed, record, prepare=policies.prepare)
+        with esp_lock_held(args.esp_lock):
+            store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti, policy=policies.reader,
+                                                                              define_policy=policies.define,
+                                                                              lock_path=anchor_lock(args.membership), **extra))
+            now_at = reanchor(store, sources, args.node_id, typed, record, prepare=policies.prepare)
     except Incomplete as failure:
         print("reanchor: INCOMPLETE: the anchor was being replaced and it did not finish: %s\nRun this command again with the same "
               "chains. Until it completes, this node's membership does not load." % failure, file=sys.stderr)

@@ -146,7 +146,9 @@ they are opened by hand too. Rehearsed end to end on three nodes by `e2e/three-n
    refuses its membership (the reason above). **Stop them before anything else**:
    `systemctl stop regalia-esp-advance.path regalia-esp-advance regalia-sync regalia-admission`, and check
    with `systemctl is-active` that all four are inactive, so that nothing but the command touches the anchor
-   (`regalia-esp-advance` is the node's one run-time writer of it, #410, under a lock of its own). Then run the command above at b's console
+   (`regalia-esp-advance` is the node's one run-time writer of it, #410, under a lock of its own). The
+   command checks it too: it refuses while any of the four runs, and holds `regalia-esp-advance`'s own lock for
+   its whole run, so an advance started meanwhile waits for it. Then run the command above at b's console
    as root, with `--peer a=a-chain.json --peer c=c-chain.json`. Read what it prints, then type the phrase.
 6. **Status 0: start b's services** (`systemctl start regalia-sync regalia-admission regalia-esp-advance.path`),
    then **`systemctl start regalia-esp-advance`** and check that `regalia-node check` shows `anchor` equal to

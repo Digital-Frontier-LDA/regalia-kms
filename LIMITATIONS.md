@@ -104,8 +104,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - An anchor read the TPM refuses says only "cannot read 8 bytes from NV index …": `HighWater._read8` drops
     `tpm2_nvread`'s error text, so an operator diagnosing it gets no TPM reason (#450; the text is pinned by
     `highwater-v1.json` in both languages, so its fix regenerates that vector).
-  - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's and reanchor's
-    (reanchor's is the node's services' `highwater.lock` since #391): run those by hand only with the node's units stopped.
+  - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's. `reanchor` (#391) refuses
+    while `regalia-esp-advance` (or its path unit, sync or admission) runs, by `systemctl is-active`, and holds the
+    advance's lock for its whole run. On a machine with no `systemctl` it skips the unit check, and the three-node
+    rehearsal can't show it (its units have other names): unit tests only. Enrolment takes neither: run it only with
+    the node's units stopped.
   - **Accepted:** enrolment (`enrol commit`) still anchors epoch 1 before it writes the ESP: its render
     verifies the chain against the anchor, so the order is not cheap to swap. A crash in between leaves no
     chain on the ESP. The next boot's render then fails and the console asks for the recovery key, as it

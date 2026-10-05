@@ -288,7 +288,7 @@ class ReanchorTakesIt(unittest.TestCase):
                 "--peer", "b=%s/b.json" % d, "--peer", "c=%s/c.json" % d, "--ownerauth", record]
         with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
                 unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
-            rc = reanchor.main(argv, ask=lambda prompt: None, highwater=highwater)
+            rc = reanchor.main(argv, ask=lambda prompt: None, highwater=highwater, active=lambda: [])
         self.assertEqual(rc, 1)
         self.assertIn("stop after the anchor is built", err.getvalue())
         self.assertEqual(built["owner_auth"].check("a"), RECORD["record"]["nodes"]["a"]["check"])
@@ -300,7 +300,7 @@ class ReanchorTakesIt(unittest.TestCase):
         err = io.StringIO()
         with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
                 unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
-            self.assertEqual(reanchor.main(argv, ask=lambda prompt: None, highwater=highwater), 1)
+            self.assertEqual(reanchor.main(argv, ask=lambda prompt: None, highwater=highwater, active=lambda: []), 1)
         self.assertIn("is not a's", err.getvalue())
         self.assertEqual(built, {})
 

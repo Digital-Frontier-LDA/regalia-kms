@@ -260,8 +260,8 @@ jobs:
           set -o pipefail
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
             python3 -Es e2e/three-node-reanchor.py | tee "$RUNNER_TEMP/reanchor.log"
-          grep -q '^three-node-reanchor: 22 passed, 0 failed$' "$RUNNER_TEMP/reanchor.log" || {
-            echo "::error::the three-node re-anchor test did not pass all 22 checks" >&2; exit 1; }
+          grep -q '^three-node-reanchor: 26 passed, 0 failed$' "$RUNNER_TEMP/reanchor.log" || {
+            echo "::error::the three-node re-anchor test did not pass all 26 checks" >&2; exit 1; }
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.
