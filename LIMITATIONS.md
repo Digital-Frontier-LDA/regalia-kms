@@ -26,9 +26,15 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
-- **Activation by quorum: not built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
-  refined by #432; see the ADR. On `main` only the format carries `activation_signers`, and nothing
-  reads it. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
+- **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
+  refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
+  its verification under the current manifest's `activation_signers`, each node's grant record and
+  signer, and the co-signer's and proposer's checks, as a library with unit tests. **Nothing issues or
+  enforces an activation in the running system yet:** no `nv_activation` index is defined at
+  enrolment, sync has no activation ops, there is no `owner.py sign-activation`, and the Go Gate still
+  takes `regalia-fence`'s single key. By the rule, a new cluster's first activation waits about 11 minutes
+  (`RECOVERY_WAIT_S`): every node starts with no grant record, so each is busy for that long after it
+  starts. Expected at first bring-up, not a fault. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
   the authority for which site signs ([`FENCING.md`](FENCING.md)).
   **Accepted in the design:**
   - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
@@ -43,21 +49,26 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - **Availability cost:** with one node dead and not yet quarantined, an unplanned reboot of a second
     node stops lease renewals until the owner quarantines the dead one, because of the boot rule. An
     alert after a set number of minutes unreachable prompts the owner.
-- **Recovery with only one surviving peer: not built.** `recover` and `reanchor` need two peer chains
-  today. With one peer left, a node cannot be recovered or re-anchored. The design is decided, with the
-  owner co-signing as the second source behind `--one-source` (#387, PR #395). With **both** peers gone,
-  recovery is a new root ceremony, by design.
-- **Accepted, once #387 lands:** a one-peer recovery cannot see a revocation that was made after the
-  signing laptop last synced, if the surviving peer withholds it and the audit collector has no
-  receipt for it. The owner is asked before signing ([`deploy/baremetal/MEMBERSHIP-RECOVERY.md`](deploy/baremetal/MEMBERSHIP-RECOVERY.md)).
+- **Recovery with only one surviving peer: built (#387), not measured.** `recover apply --one-source`
+  and `reanchor --one-source` take one peer's chain and a short-lived statement that the owner signs off
+  the nodes (`owner.py sign-recovery`). They are unit-tested only: no three-node scenario runs the one-source path yet (#391 rehearsed
+  the total-outage re-anchor; the one-source case follows this PR), and nothing has run with a real YubiKey or on
+  a DL360 TPM. With **both** peers gone, recovery is a new
+  root ceremony, by design.
+- **Accepted:** a one-peer recovery cannot see a revocation that two nodes signed after the signing
+  laptop's last record if the surviving peer withholds it and the audit collector holds no receipt
+  for it (`no collector` typed). Only the operator's answer guards it. A stale collector export still
+  verifies (#398). A node whose own tunnel is down cannot tell a dead peer from an unreachable one.
+  ([`deploy/baremetal/MEMBERSHIP-RECOVERY.md`](deploy/baremetal/MEMBERSHIP-RECOVERY.md), "One other
+  node and the owner".)
 - **Under a v4 chain the anchor is written by policy only (#242 B3), with these limits.** An owner-written counter
   or slot is Unusable under a v4 tip. load, commit, restore and the ESP advance all judge it by the tip of the chain
   they hold, fetch or anchor, and refuse it before the disk or the ESP is written. The Go initrd reader
   (`membership.Anchored`) judges alike, by the tip of the chain it reads, held to the same vectors.
   - **A node whose anchor is owner-written stops advancing under v4 until it is re-anchored by policy.** Such an
     anchor is a lab node's, or one laid down before B2b. sync refuses the next chain, and the ESP advance reports
-    `regalia_esp_advance_ok 0`. The repair is `reanchor` (MEMBERSHIP-RECOVERY.md), which needs two peer chains
-    (see the one-peer limit above).
+    `regalia_esp_advance_ok 0`. The repair is `reanchor` (MEMBERSHIP-RECOVERY.md), which needs two peer chains,
+    or one and the owner's statement (`--one-source`, above).
   - **The v3 → v4 step is refused on such a node, with nothing moved.** Every node must be re-anchored by policy
     before the root signs the first v4 manifest. No tool checks the whole fleet's layout first; each node's refusal is
     what tells.
@@ -137,7 +148,6 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
-- **`recover` is a Python call, not a command** (#387). `reanchor` is a command.
 
 ## Tokens and the HSM gate (#72)
 
@@ -219,6 +229,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   recovery scenarios (#402). Outage, leases and replace are not covered. The time trail and the update trail
   are never checked end to end in a three-node scenario. In recovery, "each node's change to serving" is not
   tied to a step, and the victims' not-serving lines are not checked.
+- **`regalia-sync` says nothing in the journal about its rounds** (#470). Its decisions (pulls, applies,
+  refusals and their reasons) are only in its hash-chained trail. `journalctl -u regalia-sync` shows systemd's
+  start and stop lines, so an operator asking why a node is behind its peers must read the trail. In the
+  three-node fixture, `advance()` now prints the puller's trail when a node doesn't take an epoch (#469).
 - **Collector receipts carry no signed time** (#398), so a stale receipt still verifies. This matters
   for the one-peer recovery witness (#387).
 
