@@ -58,9 +58,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     anchor is a lab node's, or one laid down before B2b. sync refuses the next chain, and the ESP advance reports
     `regalia_esp_advance_ok 0`. The repair is `reanchor` (MEMBERSHIP-RECOVERY.md), which needs two peer chains
     (see the one-peer limit above).
-  - **The v3 → v4 step is refused on such a node, with nothing moved.** Every node must be re-anchored by policy
-    before the root signs the first v4 manifest. No tool checks the whole fleet's layout first; each node's refusal is
-    what tells.
+  - **The v3 → v4 step is refused on such a node, with nothing moved.** This concerns lab nodes only: production
+    starts at a v4 genesis, and every v4 enrolment defines its anchor by policy (#419), so no production node has an
+    owner-written anchor. A lab fleet moving to v4 is re-anchored by policy node by node first; no tool checks the
+    whole fleet's layout beforehand (not needed for production: regalia-kms-24 and 95, 2026-10-05), and each node's
+    refusal names the fix.
   - Under a v1–v3 (lab) chain both layouts still read, by design: lab images write with the owner authorization.
   - Anyone holding the owner authorization can still undefine the indices. That is a denial (Unusable), which a
     re-anchor repairs; it cannot write them under v4.
