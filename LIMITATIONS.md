@@ -26,6 +26,23 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **Activation by quorum: not built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
+  refined by #432; see the ADR. On `main` only the format carries `activation_signers`, and nothing
+  reads it. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
+  the authority for which site signs ([`FENCING.md`](FENCING.md)).
+  **Accepted in the design:**
+  - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
+  - Activation by the owner plus one node is a recovery step behind three conditions, and every renewal
+    on that path repeats all three:
+    1. a quarantine epoch for the other nodes;
+    2. a typed hard-fencing attestation, which holds until the fenced nodes hold that epoch;
+    3. a wait counted from the latest lease expiry any record shows, plus the skew margin.
+  - The owner alone never activates.
+  - Two active sites remain possible only if a fencing attestation is false when it is made, or if an
+    operator rejoins a fenced node before it holds the quarantine epoch.
+  - **Availability cost:** with one node dead and not yet quarantined, an unplanned reboot of a second
+    node stops lease renewals until the owner quarantines the dead one, because of the boot rule. An
+    alert after a set number of minutes unreachable prompts the owner.
 - **Recovery with only one surviving peer: not built.** `recover` and `reanchor` need two peer chains
   today. With one peer left, a node cannot be recovered or re-anchored. The design is decided, with the
   owner co-signing as the second source behind `--one-source` (#387, PR #395). With **both** peers gone,
@@ -33,16 +50,30 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Accepted, once #387 lands:** a one-peer recovery cannot see a revocation that was made after the
   signing laptop last synced, if the surviving peer withholds it and the audit collector has no
   receipt for it. The owner is asked before signing ([`deploy/baremetal/MEMBERSHIP-RECOVERY.md`](deploy/baremetal/MEMBERSHIP-RECOVERY.md)).
+- **Under a v4 chain an owner-written anchor is still accepted** (#242 B3, waiting on #410). A definer never lays down
+  the owner-written layout under v4 (B2b), but a node whose anchor is already owner-written still reads it under v4.
+  Its writes take the owner authorization, not the approved image. On a host whose owner authorization is set, the
+  node's own services hold none (`Node.anchor()` has no `owner_auth`), so a sync that must advance or repair it fails
+  closed until the node is re-anchored. Anyone holding the owner authorization can write it from any image. B3 makes
+  that layout Unusable under a v4 tip (a re-anchor repairs it) and refuses the v3 → v4 step over it.
 - **TPM owner authorization: built (#242 step C), with these limits.**
-  - The owner authorization crosses the TPM bus in clear when used (password sessions, #414). A discrete TPM can
-    be sniffed by someone with physical access during enrolment, a re-anchor or a recount.
+  - On the TPM bus (#414, measured): the owner authorization itself is never sent. Owner calls use tpm2-tools'
+    own HMAC sessions. Setting it uses a session salted to the enrolled EK (its Name checked) with parameter
+    encryption. The proof is an owner createprimary. Residual: an owner call's own parameters (NV attributes and
+    policies, record epochs and digests, none secret) cross in clear, because tpm2-tools' automatic sessions are
+    unsalted. A bus probe on the DL360 sees those, not the value.
   - The value cannot be zeroed in Python memory. While an owner-authorized call runs, the value is readable through
     /proc by root (a memfd; `seal-hsm-pin.sh` uses a root-only file on /run).
   - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path
     is held by unit tests and by swtpm tests of the anchor's owner calls.
   - During `enrol commit` the owner authorization is held by a process of uid regalia-sync, the network-facing
-    sync daemon's user. commit refuses while another process of that uid exists. Moving the owner calls into the
-    root parent is #419.
+    sync daemon's user. **Who could read it, and when:**
+    - Who: root, and any process of uid regalia-sync (through /proc/<pid>/fd, or by attaching to the step where
+      Yama allows).
+    - When: only while commit's `_anchor` and `_first-heartbeat` steps run, seconds each, at enrolment.
+    - commit refuses to start a step while any other process of that uid exists (`pgrep -u regalia-sync`). The race
+      left is a process of that uid starting during a step: at enrolment the node's services are not yet running.
+    - Moving the owner calls into the root parent is #419.
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.
@@ -62,11 +93,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   node that accepts a second manifest would boot to the recovery prompt. The fix is to write the ESP
   first and advance the anchor after it, in a root oneshot ("ESP advance", #66). It must land before
   any node takes a second manifest.
+  The same order causes a transient refusal (#430, seen in CI). `regalia-sync` moves the anchor before it
+  publishes `chain.json`, so a `wg-apply` started in between reads the published chain one epoch behind the
+  anchor. It refuses that as a ROLLBACK, and its unit fails until the next publish runs it again. #410 removes
+  this as well: sync then never moves the anchor.
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
-- **Refusing a crashed node in the wrong boot phase: no end-to-end test** (#397). It is covered by unit
-  tests only.
 - **`recover` is a Python call, not a command** (#387). `reanchor` is a command.
 
 ## Tokens and the HSM gate (#72)
