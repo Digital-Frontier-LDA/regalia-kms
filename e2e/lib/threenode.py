@@ -650,6 +650,11 @@ class Cluster:
                 return None
         if not until(lambda: epoch() == self.manifest["epoch"], 180, 2):
             raise RuntimeError("%s, started at epoch %d, did not take epoch %d by its sync" % (name, held, self.manifest["epoch"]))
+        # #66 B3 (regalia-kms-48's read): and its regalia-esp-advance wrote what it caught up on to its ESP, then anchored it
+        target = self.manifest["epoch"]
+        if not until(lambda: self.anchored(name) == target and self.esp_epoch(name) == target, 60, 1):
+            raise RuntimeError("%s caught up on epoch %d, but its TPM anchor is at %s and its ESP at %s: regalia-esp-advance did not "
+                               "follow | %s" % (name, target, self.anchored(name), self.esp_epoch(name), self.journal(name, "esp-watch")[-800:]))
 
     def esp(self, name):
         """The node's ESP stand-in (a directory: what regalia-esp-advance writes; nothing boots from it here)."""
