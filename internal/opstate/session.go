@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // SESSION KEY (ADR-0002 D32, #432; 48 and 95's design). The daemon makes an Ed25519 key pair at each start
@@ -101,4 +104,14 @@ func replaceFile(dir, name string, contents []byte) error {
 	}
 	ok = true
 	return nil
+}
+
+// KernelBoottime is CLOCK_BOOTTIME: the clock nobody sets, which runs through suspend. Every confirmation
+// and staleness bound in this package is measured on it.
+func KernelBoottime() (time.Duration, error) {
+	var now unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_BOOTTIME, &now); err != nil {
+		return 0, err
+	}
+	return time.Duration(now.Nano()), nil
 }

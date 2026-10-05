@@ -18,6 +18,10 @@ import (
 	"time"
 )
 
+// Prefix is the one prefix every operational-state key is under (#432): keys/, nonces/, seq/, quota/, hwm/,
+// sessions/.
+const Prefix = "/regalia/v1/"
+
 // Change is one key's new value, or its deletion, at a revision.
 type Change struct {
 	Key         string
