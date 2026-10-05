@@ -277,3 +277,19 @@ func TestAnUnparseableListenAddressIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// A chain endpoint is an https URL with no credentials, query or fragment (#432, cosmos-account).
+func TestCosmosRPCEndpointsAreHTTPSOnly(t *testing.T) {
+	for _, endpoint := range []string{"http://rpc.example", "https://user:pw@rpc.example", "https://rpc.example/?a=b", "https://rpc.example/#x", "rpc.example"} {
+		cfg := baseConfig()
+		cfg.CosmosRPC = map[string]string{"cosmoshub-4": endpoint}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "must be an https URL") {
+			t.Errorf("%q: %v", endpoint, err)
+		}
+	}
+	cfg := baseConfig()
+	cfg.CosmosRPC = map[string]string{"cosmoshub-4": "https://rpc.example/base"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a valid endpoint was refused: %v", err)
+	}
+}

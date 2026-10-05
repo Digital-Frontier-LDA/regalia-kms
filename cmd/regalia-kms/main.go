@@ -19,6 +19,7 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/reauth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/certs"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/controlplane"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/cosmosrpc"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/executor"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/fencing"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/operations"
@@ -421,6 +422,16 @@ func run() error {
 		if admissionGate != nil {
 			coordinator.RequireAdmission(admissionGate)
 		}
+		// THE CHAINS' ENDPOINTS (#432, cosmos-account): asked before a cosmos-account key signs. Without them,
+		// every such request is refused: never signed unchecked.
+		if len(settings.CosmosRPC) > 0 {
+			chain, err := cosmosrpc.New(settings.CosmosRPC, cosmosRPCTimeout, nil)
+			if err != nil {
+				return err
+			}
+			coordinator.SetChain(chain)
+			slog.Info("KMS Cosmos chain endpoints configured", "chains", len(settings.CosmosRPC))
+		}
 		slog.Info("KMS hardware backend ready", "module", settings.PKCS11ModulePath)
 	}
 
@@ -809,6 +820,9 @@ func fenceRunner(settings config.Config, registryDigest string, base operations.
 	}
 	return fencing.NewRunner(standby, base), standby, nil
 }
+
+// cosmosRPCTimeout bounds one question to a chain's endpoint: a cosmos-account request holds its key for it.
+const cosmosRPCTimeout = 2 * time.Second
 
 // tokenConfigured reports whether the daemon gets a cryptographic backend, and with it a
 // coordinator. Without one there is nothing to route a key operation to and every one of them is

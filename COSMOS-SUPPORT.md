@@ -38,21 +38,43 @@ signer. This is intentional: a policy cannot constrain a message it cannot inspe
 - durable UTC-day denomination caps;
 - replay nonce reservation;
 - verified approver signatures;
+- for a `cosmos-account` key, the chain ID, account number, sequence and signer equal to what the chain said just before signing;
 - canonical SignDoc parsing before policy and hardware.
 - SHA-256 hashing of the canonical SignDoc before the hardware signing operation.
 
-## Sequence, fee, and gas semantics
+## Signing profile: the KMS is a blockchain user, not a validator (#432)
 
-The parser exposes signer sequence, fee coins, and gas limit from `AuthInfo`. Cosmos policies require
-a positive gas limit at or below `max_gas_limit`, and every fee coin must be explicitly allowlisted at or below
-its `max_fee` cap. The durable policy journal requires each subsequent reservation for an object to
-carry the next account sequence; gaps and repeats refuse before hardware use. A sequence is consumed
-when the reservation is durably committed, including an indeterminate later hardware result, so a
-retry cannot accidentally reuse it.
+Every secp256k1 key has a `signing_profile` in the custody manifest. The owner decided on 2026-10-05 that the KMS
+uses chains and does not validate them.
 
-The current policy does not query a live chain. Operators must initialize the first expected sequence
-from a trusted chain observation during commissioning and keep the active/passive signer state and
-policy journal together through failover.
+- **`cosmos-account`** is the default and today the only profile. Just before signing, the daemon asks the chain's
+  endpoint (`cosmos_rpc`, one https URL per chain) for:
+  - the signer's account number and sequence (`/cosmos/auth/v1beta1/accounts/{address}`);
+  - the chain's ID (`node_info`, trusted for 5 minutes).
+
+  The SignDoc must carry **exactly** those values: the chain ID, the account number, the sequence, and every
+  message's signer. If any differs, the request is refused before the hardware.
+  - **The chain arbitrates the sequence.** The KMS keeps no sequence high-water for such a key. Two servers
+    signing for one account at once both get a signature, and the chain takes one transaction per sequence.
+  - **On one server,** a key's requests are serialised from the chain's answer to the result, so two requests
+    there never read the same sequence.
+- **`cosmos-validator`** (vote signing, with height and round high-water marks) is **refused at load**. No vote
+  signing exists in this KMS.
+- **Unordered transactions** (Cosmos SDK 0.53, `TxBody.unordered`) are refused by name: they carry no sequence for
+  the chain to arbitrate.
+- **The endpoint can only deny service.** A lying or intercepted endpoint can make the values differ, and the KMS
+  then refuses. It can't make the KMS sign anything the SignDoc and its policy wouldn't allow, because the check is
+  equality, never substitution.
+  - Endpoints are https with normal certificate validation, and redirects aren't followed.
+  - The daemon resolves no names through DNS, so each host is an address or in `/etc/hosts`.
+  - The host's egress names exactly these hosts.
+
+## Fee and gas semantics
+
+The parser exposes signer sequence, fee coins, and gas limit from `AuthInfo`. Cosmos policies require a positive
+gas limit at or below `max_gas_limit`, and every fee coin must be explicitly allowlisted at or below its `max_fee`
+cap. A key with no profile (no current manifest leaves one out for a secp256k1 key) would fall back to the durable
+policy journal's gap-free sequence. That path stays only for the journal's own tests.
 
 ## Hardware qualification command
 
