@@ -438,6 +438,16 @@ class RecoveryPath(Record):
         by_a = {"lease": body, "signatures": [{"party": "a", "key": pub(NODE_KEYS["a"]), "sig": p256_sig(NODE_KEYS["a"], act.message(body))}]}
         self.refused("is signed by the survivor c", act.verify, by_a, self.m2)
 
+    def test_the_owner_s_record_closes_an_epoch_and_names_every_issue(self):
+        """d9: once an epoch after the recovery stated recovery_ends_by, the owner's tool issues nothing for it again."""
+        signed = self.authorize()
+        self.assertEqual(act.issued_line(signed), {"event": "issued", "quarantine_epoch": 2, "node_id": "c", "site": "site-c",
+                                                   "expires_at": heartbeat.parse_time(signed["authorization"]["expires_at"], "e")})
+        act.issuable([act.issued_line(signed)], 2)
+        self.refused("no authorization is issued for epoch 2", act.issuable,
+                     [{"event": "closed", "through_epoch": 2, "recovery_ends_by": 1}], 2)
+        act.issuable([{"event": "closed", "through_epoch": 2, "recovery_ends_by": 1}], 5)      # a later recovery: issuable
+
     def test_what_the_owner_s_tool_refuses(self):
         m2b = manifest4(2, m.digest(self.m1), nodes4(a="QUARANTINED"), activation_signers=dict(RULE))
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -474,7 +484,7 @@ class OwnerCommand(unittest.TestCase):
         from unittest import mock
         from deploy.baremetal import owner
         argv = ["sign-activation", "--chain", "c.json", "--root-key", "00" * 32, "--survivor", "c", "--site", "site-c",
-                "--registry-digest", "sha256:" + "ab" * 32, "--record", "r.json", "--out", "o.json",
+                "--registry-digest", "sha256:" + "ab" * 32, "--record", "r.json", "--state-dir", "/nonexistent", "--out", "o.json",
                 "--module", "/x.so", "--serial", "1"]
         with mock.patch.object(owner.os.path, "exists", return_value=True), mock.patch("sys.stderr") as err:
             self.assertEqual(owner.main(argv), 1)
@@ -582,6 +592,43 @@ class Readmission(unittest.TestCase):
         self.assertTrue(s.readmitted())
         restarted = self.sync_({}, clock, d)                                 # a restart: the cleared state is kept
         self.assertTrue(restarted.readmitted())
+
+    def test_a_survivor_quarantined_at_the_exit_is_waited_out_until_recovery_ends_by(self):
+        """d9's hole: c, the survivor, partitioned and quarantined in the restoring epoch, may never answer; a and b wait
+        until recovery_ends_by + RECOVERY_WAIT_S instead of overlapping c's self-renewals."""
+        from deploy.baremetal import node as node_module
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        m1 = manifest4(1, "", nodes4(), activation_signers=dict(RULE))
+        m2 = manifest4(2, m.digest(m1), nodes4(a="QUARANTINED", b="QUARANTINED"), activation_signers=dict(RULE))
+        ends = T0 + 7 * 24 * 3600
+        m3 = manifest4(3, m.digest(m2), nodes4(c="QUARANTINED"), activation_signers=dict(RULE), recovery_ends_by=ends)
+        ms = [m1, m2, m3]
+        self.assertEqual(act.recovery_survivors(ms, 3), {"c"})
+        m3b = manifest4(3, m.digest(m2), nodes4(a="QUARANTINED", b="QUARANTINED", c="QUARANTINED"), activation_signers=dict(RULE))
+        m4b = manifest4(4, m.digest(m3b), nodes4(c="QUARANTINED"), activation_signers=dict(RULE), recovery_ends_by=ends)
+        self.assertEqual(act.recovery_survivors([m1, m2, m3b, m4b], 4), {"c"})    # d9: N alone, N+1 nobody, N+2 back
+        now = [T0]
+        s = node_module.Sync.__new__(node_module.Sync)
+        s.node = type("N", (), {"node_id": "a", "clock": lambda self: (lambda: (now[0], True)), "path": lambda self, leaf: os.path.join(d, leaf)})()
+        s.store = type("S", (), {"manifests": ms, "load": lambda self: ms[-1]})()
+        s.manifest, s.peer_epochs = (lambda: m3), {"b": 3}                    # c never answers
+        self.assertFalse(s.readmitted())
+        now[0] = ends - 1
+        self.assertFalse(s.readmitted())                                     # however long until the owner's last authorization ends
+        now[0] = ends
+        self.assertFalse(s.readmitted())                                     # then the usual wait, from there
+        now[0] = ends + act.RECOVERY_WAIT_S
+        self.assertTrue(s.readmitted())
+        # had c answered at epoch 3, nothing but the usual wait: the survivor seen has stopped
+        d2 = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d2, True)
+        now[0] = T0
+        s.node = type("N", (), {"node_id": "a", "clock": lambda self: (lambda: (now[0], True)), "path": lambda self, leaf: os.path.join(d2, leaf)})()
+        s.peer_epochs = {"b": 3, "c": 3}
+        self.assertFalse(s.readmitted())
+        now[0] = T0 + act.RECOVERY_WAIT_S
+        self.assertTrue(s.readmitted())
 
 
 if __name__ == "__main__":
