@@ -228,7 +228,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     refused, the line says `DENY sync-heartbeat`, and the new epoch shows up in the next round's line.
   - A taken heartbeat is not reported, and neither is its freshness.
   - Unlock, enrolment and beat-sign answers given to peers are not reported.
-  - A DENY that repeats inside the 15-minute window is written once.
+  - A DENY that repeats inside the 15-minute window is written once. Repeats are matched with digit runs
+    ignored, so a reason that carries a count, a time or a sequence doesn't write a line every round. A DENY
+    whose reason differs only in its numbers therefore stays hidden for up to 15 minutes.
+  - The journal lines aren't hash-chained or shipped. Anyone who can write the journal can edit or drop
+    them. The trail is the evidence.
 
   For any of these, read the trail. In the three-node fixture, `advance()` prints the puller's trail when a
   node doesn't take an epoch (#469).

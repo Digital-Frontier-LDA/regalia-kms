@@ -831,11 +831,14 @@ class RoundLog:
 
     def refused(self, source, refusal, event):
         text = convergence._printable(refusal, membership.REASON_LIMIT)
-        if text.startswith("%s did not answer (" % source):
+        if text.startswith("%s did not answer (" % source):            # the error class is the whole key
             self._say(source, ("silent", text), "peer " + text)
             return
         kind, reason = (event["event"], event["reason"]) if event is not None else ("pull", text)
-        self._say(source, ("deny", kind, reason), "DENY %s from %s: %s" % (kind, source, reason))
+        # printable again, though audited() made them so: a sink event written raw later must not reach the journal
+        kind, reason = convergence._printable(kind, 64), convergence._printable(reason, membership.REASON_LIMIT)
+        # keyed with digit runs collapsed: a reason that carries a count, a time or a sequence is the same outcome
+        self._say(source, ("deny", kind, re.sub(r"[0-9]+", "#", reason)), "DENY %s from %s: %s" % (kind, source, reason))
 
 
 class Sync:
@@ -929,31 +932,27 @@ class Sync:
         chain is published after EACH source, not after all of them: a commit moves the TPM anchor, and
         the root services refuse the published chain until it catches up (Node.manifest)."""
         sources = self.node.sources(self.manifest())
-        denied = []
+        seen = []
 
         def sink(event):
             self.trail(event)                   # the trail first: it is the record, and a sink that fails still stops the round
-            if event.get("outcome") == "DENY":
-                denied.append(event)
+            seen.append(event)
         client = sync.Client(self.node.node_id, self.store, self.freshness, sources, sink, documents=self.node.documents())
         changed = False
         for name in sorted(sources):
-            del denied[:]
-            held = self._held_epoch()
+            del seen[:]
             try:
                 now_at, _ = client.pull(name)
             except Refused as refused:
+                denied = [e for e in seen if e.get("outcome") == "DENY"]
                 self.rounds.refused(name, refused, denied[-1] if denied else None)
             else:
-                self.rounds.pulled(name, held, now_at["epoch"])
+                # the epoch held when this source's pull began: its first sync-apply event was filed under it (no
+                # second store load, and no TPM read, per round: 3e's read)
+                applies = [e["epoch"] for e in seen if e.get("event") == "sync-apply"]
+                self.rounds.pulled(name, applies[0] if applies and applies[0] else None, now_at["epoch"])
             changed = self.publish() or changed
         return changed
-
-    def _held_epoch(self):
-        try:
-            return self.store.load()["epoch"]
-        except Exception:                       # noqa: BLE001 - a store that cannot be read: the round refuses and says why
-            return None
 
     def watch(self):
         return heartbeat_watch.Watch(self.freshness, self.manifest, self.trail, metrics.path("sync", "heartbeat.prom"),      # #305: node_exporter's

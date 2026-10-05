@@ -56,6 +56,19 @@ class RoundLogLines(unittest.TestCase):
         self.assertEqual(self.lines, ["nothing newer from b: epoch 4 held", "peer b did not answer (TimeoutError)",
                                       "peer b did not answer (ConnectionRefusedError)", "nothing newer from b: epoch 4 held"])
 
+    def test_a_varying_number_in_a_deny_does_not_defeat_the_bound(self):
+        for seconds in range(5):
+            reason = "the heartbeat expires in %d s" % (100 - seconds)
+            self.log.refused("b", Refused(reason), {"event": "sync-heartbeat", "reason": reason})
+        self.assertEqual(self.lines, ["DENY sync-heartbeat from b: the heartbeat expires in 100 s"])
+
+    def test_a_reason_cannot_forge_a_second_line(self):
+        reason = "bad\napplied epoch 99 from b (held 1 before)"
+        self.log.refused("b", Refused(reason), {"event": "sync-apply\nx", "reason": reason})
+        self.assertEqual(len(self.lines), 1)
+        self.assertNotIn("\n", self.lines[0])
+        self.assertTrue(self.lines[0].startswith("DENY sync-apply"))
+
     def test_a_deny_says_which_decision_and_why(self):
         event = {"event": "sync-heartbeat", "reason": "the heartbeat is older than the one held"}
         self.log.refused("b", Refused(event["reason"]), event)
@@ -74,8 +87,8 @@ class FakeClient:
     def pull(self, source):
         outcome = self.script[source]
         if isinstance(outcome, int):
+            self.sink({"event": "sync-apply", "epoch": self.store.epoch, "outcome": "ALLOW", "reason": ""})
             self.store.epoch = outcome
-            self.sink({"event": "sync-apply", "outcome": "ALLOW", "reason": ""})
             return {"epoch": outcome}, None
         for event in outcome[1]:
             self.sink(event)
@@ -84,8 +97,10 @@ class FakeClient:
 
 class Store:
     epoch = 5
+    loads = 0
 
     def load(self):
+        Store.loads += 1
         return {"epoch": self.epoch}
 
 
@@ -111,6 +126,17 @@ class PullRound(unittest.TestCase):
         self.assertEqual(self.lines, ["applied epoch 6 from b (held 5 before)", "DENY sync-apply from c: CONFLICT: epoch 6",
                                       "peer d did not answer (TimeoutError)"])
         self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY", "DENY"])
+
+    def test_the_round_loads_the_store_no_more_than_before(self):
+        """The held epoch comes from the sync-apply event, not a store load per source (3e's read: a load is a
+        chain verification and a TPM read)."""
+        FakeClient.script = {"b": 6, "c": 6, "d": 6}
+        Store.loads = 0
+        with mock.patch.object(nodemod.sync, "Client", FakeClient):
+            self.sync.pull_round()
+        self.assertEqual(Store.loads, 1)                    # the round's manifest(), once, as before #470
+        self.assertEqual(self.lines, ["applied epoch 6 from b (held 5 before)", "nothing newer from c: epoch 6 held",
+                                      "nothing newer from d: epoch 6 held"])
 
     def test_a_deny_line_names_this_sources_event_not_an_earlier_ones(self):
         FakeClient.script = {"b": ("first", [{"event": "sync-heartbeat", "outcome": "DENY", "reason": "first"}]),
