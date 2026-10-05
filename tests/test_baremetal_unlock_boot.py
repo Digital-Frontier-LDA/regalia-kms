@@ -773,9 +773,11 @@ class OnQemu(tub.OnSwtpm):
         approving = {"schema": measurements.SCHEMA, "name": "e2e-next", "nodes": {"a": reference(expected["pcr12"], (("e2e", record), ("e2e-k2", other_kernel)))}}
         m3 = dict(m2, epoch=3, prev_digest=membership.digest(m2), issued_at="2026-10-05T00:00:00Z", policy_version=measurements.version(approving))
         three = two + [self.signed(m3)]
+        # the peers pin the base test's root (tub.rt), the guest the image's (self.signed): the same manifests, each
+        # signed for whom it reaches
         for peer in ("b", "c"):
-            for envelope in three[1:]:
-                self.stores[peer].commit(envelope)
+            for manifest in (m2, m3):
+                self.stores[peer].commit(tub.rt.sign(manifest))
             self.fresh[peer].accept(tub.hbt.beat(m3, 2, issued=self.now), m3)
         self.assertTrue(all(self.stores[p].load()["epoch"] == 3 for p in ("b", "c")))
         # the peers' policy for a: the document the epoch commits to, as validated, checked bound to that epoch
