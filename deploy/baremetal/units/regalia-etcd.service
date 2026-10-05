@@ -1,0 +1,67 @@
+# etcd, the three servers' operational-state store (ADR-0002 D32, regalia-kms#432; deploy/baremetal/ETCD.md): the
+# servers' leases, key state, spent approvals and per-key high-water marks, replicated by Raft over the WireGuard
+# mesh. It holds NO secret and is not the authority to serve (the TPM-held lease is). Peers over mutual TLS on the
+# mesh only; local clients over a unix socket in its RuntimeDirectory. Not root, no capability.
+# Started only once enrolment has rendered its configuration (the member name, the initial cluster from the
+# root-signed manifest, the tuned heartbeat and election timeout): skipped, never failed, before that.
+[Unit]
+Description=Regalia KMS: etcd, the operational-state store shared by the three servers
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/ETCD.md
+ConditionPathExists=/etc/regalia/etcd.conf.yml
+After=regalia-wg-apply.service regalia-authtime.service
+Wants=regalia-wg-apply.service
+
+[Service]
+# etcd tells systemd when it has joined (sd_notify)
+Type=notify
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/etcd --config-file /etc/regalia/etcd.conf.yml
+Restart=always
+RestartSec=5s
+TimeoutStartSec=120
+User=regalia-etcd
+Group=regalia-etcd
+# the peer and client TLS keys, sealed to this host's TPM (systemd-creds): read by etcd from
+# /run/credentials/regalia-etcd.service/, never from a file on the disk
+LoadCredentialEncrypted=etcd-peer.key:/etc/credstore.encrypted/regalia-etcd-peer.key
+LoadCredentialEncrypted=etcd-server.key:/etc/credstore.encrypted/regalia-etcd-server.key
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+# the data directory (the WAL and the snapshots): /var/lib/regalia-etcd, its own and nobody else's
+StateDirectory=regalia-etcd
+StateDirectoryMode=0700
+# the client socket
+RuntimeDirectory=regalia-etcd
+RuntimeDirectoryMode=0750
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# the peers on the mesh only (the service tunnel's prefix, as regalia-admission)
+IPAddressDeny=any
+IPAddressAllow=fd72:6567:6c61::/48
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+LimitCORE=0
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

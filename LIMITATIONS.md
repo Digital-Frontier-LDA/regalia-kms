@@ -19,6 +19,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 
 ## Membership, heartbeats and recovery (deploy/baremetal)
 
+- **etcd (ADR-0002 D32) is in the image, but no cluster has run** (`deploy/baremetal/ETCD.md`).
+  Upstream v3.6.15 is built from a pinned commit, and `regalia-etcd.service` is hardened and skipped
+  until enrolment renders its configuration. Not built yet: that renderer, the enrolment-issued
+  certificates, member changes driven by the manifest, and the netem scenario (#432). The DL360s' WAL
+  fdatasync p99 (< 10 ms) and the inter-site round trips are unmeasured; the plan is in ETCD.md.
 - **The root's permissive epochs reach the cluster by hand** (#386 retired the authority host).
   An image approval, or a replacement, signed by the root on the offline laptop, is given to ONE
   running node with `deliver` (root, at its console), and the others pull it. Nothing carries them

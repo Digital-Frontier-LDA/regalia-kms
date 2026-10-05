@@ -60,6 +60,10 @@ prometheus-node-exporter | - | node metrics (units/prometheus-node-exporter.serv
 cmd/regalia-kms | /usr/sbin/regalia-kms | the KMS daemon, -tags piv (cgo, PC/SC: #72 G2)
 cmd/regalia-audit-ship | /usr/bin/regalia-audit-ship | ships the audit trails to the external collector (regalia-audit-ship@.service)
 
+[upstream]
+# Built from upstream source at a pinned commit (image/etcd.pin), not a Debian package | the paths | why
+etcd | /usr/bin/etcd /usr/bin/etcdctl /usr/bin/etcdutl | the operational-state store (ADR-0002 D32, regalia-etcd.service); etcdutl restores a snapshot (ETCD.md)
+
 [imported-not-run]
 # Commands found in modules the host imports, which those modules run only on the signing laptop or the builder.
 git | uki.Checkout: the build's provenance, read at signing on the laptop (uki.py sign)
