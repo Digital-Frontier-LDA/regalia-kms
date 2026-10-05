@@ -324,7 +324,7 @@ class OnQemu(tub.OnSwtpm):
             for name, entry_image in sorted((entries or {}).items()):
                 shutil.copyfile("%s/%s.efi" % (BOOT, entry_image), "%s/EFI/regalia/%s.efi" % (mnt, name))
             asked = mnt + "/EFI/regalia-e2e"
-            shutil.rmtree(asked, ignore_errors=True)
+            shutil.rmtree(asked, ignore_errors=True)        # removed before EVERY boot: a request is never acted on twice
             if request is not None:
                 os.makedirs(asked)
                 with open(asked + "/request.json", "w") as f:
@@ -957,6 +957,9 @@ class OnQemu(tub.OnSwtpm):
         said, seen, fw = q4("17-q4-back-to-current")
         unattended(self, said)
         self.assertEqual(seen["before"]["current"], current, seen)
+        # no request this boot (esp() removes EFI/regalia-e2e before every boot that passes none): the unit reported and
+        # did nothing, so no stale trial re-armed BootNext (regalia-kms-d9 on #442)
+        self.assertNotIn("after", seen, "the unit acted with no request on the ESP: %s" % seen)
         self.assertEqual((fw["next"], fw["order"][0]), (None, current), fw)
         # boot 18: NEXT approved again (the root's epoch 5), its trial set again from CURRENT
         approving_again = {"schema": measurements.SCHEMA, "name": "e2e-next-again",

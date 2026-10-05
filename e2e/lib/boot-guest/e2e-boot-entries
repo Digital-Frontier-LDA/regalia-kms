@@ -14,7 +14,13 @@ entry's label, as bootnext.state() reads them). With a request it then does exac
   {"verb": "promote", "entry": "XXXX"}                    bootnext.promote: BootOrder puts the entry first
 
 The request is read strictly: one of the three verbs, exactly its keys, an entry as four hex digits. Anything else is
-refused, said, and nothing is done.
+refused, said, and nothing is done. The ESP is mounted read-only, so the unit cannot remove a request: the test does,
+before every boot that passes none (tests/test_baremetal_unlock_boot.py, esp()), and asserts a boot with none changes
+nothing.
+
+LIMITATION: `trial` takes the accepted set from the request. In production, update.py derives NEXT's set from the
+verified chain and the measurement document the host holds, so this proves bootnext.py against a set the test gives it,
+not that approval path (which update.py's own tests and the rolling scenario exercise).
 """
 import json
 import os
@@ -60,7 +66,8 @@ def request():
 
 
 def disk_and_part(guid):
-    """The whole disk and the partition number of the GPT partition `guid` (the ESP systemd-stub booted from)."""
+    """The whole disk and the partition number of the GPT partition `guid` (the ESP systemd-stub booted from). Names like
+    /dev/vda1 (the guest's virtio disk) only: an NVMe name (nvme0n1p1) is refused, not guessed."""
     node = os.path.realpath(os.path.join("/dev/disk/by-partuuid", guid))
     match = re.fullmatch(r"(/dev/[a-z]+?)(?:p)?([0-9]+)", node)
     if match is None:
