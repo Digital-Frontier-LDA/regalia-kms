@@ -76,6 +76,7 @@ pkcheck | os_probe only looks for polkit, which the image does not ship (absence
 
 [not-on-host]
 # Deploy modules the host neither runs nor imports.
+activation | the activation lease (#440): no unit imports it yet; issuance over sync follows (#432, rewritten by D32)
 cardrecord | the card-ceremony record, verified on the laptop (manifest propose --genesis)
 firewall | renders a host's nftables ruleset from its site config, from the operator's checkout
 initrd_drift | the scheduled initrd drift report (CI)
