@@ -134,7 +134,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   refused at once, and the refusal ends with what the TPM said ("; the TPM said: ..."), which the Go reader's
   comparison drops. Past the bound the services' units restart (the ESP advance every 15 s) and read again.
   Limits:
-  - Only the anchor's `tpm2_nvread` retries. Its `nvreadpublic`, the counters' reads and the policy sessions do not.
+  - Only the anchor's `tpm2_nvread` retries. Its `nvreadpublic`, the counters' reads and the policy sessions do not,
+    and neither does the Go reader in the initrd (`nv.go`, `highwater.go`). At boot that reader is the TPM's only client,
+    so the memory warnings don't arise; but a RETRY or TESTING during the TPM's early self-test stops at the console
+    instead of retrying (regalia-kms-ed).
+  - Each failed try writes its own journal line (#452), up to 5 per read: one line per attempt, not 5 failures.
   - On a host the kernel's resource manager (`/dev/tpmrm0`) virtualizes sessions and objects, so the memory warnings
     are a CI condition there; the retry list is the TPM 2.0 warning set, not measured on the DL360.
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
