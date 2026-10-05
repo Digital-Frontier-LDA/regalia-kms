@@ -67,11 +67,13 @@ def v4_chain(length):
     envelopes, prev = [], ""
     for epoch in range(1, length + 1):
         manifest = {"schema": m.SCHEMA_V4, "epoch": epoch, "prev_digest": prev, "policy_version": "p1", "issued_at": "2026-10-04T12:00:00Z",
-                    "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600,
+                    "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "recovery_authorization_max_s": 604800,
                     "owner_keys": [{"alg": "ed25519", "key": owner}],
                     "heartbeat_signers": {"threshold": 2, "parties": ["n1", "n2", "n3", "owner"]},
                     "activation_signers": {"threshold": 2, "parties": ["n1", "n2", "n3"]},
                     "revocation_signers": [{"threshold": 2, "parties": ["n1", "n2", "n3"]}, {"threshold": 1, "parties": ["owner"]}],
+                    # #361/#405: K_A (a fixed public test point) and the card record's pin
+                    "anchor_policy_key": {"alg": "ecdsa-p256", "key": p256(60)}, "card_record": {"sequence": 1, "digest": "ca" * 32},
                     "nodes": nodes}
         envelopes.append(envelope(manifest))
         prev = m.digest(manifest)

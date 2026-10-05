@@ -2253,13 +2253,13 @@
      },
      "0x150001a": {
       "attributes": 537264130,
-      "data": "0000000000000003ab748021ebebfec2e260d13a50746e1ec88a712365c7eec0b72fa946dbaab49c3e6516c512ff817a",
+      "data": "0000000000000003b395d73bb93981f6aba405a4d82587244b0a71e7909650da0d7f632ecb3e36713822fdf28f467517",
       "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
-      "data": "00000000000000025086e564b3bb36e88b89b95c39c781595daa53b5372d32a2b1278fe0bb3728f208d20e040fe999ee",
+      "data": "000000000000000210ef65ed3000d312e5a1c97100d779bdff9d9112ce9618023b1ef950bcfac5201056d917ef06696b",
       "policy": null,
       "size": 48
      }
@@ -2292,13 +2292,13 @@
      },
      "0x150001a": {
       "attributes": 537264138,
-      "data": "0000000000000003ab748021ebebfec2e260d13a50746e1ec88a712365c7eec0b72fa946dbaab49c3e6516c512ff817a",
+      "data": "0000000000000003b395d73bb93981f6aba405a4d82587244b0a71e7909650da0d7f632ecb3e36713822fdf28f467517",
       "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264138,
-      "data": "00000000000000025086e564b3bb36e88b89b95c39c781595daa53b5372d32a2b1278fe0bb3728f208d20e040fe999ee",
+      "data": "000000000000000210ef65ed3000d312e5a1c97100d779bdff9d9112ce9618023b1ef950bcfac5201056d917ef06696b",
       "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
       "size": 48
      }
@@ -2329,13 +2329,13 @@
      },
      "0x150001a": {
       "attributes": 537264130,
-      "data": "0000000000000003ab748021ebebfec2e260d13a50746e1ec88a712365c7eec0b72fa946dbaab49c3e6516c512ff817a",
+      "data": "0000000000000003b395d73bb93981f6aba405a4d82587244b0a71e7909650da0d7f632ecb3e36713822fdf28f467517",
       "policy": null,
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264130,
-      "data": "00000000000000025086e564b3bb36e88b89b95c39c781595daa53b5372d32a2b1278fe0bb3728f208d20e040fe999ee",
+      "data": "000000000000000210ef65ed3000d312e5a1c97100d779bdff9d9112ce9618023b1ef950bcfac5201056d917ef06696b",
       "policy": null,
       "size": 48
      }
@@ -2368,13 +2368,13 @@
      },
      "0x150001a": {
       "attributes": 537264138,
-      "data": "0000000000000003ab748021ebebfec2e260d13a50746e1ec88a712365c7eec0b72fa946dbaab49c3e6516c512ff817a",
+      "data": "0000000000000003b395d73bb93981f6aba405a4d82587244b0a71e7909650da0d7f632ecb3e36713822fdf28f467517",
       "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
       "size": 48
      },
      "0x150001b": {
       "attributes": 537264138,
-      "data": "00000000000000025086e564b3bb36e88b89b95c39c781595daa53b5372d32a2b1278fe0bb3728f208d20e040fe999ee",
+      "data": "000000000000000210ef65ed3000d312e5a1c97100d779bdff9d9112ce9618023b1ef950bcfac5201056d917ef06696b",
       "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
       "size": 48
      }
@@ -3230,6 +3230,14 @@
       ],
       "threshold": 2
      },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
+     },
      "epoch": 1,
      "heartbeat_max_lifetime_s": 21600,
      "heartbeat_signers": {
@@ -3301,6 +3309,7 @@
      ],
      "policy_version": "p1",
      "prev_digest": "",
+     "recovery_authorization_max_s": 604800,
      "revocation_signers": [
       {
        "parties": [
@@ -3319,7 +3328,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "6f7d11b563e46c068197f7071cf5a58acd400b0b283aee8af529936817453e091b845eb41b978bb9005eb8d0ee72235aefd1918f5fc00eb4c3d7242dbd837a07"
+    "sig": "22d6f15e810c09eba5d648dbd3710871796df938a02530c6dc94f73c820238b8695bd69806aeb5250a04df900fab74664a9a46b89374ad2921ada75d0b8f110a"
    },
    {
     "manifest": {
@@ -3330,6 +3339,14 @@
        "n3"
       ],
       "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
      },
      "epoch": 2,
      "heartbeat_max_lifetime_s": 21600,
@@ -3401,7 +3418,8 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "a458bc46f2dc937eabe31bb738d1fcca636b5074d6c0d2fbf18cdf9bdd1e738a",
+     "prev_digest": "155fbb3e3068d274f765e71e59e52432c002715de727b8dce495ef67470a029d",
+     "recovery_authorization_max_s": 604800,
      "revocation_signers": [
       {
        "parties": [
@@ -3420,7 +3438,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "86d9b91e92f1b1c11e606024cd3c9ebb042772fb970bb0ab69bccff6734cf9e420138b3169ed59eb789fbbb5cd649429a1181b2fe8360a957ddf9c5adc3a1f0b"
+    "sig": "620e7c8501a16ff00e4bd747998742f684eef01565bcc34e1ec154a56323e0441722d8a8d40a044c293f658ad8a0eff3199cbe830f9df1a0a26df7bd67d0b801"
    },
    {
     "manifest": {
@@ -3431,6 +3449,14 @@
        "n3"
       ],
       "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
      },
      "epoch": 3,
      "heartbeat_max_lifetime_s": 21600,
@@ -3502,7 +3528,8 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "5086e564b3bb36e88b89b95c39c781595daa53b5372d32a2b1278fe0bb3728f2",
+     "prev_digest": "10ef65ed3000d312e5a1c97100d779bdff9d9112ce9618023b1ef950bcfac520",
+     "recovery_authorization_max_s": 604800,
      "revocation_signers": [
       {
        "parties": [
@@ -3521,7 +3548,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "2273b298097c8deb8cade110f82320cdb510e1dcbe1e1e2e553ee2592344c3a82f963122034ee435fed183d619212463deb5459a81efb49bf0d1db00decdb206"
+    "sig": "2572414150099b3f59f53d25530b1683c40faadd805d8fdf9818d29913bc10abeaccb583a06863b0b7499fc5ab31bddd103bf1093893c0176f29009b9cc1d309"
    },
    {
     "manifest": {
@@ -3532,6 +3559,14 @@
        "n3"
       ],
       "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
      },
      "epoch": 4,
      "heartbeat_max_lifetime_s": 21600,
@@ -3603,7 +3638,8 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "ab748021ebebfec2e260d13a50746e1ec88a712365c7eec0b72fa946dbaab49c",
+     "prev_digest": "b395d73bb93981f6aba405a4d82587244b0a71e7909650da0d7f632ecb3e3671",
+     "recovery_authorization_max_s": 604800,
      "revocation_signers": [
       {
        "parties": [
@@ -3622,7 +3658,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "428084eb1491bbb483adb11a30ee2243c9e9c6bf797a2f202e1307617c94fff26441ce8d00c98a8fae3142e069df384779d1127b29e7aba4b356b8970e1a1c06"
+    "sig": "13d7d41853938e83c376bd303b6cb78c59e85a5b8b233256c2d91ec45b3fb2e031c45d1519310e629ffd73e120e60d8b28ad2babb790636c26f33925986e9506"
    },
    {
     "manifest": {
@@ -3633,6 +3669,14 @@
        "n3"
       ],
       "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
      },
      "epoch": 5,
      "heartbeat_max_lifetime_s": 21600,
@@ -3704,7 +3748,8 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "b30ab6776d03c2b5ee6e319f64a8be9f93dc20e08a7e30b2126aa07676982153",
+     "prev_digest": "99c5aad50e56dd294bbc1fe14b26f99f52b91578e2f53385c34228fbcd5dcc80",
+     "recovery_authorization_max_s": 604800,
      "revocation_signers": [
       {
        "parties": [
@@ -3723,7 +3768,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "468c5c801847bd1b4a1c62cdc59ffd23eadce5a899133ab4cc3e337729ef6ffd44c107aa29c9c30e951a12b3c3d8bbfb1cae2fdaaf701cb62658b4e8c9db8707"
+    "sig": "07884a62c0e80eb620e357ee88ccf5c029550cd71c3adc9e11c5faccac3a670148837048b09afb608b6d234ad9394a4c463be014b38eaeadc04360ac8001d007"
    },
    {
     "manifest": {
@@ -3734,6 +3779,14 @@
        "n3"
       ],
       "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
      },
      "epoch": 6,
      "heartbeat_max_lifetime_s": 21600,
@@ -3805,7 +3858,8 @@
       }
      ],
      "policy_version": "p1",
-     "prev_digest": "a145fdd0bb65289d8234306918f041b037ec25acbd73600910c8c9fb1488d0b6",
+     "prev_digest": "ce61d720b5c060e252b295ae54d77aba7bc32f6294173366fbe654cc52373426",
+     "recovery_authorization_max_s": 604800,
      "revocation_signers": [
       {
        "parties": [
@@ -3824,7 +3878,7 @@
      ],
      "schema": "regalia.membership/v4"
     },
-    "sig": "fd3ef6b3d9124d46263b1b0938842297ae4de88a5f303ce383c8c75909bec1c66cfe6e7a65c78fb0cb0ffe286e7acbc5a397d2fbe9dd6bb28d7c71fae9851e03"
+    "sig": "f97f80684a643dad10ab35b1fc9aef961f40b8410b811c2e82864a63b20a79dc4e8fe97f156f889b03dae9004300bc13bbdff5275a7cc79772ff91f881e7ee07"
    }
   ]
  },
