@@ -46,11 +46,10 @@ CURRENT LIMITATIONS (#242):
   * set() takes the owner authorization from EMPTY only. A TPM whose owner authorization is already set is refused,
     with the way on (its value is this envelope's: nothing to do, `check` proves it; otherwise the TPM's owner
     hierarchy must be cleared by its owner first). Changing a set value to a new one (a rotation) is not built;
-  * a child process (enrolment's steps as regalia-sync) takes the value from its root parent through an inherited
-    memfd (child_fd, --ownerauth-fd) and does not re-verify the record: the parent verified it. While that child runs,
-    the OWNER authorization is held by a process of uid regalia-sync, the network-facing sync daemon's user: enrolment
-    refuses to hand it over while any other process of that uid exists (enrol._no_sync_process), and moving the owner
-    calls into the root parent is #419;
+  * under v4, enrolment's owner calls are all its root parent's (#419, enrol.define_anchors, define_first_counter):
+    the value never enters a process of regalia-sync. With a lab chain (v1-v3, owner-written) the regalia-sync steps
+    still take it from the parent through an inherited memfd (child_fd, --ownerauth-fd), refused while another process
+    of that uid exists (enrol._no_sync_process), without re-verifying the record: the parent verified it;
   * enrol commit reads the value (standard input) before the operator types the root's fingerprint (at the terminal),
     and checks it against the record (confirm) only once that fingerprint has confirmed the root key;
 """
