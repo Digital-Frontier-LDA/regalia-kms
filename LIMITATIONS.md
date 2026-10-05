@@ -225,8 +225,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Admission's "stopped serving" line can come well after the node stopped serving.** The node stops when its
   lease's bound passes (the admission file, and the daemon's own check). The admission trail records the change at
   the end of admission's next round, and a round can be held by renewal attempts to a peer that doesn't answer:
-  about 110 s after the stop in CI (#473). The trail is late, never wrong. A node stopped before that round ends
-  records no line for that start.
+  about 110 s after the stop in CI (#473). The trail is late, never wrong; serving itself stops on time (the daemon
+  refuses by the lease's own bound, internal/admission). A node stopped before that round ends records no line for
+  that start, so the trail alone doesn't show that start.
 - **The update trail is not shipped end to end in tier N** (#476). `update.py apply`'s lease and verdict path and its
   REQUEST/ALLOW lines are covered by unit tests (`tests/test_baremetal_update.py`); firmware and image measurement
   by tier Q (#442, OVMF with real UKIs). The three-node fixture has no real UKIs, and a scenario that stood in for
