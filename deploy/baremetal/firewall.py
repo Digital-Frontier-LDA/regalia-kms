@@ -24,12 +24,12 @@ With a `boot_mesh` (three-site, #66), two more openings, and nothing else:
 The WireGuard peers themselves (which keys) come from the manifest: deploy/baremetal/bootnet.py.
 
 With a `service_mesh` (#80), the only IPv6 this host carries, and only on that interface:
-  input   WireGuard (UDP listen_port) from the peers' declared addresses and the authority's; and
+  input   WireGuard (UDP listen_port) from the peers' declared addresses; and
           sync_port inside the tunnel, only between addresses of the tunnel's own prefix
           (sitecfg.SERVICE_PREFIX: every address there is derived from a WireGuard key, wgsvc.py), with
           the answers to this host's own requests. EVERYTHING ELSE on the service interface is dropped,
           IPv4 and IPv6, before any other rule: no KMS port and no SSH inside this tunnel either.
-  output  WireGuard to the peers and the authority; this host's requests to sync_port inside the tunnel,
+  output  WireGuard to the peers; this host's requests to sync_port inside the tunnel,
           and its answers; nothing else leaves on the service interface.
 IPv6 on every other interface stays dropped, in both directions.
 
@@ -87,12 +87,6 @@ def render(cfg):
                           % (cfg["host_ipv4"], service["listen_port"], underlays))
         service_udp_out = ("    ip daddr %s udp dport %d accept comment \"service mesh: WireGuard, to the peers\"\n"
                            % (underlays, service["listen_port"]))
-        if service["authority"]:
-            a = service["authority"]
-            service_udp_in += ("    ip daddr %s udp dport %d ip saddr %s accept comment \"service mesh: WireGuard, from the authority\"\n"
-                               % (cfg["host_ipv4"], service["listen_port"], a["underlay"]))
-            service_udp_out += ("    ip daddr %s udp dport %d accept comment \"service mesh: WireGuard, to the authority\"\n"
-                                % (a["underlay"], a["port"]))
     out_rules = "\n".join(
         ["    ip daddr %s %s dport %d accept comment \"%s\"" % (o["cidr"], o["proto"], o["port"], o["name"]) for o in cfg["outbound"]] +
         ["    ip daddr %s %s dport %d accept comment \"time: %s, %s\"" % (_set(server["cidrs"]), proto, port, server["name"],

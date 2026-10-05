@@ -570,7 +570,7 @@ class Sequence(Case):
         self.assertEqual(self.counter.value(), 1001)
 
     def test_a_node_back_from_a_month_away_catches_up(self):
-        """#199: an authority signing every 900 s has moved 2880 sequences in 30 days. The bound grows by one
+        """#199: nodes signing every 900 s have moved 2880 sequences in 30 days. The bound grows by one
         per MIN_INTERVAL_S since the last accepted heartbeat, so the node accepts, and the counter steps the
         whole distance (what it would have stepped had it stayed online)."""
         self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
@@ -822,7 +822,7 @@ class Sequence(Case):
 
     def test_a_planted_heartbeat_cannot_push_the_counter_forward(self):
         """check() finishes an interrupted accept, so what is on disk must pass every check before the
-        counter moves: otherwise a planted file strands the node above the authority's sequence."""
+        counter moves: otherwise a planted file strands the node above the network's sequence."""
         self.f.accept(beat(self.m1, 1), self.m1)
         with open(self.state) as f:
             state = json.load(f)

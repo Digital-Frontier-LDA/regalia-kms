@@ -148,7 +148,7 @@ class Render(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
 
-def meshed(authority=None, **service):
+def meshed(**service):
     """The example site as node a of a three-site cluster, with the boot mesh and the service mesh."""
     doc = json.loads(EXAMPLE.read_text())
     doc["host_ipv4"] = "192.0.2.10"
@@ -156,11 +156,9 @@ def meshed(authority=None, **service):
                         "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                         "peers": [{"node_id": "b", "underlay": "192.0.2.20", "address": "10.89.0.2"},
                                   {"node_id": "c", "underlay": "192.0.2.30", "address": "10.89.0.3"}]}
-    doc["service_mesh"] = dict({"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444, "authority": authority}, **service)
+    doc["service_mesh"] = dict({"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444}, **service)
     return doc
 
-
-AUTHORITY = {"key": "5e" * 32, "underlay": "192.0.2.50", "port": 51821}
 
 
 class ServiceMesh(unittest.TestCase):
@@ -168,14 +166,15 @@ class ServiceMesh(unittest.TestCase):
 
     def test_the_service_mesh_is_null_or_exact(self):
         self.assertIsNone(sitecfg.validate(json.loads(EXAMPLE.read_text()))["service_mesh"])
-        self.assertEqual(sitecfg.validate(meshed())["service_mesh"], {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444, "authority": None})
-        self.assertEqual(sitecfg.validate(meshed(AUTHORITY))["service_mesh"]["authority"], AUTHORITY)
+        self.assertEqual(sitecfg.validate(meshed())["service_mesh"], {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444})
         cases = {
             "absent": (lambda d: d.pop("service_mesh"), "fields mismatch"),
             "without a boot mesh": (lambda d: d.__setitem__("boot_mesh", None), "service_mesh needs a boot_mesh"),
             "not an object": (lambda d: d.__setitem__("service_mesh", []), "service_mesh must be null or hold exactly"),
             "unknown field": (lambda d: d["service_mesh"].__setitem__("psk", "x"), "service_mesh must be null or hold exactly"),
-            "missing field": (lambda d: d["service_mesh"].pop("authority"), "service_mesh must be null or hold exactly"),
+            "missing field": (lambda d: d["service_mesh"].pop("sync_port"), "service_mesh must be null or hold exactly"),
+            # #199 retired the revocation authority: a site file that still names one is refused, not ignored
+            "the retired authority": (lambda d: d["service_mesh"].__setitem__("authority", None), "service_mesh must be null or hold exactly"),
             "a physical interface": (lambda d: d["service_mesh"].__setitem__("interface", "eth0"), "a WireGuard interface of its own"),
             "the loopback": (lambda d: d["service_mesh"].__setitem__("interface", "lo"), "a WireGuard interface of its own"),
             "the initrd's interface": (lambda d: d["service_mesh"].__setitem__("interface", "wg-boot"), "a WireGuard interface of its own"),
@@ -189,32 +188,17 @@ class ServiceMesh(unittest.TestCase):
             "sync on the KMS port": (lambda d: d["service_mesh"].__setitem__("sync_port", 8443), "one number, one service"),
             "sync on the SSH port": (lambda d: d["service_mesh"].__setitem__("sync_port", 22), "one number, one service"),
             "sync on the unlock port": (lambda d: d["service_mesh"].__setitem__("sync_port", 7443), "one number, one service"),
-            "an authority that is a list": (lambda d: d["service_mesh"].__setitem__("authority", []), "authority must be null or hold exactly"),
-            "an authority with more": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, psk="x")), "authority must be null or hold exactly"),
-            "an authority key in capitals": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, key="5E" * 32)), "a WireGuard public key"),
-            "an authority key too short": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, key="5e" * 31)), "a WireGuard public key"),
-            "an authority key in base64": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, key="A" * 43 + "=")), "a WireGuard public key"),
-            "an authority key that is no text": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, key=None)), "a WireGuard public key"),
-            "an authority at a host name": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="authority.example")), "authority.underlay must be an IPv4 address"),
-            "an authority at this host": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="192.0.2.10")), "is a node's address"),
-            "an authority at a peer": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="192.0.2.20")), "is a node's address"),
-            "an authority at a tunnel address": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="10.89.0.2")), "is a node's address"),
-            "an authority among the clients": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="198.51.100.9")), "is inside client_cidrs"),
-            "an authority among the admins": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="203.0.113.4")), "is inside admin_cidrs"),
-            "an authority that is the monitor": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="203.0.113.128")), "is inside monitoring_cidrs"),
-            "an authority that is the audit sink": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="203.0.113.192")), "is inside outbound"),
-            "an authority port 0": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, port=0)), "authority.port must be a port number"),
         }
         for label, (breakit, why) in cases.items():
             with self.subTest(label):
-                d = meshed(dict(AUTHORITY))
+                d = meshed()
                 breakit(d)
                 with self.assertRaises(sitecfg.InvalidSite) as ctx:
                     sitecfg.validate(d)
                 self.assertIn(why, str(ctx.exception))
 
-    def rules(self, authority=None):
-        text = firewall.render(sitecfg.validate(meshed(authority)))
+    def rules(self):
+        text = firewall.render(sitecfg.validate(meshed()))
         chains = {name: body for name, body in re.findall(r"chain (\w+) \{\n(.*?)\n  \}", text, re.S)}
         return text, [line.strip() for line in chains["input"].splitlines()], [line.strip() for line in chains["output"].splitlines()]
 
@@ -249,15 +233,11 @@ class ServiceMesh(unittest.TestCase):
             self.assertIn("type filter hook %s priority filter; policy drop;" % hook, text)
         self.assertIn("tcp dport 8443 ip saddr { 198.51.100.0/24, 203.0.113.128/32 } accept", text)
 
-    def test_wireguard_itself_only_with_the_peers_declared_addresses_and_the_authority_s(self):
+    def test_wireguard_itself_only_with_the_peers_declared_addresses(self):
         text, incoming, outgoing = self.rules()
         self.assertIn('ip daddr 192.0.2.10 udp dport 51821 ip saddr { 192.0.2.20/32, 192.0.2.30/32 } accept comment "service mesh: WireGuard, from the peers\' declared addresses"', incoming)
         self.assertIn('ip daddr { 192.0.2.20/32, 192.0.2.30/32 } udp dport 51821 accept comment "service mesh: WireGuard, to the peers"', outgoing)
-        self.assertNotIn("192.0.2.50", text)                                    # no authority configured: no rule for one
-        text, incoming, outgoing = self.rules(dict(AUTHORITY, port=51900))
-        self.assertIn('ip daddr 192.0.2.10 udp dport 51821 ip saddr 192.0.2.50 accept comment "service mesh: WireGuard, from the authority"', incoming)
-        self.assertIn('ip daddr 192.0.2.50 udp dport 51900 accept comment "service mesh: WireGuard, to the authority"', outgoing)
-        self.assertEqual(text.count("192.0.2.50"), 2)
+        self.assertEqual(len([line for line in incoming + outgoing if "udp dport 51821" in line]), 2)   # no other WireGuard peer (#199)
 
     def test_the_prefix_is_the_tunnel_s(self):
         """sitecfg names the prefix because firewall.py renders from the site config alone; wgsvc derives the
@@ -278,7 +258,7 @@ class ServiceMesh(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("nft"), "nft not installed")
     def test_nft_accepts_the_syntax_with_both_meshes(self):
-        r = subprocess.run(["nft", "-c", "-f", "-"], input=firewall.render(sitecfg.validate(meshed(AUTHORITY))), capture_output=True, text=True)
+        r = subprocess.run(["nft", "-c", "-f", "-"], input=firewall.render(sitecfg.validate(meshed())), capture_output=True, text=True)
         if "Operation not permitted" in r.stderr:
             self.skipTest("nft -c needs CAP_NET_ADMIN here")
         self.assertEqual(r.returncode, 0, r.stderr)

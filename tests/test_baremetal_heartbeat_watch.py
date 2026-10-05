@@ -211,7 +211,7 @@ class Watching(hbt.Case):
             self.w.step()
         self.assertEqual(self.kinds(), [])
 
-    def test_an_authority_that_renews_at_one_third_used_never_warns(self):
+    def test_signers_that_renew_at_one_third_used_never_warn(self):
         """The condition the thresholds assume: a renewal before half of a heartbeat is used. Across restarts
         of the watcher too."""
         for sequence in range(2, 12):
@@ -221,7 +221,7 @@ class Watching(hbt.Case):
             self.f.accept(beat(self.man, sequence, issued=self.now, lifetime=DAY), self.man)
             self.watch().step()
         self.assertEqual(self.kinds(), [])
-        # and one that renews only after half is used warns in every cycle: the setting to change is the authority's
+        # and one that renews only after half is used warns in every cycle: the setting to change is node.json's beat_interval_s
         self.later(12 * HOUR)
         self.w.step()
         self.assertEqual(self.kinds(), [("WARN", "RUNNING_OUT", 50)])

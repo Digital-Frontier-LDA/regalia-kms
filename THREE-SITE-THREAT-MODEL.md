@@ -54,7 +54,7 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 | One server, running, root compromised | Its unlocked disk, its HSM session, its WG-SERVICE identity | S4: no activation lease unless it is the fenced active site; S5: no exportable key; revocation (#69) and lease expiry (#74) bound the window; detection is the audit trail and attestation drift |
 | One datacenter (physical) | Every server in it; staff cannot open the locked drawers (custody plan) | Other sites; chassis-intrusion and access logs as detection |
 | One provider (two sites may share provider X) | Both of its sites' power, network and remote hands: **one administrative failure domain** | The site at provider Y; A3 manual recovery |
-| Network partition | Peers cannot reach each other or the revocation authority | Fail closed: a peer whose membership is older than the freshness bound authorizes nothing (design question 1); serving continues only under a valid lease |
+| Network partition | Peers cannot reach each other | Fail closed: a peer whose membership is older than the freshness bound authorizes nothing (design question 1); serving continues only under a valid lease |
 | A malicious or compromised peer | It can refuse to help (availability) or try to help the wrong node | The alternate peer path (A1); it holds only its own contribution, never a whole unlock credential (S1); it cannot mint membership (offline root) |
 | Stale membership on one peer | It may still help a node revoked elsewhere | Freshness bound (question 1); revocation is restrictive-only and propagates to every reachable peer |
 | Rollback of a node's disk, or of its manifest | Old manifest, old epoch | Highest accepted epoch kept in physical TPM NV, which disk restore cannot roll back, checked at every decision. Beside it the TPM keeps the digest of the manifest accepted at that epoch, so a substituted chain of the same length (possible only if a key signed two manifests for one epoch) is refused as well, on disk or fetched from a single peer. **Rolling back the TPM NV itself** (a physical attack on the TPM) defeats that node's own anchor; the independent anchor is its peers, which each keep their own highest epoch and refuse a requester whose transcript names an older one. A whole-cluster NV rollback is out of scope |
@@ -93,9 +93,8 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 **heartbeat**: it carries the current manifest epoch, a monotonic
 sequence number, an issue time and an **expiry** (at most 24 hours after issue under a v1 manifest; a
 v2 manifest states the bound, `heartbeat_max_lifetime_s`, root-signed, from one hour to seven days). A peer authorizes a
-bootstrap only while it holds an unexpired heartbeat for its manifest's epoch. *Who signs it:* today the
-revocation authority's single key (`deploy/baremetal/authority.py`); **decided (ADR-0002 D28 and #351, 2026-10-04), not built
-(#199):** two signatures from {node a, node b, node c, the owner}, each node signing with a TPM key usable
+bootstrap only while it holds an unexpired heartbeat for its manifest's epoch. *Who signs it* (ADR-0002 D28 and #351, 2026-10-04;
+built by #199, which retired the revocation authority's single key): two signatures from {node a, node b, node c, the owner}, each node signing with a TPM key usable
 only under the approved image's PCR policy, the owner with any of the owner's YubiKey 5 approval keys, and
 no separate authority host. The peer checks:
 - the expiry against **authenticated time** (NTS-authenticated NTP, with the TPM clock as a monotonic
@@ -105,8 +104,8 @@ no separate authority host. The peer checks:
   state, so a captured older heartbeat cannot be replayed after a rollback.
 Without authenticated time, or past the expiry, the peer fails closed: availability yields to
 security, and A3 covers the gap. The bound is the explicit trade: it is both how long a partitioned
-peer goes on helping a node revoked meanwhile and how long the authority may be down before every reboot
-needs the recovery key. The owner sets it in the manifest; `heartbeat_watch.py` warns while it runs out.
+peer goes on helping a node revoked meanwhile and how long the nodes may go without a quorum (or the owner's
+hand recovery, `owner.py beat`) before every reboot needs the recovery key. The owner sets it in the manifest; `heartbeat_watch.py` warns while it runs out.
 
 **2. The powered-off theft claim before revocation.** As case 1: denied away from the datacenter
 networks; inside them, bounded by detection plus the heartbeat expiry (question 1). Not "immediately

@@ -1,4 +1,4 @@
-# Ships the audit trail %i (deploy/baremetal/trails.py's registry: sync, admission, enrol, time, authority,
+# Ships the audit trail %i (deploy/baremetal/trails.py's registry: sync, admission, enrol, time,
 # reanchor, recount, recovery-key, recovery-reconcile, update) to the audit collector, one event a line, on the
 # stream <site>.%i (cmd/regalia-audit-ship, internal/audit/trail.go; #278).
 #
@@ -12,7 +12,7 @@
 # Configuration, one file per instance plus one for the host:
 #   /etc/regalia/audit-ship.env       COLLECTOR=https://collector.example:8443  SITE=sitea
 #   /etc/regalia/audit-ship/%i.env    TRAIL_PATH=/var/lib/regalia-sync/sync-audit.jsonl
-#   (the path is trails.where(%i, the node's or authority's configuration))
+#   (the path is trails.where(%i, the node's configuration))
 #   /etc/regalia/audit-ship/client.crt, client.key (0640 root:regalia-audit-ship), collector-ca.pem,
 #   collector-receipt.pub (the external collector's pinned receipt keys; deploy/baremetal/AUDIT-COLLECTOR.md)
 # Before each start, `regalia-audit-ship check` validates all of it together (the https origin, the site, the
