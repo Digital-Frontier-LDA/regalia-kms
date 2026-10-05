@@ -740,5 +740,29 @@ class Commands(unittest.TestCase):
             act.sync_started(d, boot="boot-2")                              # a stale file from an earlier boot
 
 
+class Vectors(unittest.TestCase):
+    """tests/vectors/activation-v2.json, which the Go Gate (#432 step 3) reads, replayed here: a case the Python no longer
+    decides the same way fails, so the file cannot drift from the code."""
+
+    def test_the_shared_vectors_are_what_this_python_decides(self):
+        import hashlib
+        import json
+        from tests.test_baremetal_membership_v4 import restored
+        path = pathlib.Path(__file__).resolve().parent / "vectors" / "activation-v2.json"
+        cases = json.loads(path.read_text())["cases"]
+        seen = {"accepted": 0, "refused": 0}
+        for case in cases:
+            with self.subTest(case["name"]):
+                try:
+                    lease = act.verify(restored(case["envelope"]), restored(case["current"]))
+                    outcome = {"accepted": hashlib.sha256(act.message(lease)).hexdigest()}
+                except m.Refused as refusal:
+                    outcome = {"refused": str(refusal)}
+                want = {k: case[k] for k in ("accepted", "refused") if k in case}
+                self.assertEqual(outcome, want)
+                seen[next(iter(want))] += 1
+        self.assertTrue(seen["accepted"] >= 8 and seen["refused"] >= 10, seen)
+
+
 if __name__ == "__main__":
     unittest.main()
