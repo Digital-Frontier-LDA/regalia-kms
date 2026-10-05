@@ -887,8 +887,9 @@ Six systemd units in `deploy/baremetal/units/`, all run from one configuration, 
 the console; every step is journalled in `/var/lib/regalia-enrol` (root, 0700), and a rerun resumes,
 removing only what it can prove it made.
 - `init --node-id X --system-pub PEM --anchor-policy FILE` makes the EK and AK in the TPM, the rotation counter
-  (#361 C1: at 0x01500020, under PolicyAuthorize(Name(K_A), "rotation"), first incremented with K_A's approval from
-  FILE, `regalia.anchor-policy-first/v1`; before `enrol ownerauth`, while the owner authorization is empty), the
+  (#361 C1: at 0x01500020, under PolicyAuthorize(Name(K_A), SHA-256("regalia-rotation/v1\0" || node ID)), so its Name
+  is this node's own; first incremented with K_A's approval for THIS node from FILE, `regalia.anchor-policy-first/v1`;
+  before `enrol ownerauth`, while the owner authorization is empty), the
   signing key (#199: at 0x81010003, usable only under PolicyAuthorize of the system-phase PCR key, `signkey.py`)
   with the AK's certification of it, the WG-SERVICE key (`/etc/regalia/wg-service.key`, 0600) and the WG-BOOT key,
   and writes the identity bundle (public values) for the manifest ceremony. The bundle names the rotation counter's

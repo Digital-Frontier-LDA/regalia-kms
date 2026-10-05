@@ -539,7 +539,7 @@ def rotation_of(bundle, k_a_point):
     A node whose R was made under another K_A (a rehearsal's file) is refused here. Returns {index, name, value}: the value
     is the G start K_A's approvals for this node are made against."""
     r = rotation_shape(bundle)
-    want = anchorpolicy.rotation_name(int(r["index"], 16), k_a_point).hex()
+    want = anchorpolicy.rotation_name(int(r["index"], 16), k_a_point, node_id=bundle.get("node_id")).hex()
     require(r["name"] == want, "%s's rotation counter is not under this genesis's K_A: its quoted Name is %s, not %s (it was enrolled "
             "with another anchor-policy file)" % (bundle.get("node_id"), r["name"], want))
     return dict(r)
@@ -788,19 +788,19 @@ def _safe_directory(directory):
 OPENSC_MODULE = "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so"
 
 
-def rotation(journal, anchor_policy, run):
+def rotation(journal, anchor_policy, node_id, run):
     """#361 C1: the rotation counter R, defined under PolicyAuthorize(Name(K_A), "rotation") and first incremented with
     K_A's approval (anchorpolicy.start_rotation), before the anchor, the counters and `enrol ownerauth`. The TPM's owner
     authorization must still be empty (ownerauth.posture): after `enrol ownerauth` this step is refused, not attempted.
     Recorded in the journal; a re-run requires the TPM to hold the same R, at the same value."""
-    point, approval = anchorpolicy.read_first(anchor_policy)
+    _, point, approval = anchorpolicy.read_first(anchor_policy, node_id)
     if journal.state("rotation") == "done":
         facts = journal.get("rotation")
         now = anchorpolicy.nv_name_of(facts["index"], run)
         require(now == facts["name"] and anchorpolicy.read_rotation(facts["index"], run) == facts["value"],
                 "the rotation counter this enrolment made (%s, value %d) is not as recorded: it was redefined or advanced since"
                 % (facts["index"], facts["value"]))
-        require(facts["name"] == anchorpolicy.rotation_name(int(facts["index"], 16), point).hex(),
+        require(facts["name"] == anchorpolicy.rotation_name(int(facts["index"], 16), point, node_id=node_id).hex(),
                 "the rotation counter this enrolment made is under another K_A than the anchor-policy file names")
         return {k: facts[k] for k in ("index", "name", "value")}
     if anchorpolicy.nv_name_of(anchorpolicy.ROTATION_INDEX, run) is None:
@@ -808,7 +808,7 @@ def rotation(journal, anchor_policy, run):
         require(not held["owner"], "the TPM's owner authorization is already set (enrol ownerauth ran): the rotation counter is "
                 "defined by `enrol init` before it. Start the enrolment again on a cleared TPM, in order: init, then ownerauth")
     journal.started("rotation")
-    facts = anchorpolicy.start_rotation(anchorpolicy.ROTATION_INDEX, point, approval, run)
+    facts = anchorpolicy.start_rotation(anchorpolicy.ROTATION_INDEX, point, approval, node_id, run)
     journal.done("rotation", **facts)
     return facts
 
@@ -820,11 +820,11 @@ def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY
     increment, #361 C1), as a parsed document."""
     require(NODE_ID.fullmatch(node_id or ""), "a node ID is a lower-case name, such as a")
     signkey.pcr_key_name(system_pub)                 # an RSA-2048 PEM, before anything is made
-    anchorpolicy.read_first(anchor_policy)           # K_A's approval checked before anything is made
+    anchorpolicy.read_first(anchor_policy, node_id)  # K_A's approval, for THIS node, checked before anything is made
     _safe_directory(directory)
     journal = Journal(directory, node_id)
     ids = identity(journal, directory, run)
-    rotated = rotation(journal, anchor_policy, run)  # before the anchor, the counters and ownerauth (regalia-kms-95)
+    rotated = rotation(journal, anchor_policy, node_id, run)  # before the anchor, the counters and ownerauth (regalia-kms-95)
     cert = ek_certificate(journal, directory, run)
     signing = signing_key(journal, directory, system_pub, ids, run)     # after the EK checks: nothing more is made on a refusal
     hsm_serials = tokens(journal, module, run)

@@ -443,7 +443,7 @@ class ProducersWriterRun(unittest.TestCase):
                 "--issued-at", "2026-10-04T12:00:00Z", "--system-pub", os.path.join(d, "system.pem")]
         from deploy.baremetal import anchorpolicy
         rotation = lambda e: {"index": anchorpolicy.ROTATION_INDEX, "value": 3,          # noqa: E731  (#361 C1: R under K_A)
-                              "name": anchorpolicy.rotation_name(int(anchorpolicy.ROTATION_INDEX, 16), typed(K_A)["key"]).hex()}
+                              "name": anchorpolicy.rotation_name(int(anchorpolicy.ROTATION_INDEX, 16), typed(K_A)["key"], node_id=e["node_id"]).hex()}
         for e in entries:                   # each node as `enrol` proves it (#399; stubbed here: its proof is enrol's own test)
             path = os.path.join(d, "bundle-%s.json" % e["node_id"])
             with open(path, "w") as f:

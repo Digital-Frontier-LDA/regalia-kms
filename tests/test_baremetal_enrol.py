@@ -32,17 +32,18 @@ SYSTEM_PUB, OTHER_PUB = _rsa_pem(), _rsa_pem()          # the system-phase PCR k
 TOKENS = ["DENK0500001", "35718625"]                    # a SmartCard-HSM's PKCS#11 serial and a YubiKey's
 
 
-def first_file(scalar=0x361C1):
-    """The ceremony's anchor-policy file (#361 C1) for a TEST K_A of a fixed scalar: K_A's typed entry and its signature over
-    the rotation counter's first-increment approval. Returns (the document, K_A's point hex)."""
+def first_file(scalar=0x361C1, node_id="a"):
+    """The ceremony's anchor-policy file (#361 C1) for `node_id` and a TEST K_A of a fixed scalar: K_A's typed entry and its
+    signature over that node's rotation counter's first-increment approval. Returns (the document, K_A's point hex)."""
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
     key = ec.derive_private_key(scalar, ec.SECP256R1())
     point = key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()
-    r, s_ = decode_dss_signature(key.sign(anchorpolicy.authorize_message(anchorpolicy.increment_first(), "rotation"), ec.ECDSA(hashes.SHA256())))
+    r, s_ = decode_dss_signature(key.sign(anchorpolicy.authorize_message(anchorpolicy.increment_first(), anchorpolicy.rotation_class(node_id)),
+                                          ec.ECDSA(hashes.SHA256())))
     s_ = min(s_, membership.P256_ORDER - s_)
-    return ({"schema": anchorpolicy.FIRST_SCHEMA, "anchor_policy_key": {"alg": "ecdsa-p256", "key": point},
+    return ({"schema": anchorpolicy.FIRST_SCHEMA, "node_id": node_id, "anchor_policy_key": {"alg": "ecdsa-p256", "key": point},
              "increment_first": "%064x%064x" % (r, s_)}, point)
 
 
@@ -95,7 +96,7 @@ class InitOnSwtpm(unittest.TestCase):
 
     def init(self, run=subprocess.run, node_id="a", system_pub=None):
         return enrol.init(node_id, system_pub or SYSTEM_PUB, self.dir, self.wg, run=run, out=io.StringIO(), ssh_host_key=self.ssh + ".pub",
-                          anchor_policy=FIRST)
+                          anchor_policy=first_file(node_id=node_id)[0])
 
     def test_init_makes_the_keys_on_the_host_and_names_them_in_the_bundle(self):
         bundle = self.init()
@@ -256,7 +257,7 @@ class InitOnSwtpm(unittest.TestCase):
         it, the AK quotes it with the identity, and the genesis takes it only under the genesis manifest's K_A."""
         bundle = self.init()
         r = bundle["rotation"]
-        self.assertEqual((r["index"], r["name"]), (anchorpolicy.ROTATION_INDEX, anchorpolicy.rotation_name(int(r["index"], 16), K_A_POINT).hex()))
+        self.assertEqual((r["index"], r["name"]), (anchorpolicy.ROTATION_INDEX, anchorpolicy.rotation_name(int(r["index"], 16), K_A_POINT, node_id="a").hex()))
         self.assertEqual((anchorpolicy.nv_name_of(r["index"]), anchorpolicy.read_rotation(r["index"])), (r["name"], r["value"]))
         self.assertGreaterEqual(r["value"], 1)
         keep, activation = self.proven(bundle)
@@ -295,10 +296,22 @@ class InitOnSwtpm(unittest.TestCase):
         # made, then redefined behind its back (it starts above: another value): not the recorded one
         bundle = self.init()
         subprocess.run(["tpm2_nvundefine", anchorpolicy.ROTATION_INDEX, "-C", "o"], check=True, capture_output=True)
-        anchorpolicy.start_rotation(anchorpolicy.ROTATION_INDEX, K_A_POINT, anchorpolicy.read_first(FIRST)[1])
+        anchorpolicy.start_rotation(anchorpolicy.ROTATION_INDEX, K_A_POINT, anchorpolicy.read_first(FIRST)[2], "a")
         self.assertNotEqual(anchorpolicy.read_rotation(anchorpolicy.ROTATION_INDEX), bundle["rotation"]["value"])
         with self.assertRaisesRegex(enrol.Refused, "is not as recorded: it was redefined or advanced since"):
             self.init()
+
+    def test_another_node_s_approval_is_refused_by_the_tpm(self):
+        """d9 on #361: node b's approval of its first increment, presented for node a's R, is refused by the TPM itself
+        (verifysignature over a's policyRef), before anything is defined."""
+        theirs, _ = first_file(node_id="b")
+        der = anchorpolicy.read_first(theirs)[2]
+        with self.assertRaisesRegex(membership.Refused, "the TPM's check of K_A's approval of the rotation counter's first increment failed"):
+            anchorpolicy.start_rotation(anchorpolicy.ROTATION_INDEX, K_A_POINT, der, "a")
+        self.assertIsNone(anchorpolicy.nv_name_of(anchorpolicy.ROTATION_INDEX))
+        a = anchorpolicy.start_rotation(anchorpolicy.ROTATION_INDEX, K_A_POINT, anchorpolicy.read_first(FIRST)[2], "a")
+        self.assertEqual(a["name"], anchorpolicy.rotation_name(int(anchorpolicy.ROTATION_INDEX, 16), K_A_POINT, node_id="a").hex())
+        self.assertNotEqual(a["name"], anchorpolicy.rotation_name(int(anchorpolicy.ROTATION_INDEX, 16), K_A_POINT, node_id="b").hex())
 
     def test_the_rotation_counter_is_made_before_the_owner_authorization_is_set(self):
         """95: R is defined with the owner's EMPTY authorization, before `enrol ownerauth`; once it is set, init says how to go on."""

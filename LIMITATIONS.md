@@ -172,7 +172,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   record to judge it by), so it holds only that the root moved to a later one whenever owner_keys
   changed, not what that record says.
 - **The rotation counter R is made at `enrol init`, and nothing uses it yet** (#361 C1). Each node defines R
-  under PolicyAuthorize(Name(K_A), "rotation") and makes its first increment with K_A's public approval. Its
+  under PolicyAuthorize(Name(K_A), its own 32-byte policyRef, SHA-256("regalia-rotation/v1\0" || node ID)), so R's
+  Name and every approval naming it are that node's alone (a shared Name would let one node's public approval at a
+  higher G open another's objects after a retire). Its first increment uses K_A's approval for that node. Its
   Name and first value are AK-quoted, and the genesis requires the Name under the manifest's K_A. K_A's per-node
   approvals (C2) and the writes under them (C3) are not built: until then no index is written under R. Its value
   is the TPM's saved highest count, so it differs per node (regalia-kms-95). Measured on swtpm only. A node

@@ -1,5 +1,6 @@
 """deploy/baremetal/anchorpolicy.py (#361): every Name and policy digest, recomputed without a TPM, equal to the TPM's
 own (tests/vectors/anchor-policy-v1.json, measured on swtpm by tests/vectors/make-anchor-policy-v1.py)."""
+import hashlib
 import json
 import os
 import re
@@ -87,8 +88,10 @@ class Refusals(unittest.TestCase):
         """#361 C1: `enrol init --anchor-policy`'s file. K_A's approval of R's first increment is verified under the K_A the
         file names before any TPM is asked; each guard by an input only it refuses."""
         from tests.test_baremetal_enrol import FIRST, K_A_POINT, first_file
-        point, der = ap.read_first(FIRST)
-        self.assertEqual(point, K_A_POINT)
+        node_id, point, der = ap.read_first(FIRST)
+        self.assertEqual((node_id, point), ("a", K_A_POINT))
+        with self.assertRaisesRegex(m.Refused, "the anchor-policy file is for node a, not b"):
+            ap.read_first(FIRST, "b")
         bad, _ = first_file(0x0BAD)
         sig = FIRST["increment_first"]
         high = "%s%064x" % (sig[:64], m.P256_ORDER - int(sig[64:], 16))              # the high-S twin of a valid signature
@@ -108,6 +111,10 @@ class Refusals(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
         key = ec.derive_private_key(0x361C1, ec.SECP256R1())
         r, s_ = decode_dss_signature(key.sign(ap.authorize_message(ap.increment_first(), "anchor"), ec.ECDSA(hashes.SHA256())))
+        # ... and node b's approval does not start node a's R (per-node classes, #361 issuecomment-5996727713)
+        theirs, _ = first_file(node_id="b")
+        with self.assertRaisesRegex(m.Refused, "does not verify under the K_A it names"):
+            ap.read_first(dict(FIRST, increment_first=theirs["increment_first"]))
         with self.assertRaisesRegex(m.Refused, "does not verify under the K_A it names"):
             ap.read_first(dict(FIRST, increment_first="%064x%064x" % (r, min(s_, m.P256_ORDER - s_))))
 
@@ -126,6 +133,22 @@ class Refusals(unittest.TestCase):
             ap.nv_name_of("0x01500020", tpm(listed=True))
         with self.assertRaisesRegex(m.Refused, "listing the TPM's NV indices \\(the TPM does not answer\\) failed"):
             ap.nv_name_of("0x01500020", tpm(listed=False, answers=False))
+
+    def test_each_node_s_rotation_counter_has_its_own_name(self):
+        """#361 (1e, d9, 95): R is defined under PolicyAuthorize(Name(K_A), SHA-256("regalia-rotation/v1\\0" || node_id)), so
+        its Name, and every approval naming it, is one node's; the ref is 32 bytes, within any TPM 2.0's TPM2B_NONCE."""
+        index, point = int(ap.ROTATION_INDEX, 16), V["k_a"]["point"]
+        names = {n: ap.rotation_name(index, point, node_id=n) for n in ("a", "b", "c", "x" * 32)}
+        self.assertEqual(len(set(names.values())), 4)
+        self.assertNotIn(ap.rotation_name(index, point), names.values())                 # nor the shared class's
+        for n in names:
+            self.assertEqual(len(ap._ref(ap.rotation_class(n))), 32)
+        self.assertEqual(ap._ref("rotation/a"), hashlib.sha256(b"regalia-rotation/v1\x00a").digest())
+        k_sys = bytes.fromhex(V["k_sys"]["name"])
+        self.assertNotEqual(ap.approved(k_sys, names["a"], 7), ap.approved(k_sys, names["b"], 7))
+        for bad in ("A", "", "a" * 33, "a/b", None):
+            with self.subTest(bad=bad), self.assertRaisesRegex(m.Refused, "is not a node ID|no policy class"):
+                ap.rotation_class(bad) if bad is not None else ap.rotation_class(bad)
 
     def test_classes_never_share_a_policy(self):
         policies = {ap.class_policy(V["k_a"]["point"], c) for c in ap.REFS}
