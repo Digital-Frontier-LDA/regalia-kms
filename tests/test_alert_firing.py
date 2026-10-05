@@ -6,7 +6,7 @@ still be unable to fire, or fire on a state that is normal.
 
 Both have happened here, and neither was caught by a test:
 
-  * RegaliaFencingLeaseLost would have paged on EVERY daemon restart, because `lease_held 0`
+  * RegaliaFencingLeaseLost (now RegaliaNoActiveSite, across the sites) would have paged on EVERY daemon restart, because `lease_held 0`
     before the first evaluation is byte-identical to a lease just lost. A rule that pages on
     every restart is a rule somebody silences.
   * Fixing that by making the gauge absent until first evaluation left
@@ -106,10 +106,22 @@ SCENARIOS: dict[str, dict] = {
         "healthy": [("regalia_audit_verify_last_run_seconds", {}, "580+0x10")],
         "at": 600,
     },
-    "RegaliaFencingLeaseLost": {
-        "fault": [("regalia_fencing_lease_held", {}, "0+0x10")],
-        "healthy": [("regalia_fencing_lease_held", {}, "1+0x10")],
-        "at": 300,
+    # across the sites of one job (#432): no site holding, or two; `labels` because the rules aggregate the instance away
+    "RegaliaNoActiveSite": {
+        "fault": [("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "a"}, "0+0x20"),
+                  ("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "b"}, "0+0x20")],
+        "healthy": [("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "a"}, "1+0x20"),
+                    ("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "b"}, "0+0x20")],
+        "labels": {"job": "regalia-kms"},
+        "at": 1080,
+    },
+    "RegaliaTwoActiveSites": {
+        "fault": [("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "a"}, "1+0x5"),
+                  ("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "b"}, "1+0x5")],
+        "healthy": [("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "a"}, "1+0x5"),
+                    ("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "b"}, "0+0x5")],
+        "labels": {"job": "regalia-kms"},
+        "at": 120,
     },
     "RegaliaFencingNeverEvaluated": {
         "fault": [("regalia_fencing_evaluated", {}, "0+0x10")],
@@ -207,6 +219,7 @@ def build_cases(rules: dict[str, dict]) -> list[dict]:
         labels = {}
         for _, series_labels, _ in scenario["fault"]:
             labels.update(series_labels)
+        labels = scenario.get("labels", labels)      # a rule that aggregates labels away states the ones it keeps
         expected_labels = {"alertname": name, **rule.get("labels", {}), **labels}
         expected_annotations = {
             key: render(value, labels)
@@ -325,7 +338,7 @@ class AlertFiringTests(unittest.TestCase):
                 },
                 # A restart must not page. This is the regression that would have woken
                 # somebody on every deploy.
-                {"eval_time": "400s", "alertname": "RegaliaFencingLeaseLost", "exp_alerts": []},
+                {"eval_time": "400s", "alertname": "RegaliaNoActiveSite", "exp_alerts": []},
                 # And the stale rule genuinely cannot see this state, which is why the one
                 # above has to.
                 {"eval_time": "400s", "alertname": "RegaliaFencingEvaluationStale",
@@ -350,6 +363,56 @@ class AlertFiringTests(unittest.TestCase):
         output = completed.stdout + completed.stderr
         self.assertNotIn("no file match pattern", output, "the rules file was not loaded")
         self.assertEqual(0, completed.returncode, output)
+
+
+
+class FencingAcrossSites(unittest.TestCase):
+    """RegaliaNoActiveSite and RegaliaTwoActiveSites judge the sites of one job together (#432): a planned switchover
+    (the old lease runs out, then the new site is promoted: at most one lease life plus skew) does not page, and one
+    cluster's sites are never judged with another's."""
+
+    def setUp(self):
+        self.promtool = shutil.which("promtool")
+        if self.promtool is None:
+            if REQUIRE_PROMTOOL:
+                self.fail("promtool is required in this job and was not found on PATH")
+            self.skipTest("promtool not installed; set ALERT_RULES_JOB=1 to require it")
+
+    def run_suite(self, tests):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            shutil.copy(RULES_PATH, workspace / RULES_PATH.name)
+            (workspace / "sites.test.yml").write_text(yaml.safe_dump(
+                {"rule_files": [RULES_PATH.name], "evaluation_interval": "1m", "tests": tests}, sort_keys=False), encoding="utf-8")
+            completed = subprocess.run([self.promtool, "test", "rules", "sites.test.yml"], cwd=workspace,
+                                       capture_output=True, text=True, check=False)
+        output = completed.stdout + completed.stderr
+        self.assertNotIn("no file match pattern", output)
+        self.assertEqual(0, completed.returncode, output)
+
+    def test_a_planned_switchover_does_not_page_and_clusters_are_judged_apart(self):
+        rules = alert_rules()
+        no_site = rules["RegaliaNoActiveSite"]
+        a, b, c = ({"job": "regalia-kms", "instance": i} for i in ("a", "b", "c"))
+        other = {"job": "regalia-kms-other", "instance": "x"}
+        self.run_suite([
+            {"name": "a switchover: a holds, no site for 12 minutes, then b", "interval": "1m",
+             "input_series": [{"series": series("regalia_fencing_lease_held", a), "values": "1+0x5 0+0x30"},
+                              {"series": series("regalia_fencing_lease_held", b), "values": "0+0x17 1+0x18"}],
+             "alert_rule_test": [{"eval_time": "20m", "alertname": "RegaliaNoActiveSite", "exp_alerts": []},
+                                 {"eval_time": "20m", "alertname": "RegaliaTwoActiveSites", "exp_alerts": []}]},
+            {"name": "two clusters: only the one where no site holds", "interval": "1m",
+             "input_series": [{"series": series("regalia_fencing_lease_held", a), "values": "1+0x20"},
+                              {"series": series("regalia_fencing_lease_held", c), "values": "0+0x20"},
+                              {"series": series("regalia_fencing_lease_held", other), "values": "0+0x20"}],
+             "alert_rule_test": [{"eval_time": "18m", "alertname": "RegaliaNoActiveSite", "exp_alerts": [{
+                 "exp_labels": {"alertname": "RegaliaNoActiveSite", **no_site["labels"], "job": "regalia-kms-other"},
+                 "exp_annotations": {k: render(v, {"job": "regalia-kms-other"}) for k, v in no_site["annotations"].items()}}]}]},
+            {"name": "two clusters, each with one holder: never two active", "interval": "1m",
+             "input_series": [{"series": series("regalia_fencing_lease_held", a), "values": "1+0x5"},
+                              {"series": series("regalia_fencing_lease_held", other), "values": "1+0x5"}],
+             "alert_rule_test": [{"eval_time": "3m", "alertname": "RegaliaTwoActiveSites", "exp_alerts": []}]},
+        ])
 
 
 if __name__ == "__main__":

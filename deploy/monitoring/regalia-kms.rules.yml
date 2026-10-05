@@ -63,13 +63,31 @@ groups:
           severity: critical
         annotations:
           summary: The journal verifier has not run in over two minutes — twice its interval. A verifier that stops asking is the blind spot the loop exists to close.
-      - alert: RegaliaFencingLeaseLost
-        expr: regalia_fencing_lease_held == 0
-        for: 2m
+      # ACROSS THE SITES OF ONE CLUSTER (one scrape job), never per site (#432): a site that holds no lease is normal --
+      # two of three are passive by design under activation by quorum, so a per-site "lease lost" rule would page on
+      # them for ever. What fencing exists to prevent is NO site active, or TWO. regalia_fencing_lease_held is each
+      # daemon's own Gate verdict (the authoritative "this site signs"); until the Gate verifies the v2 quorum lease
+      # (#432 step 3) it is regalia-fence's single-authority verdict, and both rules hold under either.
+      #
+      # No site for 15 minutes. A planned switchover (`activation release`, the lease runs out, then `activation
+      # promote`) leaves at most one lease life (fencing.MaxLeaseDuration, 10 min) plus the co-signers' skew (60 s)
+      # plus the promote: 15 minutes does not page on it. A site whose daemons never evaluated (absent series) or are
+      # not scraped matches nothing here: RegaliaFencingNeverEvaluated and the scrape rules see those.
+      - alert: RegaliaNoActiveSite
+        expr: max by (job) (regalia_fencing_lease_held) == 0
+        for: 15m
         labels:
           severity: critical
         annotations:
-          summary: This site does not hold the fencing lease. Fire this only for the intended-active site; a passive site holds no lease by design. A site that has never evaluated the lease does not match this rule at all -- the gauge is absent until the first evaluation, so this cannot fire on a restart; RegaliaFencingNeverEvaluated covers that state.
+          summary: "No site of {{ $labels.job }} has held the activation lease for 15 minutes: nothing signs. Check the active site's renewals (RegaliaActivationRenewalFailing) and, for a switchover, `activation promote` (FENCING.md)."
+      # Two sites at once: what fencing exists to prevent. No for: one evaluation is enough. The backstop if exclusion
+      # ever failed (#432's accepted risk: a false fencing attestation on the recovery path).
+      - alert: RegaliaTwoActiveSites
+        expr: sum by (job) (regalia_fencing_lease_held) > 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than one site of {{ $labels.job }} holds the activation lease at once: two sites may sign. Stop all but one (FENCING.md) and record an incident."
       # A LEASE THAT HAS NEVER BEEN EVALUATED FIRES NEITHER RULE ABOVE OR BELOW.
       #
       # regalia_fencing_lease_held and _last_check_seconds are both ABSENT until the first
