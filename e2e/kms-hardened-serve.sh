@@ -9,7 +9,7 @@
 #
 #   REGALIA_SANDBOX_HOST_OK=1 e2e/kms-hardened-serve.sh       (CI sets nothing: GITHUB_ACTIONS is enough)
 #
-# It INSTALLS on this machine: the binary at /usr/local/sbin/regalia-kms, a regalia-kms system user,
+# It INSTALLS on this machine: the binary at /usr/sbin/regalia-kms, a regalia-kms system user,
 # /etc/regalia-kms, /var/lib/regalia-kms, the unit and its drop-ins, and the AppArmor profile (in
 # complain mode); and it starts the unit on the machine's own system manager. All of it is removed at
 # the end. That is fine on a CI runner or a throwaway VM, and it is refused anywhere else unless
@@ -53,7 +53,7 @@ MODULE=""; for c in /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/so
 [ -n "$MODULE" ] || die "libsofthsm2.so not found"
 # Everything the cleanup removes must not exist yet: a host that has any of it is somebody's installation.
 for existing in /etc/systemd/system/regalia-kms.service /etc/systemd/system/regalia-kms.service.d /etc/regalia-kms \
-                /var/lib/regalia-kms /usr/local/sbin/regalia-kms; do
+                /var/lib/regalia-kms /usr/sbin/regalia-kms; do
   [ ! -e "$existing" ] && [ ! -L "$existing" ] || die "this machine already has $existing: not a throwaway host, and the cleanup would delete it"
 done
 if sudo grep -q '^regalia-kms ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
@@ -63,12 +63,12 @@ echo "kms-hardened-serve: $(systemctl --version | head -1), kernel $(uname -r), 
 
 ETC=/etc/regalia-kms; STATE=/var/lib/regalia-kms; UNITDIR=/etc/systemd/system; SVC=regalia-kms.service
 PORT=18443; SINK=18444; SITE=e2e-site; DEVICE=softhsm-e2e; OBJECT=e2e-signing-key; PRINCIPAL=spiffe://regalia/workload/e2e
-PROFILE="$HERE/deploy/baremetal/apparmor/usr.local.sbin.regalia-kms"
+PROFILE="$HERE/deploy/baremetal/apparmor/usr.sbin.regalia-kms"
 W="$(mktemp -d)"; collector=""; made_user=0
 cleanup(){
   sudo systemctl stop "$SVC" 2>/dev/null
   [ -n "$collector" ] && kill "$collector" 2>/dev/null
-  sudo rm -rf "$UNITDIR/$SVC" "$UNITDIR/$SVC.d" "$ETC" "$STATE" /usr/local/sbin/regalia-kms "$W"
+  sudo rm -rf "$UNITDIR/$SVC" "$UNITDIR/$SVC.d" "$ETC" "$STATE" /usr/sbin/regalia-kms "$W"
   sudo systemctl daemon-reload 2>/dev/null
   sudo apparmor_parser -R "$PROFILE" 2>/dev/null
   [ "$made_user" = 1 ] && sudo userdel regalia-kms 2>/dev/null
@@ -79,7 +79,7 @@ as_kms(){ sudo -u regalia-kms env SOFTHSM2_CONF="$ETC/softhsm2.conf" "$@"; }
 # ---- build and install -------------------------------------------------------------------------------
 go -C "$HERE" build -o "$W/regalia-kms" ./cmd/regalia-kms || die "cannot build regalia-kms"
 go -C "$HERE" build -o "$W/regalia-audit-collector" ./cmd/regalia-audit-collector || die "cannot build the audit collector"
-sudo install -m 0755 "$W/regalia-kms" /usr/local/sbin/regalia-kms || die "cannot install the binary"
+sudo install -m 0755 "$W/regalia-kms" /usr/sbin/regalia-kms || die "cannot install the binary"
 if ! id regalia-kms >/dev/null 2>&1; then
   sudo useradd --system --no-create-home --shell /usr/sbin/nologin regalia-kms || die "cannot create the regalia-kms user"; made_user=1
 fi
@@ -176,7 +176,7 @@ collector=$!
 sleep 2; kill -0 "$collector" 2>/dev/null || die "the audit collector did not start: $(tail -5 "$W/collector.log")"
 
 hdr "1  the configuration"
-out="$(as_kms /usr/local/sbin/regalia-kms -config "$ETC/config.json" -check-config 2>&1)"; rc=$?
+out="$(as_kms /usr/sbin/regalia-kms -config "$ETC/config.json" -check-config 2>&1)"; rc=$?
 [ "$rc" = 0 ] && P "-check-config accepts it, as the service user" || F "-check-config (exit $rc): $(tail -c 600 <<< "$out")"
 
 hdr "2  systemd starts the shipped unit"
@@ -191,7 +191,7 @@ done
 [ "$ready" = 200 ] && P "the daemon is ready (GET /v1/health/ready: 200)" || { F "not ready (HTTP ${ready:-none}; unit $(systemctl is-active "$SVC"))"; journal; }
 pid="$(systemctl show "$SVC" -p MainPID --value)"
 exe="$(sudo readlink "/proc/$pid/exe" 2>/dev/null)"; uid="$(awk '/^Uid:/{print $2}' "/proc/$pid/status" 2>/dev/null)"
-[ "$exe" = /usr/local/sbin/regalia-kms ] && [ "$uid" = "$(id -u regalia-kms)" ] && [ "$uid" != 0 ] \
+[ "$exe" = /usr/sbin/regalia-kms ] && [ "$uid" = "$(id -u regalia-kms)" ] && [ "$uid" != 0 ] \
   && P "the main process (pid $pid) is the installed binary, running as regalia-kms (uid $uid)" || F "pid $pid runs '$exe' as uid '$uid'"
 dropins="$(systemctl show "$SVC" -p DropInPaths --value)"
 grep -q hardening.conf <<< "$dropins" && P "the shipped hardening drop-in is in effect ($dropins)" || F "drop-ins in effect: '$dropins'"
