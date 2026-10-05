@@ -613,9 +613,9 @@ class InitOnSwtpm(unittest.TestCase):
         serials = ["DENK0500001", "36000001"]                        # not bench tokens: a v4 chain refuses those
         with unittest.mock.patch.object(enrol, "token_serials", lambda module, run=None: list(serials)):
             bundle = self.init(system_pub=pem)
-        keep, answer = self.proven(bundle)
+        keep, activation = self.proven(bundle)
         nodes = v4.nodes4()
-        nodes[0] = dict(nodes[0], **enrol.entry(bundle, pem, keep, answer))
+        nodes[0] = dict(nodes[0], **enrol.entry(bundle, pem, keep, activation))
         # the signed image this host booted, and the measurements naming its system-phase key for every node
         image = sb.image("approved")
         signature, _ = sb.signature(image, private, public)
