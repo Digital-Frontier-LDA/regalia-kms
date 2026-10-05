@@ -79,6 +79,9 @@ def header(text):
 
 
 def leased_by(cluster, peer, subject, since):
+    """Whether `peer`'s sync issued `subject` a lease at or after `since`, to since's second (threenode.at_or_after): a
+    lease issued in that second just before the step began counts too; a reboot takes seconds, so it cannot be the
+    step's own (regalia-kms-d9 on #454). Used for leases that DID happen only."""
     return any(e.get("event") == "sync-lease" and e.get("subject") == subject and e.get("outcome") == "ALLOW" and threenode.at_or_after(e, since)
                for e in cluster.trail(peer))
 

@@ -103,8 +103,10 @@ def scenario(cluster):
     since = time.time()
     cluster.replace("c", "c2")                       # #199: the root's envelope given to a, as advance() gives an epoch
     took = until(lambda: all(cluster.node(name).store().load()["epoch"] == 2 for name in ("a", "b"))
-                 and any(e.get("event") == "sync-apply" and e.get("peer") == "a" and e.get("outcome") == "ALLOW" and threenode.at_or_after(e, since)
-                         for e in cluster.trail("b")), 120, 3)
+                 # epoch 1: the apply of epoch 2 is decided under epoch 1 (convergence.audited); an earlier apply in since's
+                 # second would be under another epoch (regalia-kms-d9 on #454)
+                 and any(e.get("event") == "sync-apply" and e.get("peer") == "a" and e.get("outcome") == "ALLOW" and e.get("epoch") == 1
+                         and threenode.at_or_after(e, since) for e in cluster.trail("b")), 120, 3)
     ok(took is True, "the root's replacement given to a, b took epoch 2 from a by sync: c RETIRED, c2 ACTIVE")
     fresh = cluster.fresh(["a", "b"], 2, timeout=300)
     ok(all(fresh.values()), "a and b sign epoch 2's heartbeat themselves (c2, not yet running, joins later) (%s)" % fresh,

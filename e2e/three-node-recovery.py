@@ -73,9 +73,13 @@ def header(text):
     sys.stdout.flush()
 
 
-def leased_by(cluster, peer, subject, since):
-    """Whether `peer`'s sync issued `subject` a lease (its trail) at or after `since`."""
-    return any(e.get("event") == "sync-lease" and e.get("subject") == subject and e.get("outcome") == "ALLOW" and threenode.at_or_after(e, since)
+def leased_by(cluster, peer, subject, since, strict=False):
+    """Whether `peer`'s sync issued `subject` a lease (its trail) at or after `since`: to since's second
+    (threenode.at_or_after), so a lease issued in that second just before the step began also counts (a reboot takes
+    seconds, so it cannot be the step's own: regalia-kms-d9 on #454). `strict`: from `since` itself, for a check that
+    NO lease was issued after it."""
+    return any(e.get("event") == "sync-lease" and e.get("subject") == subject and e.get("outcome") == "ALLOW"
+               and (e.get("at", 0) >= since if strict else threenode.at_or_after(e, since))
                for e in cluster.trail(peer))
 
 
@@ -325,7 +329,10 @@ def scenario(cluster):
                % (alone, manifest["epoch"], lives), envelope["heartbeat"])
         pulled = [s for s in survivors if s != seed]
         ok(all(cluster.node(s).store().load()["epoch"] == manifest["epoch"] for s in survivors)
-           and all(any(e.get("event") == "sync-apply" and e.get("peer") == seed and e.get("outcome") == "ALLOW" and threenode.at_or_after(e, since)
+           # under the epoch before: an apply is decided under the manifest it replaces (convergence.audited), so an earlier
+           # apply from the same seed in since's second cannot be taken for this one (regalia-kms-d9 on #454)
+           and all(any(e.get("event") == "sync-apply" and e.get("peer") == seed and e.get("outcome") == "ALLOW"
+                       and e.get("epoch") == manifest["epoch"] - 1 and threenode.at_or_after(e, since)
                        for e in cluster.trail(s)) for s in pulled),
            "epoch %d (%s %s, by the %s key) given to %s; %s took it from %s by sync"
            % (manifest["epoch"], victim, state, signer, seed, ", ".join(pulled) or "nobody else", seed))
@@ -352,7 +359,7 @@ def scenario(cluster):
                 return "%s dropped it from wg-svc: it cannot ask" % ", ".join(survivors)
             return None
         reason = until(why, 90, 3)
-        ok(bool(reason) and not cluster.lease(victim) and not any(leased_by(cluster, s, victim, since) for s in survivors),
+        ok(bool(reason) and not cluster.lease(victim) and not any(leased_by(cluster, s, victim, since, strict=True) for s in survivors),   # strict: nothing after
            "N: and no lease, because %s" % reason, cluster.journal(victim, "admission")[-400:])
         cluster.stop(victim)
 
