@@ -141,20 +141,19 @@ AUTHORIZATIONS = "activation-authorizations.jsonl"     # in the laptop's state d
 
 
 def recovery_ends_by(current, candidate, given, record_lines):
-    """recovery_ends_by for `candidate` (#432 amendment 5, d9): null unless it lets a node party count again after a recovery
-    epoch (one node party counting), and then the latest expires_at of the owner's recovery authorizations: taken from
+    """recovery_ends_by for `candidate` (#432 amendment 5, d9): null unless it brings the counting node parties back to the
+    activation threshold from below it (membership._recovery_end_rules), and then the latest expires_at of the owner's recovery authorizations: taken from
     the record of what the owner's tool issued (`record_lines`, owner.py's AUTHORIZATIONS lines) when present, or `given`;
     a `given` value earlier than any expiry the record holds is refused. Returns (the value, the closing record line or None)."""
-    if current.get("schema") != membership.SCHEMA_V4 or not (len(membership.activation_counting(current)) == 1
-                                                              and membership.activation_counting(candidate) - membership.activation_counting(current)):
+    if current.get("schema") != membership.SCHEMA_V4 or not (membership.below_quorum(current) and not membership.below_quorum(candidate)):
         require(given is None, "--recovery-ends-by is for an epoch that ends a recovery, and this one does not")
         return None, None
     issued = [line["expires_at"] for line in record_lines if line.get("event") == "issued" and line.get("quarantine_epoch", 0) <= current["epoch"]]
     latest = max(issued) if issued else None
     if given is None:
-        require(latest is not None, "this epoch ends a recovery: give --recovery-ends-by (the latest expiry of the owner's recovery "
-                "authorizations), or --state-dir with the owner's %s" % AUTHORIZATIONS)
-        value = latest
+        require(record_lines or latest is not None, "this epoch ends a recovery: give --recovery-ends-by (the latest expiry of the "
+                "owner's recovery authorizations, 0 when none was issued), or --state-dir with the owner's %s" % AUTHORIZATIONS)
+        value = latest if latest is not None else 0      # a record that shows none issued: nothing to wait out
     else:
         require(latest is None or given >= latest, "--recovery-ends-by %d is earlier than an authorization the record holds (until %d)"
                 % (given, latest))

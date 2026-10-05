@@ -1136,6 +1136,7 @@ class ProposeGenesis(unittest.TestCase):
         self.refused("is earlier than an authorization the record holds (until 1790300000)", tool.recovery_ends_by, recovery, back, 1790200000, lines)
         self.assertEqual(tool.recovery_ends_by(recovery, back, 1790400000, lines)[0], 1790400000)
         self.refused("give --recovery-ends-by", tool.recovery_ends_by, recovery, back, None, [])
+        self.assertEqual(tool.recovery_ends_by(recovery, back, None, [{"event": "closed", "through_epoch": 1, "recovery_ends_by": 5}])[0], 0)   # none issued
         policy = tool.propose_states(recovery, {"c": "DRAINING"}, "2026-10-05T00:00:00Z")    # not ending it
         self.assertEqual(tool.recovery_ends_by(recovery, policy, None, lines), (None, None))
         self.refused("is for an epoch that ends a recovery", tool.recovery_ends_by, recovery, policy, 1790400000, lines)

@@ -237,23 +237,24 @@ func activationCounting(manifest map[string]any) map[string]bool {
 	return out
 }
 
-// recoveryEndRules is membership._recovery_end_rules (#432 amendment 5): after a recovery epoch (one node party
-// counting), an epoch that lets another node party count again states recovery_ends_by.
+// belowQuorum is membership.below_quorum: fewer counting node parties of activation_signers than its threshold.
+func belowQuorum(manifest map[string]any) bool {
+	threshold, _ := integer(manifest["activation_signers"].(map[string]any)["threshold"])
+	return big.NewInt(int64(len(activationCounting(manifest)))).Cmp(threshold) < 0
+}
+
+// recoveryEndRules is membership._recovery_end_rules (#432 amendment 5, d9): an epoch that brings the counting node
+// parties back to the activation threshold, from below it, states recovery_ends_by.
 func recoveryEndRules(current, candidate map[string]any) error {
-	alone, after := activationCounting(current), activationCounting(candidate)
-	if len(alone) != 1 {
-		return nil
-	}
-	back := []string{}
-	for party := range after {
-		if !alone[party] {
+	if belowQuorum(current) && !belowQuorum(candidate) && candidate["recovery_ends_by"] == nil {
+		back := []string{}
+		for party := range activationCounting(candidate) {
 			back = append(back, party)
 		}
-	}
-	if len(back) > 0 && candidate["recovery_ends_by"] == nil {
 		sort.Strings(back)
-		return refuse("this epoch lets %s count again after a recovery epoch: it must state recovery_ends_by, the latest "+
-			"expiry of the owner's recovery authorizations (manifest.py propose --recovery-ends-by)", strings.Join(back, ", "))
+		return refuse("this epoch brings the counting nodes back to the activation threshold (%s) after an epoch below it: it "+
+			"must state recovery_ends_by, the latest expiry of the owner's recovery authorizations, 0 when none was issued "+
+			"(manifest.py propose --recovery-ends-by)", strings.Join(back, ", "))
 	}
 	return nil
 }

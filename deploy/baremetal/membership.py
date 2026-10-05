@@ -55,8 +55,8 @@ v3's fields without `revocation_keys`, and:
     leases under that one authorization): an integer from RECOVERY_AUTH_MIN_S to RECOVERY_AUTH_MAX_S (1 h to 7 days),
     the root's to change;
   * `recovery_ends_by`: null, or (unix seconds) the latest expiry of any recovery authorization the owner issued before
-    this epoch. The root must set it in an epoch that lets a node count again after a recovery epoch (one node party of
-    activation_signers counting, #432 amendment 5): a node coming back then waits for the survivor at this epoch, or
+    this epoch (0: none was). The root must set it in an epoch that brings the counting node parties of
+    activation_signers back to its threshold from below it (#432 amendment 5): a node coming back then waits for the survivor at this epoch, or
     until this time and RECOVERY_WAIT_S when the survivor is quarantined and may never answer (d9);
   * `owner_heartbeat_lifetime_s`: the longest life of a heartbeat whose counting signatures include the
     owner's (an emergency credential), from 300 s to heartbeat_max_lifetime_s. Such a heartbeat is always
@@ -711,15 +711,22 @@ def activation_counting(manifest):
     return {p for p in manifest["activation_signers"]["parties"] if p != OWNER and p in nodes and nodes[p]["state"] not in NOT_COUNTING}
 
 
+def below_quorum(manifest):
+    """Whether fewer node parties of activation_signers count than its threshold: no two nodes can activate a site, and a
+    recovery (the owner and one node, #432 amendment 5) may be under way."""
+    return len(activation_counting(manifest)) < manifest["activation_signers"]["threshold"]
+
+
 def _recovery_end_rules(current, candidate):
-    """The root's v4 rule for recovery_ends_by (#432 amendment 5, d9): after a recovery epoch (ONE node party counting), an
-    epoch that lets another node party count again states recovery_ends_by, the latest expiry of the owner's recovery
-    authorizations: the nodes coming back wait for it when the survivor cannot be heard."""
-    alone = activation_counting(current)
-    if len(alone) == 1 and activation_counting(candidate) - alone:
-        require(candidate["recovery_ends_by"] is not None, "this epoch lets %s count again after a recovery epoch: it must state "
-                "recovery_ends_by, the latest expiry of the owner's recovery authorizations (manifest.py propose "
-                "--recovery-ends-by)" % ", ".join(sorted(activation_counting(candidate) - alone)))
+    """The root's v4 rule for recovery_ends_by (#432 amendment 5, d9): an epoch that brings the counting node parties back
+    to the activation threshold, from below it, states recovery_ends_by, the latest expiry of the owner's recovery
+    authorizations (0 when none was issued): any epoch of the run below the threshold may have been a recovery, and a
+    survivor that cannot hear the new epoch may still be renewing (d9: not only the epoch before)."""
+    if below_quorum(current) and not below_quorum(candidate):
+        require(candidate["recovery_ends_by"] is not None, "this epoch brings the counting nodes back to the activation threshold "
+                "(%s) after an epoch below it: it must state recovery_ends_by, the latest expiry of the owner's recovery "
+                "authorizations, 0 when none was issued (manifest.py propose --recovery-ends-by)"
+                % ", ".join(sorted(activation_counting(candidate))))
 
 
 def accept_chain(current, envelopes, root_key):
