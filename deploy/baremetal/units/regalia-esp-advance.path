@@ -1,0 +1,11 @@
+# Run regalia-esp-advance whenever regalia-sync publishes a new chain: the ESP takes the chain the next boot
+# renders from, and only then does the TPM anchor move to it (#66 B3).
+[Unit]
+Description=Regalia KMS: advance the ESP's membership chain, then the TPM anchor, when the chain changes
+
+[Path]
+PathChanged=/var/lib/regalia-sync/chain.json
+Unit=regalia-esp-advance.service
+
+[Install]
+WantedBy=multi-user.target

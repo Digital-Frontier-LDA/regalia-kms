@@ -11,8 +11,8 @@ image's boot entry (forget). Run on the node, as root, by hand.
 
 APPLY refuses unless all of this holds, from the host's own state, never from files an operator collected:
   1  the manifest is this node's published chain, verified from the root key and against the TPM's
-     high-water (node.manifest, as the root services read it), and the measurement document is the one it
-     commits to;
+     high-water (node.manifest, as the root services read it), the high-water is AT its epoch (the ESP advance
+     has written it to the ESP and anchored it, #66 B3), and the measurement document is the one it commits to;
   2  the set this host RUNS is read from its TPM: its PCRs, as booted, match exactly one set the document
      accepts for it (an image the manifest does not approve matches none);
   3  rollout.may_reboot says yes, on LIVE leases: this node asks each other node that may authorize for a
@@ -189,6 +189,17 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
     try:
         require(isinstance(deadline_minutes, int) and 5 <= deadline_minutes <= 120, "the deadline is 5 to 120 minutes")
         manifest = host.manifest()
+        # #66 B3: the reboot renders from the ESP's chain, which the ESP advance writes before it moves the anchor; an
+        # anchor behind the published epoch means that run has not finished, and the peers judge the next boot by an
+        # epoch this host's ESP may not hold
+        anchored = host.anchored()
+        require(anchored == manifest["epoch"], "the TPM anchor is at epoch %d, the published chain at %d: regalia-esp-advance has not "
+                "written this epoch to the ESP and anchored it yet (journalctl -u regalia-esp-advance); reboot once it has"
+                % (anchored, manifest["epoch"]))
+        # and the initrd must be able to render from it, or the reboot is a recovery-key ceremony (regalia-kms-48)
+        unrenderable = host.unrenderable(manifest)
+        require(unrenderable is None, "the initrd cannot render a boot configuration under epoch %d (%s): this host's next boot asks "
+                "for the recovery key; nothing is rebooted" % (manifest["epoch"], unrenderable))
         document = host.document(manifest)
         measurements.bind(manifest, document)
         node_id = host.node_id
@@ -384,6 +395,19 @@ class Host:
 
     def manifest(self):
         return self.node.manifest()          # the published chain, verified from the root key and against the TPM anchor
+
+    def anchored(self):
+        return self.node.anchor().value()    # the TPM anchor's epoch: the ESP advance's last completed run
+
+    def unrenderable(self, manifest):
+        """Why the initrd could not render this host's boot configuration under `manifest` (bootcreds.render, as
+        regalia-esp-advance tries it), or None."""
+        from deploy.baremetal import bootcreds
+        try:
+            bootcreds.render(manifest, self.node.site, self._node_module.ESP_RENDER_DEVICE)
+            return None
+        except membership.Refused as refused:
+            return str(refused)
 
     def document(self, manifest):
         """The measurement document `manifest` commits to, from this node's store by digest (#332): refused when it
