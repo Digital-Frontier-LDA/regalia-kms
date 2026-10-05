@@ -213,3 +213,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - The initrd builds verify every package against snapshot.debian.org, and one dropped connection fails the whole
   build: `debverify` doesn't retry a fetch. That fails closed, but it turned main red once (8eb35a6) with no code
   at fault. Retrying fetch errors only, never a verification failure, is #425.
+- three-node-outage's step 5 (a node without authenticated time signs nothing) allows **one** signature in flight
+  across the switch: a's Proposer reads the authenticated time once per step, so a signature it began before the
+  read saw the switch is legitimate. The check is by position in a's trail: after a's first refusal for want of time,
+  no signature as proposer or co-signer, and at most one between the switch and that refusal.
