@@ -98,12 +98,35 @@ func efivar(uuid string) []byte {
 	return out
 }
 
+// vectorManifest undoes the composition of a manifest in the vector's chains: every "public" field is "key" again, as
+// the Python signed it (make-highwater-v1.py, composed; the v4 chain's typed keys).
+func vectorManifest(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		out := map[string]any{}
+		for k, x := range v {
+			if k == "public" {
+				k = "key"
+			}
+			out[k] = vectorManifest(x)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, x := range v {
+			out[i] = vectorManifest(x)
+		}
+		return out
+	}
+	return value
+}
+
 // chainBytes is the first n envelopes of one of the vector's chains, as the update path writes them.
 func chainBytes(v map[string]any, name string, n int) []byte {
 	var envelopes []any
 	for _, e := range v["chains"].(map[string]any)[name].([]any)[:n] {
 		e := e.(map[string]any)
-		envelopes = append(envelopes, map[string]any{"manifest": e["manifest"],
+		envelopes = append(envelopes, map[string]any{"manifest": vectorManifest(e["manifest"]),
 			"signature": map[string]any{"signer": "root", "key": v["root_public"], "sig": e["sig"]}})
 	}
 	return membership.Canonical(envelopes)
