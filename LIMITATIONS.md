@@ -252,6 +252,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - The initrd builds verify every package against snapshot.debian.org, and one dropped connection fails the whole
   build: `debverify` doesn't retry a fetch. That fails closed, but it turned main red once (8eb35a6) with no code
   at fault. Retrying fetch errors only, never a verification failure, is #425.
+- three-node-wan (#432, the owner's ~500 km requirement) measures **today's** services across a WAN: about 100 ms round
+  trip with jitter and 0.5% loss (netem, 50 ms ± 15 ms each way), with leases, sync, failover by a full cut, and an
+  epoch. It does not yet measure the multi-active design (short per-node leases, majority commits, stateless signing
+  staying local, a leader election under jitter). Those steps are planned on #432 and wait for the design. The
+  namespaces share one kernel clock, so clock skew between distant sites isn't tested here. The links are
+  symmetric with uncorrelated jitter, not a real WAN's asymmetric routes, bursts or bandwidth limits.
 - three-node-outage's step 5 (a node without authenticated time signs nothing) allows **one** signature in flight
   across the switch: a's Proposer reads the authenticated time once per step, so a signature it began before the
   read saw the switch is legitimate. The check is by position in a's trail: after a's first refusal for want of time,
