@@ -20,18 +20,18 @@ and the survivor still using it). The owner's tool records nothing on the nodes;
 Nothing has to be reconciled after: the survivor commits nothing (stateful keys wait for a majority, D32).
 
 THE DIRECTIVE (regalia-kms-d9's addition, agreed by 24): during a recovery that may last days, the owner can still
-kill a compromised key. An owner-signed directive names an object and a state that is ONLY "disabled" or
-"destroyed", never "enabled" (DIRECTIVE_STATES). The survivor applies it at once (Directives: a state only ever
-rises, enabled < disabled < destroyed) and the majority commits it on its return as a key-state change. Re-enabling a
-key is D25's approvers' act on the majority, never a directive's.
+stop a compromised key. An owner-signed directive names an object and ONE state, "disabled" (DIRECTIVE_STATES): never
+"enabled", and never "destroyed" (d9 on #493: one stolen owner token must not be able to destroy keys irreversibly
+mid-recovery with no approver able to intervene; destruction stays a majority-time, approval-gated operation, as AWS
+KMS schedules a deletion). The survivor keeps every signed directive it applied, append-only (Directives), and derives
+the disabled keys from them; the majority commits each on its return as a key-state change. Re-enabling a key is D25's
+approvers' act on the majority, never a directive's.
 
 Not built here (#432 item (e), part 2): the survivor's admission mode, the daemon's stateless-only gate in it (ed),
 and the directive's commit on the majority's return. LIMITATIONS.md says so.
 """
-import json
 import os
 import re
-import tempfile
 
 from deploy.baremetal import heartbeat, membership
 
@@ -45,8 +45,8 @@ MAX_FENCED_BYTES = 512
 DIRECTIVE_SCHEMA = "regalia.survivor-directive/v1"
 DIRECTIVE_DOMAIN = b"regalia-survivor-directive/v1\0"
 DIRECTIVE_KEYS = ("schema", "object_id", "state", "quarantine_epoch", "quarantine_digest", "issued_at", "reason")
-DIRECTIVE_STATES = ("disabled", "destroyed")       # never "enabled": a directive only takes away
-RANK = {"enabled": 0, "disabled": 1, "destroyed": 2}
+DIRECTIVE_STATES = ("disabled",)                   # never "enabled", never "destroyed" (d9 on #493)
+MAX_DIRECTIVES_BYTES = 4 * 1024 * 1024
 NODE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 NAME = re.compile(r"[\x21-\x7e]{1,256}")
 
@@ -165,8 +165,8 @@ def validate_directive(directive):
     membership.exact(directive, DIRECTIVE_KEYS, "the survivor directive")
     require(directive["schema"] == DIRECTIVE_SCHEMA, "schema must be %s" % DIRECTIVE_SCHEMA)
     require(isinstance(directive["object_id"], str) and NAME.fullmatch(directive["object_id"]) is not None, "object_id must be a name")
-    require(directive["state"] in DIRECTIVE_STATES, "a directive only disables or destroys (%s), never %r: re-enabling a key is D25's "
-            "approvers' act on the majority" % (", ".join(DIRECTIVE_STATES), directive["state"]))
+    require(directive["state"] in DIRECTIVE_STATES, "a directive only disables, never %r: re-enabling or destroying a key is D25's "
+            "approvers' act on the majority" % (directive["state"],))
     _epoch_bound(directive, "the directive")
     heartbeat.parse_time(directive["issued_at"], "issued_at")
     _text(directive["reason"], "reason")
@@ -188,16 +188,15 @@ def verify_directive(signed, at_quarantine):
     return directive
 
 
-def make_directive(tip, object_id, state, reason, now, confirm, open_signer):
-    """The owner's directive (owner.py sign-directive, off the nodes): `object_id` disabled or destroyed, under the
-    quarantine manifest `tip`. Returns {"directive", "signature"}."""
+def make_directive(tip, object_id, reason, now, confirm, open_signer, state="disabled"):
+    """The owner's directive (owner.py sign-directive, off the nodes): `object_id` disabled, under the quarantine
+    manifest `tip`. Returns {"directive", "signature"}."""
     directive = {"schema": DIRECTIVE_SCHEMA, "object_id": object_id, "state": state, "quarantine_epoch": tip["epoch"],
                  "quarantine_digest": membership.digest(tip), "issued_at": _stamp(now), "reason": reason}
     validate_directive(directive)
     want = "%s %s" % (state, object_id)
-    shown = ("A SURVIVOR DIRECTIVE under epoch %d: the key %s becomes %s at once on the survivor, and on the majority when it returns.\n"
-             "  reason: %s\n  %s\nType exactly: %s\n> " % (tip["epoch"], object_id, state.upper(), reason,
-                                                           "DESTROYED IS FINAL." if state == "destroyed" else "Re-enabling it later takes D25's approvers.", want))
+    shown = ("A SURVIVOR DIRECTIVE under epoch %d: the key %s becomes DISABLED at once on the survivor, and on the majority when it\n"
+             "returns.\n  reason: %s\n  Re-enabling it later takes D25's approvers.\nType exactly: %s\n> " % (tip["epoch"], object_id, reason, want))
     require((confirm(shown) or "").strip() == want, "the line typed is not this directive's: nothing is signed")
     owners = {e["key"] for e in tip["owner_keys"] if e["alg"] == "ed25519"}
     signer = open_signer()
@@ -209,43 +208,45 @@ def make_directive(tip, object_id, state, reason, now, confirm, open_signer):
 
 
 class Directives:
-    """The survivor's applied directives, {object_id: state}, in `path` (its state directory). A state only ever rises
-    (enabled < disabled < destroyed): applying a directive that would lower one changes nothing. The daemon refuses every
-    key named here (not built: ed)."""
+    """The survivor's directives, append-only in `path` (its state directory): one line per SIGNED directive it applied,
+    verified before it is written (d9 on #493: the majority's commit needs the envelopes, and states are derived from
+    them, never kept apart). `disabled()` is the set of keys the daemon refuses (not built: ed). A file that is there and
+    cannot be read raises: the daemon then refuses EVERY key, never takes it for "nothing disabled"."""
 
     def __init__(self, path):
         self.path = path
 
     def held(self):
+        """The signed directives on file, in order. Refused (refuse every key) if the file is corrupt."""
         try:
             with open(self.path, "rb") as f:
-                raw = f.read(1024 * 1024 + 1)
+                raw = f.read(MAX_DIRECTIVES_BYTES + 1)
         except FileNotFoundError:
-            return {}
-        require(len(raw) <= 1024 * 1024, "the directives file is oversized")
-        states = membership.load(raw)
-        require(isinstance(states, dict) and all(isinstance(k, str) and v in DIRECTIVE_STATES for k, v in states.items()),
-                "the directives file is not {object_id: disabled|destroyed}")
-        return states
-
-    def apply(self, directive):
-        """Apply a VERIFIED directive. Returns the object's state after it (the higher of the held and the directed)."""
-        validate_directive(directive)
-        states = self.held()
-        before = states.get(directive["object_id"], "enabled")
-        after = directive["state"] if RANK[directive["state"]] > RANK[before] else before
-        if after != before:
-            states[directive["object_id"]] = after
-            directory = os.path.dirname(os.path.abspath(self.path))
-            fd, tmp = tempfile.mkstemp(dir=directory, prefix=".directives-")
+            return []
+        require(len(raw) <= MAX_DIRECTIVES_BYTES, "the directives file is oversized: every key is refused")
+        out = []
+        for i, line in enumerate(raw.splitlines()):
             try:
-                with os.fdopen(fd, "w") as f:
-                    json.dump(states, f, sort_keys=True)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(tmp, self.path)
-            except BaseException:
-                if os.path.exists(tmp):
-                    os.unlink(tmp)
-                raise
-        return after
+                signed = membership.load(line)
+                membership.exact(signed, ("directive", "signature"), "a signed directive")
+                validate_directive(signed["directive"])
+            except Refused as why:
+                raise Refused("the directives file is corrupt at line %d (%s): every key is refused" % (i + 1, why)) from None
+            out.append(signed)
+        return out
+
+    def disabled(self):
+        return {signed["directive"]["object_id"] for signed in self.held()}
+
+    def apply(self, signed, at_quarantine):
+        """Verify `signed` against its quarantine manifest (verify_directive), then append it. Returns the disabled set."""
+        directive = verify_directive(signed, at_quarantine)
+        held = self.held()
+        if any(membership.canonical(h) == membership.canonical(signed) for h in held):
+            return {h["directive"]["object_id"] for h in held}
+        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC, 0o640)
+        with os.fdopen(fd, "ab") as f:
+            f.write(membership.canonical(signed) + b"\n")
+            f.flush()
+            os.fsync(f.fileno())
+        return {h["directive"]["object_id"] for h in held} | {directive["object_id"]}

@@ -30,16 +30,21 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   `deploy/baremetal/survivor.py`, `owner.py sign-survivor` and `sign-directive`). Built:
   - one owner authorization, held only at the quarantine epoch (any new epoch ends it), with every other server stopped
     and the owner's typed fencing attestation, for at most 7 days;
-  - the owner's directive, which only disables or destroys a key and never enables one, and the survivor's store of
-    applied directives, in which a key's state only ever rises.
+  - the owner's directive, which only disables a key: never enables one and never destroys one (d9: one stolen owner
+    token must not destroy keys irreversibly with no approver able to intervene);
+  - the survivor's append-only store of the signed directives it applied. Each is verified before it is written, and
+    a corrupt file refuses every key.
   Not built yet:
   - the survivor's admission mode: recovery only with no unexpired normal lease, left at the first normal lease;
   - the daemon serving stateless operations only in that mode, and refusing keys under a directive (ed);
   - installing the authorization on the node;
   - the majority committing a directive as a key-state change on its return;
   - the cap coming from the manifest's `recovery_authorization_max_s` (#459, stacked on #438; it is a constant here).
-  **Accepted** (D28.6 amendment 5, D32.6): a false fencing attestation holds for the authorization's life. While it
-  holds, the survivor uses key state that may be up to that old, except what a directive disabled.
+  **Accepted** (D28.6 amendment 5, D32.6):
+  - A false fencing attestation holds for the authorization's life. While it holds, the survivor uses key state that
+    may be up to that old, except what a directive disabled.
+  - The directives live on the survivor alone until the majority returns. If its disk is lost, they are lost there, so
+    the owner keeps every directive file the tool wrote and gives them again to a rebuilt survivor and to the majority.
 - **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
   refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
   its verification under the current manifest's `activation_signers`, each node's grant record and

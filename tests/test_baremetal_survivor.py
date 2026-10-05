@@ -104,35 +104,57 @@ class VerifiedOnItsOwn(Case):
 
 
 class Directive(Case):
-    def directive(self, state="disabled", object_id="release-signing", typed=None):
+    def directive(self, object_id="release-signing", typed=None, state="disabled"):
         def confirm(text):
             return typed if typed is not None else text.split("Type exactly: ")[1].split("\n")[0]
-        return sv.make_directive(self.m2, object_id, state, "the release card was stolen", T0, confirm, lambda: OwnerKey(OWNER_KEYS[1]))
+        return sv.make_directive(self.m2, object_id, "the release card was stolen", T0, confirm, lambda: OwnerKey(OWNER_KEYS[1]), state=state)
 
-    def test_a_directive_can_only_disable_or_destroy_never_enable(self):
-        """d9 and 24 on #432: monotone. Neither the tool, the schema nor the verifier takes "enabled"."""
-        self.refused("a directive only disables or destroys", self.directive, "enabled")
-        signed = self.directive()
-        forged = dict(signed, directive=dict(signed["directive"], state="enabled"))
-        self.refused("a directive only disables or destroys", sv.verify_directive, forged, self.m2)
-        self.assertEqual(sv.verify_directive(self.directive("destroyed"), self.m2)["state"], "destroyed")
+    def test_a_directive_only_disables_never_enables_never_destroys(self):
+        """d9 and 24 on #432 and #493: monotone, and never irreversible. Neither the tool, the schema nor the verifier takes
+        "enabled" or "destroyed": destruction stays a majority-time, approval-gated operation."""
+        for state in ("enabled", "destroyed"):
+            with self.subTest(state):
+                self.refused("a directive only disables, never %r" % state, self.directive, state=state)
+                signed = self.directive()
+                forged = dict(signed, directive=dict(signed["directive"], state=state))
+                self.refused("a directive only disables, never %r" % state, sv.verify_directive, forged, self.m2)
 
     def test_it_is_judged_against_its_own_quarantine_manifest_so_the_majority_can_commit_it_later(self):
         signed = self.directive()
         self.assertEqual(sv.verify_directive(signed, self.m2)["object_id"], "release-signing")
         self.refused("is for epoch 2's manifest", sv.verify_directive, signed, self.m1)
 
-    def test_the_survivor_s_store_only_ever_rises(self):
+    def store(self):
         d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, d, True)
-        store = sv.Directives(os.path.join(d, "directives.json"))
-        self.assertEqual(store.apply(self.directive()["directive"]), "disabled")
-        self.assertEqual(store.apply(self.directive("destroyed")["directive"]), "destroyed")
-        self.assertEqual(store.apply(self.directive()["directive"]), "destroyed")       # disabling a destroyed key changes nothing
-        self.assertEqual(store.held(), {"release-signing": "destroyed"})
-        enabled = dict(self.directive()["directive"], state="enabled")
-        self.refused("a directive only disables or destroys", store.apply, enabled)
-        self.assertEqual(store.held(), {"release-signing": "destroyed"})
+        return sv.Directives(os.path.join(d, "directives.jsonl"))
+
+    def test_the_survivor_keeps_the_signed_directives_and_derives_the_disabled_keys_from_them(self):
+        store = self.store()
+        self.assertEqual(store.disabled(), set())
+        first = self.directive()
+        self.assertEqual(store.apply(first, self.m2), {"release-signing"})
+        self.assertEqual(store.apply(first, self.m2), {"release-signing"})                 # the same one again: kept once
+        self.assertEqual(store.apply(self.directive("ci-signing"), self.m2), {"release-signing", "ci-signing"})
+        held = store.held()
+        self.assertEqual([h["directive"]["object_id"] for h in held], ["release-signing", "ci-signing"])
+        self.assertEqual(sv.verify_directive(held[0], self.m2), first["directive"])          # the envelopes, for the majority
+
+    def test_apply_verifies_itself(self):
+        store = self.store()
+        signed = self.directive()
+        by_a = {"directive": signed["directive"], "signature": {"party": "a", "key": pub(NODE_KEYS["a"]),
+                                                                "sig": p256_sig(NODE_KEYS["a"], sv.directive_message(signed["directive"]))}}
+        self.refused("is not the owner's", store.apply, by_a, self.m2)
+        self.refused("is for epoch 2's manifest", store.apply, signed, self.m1)
+        self.assertEqual(store.held(), [])
+
+    def test_a_corrupt_file_refuses_every_key_never_reads_as_nothing_disabled(self):
+        store = self.store()
+        store.apply(self.directive(), self.m2)
+        with open(store.path, "ab") as f:
+            f.write(b'{"directive": {"state": "enabled"}}\n')
+        self.refused("every key is refused", store.disabled)
 
     def test_a_node_s_directive_is_not_the_owner_s(self):
         directive = self.directive()["directive"]
@@ -185,15 +207,15 @@ class OwnerTool(Case):
         self.assertEqual(code, 0)
         self.assertEqual(sv.in_force(signed, self.m2, "a", T0 + 60), T0 + 86400)
 
-    def test_sign_directive_writes_a_disable_only_directive(self):
+    def test_sign_directive_writes_a_disable_only_directive_and_has_no_state_to_choose(self):
         out = os.path.join(self.d, "directive.json")
         code, signed = self.run_tool(["sign-directive", "--chain", self.chain, "--root-key", self.root, "--object-id", "release-signing",
-                                      "--state", "disabled", "--reason", "the card was stolen", "--out", out], "disabled release-signing")
+                                      "--reason", "the card was stolen", "--out", out], "disabled release-signing")
         self.assertEqual(code, 0)
         self.assertEqual(sv.verify_directive(signed, self.m2)["state"], "disabled")
-        with self.assertRaises(SystemExit):                            # argparse itself refuses "enabled"
-            self.run_tool(["sign-directive", "--chain", self.chain, "--root-key", self.root, "--object-id", "x", "--state", "enabled",
-                           "--reason", "r", "--out", os.path.join(self.d, "no.json")], "enabled x")
+        with self.assertRaises(SystemExit):                            # the tool has no --state: it only disables
+            self.run_tool(["sign-directive", "--chain", self.chain, "--root-key", self.root, "--object-id", "x", "--state", "destroyed",
+                           "--reason", "r", "--out", os.path.join(self.d, "no.json")], "destroyed x")
 
     def test_a_wrong_line_writes_nothing(self):
         out = os.path.join(self.d, "auth.json")

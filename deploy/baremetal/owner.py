@@ -290,7 +290,6 @@ def main(argv=None):
     d.add_argument("--chain", required=True, help="the survivor's signed chain; its tip is the quarantine epoch")
     d.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
     d.add_argument("--object-id", required=True)
-    d.add_argument("--state", required=True, choices=("disabled", "destroyed"))
     d.add_argument("--reason", required=True)
     d.add_argument("--out", required=True)
     for parser_ in (w, d):
@@ -383,8 +382,8 @@ def main(argv=None):
                 signed = survivor.make_authorization(tip, args.node_id, args.how, int(time.time()), confirm_line, open_signer, life_s=args.life_s)
                 note = "valid until %s or any new epoch; install it on %s" % (signed["authorization"]["expires_at"], args.node_id)
             else:
-                signed = survivor.make_directive(tip, args.object_id, args.state, args.reason, int(time.time()), confirm_line, open_signer)
-                note = "%s %s; give it to the survivor, and to the majority when it returns" % (args.state, args.object_id)
+                signed = survivor.make_directive(tip, args.object_id, args.reason, int(time.time()), confirm_line, open_signer)
+                note = "disabled %s; keep it, give it to the survivor, and to the majority when it returns" % args.object_id
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
             with os.fdopen(fd, "w") as f:
                 json.dump(signed, f, sort_keys=True)
