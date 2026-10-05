@@ -47,6 +47,10 @@ from deploy.baremetal import membership
 
 Refused, require = membership.Refused, membership.require
 
+
+class WrongServer(Refused):
+    """The iLO reports another server than the one named: never retried, never waited out."""
+
 SYSTEM = "/redfish/v1/Systems/1"
 MANAGER = "/redfish/v1/Managers/1"
 RESET_ACTION = "#ComputerSystem.Reset"
@@ -55,7 +59,7 @@ POWER_TIMEOUT_S = {"Off": 60, "On": 120}
 POLL_S = 2
 MAX_BODY = 1024 * 1024
 SERIAL = re.compile(r"[A-Za-z0-9]{4,32}")
-HOST = re.compile(r"[A-Za-z0-9.:-]{1,253}")
+HOST = re.compile(r"[A-Za-z0-9.-]{1,253}")    # a name or IPv4 on the management network (a bare IPv6 literal fails in HTTPSConnection)
 
 
 def now_ms():
@@ -156,7 +160,8 @@ class Client:
 
     def power_state(self):
         state = self._get(SYSTEM)
-        require(str(state.get("SerialNumber") or "").strip() == self.serial, "the iLO at %s changed servers mid-action" % self.ilo)
+        if str(state.get("SerialNumber") or "").strip() != self.serial:
+            raise WrongServer("the iLO at %s changed servers mid-action" % self.ilo)
         return state.get("PowerState")
 
     def _record(self, found, action, reset_type, status, readbacks, outcome):
@@ -175,8 +180,16 @@ class Client:
         require(status in (200, 202, 204), "the iLO at %s refused ResetType %s with HTTP %s" % (self.ilo, reset_type, status))
         deadline = self.clock() + POWER_TIMEOUT_S[want] * 1000
         while True:
-            power = self.power_state()
-            readbacks.append({"at_ms": self.clock(), "power": power})
+            # one failed poll (an iLO timeout, a reset connection) is a readback, not the end of a fence: the next one
+            # may well say Off. Only another server answering ends it at once (regalia-kms-3e on #501)
+            try:
+                power = self.power_state()
+                readbacks.append({"at_ms": self.clock(), "power": power})
+            except WrongServer:
+                raise
+            except Refused as failure:
+                power = None
+                readbacks.append({"at_ms": self.clock(), "error": str(failure)[:300]})
             if power == want:
                 return self._record(found, action, reset_type, status, readbacks, want)
             if self.clock() >= deadline:
@@ -185,7 +198,9 @@ class Client:
             self.sleep(POLL_S)
 
     def force_off(self):
-        """The fence (G1) and the drills' power fault: ForceOff, then PowerState read back until Off."""
+        """The fence (G1) and the drills' power fault: ForceOff, then PowerState read back until Off. A server already
+        Off is returned as "already Off: nothing sent", with reset_type None: the readback alone is the evidence, and a
+        recovery authorization (G1) accepts it as fenced on that readback, not on a ResetType."""
         return self._reset_and_wait("power-off", "ForceOff", "Off")
 
     def power_on(self):
@@ -204,10 +219,15 @@ def read_password(path):
     """The iLO account's password from a 0600 file of the caller's, or typed when no file is given."""
     if path is None:
         return getpass.getpass("iLO password: ")
-    info = os.lstat(path)
-    require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_mode & 0o077 == 0,
-            "%s must be a regular file of yours, mode 0600: the iLO password is not read from it" % path)
-    with open(path) as f:
+    # opened once, never followed, and judged by that descriptor: no window between the check and the read (3e)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as failure:
+        raise Refused("%s must be a regular file of yours, mode 0600: the iLO password is not read from it (%s)" % (path, failure)) from None
+    with os.fdopen(fd) as f:
+        info = os.fstat(f.fileno())
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_mode & 0o077 == 0,
+                "%s must be a regular file of yours, mode 0600: the iLO password is not read from it" % path)
         password = f.readline().rstrip("\n")
     require(password, "%s is empty" % path)
     return password

@@ -86,6 +86,41 @@ class Power(unittest.TestCase):
         record = client(service).force_off()
         self.assertEqual((service.posts, record["outcome"]), ([], "already Off: nothing sent"))
 
+    def test_one_failed_poll_is_a_readback_and_the_fence_still_completes(self):
+        """3e on #501: a single iLO timeout mid-poll must not end a fence whose next readback says Off."""
+        service = StandIn(lag=3)
+        real, calls = service.request, {"n": 0}
+
+        def flaky(method, path, body=None):
+            if method == "GET" and path == redfish.SYSTEM and service.posts:
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise Refused("the iLO at ilo-b.mgmt did not answer GET /redfish/v1/Systems/1: timed out")
+            return real(method, path, body)
+        service.request = flaky
+        record = client(service).force_off()
+        self.assertEqual(record["outcome"], "Off")
+        self.assertIn("timed out", record["readbacks"][1]["error"])
+        self.assertEqual(record["readbacks"][-1]["power"], "Off")
+
+    def test_another_server_answering_mid_poll_ends_it_at_once(self):
+        service = StandIn(lag=5)
+        real = service.request
+
+        def swapped(method, path, body=None):
+            status, answer = real(method, path, body)
+            if method == "GET" and path == redfish.SYSTEM and service.posts:
+                answer = dict(answer, SerialNumber="CZJ0000000")
+            return status, answer
+        service.request = swapped
+        with self.assertRaisesRegex(redfish.WrongServer, "changed servers mid-action"):
+            client(service).force_off()
+
+    def test_already_off_is_fenced_on_the_readback_alone(self):
+        record = client(StandIn(power="Off")).force_off()
+        self.assertEqual((record["reset_type"], record["readbacks"][0]["power"]), (None, "Off"))
+        self.assertIn("accepts it as fenced on that readback", redfish.Client.force_off.__doc__)
+
     def test_a_server_that_does_not_go_off_in_time_is_a_refusal_with_its_readbacks(self):
         service = StandIn(lag=10 ** 6)
         with self.assertRaisesRegex(Refused, r"did not read Off within 60 s after ForceOff \(last 'On'\): readbacks"):
@@ -212,6 +247,11 @@ class Pin(unittest.TestCase):
     def test_the_pin_s_form_is_checked(self):
         with self.assertRaisesRegex(Refused, "64 lowercase hex"):
             redfish.PinnedHTTPS("127.0.0.1", "AB" * 32, "fence", "pw")
+
+    def test_a_bare_ipv6_literal_is_refused(self):
+        """HTTPSConnection takes no bare IPv6 literal: the iLOs are named or IPv4 on the management network (3e)."""
+        with self.assertRaisesRegex(Refused, "not a host name or address"):
+            redfish.PinnedHTTPS("fd00::1", "ab" * 32, "fence", "pw")
 
 
 if __name__ == "__main__":
