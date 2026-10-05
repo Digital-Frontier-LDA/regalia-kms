@@ -143,7 +143,21 @@ def scenario(cluster):
 
     header("6  14.3: running a revoked; nobody renews it, and it stops serving by itself")
     service_a = base64.b64encode(bytes.fromhex(cluster.keys["a"]["service"][1])).decode()
+    # watched from the revocation on, beside the checks below: a 30 s lease (D32) runs out while they run, and a watch
+    # begun after them would see the stop late (regalia-kms-48, #485's CI)
+    import threading
+    expiry, stop = [lease_expiry(cluster, "a")], [None]
+
+    def watch():
+        while stop[0] is None and time.time() < revoked_at + lease.MAX_LIFETIME + admission.MARGIN + 120:
+            if cluster.lease("a"):
+                expiry[0] = lease_expiry(cluster, "a") or expiry[0]
+            else:
+                stop[0] = time.time()
+            time.sleep(0.5)
     revoked_at = time.time()
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
     # #199: by two nodes, each at its own console (revoke.py propose on b, cosign on c, which commits it)
     cluster.revoke_by_nodes("b", "c", "a", "REVOKED_STOLEN", "e2e: revoked while running")
     off = until(lambda: all(service_a not in cluster.wg_peers(p, "wg-svc") for p in ("b", "c")), 90, 2)
@@ -154,15 +168,8 @@ def scenario(cluster):
     named = until(lambda: [e.get("reason") for e in cluster.trail("b") if e.get("event", "").startswith("sync") and e.get("outcome") == "DENY"
                            and "a is REVOKED_STOLEN under epoch 2" in e.get("reason", "") and e.get("at", 0) >= revoked_at], 150, 3)
     ok(bool(named), "through a tunnel forced open on b, b's sync refuses a's requests by name", named)
-    expiry = [lease_expiry(cluster, "a")]
-
-    def stopped():                                    # the expiry of the last lease a held, read while it still served
-        if cluster.lease("a"):
-            expiry[0] = lease_expiry(cluster, "a") or expiry[0]
-            return False
-        return True
-    done = until(stopped, lease.MAX_LIFETIME + admission.MARGIN + 60, 0.5)   # sampled finely against a 30 s lease (3e)
-    stop_at = time.time()
+    watcher.join(lease.MAX_LIFETIME + admission.MARGIN + 130)
+    done, stop_at = stop[0] is not None, stop[0] or time.time()
     took = stop_at - revoked_at
     due = (expiry[0] - admission.MARGIN) if expiry[0] else None
     ok(done is True and due is not None and expiry[0] - revoked_at <= lease.MAX_LIFETIME and abs(stop_at - due) <= 3,

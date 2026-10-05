@@ -131,7 +131,10 @@ ANSWER_FIELDS = {"pull": ("v", "ok", "summary", "bundle"),
 ENROL_OPS = ("ak-challenge", "ak-enroll", "ak-public", "ak-activate", "path-nonce", "path")
 REFUSAL_FIELDS = ("v", "ok", "refused")
 EVIDENCE_FIELDS = ("ephemeral_public", "nonce", "quote", "signature")
-RATE = {"address": (30, 60), "any": (20, 60), "lease": (6, 60), "beat": (6, 60), "enrol": (12, 60), "drop": (1, 60), "listener": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
+# class -> (requests, per seconds); the bucket holds that many. "lease" is sized for D32's 30 s lease renewed every 10 s
+# (#485): two asks a renewal (nonce, lease) at one peer when the other is down is 12 a minute, and 6 for retries; it
+# stays within "any" (every request spends that too), which also carries a pull a minute and the heartbeat rounds
+RATE = {"address": (30, 60), "any": (20, 60), "lease": (18, 60), "beat": (6, 60), "enrol": (12, 60), "drop": (1, 60), "listener": (1, 60)}
 OPEN = ("address", "drop")       # the classes keyed by a source address: anybody who can connect makes a key
 MAX_BUCKETS = 4096               # address-keyed buckets remembered at once; idle ones are forgotten first
 EVERYBODY = "*"                  # the one key the "too many callers" refusal is counted under

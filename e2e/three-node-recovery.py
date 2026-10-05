@@ -52,6 +52,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
 import threenode                                     # noqa: E402
 from threenode import sh, until                      # noqa: E402
+from deploy.baremetal import sync                     # noqa: E402
 
 passed, failed = 0, 0
 SERVICES = ("sync", "wg-apply", "admission")
@@ -274,7 +275,7 @@ def scenario(cluster):
     # b's own admission stopped (its asks would spend the same bucket), and a minute for the bucket to fill
     sh("systemctl", "stop", cluster.unit("b", "admission"), check=False)
     time.sleep(61)
-    count, per = 6, 60                                   # deploy/baremetal/sync.py RATE["lease"]
+    count, per = sync.RATE["lease"]                      # deploy/baremetal/sync.py
     since = rated = time.time()
     answers = cluster.ask("b", "a", "lease-nonce", times=count + 1, node_id="b")
     ok([a.get("ok") for a in answers] == [True] * count + [False]
@@ -372,7 +373,7 @@ def scenario(cluster):
                                reason=lambda r: bool(r) and "a second boot session in the same boot" in r)
     ok(bool(second), "%s's refusal of %s's second session in one boot (step 5) is in %s's stream" % (survivor_5, crashed_5, survivor_5))
     limited = cluster.audit_has("a", "sync", since=rated - 1, event="sync-lease-nonce", subject="b", outcome="DENY",
-                                reason=lambda r: bool(r) and "RATE: more than 6 lease requests in 60 s from b" in r)
+                                reason=lambda r: bool(r) and "RATE: more than %d lease requests in 60 s from b" % sync.RATE["lease"][0] in r)
     ok(bool(limited), "a's refusal of b's seventh lease request in a minute (step 6) is in a's stream")
     hand = {"%s@%d" % (n, e): (bool(cluster.audit_has(n, "sync", since=t, event="beat-propose", epoch=e, outcome="DENY",
                                                       reason=lambda r: bool(r) and "no other node counts" in r)),
