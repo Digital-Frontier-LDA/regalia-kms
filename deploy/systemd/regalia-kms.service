@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 User=regalia-kms
 Group=regalia-kms
-ExecStart=/usr/local/sbin/regalia-kms -config /etc/regalia-kms/config.json
+ExecStart=/usr/sbin/regalia-kms -config /etc/regalia-kms/config.json
 # The daemon's own OpenSC configuration. On a host that also serves YubiKey PIV keys it must tell
 # OpenSC to ignore the YubiKey's reader (deploy/opensc/ignore-yubikey.conf): the PIV backend needs
 # the card to itself, and the daemon refuses to start if its PKCS#11 module holds it.
