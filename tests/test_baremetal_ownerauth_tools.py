@@ -285,7 +285,10 @@ class ReanchorTakesIt(unittest.TestCase):
         stdin.buffer.isatty = lambda: False
         err = io.StringIO()
         argv = ["--membership", d + "/m.json", "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "a",
-                "--peer", "b=%s/b.json" % d, "--peer", "c=%s/c.json" % d, "--ownerauth", record]
+                "--peer", "b=%s/b.json" % d, "--peer", "c=%s/c.json" % d, "--ownerauth", record, "--esp", d + "/esp"]
+        os.makedirs(d + "/esp/EFI/regalia")                         # an enrolled node's ESP: it holds a chain
+        with open(reanchor.esp_chain_path(d + "/esp"), "wb") as f:
+            f.write(m.canonical(chain(2)))
         with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
                 unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
             rc = reanchor.main(argv, ask=lambda prompt: None, highwater=highwater, active=lambda: [])

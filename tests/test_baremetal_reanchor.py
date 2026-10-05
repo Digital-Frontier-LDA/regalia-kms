@@ -496,7 +496,24 @@ class Command(Case):
         self.assertEqual(self.run_reanchor(self.sources())["epoch"], 3)              # run again: it completes
         self.assertEqual(self.outcomes()[-1], ("reanchor", "ALLOW"))
 
+    def esp(self, upto=2):
+        """b's ESP stand-in as enrolment and the advances left it: the chain up to `upto` (below what the peers give)."""
+        esp = self.d + "/esp"
+        if not os.path.isdir(esp):
+            os.makedirs(esp + "/EFI/regalia")
+            for directory in (esp, esp + "/EFI", esp + "/EFI/regalia"):   # as an ESP's: closed to group and others
+                os.chmod(directory, 0o755)
+            with open(reanchor.esp_chain_path(esp), "wb") as f:
+                f.write(m.canonical(self.envs[:upto]))
+        return esp
+
+    def on_esp(self):
+        with open(reanchor.esp_chain_path(self.esp()), "rb") as f:
+            return f.read()
+
     def program(self, *extra, typed=None, peers=(OTHER, "c"), upto=3, log="audit.jsonl", ask="given", tty=None, active=lambda: []):
+        if "--esp" not in extra:
+            extra = ("--esp", self.esp()) + tuple(extra)
         for name in peers:
             with open("%s/%s.json" % (self.d, name), "wb") as f:
                 f.write(m.canonical(self.envs[:upto]))
@@ -548,6 +565,40 @@ class Command(Case):
         self.assertEqual((rc, len(asked)), (1, 1))
         self.assertEqual(calls, [(self.path, False)])
         self.assertIn("NOT DONE, nothing was changed", self.said.getvalue())
+
+    def test_the_esp_is_written_before_the_anchor_moves(self):
+        # regalia-kms-24 on #391: #410's order. Anchored first, a reboot in between would find the ESP below the anchor
+        self.lose_record()
+        order = []
+        write, redefine = reanchor.write_esp, m.Store.reanchor
+        with unittest.mock.patch.object(reanchor, "write_esp", lambda *a: (order.append("esp"), write(*a))[1]), \
+                unittest.mock.patch.object(m.Store, "reanchor", lambda store, *a: (order.append("anchor"), redefine(store, *a))[1]):
+            rc, asked = self.program()
+        self.assertEqual((rc, order), (0, ["esp", "anchor"]))
+        self.assertEqual(self.on_esp(), m.canonical(self.envs[:3]))
+        self.assertEqual(self.hw.record(), (3, self.digest(3)))
+
+    def test_a_crash_after_the_esp_and_before_the_anchor_is_run_again(self):
+        # the ESP ahead of an anchor that is still unusable: the boot is no worse (it asked for the recovery key already),
+        # and the command run again completes, the ESP already right
+        self.lose_record()
+        before = self.hw.slots()
+        with unittest.mock.patch.object(m.Store, "reanchor", side_effect=OSError("power lost")):
+            rc, _ = self.program()
+        self.assertEqual(rc, 1)
+        self.assertEqual((self.on_esp(), self.hw.slots()), (m.canonical(self.envs[:3]), before))
+        rc, _ = self.program()
+        self.assertEqual((rc, self.on_esp(), self.hw.record()), (0, m.canonical(self.envs[:3]), (3, self.digest(3))))
+
+    def test_no_chain_on_the_esp_refuses_before_anything_is_asked(self):
+        # an ESP not mounted at --esp: written there, the boot would still read the old chain below the new anchor
+        self.lose_record()
+        before = self.hw.slots()
+        os.makedirs(self.d + "/unmounted")
+        rc, asked = self.program("--esp", self.d + "/unmounted")
+        self.assertEqual((rc, asked, self.hw.slots()), (1, [], before))
+        self.assertIn("holds no boot chain: is the ESP mounted there?", self.said.getvalue())
+        self.assertFalse(os.path.exists(self.d + "/unmounted/EFI"))
 
     def test_refused_while_the_nodes_units_run(self):
         # regalia-kms-24 on #391: nothing but reanchor may touch the anchor; regalia-esp-advance writes it at run time
@@ -850,8 +901,15 @@ class OnSwtpm(_Swtpm):
         for name in (OTHER, "c"):
             with open("%s/%s.json" % (self.d, name), "wb") as f:
                 f.write(m.canonical(envs))
+        esp = self.d + "/esp"                                                     # as enrolment left it: the chain to epoch 3
+        os.makedirs(esp + "/EFI/regalia")
+        for directory in (esp, esp + "/EFI", esp + "/EFI/regalia"):
+            os.chmod(directory, 0o755)
+        with open(reanchor.esp_chain_path(esp), "wb") as f:
+            f.write(m.canonical(envs[:3]))
         argv = ["--membership", path, "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "b",
-                "--peer", "a=%s/a.json" % self.d, "--peer", "c=%s/c.json" % self.d, "--audit-log", self.d + "/audit.jsonl", "--tcti", self.tcti]
+                "--peer", "a=%s/a.json" % self.d, "--peer", "c=%s/c.json" % self.d, "--audit-log", self.d + "/audit.jsonl", "--tcti", self.tcti,
+                "--esp", esp]
         os.environ.pop("TPM2TOOLS_TCTI", None)
         make = lambda index, tcti, policy=None, define_policy=None, lock_path=None: m.HighWater(index, tcti=tcti, lock_path=self.d + "/hw.lock", policy=policy, define_policy=define_policy)
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
@@ -860,6 +918,8 @@ class OnSwtpm(_Swtpm):
             self.assertEqual(reanchor.main(argv, ask=lambda prompt: prompt.split("Type exactly: ")[1].split("\n")[0], highwater=make, active=lambda: []), 0)
         digest4 = m.digest(envs[3]["manifest"])
         self.assertEqual((self.hw.value(), self.hw.slots(), self.hw.pinned(), self.hw.unusable()), (4, [(4, digest4)] * 2, True, None))
+        with open(reanchor.esp_chain_path(esp), "rb") as f:
+            self.assertEqual(f.read(), m.canonical(envs))                       # the ESP at the anchor's epoch, written first
         new_base = subprocess.run(["tpm2_nvread", "0x1500017", "-C", "o", "-s", "8"], env=self.env, capture_output=True, check=True).stdout
         new_counter = subprocess.run(["tpm2_nvread", "0x1500016", "-C", "o", "-s", "8"], env=self.env, capture_output=True, check=True).stdout
         self.assertGreater(int.from_bytes(new_counter, "big"), int.from_bytes(old_counter, "big"))
@@ -902,6 +962,15 @@ class AnchorUnits(unittest.TestCase):
         def missing(argv, **kw):
             raise FileNotFoundError("systemctl")
         self.assertEqual(reanchor.active_units(missing), [])
+
+    def test_a_systemctl_that_cannot_answer_is_a_refusal(self):
+        # regalia-kms-1e on #391: "Failed to connect to bus" (a recovery boot, a chroot) is not "nothing runs"
+        for code, out, err in ((1, "", "Failed to connect to bus: No such file or directory"),
+                               (3, "inactive\ninactive\n", ""),                      # fewer states than units
+                               (3, "inactive\ninactive\ninactive\nweird\n", ""),       # a state it does not know
+                               (4, "inactive\ninactive\ninactive\ninactive\n", "")):     # not is-active's own status
+            with self.assertRaisesRegex(m.Refused, "cannot ask systemd which of .* run .*: stop them and run this on the booted node"):
+                reanchor.active_units(lambda argv, **kw: subprocess.CompletedProcess(argv, code, stdout=out, stderr=err))
 
 
 class HandBack(unittest.TestCase):

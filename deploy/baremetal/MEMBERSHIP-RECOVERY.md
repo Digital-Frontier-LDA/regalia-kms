@@ -82,6 +82,12 @@ takes is the node's own (`highwater.lock` in the state directory, `node.Node.anc
 run-time writer of the anchor, `regalia-esp-advance` (#410), takes its own lock (`/run/regalia-esp-advance/`),
 so the two do not serialize: stop the node's units first, `regalia-esp-advance.path` included (below).
 
+Once the phrase is typed it writes the chain to the ESP (`--esp`, default `/efi`), as `regalia-esp-advance`
+does, and only then replaces the anchor: the initrd accepts an ESP chain ahead of its anchor and refuses one below
+it (a ROLLBACK), so no reboot after the command, or in the middle of it, lands below the new anchor. Before
+anything is asked it checks that the ESP holds a chain (every enrolled node's does): none there is an ESP not
+mounted at `--esp`.
+
 It needs the TPM's owner authorization, as defining the anchor did at commissioning (#242 step C,
 `ownerauth.py`): this node's value comes on standard input from its envelope, decrypted with the owner's
 card, and is checked against the ceremony's signed `ownerauth.record.json` under the pinned root before the
@@ -96,7 +102,7 @@ be computed from the chain files.
 | Exit status | Audit line | Meaning | What to do |
 |---|---|---|---|
 | 0 | `ALLOW` | Done | Start the service |
-| 1 | `DENY`, or none if the arguments were refused | Refused. Nothing was changed in the TPM or the chain. A lock the run made as root is given back too, as at status 0 | Read the reason. If it also says a lock or file could not be given back, do as for status 5 |
+| 1 | `DENY`, or none if the arguments were refused | Refused. Nothing was changed in the TPM or the chain. If the refusal came after the phrase (a TPM refusing the redefinition before it began), the ESP may already hold the new chain: ahead of the anchor, which the initrd accepts. A lock the run made as root is given back too, as at status 0 | Read the reason. If it also says a lock or file could not be given back, do as for status 5 |
 | 2 | none | The command line itself is wrong (a missing or unknown option). Nothing was read or changed | Correct the arguments |
 | 3 | `INCOMPLETE` | The re-anchor had begun and a step failed (the chain file could not be written, or a TPM command was refused). The verified chain may or may not be on disk yet; the node's membership does not load | If the reason is a storage error (disk full, read-only), fix that first. Then **run the same command again with the same chains**: it completes from wherever it stopped. A shorter or different chain is refused: the file on disk, if it was written, and whatever the TPM still holds bind the second attempt |
 | none | a `reanchor-requested` line with no outcome after it | The process was killed or the power was lost while it ran: there is no exit status and no outcome line. Anything from nothing changed to finished is possible | The same as status 3: run the same command again with the same chains. If the anchor is already usable, it says so and changes nothing; start the service |
@@ -152,9 +158,8 @@ they are opened by hand too. Rehearsed end to end on three nodes by `e2e/three-n
    as root, with `--peer a=a-chain.json --peer c=c-chain.json`. Read what it prints, then type the phrase.
 6. **Status 0: start b's services** (`systemctl start regalia-sync regalia-admission regalia-esp-advance.path`),
    then **`systemctl start regalia-esp-advance`** and check that `regalia-node check` shows `anchor` equal to
-   `epoch`. The ESP must hold the chain the anchor now names: the peers' chain may be newer than what b's ESP
-   held, and the initrd refuses an ESP chain below its anchor (a ROLLBACK), so b's next boot would go to the
-   recovery prompt until the advance runs. b loads its membership
+   `epoch`. The command already wrote the ESP before the anchor, so the advance finds it right and agrees; it is
+   also what the node runs at every boot. b loads its membership
    at the chain's epoch under the new anchor, takes the heartbeat a and c signed, asks them for a lease and
    serves again; it issues leases to them in turn. Any other status: the table above.
 

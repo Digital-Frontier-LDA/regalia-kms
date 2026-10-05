@@ -24,10 +24,11 @@ start and b serves again. A server whose two peers are both destroyed has no suc
      changing nothing (b's files, its TPM's NV indices, their public areas and contents): one peer only; b's own chain
      as a peer; the phrase mistyped; regalia-esp-advance running (its lock held), refused before the phrase
   6  the re-anchor from a's and c's chains: typed at the terminal, done, recorded ALLOW; b's anchor at epoch 3 and its
-     ESP still at 2 (what its initrd would refuse, ROLLBACK); b's membership loads at epoch 3
+     ESP both at 3 as it ends (the chain written to the ESP before the anchor moved: never a ROLLBACK window); b's
+     membership loads at epoch 3
      under the new anchor, and the file is regalia-sync's again (#388: written by root, given back); run again, it is
      refused, since the anchor is usable
-  7  the three start: b's regalia-esp-advance runs and its ESP reaches its anchor's epoch 3; b holds a heartbeat the
+  7  the three start: b's regalia-esp-advance runs and finds its ESP and anchor at epoch 3; b holds a heartbeat the
      nodes signed and a lease, and issues one: it serves again
 
 NOT SHOWN HERE (MEMBERSHIP-RECOVERY.md, "What the rehearsal does not show"):
@@ -209,7 +210,8 @@ def scenario(cluster, work):
     def reanchor(peers, answer=None):
         argv = ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.reanchor", "--membership", str(cluster.node(b).path("membership.json")),
                 "--root-key", cfg["root_key"], "--tpm-index", index, "--tcti", cluster.nodes[b].tcti, "--node-id", b,
-                "--node-config", str(cluster.nodes[b].cfg_path), "--audit-log", str(trail), "--esp-lock", str(esp_lock)]
+                "--node-config", str(cluster.nodes[b].cfg_path), "--audit-log", str(trail), "--esp-lock", str(esp_lock),
+                "--esp", str(cluster.esp(b))]
         for peer, path in peers:
             argv += ["--peer", "%s=%s" % (peer, path)]
         return at_console(cluster, b, argv, answer)
@@ -229,8 +231,9 @@ def scenario(cluster, work):
         for i in sorted(cluster.node(b).anchor().indices()):
             done = subprocess.run(["tpm2_nvread", "-T", tcti, "-C", "o", "0x%x" % i], capture_output=True)
             contents[i] = (done.returncode, done.stdout)
+        on_esp = cluster.esp(b) / "EFI" / "regalia" / "membership.json"
         return (files, sh("tpm2_getcap", "-T", tcti, "handles-nv-index", check=False).stdout,
-                sh("tpm2_nvreadpublic", "-T", tcti, check=False).stdout, contents)
+                sh("tpm2_nvreadpublic", "-T", tcti, check=False).stdout, contents, on_esp.read_bytes() if on_esp.exists() else None)
     before = snapshot()
 
     def unchanged():
@@ -261,8 +264,10 @@ def scenario(cluster, work):
     digest = membership.digest(held[a][-1]["manifest"])
     ok(rc == 0 and ("reanchor: done. b now holds epoch 3, manifest %s" % digest) in shown,
        "done (status %s): b holds epoch 3, manifest %s..., under a new anchor" % (rc, digest[:16]), shown[-800:])
-    ok((cluster.anchored(b), cluster.esp_epoch(b)) == (3, 2),
-       "b's new anchor is at epoch 3 and its ESP still at 2: the state its initrd would refuse (ROLLBACK) at the next boot",
+    # the ESP written BEFORE the anchor moved (#410's order, regalia-kms-24 on #391): no moment where b's ESP is below its
+    # anchor, which its initrd would refuse (ROLLBACK), not even before regalia-esp-advance runs
+    ok((cluster.anchored(b), cluster.esp_epoch(b)) == (3, 3),
+       "b's ESP and its new anchor both at epoch 3 as the command ends, before any regalia-esp-advance: no reboot lands below it",
        (cluster.anchored(b), cluster.esp_epoch(b)))
     lines = [json.loads(line) for line in trail.read_text().splitlines() if line.strip()]
     ok([e.get("outcome") for e in lines if e.get("event") == "reanchor"][-1:] == ["ALLOW"]
@@ -282,10 +287,10 @@ def scenario(cluster, work):
     for name in names:
         cluster.start(name, SERVICES)
     # b's start ran its regalia-esp-advance (the fixture's start, as the unit's WantedBy= does on a host; the procedure's
-    # step 6): its ESP holds the chain its new anchor names, and its next boot renders
+    # step 6): it finds the ESP and the anchor already at the chain, and agrees
     advanced = until(lambda: (cluster.anchored(b), cluster.esp_epoch(b)) == (3, 3), 60, 2)
     ok(advanced is True and "the ESP's membership chain is epoch 3" in cluster.journal(b, "esp-watch"),
-       "b's regalia-esp-advance ran: its ESP and its anchor both at epoch 3", {"b": (cluster.anchored(b), cluster.esp_epoch(b)),
+       "b's regalia-esp-advance ran and agrees: its ESP and its anchor both at epoch 3", {"b": (cluster.anchored(b), cluster.esp_epoch(b)),
                                                                               "esp-watch": cluster.journal(b, "esp-watch")[-600:]})
     fresh = cluster.fresh(names, 3, timeout=300)
     ok(all(fresh.values()), "every node holds a heartbeat for epoch 3 the nodes signed (%s)" % fresh, cluster.beat_events(names))

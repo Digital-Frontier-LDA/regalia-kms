@@ -107,8 +107,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's. `reanchor` (#391) refuses
     while `regalia-esp-advance` (or its path unit, sync or admission) runs, by `systemctl is-active`, and holds the
     advance's lock for its whole run. On a machine with no `systemctl` it skips the unit check, and the three-node
-    rehearsal can't show it (its units have other names): unit tests only. Enrolment takes neither: run it only with
-    the node's units stopped.
+    rehearsal can't show it (its units have other names): unit tests only. When the advance's RuntimeDirectory is not
+    there, no lock is taken: a `regalia-esp-advance.service` an operator starts by hand during the re-anchor would run
+    unserialized (the unit check refuses one that already runs). Enrolment takes neither: run it only with the node's
+    units stopped.
+  - `reanchor` writes the ESP before the anchor (#391), as the advance does, but does not try the initrd's render first
+    as the advance does (`boot_renderable`): a chain this node could not boot under is written and anchored without
+    that warning.
   - **Accepted:** enrolment (`enrol commit`) still anchors epoch 1 before it writes the ESP: its render
     verifies the chain against the anchor, so the order is not cheap to swap. A crash in between leaves no
     chain on the ESP. The next boot's render then fails and the console asks for the recovery key, as it

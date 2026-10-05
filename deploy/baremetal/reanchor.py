@@ -105,7 +105,7 @@ def phrase(node_id, planned):
     return "re-anchor %s at epoch %d %s" % (node_id, planned["epoch"], planned["manifest_digest"][:8])
 
 
-def reanchor(store, sources, node_id, typed, sink, prepare=None):
+def reanchor(store, sources, node_id, typed, sink, prepare=None, before_anchor=None):
     """Plan, record the request, check what the operator typed, re-anchor, record the outcome. Returns
     {"epoch", "manifest_digest"} of what the node now holds.
 
@@ -115,7 +115,9 @@ def reanchor(store, sources, node_id, typed, sink, prepare=None):
     did not finish: Incomplete is raised, and the command is run again). `typed` is a callable given the
     plan and returning what the operator typed, so nothing is asked before the plan exists. `prepare(planned)`, if
     given, runs once the plan exists and before anything is recorded as requested, asked or changed (the define policy
-    from the manifest being anchored, NodePolicies.prepare): a refusal there is a DENY with nothing changed."""
+    from the manifest being anchored, NodePolicies.prepare): a refusal there is a DENY with nothing changed.
+    `before_anchor(planned)`, if given, runs once the phrase is confirmed and BEFORE the anchor is touched (the chain
+    written to the ESP, write_esp: #410's order, the ESP first): a failure there is a DENY with the anchor unchanged."""
     def event(kind, planned, **more):
         return dict({"event": kind, "subject": convergence._printable(node_id), "peer": "operator",
                      "epoch": planned.get("epoch", 0), "manifest_digest": planned.get("manifest_digest", ""),
@@ -139,6 +141,8 @@ def reanchor(store, sources, node_id, typed, sink, prepare=None):
     store.reanchor_began = False
     try:
         require(typed(dict(planned)) == phrase(node_id, planned), "not confirmed: the phrase typed is not %r" % phrase(node_id, planned))
+        if before_anchor is not None:
+            before_anchor(planned)
         store.reanchor(planned["chain"])
     except BaseException as failure:
         began = store.reanchor_began
@@ -215,14 +219,23 @@ ESP_LOCK = "/run/regalia-esp-advance/highwater.lock"
 ANCHOR_UNITS = ("regalia-esp-advance.path", "regalia-esp-advance.service", "regalia-sync.service", "regalia-admission.service")
 
 
+UNIT_STATES = ("active", "activating", "reloading", "refreshing", "deactivating", "inactive", "failed", "maintenance")
+
+
 def active_units(run=subprocess.run):
     """Which of ANCHOR_UNITS systemd says are running (or starting, or stopping). No systemctl at all (a machine that is
-    not a node, as the unit tests run on): none."""
+    not a node, as the unit tests run on): none. A systemctl that cannot answer ("Failed to connect to bus" on a
+    recovery boot, in a chroot) is a refusal, never "none running" (regalia-kms-1e on #391): exactly one known state per
+    unit, and is-active's own status (0 all active, 3 some not), or nothing is assumed."""
     try:
         done = run(["systemctl", "is-active"] + list(ANCHOR_UNITS), capture_output=True, text=True, check=False)
     except FileNotFoundError:
         return []
-    return [unit for unit, state in zip(ANCHOR_UNITS, done.stdout.split()) if state in ("active", "activating", "reloading", "deactivating")]
+    states = done.stdout.split()
+    if done.returncode not in (0, 3) or len(states) != len(ANCHOR_UNITS) or any(state not in UNIT_STATES for state in states):
+        raise Refused("cannot ask systemd which of %s run (status %s: %s): stop them and run this on the booted node"
+                      % (", ".join(ANCHOR_UNITS), done.returncode, " ".join(((done.stderr or "") + " " + (done.stdout or "")).split())[:200]))
+    return [unit for unit, state in zip(ANCHOR_UNITS, states) if state in ("active", "activating", "reloading", "refreshing", "deactivating")]
 
 
 @contextlib.contextmanager
@@ -251,6 +264,51 @@ def esp_lock_held(path):
         yield True
     finally:
         os.close(fd)
+
+
+def esp_chain_path(esp):
+    """Where the boot chain lies on the ESP mounted at `esp` (bootcreds.CHAIN_ON_ESP, confined as enrolment confines it)."""
+    from deploy.baremetal import bootcreds, enrol
+    return os.path.join(esp, enrol._rendered_path(bootcreds.CHAIN_ON_ESP))
+
+
+def check_esp(esp):
+    """Before anything is asked: the ESP is there, as enrolment left it. Every enrolled node has a chain on it; none at
+    `esp` is an ESP not mounted there (a write would go to the root file system, and the next boot would still read
+    the old chain below the new anchor: a ROLLBACK)."""
+    require(os.path.isfile(esp_chain_path(esp)) and not os.path.islink(esp_chain_path(esp)),
+            "%s holds no boot chain: is the ESP mounted there? Give it with --esp" % esp)
+
+
+def write_esp(esp, envelopes):
+    """The chain being anchored written to the ESP BEFORE the anchor moves (#410's order: the initrd accepts an ESP chain
+    ahead of its anchor, never one below it; regalia-kms-24 on #391), through enrolment's confined writer, as
+    regalia-esp-advance writes it (node.esp_advance): a trusted directory, a temporary file fsynced and renamed, read
+    back. Only the chain. Returns whether the ESP was rewritten."""
+    from deploy.baremetal import enrol
+    chain = membership.canonical(envelopes)
+    target = esp_chain_path(esp)
+    directory, filename = os.path.dirname(target), os.path.basename(target)
+    try:
+        enrol._ensure_trusted_dir(directory)
+    except enrol.Refused as refused:
+        raise Refused(str(refused)) from None
+
+    def read():
+        try:
+            fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except FileNotFoundError:
+            return None
+        try:
+            require(stat.S_ISREG(os.fstat(fd).st_mode), "%s is not a regular file" % target)
+            return os.read(fd, len(chain) + 1)
+        finally:
+            os.close(fd)
+    if read() == chain:
+        return False
+    enrol._replace_esp(directory, filename, chain)
+    require(read() == chain, "the chain read back from %s is not the one written" % target)
+    return True
 
 
 def node_policy(path, node_id):
@@ -322,6 +380,8 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None, active=active_unit
     ap.add_argument("--audit-log", default=trails.where("reanchor"),
                     help="the audit trail (default %(default)s, its place in trails.py's registry)")
     ap.add_argument("--tcti", help="the TPM to re-anchor, as a TCTI (e.g. device:/dev/tpmrm0); default: tpm2-tools' default TPM")
+    ap.add_argument("--esp", default="/efi", help="the ESP's mount point (default %(default)s): the chain is written there "
+                    "before the anchor moves, as regalia-esp-advance does")
     ap.add_argument("--esp-lock", default=ESP_LOCK, help="regalia-esp-advance's lock, held for the whole re-anchor "
                     "(default %(default)s, its RuntimeDirectory's; the three-node fixture gives each node its own)")
     ap.add_argument("--node-config", help="this node's node.json: needed when its anchor is written by its approved-image policy (#242)")
@@ -380,6 +440,7 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None, active=active_unit
         policies = NodePolicies(args.node_config, args.node_id)
         # nothing else may touch the anchor while it is replaced: the node's units stopped (the procedure's step 5), and
         # regalia-esp-advance's own lock held from here to the end (it writes the anchor under that lock, not the node's)
+        check_esp(args.esp)
         running = active()
         require(not running, "%s %s running: stop %s first (MEMBERSHIP-RECOVERY.md, step 5), so that nothing but this "
                 "command touches the anchor" % (", ".join(running), "is" if len(running) == 1 else "are", " ".join(running)))
@@ -388,7 +449,8 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None, active=active_unit
             store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti, policy=policies.reader,
                                                                               define_policy=policies.define,
                                                                               lock_path=anchor_lock(args.membership), **extra))
-            now_at = reanchor(store, sources, args.node_id, typed, record, prepare=policies.prepare)
+            now_at = reanchor(store, sources, args.node_id, typed, record, prepare=policies.prepare,
+                              before_anchor=lambda planned: write_esp(args.esp, planned["chain"]))
     except Incomplete as failure:
         print("reanchor: INCOMPLETE: the anchor was being replaced and it did not finish: %s\nRun this command again with the same "
               "chains. Until it completes, this node's membership does not load." % failure, file=sys.stderr)
