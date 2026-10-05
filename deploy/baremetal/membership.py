@@ -719,7 +719,12 @@ class HighWater:
         plus policywrite), with authPolicy = PolicyAuthorize(system-phase PCR key) = the node's configured
         approved-image policy (HighWater(policy=...)). Such an index with any other authPolicy, or on a node
         with no policy configured, is Unusable ("the anchor's write policy is not this node's approved-image
-        policy"), which a re-anchor repairs. The base is never policy-written. A signed PolicyPCR cannot also
+        policy"), which a re-anchor repairs. The base is never policy-written.
+        UNDER A v4 CHAIN TIP (production, #242 B3) the counter and the slots are policy-written ONLY: an owner-written
+        one is Unusable ("is owner-written: under regalia.membership/v4 the anchor is written by policy only"), which a
+        re-anchor repairs. Under v1-v3 (a lab image's chain) both layouts read. The tip's schema is the one fact this
+        reader and the Go initrd's both hold (HighWater(schema=...); a Store judges by its own verified chain's tip, and a
+        commit by the NEW tip, before the disk is written). A signed PolicyPCR cannot also
         restrict the command code, so a session that satisfies the policy may write or increment the index;
         it can neither delete it (no policydelete) nor lock it (no writedefine or write_stclear on these).
         STATED LIMIT (#242, d9): the COUNTER is policy-writable too, not owner-only. Root on an approved, booted
@@ -770,7 +775,7 @@ class HighWater:
     POLICY_ATTRIBUTES = {"counter": 0x0006001A, "slot": 0x0006000A}
 
     def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_indices=None, policy=None,
-                 image_key=None, signatures=None, define_policy=None, owner_auth=None):
+                 image_key=None, signatures=None, define_policy=None, owner_auth=None, schema=None):
         """`policy`: the node's approved-image write policy, PolicyAuthorize(system-phase PCR key), as 64 hex
         (the digest a policy-written index must hold as its authPolicy), or a function that returns it (the
         node's: measurements.approved_image_policy over its signed chain and the running image's key), called
@@ -787,7 +792,12 @@ class HighWater:
         `owner_auth`: the TPM's owner authorization (ownerauth.Auth, from the node's envelope, or a function that returns
         one), for the OWNER-authorized calls only: a definition, a redefinition, an owner-written index's write, an
         nvundefine (#242 step C). None: the owner authorization is empty (a lab TPM). Resolved once, at its first use,
-        and passed through ownerauth's one channel (a pipe fd), never on the command line."""
+        and passed through ownerauth's one channel (a sealed memfd), never on the command line.
+        `schema`: the schema of this node's verified chain tip (or a function that returns it), asked for only when
+        an OWNER-written counter or slot is met (#242 B3): under regalia.membership/v4 the anchor is written by policy
+        only, and such an index is Unusable (a re-anchor repairs it); under v1-v3, a lab image's, both layouts read.
+        None: no chain to judge by (a lab tool, a test), and owner-written reads as before. A Store sets it to its own
+        verified chain's tip once it holds one."""
         self.index, self.run, self.env = index, run, ({"TPM2TOOLS_TCTI": tcti} if tcti else None)
         if policy is not None and not callable(policy):
             hex_field(policy, 64, "the approved-image write policy")
@@ -800,6 +810,7 @@ class HighWater:
         self._image_key, self._signatures, self._define_policy = image_key, signatures, define_policy
         self._policy_asked = False
         self._owner_auth = owner_auth
+        self._schema = schema
         self.base_index = base_index or "0x%x" % (int(index, 16) + 1)
         # index + 2 and + 3 are left to the heartbeat's pair (0x1500018/0x1500019 beside 0x1500016)
         self.record_indices = tuple(record_indices or ("0x%x" % (int(index, 16) + 4), "0x%x" % (int(index, 16) + 5))) if self.RECORD else ()
@@ -900,6 +911,12 @@ class HighWater:
         tcti = (self.env or {}).get("TPM2TOOLS_TCTI")
         with signkey.policy_session(pem, tcti, self.run, self._signatures) as session:
             return self._tpm(tool, index, "-C", index, "-P", "session:" + session, *args, input=input)
+
+    def tip_schema(self):
+        """The schema of this node's verified chain tip (`schema`), resolved once; None when there is none to judge by."""
+        if callable(self._schema):
+            self._schema = self._schema()
+        return self._schema
 
     def _auth_policy(self, index):
         """An index's authPolicy as tpm2_nvreadpublic reports it (64 lowercase hex), or "" when it has none."""
@@ -1044,6 +1061,9 @@ class HighWater:
         else:
             require_anchor(mask == want, "NV index %s does not have this anchor's attributes (0x%x, not 0x%x): it can be written or read "
                            "otherwise than this software defines" % (index, mask, want))
+            if kind in self.POLICY_ATTRIBUTES:
+                require_anchor(self.tip_schema() != SCHEMA_V4, "NV index %s is owner-written: under %s the anchor is written by "
+                               "policy only (re-anchor it)" % (index, SCHEMA_V4))
         if kind == "base":
             require_anchor(attributes & self.WRITELOCKED, "base index %s is not write-locked" % index)
         else:
@@ -1336,6 +1356,7 @@ class Store:
             manifests.append(nxt)
             current = nxt
         epoch = current["epoch"] if current else 0
+        self._judge_by(manifests)
         hw = self.hw.value()
         require(epoch >= hw, "ROLLBACK: the membership on disk is epoch %d but the TPM high-water is %d; "
                 "fetch the chain from a peer" % (epoch, hw))
@@ -1359,6 +1380,13 @@ class Store:
         self.hw.check(epoch)
         self.chain, self.manifests = chain, manifests
         return current
+
+    def _judge_by(self, manifests):
+        """The anchor is judged by the schema of THIS verified chain's current tip (#242 B3: under v4 it is written by policy
+        only), whatever its caller named (HighWater(schema=...)): the chain the Store holds is the one the anchor guards.
+        A Store with no chain yet leaves the caller's."""
+        if manifests:
+            self.hw._schema = manifests[-1]["schema"]
 
     def envelopes(self, after_epoch=0):
         """The signed envelopes above `after_epoch`, in order: what a peer at that epoch lacks. Verified and
@@ -1389,6 +1417,9 @@ class Store:
                 require(nxt is not current, "the fetched chain repeats epoch %d" % nxt["epoch"])
                 manifests.append(nxt)
                 current = nxt
+            # judged by the FETCHED chain's tip (#242 B3, regalia-kms-ed): a v4 chain is never restored over an owner-written
+            # anchor (whatever the disk held, or did not), which only a re-anchor repairs
+            self._judge_by(manifests)
             hw = self.hw.value()
             require(current["epoch"] >= hw, "the fetched chain ends at epoch %d, below the TPM high-water %d: "
                     "fetch from a peer that is not behind" % (current["epoch"], hw))
@@ -1441,6 +1472,7 @@ class Store:
                 manifests.append(nxt)
                 current = nxt
             digest_of = self._digests(manifests)
+            self._judge_by(manifests)
             require(self.hw.unusable() is not None, "the TPM anchor is usable: it is not reset. A chain that is rolled back, lost or "
                     "substituted is restored under the anchor it has (restore)")
             counter, records = self.hw.remains()
@@ -1490,8 +1522,13 @@ class Store:
             return current
         if final and self.documents is not None:       # before the disk and the TPM: refused, nothing has moved
             self.documents(nxt)
+        # judged by the NEW tip before the disk is written (#242 B3): a move to v4 over an owner-written anchor is refused
+        # here, with nothing moved, instead of leaving a v4 chain on the disk over an anchor it then refuses. The same for
+        # a store that never anchors (#66 B3): the ESP advance would refuse that anchor only after the disk had moved
+        self._judge_by(self.manifests + [nxt])
+        hw = self.hw.value()
+        self.hw._slots()
         if not self.anchors:                            # the disk only: the ESP advance moves the anchor, ESP first
-            hw = self.hw.value()
             require(nxt["epoch"] - hw <= self.hw.MAX_JUMP, "epoch %d is %d above the TPM high-water: the jump exceeds the bound %d "
                     "until the ESP advance anchors what is held" % (nxt["epoch"], nxt["epoch"] - hw, self.hw.MAX_JUMP))
             self._write(self.chain + [envelope])

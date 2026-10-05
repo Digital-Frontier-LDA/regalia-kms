@@ -74,8 +74,8 @@ ADMISSION_DIR_MODE = _state_directory_mode("regalia-admission.service")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import attest, authtime, bootnet, heartbeat, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
-import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root key
+from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
+import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
 NAMES = ("a", "b", "c")
 RECOVERY = b"cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuuvvcb"     # the TEST recovery key (as the unlock tests')
@@ -538,13 +538,28 @@ class Cluster:
 
     def _anchor_and_store(self, n):
         here = self.node(n.name)
+        here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
+        if self.v4:
+            self._enrolled(n.name, self.chain)
+            return
         anchor = here.anchor()
         anchor.define()
-        here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
         self.enrolled_store(here).commit(self.chain[0])
         with self._as_booted(n.name):                 # laid down by the node's policy (node.define_policy: the system key its measurements name)
             node.heartbeat_counter(here.cfg).define()
             node.signing_counter(here.cfg).define()  # #199: the highest sequence this node has signed
+
+    def _enrolled(self, name, chain):
+        """v4 (#242 B3): the node's trust anchors as `enrol commit`'s step lays them down, enrol.anchor_and_store: the
+        anchor and the signing counter defined under the node's policy (the system key its measurements name), the
+        chain committed by policy sessions; then its heartbeat counter, by the same policy. Run as its booted system
+        (_as_booted), in the system phase: enrolment runs on the booted image, and a policy write needs PCR 11 at the
+        system value (_leave_initrd, which start() then does not repeat)."""
+        here = self.node(name)
+        self._leave_initrd(name)
+        with self._as_booted(name):
+            enrol.anchor_and_store(str(self.nodes[name].cfg_path), chain)
+            node.heartbeat_counter(here.cfg).define()
 
     # ---- the stand-ins ----
 
@@ -798,13 +813,8 @@ class Cluster:
         envelope = self.chain[-1]
         n = self.nodes[new]
         here = self.node(new)
-        here.anchor().define()
         here.documents().put(document)
-        for i, held in enumerate(self.chain):
-            self.enrolled_store(here).commit(held, final=i == len(self.chain) - 1)
-        with self._as_booted(new):                    # laid down by its policy, as at build (#389: the system key its set names)
-            node.heartbeat_counter(here.cfg).define()
-            node.signing_counter(here.cfg).define()
+        self._enrolled(new, self.chain)                 # as at build: the whole chain, by its policy (#242 B3)
         sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
