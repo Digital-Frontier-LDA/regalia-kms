@@ -1,4 +1,4 @@
-"""deploy/baremetal/apparmor/usr.local.sbin.regalia-kms: the profile the bare-metal unit asks for by name
+"""deploy/baremetal/apparmor/usr.sbin.regalia-kms: the profile the bare-metal unit asks for by name
 (regalia-kms#61). It must parse, carry the name the unit asks for and the binary os_probe expects,
 allow every path the daemon's documented configuration names, and allow nothing a KMS daemon has no
 business doing: no execution, no capability, no socket but inet stream and a pathname unix stream.
@@ -17,7 +17,7 @@ from pathlib import Path
 from deploy.baremetal import os_probe
 
 ROOT = Path(__file__).resolve().parents[1]
-PROFILE = ROOT / "deploy/baremetal/apparmor/usr.local.sbin.regalia-kms"
+PROFILE = ROOT / "deploy/baremetal/apparmor/usr.sbin.regalia-kms"
 VARIABLES = {"@{multiarch}": "x86_64-linux-gnu", "@{PROC}": "/proc", "@{pid}": "4242", "@{sys}": "/sys"}
 FILE_RULE = re.compile(r"(?P<audit>audit )?(?P<deny>deny )?(?P<owner>owner )?(?P<path>[/@]\S*) (?P<perms>[rwmklaix]+),")
 
@@ -130,7 +130,7 @@ class Profile(unittest.TestCase):
         for path, perms in (
                 ("/dev/tpm0", "r"), ("/dev/tpmrm0", "rw"), ("/etc/credstore.encrypted/regalia-kms-hsm-site-a.pin", "r"),
                 ("/etc/regalia-kms/config.json", "w"), ("/etc/regalia-kms/tls/server.key", "w"),
-                ("/usr/local/sbin/regalia-kms", "w"), ("/usr/local/sbin/regalia-kms", "x"),
+                ("/usr/sbin/regalia-kms", "w"), ("/usr/sbin/regalia-kms", "x"),
                 ("/etc/shadow", "r"), ("/root/.ssh/authorized_keys", "r"), ("/home/operator/.bash_history", "r"),
                 ("/var/lib/regalia-kms/audit.jsonl", "x"), ("/var/lib/regalia-kms/sub/audit.jsonl", "w"),
                 ("/var/lib/regalia-kms/authorized_keys", "w"), ("/var/lib/other/audit.jsonl", "r"),
@@ -201,7 +201,7 @@ class Parses(unittest.TestCase):
     def test_the_parser_refuses_a_broken_profile(self):
         """The control: this check can fail."""
         text = PROFILE.read_text()
-        for label, broken in (("an unknown permission", text.replace("/usr/local/sbin/regalia-kms mr,", "/usr/local/sbin/regalia-kms mq,")),
+        for label, broken in (("an unknown permission", text.replace("/usr/sbin/regalia-kms mr,", "/usr/sbin/regalia-kms mq,")),
                               ("an unknown abstraction", text.replace("<abstractions/base>", "<abstractions/no-such>")),
                               ("an unclosed block", text.rstrip().rstrip("}"))):
             with self.subTest(label), tempfile.TemporaryDirectory() as d:
