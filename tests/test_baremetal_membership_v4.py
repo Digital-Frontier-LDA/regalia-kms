@@ -71,7 +71,7 @@ def nodes4(**states):
 
 def manifest4(epoch, prev, nodes, **fields):
     man = {"schema": m.SCHEMA_V4, "epoch": epoch, "prev_digest": prev, "policy_version": "p1", "issued_at": "2026-10-04T09:00:00Z",
-           "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "owner_keys": [typed(k) for k in OWNER_KEYS],
+           "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "recovery_authorization_max_s": 604800, "recovery_ends_by": None, "owner_keys": [typed(k) for k in OWNER_KEYS],
            "heartbeat_signers": {"threshold": 2, "parties": ["a", "b", "c", "owner"]},
            "activation_signers": {"threshold": 2, "parties": ["a", "b", "c"]},
            "revocation_signers": [{"threshold": 2, "parties": ["a", "b", "c"]}, {"threshold": 1, "parties": ["owner"]}],
@@ -128,6 +128,11 @@ class Format(Case):
     def valid(self, man):
         self.assertEqual(m.accept(None, sign(man, ROOT), ROOT_PUB), man)
 
+    def test_the_recovery_authorization_bound_s_inclusive_ends_are_accepted(self):
+        """#432 (ed): 3600 and 604800 are accepted, 3599 and 604801 refused (the refusals are in the field cases)."""
+        for value in (3600, 604800):
+            self.valid(manifest4(1, "", nodes4(), recovery_authorization_max_s=value))
+
     def test_the_floors_are_the_format_s(self):
         for name, change, reason in (
                 ("a heartbeat threshold of 1", lambda x: x["heartbeat_signers"].update(threshold=1), "heartbeat_signers.threshold must be from 2"),
@@ -180,7 +185,18 @@ class Format(Case):
                 ("no owner heartbeat bound", lambda x: x.pop("owner_heartbeat_lifetime_s"), "manifest fields mismatch"),
                 ("an owner heartbeat bound below 300 s", lambda x: x.update(owner_heartbeat_lifetime_s=299), "owner_heartbeat_lifetime_s must be an integer from 300"),
                 ("an owner heartbeat bound above the heartbeat bound", lambda x: x.update(owner_heartbeat_lifetime_s=21601), "to heartbeat_max_lifetime_s"),
-                ("an owner heartbeat bound true", lambda x: x.update(owner_heartbeat_lifetime_s=True), "owner_heartbeat_lifetime_s must be an integer")):
+                ("an owner heartbeat bound true", lambda x: x.update(owner_heartbeat_lifetime_s=True), "owner_heartbeat_lifetime_s must be an integer"),
+                ("no recovery authorization bound", lambda x: x.pop("recovery_authorization_max_s"), "manifest fields mismatch"),
+                ("no recovery end", lambda x: x.pop("recovery_ends_by"), "manifest fields mismatch"),
+                ("a recovery end below 0", lambda x: x.update(recovery_ends_by=-1), "recovery_ends_by must be null or an integer from 0"),
+                ("a recovery end that is text", lambda x: x.update(recovery_ends_by="soon"), "recovery_ends_by must be null or an integer"),
+                ("a recovery end true", lambda x: x.update(recovery_ends_by=True), "recovery_ends_by must be null or an integer"),
+                ("a recovery authorization bound below 1 h", lambda x: x.update(recovery_authorization_max_s=3599),
+                 "recovery_authorization_max_s must be an integer from 3600 to 604800"),
+                ("a recovery authorization bound above 7 days", lambda x: x.update(recovery_authorization_max_s=604801),
+                 "recovery_authorization_max_s must be an integer from 3600 to 604800"),
+                ("a recovery authorization bound true", lambda x: x.update(recovery_authorization_max_s=True),
+                 "recovery_authorization_max_s must be an integer")):
             with self.subTest(name):
                 self.invalid(reason, change)
 
@@ -303,6 +319,7 @@ class Quorum(Case):
                 ("a revocation rule dropped", lambda x: x["revocation_signers"].pop(), "cannot change revocation_signers"),
                 ("an owner key added", lambda x: x["owner_keys"].append(typed(STRANGER)), "cannot change owner_keys"),
                 ("the owner's heartbeat bound", lambda x: x.update(owner_heartbeat_lifetime_s=7200), "cannot change owner_heartbeat_lifetime_s"),
+                ("the recovery authorization bound", lambda x: x.update(recovery_authorization_max_s=7200), "cannot change recovery_authorization_max_s"),
                 ("the heartbeat bound", lambda x: x.update(heartbeat_max_lifetime_s=7200, owner_heartbeat_lifetime_s=3600), "cannot change heartbeat_max_lifetime_s"),
                 ("the policy", lambda x: x.update(policy_version="p2"), "cannot change the policy version"),
                 ("a signing key", lambda x: x["nodes"][0].update(signing_key=typed(STRANGER)), "cannot change signing_key of a"),
@@ -386,6 +403,48 @@ class AnchorPolicyAndCardRecord(Case):
                 man = manifest4(3, m.digest(current), nodes4(), card_record=record)
                 self.refused("card_record changes only to a later card ceremony's record (sequence %d after 3)" % record["sequence"],
                              m.accept, current, sign(man, ROOT), ROOT_PUB)
+
+    def test_an_epoch_ending_a_recovery_states_when_the_recovery_ends(self):
+        """#432 amendment 5 (d9): after a recovery epoch (one node party counting), an epoch that lets another count again
+        must carry recovery_ends_by; any other epoch may leave it null."""
+        recovery = m.accept(self.first, sign(manifest4(2, m.digest(self.first), nodes4(a="QUARANTINED", b="QUARANTINED")), ROOT), ROOT_PUB)
+        back = manifest4(3, m.digest(recovery), nodes4(b="QUARANTINED"))                       # a counts again
+        self.refused("back to the activation threshold (a, c) after an epoch below it: it must state recovery_ends_by", m.accept,
+                     recovery, sign(back, ROOT), ROOT_PUB)
+        stated = m.accept(recovery, sign(dict(back, recovery_ends_by=1790604800), ROOT), ROOT_PUB)
+        self.assertEqual(stated["recovery_ends_by"], 1790604800)
+        still = manifest4(3, m.digest(recovery), nodes4(a="QUARANTINED", b="QUARANTINED"), policy_version="p2")
+        self.assertEqual(m.accept(recovery, sign(still, ROOT), ROOT_PUB)["recovery_ends_by"], None)   # not ending it: null is fine
+
+    def test_the_end_is_required_however_many_epochs_below_the_threshold_came_first(self):
+        """d9: N, c alone (a recovery); N+1, c quarantined too (nobody counts); N+2, a and b back. N+2 must state it: the
+        partitioned c may still be renewing under its epoch-N authorization."""
+        alone = m.accept(self.first, sign(manifest4(2, m.digest(self.first), nodes4(a="QUARANTINED", b="QUARANTINED")), ROOT), ROOT_PUB)
+        nobody = m.accept(alone, sign(manifest4(3, m.digest(alone), nodes4(a="QUARANTINED", b="QUARANTINED", c="QUARANTINED")), ROOT), ROOT_PUB)
+        back = manifest4(4, m.digest(nobody), nodes4(c="QUARANTINED"))
+        self.refused("back to the activation threshold (a, b) after an epoch below it", m.accept, nobody, sign(back, ROOT), ROOT_PUB)
+        self.assertEqual(m.accept(nobody, sign(dict(back, recovery_ends_by=0), ROOT), ROOT_PUB)["recovery_ends_by"], 0)
+
+    def test_a_second_recovery_never_inherits_the_first_s_end(self):
+        """ed: recovery_ends_by is cleared by the epoch that drops below the activation threshold, whoever signs it; the
+        epoch coming back must state its own."""
+        alone = m.accept(self.first, sign(manifest4(2, m.digest(self.first), nodes4(a="QUARANTINED", b="QUARANTINED")), ROOT), ROOT_PUB)
+        ended = m.accept(alone, sign(manifest4(3, m.digest(alone), nodes4(), recovery_ends_by=1790000000), ROOT), ROOT_PUB)   # T1
+        stale = manifest4(4, m.digest(ended), nodes4(a="QUARANTINED", b="QUARANTINED"), recovery_ends_by=1790000000)
+        self.refused("recovery_ends_by must be null (an earlier recovery's end does not carry over)", m.accept, ended, sign(stale, ROOT), ROOT_PUB)
+        # a quorum may drop below the threshold too (c and the owner quarantine a, then b): it clears the field, and only that
+        by_quorum = manifest4(4, m.digest(ended), nodes4(a="QUARANTINED"), recovery_ends_by=1790000000)
+        one = m.accept(ended, quorum(by_quorum, ("b", NODE_KEYS["b"]), ("c", NODE_KEYS["c"])), ROOT_PUB)       # still at the threshold
+        below = manifest4(5, m.digest(one), nodes4(a="QUARANTINED", b="QUARANTINED"), recovery_ends_by=1790000000)
+        self.refused("recovery_ends_by must be null", m.accept, one, quorum(below, ("b", NODE_KEYS["b"]), ("c", NODE_KEYS["c"])), ROOT_PUB)
+        cleared = m.accept(one, quorum(dict(below, recovery_ends_by=None), ("b", NODE_KEYS["b"]), ("c", NODE_KEYS["c"])), ROOT_PUB)
+        self.assertIsNone(cleared["recovery_ends_by"])
+        back = manifest4(6, m.digest(cleared), nodes4())
+        self.refused("must state recovery_ends_by", m.accept, cleared, sign(back, ROOT), ROOT_PUB)
+        self.assertEqual(m.accept(cleared, sign(dict(back, recovery_ends_by=1790900000), ROOT), ROOT_PUB)["recovery_ends_by"], 1790900000)
+        # a quorum still cannot SET it, nor change it to another value
+        self.refused("cannot change recovery_ends_by", m.accept, ended,
+                     quorum(manifest4(4, m.digest(ended), nodes4(a="QUARANTINED"), recovery_ends_by=1), ("b", NODE_KEYS["b"]), ("c", NODE_KEYS["c"])), ROOT_PUB)
 
     def test_owner_keys_change_only_with_a_new_card_record(self):
         man = self.changed(lambda x: x["owner_keys"].pop())

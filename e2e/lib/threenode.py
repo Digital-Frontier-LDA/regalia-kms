@@ -494,7 +494,7 @@ class Cluster:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         names = [n.name for n in self.nodes.values()]
         self.manifest = {"schema": membership.SCHEMA_V4, "epoch": 1, "prev_digest": "", "policy_version": measurements.version(self.document),
-                         "issued_at": "2026-10-01T00:00:00Z", "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600,
+                         "issued_at": "2026-10-01T00:00:00Z", "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "recovery_authorization_max_s": 604800, "recovery_ends_by": None,
                          "owner_keys": self.owner_keys,
                          "heartbeat_signers": {"threshold": 2, "parties": names + [membership.OWNER]},
                          "activation_signers": {"threshold": 2, "parties": names},
