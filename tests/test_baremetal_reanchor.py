@@ -1,5 +1,5 @@
 """deploy/baremetal/reanchor.py and membership.Store.reanchor (#68): a new TPM anchor for a node whose anchor
-is unusable. Every fence around it has a test: the authority and a peer, a usable anchor never reset, a silent
+is unusable. Every fence around it has a test: two other nodes that agree, a usable anchor never reset, a silent
 TPM never re-anchored, nothing the TPM still holds forgotten, never an empty anchor on the way, verified
 before anything changes, typed at a terminal, recorded (and INCOMPLETE said when it is)."""
 import ast
@@ -22,7 +22,7 @@ from deploy.baremetal import membership as m
 from tests.test_baremetal_heartbeat import FakeTpm
 from tests.test_baremetal_membership import ROOT, ROOT_PUB, _Swtpm, manifest, sign, three
 
-AUTHORITY = convergence.AUTHORITY
+OTHER = "a"                      # the other node beside c whose chain vouches (#199: there is no authority any more)
 GARBAGE = b"\x5a" * 48
 
 
@@ -31,7 +31,9 @@ def chain(upto, **last):
     envs, cur = [], None
     for e in range(1, upto + 1):
         states = last if e == upto else {}
-        env = sign(manifest(e, m.digest(cur) if cur else "", three(**dict({"a": "DRAINING" if e % 2 else "ACTIVE"}, **states))), ROOT)
+        # b, the node re-anchored (never a source), alternates so that every epoch's manifest differs; a and c, the two
+        # sources (#199), stay ACTIVE: they may authorize, so they may vouch
+        env = sign(manifest(e, m.digest(cur) if cur else "", three(**dict({"b": "DRAINING" if e % 2 else "ACTIVE"}, **states))), ROOT)
         cur = m.accept(cur, env, ROOT_PUB)
         envs.append(env)
     return envs
@@ -349,7 +351,7 @@ class Command(Case):
     """reanchor.reanchor() and the program: who must agree, what the operator types, what is recorded."""
 
     def sources(self, upto=3, **more):
-        return dict({AUTHORITY: self.envs[:upto], "c": self.envs[:upto]}, **more)
+        return dict({OTHER: self.envs[:upto], "c": self.envs[:upto]}, **more)
 
     def run_reanchor(self, sources, typed=None, node_id="b"):
         return reanchor.reanchor(self.store, sources, node_id, typed or (lambda planned: reanchor.phrase(node_id, planned)), self.events.append)
@@ -357,18 +359,18 @@ class Command(Case):
     def outcomes(self):
         return [(e["event"], e.get("outcome")) for e in self.events]
 
-    def test_the_authority_and_a_peer_that_agree_re_anchor_the_node_and_it_is_recorded(self):
+    def test_two_other_nodes_that_agree_re_anchor_the_node_and_it_is_recorded(self):
         self.lose_record()
         seen = []
         typed = lambda planned: seen.append(planned) or "re-anchor b at epoch 3 %s" % self.digest(3)[:8]
         self.assertEqual(self.run_reanchor(self.sources(), typed), {"epoch": 3, "manifest_digest": self.digest(3)})
         self.assertEqual((self.hw.value(), self.hw.record(), self.hw.unusable()), (3, (3, self.digest(3)), None))
-        self.assertEqual((seen[0]["epoch"], seen[0]["counter"], seen[0]["records"], seen[0]["sources"], seen[0]["chain"]), (3, 3, [], [AUTHORITY, "c"], self.envs[:3]))
+        self.assertEqual((seen[0]["epoch"], seen[0]["counter"], seen[0]["records"], seen[0]["sources"], seen[0]["chain"]), (3, 3, [], [OTHER, "c"], self.envs[:3]))
         self.assertIn("NO RECORD", seen[0]["reason"])
         self.assertEqual(self.outcomes(), [("reanchor-requested", None), ("reanchor", "ALLOW")])
         for event in self.events:                                # the request names what is about to be anchored, before it is
             self.assertEqual({k: event[k] for k in ("subject", "peer", "epoch", "manifest_digest", "sources")},
-                             {"subject": "b", "peer": "operator", "epoch": 3, "manifest_digest": self.digest(3), "sources": [AUTHORITY, "c"]})
+                             {"subject": "b", "peer": "operator", "epoch": 3, "manifest_digest": self.digest(3), "sources": [OTHER, "c"]})
             self.assertIn("NO RECORD", event["anchor_was"])
 
     def test_the_request_is_recorded_before_anything_is_asked_or_changed(self):
@@ -394,65 +396,64 @@ class Command(Case):
         self.assertEqual([e.get("outcome") for e in self.events[events:]], ([None] if requested else []) + ["DENY"])
         self.assertIn(reason[:60], self.events[-1]["reason"])
 
-    def test_two_peers_alone_cannot_re_anchor_a_node(self):
+    def test_one_node_alone_cannot_re_anchor_a_node(self):
+        """#199: two other nodes are the quorum (there is no authority any more): one node's chain is not enough."""
         self.lose_record()
-        self.denied("re-anchoring needs the revocation authority's chain: peers alone cannot re-anchor a node", {"a": self.envs[:3], "c": self.envs[:3]})
-        self.denied("re-anchoring needs the revocation authority's chain", {"c": self.envs[:3]})
-        self.denied("re-anchoring needs the revocation authority's chain", {})
+        self.denied("re-anchoring needs whole chains from at least two other nodes (1 source given)", {"c": self.envs[:3]})
+        self.denied("re-anchoring needs whole chains from at least two other nodes (1 source given)", {OTHER: self.envs[:3]})
+        self.denied("re-anchoring needs whole chains from at least two other nodes (0 source given)", {})
         self.denied("sources must map each source to the chain it gave", [self.envs[:3], self.envs[:3]])
 
-    def test_the_authority_alone_cannot_either(self):
-        self.lose_record()
-        self.denied("re-anchoring needs the authority's chain and at least one peer's (1 source given)", {AUTHORITY: self.envs[:3]})
-
     def test_the_node_is_not_a_source_for_its_own_re_anchor(self):
-        """51's finding 6: {authority, b} re-anchored node b: the "peer" was the node itself."""
+        """51's finding 6: {a source, b} re-anchored node b: the "peer" was the node itself."""
         self.lose_record()
-        self.denied("b cannot be a source for its own re-anchor", {AUTHORITY: self.envs[:3], "b": self.envs[:3]})
-        self.denied("b cannot be a source for its own re-anchor", {AUTHORITY: self.envs[:3], "b": self.envs[:3], "c": self.envs[:3]})
+        self.denied("b cannot be a source for its own re-anchor", {OTHER: self.envs[:3], "b": self.envs[:3]})
+        self.denied("b cannot be a source for its own re-anchor", {OTHER: self.envs[:3], "b": self.envs[:3], "c": self.envs[:3]})
 
-    def test_the_chain_anchored_is_the_authoritys(self):
-        """51's finding 6: the longest chain won, so authority 1..3 with a peer at 1..5 anchored epoch 5 on the
-        peer's word alone."""
+    def test_every_source_gives_the_same_whole_chain(self):
+        """51's finding 6: the longest chain won, so one node at 1..3 with another at 1..5 anchored epoch 5 on the
+        second's word alone. #199: no source is privileged any more, so a chain ahead of another, either way round,
+        is refused; the same whole chain from both is anchored."""
         self.lose_record()
-        self.denied("a peer's chain ends at epoch 5 and the authority's at epoch 3: the chain anchored must be the authority's",
-                    {AUTHORITY: self.envs[:3], "c": self.envs})
-        self.assertEqual(self.run_reanchor({AUTHORITY: self.envs, "c": self.envs[:3]})["epoch"], 5)      # a peer that is behind agrees as far as it goes
+        for chains in ({OTHER: self.envs[:3], "c": self.envs}, {OTHER: self.envs, "c": self.envs[:3]}):
+            with self.subTest(sorted((k, len(v)) for k, v in chains.items())):
+                self.denied("the nodes' chains end at different epochs", chains)
+        self.assertEqual(self.run_reanchor({OTHER: self.envs, "c": self.envs})["epoch"], 5)
         self.assertEqual(self.events[-2]["epoch"], 5)
 
     def test_the_sources_must_agree_and_be_trusted_by_the_chain(self):
         self.lose_record()
         fork3 = sign(manifest(3, self.digest(2), three(c="QUARANTINED")), ROOT)
         fork = self.envs[:2] + [fork3]
-        self.denied("CONFLICT: the sources' chains differ at epoch 3", {AUTHORITY: self.envs[:3], "c": fork})
-        self.denied("CONFLICT: the sources' chains differ at epoch 3", {AUTHORITY: fork, "c": self.envs[:3]})
-        self.denied("'z' is not a source this chain trusts", {AUTHORITY: self.envs[:3], "z": self.envs[:3]})
+        self.denied("CONFLICT: the sources' chains differ at epoch 3", {OTHER: self.envs[:3], "c": fork})
+        self.denied("CONFLICT: the sources' chains differ at epoch 3", {OTHER: fork, "c": self.envs[:3]})
+        self.denied("'z' is not a source this chain trusts", {OTHER: self.envs[:3], "z": self.envs[:3]})
         retired = chain(3, c="RETIRED")
         with open(self.path, "wb") as f:                                             # (the disk would refuse this other chain first)
             f.write(m.canonical(retired[:2]))
-        self.denied("'c' is not a source this chain trusts", {AUTHORITY: retired, "c": retired})   # a node that chain has retired vouches for nothing
-        self.denied("a fetched chain ends at epoch 2, below the TPM high-water 3", {AUTHORITY: self.envs[:3], "c": self.envs[:2]})
+        self.denied("'c' is not a source this chain trusts", {OTHER: retired, "c": retired})   # a node that chain has retired vouches for nothing
+        self.denied("a fetched chain ends at epoch 2, below the TPM high-water 3", {OTHER: self.envs[:3], "c": self.envs[:2]})
         self.denied("the manifest signature does not verify",
-                    {AUTHORITY: self.envs[:3], "c": self.envs[:2] + [dict(self.envs[2], signature=dict(self.envs[2]["signature"], sig="00" * 64))]})
+                    {OTHER: self.envs[:3], "c": self.envs[:2] + [dict(self.envs[2], signature=dict(self.envs[2]["signature"], sig="00" * 64))]})
 
     def test_the_floor_the_sources_must_reach_includes_a_record_slot_that_still_reads(self):
         self.tpm(["tpm2_nvundefine", "0x1500016", "-C", "o"])                        # the counter is gone; the slots hold epoch 3
         os.unlink(self.path)
-        self.denied("a fetched chain ends at epoch 1, below the TPM high-water 3", {AUTHORITY: self.envs[:1], "c": self.envs[:1]})
-        fork = self.envs[:2] + [sign(manifest(3, self.digest(2), three(a="MAINTENANCE")), ROOT)]
-        self.denied("CONFLICT: a record slot that still reads names another manifest at epoch 3", {AUTHORITY: fork, "c": fork}, requested=True)
+        self.denied("a fetched chain ends at epoch 1, below the TPM high-water 3", {OTHER: self.envs[:1], "c": self.envs[:1]})
+        fork = self.envs[:2] + [sign(manifest(3, self.digest(2), three(b="MAINTENANCE")), ROOT)]
+        self.denied("CONFLICT: a record slot that still reads names another manifest at epoch 3", {OTHER: fork, "c": fork}, requested=True)
         seen = []
         self.assertEqual(self.run_reanchor(self.sources(), lambda planned: seen.append(planned) or reanchor.phrase("b", planned))["epoch"], 3)
         self.assertEqual((seen[0]["counter"], sorted(seen[0]["records"])), (None, [(2, self.digest(2)), (3, self.digest(3))]))    # both slots bind the chain
 
     def test_a_fork_two_sources_agree_on_is_still_refused_by_the_disk(self):
         self.lose_record()
-        fork = self.envs[:2] + [sign(manifest(3, self.digest(2), three(a="MAINTENANCE")), ROOT)]
-        self.denied("CONFLICT: the fetched chain differs from the stored one at epoch 3", {AUTHORITY: fork, "c": fork}, requested=True)
+        fork = self.envs[:2] + [sign(manifest(3, self.digest(2), three(b="MAINTENANCE")), ROOT)]
+        self.denied("CONFLICT: the fetched chain differs from the stored one at epoch 3", {OTHER: fork, "c": fork}, requested=True)
 
     def test_a_usable_anchor_or_a_silent_tpm_is_refused_before_any_chain_is_looked_at(self):
         self.denied("the TPM anchor is usable: it is not reset", self.sources())
-        self.denied("the TPM anchor is usable: it is not reset", {AUTHORITY: "not even a chain", "c": None})
+        self.denied("the TPM anchor is usable: it is not reset", {OTHER: "not even a chain", "c": None})
         self.silent = True
         self.denied("the TPM does not answer", self.sources())
 
@@ -469,13 +470,13 @@ class Command(Case):
         asked = []
         self.denied("the TPM anchor is usable", self.sources(), lambda planned: asked.append(planned) or "x")
         self.lose_record()
-        self.denied("re-anchoring needs the revocation authority's chain", {"c": self.envs[:3]}, lambda planned: asked.append(planned) or "x")
+        self.denied("re-anchoring needs whole chains from at least two other nodes", {"c": self.envs[:3]}, lambda planned: asked.append(planned) or "x")
         self.assertEqual(asked, [])
 
     def test_the_node_must_be_one_of_the_chain(self):
         self.lose_record()
         self.denied("z9 is not a node of the chain being anchored", self.sources(), None, "z9")
-        for bad in ("", "B", "b c", None, "@authority"):
+        for bad in ("", "B", "b c", None, "@b"):
             with self.subTest(node_id=bad):
                 self.denied("node_id must be a node ID", self.sources(), None, bad)
 
@@ -493,12 +494,12 @@ class Command(Case):
         self.assertEqual(self.run_reanchor(self.sources())["epoch"], 3)              # run again: it completes
         self.assertEqual(self.outcomes()[-1], ("reanchor", "ALLOW"))
 
-    def program(self, *extra, typed=None, peers=("c",), upto=3, log="audit.jsonl", ask="given", tty=None):
-        for name in (AUTHORITY,) + tuple(peers):
-            with open("%s/%s.json" % (self.d, name.strip("@")), "wb") as f:
+    def program(self, *extra, typed=None, peers=(OTHER, "c"), upto=3, log="audit.jsonl", ask="given", tty=None):
+        for name in peers:
+            with open("%s/%s.json" % (self.d, name), "wb") as f:
                 f.write(m.canonical(self.envs[:upto]))
         argv = ["--membership", self.path, "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "b",
-                "--authority", self.d + "/authority.json", "--audit-log", "%s/%s" % (self.d, log)]
+                "--audit-log", "%s/%s" % (self.d, log)]
         for name in peers:
             argv += ["--peer", "%s=%s/%s.json" % (name, self.d, name)]
         asked = []
@@ -529,7 +530,7 @@ class Command(Case):
         log = self.audit()
         self.assertEqual([(e["event"], e.get("outcome")) for e in log], [("reanchor-requested", None), ("reanchor", "ALLOW")])
         for entry in log:
-            self.assertEqual((entry["epoch"], entry["manifest_digest"], entry["sources"], entry["subject"]), (3, self.digest(3), [AUTHORITY, "c"], "b"))
+            self.assertEqual((entry["epoch"], entry["manifest_digest"], entry["sources"], entry["subject"]), (3, self.digest(3), [OTHER, "c"], "b"))
             self.assertRegex(entry["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertEqual(os.stat(self.d + "/audit.jsonl").st_mode & 0o777, 0o640)           # #283: its shipper reads it through the group
         self.assertEqual(trails.verify(self.d + "/audit.jsonl")["chained"], 2)            # #278: a hash-chained trail
@@ -610,13 +611,13 @@ class Command(Case):
         for label, kw, extra, outcomes, said in (
                 ("the wrong phrase", {"typed": "yes"}, (), [None, "DENY"], "NOT DONE, nothing was changed: not confirmed: the phrase typed is not"),
                 ("nothing typed: end of input", {"typed": EOFError()}, (), [None, "DENY"], "NOT DONE, nothing was changed: not confirmed"),
-                ("no peer", {"peers": ()}, (), ["DENY"], "NOT DONE, nothing was changed: re-anchoring needs the authority's chain and at least one peer's (1 source given)"),
-                ("the node as its own peer", {"peers": ("b",)}, (), ["DENY"], "b cannot be a source for its own re-anchor"),
+                ("one node only", {"peers": ("c",)}, (), ["DENY"], "NOT DONE, nothing was changed: re-anchoring needs whole chains from at least two other nodes (1 source given)"),
+                ("the node as its own peer", {"peers": (OTHER, "b")}, (), ["DENY"], "b cannot be a source for its own re-anchor"),
                 ("a chain that is behind", {"upto": 2}, (), ["DENY"], "a fetched chain ends at epoch 2, below the TPM high-water 3"),
                 ("a peer named twice", {}, ("--peer", "c=%s/c.json" % self.d), [], "--peer names c twice"),
                 ("a peer without a file", {}, ("--peer", "a"), [], "--peer takes NODE=CHAIN.json, not 'a'"),
                 ("a peer without a name", {}, ("--peer", "=%s/c.json" % self.d), [], "--peer takes NODE=CHAIN.json, not"),
-                ("a peer file that is absent", {}, ("--peer", "a=%s/absent.json" % self.d), [], "No such file or directory")):
+                ("a peer file that is absent", {}, ("--peer", "d=%s/absent.json" % self.d), [], "No such file or directory")):
             with self.subTest(label):
                 log = "audit-%d.jsonl" % len(label)
                 self.assertEqual(self.program(*extra, log=log, **kw)[0], 1)
@@ -770,11 +771,11 @@ class OnSwtpm(_Swtpm):
         with self.assertRaisesRegex(m.Refused, "NO RECORD"):
             m.Store(path, ROOT_PUB, self.hw).load()
         self.assertEqual(self.hw.remains(), (3, []))
-        for name in ("authority", "c"):
+        for name in (OTHER, "c"):
             with open("%s/%s.json" % (self.d, name), "wb") as f:
                 f.write(m.canonical(envs))
-        argv = ["--membership", path, "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "b", "--authority", self.d + "/authority.json",
-                "--peer", "c=%s/c.json" % self.d, "--audit-log", self.d + "/audit.jsonl", "--tcti", self.tcti]
+        argv = ["--membership", path, "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "b",
+                "--peer", "a=%s/a.json" % self.d, "--peer", "c=%s/c.json" % self.d, "--audit-log", self.d + "/audit.jsonl", "--tcti", self.tcti]
         os.environ.pop("TPM2TOOLS_TCTI", None)
         make = lambda index, tcti, policy=None, define_policy=None: m.HighWater(index, tcti=tcti, lock_path=self.d + "/hw.lock", policy=policy, define_policy=define_policy)
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):

@@ -21,9 +21,9 @@ them parses what a peer sends except `sync` and `admission`, which hold no capab
     sync       its own user, no capability, the TPM through its group
                                         answers peers on wg-svc (sync.py) and booting nodes on
                                         wg-unlock (unlock.py), pulls manifests and heartbeats from the
-                                        peers and the revocation authority, keeps the membership store,
-                                        and runs the heartbeat watch (heartbeat_watch.py); under a v4
-                                        manifest it also proposes and co-signs the heartbeats with the
+                                        peers, keeps the membership store, and runs the heartbeat watch
+                                        (heartbeat_watch.py); under a v4 manifest it also proposes and
+                                        co-signs the heartbeats with the
                                         TPM signing key and its signing counter (beat.py, #199)
 
 ONE WRITER OF THE MEMBERSHIP CHAIN. `sync` owns the store (membership.Store: its files are its own, 0600).
@@ -47,7 +47,7 @@ THE TRAIL. Each service appends its audit events to its own file (one JSON objec
 its own state directory. Shipping them off the host is the audit pipeline's job, not this module's.
 
 NOT HERE: the systemd units, the AppArmor profiles and the probes (#80 step 3b, next); enrolment, which
-writes the trust anchors this configuration points at (#190); the revocation authority (#199).
+writes the trust anchors this configuration points at (#190).
 """
 import argparse
 import binascii
@@ -438,13 +438,9 @@ class Node:
                 if n["node_id"] != self.node_id and n["state"] not in membership.TERMINAL}
 
     def sources(self, manifest, timeout=sync.DEADLINE):
-        """sync.Client transports: the peers, and the revocation authority if the site names one."""
+        """sync.Client transports: the peers (the nodes of the manifest; #199 retired the revocation authority)."""
         mine, port = self.own_address(manifest), self.site["service_mesh"]["sync_port"]
-        transports = {node: sync.tcp_transport(where, port, mine, timeout) for node, where in self.peers(manifest).items()}
-        authority = self.site["service_mesh"]["authority"]
-        if authority is not None:
-            transports[convergence.AUTHORITY] = sync.tcp_transport(wgsvc.address(authority["key"]), port, mine, timeout)
-        return transports
+        return {node: sync.tcp_transport(where, port, mine, timeout) for node, where in self.peers(manifest).items()}
 
     def own_address(self, manifest):
         entries = {n["node_id"]: n for n in manifest["nodes"]}
@@ -488,7 +484,7 @@ def wg_apply(node):
         manifest = node.manifest()
         underlays = {p["node_id"]: p["underlay"] for p in mesh["peers"]}
         key = node.private_key()
-        wgsvc.reconcile(manifest, node.node_id, underlays, key, svc["authority"], svc["listen_port"], svc["interface"], node.run)
+        wgsvc.reconcile(manifest, node.node_id, underlays, key, svc["listen_port"], svc["interface"], node.run)
         name, text = mesh["interface"], bootnet.peer_wg_conf(node.site, manifest)
         # as wgsvc.reconcile: nothing is carried until the peers are applied and read back
         present = node.run(["ip", "link", "show", "dev", name], capture_output=True, timeout=10).returncode == 0
@@ -580,7 +576,7 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
     def renew(request):
         manifest = node.manifest()
         sources = node.sources(manifest)
-        peers = [name for name in sorted(sources) if name != convergence.AUTHORITY]
+        peers = sorted(sources)
         require(peers, "no peer to ask for a lease")
         order[:] = order[1:] + order[:1] if order and set(order) == set(peers) else peers
         failures = []
@@ -757,7 +753,7 @@ def bind_when_up(where, stop, family=socket.AF_INET, create=socket.create_server
 def authtime_service(cfg):
     """Takes the configuration only: it reads nothing else (not the site configuration, not a key), and
     its unit hides the rest of /etc and all of /var from it."""
-    return authtime.service(cfg["run_dir"], cfg["time_servers"])     # the one entry point, the authority host's too (#71)
+    return authtime.service(cfg["run_dir"], cfg["time_servers"])     # the one entry point
 
 
 # ---- command line ----

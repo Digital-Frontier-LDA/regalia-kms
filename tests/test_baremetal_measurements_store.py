@@ -1,7 +1,7 @@
 """#332: measurement documents by digest, delivered with the epoch that names them. A node holds documents side
 by side in a store named by digest; it judges an epoch by the document THAT epoch commits to and by no other;
 it does not commit an epoch (nor move its TPM anchor) without that document; and sync brings the document with
-the epoch. Fixtures are the sync tests': b, c and the authority hold the chain, a asks."""
+the epoch. Fixtures are the sync tests': b, c and the seed hold the chain, a asks."""
 import json
 import os
 
@@ -169,51 +169,51 @@ class Sync(Case):
 
     def setUp(self):
         super().setUp()
-        self.auth_docs = self.documents("authority")
+        self.auth_docs = self.documents("seed")
         self.auth_docs.put(DOC2)
-        self.servers["authority"].documents = self.auth_docs
+        self.servers["seed"].documents = self.auth_docs
         self.m2 = self.advance(1, policy_version=measurements.version(DOC2))
         self.mine = self.documents("a-own")
         self.stores["a"] = self.guarded("a-own", self.mine)
-        self.client = sync.Client("a", self.stores["a"], self.own, {convergence.AUTHORITY: self.wire("authority", "a")}, self.events.append,
+        self.client = sync.Client("a", self.stores["a"], self.own, {"seed": self.wire("seed", "a")}, self.events.append,
                                   documents=self.mine)
 
     def test_a_node_lacking_the_document_fetches_it_then_commits(self):
-        now_at, _ = self.client.pull(convergence.AUTHORITY)
+        now_at, _ = self.client.pull("seed")
         self.assertEqual(now_at["epoch"], 2)
         self.assertEqual(self.mine.get(measurements.version(DOC2)), DOC2)
         self.assertEqual(measurements.held(self.mine, self.stores["a"].load()), DOC2)
 
     def test_a_source_without_the_document_moves_nothing(self):
         os.unlink(os.path.join(self.auth_docs.directory, os.listdir(self.auth_docs.directory)[0]))
-        self.refused("does not hold measurements", self.client.pull, convergence.AUTHORITY)
+        self.refused("does not hold measurements", self.client.pull, "seed")
         self.assertIsNone(self.client._held())
         self.assertEqual(self.mine.versions(), {})
 
     def test_another_document_than_the_epoch_names_is_refused(self):
-        real = self.wire("authority", "a")
+        real = self.wire("seed", "a")
 
         def lying(raw):
             if json.loads(raw)["op"] == "measurements":
                 return m.canonical({"v": 1, "ok": True, "document": DOC1})
             return real(raw)
-        self.client.transports[convergence.AUTHORITY] = lying
-        self.refused("not the document epoch 2 commits to", self.client.pull, convergence.AUTHORITY)
+        self.client.transports["seed"] = lying
+        self.refused("not the document epoch 2 commits to", self.client.pull, "seed")
         self.assertEqual(self.mine.versions(), {})
         self.assertIsNone(self.client._held())
 
     def test_the_server_answers_only_a_held_document_by_a_version(self):
-        self.assertEqual(self.ask("authority", v=1, op="measurements", version=measurements.version(DOC2))["document"], DOC2)
-        self.refusal("does not hold measurements", self.ask("authority", v=1, op="measurements", version=measurements.version(DOC3)))
-        self.refusal("version must be a policy_version", self.ask("authority", v=1, op="measurements", version="../../etc/passwd"))
+        self.assertEqual(self.ask("seed", v=1, op="measurements", version=measurements.version(DOC2))["document"], DOC2)
+        self.refusal("does not hold measurements", self.ask("seed", v=1, op="measurements", version=measurements.version(DOC3)))
+        self.refusal("version must be a policy_version", self.ask("seed", v=1, op="measurements", version="../../etc/passwd"))
         self.refusal("holds no measurement documents", self.ask("b", v=1, op="measurements", version=measurements.version(DOC2)))
 
     def test_a_lost_document_of_the_epoch_held_heals_itself(self):
-        self.client.pull(convergence.AUTHORITY)
+        self.client.pull("seed")
         for name in os.listdir(self.mine.directory):
             os.unlink(os.path.join(self.mine.directory, name))
         self.refused("which this node does not hold", measurements.held, self.mine, self.stores["a"].load())
-        self.client.pull(convergence.AUTHORITY)                       # nothing new to apply: the held epoch's document comes back
+        self.client.pull("seed")                       # nothing new to apply: the held epoch's document comes back
         self.assertEqual(measurements.held(self.mine, self.stores["a"].load()), DOC2)
 
 
@@ -224,13 +224,13 @@ class Review(Sync):
         """A batch [K, K+1] crashed after K: K was committed as passed through (final=False) without its document.
         The node then judges nothing at K, and says which document it lacks; the next pull fetches it."""
         store = self.stores["a"]
-        chain = self.stores["authority"].envelopes()
+        chain = self.stores["seed"].envelopes()
         store.commit(chain[0], final=False)
         store.commit(chain[1], final=False)                           # epoch 2, K: the crash leaves the node here
         self.assertEqual(store.load()["epoch"], 2)
         self.refused("epoch 2 commits to measurements %s, which this node does not hold" % measurements.version(DOC2),
                      measurements.held, self.mine, store.load())
-        self.client.pull(convergence.AUTHORITY)                       # nothing new to apply: the held epoch's document comes
+        self.client.pull("seed")                       # nothing new to apply: the held epoch's document comes
         self.assertEqual(measurements.held(self.mine, store.load()), DOC2)
 
     def test_the_last_new_epoch_is_held_to_its_document_whatever_follows_it(self):
@@ -245,18 +245,18 @@ class Review(Sync):
         self.assertEqual(convergence.catch_up(store, [e1, e2, e1])["epoch"], 2)
 
     def test_only_a_batch_or_an_enrolment_passes_an_epoch_through(self):
-        """final=False, the one way to commit an epoch without its document, is passed by exactly the three callers
-        that commit a batch: convergence.catch_up, enrol's anchor step and the authority's accept."""
+        """final=False, the one way to commit an epoch without its document, is passed by exactly the two callers
+        that commit a batch: convergence.catch_up and enrol's anchor step (#199 retired the authority's accept)."""
         import pathlib
         import re
         here = pathlib.Path(measurements.__file__).parent
         callers = sorted(path.name for path in here.glob("*.py") if re.search(r"\.commit\([^)]*\bfinal=", path.read_text()))
-        self.assertEqual(callers, ["authority.py", "convergence.py", "enrol.py"])
+        self.assertEqual(callers, ["convergence.py", "enrol.py"])
 
     def test_measurements_requests_are_limited_like_every_request(self):
         """Every request of a node, this one too, is spent from its own bucket before it is decided."""
         version = measurements.version(DOC2)
-        answers = [self.ask("authority", v=1, op="measurements", version=version) for _ in range(sync.RATE["any"][0] + 1)]
+        answers = [self.ask("seed", v=1, op="measurements", version=version) for _ in range(sync.RATE["any"][0] + 1)]
         self.assertTrue(all(a["ok"] for a in answers[:-1]))
         self.refusal("RATE: more than %d any requests" % sync.RATE["any"][0], answers[-1])
 
@@ -277,7 +277,7 @@ class Verifier(Case):
         lease.issue's reason, not the verifier's "unknown node" (three-node-recovery's N case)."""
         calls = []
         self.servers["b"].attester = lambda manifest: calls.append(manifest["epoch"]) or self.peers["b"]["attester"]
-        self.stores["b"].restore(self.stores["authority"].envelopes() + [self.revoke(self.m1, state="QUARANTINED", node="a")])
+        self.stores["b"].restore(self.stores["seed"].envelopes() + [self.revoke(self.m1, state="QUARANTINED", node="a")])
         self.refusal("a may not serve under epoch 2: no lease", self.ask("b", v=1, op="lease-nonce", node_id="a"))
         self.assertEqual(calls, [])
 
