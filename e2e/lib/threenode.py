@@ -1462,12 +1462,18 @@ class Cluster:
         """The collector's signed receipt for position `sequence` of the node's stream, asked as its shipper asks: over
         mutual TLS with the shipper's certificate, for its own stream (X-Regalia-Site)."""
         import ssl
+        import urllib.parse
         import urllib.request
+        if type(sequence) is not int or sequence < 0:
+            raise ValueError("a receipt's sequence is a non-negative int, not %r" % (sequence,))
+        url = "https://127.0.0.1:%d/v1/receipt?sequence=%d" % (COLLECTOR_PORT, sequence)
+        parts = urllib.parse.urlsplit(url)        # only the local collector, over https: never another scheme, host or path
+        if (parts.scheme, parts.hostname, parts.port, parts.path) != ("https", "127.0.0.1", COLLECTOR_PORT, "/v1/receipt"):
+            raise ValueError("refusing to fetch a receipt from %r: not the local collector" % url)
         d = self.audit_dir
         context = ssl.create_default_context(cafile=str(d / "ca.pem"))
         context.load_cert_chain(str(d / "shipper.pem"), str(d / "shipper.key"))
-        request = urllib.request.Request("https://127.0.0.1:%d/v1/receipt?sequence=%d" % (COLLECTOR_PORT, sequence),
-                                         headers={"X-Regalia-Site": "e2e3-%s.%s" % (name, trail)})
+        request = urllib.request.Request(url, headers={"X-Regalia-Site": "e2e3-%s.%s" % (name, trail)})
         with urllib.request.urlopen(request, context=context, timeout=10) as answer:
             return json.loads(answer.read())
 
