@@ -139,6 +139,7 @@ def scenario(cluster):
        {n: sorted(cluster.wg_peers(n, "wg-svc")) for n in ("a", "b")})
 
     header("5  without authenticated time a node signs nothing")
+    step5 = time.time()                               # for step 6: a's refusals are this step's (regalia-kms-1e on #473)
     # BY POSITION IN a's TRAIL, NOT BY TIME (regalia-kms-48 and 3e): a trail's "at" is whole seconds, and a signature
     # a's Proposer began before its clock read saw the switch is legitimate. So: the trail's last sequence before the
     # switch; then a's first refusal for want of time after it, which must exist; then nothing signed after THAT
@@ -186,8 +187,9 @@ def scenario(cluster):
     revoked = {n: bool(cluster.audit_has(n, "sync", event="revoke-commit", outcome="ALLOW", epoch=2)) for n in ("a", "b")}
     ok(any(revoked.values()), "c's revocation (epoch 2, step 4) committed in the stream of the node that committed it %s" % revoked)
     untimed = lambda r: bool(r) and "time is not authenticated" in r
-    as_proposer = cluster.audit_has("a", "sync", event="beat-propose", outcome="DENY", reason=untimed)
-    as_cosigner = cluster.audit_has("a", "sync", event="sync-beat-sign", outcome="DENY", reason=untimed)
+    # since step 5 began: a node's first rounds after any start may refuse for want of time too, before chrony answers
+    as_proposer = cluster.audit_has("a", "sync", since=step5, event="beat-propose", outcome="DENY", reason=untimed)
+    as_cosigner = cluster.audit_has("a", "sync", since=step5, event="sync-beat-sign", outcome="DENY", reason=untimed)
     ok(bool(as_proposer) and bool(as_cosigner),
        "a's refusals for want of authenticated time (step 5), as proposer (%d) and as co-signer (%d), are in a's stream"
        % (len(as_proposer), len(as_cosigner)))

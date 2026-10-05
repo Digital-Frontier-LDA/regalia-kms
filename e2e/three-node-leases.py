@@ -112,6 +112,7 @@ def scenario(cluster):
        "a's lease is renewed (issued %s, then %s, by %s), and its issuer's trail holds the ALLOW" % (first, got and got[0], got and got[1]), got)
 
     header("3  14.2: a's issuer crashes; the other peer renews, and a never stops serving")
+    step3 = time.time()                               # step 7: step 2's renewal ends here (regalia-kms-1e on #473)
     current, issuer, _ = held(cluster, "a")
     other = next(n for n in ("b", "c") if n != issuer)
     cluster.stop(issuer, power=None)
@@ -187,10 +188,13 @@ def scenario(cluster):
     ok(wrong == {}, "every node's trails are written and in the collector line for line: sequence from 1, chained from genesis, "
        "each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
        {"%s.%s" % k: v for k, v in wrong.items()})
-    renewed_in = cluster.audit_has(renewal_by, "sync", since=renewal_since, event="sync-lease", subject="a", outcome="ALLOW")
+    renewed_in = [e for e in cluster.audit_has(renewal_by, "sync", since=renewal_since, event="sync-lease", subject="a", outcome="ALLOW")
+                  if e.get("at", 0) <= int(step3)]
     committed = {n: bool(cluster.audit_has(n, "sync", event="revoke-commit", outcome="ALLOW", epoch=2)) for n in ("b", "c")}
     refused_a = cluster.audit_has("b", "sync", since=revoked_at, outcome="DENY", reason=lambda r: bool(r) and "a is REVOKED_STOLEN under epoch 2" in r)
-    a_stopped = cluster.audit_has("a", "admission", since=revoked_at, event="admission-serving", outcome="DENY")
+    # a's FIRST change of serving state after the revocation is the stop (it served until then), near when it stopped
+    after = cluster.audit_has("a", "admission", since=revoked_at, event="admission-serving")
+    a_stopped = after[:1] if after and after[0].get("outcome") == "DENY" and after[0].get("at", 0) <= int(stop_at) + 5 else []
     ok(bool(renewed_in) and any(committed.values()) and bool(refused_a) and bool(a_stopped),
        "in each one's own stream: a's renewal by %s (step 2, %d), a's revocation committed %s, b's refusals of the revoked a by "
        "name (%d), and a's admission no longer serving after it (%d)" % (renewal_by, len(renewed_in), committed, len(refused_a), len(a_stopped)),

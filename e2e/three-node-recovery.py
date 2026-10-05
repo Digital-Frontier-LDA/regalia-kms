@@ -292,7 +292,7 @@ def scenario(cluster):
 
     header("7  N: a quarantined, then retired; b reported stolen: no key, no lease, and why")
     alone_at = []                                       # (node, epoch, since) of each hand recovery, for step 8
-    victims = []                                        # (node, state, epoch, since its start) of each one that may not serve
+    victims = []                                        # (node, state, epoch, its start, its stop) of each one that may not serve
     for victim, signer, state in (("a", "owner", "QUARANTINED"), ("a", "root", "RETIRED"), ("b", "owner", "REVOKED_STOLEN")):
         before = cluster.manifest
         survivors = [n for n in names if n != victim and may(before, n, "authorize")]
@@ -342,7 +342,6 @@ def scenario(cluster):
            % (victim, state, manifest["epoch"], ", ".join(survivors)), got)
         since = time.time()
         cluster.start(victim, SERVICES)
-        victims.append((victim, state, manifest["epoch"], since))
         refused = "may not serve under epoch %d" % manifest["epoch"]
 
         def why():
@@ -360,6 +359,7 @@ def scenario(cluster):
         ok(bool(reason) and not cluster.lease(victim) and not any(leased_by(cluster, s, victim, since) for s in survivors),
            "N: and no lease, because %s" % reason, cluster.journal(victim, "admission")[-400:])
         cluster.stop(victim)
+        victims.append((victim, state, manifest["epoch"], since, time.time()))
 
     header("8  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
     wrong = cluster.audit_complete()
@@ -388,21 +388,32 @@ def scenario(cluster):
     # tied to step 2 (LIMITATIONS.md, Audit and monitoring): each target restored by one peer alone records its change to
     # serving on THAT peer's lease, within that pair's own window (whole seconds, both ends inclusive)
     def served(target, peer, start, end):
+        # strictly after start's second (regalia-kms-1e on #473): `start` is taken after the target stopped, and its last
+        # change to serving before that cannot share the second; the volume's unlock alone takes seconds
         return [e for e in cluster.audit_has(target, "admission", since=start, event="admission-serving", outcome="ALLOW", peer=peer)
-                if e.get("at", 0) <= int(end)]
+                if int(start) < e.get("at", 0) <= int(end)]
     serving = {"%s<-%s" % (t, p): len(served(t, p, start, end)) for t, p, start, end in restored}
     ok(len(restored) == 6 and all(serving.values()),
        "each node's change to serving in step 2, on the lease of the one peer that restored it, is in its own admission stream", serving)
     # and the victims of step 7: each, started under an epoch that says it may not serve, records that it does not serve
-    # (its admission's first round after the start) and never that it serves (they stay down after it: strict is not needed)
-    stopped = {"%s %s@%d" % (n, st, ep): (len(cluster.audit_has(n, "admission", since=t, event="admission-serving", outcome="DENY")),
-                                          len(cluster.audit_has(n, "admission", since=t, event="admission-serving", outcome="ALLOW")))
-               for n, st, ep, t in victims}
-    ok(len(victims) == 3 and all(deny and not allow for deny, allow in stopped.values()),
-       "each step-7 victim's not serving after its start is in its own admission stream, and no change to serving (DENY, ALLOW) %s" % stopped,
-       {"%s %s@%d" % (n, st, ep): [{k: e.get(k) for k in ("at", "outcome", "peer", "reason")}
-                                   for e in cluster.audit_has(n, "admission", since=t, event="admission-serving")][-4:]
-        for n, st, ep, t in victims})
+    # and never that it serves, WITHIN ITS OWN start..stop (regalia-kms-1e on #473: a is a victim twice). Admission
+    # records its state at its first round after every start (its recorded state begins unknown), so the first
+    # serving-state line in the window must be a DENY, and none an ALLOW. A RETIRED or stolen node's reason is not
+    # matched: it is off the peers' tunnels, or told only "refused"; its lines are printed instead
+    def window(n, start, end):
+        return [e for e in cluster.audit_has(n, "admission", since=start, event="admission-serving") if e.get("at", 0) <= int(end) + 1]
+    # A QUARANTINED node is still identified, so its peers tell it why (sync: a terminal state hears only "refused"):
+    # its own not-serving line must then name its own epoch (regalia-kms-24 on #473)
+    def stays_down(n, st, ep, start, end):
+        lines = window(n, start, end)
+        first = lines[0] if lines else {}
+        named = st != "QUARANTINED" or ("may not serve under epoch %d" % ep) in (first.get("reason") or "")
+        return bool(lines) and first.get("outcome") == "DENY" and named and all(e.get("outcome") != "ALLOW" for e in lines)
+    stopped = {"%s %s@%d" % (n, st, ep): stays_down(n, st, ep, start, end) for n, st, ep, start, end in victims}
+    ok(len(victims) == 3 and all(stopped.values()),
+       "each step-7 victim's not serving, within its own start and stop, is in its own admission stream, and no change to serving %s" % stopped,
+       {"%s %s@%d" % (n, st, ep): [{k: e.get(k) for k in ("at", "outcome", "peer", "reason")} for e in window(n, start, end)][:4]
+        for n, st, ep, start, end in victims})
 
 
 def main():

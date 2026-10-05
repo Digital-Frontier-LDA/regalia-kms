@@ -89,6 +89,7 @@ def scenario(cluster):
         ok(bool(until(lambda: cluster.lease(name), 150, 3)), "%s holds a lease" % name, cluster.journal(name, "admission")[-400:])
 
     header("2  PoC 16.1-16.4: c fails for good; c2 replaces it in one root-signed manifest")
+    step2 = time.time()
     cluster.stop("c")                                 # gone: it stays off
     cluster.add_node("c2")
     current, current_document = cluster.manifest, cluster.document
@@ -116,6 +117,7 @@ def scenario(cluster):
        cluster.beat_events(["a", "b"]))
 
     header("3  c2 enrolled through a and b, opens its volume through each, and is leased")
+    step3 = time.time()                               # step 6: b's apply of the replacement is step 2's (regalia-kms-1e on #473)
     for name in ("a", "b"):                           # the fixture writes their stores: their services stop meanwhile
         cluster.stop(name, power=None)
     cluster.disk("c2")
@@ -183,7 +185,8 @@ def scenario(cluster):
     ok(wrong == {} and "c2" in everyone, "every node's trails, c2's and the old c's included, are written and in the collector line for "
        "line: sequence from 1, chained from genesis, each DENY a deny, and its head as the collector's signed receipt and the "
        "shipper's head file state it %s" % counts, {"%s.%s" % k: v for k, v in wrong.items()})
-    applied = cluster.audit_has("b", "sync", event="sync-apply", peer="a", outcome="ALLOW", epoch=1)
+    applied = [e for e in cluster.audit_has("b", "sync", since=step2, event="sync-apply", peer="a", outcome="ALLOW", epoch=1)
+               if e.get("at", 0) <= int(step3)]
     leased_c2 = {p: len(cluster.audit_has(p, "sync", event="sync-lease", subject="c2", outcome="ALLOW")) for p in ("a", "b")}
     retired = cluster.audit_has("a", "sync", since=refused_since, outcome="DENY", reason=lambda r: bool(r) and "c is RETIRED under epoch 2" in r)
     ok(bool(applied) and all(leased_c2.values()) and bool(retired),
