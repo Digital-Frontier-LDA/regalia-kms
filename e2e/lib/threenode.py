@@ -807,6 +807,9 @@ class Cluster:
         here = self.node(new)
         here.documents().put(document)
         self._enrolled(new, self.chain)                 # as at build: the whole chain, by its policy (#242 B3)
+        # enrolment ran on the booted system (PCR 11 in its system phase, _leave_initrd); the host reboots before its
+        # initrd asks for the disk, so its quote shows the initrd phase the peers admit
+        self.power_cycle(new)
         sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
@@ -1295,21 +1298,27 @@ class Cluster:
                 path = d / ("document-%d-%d.json" % (envelopes[-1]["manifest"]["epoch"], i))
                 path.write_text(json.dumps(document))
                 args.append(str(path))
-        # in a transient unit of root's with the node's /run/systemd as its services see it (the system-phase PCR key and
-        # its signatures, bound as _props binds them): where an operator runs it on the host, and what the node's policy
-        # sessions read when the anchor is written by policy (#242 B3, 95's read); the other nodes' directories hidden
+        done = self.as_root(name, "deliver-%d" % envelopes[-1]["manifest"]["epoch"], args)
+        if done.returncode != 0:
+            raise RuntimeError("deliver to %s failed (%d): %s" % (name, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
+        return done.stdout
+
+    def as_root(self, name, label, args, input=None, in_ns=False):
+        """`args` run as root on node `name`'s host, the way an operator or a root unit runs it there: a transient unit of
+        root's, named e2e3-<node>-<label>, with the node's /run/systemd as its services see it (the system-phase PCR key
+        and its signatures, bound as properties() binds them: what the node's policy sessions read, and what a read of its
+        anchor needs once it is written by policy, #242 B3), the other nodes' directories hidden, and with `in_ns` in the
+        node's network namespace. `input` goes to its standard input. Returns the completed process (not checked)."""
         n = self.member(name)
         pcr = n.dir / "pcr"
         props = ["WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1",
                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
+        props += ["NetworkNamespacePath=/run/netns/" + n.ns] if in_ns else []
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
-        done = sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, "deliver-%d" % envelopes[-1]["manifest"]["epoch"]),
+        return sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, label),
                   *[a for p in props for a in ("-p", p)], *args, check=False,
-                  stdin=subprocess.DEVNULL)
-        if done.returncode != 0:
-            raise RuntimeError("deliver to %s failed (%d): %s" % (name, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
-        return done.stdout
+                  **({"input": input} if input is not None else {"stdin": subprocess.DEVNULL}))
 
     def journal(self, name, service, lines=40):
         return sh("journalctl", "-u", self.unit(name, service), "-n", str(lines), "--no-pager", "-o", "cat", check=False).stdout
