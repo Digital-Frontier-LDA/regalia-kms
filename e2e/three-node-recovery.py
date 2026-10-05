@@ -309,7 +309,9 @@ def scenario(cluster):
         # lone-node branch silently and left step 8 nothing to see (regalia-kms-48 on #440). A survivor that counts must
         # be running; one that is not fails here, by name
         counting = [s for s in survivors if s in cluster.manifest["heartbeat_signers"]["parties"] and may(manifest, s, "authorize")]
-        down = [s for s in counting if not until(lambda: cluster.running(s), 60, 1)]
+        # `is not True`: until() returns the exception it last saw at its deadline (a systemctl that could not start),
+        # which is truthy and must not read as running (CodeRabbit on #446; the same trap as #434's)
+        down = [s for s in counting if until(lambda s=s: cluster.running(s), 60, 1) is not True]
         ok(not down, "every survivor that counts at epoch %d (%s) is running" % (manifest["epoch"], ", ".join(counting)),
            {s: cluster.journal(s, "sync")[-800:] for s in down})
         if len(counting) == 1:
