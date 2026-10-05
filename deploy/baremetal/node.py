@@ -260,7 +260,7 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
     # before the ESP is written (the unit's ok=0); a re-anchor repairs it
     require(isinstance(envelopes, list) and envelopes, "the membership chain must be a non-empty list of envelopes")
     tip = membership.accept_chain(None, envelopes, node.cfg["root_key"])
-    anchor = node.anchor(lock_path=lock_path, schema=tip["schema"])
+    anchor = node.anchor(lock_path=lock_path, schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"))
     manifest = bootcreds.anchored(envelopes, node.cfg["root_key"], anchor)
     chain = membership.canonical(envelopes)
     require(len(chain) <= membership.MAX_CHAIN_BYTES, "the membership chain is over %d bytes" % membership.MAX_CHAIN_BYTES)
@@ -481,6 +481,14 @@ def _tip_schema(cfg):
     return _chain_tip(cfg)["schema"]
 
 
+def _tip_anchor_key(cfg):
+    """K_A, the anchor_policy_key of the verified chain tip this node holds (#361), which its anchor is judged and defined
+    under under v4; None before it holds any chain, or under v1-v3 (no such field)."""
+    if not any(os.path.lexists(os.path.join(cfg["state_dir"], name)) for name in ("membership.json", PUBLISHED)):
+        return None
+    return _chain_tip(cfg).get("anchor_policy_key")
+
+
 def heartbeat_counter(cfg, run=subprocess.run, owner_auth=None):
     """This node's heartbeat sequence counter, with the lock its users take: the one construction the
     services and the recovery command (recount.py) share. Written by policy like the anchor (#242)."""
@@ -521,7 +529,7 @@ class Node:
     def tpm_clock(self):
         return heartbeat.TpmClock(self.tcti, self.run)
 
-    def anchor(self, lock_path=None, schema=None):
+    def anchor(self, lock_path=None, schema=None, anchor_key=None):
         """The membership epoch anchor: membership.HighWater on its own index (and the pair and slots after it),
         with this node's approved-image write policy (image_policy) for an index written by policy (#242), judged by the
         schema of the chain tip this node holds (_tip_schema, #242 B3).
@@ -531,7 +539,8 @@ class Node:
         (esp_advance: the published one it anchors); default, the chain tip this node holds."""
         return membership.HighWater(self.cfg["nv_epoch"], self.tcti, self.run, lock_path=lock_path or self.path("highwater.lock"),
                                     policy=lambda: image_policy(self.cfg), image_key=lambda: image_key(self.cfg),
-                                    schema=schema or (lambda: _tip_schema(self.cfg)))
+                                    schema=schema or (lambda: _tip_schema(self.cfg)),
+                                    anchor_key=anchor_key or (lambda: _tip_anchor_key(self.cfg)))
 
     def manifest(self, patience=2.0, step=0.25):
         """The current manifest, by the published chain, verified (the root services' view).

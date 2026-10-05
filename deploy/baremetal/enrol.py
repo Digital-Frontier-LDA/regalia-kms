@@ -1034,8 +1034,10 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     # by that same policy. Owner-written when they name none.
     tip = membership.accept_chain(None, envelopes, cfg["root_key"])
     policy = lambda: node_module.define_policy(cfg, manifest=tip)
+    # under a v4 genesis the anchor is defined under K_A, the tip's anchor_policy_key (#361), not under the image policy
     hw = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=n.path("highwater.lock"), define_policy=policy,
-                              image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth)
+                              image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth,
+                              schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"))
     store = membership.Store(n.path("membership.json"), cfg["root_key"], hw, documents=n.documents().require_for)
     counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"), policy=policy,
                                 owner_auth=owner_auth)

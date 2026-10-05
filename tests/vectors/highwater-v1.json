@@ -2273,7 +2273,120 @@
    "chain": "v4",
    "high_water": 3,
    "length": 3,
-   "name": "a v4 chain, a policy-written anchor",
+   "name": "a v4 chain, an anchor under K_A's classes",
+   "policy": null,
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "v4",
+   "high_water": 3,
+   "length": 5,
+   "name": "a v4 chain ahead of an anchor under K_A's classes",
+   "policy": null,
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "v4",
+   "length": 2,
+   "name": "a v4 chain, a restored disk under K_A's classes",
+   "policy": null,
+   "refused": "ROLLBACK: the membership on disk is epoch 2 but the TPM high-water is 3; fetch the chain from a peer",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "v4",
+   "length": 3,
+   "name": "a v4 chain, an anchor under the image key's policy (no fallback)",
    "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
    "tpm": {
     "broken": false,
@@ -2305,20 +2418,97 @@
     },
     "public_fails": [],
     "unreadable": []
-   }
+   },
+   "unusable": "NV index 0x1500016 (the anchor class) is not defined under the anchor-policy authority: its authPolicy is a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7, not PolicyAuthorize(K_A 04513e008b2441b2\u2026, \"anchor\") = 82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb"
   },
   {
    "chain": "v4",
    "length": 3,
-   "name": "a v4 chain, owner-written slots beside a policy-written counter",
-   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "name": "a v4 chain, a slot under K_A's anchor class",
+   "policy": null,
    "tpm": {
     "broken": false,
     "nv": {
      "0x1500016": {
       "attributes": 537264154,
       "data": "000000000000002d",
-      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x150001b (the slots class) is not defined under the anchor-policy authority: its authPolicy is 82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb, not PolicyAuthorize(K_A 04513e008b2441b2\u2026, \"slots\") = 1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7"
+  },
+  {
+   "chain": "v4",
+   "length": 3,
+   "name": "a v4 chain, a slot with an empty authPolicy",
+   "policy": null,
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x150001a (the slots class) is not defined under the anchor-policy authority: its authPolicy is (none), not PolicyAuthorize(K_A 04513e008b2441b2\u2026, \"slots\") = 1b1427b905f7463df346931605fe293188f41eebaf93f0eafd54faf48b6caef7"
+  },
+  {
+   "chain": "v4",
+   "length": 3,
+   "name": "a v4 chain, owner-written slots beside a counter under K_A",
+   "policy": null,
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "82ca09190b74318fabe5515c8cc7d860fe6be024ede1e9d155e1080ae719edeb",
       "size": 8
      },
      "0x1500017": {
@@ -2344,44 +2534,6 @@
     "unreadable": []
    },
    "unusable": "NV index 0x150001a is owner-written: under regalia.membership/v4 the anchor is written by policy only (re-anchor it)"
-  },
-  {
-   "chain": "v4",
-   "high_water": 3,
-   "length": 5,
-   "name": "a v4 chain ahead of a policy-written anchor",
-   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
-   "tpm": {
-    "broken": false,
-    "nv": {
-     "0x1500016": {
-      "attributes": 537264154,
-      "data": "000000000000002d",
-      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
-      "size": 8
-     },
-     "0x1500017": {
-      "attributes": 537274370,
-      "data": "000000000000002a",
-      "policy": null,
-      "size": 8
-     },
-     "0x150001a": {
-      "attributes": 537264138,
-      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
-      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
-      "size": 48
-     },
-     "0x150001b": {
-      "attributes": 537264138,
-      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
-      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
-      "size": 48
-     }
-    },
-    "public_fails": [],
-    "unreadable": []
-   }
   }
  ],
  "chains": {
