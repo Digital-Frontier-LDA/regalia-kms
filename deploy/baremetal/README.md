@@ -925,17 +925,20 @@ removing only what it can prove it made.
   `gpg --decrypt ownerauth-X.yk.gpg | sudo <tool> ... --ownerauth ownerauth.record.json`, for `enrol commit`,
   `reanchor` and `recount`, and `seal-hsm-pin.sh --init-import-key --ownerauth-stdin`. The value always comes on
   standard input, never on another descriptor: sudo closes every one above 2. What the operator types (commit's
-  root fingerprint, the reanchor and recount phrases) is then read from the terminal itself. `commit` hands the value
-  to its regalia-sync steps through an inherited sealed memfd (runuser keeps it). Under v4 `commit` refuses unless
+  root fingerprint, the reanchor and recount phrases) is then read from the terminal itself. With a lab chain (v1–v3)
+  `commit` hands the value to its regalia-sync steps through an inherited sealed memfd (runuser keeps it); under v4
+  it hands them nothing and makes the owner's definitions itself (#419, below). Under v4 `commit` refuses unless
   the TPM's owner and lockout authorizations are both set and the value is given.
   **Current limitations:**
   - `init` takes no owner authorization; it runs before `ownerauth`.
-  - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path is
-    held by unit tests: the decision, the handoff to the regalia-sync steps, and every owner call site against a TPM
-    stand-in that refuses a missing value. The anchor's owner calls are also proven on swtpm.
-  - While commit's regalia-sync steps run, the owner authorization is held by a process of that uid, the
-    network-facing sync daemon's. commit refuses to hand it over while any other process of the uid exists, which
-    leaves a race with one starting meanwhile; doing the owner calls in the root parent is #419.
+  - `enrol commit` under v4 with an owner authorization set by `enrol ownerauth` runs on swtpm (`InitOnSwtpm`,
+    #420), but its regalia-sync steps run in-process there, not through `runuser` as that user (that needs root and
+    the user: a CI e2e), and its heartbeat probe is a stand-in that finds no source.
+  - Under v4, commit makes every owner-authorized definition itself, as root (#419): the anchor and the signing
+    counter before its regalia-sync step, which then commits by policy with no owner authorization, and the
+    heartbeat counter after that step's probe. The probe only fetches the sources' heartbeats; root verifies them
+    and defines the counter one below the highest, so the node is fresh at its sync's first pull, not at once. With a
+    lab chain (v1–v3) the value is still handed to the regalia-sync steps (a memfd), as before.
   - `seal-hsm-pin.sh` passes the value to tpm2-tools as a file in a root-only directory on /run (tmpfs), removed on
     exit. A run killed outright leaves it until reboot. The script doesn't check it against the record: a wrong
     value is refused by the TPM.
@@ -966,9 +969,12 @@ removing only what it can prove it made.
 - `commit --replace OLD_ID` (#76): a host that replaces a node is enrolled only as the replacement typed.
   The manifest that first names it must retire `OLD_ID` and change nothing else (replacement's rules);
   without `--replace`, such a manifest is refused, and so is any other ID.
-- The heartbeat counter starts at a heartbeat this node verifies from a peer
-  (`Freshness.accept_first`), never at 0 on a running network. `--bootstrap` allows 0 only at epoch 1, when
-  no reachable source holds a heartbeat. An existing counter is checked against the network.
+- The heartbeat counter starts at a heartbeat this node verifies from a peer, never at 0 on a running network.
+  With a lab chain (v1–v3) that is `Freshness.accept_first` in the regalia-sync step. Under v4 (#419) root verifies
+  the envelopes the step's probe fetched, counts only those live by authenticated time, and defines the counter at
+  max(highest verified sequence − 1, 0), so the node's sync takes that heartbeat at its first pull.
+  `--bootstrap` allows 0 only at epoch 1, when no reachable source holds a heartbeat. An existing counter is checked
+  against the network (v4: adopted only as defined, `HighWater._as_defined`).
 - **What stays on disk in the clear, and for how long.**
   - The WG-BOOT private key stays only until its sealed copy is on the ESP.
   - The local unlock contribution (`/var/lib/regalia-enrol/local.bin`, root 0600) stays until
