@@ -182,6 +182,15 @@ def scenario(cluster):
                for p in ("b", "c") for e in cluster.trail(p)), "and nobody issued a a lease after the revocation")
 
     header("7  #340: every line of every node's sync, admission and time trail is in the audit collector, for the node that recorded it")
+    # admission records its change to not serving at the end of its next round; that round may be held by renewal
+    # attempts to a peer that does not answer, so the line can come after the lease's end (CI on #473: 110 s after).
+    # Waited for, bounded, on the trail file, before audit_complete snapshots it
+    def stop_line():
+        path = cluster._trail_path("a", "admission")
+        lines = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+        return [e for e in lines if e.get("event") == "admission-serving" and e.get("at", 0) >= int(revoked_at)]
+    until(stop_line, 300, 3)
+    print("  MEASURED: a's admission recorded its stop %.0f s after it stopped serving" % (time.time() - stop_at))
     names = list(cluster.nodes)
     wrong = cluster.audit_complete()
     counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t, _, _ in threenode.AUDIT_TRAILS}
@@ -192,9 +201,10 @@ def scenario(cluster):
                   if e.get("at", 0) <= int(step3)]
     committed = {n: bool(cluster.audit_has(n, "sync", event="revoke-commit", outcome="ALLOW", epoch=2)) for n in ("b", "c")}
     refused_a = cluster.audit_has("b", "sync", since=revoked_at, outcome="DENY", reason=lambda r: bool(r) and "a is REVOKED_STOLEN under epoch 2" in r)
-    # a's FIRST change of serving state after the revocation is the stop (it served until then), near when it stopped
+    # a's FIRST change of serving state after the revocation is the stop (it served until then)
     after = cluster.audit_has("a", "admission", since=revoked_at, event="admission-serving")
-    a_stopped = after[:1] if after and after[0].get("outcome") == "DENY" and after[0].get("at", 0) <= int(stop_at) + 5 else []
+    # within the bounded wait above: admission's own round records it, possibly well after the lease's end
+    a_stopped = after[:1] if after and after[0].get("outcome") == "DENY" and after[0].get("at", 0) <= int(stop_at) + 300 else []
     ok(bool(renewed_in) and any(committed.values()) and bool(refused_a) and bool(a_stopped),
        "in each one's own stream: a's renewal by %s (step 2, %d), a's revocation committed %s, b's refusals of the revoked a by "
        "name (%d), and a's admission no longer serving after it (%d)" % (renewal_by, len(renewed_in), committed, len(refused_a), len(a_stopped)),

@@ -358,6 +358,15 @@ def scenario(cluster):
         reason = until(why, 90, 3)
         ok(bool(reason) and not cluster.lease(victim) and not any(leased_by(cluster, s, victim, since) for s in survivors),
            "N: and no lease, because %s" % reason, cluster.journal(victim, "admission")[-400:])
+        # its admission's first round must END before it is stopped, or that round records nothing: a node off its peers'
+        # tunnels waits out each renewal's timeout first (CI on #473: RETIRED and stolen victims, stopped 2 s after their
+        # start, had recorded no line). Waited for, bounded, on the trail file; step 8 judges what the collector holds
+        def recorded(victim=victim, since=since):
+            path = cluster._trail_path(victim, "admission")
+            lines = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+            return [e for e in lines if e.get("event") == "admission-serving" and e.get("at", 0) >= int(since)]
+        until(recorded, 240, 3)
+        print("  MEASURED: %s's admission recorded its state %.0f s after its start" % (victim, time.time() - since))
         cluster.stop(victim)
         victims.append((victim, state, manifest["epoch"], since, time.time()))
 
