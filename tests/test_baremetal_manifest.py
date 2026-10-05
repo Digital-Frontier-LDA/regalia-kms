@@ -891,8 +891,9 @@ class ProposeGenesis(unittest.TestCase):
 
     def setUp(self):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        from tests.test_baremetal_membership_v4 import nodes4, OWNER_KEYS, typed
+        from tests.test_baremetal_membership_v4 import nodes4, OWNER_KEYS, K_A, typed
         self.d = tempfile.mkdtemp()
+        self.k_a = K_A
         self.addCleanup(shutil.rmtree, self.d, True)
         self.root_key = Ed25519PrivateKey.generate()
         self.root = OfflineRoot.raw(self.root_key).hex()
@@ -908,10 +909,15 @@ class ProposeGenesis(unittest.TestCase):
     def owners(self):
         return {self.MAIN: self.owner_a, self.BACKUP: self.owner_b}
 
-    def propose(self, entries=None, owners=None, release=None, policy=None, document=None):
+    def propose(self, entries=None, owners=None, release=None, policy=None, document=None, anchor=None, card_record=None):
         return tool.propose_genesis(self.entries if entries is None else entries, document or self.document,
                                     self.owners() if owners is None else owners, release or self.release, self.root,
-                                    "2026-10-04T12:00:00Z", policy)
+                                    "2026-10-04T12:00:00Z", policy, anchor or self.anchor(),
+                                    card_record or {"sequence": 1, "digest": "ca" * 32})
+
+    def anchor(self, key=None):
+        return tool.anchor_policy_key((key or self.k_a).public_key().public_bytes(serialization.Encoding.PEM,
+                                                                                  serialization.PublicFormat.SubjectPublicKeyInfo))
 
     def card_record(self, signer=None, change=None):
         """The card ceremony's record of the owner's two cards and the release card, as regalia-ceremony writes it
@@ -1003,6 +1009,33 @@ class ProposeGenesis(unittest.TestCase):
         partial = dict(self.document, nodes={k: v for k, v in self.document["nodes"].items() if k != "c"})
         self.refused("the measurements have no entry for c", self.propose, document=partial)
 
+    def test_k_a_and_the_card_record_are_in_the_genesis(self):
+        """#361, #405: K_A from its PEM, pinned in epoch 1; the card record's sequence and digest, and nothing else of it."""
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from tests.test_baremetal_membership_v4 import typed
+        candidate = self.propose(card_record={"sequence": 2, "digest": "cb" * 32, "owners": {}, "session": "x"})
+        self.assertEqual((candidate["anchor_policy_key"], candidate["card_record"]), (typed(self.k_a), {"sequence": 2, "digest": "cb" * 32}))
+        self.refused("the anchor-policy key is not a P-256 key", tool.anchor_policy_key,
+                     ec.generate_private_key(ec.SECP384R1()).public_key().public_bytes(serialization.Encoding.PEM,
+                                                                                         serialization.PublicFormat.SubjectPublicKeyInfo))
+        self.refused("the anchor-policy key is neither its typed entry (JSON) nor a PEM public key", tool.anchor_policy_key, b"not a key")
+        # what regalia-ceremony's offline-keys prints (rc#129), the line as printed or the entry alone
+        entry = json.dumps(typed(self.k_a)).encode()
+        self.assertEqual(tool.anchor_policy_key(b"ANCHOR-POLICY-ENTRY " + entry + b"\n"), typed(self.k_a))
+        self.assertEqual(tool.anchor_policy_key(entry), typed(self.k_a))
+        printed = b"ANCHOR-POLICY-ENTRY " + entry + b"  (K_A, pinned in the genesis manifest: regalia-kms#361)\n"
+        self.assertEqual(tool.anchor_policy_key(printed), typed(self.k_a))
+        self.refused("neither its typed entry (JSON) nor a PEM public key", tool.anchor_policy_key, entry + b" trailing")
+        self.refused("the anchor-policy key: alg must be one of ecdsa-p256", tool.anchor_policy_key, b'{"alg": "ed25519", "key": "' + b"00" * 32 + b'"}')
+        self.refused("a v4 genesis names K_A (the anchor-policy key) and the card record",
+                     tool.propose_genesis, self.entries, self.document, self.owners(), self.release, self.root, "2026-10-04T12:00:00Z")
+
+    def test_k_a_is_no_other_key(self):
+        from tests.test_baremetal_membership_v4 import NODE_KEYS
+        self.refused("anchor_policy_key is already used (signing_key of a)", self.propose, anchor=self.anchor(NODE_KEYS["a"]))
+        self.refused("the anchor-policy key is the pinned root's or the release card's", self.propose,
+                     anchor={"alg": "ecdsa-p256", "key": self.root})
+
     def test_a_policy_override_below_its_floor_is_refused(self):
         self.refused("owner_heartbeat_lifetime_s must be an integer from 300", self.propose, policy={"owner_heartbeat_lifetime_s": 100})
         self.assertEqual(self.propose(policy={"heartbeat_max_lifetime_s": 7200})["heartbeat_max_lifetime_s"], 7200)
@@ -1047,7 +1080,11 @@ class ProposeGenesis(unittest.TestCase):
         args = ["propose", "--genesis", "--root-key", root or self.root, "--measurements", doc, "--out", out,
                 "--issued-at", "2026-10-04T12:00:00Z"] + (["--card-record", cards] if with_record else []) \
             + (["--state-dir", self.state(*(logged or [record]))] if with_state else [])
-        args += ["--system-pub", pub]
+        anchor = os.path.join(self.d, "k_a.pub.pem")
+        with open(anchor, "wb") as f:
+            f.write(self.k_a.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+        args += ["--system-pub", pub] + ([] if "no-anchor" in extra else ["--anchor-policy-key", anchor])
+        extra = tuple(x for x in extra if x != "no-anchor")
         for files in nodes:
             args += ["--node"] + files
 
@@ -1076,6 +1113,19 @@ class ProposeGenesis(unittest.TestCase):
         written = json.load(open(path))
         self.assertEqual((written["epoch"], written["owner_keys"]), (1, [{"alg": "ed25519", "key": self.owner_a}, {"alg": "ed25519", "key": self.owner_b}]))
         self.assertNotIn(self.release, json.dumps(written))
+        from deploy.baremetal import cardrecord
+        from tests.test_baremetal_membership_v4 import typed
+        with open(os.path.join(self.d, "cards.record.json")) as f:              # the record the command read
+            given = json.load(f)["record"]
+        self.assertEqual(written["card_record"], {"sequence": 1, "digest": cardrecord.digest(given)})
+        self.assertEqual(written["anchor_policy_key"], typed(self.k_a))
+        self.assertIn("anchor-policy key K_A (#361; fixed for the life of this genesis: a new one is a new genesis): " + typed(self.k_a)["key"], out)
+
+    def test_the_genesis_needs_k_a(self):
+        code, _, err, path = self.run_cli("no-anchor")
+        self.assertEqual(code, 2)
+        self.assertIn("--genesis needs --anchor-policy-key (K_A's public half: offline-keys' ANCHOR-POLICY-ENTRY, or PEM; #361)", err)
+        self.assertFalse(os.path.exists(path))
 
     def test_the_keys_come_only_from_a_record_the_pinned_root_signed(self):
         """24, 2026-10-04: --card-record is the one path; the typed --owner-key/--release-key are gone, never mixed."""
@@ -1107,7 +1157,7 @@ class ProposeGenesis(unittest.TestCase):
             self.assertEqual(tool.main(["propose", "--root-key", self.root, "--chain", os.path.join(self.d, "none.json"),
                                         "--card-record", os.path.join(self.d, "x.json"), "--set-state", "c=MAINTENANCE",
                                         "--out", os.path.join(self.d, "x")]), 2)
-        self.assertIn("--node, --system-pub, --measurements, --card-record, --state-dir and the lifetimes are for --genesis only", stderr.getvalue())
+        self.assertIn("--node, --system-pub, --measurements, --card-record, --state-dir, --anchor-policy-key and the lifetimes are for --genesis only", stderr.getvalue())
 
     def test_each_node_was_enrolled_on_the_reviewed_image(self):
         """#399 (regalia-kms-d9): the PCR 11 each node's AK quoted at activation is the SYSTEM-phase value the genesis

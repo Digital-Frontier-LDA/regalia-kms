@@ -431,7 +431,11 @@ class ProducersWriterRun(unittest.TestCase):
             json.dump(doc, f)
         with open(os.path.join(d, "system.pem"), "w") as f:
             f.write("stub\n")
-        args = ["propose", "--genesis", "--root-key", self.root, "--card-record", str(self.here / "card-record-2.record.json"),
+        from tests.test_baremetal_membership_v4 import K_A, typed
+        with open(os.path.join(d, "k_a.entry"), "w") as f:            # as regalia-ceremony's offline-keys prints it (rc#129)
+            f.write("ANCHOR-POLICY-ENTRY %s  (K_A, pinned in the genesis manifest: regalia-kms#361)\n" % json.dumps(typed(K_A), sort_keys=True))
+        args = ["--anchor-policy-key", os.path.join(d, "k_a.entry")]
+        args = ["propose", "--genesis", *args, "--root-key", self.root, "--card-record", str(self.here / "card-record-2.record.json"),
                 "--state-dir", self.state, "--measurements", os.path.join(d, "doc.json"), "--out", os.path.join(d, "e1.json"),
                 "--issued-at", "2026-10-04T12:00:00Z", "--system-pub", os.path.join(d, "system.pem")]
         for e in entries:                   # each node as `enrol` proves it (#399; stubbed here: its proof is enrol's own test)
@@ -448,6 +452,9 @@ class ProducersWriterRun(unittest.TestCase):
             written = json.load(f)
         owners = self.record(2)["record"]["owner_keys"]
         self.assertEqual(written["owner_keys"], [{"alg": "ed25519", "key": k["key"]} for k in sorted(owners, key=lambda k: k["serial"])])
+        # the writer's own record, pinned by sequence and digest (#405), and K_A as offline-keys printed it (#361)
+        self.assertEqual(written["card_record"], {"sequence": 2, "digest": cr.digest(self.record(2)["record"])})
+        self.assertEqual(written["anchor_policy_key"], typed(K_A))
 
 
 if __name__ == "__main__":

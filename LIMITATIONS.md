@@ -143,6 +143,14 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   judgement assumes the host had finished booting (systemd-pcrphase "ready" extended) when `activate`
   ran, which a software TPM cannot show: a bench item (#297), and the refusal says to re-run once
   `systemctl is-system-running` reports running. Run only on software TPMs so far.
+- **K_A and the card record are pinned in the v4 manifest, and nothing uses K_A yet** (#361, #405).
+  `anchor_policy_key` is set at genesis and no signer, the root included, changes it: every node's
+  anchor, counters and signing key will be defined under it, so losing or replacing K_A means a new
+  genesis and re-enrolling every node (its Shamir backup, D28, guards the loss). No node defines or
+  uses an object under K_A until #361's PR C. `card_record` pins the card ceremony record's sequence
+  and digest, never the record itself: a node cannot read a card record (it has no laptop signing
+  record to judge it by), so it holds only that the root moved to a later one whenever owner_keys
+  changed, not what that record says.
 - **Card attestation: not built** (#400). Nothing yet produces the YubiKeys' OpenPGP attestation
   certificates (`ykman openpgp keys attest`). The card record's `attestation_sha256` values are
   placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is

@@ -11,6 +11,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -113,7 +121,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -121,12 +129,12 @@
      {
       "party": "a",
       "public": "043a2f765da17a71c4881b06c9da4ed8f402bd06715fe7c6f919cc6508e7ea0578edcc9a810a89b58440ed9a1107f81984316565b041447bbcf0a17fcddf72eba0",
-      "sig": "7abee5126ac1d505f73dbe2eba86cebd2b2bbbe5639e6cb3e5903c1daaaa0a046f83f1fa4881395db735ed849c0111a3482fd0fdc7d6e462740b44a71ad59630"
+      "sig": "fefba562fc654b4c71155eff1608c87654f59a455fa81cdf2619644eacd2f9d2269ef14616ac2972ea0f415c84090caaea807290e6204abf96b6915f862a08a7"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "de0a38ae3e7d19963e0f7e0da505f101127423a5146c2e4d48b78f2a6cbe57ef6359384c711f538f06998b9ef00f299cdf071f090cbf09ee8f6313c65b6171f6"
+      "sig": "69e430bc6e0e69cee9e9cf5aa5abbad2eb87b56d0ab7bd25266f92cfe7ad13e523dfe2290ec13dd9265915285bdf040d9ae8e5c73f5a62f1d4a2016400cdc5ae"
      }
     ]
    },
@@ -143,6 +151,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -245,7 +261,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -253,12 +269,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "75c175d3cb94471d3d520860b49ae1da91fd83483b0fc0eb8a56e60e216c455e49670687a92a053e6d8357daa783eadf9d92a5467f94c0ec402274bc3fa86296"
+      "sig": "189b6587b664af56defba3df9e24099d596b08688b0a2c35a8b81d2b1355dea90928ca5b82cefcf9fbc249a792ec127e4edceb0f25b6db710c435d122a5b76f9"
      },
      {
       "party": "owner",
       "public": "043a2f765da17a71c4881b06c9da4ed8f402bd06715fe7c6f919cc6508e7ea0578edcc9a810a89b58440ed9a1107f81984316565b041447bbcf0a17fcddf72eba0",
-      "sig": "d34d40c260e59b8dd8d650313f6138ffc049792f34dd848427a1d3bdb01b5ad25025ff89425262f32186d730cf5d07dc9e437e65caa603b25097153b388e297b"
+      "sig": "fb21e651e4dd4be8e4ba45c1ef72520ec8a490de33a6b11d88819cb1453e1ddd6a2d5ac5eb4634555c2949d231af41ae432795de468acda3682ed3a6f17500eb"
      }
     ]
    },
@@ -275,6 +291,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -377,7 +401,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -385,12 +409,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "4e9226361df0f4bb3efb410e8819c52db4ad9267ad60059444b84afdd69965b7d84ca60121d6fe6ed348235562aa63d954788a0f0fb8f94c6928d1666c001763"
+      "sig": "e5d67958faad787c2ecd0ad9d17b30b2197fa5ff5fc95d3fe85832393867bc9cc227ccad517bb701ee5e7b5bdf6bcf06505a1705b63b0b19a2fd9fea1774d572"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "c4712466879e70d747a7d5691147559e8f42585acacc76036d5be3372d840ed0b7fd8dc4ebcea987fb33d64b58cc0bc23ca6d4e3a465e162f387d28fd01e8b6d"
+      "sig": "3c4439b07d0a830c316408c97a3dd9c53f097435d023435d1780d89168cbd9c8f6db5d10010a106fe79958275be5fd56af52d85dcaf635016066f6d3aa723614"
      }
     ]
    },
@@ -402,7 +426,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T15:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+    "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -415,6 +439,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -517,7 +549,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -525,12 +557,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "98d4a42fb875cdff0a31b1252624e3823a2b883b1513ead20d6b0b4fa99b75ae7404c3b80bbc1f41833bbd6cef7ebdccb1a9b348a354ab6f586b3cd237843f2f"
+      "sig": "6eee71584e00afd331589409329a4ee865e609e35cf0b19c321527626bfb51610367ea786df5135bebb785878a79a8da93d03e33d9d8ba96f8dd72e1d9dbe771"
      },
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "a7a78fc5c54bf6dd1de28a755ecaa3a906c58750bfe3eda4c7d9e3f89c4e9928dfd4908c1c6b41674a312781841bcdf313e28ddaeef44b971916d4b922942e02"
+      "sig": "bac4b3526d7f89a6b15f6269f7af1fc8342cc693243c832b0792af19eda76009ab38405dc43974b8aa973901836c4c469ffe2bb4b009a921b773b1909133a708"
      }
     ]
    },
@@ -545,6 +577,14 @@
       "c"
      ],
      "threshold": 2
+    },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
     },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
@@ -648,7 +688,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T20:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -656,12 +696,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "9ff97a55bb0718b4aee297ebb62d3ca68dc0cfd1525f213108dae85d743603850904128ea3a9f43397c4368e1ad6571ac221fef59c24caf2c9f094c5fa9329a3"
+      "sig": "10af71b47dc1d0f51d819fabb081fc02ea4cf263604aa0314e178653eaea21797bc75c9cc991e8a232f34e65dbe4f7a858ea965a011a33a3f401f97a815feb8b"
      },
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "5389827e282ca7aef4156769237e06fd4def4c20ff43dcc3b8dd8966b02a9033381d4f7d68a7499332e9aa53909381b238e2df716f2defdeb5a714349292bd09"
+      "sig": "79e2fa78306de3789bdd99f20e0cb0f83752af09ec0ac47b5ba4429c4a832afac214f30a3484113bb6b2d7c827ea1d2a8a56aefda13b52bead492568e5569004"
      }
     ]
    },
@@ -678,6 +718,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -780,7 +828,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T20:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -788,17 +836,17 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "ce5f90279164702f12b634afa86495a17c18014461090fc0cec8b1b61f53a2020b7e5a71c8201db32c1287aa591b54e7b05583863f8d1290cb18331dcb1e0e97"
+      "sig": "4d1803f28cdb2621cb6c4d9ab8dbc3155ae93808dd0f370c751f1c465e103fc01dfeffbc404079e1cd4c26c77f8023f5b15b96ee41ab10ce01f23491f5baa1c3"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "5cf80a2b28bed37e8e2401352893738c5025b2147fee570fe28b4fc7b65305805d2a542f8dd4d92e09e0d91bf9c5d9e031c4b59c4dcf3662d1fd6e15e2888bfe"
+      "sig": "8743c8cedd24789919c7fd34d897f751ee18f088cfdcadeb48531d1a9933b6b0642d392e1ea98e7efb1a3007d8b79cc51011522c90eba61cf03541b65144028e"
      },
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "5389827e282ca7aef4156769237e06fd4def4c20ff43dcc3b8dd8966b02a9033381d4f7d68a7499332e9aa53909381b238e2df716f2defdeb5a714349292bd09"
+      "sig": "79e2fa78306de3789bdd99f20e0cb0f83752af09ec0ac47b5ba4429c4a832afac214f30a3484113bb6b2d7c827ea1d2a8a56aefda13b52bead492568e5569004"
      }
     ]
    },
@@ -815,6 +863,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -916,7 +972,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cfc4a0d2999dfc7f564bc7956cc729fd7a1e3246d2f65b15930d83219e773372",
+     "manifest_digest": "f845e358af76f987e56655b23f9e4bd198a762eaf59ee25e169df94279e882ae",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -924,12 +980,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "ed2ab5a9071b76430fe375f747029852efe5756306e4825a4f0d00e1280a690d10f0d63e287f26d965600f386e4d13f4419e82f1251c2e73d3b75538dda193d3"
+      "sig": "48e2c6417d7096fb3b6f9e18f3a8717246d6711a3c38a9e2793e4c14690508312f7248fb3458d4a7b9b8ec6849da4a9dbc6f835afec4a2828164d5a0a8882ba8"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "d6d8cbb023864dda976e13cf973eba85f359a1dd02495806e592956ba3ea1f713a16524388651db69bcb5bb84ceef8960a190de467b33d7217d1bddc1d139599"
+      "sig": "3726ee4fbfebc3fd0a6336fa53f2d3d5c1f9a2a753caefc28ba11aeafaa671c21436c662254345e5dc503f712bdd46a80c0c723563ee7301e05cd3b82f7c1d77"
      }
     ]
    },
@@ -941,7 +997,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T15:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "cfc4a0d2999dfc7f564bc7956cc729fd7a1e3246d2f65b15930d83219e773372",
+    "manifest_digest": "f845e358af76f987e56655b23f9e4bd198a762eaf59ee25e169df94279e882ae",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -954,6 +1010,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -1055,7 +1119,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cfc4a0d2999dfc7f564bc7956cc729fd7a1e3246d2f65b15930d83219e773372",
+     "manifest_digest": "f845e358af76f987e56655b23f9e4bd198a762eaf59ee25e169df94279e882ae",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1063,12 +1127,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "6153ef386ef8a79bbd4721144b509dbc0d7989e6ca1629343f5dea9378d36d467476eaadc748b0f22b4249b8fef7a093972599819d9e636a825967eb8189e5fb"
+      "sig": "efed60e28a9ad08773de44e4d7f56b51c3cf932e2bef4853ae5071697495b11225b86e6680555d75f0e26a9dd7b6e96c6b41fbecd07d2fdc669ac9dfcf719994"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "477e298a3e393fe0f186f50bf4055522a4ff7e94ffcf9033b19789c5b718384f7f53246477d4aaec9b6f68dbc4fb6b716b6e4a760bc52f018e6b5eb2a1304967"
+      "sig": "0bbd505a306c86d071951399e4b7e970f064138e51b5dfc3841b1e396192abf4595df6e123631a6bbf0738a3467b718445d458306ed4ddf9ccc91d2688189ab6"
      }
     ]
    },
@@ -1084,6 +1148,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -1186,7 +1258,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "b8c7793715214108fc492612d570be2f394dff20e17e832cd637e6b92981e65e",
+     "manifest_digest": "aa60d9f918d43a4042d8fc7ad56b24a59e328812f8f68ef71d044df012f8b4ee",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1194,12 +1266,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "60ade16d7f6ed332a688d7ec9ea2b2e9cae9416975634c145ecb263581763c3e006b04b93b1cf48864df0f27da141fe84be5031be073853d6bee9cb2fde38593"
+      "sig": "a4da3d0054dc39bc2630cec3afb5dee647cb346bac4a24ca96e23065efefe6ed50d2d8b3d188de0abeedbca280d74874b8bd7e563ed1565062105acc0b4dd776"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "caf9194e19ef1e8e452dcf78711782ad8c35ef13c966da120cb1c6347a41a0fb0759a655053e5552b95bc7a963df11afff50edfc0addccf195fa527b042937be"
+      "sig": "83bfd53ffb8ff64cbff4f2bee6a95c19bd3e8879c699e0129847fa0fdbc36bae164bddb84877e58f1c642f6a4a348caee5dc73bea5faa366d5008c445ffe944f"
      }
     ]
    },
@@ -1211,7 +1283,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T15:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "b8c7793715214108fc492612d570be2f394dff20e17e832cd637e6b92981e65e",
+    "manifest_digest": "aa60d9f918d43a4042d8fc7ad56b24a59e328812f8f68ef71d044df012f8b4ee",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -1224,6 +1296,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -1326,7 +1406,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "b8c7793715214108fc492612d570be2f394dff20e17e832cd637e6b92981e65e",
+     "manifest_digest": "aa60d9f918d43a4042d8fc7ad56b24a59e328812f8f68ef71d044df012f8b4ee",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1334,12 +1414,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "8b56c81a94e98d6efda9470f7442fe186fa99fcd4d476aabd0caaa6f73cad73c527b44f631d324c25864a2ec6e3fd128688b33aa45bff857e62bc6d1e7c28adc"
+      "sig": "5b4347140fb85221559da63fb3bc4347df9ae07126be2a86e038f2e6b836abb046c32883ba56321ccc02c16123b7db7f7cc1aa94c103ece3caca4e68656594ff"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "c7709f04ae8b56943bbcdce917901dc6bb581767a2c412171971833b3d07283a30254ae5c9332e613f3b58e2f056fd0bdf3ad83400e8f4bed3d17a63e28b5a4b"
+      "sig": "ef66c10316fbaff440087c9cfac9d0709dd5dc880d262db8a3673361728c5bf06e696db1a321924e7cbd49d7a63a8674c532fcb7d848d99eb79aa55353fbae69"
      }
     ]
    },
@@ -1355,6 +1435,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -1457,7 +1545,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "b7ccff861149fa302fc71311de069bb7928abc371515f9443018a41236f46e6a",
+     "manifest_digest": "58758d4ef385272ae7d7b094e0ba31d6e63d0b0c9292828d398ec8705c217c7b",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1465,12 +1553,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "4a75324824a03ad084bb419cd7a35e716a96fd43ad77c30476948720319b9bfc5f22de41627611afe68573fab411621e6228dee1cebcba72e225824f1026f7e5"
+      "sig": "d011a9e7bc1536cf240eb1a75a101e6a500323a2382f43849a0bd5fa512e11a25e719c9f72187b28acf7c8e4b1cd1095e337c1404f7ed7569f5bb088653d68b6"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "ea4ac41d406491f6b89838b9bc6844627ba84e4d583c4a26701f52d458552f731bae16a00b7a7d45514504f9b2fdc2636b7a99922f930b8a00e4ad47bad05a8a"
+      "sig": "903a64adf682ffc315959b6b8a72e1b562fe2eb0957d7a20fff13461f95a375b5f6cc99109e0a45bc9d91b1d6a396f9c806c7b07a5b0076923424e74e71977b4"
      }
     ]
    },
@@ -1482,7 +1570,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T15:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "b7ccff861149fa302fc71311de069bb7928abc371515f9443018a41236f46e6a",
+    "manifest_digest": "58758d4ef385272ae7d7b094e0ba31d6e63d0b0c9292828d398ec8705c217c7b",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -1495,6 +1583,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -1597,7 +1693,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "b7ccff861149fa302fc71311de069bb7928abc371515f9443018a41236f46e6a",
+     "manifest_digest": "58758d4ef385272ae7d7b094e0ba31d6e63d0b0c9292828d398ec8705c217c7b",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1605,12 +1701,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "b040a3140885311545d3b59e18bbb9a5c71149b44bda461b8db6d92ac70a06a25d8dd47943e9bbb6651057781a8f766037d3ea632c68eea4f64b49b33ec64a13"
+      "sig": "87fcef1e4198def76c46c5b49cfe54ab605404c767078fed97162566918465923e0c403a664b2b04e72b0a420af9fce88fa26e56d61d515079bdc30f83deb869"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "5ca5a4f9bc154cb891699951c626f118007e520c4e25a4a4276c93ffd1389e7c5d841d9d0e5dddfd0b1fb699ed0ef83eadfd99d35d5bee0363533e72e4684052"
+      "sig": "f97b65d4825863ba1ac27874e9f4888422628679ddd767fd9ada3e63c64d6c5a05eea69d8941aefba80bf49cbe315f078142a611f572a8d02bc5e58224393100"
      }
     ]
    },
@@ -1626,6 +1722,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -1728,7 +1832,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "364765dbc1c04267aa02ae631112be5bebb5d810138878ce6c6d7c91ddf8a41b",
+     "manifest_digest": "b2c7cfc1d402ead11fafdb243795d2d146223ce9192f2fc880237b7b60ee3ab0",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1736,12 +1840,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "6c21f9f03dddef00cb29060f05e1ad7da5f11d4cfaaeed569b72cb94391c2e426e8da9032a2fbd98e5f2542ccefd5b4162e3eb25f49acdf1bcddbc2e147be209"
+      "sig": "9712ef536468bd2112be35b1b6d0aa1328abd6b0a3df1fa4f8dc4314879558620e6334bcbcb722bb8504bb4003fffe0cd4bc0199f454cf72b3d7821267bb1879"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "cda3cd7275510f2712e6584b891e23cc8492c8301f06fcac63d2a95dec6f15f62b4ba315c8e9dee0381543c73b7d150e111e8f649157dbb91726c2832bba8ad9"
+      "sig": "a82616a4e69db0192406b3c953a16874a509e3a922177a65cf9b5bca036e0f9d278391e6a2aa562a4fb0cdd2a1610354e147b364458657717f6d598dfc09c824"
      }
     ]
    },
@@ -1753,7 +1857,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T15:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "364765dbc1c04267aa02ae631112be5bebb5d810138878ce6c6d7c91ddf8a41b",
+    "manifest_digest": "b2c7cfc1d402ead11fafdb243795d2d146223ce9192f2fc880237b7b60ee3ab0",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -1766,6 +1870,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -1868,7 +1980,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "364765dbc1c04267aa02ae631112be5bebb5d810138878ce6c6d7c91ddf8a41b",
+     "manifest_digest": "b2c7cfc1d402ead11fafdb243795d2d146223ce9192f2fc880237b7b60ee3ab0",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -1876,12 +1988,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "9a8c828f0e7d6b16db5af0f9ae886f50a952fa8e88acb4a8e66ccf4bdd3b592026b4fb1b1480afa71776124dd662c441ce81dad63b177c08e0b92a1c1ec9634e"
+      "sig": "98b2c27f4dcb98c69493f9ac9cc19da330f4f1da26eccd6df2dae0f6a36e27b5409b9c383f60007858328fad50f3444c8ee95d2ba0999ee9ba244a324b7bb366"
      },
      {
       "party": "c",
       "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee",
-      "sig": "6f6ae4cb5739d9cce0f4424892cba9be4442424c23690bb6841fad7d1b33b2c152c5622e7236b9fad0c1793b94f2df7d6673d25eb62f1212a39b71fa4a108221"
+      "sig": "579f8d95f23355a34bb1a6704f1536269bdc1f7c86eb4626d7f360246249ad6831a94d2c313fa4e750544871c71a3f40a0dfb2a34da6a84eeb126ba56fa49f13"
      }
     ]
    },
@@ -1897,6 +2009,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -1999,7 +2119,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2007,12 +2127,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "cffb18d8b6ab82bb59e23e0c03d4a5c69b8336328253b6e85f9214659f59664b7ffffc91f194b59bb2ee6351e315d9894e94850e117ce2e8bd42a0b869d2301f"
+      "sig": "c9b5f73c56b86278afa922629eb96fc6e347d9576b0bcb25eccbb530a17afc8c214f12ef5190754554cfd68d2e2176a03a33d9699d0a304ee98792ff67662284"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "8b0bfffbb5cba94a7f507a72ab22c870a294d7046fff115fc33e33371fad48942fd158c5ce92878e257e05ba03e687184414fc02e4a1f9d94d626b0a59514f6c"
+      "sig": "6f02235a574e51b0744a0fbd73e6d8347876b013a9adb6c2161ee7ab419a9a836b374a7184e6fe0fbe2d3041a5ab23899a01d8ea892639c12e122bf9a0a1d44e"
      }
     ]
    },
@@ -2029,6 +2149,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -2131,7 +2259,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "b8c7793715214108fc492612d570be2f394dff20e17e832cd637e6b92981e65e",
+     "manifest_digest": "aa60d9f918d43a4042d8fc7ad56b24a59e328812f8f68ef71d044df012f8b4ee",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2139,17 +2267,17 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "a052dd1bb6bc97cf7d17d807a8065490271699f54cd934a9dec5c2d7258803e96845641bcd1b3213036b605b961228a8e955f677357fc9a92d5dcce3b3241477"
+      "sig": "26f15c18e03ced6df7f4b8ef814f6a47f38e6d33d4229627ec2fbc9bea0e94936cb6c0c242c4017e131b0057100b97ff67dedc71f6301af3fb507ce21a05af3d"
      },
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "0eed103ae34a4e00b13e1ea0e07a93d4ff666cc77b477537f6346e7dbb39858533c0eb620dc59d6f1eb186817e52746c866d8bf4803b48216637aca02e96ef01"
+      "sig": "44c3cf73639774654785612c221bb7c422fdfa9a264d4c3d787bc2aeddea4c4618e9080a024f5d1bae2cd7b00105eaa6856d3e2173e4414e614876827e8e3802"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "8105f519d0c8394ad7d0daa3f16838c67d6646b83fdf392078ed128f5a3391d94c7345ce1f557e49cf4261deff6a6cf923673d89187169a2e6433cc530bea7e3"
+      "sig": "b7abe18f38c9e72bd4e4953f3294744d929ad6e8aba5ecbca56a78bec85dabeb69beabdc91ec7172bf9aeab14868b16e83256a75d51c8c8b949d4d7f64498d82"
      }
     ]
    },
@@ -2161,7 +2289,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T15:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "b8c7793715214108fc492612d570be2f394dff20e17e832cd637e6b92981e65e",
+    "manifest_digest": "aa60d9f918d43a4042d8fc7ad56b24a59e328812f8f68ef71d044df012f8b4ee",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -2174,6 +2302,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -2276,7 +2412,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "b8c7793715214108fc492612d570be2f394dff20e17e832cd637e6b92981e65e",
+     "manifest_digest": "aa60d9f918d43a4042d8fc7ad56b24a59e328812f8f68ef71d044df012f8b4ee",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2284,17 +2420,17 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "4cc212397f95bb3c9a56c4e3639fe0467a7771c9d706d7aac79d249d96d43abb281e8df7dee1c45b1947985f176147ba0fd4e601e5ea26201c6e4b8e3950a6a4"
+      "sig": "a5f783629f7a1fa048475a0e1dfe63a1c1be9f717e4fa31c68e479201d3d75de1d8999a0b31b023f07a256e523228aa0a052644848baa09b2189c2d5848bf8e1"
      },
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "0eed103ae34a4e00b13e1ea0e07a93d4ff666cc77b477537f6346e7dbb39858533c0eb620dc59d6f1eb186817e52746c866d8bf4803b48216637aca02e96ef01"
+      "sig": "44c3cf73639774654785612c221bb7c422fdfa9a264d4c3d787bc2aeddea4c4618e9080a024f5d1bae2cd7b00105eaa6856d3e2173e4414e614876827e8e3802"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "e78925665dd7eb4c6c3b0fe7d052db5d9fe11eddaf6db92810a758986498d0f8084b6d3ae42d10861473f9225cd504e456d784ef6468fe91c840dd177fd951cc"
+      "sig": "cb432523e8b459969f1d197bca8022a6c75cc6fefa0b92863b0c50d45f3f9a8f35e53100553f059d4803b2fbb6cbfb50121526d98f62f20f7aa86d760cd3b53e"
      }
     ]
    },
@@ -2310,6 +2446,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -2412,7 +2556,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2420,7 +2564,7 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "7b2ffbe1260201aba2a4ef617a8e84a9f98b9d130d57033f69bac77bfa0e7637235247c009e25dcc80dde2309e684b9e543bf0c26fab1f0d81bc128fab59fedc"
+      "sig": "0861e11b23b55f0fd57abcafed35d83c8c019dd06df7cca3056e46b1fc0ea3b96d138d95fbc022e9e47baef6450882626fffe88a091f7c09dc79680e4a7957db"
      }
     ]
    },
@@ -2437,6 +2581,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -2539,7 +2691,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2547,7 +2699,7 @@
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "a7a78fc5c54bf6dd1de28a755ecaa3a906c58750bfe3eda4c7d9e3f89c4e9928dfd4908c1c6b41674a312781841bcdf313e28ddaeef44b971916d4b922942e02"
+      "sig": "bac4b3526d7f89a6b15f6269f7af1fc8342cc693243c832b0792af19eda76009ab38405dc43974b8aa973901836c4c469ffe2bb4b009a921b773b1909133a708"
      }
     ]
    },
@@ -2564,6 +2716,14 @@
      ],
      "threshold": 2
     },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
     "heartbeat_signers": {
@@ -2666,7 +2826,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2674,12 +2834,12 @@
      {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "a7a78fc5c54bf6dd1de28a755ecaa3a906c58750bfe3eda4c7d9e3f89c4e9928dfd4908c1c6b41674a312781841bcdf313e28ddaeef44b971916d4b922942e02"
+      "sig": "bac4b3526d7f89a6b15f6269f7af1fc8342cc693243c832b0792af19eda76009ab38405dc43974b8aa973901836c4c469ffe2bb4b009a921b773b1909133a708"
      },
      {
       "party": "owner",
       "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
-      "sig": "5ccbe1133c22d965e6b7e87d6eb1513e88ed6c6c662980e784352ad5587b9676e7189d76c9a539986bf6f5cfecf533e71231b5924a8eb815e13e869937506d07"
+      "sig": "baf4dcba9a600bbf2419de3e938e65ce7ad78bf28d9b7abd95976486ea60c65d6ba3cd62c5df0c7ea3322bbe32f8d6303d15cbd9404a482a0c9988f0a6c0c80e"
      }
     ]
    },
@@ -2695,6 +2855,14 @@
       "c"
      ],
      "threshold": 2
+    },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
     },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
@@ -2798,7 +2966,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T20:13:21Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -2806,12 +2974,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "769413bee2a83a3e55d092f7f1074a74a583d18db0ed1539c87b3e491f17371d792b2692cac6c680b63e9ffe3976097dfef872cea0d799d9ff13f25aec3977f1"
+      "sig": "8b29f4519be97139a981efff86b0f2bb7a41e3d1327f791fea56efc331855d3969eeb2443b42febc05cbcf72a333495be812f15f5f2d09fa6d2752cedef5a2ef"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "54e05301733d908544a35377a1c63789f4c481f11344c1c9ed6094e7f7794a9a43d6452dcdc1d7dfee6d69ef53f9a919a6ac8726b0e50644891d3f8cf9aedf48"
+      "sig": "da3a3ea52a077d2f617051b3d4abc6ecadcac67395574b3254fb24ea6889344e39c460933bfa6a0b4cecc9115ec091464c6f62616febc950ef3b2ddd6745b5fb"
      }
     ]
    },
@@ -2827,6 +2995,14 @@
       "c"
      ],
      "threshold": 2
+    },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
     },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
@@ -2930,13 +3106,13 @@
      "epoch": 1,
      "expires_at": "2026-09-21T15:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
     "signature": {
      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-     "sig": "7f0c8bc0daa1b52e1c23d11cd9dae5cd7c8870241d979af394c0eba2ae53fa3720b61407f91a3f4ea8bf4a3290a0adfac23319dc2c9ad1e15eb7b3bb4355f0e3"
+     "sig": "105b167d1377c5d723fd02d42c77471a44f13453802098ce7e47b63a1044cd7103d61929389bc11b3fad475770bfd94a39de3acc17bfa87b845f707a40caa60a"
     }
    },
    "name": "Quorum.test_the_single_key_form_is_not_a_v4_heartbeat #1",
@@ -2947,7 +3123,7 @@
     "epoch": 1,
     "expires_at": "2026-09-21T20:13:20Z",
     "issued_at": "2026-09-21T14:13:20Z",
-    "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+    "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
     "schema": "regalia.heartbeat/v1",
     "sequence": 7
    },
@@ -2959,6 +3135,14 @@
       "c"
      ],
      "threshold": 2
+    },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
     },
     "epoch": 1,
     "heartbeat_max_lifetime_s": 21600,
@@ -3062,7 +3246,7 @@
      "epoch": 1,
      "expires_at": "2026-09-21T20:13:20Z",
      "issued_at": "2026-09-21T14:13:20Z",
-     "manifest_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+     "manifest_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
      "schema": "regalia.heartbeat/v1",
      "sequence": 7
     },
@@ -3070,12 +3254,12 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "ae74a5faa26969ccf65bd3cc96ea8b283c8a90842ff4e0005f88c59e9d0d50cf4dd2ac1d52e9ecaee609ffc0269f2e199862fe12ebf5e4a55f91ec5b612c7fad"
+      "sig": "5d9dc98334d6777524c799c4fd9c285b430a65d2b4bc83431eaf679b622dee7d3f23dc36ef8504f5b023346fa33186c90ede5f889b13c4d49b5ccc04445142ce"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "549a5e14c394b5684b2ddf4d75def72269f5eb1c350ab5843ccd793e2216f7cc2ce9ba012141650a167ea6229454baa3f22c8ed93f73507b79ba14fe2b56743b"
+      "sig": "59b26da9de4c1ac50dfd49610ad4016569a29129253d4ba099f8d7950420a76b0117aa53acd6b86425c4a3e667cbd83bc8b22f534f0e3dd0666b53bd036f95ef"
      }
     ]
    },

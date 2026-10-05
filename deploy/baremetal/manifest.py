@@ -216,9 +216,39 @@ def judge_enrolled(document, enrolled):
     return judged
 
 
-def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None):
+def anchor_policy_key(pem):
+    """K_A (#361) as the manifest's typed entry: from the ANCHOR-POLICY-ENTRY that regalia-ceremony's offline-keys prints
+    (rc#129: {"alg": "ecdsa-p256", "key": <130 hex>}), or from its public half in PEM (SubjectPublicKeyInfo). A P-256 key
+    and nothing else, since every node defines its anchor objects under PolicyAuthorize of exactly this point."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    text = pem.strip()
+    if text.startswith(b"ANCHOR-POLICY-ENTRY"):
+        text = text[len(b"ANCHOR-POLICY-ENTRY"):].strip()
+    if text.startswith(b"{"):
+        try:                                   # the line as printed ends with "  (K_A, pinned in ...)": that note only
+            entry, end = json.JSONDecoder().raw_decode(text.decode("utf-8"))
+            rest = text.decode("utf-8")[end:].strip()
+            if rest and not (rest.startswith("(") and rest.endswith(")") and "\n" not in rest):
+                raise ValueError
+        except ValueError:
+            raise Refused("the anchor-policy key is neither its typed entry (JSON) nor a PEM public key") from None
+        alg, key = membership.typed_key(entry, "the anchor-policy key", membership.ANCHOR_POLICY_KEY_ALGS)
+        return {"alg": alg, "key": key}
+    try:
+        key = serialization.load_pem_public_key(pem)
+    except (ValueError, TypeError):
+        raise Refused("the anchor-policy key is neither its typed entry (JSON) nor a PEM public key") from None
+    require(isinstance(key, ec.EllipticCurvePublicKey) and isinstance(key.curve, ec.SECP256R1),
+            "the anchor-policy key is not a P-256 key (K_A is ECDSA P-256, #361)")
+    return {"alg": "ecdsa-p256", "key": key.public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()}
+
+
+def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None, anchor_policy=None, card_record=None):
     """Epoch 1 (v4), unsigned: every node from its `enrol entry` output (state ACTIVE), the measurements `document` it
-    commits to, the owner's two keys, and GENESIS_POLICY (with `policy` overrides). Refused unless it is a manifest a
+    commits to, the owner's two keys, K_A (`anchor_policy`, anchor_policy_key's entry), the card record that names the
+    owner's keys (`card_record`, {"sequence", "digest"} from card_record_keys), and GENESIS_POLICY (with `policy`
+    overrides). Refused unless it is a manifest a
     node would accept from the root at genesis (validate, transition(None, ..., "root"), measurements.bind), and unless
     the release card's key, the root's and every node's signing key are each other than the owner keys. `owners`
     ({card serial: key}) and `release_key` come from the card record (card_record_keys); checked here again, as a
@@ -244,7 +274,11 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
     nodes.sort(key=lambda n: n["node_id"])
     release_key = _raw_ed25519(release_key, "the release key")
     require(release_key not in owners.values(), "the release key is one of the owner keys: the release card is never an owner key")
+    require(isinstance(anchor_policy, dict) and isinstance(card_record, dict),
+            "a v4 genesis names K_A (the anchor-policy key) and the card record (#361, #405)")
     roots = {key for _, key in membership.root_entries(root)}
+    require(anchor_policy.get("key") not in roots and anchor_policy.get("key") != release_key,
+            "the anchor-policy key is the pinned root's or the release card's: K_A is its own key (D28)")
     for name, key in [("owner card %s" % s, k) for s, k in sorted(owners.items())] + [("release card", release_key)]:
         require(key not in roots, "the %s's key is the pinned root's" % name)
         for node in nodes:
@@ -257,6 +291,7 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
         "heartbeat_signers": {"threshold": 2, "parties": ids + [OWNER_PARTY]},
         "activation_signers": {"threshold": 2, "parties": ids + [OWNER_PARTY]},
         "revocation_signers": [{"threshold": 2, "parties": ids}, {"threshold": 1, "parties": [OWNER_PARTY]}],
+        "anchor_policy_key": anchor_policy, "card_record": {"sequence": card_record.get("sequence"), "digest": card_record.get("digest")},
         "nodes": nodes})
     membership.validate(candidate)
     membership.transition(None, candidate, "root")
@@ -555,6 +590,7 @@ def _propose_genesis(args, root, confirm=None, say=print):
     require(args.measurements and args.card_record and args.state_dir,
             "--genesis needs --measurements, --card-record and --state-dir (the laptop's root signing record, #403)")
     require(args.node and args.system_pub, "--genesis needs --node BUNDLE KEEP ACTIVATION for each node, and --system-pub (#399)")
+    require(args.anchor_policy_key, "--genesis needs --anchor-policy-key (K_A's public half: offline-keys' ANCHOR-POLICY-ENTRY, or PEM; #361)")
     cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root, args.state_dir)
     owners, release_key = cards["owners"], cards["release_key"]
     with open(args.system_pub, "rb") as f:
@@ -570,7 +606,9 @@ def _propose_genesis(args, root, confirm=None, say=print):
     pcr7_judged = judge_enrolled(document, enrolled)
     policy = {k: v for k, v in (("heartbeat_max_lifetime_s", args.heartbeat_max_lifetime_s),
                                 ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s)) if v is not None}
-    candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy)
+    with open(args.anchor_policy_key, "rb") as f:
+        anchor_policy = anchor_policy_key(f.read(65536))
+    candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy, anchor_policy, cards)
     require(not os.path.lexists(args.out), "%s exists: nothing is overwritten" % args.out)
     for line in diff({"nodes": []}, candidate):
         say("  " + line)
@@ -588,6 +626,8 @@ def _propose_genesis(args, root, confirm=None, say=print):
         say("owner card %s (%s): key %s, SHA-256 %s" % (serial, roles[serial], owners[serial],
                                                         hashlib.sha256(bytes.fromhex(owners[serial])).hexdigest()))
     say("release card key (not in the manifest; refused as an owner, root or node key): %s" % release_key)
+    say("anchor-policy key K_A (#361; fixed for the life of this genesis: a new one is a new genesis): %s, SHA-256 %s"
+        % (anchor_policy["key"], hashlib.sha256(bytes.fromhex(anchor_policy["key"])).hexdigest()))
     typed = (confirm or keyfd.tty_line)("type the two owner cards' serials, as printed ON THE CARDS, in the order above: ").split()
     require(typed == order, "the serials typed are not the owner cards above: nothing was written")
     _write_new(args.out, json.dumps(candidate, indent=2, sort_keys=True).encode() + b"\n")
@@ -674,6 +714,9 @@ def main(argv=None):
                         "root: the owner's two keys and the release card's, from it and never typed")
     c.add_argument("--state-dir", metavar="DIR", help="--genesis: the ceremony laptop's state directory (its root signing record "
                    "and regalia-signing-state.json): the card record must be the newest the root signed (#403)")
+    c.add_argument("--anchor-policy-key", metavar="PEM", help="--genesis: K_A's public half (P-256, #361): the "
+                   "ANCHOR-POLICY-ENTRY line regalia-ceremony's offline-keys prints, or a PEM public key; pinned in epoch 1 "
+                   "for the life of the genesis")
     c.add_argument("--heartbeat-max-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["heartbeat_max_lifetime_s"])
     c.add_argument("--owner-heartbeat-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["owner_heartbeat_lifetime_s"])
     c.add_argument("--from-rollout", metavar="R.json", help="the output of `rollout propose --json`")
@@ -718,9 +761,10 @@ def main(argv=None):
             return _propose_genesis(args, root)
         if args.command == "propose":
             require(args.chain is not None, "give --chain (or --genesis)")
-            require(not (args.node or args.system_pub or args.measurements or args.card_record or args.state_dir or args.heartbeat_max_lifetime_s
-                         or args.owner_heartbeat_lifetime_s), "--node, --system-pub, --measurements, --card-record, --state-dir and the "
-                    "lifetimes are for --genesis only")
+            require(not (args.node or args.system_pub or args.measurements or args.card_record or args.state_dir or args.anchor_policy_key
+                         or args.heartbeat_max_lifetime_s
+                         or args.owner_heartbeat_lifetime_s), "--node, --system-pub, --measurements, --card-record, --state-dir, "
+                    "--anchor-policy-key and the lifetimes are for --genesis only")
         if args.command == "sign" and args.genesis:
             # the first ceremony: no chain at all, the offline root only (see GENESIS above)
             require(args.chain is None and args.expected_epoch is None, "--genesis takes no --chain and no --expected-epoch")

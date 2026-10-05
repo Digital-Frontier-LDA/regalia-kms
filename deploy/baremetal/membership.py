@@ -57,7 +57,14 @@ v3's fields without `revocation_keys`, and:
   * `heartbeat_signers`: {"threshold", "parties"}, the parties node IDs or "owner";
   * `activation_signers`: the same form, for activation leases (#199: a node quorum, signed by the nodes
     once the lease side lands; in the format now so that it needs no further schema);
-  * `revocation_signers`: one to four such rules, any one of which signs a restrictive change.
+  * `revocation_signers`: one to four such rules, any one of which signs a restrictive change;
+  * `anchor_policy_key`: {"alg": "ecdsa-p256", "key": <130 hex>}, K_A, the anchor-policy authority (#361): an offline
+    Shamir software key (D28) under whose PolicyAuthorize every node's anchor, counters and signing key are defined at
+    enrolment (anchorpolicy.py). Set at genesis and NEVER changed, by any signer, the root included: a node's TPM
+    objects name it, so a new one is a new genesis. Distinct from every other key here and from the pinned root;
+  * `card_record`: {"sequence", "digest"}, the card ceremony's record (cardrecord.py, #405) that names owner_keys:
+    its sequence (an integer from 1) and the SHA-256 of its canonical form (64 hex). Only the root changes it; when
+    it changes its sequence rises, and owner_keys change only together with it.
   THE FLOORS ARE THE FORMAT'S: the heartbeat and activation thresholds are at least 2, a revocation rule that names a node
   needs at least 2, and only a rule naming the owner alone may be 1; no threshold exceeds its parties.
   A quorum-signed envelope is {"manifest", "signatures": [{"party", "key", "sig"}, ...]}: every signature
@@ -160,11 +167,14 @@ V2_MANIFEST_KEYS = MANIFEST_KEYS + ("heartbeat_max_lifetime_s",)
 V2_NODE_KEYS = NODE_KEYS + ("ssh_host_pub",)
 V2_IDENTITY_KEYS = IDENTITY_KEYS + ("ssh_host_pub",)
 SIGNER_FIELDS = ("owner_heartbeat_lifetime_s", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers")
+# #361/#405: K_A (immutable, every signer) and the card ceremony's record that names owner_keys (the root's)
+V4_ONLY_FIELDS = ("anchor_policy_key", "card_record")
+MAX_CARD_SEQUENCE = 2 ** 31 - 1                                  # exact in every JSON reader
 SINGLE_RULES = ("heartbeat_signers", "activation_signers")       # one rule each; revocation_signers is a list of them
-V4_MANIFEST_KEYS = tuple(k for k in V2_MANIFEST_KEYS if k != "revocation_keys") + SIGNER_FIELDS
+V4_MANIFEST_KEYS = tuple(k for k in V2_MANIFEST_KEYS if k != "revocation_keys") + SIGNER_FIELDS + V4_ONLY_FIELDS
 V4_NODE_KEYS = V2_NODE_KEYS + ("signing_key",)
 # What only the root may change: a quorum (or a v1-v3 revocation key) leaves every one as it was.
-ROOT_FIELDS = ("policy_version", "revocation_keys", "heartbeat_max_lifetime_s") + SIGNER_FIELDS
+ROOT_FIELDS = ("policy_version", "revocation_keys", "heartbeat_max_lifetime_s") + SIGNER_FIELDS + ("card_record",)
 # A node that is retired, revoked or quarantined is named in a signer rule but does not count.
 NOT_COUNTING = ("RETIRED", "REVOKED_STOLEN", "QUARANTINED")
 
@@ -296,7 +306,7 @@ def root_entries(root, label="the root key"):
     return out
 
 
-SIGNING_KEY_ALGS, OWNER_KEY_ALGS = ("ecdsa-p256",), ("ed25519", "ecdsa-p256")
+SIGNING_KEY_ALGS, OWNER_KEY_ALGS, ANCHOR_POLICY_KEY_ALGS = ("ecdsa-p256",), ("ed25519", "ecdsa-p256"), ("ecdsa-p256",)
 
 
 def typed_key(entry, label, algs):
@@ -395,6 +405,15 @@ def _signer_rules(manifest, by_id, seen):
     require(isinstance(rules, list) and 1 <= len(rules) <= MAX_RULES, "revocation_signers must be a list of one to %d rules" % MAX_RULES)
     for i, r in enumerate(rules):
         rule(r, "revocation_signers[%d]" % i, owner_alone=True)
+    # K_A (#361): a P-256 key, as tpm2_loadexternal loads it, and no other key of this manifest (checked last, after the
+    # nodes' identities and owner_keys: `seen` holds them all)
+    key = typed_key(manifest["anchor_policy_key"], "anchor_policy_key", ANCHOR_POLICY_KEY_ALGS)[1]
+    require(key not in seen, "anchor_policy_key is already used (%s)" % seen.get(key))
+    record = manifest["card_record"]
+    exact(record, ("sequence", "digest"), "card_record")
+    seq = record["sequence"]
+    require(type(seq) is int and 1 <= seq <= MAX_CARD_SEQUENCE, "card_record.sequence must be an integer from 1 to %d" % MAX_CARD_SEQUENCE)
+    hex_field(record["digest"], 64, "card_record.digest")
 
 
 def counting_parties(current, message, signatures, what):
@@ -519,6 +538,7 @@ def _apart_from_root(manifest, root_key):
     roots = {key for _, key in root_entries(root_key)}
     keys = [("owner_keys[%d]" % i, e["key"]) for i, e in enumerate(manifest["owner_keys"])]
     keys += [("signing_key of %s" % n["node_id"], n["signing_key"]["key"]) for n in manifest["nodes"] if "signing_key" in n]
+    keys += [("anchor_policy_key", manifest["anchor_policy_key"]["key"])]
     for label, key in keys:
         require(key not in roots, "%s is a pinned root key: the payload root is never a quorum party" % label)
 
@@ -647,9 +667,27 @@ def transition(current, candidate, signer):
                 "only moves forward" % (candidate["schema"], current["schema"]))
         require(signer == "root", "only the root can change the schema (%s to %s)" % (current["schema"], candidate["schema"]))
     _tombstones(current, candidate)        # every signer: the one rule the root cannot override
+    if current["schema"] == candidate["schema"] == SCHEMA_V4:
+        # K_A is named by every node's TPM objects (#361): no signer changes it; a new K_A is a new genesis. (v3 -> v4,
+        # root-signed, is where it is first set.)
+        require(candidate["anchor_policy_key"] == current["anchor_policy_key"], "anchor_policy_key is set at genesis "
+                "and never changes, for any signer: every node's TPM objects are defined under it (a new one is a new genesis)")
     if signer != "root":
         _restrictive(current, candidate, signer)
+    elif current["schema"] == candidate["schema"] == SCHEMA_V4:
+        _card_record_rules(current, candidate)
     return candidate
+
+
+def _card_record_rules(current, candidate):
+    """The root's own v4 rules for card_record (#405): a new card record has a higher sequence, and owner_keys, which
+    the card ceremony's record names, change only with a new one. (A quorum changes neither: ROOT_FIELDS.)"""
+    old, new = current["card_record"], candidate["card_record"]
+    if new != old:
+        require(new["sequence"] > old["sequence"], "card_record changes only to a later card ceremony's record (sequence %d "
+                "after %d)" % (new["sequence"], old["sequence"]))
+    elif candidate["owner_keys"] != current["owner_keys"]:
+        raise Refused("owner_keys change only with a new card_record: the card ceremony's record names them")
 
 
 def accept_chain(current, envelopes, root_key):
