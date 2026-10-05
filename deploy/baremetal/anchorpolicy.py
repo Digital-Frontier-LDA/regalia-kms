@@ -20,7 +20,13 @@ THE DESIGN (#361, decided by regalia-kms-24 with d9 and 95; measured by 95 and 1
   * R itself is incremented only under K_A's single-use approvals (increment_first, increment_from): PolicyCommandCode
     (NV_Increment) with PolicyNvWritten(clear) for its first increment, or with PolicyNV(R == n) for the one after n, so
     an approval to increment cannot be replayed to bump R at will. R is defined with policywrite only (not even the
-    owner increments it) and is publicly readable (authread, empty authValue) for PolicyNV.
+    owner increments it) and is publicly readable (authread, empty authValue) for PolicyNV. The owner can still UNDEFINE
+    it, which only denies: every class write fails until R is redefined and K_A's first-increment approval reused, and the
+    redefined R starts ABOVE its old value (the TPM's saved highest count), never below (measured, #361 case 6).
+  * G AND n ARE PER NODE (regalia-kms-95 on #437). A counter's first increment starts at the TPM's saved highest count,
+    which deleting any counter raises, so each node's R starts somewhere of its own. Enrolment records R's value after
+    its first increment; K_A approves P(K_sys, G_node) per node and per class, and increment_from(R, n_node) per node.
+    A single fleet-wide G could not both work on every node and revoke on every node.
   * R's Name includes TPMA_NV_WRITTEN, so every approval naming R is computed AFTER its first increment (at enrolment):
     rotation_name(written=True).
 """
@@ -105,7 +111,8 @@ def _count(value, what):
 
 def approved(k_sys_name, rotation, generation):
     """P(K_sys, G): PolicyAuthorize(Name(K_sys)) (systemd's empty policyRef) then PolicyNV(R <= G) on the rotation
-    counter of Name `rotation` (written). K_A approves this, per class."""
+    counter of Name `rotation` (written). G is THIS NODE's: its R's value (from its enrolment, then its rotations).
+    K_A approves this per node and per class."""
     return policy_nv(policy_authorize(k_sys_name, b""), rotation, _count(generation, "the generation"), 0, EO_UNSIGNED_LE)
 
 

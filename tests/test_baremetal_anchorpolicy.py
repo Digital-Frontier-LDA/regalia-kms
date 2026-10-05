@@ -32,6 +32,10 @@ class TheTpmsOwnValues(unittest.TestCase):
         self.assertEqual(self.rotation.hex(), V["rotation"]["name_written"])
 
     def test_the_approved_policies_and_the_increment_approvals(self):
+        """G and n are the NODE's: its R starts at the TPM's saved highest count (regalia-kms-95), here 6, not 1."""
+        start = V["rotation"]["first_value"]
+        self.assertGreater(start, 1)
+        self.assertEqual(sorted(V["approved"], key=int), [str(start), str(start + 1)])
         k_sys = bytes.fromhex(V["k_sys"]["name"])
         self.assertEqual(ap.policy_authorize(k_sys, b"").hex(), V["k_sys"]["policy_authorize"])
         for g, want in V["approved"].items():

@@ -1,13 +1,13 @@
 {
  "approved": {
-  "1": "1441f6f922cd091ce4d95e17ebb49e25ebed07edde685300afe75040f1f5d1ac",
-  "2": "d08c9fb25accd3384a8d2782c89a1fc4c78a51615d22477edce43aa404096af9"
+  "6": "298412a102ac3abfe4935e445ffbc47d859bcf9178b43eb2732274beda70c6b3",
+  "7": "85b85314fccc918abfe8675066574d9038478d6273c0a94503161ca5a667b579"
  },
  "increment": {
   "first": "0cdb3e65693b6a8a9f96dda9d216359b3a5b5208474f3427910bc05b70fe31a5",
   "from": {
-   "1": "be81f2f61daaeee5b2d81de9440569e079de8e5217702312478f979bb16c1af0",
-   "2": "24009e3d2548c50fd56205ed89fff46b6ff01bb9c19e9f065386f5540d3b22bf"
+   "6": "0e924ede006aa5daadf84fade9db5886c3743cae8890f6a6450fec664b768a75",
+   "7": "3b611f8c227d6538f201341f9cf8a81756b7a1d1c1bd32b01be9b6c55795517d"
   }
  },
  "k_a": {
@@ -50,6 +50,7 @@
  },
  "rotation": {
   "attributes": "nt=counter|authread|policywrite|no_da",
+  "first_value": 6,
   "index": "0x01500395",
   "name_unwritten": "000b52273ff39f58476e68eb2535232e20e02e1a497ed8410d52b99c3bdad0f76824",
   "name_written": "000b00ba45926082472c924006274ce3bbe113b9eb146dd06b30ea33c342e6736bff",

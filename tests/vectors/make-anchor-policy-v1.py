@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 PORT = 27395
 ROTATION_INDEX = 0x01500395
+SCRATCH_INDEX = 0x01500396
 ROTATION_ATTRIBUTES = "nt=counter|authread|policywrite|no_da"
 REFS = ("anchor", "slots", "heartbeat", "signing-counter", "rotation", "signing")
 K_A_SCALAR = int("361" * 21, 16) % (2 ** 255)                  # a fixed test scalar: the PUBLIC point is what is kept
@@ -80,6 +81,14 @@ def main():
         refs = {}
         for ref in REFS:
             refs[ref] = trial(["policyauthorize", "-S", "{S}", "-i", "/dev/null", "-n", p("ka.name"), "-q", ref.encode().hex()])
+        # a TPM that held counters before (a lab run, a re-anchor, B2b's base swaps) starts a NEW counter at its saved
+        # highest count, which deleting any counter raises (regalia-kms-95 on #437): a scratch counter taken to 5 and
+        # deleted, so R's first value here is not 1 and G is the NODE's, never a fleet-wide 1
+        flush()
+        tpm(env, "nvdefine", "0x%08x" % SCRATCH_INDEX, "-C", "o", "-s", "8", "-a", "nt=counter|ownerwrite|ownerread|no_da")
+        for _ in range(5):
+            tpm(env, "nvincrement", "0x%08x" % SCRATCH_INDEX, "-C", "o")
+        tpm(env, "nvundefine", "0x%08x" % SCRATCH_INDEX, "-C", "o")
         # the rotation counter, under PA(K_A, "rotation"), written once by the increment approval
         with open(p("pa_rot.pol"), "wb") as f:
             f.write(bytes.fromhex(refs["rotation"]))
@@ -106,17 +115,19 @@ def main():
         tpm(env, "policyauthorize", "-S", p("s.ctx"), "-i", p("inc.pol"), "-n", p("ka.name"), "-q", b"rotation".hex(), "-t", p("inc.tkt"))
         tpm(env, "nvincrement", "0x%08x" % ROTATION_INDEX, "-P", "session:" + p("s.ctx"))
         public_written = tpm(env, "nvreadpublic", "0x%08x" % ROTATION_INDEX).stdout.decode()
+        tpm(env, "nvread", "0x%08x" % ROTATION_INDEX, "-o", p("r.bin"))
+        start = int.from_bytes(open(p("r.bin"), "rb").read(), "big")      # this node's R after its first increment
         name_of = lambda text: next(l.split(":", 1)[1].strip() for l in text.splitlines() if l.strip().startswith("name:"))  # noqa: E731
         pa_ksys = trial(["policyauthorize", "-S", "{S}", "-i", "/dev/null", "-n", p("ksys.name")])
         approved = {}
-        for g in (1, 2):
+        for g in (start, start + 1):
             with open(p("g.bin"), "wb") as f:
                 f.write(g.to_bytes(8, "big"))
             approved[str(g)] = trial(["policyauthorize", "-S", "{S}", "-i", "/dev/null", "-n", p("ksys.name")],
                                      ["policynv", "-S", "{S}", "-i", p("g.bin"), "0x%08x" % ROTATION_INDEX, "ule"])
         first = trial(["policycommandcode", "-S", "{S}", "TPM2_CC_NV_Increment"], ["policynvwritten", "-S", "{S}", "c"])
         later = {}
-        for n in (1, 2):
+        for n in (start, start + 1):
             with open(p("n.bin"), "wb") as f:
                 f.write(n.to_bytes(8, "big"))
             later[str(n)] = trial(["policycommandcode", "-S", "{S}", "TPM2_CC_NV_Increment"],
@@ -128,7 +139,8 @@ def main():
             "k_sys": {"pem": ksys_pem.decode(), "tpmt_public": ksys_public, "name": ksys_name, "policy_authorize": pa_ksys},
             "refs": {ref: {"policy_ref_hex": ref.encode().hex(), "auth_policy": refs[ref]} for ref in REFS},
             "rotation": {"index": "0x%08x" % ROTATION_INDEX, "attributes": ROTATION_ATTRIBUTES, "size": 8,
-                         "name_unwritten": name_of(public_unwritten), "name_written": name_of(public_written)},
+                         "name_unwritten": name_of(public_unwritten), "name_written": name_of(public_written),
+                         "first_value": start},
             "approved": approved,                                  # P(K_sys, G) = PolicyNV(R <= G) over PA(K_sys), R written
             "increment": {"first": first, "from": later},           # CC(NV_Increment) + NvWritten(clear); CC + PolicyNV(R == n)
         }, sys.stdout, indent=1, sort_keys=True)
