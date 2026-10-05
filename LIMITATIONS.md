@@ -152,6 +152,14 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
+- **The iLO Redfish client (`deploy/baremetal/redfish.py`, the drills' power faults and D32's G1 fence) has not
+  run against a DL360's iLO 4.** It has been tested only against a stand-in Redfish service, and its certificate pin
+  against a loopback TLS server. The ResetTypes it expects (no GracefulRestart on iLO 4), the firmware string's form
+  and the power timings are to be measured at commissioning, from the discovery it records. It uses Basic
+  authentication over the pinned TLS, with no Redfish session tokens. Its firmware floor (2.30, where Redfish begins)
+  is not the security minimum: commissioning pins the current iLO 4 release. The iLO account's custody (Login plus
+  Virtual Power and Reset only) and a management network apart from the WireGuard mesh's path are commissioning
+  items (#495).
 
 ## Tokens and the HSM gate (#72)
 
