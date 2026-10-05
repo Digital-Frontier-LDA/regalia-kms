@@ -16,7 +16,8 @@ comes on STANDARD INPUT as 64 lowercase hex and one newline (read_value), is che
 under the node's PINNED root (verify, check) BEFORE the TPM is touched, and lives only in the process that uses it.
 
 CUSTODY (owner, 2026-10-05, recorded on #242 by regalia-kms-24). Two independent paths, so neither strands a node:
-  * day to day, the developer cards' envelope (.yk.gpg, rc#120/#130), as above;
+  * day to day, the .yk.gpg envelope, to the OWNER pair's decryption keys (ADR-0002 D30.7, regalia#568; the record
+    still calls its recipients yk_recipients), as above;
   * BREAK-GLASS, a SOPS file per node encrypted to an age key that is never held whole: it is rebuilt k-of-n from the
     ADR-0002 D28 platform Shamir share set (`ssss-combine ... 2> key`, never typed), as the ceremony opens its own vault
     (regalia-ceremony qubes/recovery/RECOVERY-TECHNICAL.md), and it replaces the per-node .bg.age envelope
@@ -26,6 +27,10 @@ CUSTODY (owner, 2026-10-05, recorded on #242 by regalia-kms-24). Two independent
     holds either the value or that key.
   * THE DRILL (the ceremony rehearsal): rebuild the key, decrypt one node's value, check it against the root-signed
     record WITHOUT a TPM (`python3 -Es -m deploy.baremetal.ownerauth check`, main), destroy the rebuilt key file.
+    The key is rebuilt into a tmpfs (/dev/shm, or the ceremony's RAM-only qube), mode 0600, and removed there by its
+    exact path after the decrypt: on a disk, removing a file does not destroy it. `--root-key` is the network's PINNED root, from the ceremony's own record of it (a
+    node's node.json root_key, the root card's printed fingerprint), NEVER read from the owner-authorization record or
+    the folder it came in: a record checked under a root it names itself proves nothing (regalia-kms-ed).
 
 THE CHANNEL. tpm2-tools takes an authorization as `-P <auth>`; on argv it would be in /proc for every local user.
 Every owner call here passes `-P file:/dev/fd/N`, N an anonymous memory file (memfd) holding "hex:<64 hex>"
@@ -505,7 +510,8 @@ def main(argv=None, stdin=None):
     """`python3 -Es -m deploy.baremetal.ownerauth check --node-id X --root-key ROOT --record ownerauth.record.json`, the
     value on standard input: whether it is node X's, by the check value of the record verified under the pinned root.
     Touches no TPM and writes nothing: the break-glass drill's last step (the module text), and a way to tell which
-    node a decrypted value is for before going to that node."""
+    node a decrypted value is for before going to that node. Exit 0: it is; 1: refused (not this node's, the record,
+    the form); 2 is argparse's own (a usage error), so a script can tell them apart (regalia-kms-d9)."""
     import argparse
     import sys
     parser = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.ownerauth",
@@ -525,7 +531,7 @@ def main(argv=None, stdin=None):
         from_envelope(stream, envelope, args.root_key, args.node_id)
     except (OSError, Refused) as failure:
         print("REFUSED: %s" % failure, file=sys.stderr)
-        return 2
+        return 1
     print("the value is %s's: it matches the check value of the record signed by the pinned root (no TPM touched, "
           "nothing written)" % args.node_id)
     return 0

@@ -910,15 +910,16 @@ removing only what it can prove it made.
 - `ownerauth` (#242 step C), after `init` and before `commit`: `gpg --decrypt ownerauth-X.yk.gpg | enrol ownerauth
   --node-id X --root-key ROOT --record ownerauth.record.json` sets the TPM's owner authorization to this node's
   value from the ceremony's envelope (regalia-ceremony#111). **Custody** (owner, 2026-10-05, #242): two independent
-  paths. Day to day, the developer cards' `.yk.gpg`. Break-glass, one binary SOPS file per node, encrypted to an age
+  paths. Day to day, `.yk.gpg`, to the owner pair's decryption keys (ADR-0002 D30.7, regalia#568). Break-glass, one binary SOPS file per node, encrypted to an age
   key that only the ADR-0002 D28 platform Shamir shares rebuild, as the ceremony opens its vault (no server holds
   the value or that key):
-  `( umask 077; ssss-combine -t K -q 2> bg.key )`, then
-  `SOPS_AGE_KEY_FILE=bg.key sops decrypt --input-type binary --output-type binary ownerauth-X.bg.sops | sudo ...`,
-  then remove `bg.key`. It must be a binary SOPS file, not a YAML map: `sops decrypt --extract` drops the newline
+  `( cd /dev/shm && umask 077; ssss-combine -t K -q 2> bg.key )`, then
+  `SOPS_AGE_KEY_FILE=/dev/shm/bg.key sops decrypt --input-type binary --output-type binary ownerauth-X.bg.sops | sudo ...`,
+  then remove `/dev/shm/bg.key` by that exact path. The key goes on a tmpfs, mode 0600: a removed file on a disk is not destroyed. It must be a binary SOPS file, not a YAML map: `sops decrypt --extract` drops the newline
   that the value's form requires (measured with sops 3.13.1). The drill, at the ceremony rehearsal, checks a
   decrypted value with no TPM: `... | python3 -Es -m deploy.baremetal.ownerauth check --node-id X --root-key ROOT
-  --record ownerauth.record.json`. The value comes on standard input only. It is checked against the record verified under the
+  --record ownerauth.record.json`. ROOT is the network's pinned root, from a node's node.json or the root card's
+  printed fingerprint, never from the record or the folder it came in. The value comes on standard input only. It is checked against the record verified under the
   pinned root BEFORE the TPM is touched (`deploy/baremetal/ownerauth.py`), and it is never written to disk. Every
   owner-authorized TPM call then gets it through one channel: a sealed in-memory file descriptor, never the command
   line (readable through /proc by root while the call runs). It sets the authorization from EMPTY only: a TPM whose owner authorization is already set is refused, never

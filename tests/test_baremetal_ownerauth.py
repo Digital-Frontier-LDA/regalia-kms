@@ -149,10 +149,27 @@ class TheDrillCheck(unittest.TestCase):
                 ("a", VECTOR["values"]["a"][:64], PIN, b"is not 64 lowercase hex and a newline")):
             with self.subTest(node=node, root=root, given=len(given)):
                 done = self.check(node, given, root)
-                self.assertEqual(done.returncode, 2)
+                self.assertEqual(done.returncode, 1)
                 self.assertIn(b"REFUSED: ", done.stderr)
                 self.assertIn(reason, done.stderr)
                 self.assertNotIn(VECTOR["values"]["a"][:16].encode(), done.stderr)
+
+    def test_a_terminal_on_standard_input_or_no_record_is_refused(self):
+        """regalia-kms-ed: each its own message and exit 1 (2 is argparse's), never a traceback."""
+        import contextlib
+
+        class Terminal(io.BytesIO):
+            def isatty(self):
+                return True
+        argv = ["check", "--node-id", "a", "--root-key", PIN, "--record", self.record]
+        for label, args, stdin, reason in (
+                ("a terminal", argv, Terminal(VECTOR["values"]["a"].encode()), "REFUSED: standard input is a terminal"),
+                ("no record", argv[:-1] + [os.path.join(self.d, "absent.json")], value("a"), "REFUSED: [Errno 2] No such file or directory")):
+            with self.subTest(label):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(ownerauth.main(args, stdin=stdin), 1)
+                self.assertTrue(err.getvalue().startswith(reason), err.getvalue())
 
 
 class TheChannel(unittest.TestCase):
