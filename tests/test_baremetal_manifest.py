@@ -1065,6 +1065,11 @@ class ProposeGenesis(unittest.TestCase):
         real = json.loads((here / "offline-keys.record.json").read_text())
         entry, record = tool.offline_keys_record(real, (here / "root.hex").read_text().strip())
         self.assertEqual((entry, record["event"]), (real["record"]["anchor_policy_entry"], "generate"))
+        # and rc#133's (head 178e358, by regalia-kms-51): ownerauth-recovery's age recipient published beside the keys
+        real = json.loads((here / "offline-keys.record.rc133.json").read_text())
+        self.assertIn("ownerauth-recovery", real["record"]["publics"])
+        entry, _ = tool.offline_keys_record(real, (here / "root-rc133.hex").read_text().strip())
+        self.assertEqual(entry, real["record"]["anchor_policy_entry"])
         # rc#133 (regalia-kms-51): the record also publishes the ownerauth-recovery age recipient (no spki) and its proof;
         # only K_A's entries are read, so other keys of publics and operation_proof never refuse it
         def recovery(r):
