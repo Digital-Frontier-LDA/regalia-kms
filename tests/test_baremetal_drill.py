@@ -129,12 +129,20 @@ class Preflight(unittest.TestCase):
                 return good, "%s saw this" % name
             return name, run
         with self.assertRaises(m.Refused) as caught:
-            drill.preflight([check("three serving", True), check("ilo b", None), check("canary only", False)])
+            drill.preflight([check("three serving", True), check("ilo b", None), check("canary only", False)], required=())
         self.assertEqual(ran, ["three serving", "ilo b", "canary only"])
         self.assertIn("ilo b (the check failed: OSError: no route to the iLO)", str(caught.exception))
         self.assertIn("canary only (canary only saw this)", str(caught.exception))
         self.assertNotIn("three serving", str(caught.exception))
-        self.assertEqual([r["ok"] for r in drill.preflight([check("x", True)])], [True])
+        self.assertEqual([r["ok"] for r in drill.preflight([check("x", True)], required=())], [True])
+
+    def test_a_required_check_cannot_be_dropped(self):
+        # d9 on #498: the canary check (and #495's other required checks) must be in the list, whoever builds it
+        every = [(name, lambda: (True, "fine")) for name in drill.REQUIRED_CHECKS]
+        self.assertEqual(len(drill.preflight(every)), len(drill.REQUIRED_CHECKS))
+        without = [(name, check) for name, check in every if name != "canary-only"]
+        with self.assertRaisesRegex(m.Refused, "the required check\\(s\\) canary-only are not in the list"):
+            drill.preflight(without)
 
 
 class Run(unittest.TestCase):
@@ -237,6 +245,29 @@ class Journal(unittest.TestCase):
         self.assertEqual(restored, [])
         self.assertIn("power c on through its iLO by hand", failed[0]["error"])
         self.assertEqual(len(journal.pending()), 1)
+
+    def test_a_torn_last_line_is_a_fault_to_check_by_hand_and_a_bad_middle_line_refuses(self):
+        journal = drill.Journal(self.path)
+        journal.fault("partition", "b", {"action": "unpartition", "node": "b"})
+        with open(self.path, "ab") as f:
+            f.write(b'{"kind": "fault", "id": 2, "act')                  # power lost mid-append
+        undone = []
+        restored, failed = journal.restore({"unpartition": undone.append})
+        self.assertEqual(undone, ["b"])                                    # the readable fault is still undone
+        self.assertEqual([f["id"] for f in failed], [0])
+        self.assertIn("the journal's last line is torn", failed[0]["error"])
+        # the undone line was NOT glued onto the torn one: the journal still reads, the torn fault still pending
+        self.assertEqual([e["undo"]["action"] for e in journal.pending()], ["torn"])
+        journal.fault("power-off", "c", {"action": "power-on", "node": "c"})   # and later faults are fine too
+        self.assertEqual(len(journal.pending()), 2)
+        restored, failed = journal.restore({"power-on": undone.append}, torn_checked=True)
+        self.assertEqual((undone[-1], failed, journal.pending()), ("c", [], []))
+        bad = os.path.join(self.d, "bad.jsonl")                          # an unreadable line that is not a torn write
+        with open(bad, "wb") as f:
+            f.write(m.canonical({"kind": "fault", "id": 1, "action": "x", "node": "b", "undo": {"action": "unpartition", "node": "b"}})
+                    + b"\nnot json\n" + m.canonical({"kind": "undone", "id": 1}) + b"\n")
+        with self.assertRaisesRegex(m.Refused, "unreadable line 2 that is neither its last nor marked torn"):
+            drill.Journal(bad).entries()
 
     def test_the_fault_is_on_disk_before_the_cut_and_restore_undoes_it(self):
         # the journal line exists before the server is touched at all

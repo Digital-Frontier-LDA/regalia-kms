@@ -131,23 +131,47 @@ class Journal:
         self.path = path
 
     def _append(self, entry):
-        fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        fd = os.open(self.path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         try:
+            size = os.fstat(fd).st_size
+            if size and os.pread(fd, 1, size - 1) != b"\n":
+                # a torn last write (power lost mid-append): ended, and marked, so the next line is not glued onto it
+                os.write(fd, b"\n" + membership.canonical({"kind": "torn-line"}) + b"\n")
             os.write(fd, membership.canonical(entry) + b"\n")
             os.fsync(fd)
         finally:
             os.close(fd)
 
+    TORN = {"kind": "fault", "id": 0, "action": "unknown", "node": "?", "undo": {"action": "torn", "node": "?"}}
+
     def entries(self):
+        """The journal's entries. A line that does not parse is a write torn by a power loss (d9 on #498) only if it is the
+        LAST line, or the next is the "torn-line" marker _append writes after one: it stands for a fault whose undo is
+        unknown (restore refuses it: every server to be checked by hand, then `restore --torn-checked`). A bad line
+        anywhere else is not a torn write: refused."""
         try:
             with open(self.path, "rb") as f:
-                return [json.loads(line) for line in f.read().splitlines() if line.strip()]
+                lines = [line for line in f.read().splitlines() if line.strip()]
         except FileNotFoundError:
             return []
+        def marker(i):
+            try:
+                return i < len(lines) and json.loads(lines[i]) == {"kind": "torn-line"}
+            except ValueError:
+                return False
+        out = []
+        for i, line in enumerate(lines):
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                require(i == len(lines) - 1 or marker(i + 1), "the fault journal %s has an unreadable line %d that is neither "
+                        "its last nor marked torn: refused" % (self.path, i + 1))
+                out.append(dict(self.TORN))
+        return [e for e in out if e != {"kind": "torn-line"}]
 
     def fault(self, action, node, undo):
         """Record a fault BEFORE it is injected. `undo` is {"action", "node"}, what restore does. Returns its id."""
-        fault_id = len([e for e in self.entries() if e.get("kind") == "fault"]) + 1
+        fault_id = len([e for e in self.entries() if e.get("kind") == "fault" and e.get("id")]) + 1
         self._append({"kind": "fault", "id": fault_id, "action": action, "node": node, "undo": undo,
                       "at_ms": int(time.time() * 1000)})
         return fault_id
@@ -160,12 +184,19 @@ class Journal:
         done = {e["id"] for e in self.entries() if e.get("kind") == "undone"}
         return [e for e in reversed(self.entries()) if e.get("kind") == "fault" and e["id"] not in done]
 
-    def restore(self, undoers):
+    def restore(self, undoers, torn_checked=False):
         """Each pending fault's undo, newest first, through undoers[undo["action"]](node); each marked undone once it
-        succeeds. Returns (done, failed): a failed undo stays pending, said, and is tried again next time."""
+        succeeds. Returns (done, failed): a failed undo stays pending, said, and is tried again next time. `torn_checked`:
+        the operator has checked every server by hand after a torn write, which clears it."""
+        if torn_checked and any(e["undo"]["action"] == "torn" for e in self.pending()):
+            self.undone(0)
         done, failed = [], []
         for entry in self.pending():
             undo = entry["undo"]
+            if undo["action"] == "torn":
+                failed.append({"id": 0, "undo": undo, "error": "the journal's last line is torn (power lost mid-write): the fault it "
+                               "recorded is unknown. Check every server by hand: its power (iLO) and `nft list table inet %s`" % TABLE})
+                continue
             try:
                 undoers[undo["action"]](undo["node"])
             except Exception as failure:              # noqa: BLE001 - each fault's undo tried; the rest go on
@@ -186,8 +217,17 @@ def canary_only(keys, purpose_of):
     return (not wrong), ("every key's purpose is canary-*" if not wrong else "not canary in the key-state store: %s" % wrong)
 
 
-def preflight(checks):
-    """Each (name, check) run; check() -> (ok, what it saw). Returns the results; refuses if any failed."""
+# #495 section 2: what preflight must have checked, by name, before a drill may start (d9 on #498: a caller cannot drop
+# one, the canary check above all)
+REQUIRED_CHECKS = ("three-serving", "etcd-healthy", "collector-current", "monitoring-reachable", "ilo-reachable",
+                   "canary-only", "baseline-on-file", "pin-retries-recorded", "operator-and-witness")
+
+
+def preflight(checks, required=REQUIRED_CHECKS):
+    """Each (name, check) run; check() -> (ok, what it saw). Returns the results; refuses if any failed, or if any
+    `required` check is missing from the list."""
+    missing = [name for name in required if name not in {name for name, _ in checks}]
+    require(not missing, "preflight refused: the required check(s) %s are not in the list" % ", ".join(missing))
     results = []
     for name, check in checks:
         try:
@@ -313,6 +353,7 @@ def main(argv=None, ssh=None):
             p.add_argument("--ttl", type=int, default=600, help="the dead-man timer, seconds (%d to %d)" % (TTL_MIN, TTL_MAX))
     p = sub.add_parser("restore", help="undo every fault the journal holds that is not marked undone, newest first")
     p.add_argument("--journal", required=True)
+    p.add_argument("--torn-checked", action="store_true", help="after a torn journal write: every server was checked by hand")
     p.add_argument("--host", action="append", default=[], metavar="NODE=ADDRESS", help="a node's SSH address")
     args = ap.parse_args(argv)
     if args.op == "restore":
@@ -332,7 +373,7 @@ def main(argv=None, ssh=None):
                 if entry["undo"] == {"action": "unpartition", "node": args.node}:
                     journal.undone(entry["id"])
         else:
-            restored, failed = journal.restore({"unpartition": cut.remove, "power-on": power_on_by_hand})
+            restored, failed = journal.restore({"unpartition": cut.remove, "power-on": power_on_by_hand}, torn_checked=args.torn_checked)
             done = {"restored": restored, "still_pending": failed}
             print(json.dumps(done, sort_keys=True))
             return 0 if not failed else 3
