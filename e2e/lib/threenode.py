@@ -1294,7 +1294,11 @@ class Cluster:
             self.start(seed, services)
         for name in running:
             if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
-                raise RuntimeError("%s did not take epoch %d from %s | %s" % (name, manifest["epoch"], seed, self._why_not_taken(name, seed, since)))
+                try:
+                    why = self._why_not_taken(name, seed, since)
+                except Exception as failure:              # noqa: BLE001 - the diagnostic never hides the failure it explains
+                    why = "diagnostic unavailable: %s: %s" % (type(failure).__name__, failure)
+                raise RuntimeError("%s did not take epoch %d from %s | %s" % (name, manifest["epoch"], seed, why))
         # #66 B3: neither deliver nor sync moves the anchor; each running node's regalia-esp-advance writes the epoch to its
         # ESP and then anchors it. Checked at every advance, so tier N keeps the anchor's progression (regalia-kms-24)
         for name in [seed] + running:
