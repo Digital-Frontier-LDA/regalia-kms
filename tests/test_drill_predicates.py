@@ -79,10 +79,20 @@ class Predicates(unittest.TestCase):
         self.failed(run([], gap), "answered no stateless request")
 
     def test_the_load_generator_s_line_becomes_a_request(self):
-        line = {"ts": 1700000000123, "run": "r1", "op": "spend", "key": "canary-approve", "node": "b", "outcome": "ABORTED",
-                "latency": 250, "attempt": 1}
-        r = drills.from_loadgen(line, {"spend", "cosmos-sign"})
+        line = {"start_ms": 1700000000123, "end_ms": 1700000000373, "op": "sign", "key": "canary-cosmos", "node": "b",
+                "outcome": "ABORTED", "attempt": 1, "drill": "r1", "stateful": True}
+        r = drills.from_loadgen(line)
         self.assertEqual((r["start"], r["end"], r["outcome"], r["stateful"], r["node"]), (1700000000.123, 1700000000.373, "failed", True, "b"))
+        self.assertEqual(drills.from_loadgen(dict(line, outcome="ok", stateful=False))["outcome"], "ok")
+
+    def test_a_line_without_stateful_is_refused_never_defaulted(self):
+        """ed: no inference; a sign with a sequenced Cosmos key is stateful, which only the load generator knows."""
+        line = {"start_ms": 1, "end_ms": 2, "op": "sign", "key": "k", "node": "a", "outcome": "ok", "attempt": 1, "drill": "r1"}
+        with self.assertRaises(drills.Malformed) as caught:
+            drills.from_loadgen(line)
+        self.assertIn("without 'stateful' is refused", str(caught.exception))
+        with self.assertRaises(drills.Malformed):
+            drills.from_loadgen(dict(line, stateful="yes"))
 
     def test_the_bounds_are_deploy_s(self):
         """3e on #497: drills.py may not import deploy; these hold its copies equal to the source."""
