@@ -1122,6 +1122,24 @@ class ProposeGenesis(unittest.TestCase):
         self.refused("owner_heartbeat_lifetime_s must be an integer from 300", self.propose, policy={"owner_heartbeat_lifetime_s": 100})
         self.assertEqual(self.propose(policy={"heartbeat_max_lifetime_s": 7200})["heartbeat_max_lifetime_s"], 7200)
 
+    def test_the_epoch_ending_a_recovery_takes_its_end_from_the_owner_s_record(self):
+        """#432 amendment 5 (d9, 24): the value proposed is the latest expiry the owner's tool issued; an earlier typed one is
+        refused; the epochs before are closed in the record; an epoch not ending a recovery stays null."""
+        from tests.test_baremetal_membership_v4 import manifest4 as v4, nodes4
+        first = v4(1, "", nodes4())
+        recovery = v4(2, m.digest(first), nodes4(a="QUARANTINED", b="QUARANTINED"))
+        back = tool.propose_states(recovery, {"a": "ACTIVE"}, "2026-10-05T00:00:00Z")
+        lines = [{"event": "issued", "quarantine_epoch": 2, "expires_at": 1790100000}, {"event": "issued", "quarantine_epoch": 2, "expires_at": 1790300000},
+                 {"event": "issued", "quarantine_epoch": 9, "expires_at": 1799999999}]           # a later epoch's: not this recovery's
+        self.assertEqual(tool.recovery_ends_by(recovery, back, None, lines),
+                         (1790300000, {"event": "closed", "through_epoch": 2, "recovery_ends_by": 1790300000}))
+        self.refused("is earlier than an authorization the record holds (until 1790300000)", tool.recovery_ends_by, recovery, back, 1790200000, lines)
+        self.assertEqual(tool.recovery_ends_by(recovery, back, 1790400000, lines)[0], 1790400000)
+        self.refused("give --recovery-ends-by", tool.recovery_ends_by, recovery, back, None, [])
+        policy = tool.propose_states(recovery, {"c": "DRAINING"}, "2026-10-05T00:00:00Z")    # not ending it
+        self.assertEqual(tool.recovery_ends_by(recovery, policy, None, lines), (None, None))
+        self.refused("is for an epoch that ends a recovery", tool.recovery_ends_by, recovery, policy, 1790400000, lines)
+
     def test_the_recovery_authorization_bound_is_lowered_never_raised_past_its_range(self):
         """#432: --recovery-authorization-max-s lowers the genesis default; 1 h and 7 days are the inclusive bounds."""
         for value in (3600, 86400, 604800):

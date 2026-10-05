@@ -71,7 +71,7 @@ def nodes4(**states):
 
 def manifest4(epoch, prev, nodes, **fields):
     man = {"schema": m.SCHEMA_V4, "epoch": epoch, "prev_digest": prev, "policy_version": "p1", "issued_at": "2026-10-04T09:00:00Z",
-           "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "recovery_authorization_max_s": 604800, "owner_keys": [typed(k) for k in OWNER_KEYS],
+           "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "recovery_authorization_max_s": 604800, "recovery_ends_by": None, "owner_keys": [typed(k) for k in OWNER_KEYS],
            "heartbeat_signers": {"threshold": 2, "parties": ["a", "b", "c", "owner"]},
            "activation_signers": {"threshold": 2, "parties": ["a", "b", "c"]},
            "revocation_signers": [{"threshold": 2, "parties": ["a", "b", "c"]}, {"threshold": 1, "parties": ["owner"]}],
@@ -187,6 +187,10 @@ class Format(Case):
                 ("an owner heartbeat bound above the heartbeat bound", lambda x: x.update(owner_heartbeat_lifetime_s=21601), "to heartbeat_max_lifetime_s"),
                 ("an owner heartbeat bound true", lambda x: x.update(owner_heartbeat_lifetime_s=True), "owner_heartbeat_lifetime_s must be an integer"),
                 ("no recovery authorization bound", lambda x: x.pop("recovery_authorization_max_s"), "manifest fields mismatch"),
+                ("no recovery end", lambda x: x.pop("recovery_ends_by"), "manifest fields mismatch"),
+                ("a recovery end below 0", lambda x: x.update(recovery_ends_by=-1), "recovery_ends_by must be null or an integer from 0"),
+                ("a recovery end that is text", lambda x: x.update(recovery_ends_by="soon"), "recovery_ends_by must be null or an integer"),
+                ("a recovery end true", lambda x: x.update(recovery_ends_by=True), "recovery_ends_by must be null or an integer"),
                 ("a recovery authorization bound below 1 h", lambda x: x.update(recovery_authorization_max_s=3599),
                  "recovery_authorization_max_s must be an integer from 3600 to 604800"),
                 ("a recovery authorization bound above 7 days", lambda x: x.update(recovery_authorization_max_s=604801),
@@ -399,6 +403,17 @@ class AnchorPolicyAndCardRecord(Case):
                 man = manifest4(3, m.digest(current), nodes4(), card_record=record)
                 self.refused("card_record changes only to a later card ceremony's record (sequence %d after 3)" % record["sequence"],
                              m.accept, current, sign(man, ROOT), ROOT_PUB)
+
+    def test_an_epoch_ending_a_recovery_states_when_the_recovery_ends(self):
+        """#432 amendment 5 (d9): after a recovery epoch (one node party counting), an epoch that lets another count again
+        must carry recovery_ends_by; any other epoch may leave it null."""
+        recovery = m.accept(self.first, sign(manifest4(2, m.digest(self.first), nodes4(a="QUARANTINED", b="QUARANTINED")), ROOT), ROOT_PUB)
+        back = manifest4(3, m.digest(recovery), nodes4(b="QUARANTINED"))                       # a counts again
+        self.refused("lets a count again after a recovery epoch: it must state recovery_ends_by", m.accept, recovery, sign(back, ROOT), ROOT_PUB)
+        stated = m.accept(recovery, sign(dict(back, recovery_ends_by=1790604800), ROOT), ROOT_PUB)
+        self.assertEqual(stated["recovery_ends_by"], 1790604800)
+        still = manifest4(3, m.digest(recovery), nodes4(a="QUARANTINED", b="QUARANTINED"), policy_version="p2")
+        self.assertEqual(m.accept(recovery, sign(still, ROOT), ROOT_PUB)["recovery_ends_by"], None)   # not ending it: null is fine
 
     def test_owner_keys_change_only_with_a_new_card_record(self):
         man = self.changed(lambda x: x["owner_keys"].pop())

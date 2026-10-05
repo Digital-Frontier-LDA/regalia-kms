@@ -137,9 +137,35 @@ def utc_now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def propose_states(current, changes, issued_at):
+AUTHORIZATIONS = "activation-authorizations.jsonl"     # in the laptop's state directory: the owner's recovery authorizations
+
+
+def recovery_ends_by(current, candidate, given, record_lines):
+    """recovery_ends_by for `candidate` (#432 amendment 5, d9): null unless it lets a node party count again after a recovery
+    epoch (one node party counting), and then the latest expires_at of the owner's recovery authorizations: taken from
+    the record of what the owner's tool issued (`record_lines`, owner.py's AUTHORIZATIONS lines) when present, or `given`;
+    a `given` value earlier than any expiry the record holds is refused. Returns (the value, the closing record line or None)."""
+    if current.get("schema") != membership.SCHEMA_V4 or not (len(membership.activation_counting(current)) == 1
+                                                              and membership.activation_counting(candidate) - membership.activation_counting(current)):
+        require(given is None, "--recovery-ends-by is for an epoch that ends a recovery, and this one does not")
+        return None, None
+    issued = [line["expires_at"] for line in record_lines if line.get("event") == "issued" and line.get("quarantine_epoch", 0) <= current["epoch"]]
+    latest = max(issued) if issued else None
+    if given is None:
+        require(latest is not None, "this epoch ends a recovery: give --recovery-ends-by (the latest expiry of the owner's recovery "
+                "authorizations), or --state-dir with the owner's %s" % AUTHORIZATIONS)
+        value = latest
+    else:
+        require(latest is None or given >= latest, "--recovery-ends-by %d is earlier than an authorization the record holds (until %d)"
+                % (given, latest))
+        value = given
+    return value, {"event": "closed", "through_epoch": current["epoch"], "recovery_ends_by": value}
+
+
+def propose_states(current, changes, issued_at, ends_by=None):
     """The next manifest: `current` with the nodes' states changed ({node_id: state}), the epoch moved on and
-    chained to it. Validated; whether a signer may make the change is transition()'s, at `sign`."""
+    chained to it, and recovery_ends_by `ends_by` (null unless it ends a recovery: recovery_ends_by()). Validated;
+    whether a signer may make the change is transition()'s, at `sign`."""
     require(changes, "no change given")
     candidate = json.loads(json.dumps(current))
     nodes = {n["node_id"]: n for n in candidate["nodes"]}
@@ -149,6 +175,8 @@ def propose_states(current, changes, issued_at):
         require(nodes[nid]["state"] != state, "%s is already %s" % (nid, state))
         nodes[nid]["state"] = state
     candidate.update(epoch=current["epoch"] + 1, prev_digest=membership.digest(current), issued_at=issued_at)
+    if "recovery_ends_by" in candidate:
+        candidate["recovery_ends_by"] = ends_by
     membership.validate(candidate)
     return candidate
 
@@ -160,7 +188,8 @@ def propose_states(current, changes, issued_at):
 # --owner-heartbeat-lifetime-s); membership.validate still refuses a value below its floors. The owner is ONE party,
 # so "2 of {a, b, c, owner}" already means at least one node signs every heartbeat and activation lease. The proposed
 # D31 director party (not decided) would make that floor explicit; there is deliberately no director field here.
-GENESIS_POLICY = {"heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "recovery_authorization_max_s": 604800}
+GENESIS_POLICY = {"heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "recovery_authorization_max_s": 604800,
+                  "recovery_ends_by": None}
 OWNER_PARTY = membership.OWNER
 # what `enrol entry` prints for a node (#358, #371 and its ssh_host_pub): the v4 entry is these and state ACTIVE
 ENTRY_FIELDS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key", "hsm_serials", "ssh_host_pub")
@@ -697,6 +726,17 @@ def _raw(path, limit):
         return f.read(limit + 1)
 
 
+def _authorization_lines(state_dir):
+    """The owner's recovery-authorization record in the laptop's state directory (owner.py sign-activation), or []."""
+    if not state_dir:
+        return []
+    try:
+        with open(os.path.join(state_dir, AUTHORIZATIONS)) as f:
+            return [json.loads(line) for line in f if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
 def _states(pairs):
     changes = {}
     for pair in pairs:
@@ -763,6 +803,8 @@ def main(argv=None):
                    "(#432), override the default %d (7 days; 3600 at least)" % GENESIS_POLICY["recovery_authorization_max_s"])
     c.add_argument("--from-rollout", metavar="R.json", help="the output of `rollout propose --json`")
     c.add_argument("--set-state", action="append", default=[], metavar="NODE=STATE", help="change a node's state; repeat")
+    c.add_argument("--recovery-ends-by", type=int, metavar="UNIX_SECONDS", help="an epoch ending a recovery (#432): the latest "
+                   "expiry of the owner's recovery authorizations; taken from --state-dir's %s when that is present" % AUTHORIZATIONS)
     c.add_argument("--issued-at", metavar="YYYY-MM-DDTHH:MM:SSZ")
     c.add_argument("--out", required=True)
     step_args(c, acknowledge=False)
@@ -834,7 +876,15 @@ def main(argv=None):
             if args.from_rollout:
                 candidate = propose_from_rollout(current, read_json(args.from_rollout, membership.MAX_BYTES), _step(args))
             else:
-                candidate = propose_states(current, _states(args.set_state), args.issued_at or utc_now())
+                changes = _states(args.set_state)
+                trial = propose_states(current, changes, args.issued_at or utc_now(), None)
+                lines = _authorization_lines(args.state_dir)
+                ends, closing = recovery_ends_by(current, trial, args.recovery_ends_by, lines)
+                candidate = propose_states(current, changes, args.issued_at or utc_now(), ends)
+                if closing is not None and args.state_dir:
+                    # the record closes the epochs before: the owner's tool issues no authorization for them again (d9)
+                    with open(os.path.join(args.state_dir, AUTHORIZATIONS), "a") as f:
+                        f.write(json.dumps(closing, sort_keys=True) + "\n")
             _write_new(args.out, json.dumps(candidate, indent=2, sort_keys=True).encode() + b"\n")
             print("\n".join(diff(current, candidate)))
             print("UNSIGNED epoch %d written to %s" % (candidate["epoch"], args.out))

@@ -54,6 +54,10 @@ v3's fields without `revocation_keys`, and:
     and ONE surviving node activate a site while the other node parties are quarantined, the survivor renewing its own
     leases under that one authorization): an integer from RECOVERY_AUTH_MIN_S to RECOVERY_AUTH_MAX_S (1 h to 7 days),
     the root's to change;
+  * `recovery_ends_by`: null, or (unix seconds) the latest expiry of any recovery authorization the owner issued before
+    this epoch. The root must set it in an epoch that lets a node count again after a recovery epoch (one node party of
+    activation_signers counting, #432 amendment 5): a node coming back then waits for the survivor at this epoch, or
+    until this time and RECOVERY_WAIT_S when the survivor is quarantined and may never answer (d9);
   * `owner_heartbeat_lifetime_s`: the longest life of a heartbeat whose counting signatures include the
     owner's (an emergency credential), from 300 s to heartbeat_max_lifetime_s. Such a heartbeat is always
     the owner AND at least one node: the heartbeat threshold is at least 2 and the owner is one party
@@ -171,7 +175,7 @@ IDENTITY_KEYS = ("ek_name", "ak_name", "wg_boot_pub", "wg_service_pub")
 V2_MANIFEST_KEYS = MANIFEST_KEYS + ("heartbeat_max_lifetime_s",)
 V2_NODE_KEYS = NODE_KEYS + ("ssh_host_pub",)
 V2_IDENTITY_KEYS = IDENTITY_KEYS + ("ssh_host_pub",)
-SIGNER_FIELDS = ("owner_heartbeat_lifetime_s", "recovery_authorization_max_s", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers")
+SIGNER_FIELDS = ("owner_heartbeat_lifetime_s", "recovery_authorization_max_s", "recovery_ends_by", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers")
 # #361/#405: K_A (immutable, every signer) and the card ceremony's record that names owner_keys (the root's)
 V4_ONLY_FIELDS = ("anchor_policy_key", "card_record")
 MAX_CARD_SEQUENCE = 2 ** 31 - 1                                  # exact in every JSON reader
@@ -394,6 +398,8 @@ def _signer_rules(manifest, by_id, seen):
     recovery = manifest["recovery_authorization_max_s"]
     require(type(recovery) is int and RECOVERY_AUTH_MIN_S <= recovery <= RECOVERY_AUTH_MAX_S,
             "recovery_authorization_max_s must be an integer from %d to %d" % (RECOVERY_AUTH_MIN_S, RECOVERY_AUTH_MAX_S))
+    ends = manifest["recovery_ends_by"]
+    require(ends is None or (type(ends) is int and 0 <= ends < 2 ** 63), "recovery_ends_by must be null or an integer from 0")
 
     def rule(value, label, owner_alone):
         exact(value, ("threshold", "parties"), label)
@@ -684,6 +690,7 @@ def transition(current, candidate, signer):
         _restrictive(current, candidate, signer)
     elif current["schema"] == candidate["schema"] == SCHEMA_V4:
         _card_record_rules(current, candidate)
+        _recovery_end_rules(current, candidate)
     return candidate
 
 
@@ -696,6 +703,23 @@ def _card_record_rules(current, candidate):
                 "after %d)" % (new["sequence"], old["sequence"]))
     elif candidate["owner_keys"] != current["owner_keys"]:
         raise Refused("owner_keys change only with a new card_record: the card ceremony's record names them")
+
+
+def activation_counting(manifest):
+    """The node parties of a v4 manifest's activation_signers that count (not RETIRED, REVOKED_STOLEN or QUARANTINED)."""
+    nodes = {n["node_id"]: n for n in manifest["nodes"]}
+    return {p for p in manifest["activation_signers"]["parties"] if p != OWNER and p in nodes and nodes[p]["state"] not in NOT_COUNTING}
+
+
+def _recovery_end_rules(current, candidate):
+    """The root's v4 rule for recovery_ends_by (#432 amendment 5, d9): after a recovery epoch (ONE node party counting), an
+    epoch that lets another node party count again states recovery_ends_by, the latest expiry of the owner's recovery
+    authorizations: the nodes coming back wait for it when the survivor cannot be heard."""
+    alone = activation_counting(current)
+    if len(alone) == 1 and activation_counting(candidate) - alone:
+        require(candidate["recovery_ends_by"] is not None, "this epoch lets %s count again after a recovery epoch: it must state "
+                "recovery_ends_by, the latest expiry of the owner's recovery authorizations (manifest.py propose "
+                "--recovery-ends-by)" % ", ".join(sorted(activation_counting(candidate) - alone)))
 
 
 def accept_chain(current, envelopes, root_key):
