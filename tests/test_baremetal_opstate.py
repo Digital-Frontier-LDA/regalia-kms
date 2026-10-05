@@ -25,7 +25,7 @@ class Vectors(unittest.TestCase):
         for c in doc["cases"]:
             with self.subTest(c["name"]):
                 try:
-                    entry = opstate.verify(c["key"], c["value"], sessions, doc["approvers"], c["required"])
+                    entry = opstate.verify(c["key"], c["value"], sessions, doc["approver_sets"])
                     opstate.transition(c["previous"], entry)
                     got, why = True, ""
                 except m.Refused as refused:

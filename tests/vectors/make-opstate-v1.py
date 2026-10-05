@@ -30,6 +30,9 @@ STRANGER, STRANGER_PUB = key(9)
 BOOT = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
 SESSIONS = {"a|" + BOOT: SESSION_A_PUB}
 APPROVERS = {"alice": ALICE_PUB, "bob": BOB_PUB}
+CURRENT_SET = opstate.approver_set_digest(APPROVERS, 2)
+OLD_SET = opstate.approver_set_digest({"alice": ALICE_PUB}, 1)                 # the set before a rotation
+APPROVER_SETS = {CURRENT_SET: {"approvers": APPROVERS, "required": 2}, OLD_SET: {"approvers": {"alice": ALICE_PUB}, "required": 1}}
 NONCE = opstate.nonce_digest("request-nonce-1")
 AT = "2026-10-05T12:00:00Z"
 
@@ -57,10 +60,18 @@ def quota(total, **over):
     return entry
 
 
-def key_state(state, **over):
-    entry = {"schema": opstate.SCHEMA, "kind": "key-state", "at": AT, "object_id": "release-signing", "state": state}
+def key_state(state, after=None, **over):
+    """A key's state, version 1 or the one after `after` (the entry it replaces), under the current approver set."""
+    entry = {"schema": opstate.SCHEMA, "kind": "key-state", "at": AT, "object_id": "release-signing", "state": state,
+             "version": after["version"] + 1 if after else 1, "prev_digest": opstate.entry_digest(after) if after else "",
+             "approver_set": CURRENT_SET}
     entry.update(over)
     return entry
+
+
+ENABLED = key_state("enabled")
+DISABLED = key_state("disabled", ENABLED)
+DESTROYED = key_state("destroyed", DISABLED)
 
 
 def by_node(entry, private=SESSION_A, party="a", boot=BOOT, raw=None):
@@ -77,13 +88,13 @@ def by_approvers(entry, *who):
 CASES = []
 
 
-def case(name, value, accept, previous=None, where=None, required=2):
+def case(name, value, accept, previous=None, where=None):
     entry = value["entry"]
     try:
         where = where or opstate.key_for(entry)
     except m.Refused:
         where = where or opstate.PREFIX + "nonces/" + "00" * 32
-    CASES.append({"name": name, "key": where, "value": value, "previous": previous, "required": required, "accept": accept})
+    CASES.append({"name": name, "key": where, "value": value, "previous": previous, "accept": accept})
 
 
 # ---- accepted ----
@@ -93,10 +104,12 @@ case("the first value of a sequence", by_node(sequence(7)), True)
 case("a sequence above the previous", by_node(sequence(8)), True, previous=sequence(7))
 case("a quota total that grows, under its cap", by_node(quota(5)), True, previous=quota(4))
 case("a quota total exactly at its cap", by_node(quota(100)), True, previous=quota(99))
-case("a key disabled by two of two approvers", by_approvers(key_state("disabled"), "alice", "bob"), True, previous=key_state("enabled"))
-case("a key enabled again", by_approvers(key_state("enabled"), "bob", "alice"), True, previous=key_state("disabled"))
-case("a key destroyed", by_approvers(key_state("destroyed"), "alice", "bob"), True, previous=key_state("disabled"))
-case("one of one approvers when one is required", by_approvers(key_state("disabled"), "alice"), True, required=1)
+case("a key's first state", by_approvers(ENABLED, "alice", "bob"), True)
+case("a key disabled by two of two approvers", by_approvers(DISABLED, "alice", "bob"), True, previous=ENABLED)
+case("a key enabled again", by_approvers(key_state("enabled", DISABLED), "bob", "alice"), True, previous=DISABLED)
+case("a key destroyed", by_approvers(DESTROYED, "alice", "bob"), True, previous=DISABLED)
+case("an entry under the set before a rotation still verifies", by_approvers(key_state("disabled", ENABLED, approver_set=OLD_SET), "alice"),
+     True, previous=ENABLED)
 
 # ---- refused ----
 case("SPENT: the nonce exists already", by_node(spend()), False, previous=spend(at="2026-10-05T11:59:00Z"))
@@ -120,11 +133,20 @@ case("a sequence that does not move", by_node(sequence(7)), False, previous=sequ
 case("a sequence that goes back", by_node(sequence(6)), False, previous=sequence(7))
 case("a quota over its cap", by_node(quota(101)), False, previous=quota(100))
 case("a quota total that shrinks", by_node(quota(3)), False, previous=quota(4))
-case("one of two required approvals", by_approvers(key_state("disabled"), "alice"), False, previous=key_state("enabled"))
-case("the same approver twice", by_approvers(key_state("disabled"), "alice", "alice"), False, previous=key_state("enabled"))
-case("an approver not in the set", by_approvers(key_state("disabled"), "alice", "mallory"), False, previous=key_state("enabled"))
-case("a destroyed key enabled again", by_approvers(key_state("enabled"), "alice", "bob"), False, previous=key_state("destroyed"))
-case("a key state signed by a node session", by_node(key_state("disabled")), False)
+case("one of two required approvals", by_approvers(DISABLED, "alice"), False, previous=ENABLED)
+case("the same approver twice", by_approvers(DISABLED, "alice", "alice"), False, previous=ENABLED)
+case("an approver not in the set", by_approvers(DISABLED, "alice", "mallory"), False, previous=ENABLED)
+case("bob approving under the old set, which did not hold him", by_approvers(key_state("disabled", ENABLED, approver_set=OLD_SET), "bob"),
+     False, previous=ENABLED)
+case("an approver set nobody knows", by_approvers(key_state("disabled", ENABLED, approver_set="ee" * 32), "alice", "bob"), False, previous=ENABLED)
+case("a destroyed key enabled again", by_approvers(key_state("enabled", DESTROYED), "alice", "bob"), False, previous=DESTROYED)
+case("REPLAY: the old approved enabled put back after a disable", by_approvers(ENABLED, "alice", "bob"), False, previous=DISABLED)
+case("a later version that names another previous", by_approvers(key_state("enabled", DISABLED, prev_digest="11" * 32), "alice", "bob"),
+     False, previous=DISABLED)
+case("a version that skips one", by_approvers(key_state("enabled", DISABLED, version=4), "alice", "bob"), False, previous=DISABLED)
+case("version 2 where the key has no state", by_approvers(DISABLED, "alice", "bob"), False)
+case("version 1 that names a previous", by_approvers(key_state("enabled", prev_digest="11" * 32), "alice", "bob"), False)
+case("a key state signed by a node session", by_node(DISABLED), False)
 case("a sequence entry over a quota", by_node(sequence(9)), False, previous=quota(1))
 
 BATCHES = []
@@ -144,7 +166,7 @@ batch("no spend", [write(by_node(sequence(8)), sequence(7))], False)
 batch("two spends", [write(by_node(spend())), write(by_node(spend(nonce_digest=opstate.nonce_digest("request-nonce-2"))))], False)
 batch("a sequence naming another nonce", [write(by_node(spend())), write(by_node(sequence(8, nonce_digest="22" * 32)), sequence(7))], False)
 batch("a quota by another node", [write(by_node(spend())), write(by_node(quota(5, node_id="b"), party="b"), quota(4))], False)
-batch("a key-state change inside a Reserve", [write(by_node(spend())), write(by_approvers(key_state("disabled"), "alice", "bob"), key_state("enabled"))], False)
+batch("a key-state change inside a Reserve", [write(by_node(spend())), write(by_approvers(DISABLED, "alice", "bob"), ENABLED)], False)
 batch("one key twice", [write(by_node(spend())), write(by_node(quota(5)), quota(4)), write(by_node(quota(6)), quota(4))], False)
 batch("over the size of one transaction", [write(by_node(spend()))] +
       [write(by_node(quota(1, counter="c%d" % i))) for i in range(opstate.MAX_BATCH)], False)
@@ -154,7 +176,7 @@ batch("a spent nonce inside a Reserve", [write(by_node(spend()), spend(at="2026-
 def decide_case(c):
     sessions = lambda node, boot: SESSIONS.get("%s|%s" % (node, boot))      # noqa: E731
     try:
-        entry = opstate.verify(c["key"], c["value"], sessions, APPROVERS, c["required"])
+        entry = opstate.verify(c["key"], c["value"], sessions, APPROVER_SETS)
         opstate.transition(c["previous"], entry)
         return True, ""
     except m.Refused as refused:
@@ -179,7 +201,7 @@ def main():
         assert got == b["accept"], (b["name"], why)
         b["python_reason"] = why
     doc = {"schema": "regalia.opstate-vectors/v1", "domain": opstate.DOMAIN.decode().rstrip("\0") + "\\0", "max_batch": opstate.MAX_BATCH,
-           "sessions": SESSIONS, "approvers": APPROVERS, "cases": CASES, "batches": BATCHES}
+           "sessions": SESSIONS, "approver_sets": APPROVER_SETS, "cases": CASES, "batches": BATCHES}
     json.dump(copy.deepcopy(doc), sys.stdout, indent=1, sort_keys=True)
     sys.stdout.write("\n")
 

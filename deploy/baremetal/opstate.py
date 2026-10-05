@@ -20,15 +20,23 @@ KINDS, and the key under /regalia/v1/ each lives at (key_for):
              value is above the one it replaces: Txn If value == previous.
   quota      quota/<sha256(principal)>/<utc_date>/<sha256(counter)>   a principal's running total for the day, at
              most its cap.
-  key-state  keys/<sha256(object_id)>/state       enabled, disabled or destroyed; destroyed is final.
+  key-state  keys/<sha256(object_id)>/state       enabled, disabled or destroyed; destroyed is final. A chain: each
+             entry names its version (previous + 1, the first 1) and the SHA-256 of the entry it replaces, both signed,
+             so an old approved entry cannot be put back after a newer one (regalia-kms-ed on #488).
 
 Names inside a key are hashed: a principal is a SPIFFE ID, and a "/" in a name must not make two keys one.
 
 WHO SIGNS. spend, sequence and quota: the node that reserved them, with its per-boot session key. The daemon makes
 that key at each start; the node's TPM-quoted runtime lease names it (lease v2, regalia-kms-95), and
 sessions/<node>/<boot_id> keeps that lease, so a verifier resolves (node_id, boot_id) to the key long after the lease
-ran out (`sessions`, the caller's resolver). key-state: approvers under D25, `required` of the `approvers` key set
-(Ed25519, as internal/approval verifies), or the owner as one of them.
+ran out (`sessions`, the caller's resolver). key-state: approvers under D25 (Ed25519, as internal/approval verifies),
+`required` of a set the entry names by its digest (approver_set_digest), so an entry signed under an earlier set still
+verifies after the set is rotated: the verifier keeps every set by digest (`approver_sets`), as it keeps manifests.
+
+DELETION. Nothing deletes under /regalia/v1/ but etcd's own lease expiry, for spends whose request has expired and
+quota days that are over (an etcd role grants the daemons put, never delete, there). A key-state entry is never
+collected: a reader that has seen a key's state refuses its absence, and a version 1 entry after a later one is a
+replay.
 
 ONE RESERVE IS ONE TRANSACTION: a spend, its sequence and its quota counters, at most MAX_BATCH entries (etcd's
 --max-txn-ops is 128), all or nothing (batch()). Transactions that lose a race are retried at most RETRIES times
@@ -66,7 +74,7 @@ FIELDS = {
                        "node_id", "boot_id", "lease_digest", "lease_expires_at", "expires_at"),
     "sequence": COMMON + ("sequence_key", "value", "nonce_digest", "node_id", "boot_id"),
     "quota": COMMON + ("principal", "utc_date", "counter", "total", "cap", "nonce_digest", "node_id", "boot_id"),
-    "key-state": COMMON + ("object_id", "state"),
+    "key-state": COMMON + ("object_id", "state", "version", "prev_digest", "approver_set"),
 }
 
 
@@ -125,7 +133,24 @@ def validate(entry):
     else:
         _name(entry["object_id"], "object_id")
         require(entry["state"] in KEY_STATES, "state must be one of %s" % ", ".join(KEY_STATES))
+        require(isinstance(entry["version"], int) and not isinstance(entry["version"], bool) and 1 <= entry["version"] < 2 ** 63,
+                "version must be an integer from 1")
+        if entry["version"] == 1:
+            require(entry["prev_digest"] == "", "the first state of a key replaces nothing (prev_digest \"\")")
+        else:
+            membership.hex_field(entry["prev_digest"], 64, "prev_digest")
+        membership.hex_field(entry["approver_set"], 64, "approver_set")
     return kind
+
+
+def approver_set_digest(approvers, required):
+    """The digest a key-state entry names its approver set by: {approver ID: Ed25519 key hex} and the threshold."""
+    return hashlib.sha256(membership.canonical({"approvers": approvers, "required": required})).hexdigest()
+
+
+def entry_digest(entry):
+    """What the next key-state entry names as prev_digest."""
+    return hashlib.sha256(membership.canonical(entry)).hexdigest()
 
 
 def _h(name):
@@ -158,10 +183,11 @@ def _ed25519(key_hex, sig_hex, raw, label):
         raise Refused("%s signature does not verify" % label)
 
 
-def verify(key, value, sessions, approvers=None, required=0):
+def verify(key, value, sessions, approver_sets=None):
     """The entry stored at etcd key `key` as `value`, if it verifies, else Refused (and the entry is unavailable).
     `sessions(node_id, boot_id)` returns that boot's session key (64 hex), or None when no verified lease named one.
-    `approvers` ({approver ID: Ed25519 key hex}) and `required` judge a key-state entry (D25)."""
+    `approver_sets` ({digest: {"approvers": {ID: Ed25519 key hex}, "required": n}}, every set the policy has had)
+    judges a key-state entry (D25) by the set it names."""
     membership.exact(value, ("entry", "signatures"), "the opstate value")
     entry, signatures = value["entry"], value["signatures"]
     require(key == key_for(entry), "the entry belongs under %s, not %s" % (key_for(entry), key))
@@ -177,7 +203,13 @@ def verify(key, value, sessions, approvers=None, required=0):
         require(session is not None, "no verified lease names a session key for %s in boot %s" % (entry["node_id"], entry["boot_id"]))
         _ed25519(session, sig["sig"], raw, "%s's session" % entry["node_id"])
         return entry
-    require(isinstance(required, int) and required >= 1 and approvers, "a key-state change needs an approver set and a threshold")
+    named = (approver_sets or {}).get(entry["approver_set"])
+    require(named is not None, "the approver set %s is not one this verifier knows" % entry["approver_set"][:16])
+    approvers, required = named["approvers"], named["required"]
+    require(approver_set_digest(approvers, required) == entry["approver_set"], "the approver set held under %s is not that set"
+            % entry["approver_set"][:16])
+    require(isinstance(required, int) and not isinstance(required, bool) and required >= 1 and approvers,
+            "a key-state change needs an approver set and a threshold")
     require(len(signatures) <= MAX_APPROVERS, "at most %d approvals" % MAX_APPROVERS)
     counted = set()
     for sig in signatures:
@@ -196,6 +228,8 @@ def transition(previous, entry):
     cannot say: the transaction already requires the previous value to be what was read."""
     kind = entry["kind"]
     if previous is None:
+        require(kind != "key-state" or entry["version"] == 1, "the key %s has no state on record; version %d replaces one"
+                % (entry.get("object_id"), entry.get("version", 0)))
         return
     require(previous["kind"] == kind, "a %s entry cannot replace a %s entry" % (kind, previous["kind"]))
     if kind == "spend":
@@ -206,6 +240,8 @@ def transition(previous, entry):
         require(entry["total"] > previous["total"], "a quota total only grows within its day (%d, then %d)" % (previous["total"], entry["total"]))
     else:
         require(previous["state"] != "destroyed", "the key %s is destroyed: its state is final" % entry["object_id"])
+        require(entry["version"] == previous["version"] + 1 and entry["prev_digest"] == entry_digest(previous),
+                "REPLAY: the key %s is at version %d; this entry is version %d over another state" % (entry["object_id"], previous["version"], entry["version"]))
 
 
 def batch(writes):

@@ -36,6 +36,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     lease v2 (regalia-kms-95), and the caller supplies the resolver;
   - the D25 approver set for a key-state change is the caller's, not yet read from the policy;
   - garbage collection by hour-bucketed etcd leases.
+  - the etcd role that grants the daemons put, never delete, under `/regalia/v1/` (ed's daemon). Until it exists, a
+    client of the etcd socket could delete a key. A reader that has seen a key-state refuses its absence, but a reader
+    starting fresh cannot tell a deleted key from a new one.
   **Accepted:**
   - etcd isn't Byzantine-tolerant. A member with root can withhold entries or serve old ones. It cannot forge an
     entry, because every entry carries its own signatures. A whole-cluster rollback is caught by the revision in the

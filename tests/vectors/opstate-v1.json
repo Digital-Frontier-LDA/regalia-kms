@@ -1,7 +1,18 @@
 {
- "approvers": {
-  "alice": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
-  "bob": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
+ "approver_sets": {
+  "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945": {
+   "approvers": {
+    "alice": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+    "bob": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
+   },
+   "required": 2
+  },
+  "fdd1ebecfb19a52f5422e2f43cb737edf6731827dccee4e9927ec69ceeb5127c": {
+   "approvers": {
+    "alice": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394"
+   },
+   "required": 1
+  }
  },
  "batches": [
   {
@@ -457,28 +468,34 @@
     {
      "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
      "previous": {
+      "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
       "at": "2026-10-05T12:00:00Z",
       "kind": "key-state",
       "object_id": "release-signing",
+      "prev_digest": "",
       "schema": "regalia.opstate/v1",
-      "state": "enabled"
+      "state": "enabled",
+      "version": 1
      },
      "value": {
       "entry": {
+       "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "at": "2026-10-05T12:00:00Z",
        "kind": "key-state",
        "object_id": "release-signing",
+       "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
        "schema": "regalia.opstate/v1",
-       "state": "disabled"
+       "state": "disabled",
+       "version": 2
       },
       "signatures": [
        {
         "party": "alice",
-        "sig": "1ab01088e3262c7a8edff5d88c9368aa61c262008da5db26100826a749dfe79ad9537ac9132f45932b9c67b5eee29b89da9daf62741e974394a21d25cc160803"
+        "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
        },
        {
         "party": "bob",
-        "sig": "7000ddc716377a3d1bc086db8a8957cfa80cb77999f8cd6ff31077a726be0292795091b1f0bc04ecca4742e997e6f7795d1ed5feb4d5fe99ea06c2d81fbdc001"
+        "sig": "51df0dee7935af2d8cbb25fe7ba901a1092ab1cdde91810d3d1586496ed443f79372160296650facf6b7a95b062179abcc7939de7c86f5d21c747a4286d9d108"
        }
       ]
      }
@@ -2372,7 +2389,6 @@
    "name": "a spend, signed by the node's session key",
    "previous": null,
    "python_reason": "",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -2409,7 +2425,6 @@
    "name": "a spend with no approvers (a request no policy gates)",
    "previous": null,
    "python_reason": "",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [],
@@ -2443,7 +2458,6 @@
    "name": "the first value of a sequence",
    "previous": null,
    "python_reason": "",
-   "required": 2,
    "value": {
     "entry": {
      "at": "2026-10-05T12:00:00Z",
@@ -2479,7 +2493,6 @@
     "value": 7
    },
    "python_reason": "",
-   "required": 2,
    "value": {
     "entry": {
      "at": "2026-10-05T12:00:00Z",
@@ -2518,7 +2531,6 @@
     "utc_date": "2026-10-05"
    },
    "python_reason": "",
-   "required": 2,
    "value": {
     "entry": {
      "at": "2026-10-05T12:00:00Z",
@@ -2560,7 +2572,6 @@
     "utc_date": "2026-10-05"
    },
    "python_reason": "",
-   "required": 2,
    "value": {
     "entry": {
      "at": "2026-10-05T12:00:00Z",
@@ -2587,32 +2598,66 @@
   {
    "accept": true,
    "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
-   "name": "a key disabled by two of two approvers",
-   "previous": {
-    "at": "2026-10-05T12:00:00Z",
-    "kind": "key-state",
-    "object_id": "release-signing",
-    "schema": "regalia.opstate/v1",
-    "state": "enabled"
-   },
+   "name": "a key's first state",
+   "previous": null,
    "python_reason": "",
-   "required": 2,
    "value": {
     "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
+     "prev_digest": "",
      "schema": "regalia.opstate/v1",
-     "state": "disabled"
+     "state": "enabled",
+     "version": 1
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "1ab01088e3262c7a8edff5d88c9368aa61c262008da5db26100826a749dfe79ad9537ac9132f45932b9c67b5eee29b89da9daf62741e974394a21d25cc160803"
+      "sig": "5877c6116bb4af11a8ed8f5624bf4eddcb1c619889281cf33832a8f3b8f6c8ae4901d712c040b2430262fe2fb35cd25d9222ab4fb0bdd2cb7f771b88021caf09"
      },
      {
       "party": "bob",
-      "sig": "7000ddc716377a3d1bc086db8a8957cfa80cb77999f8cd6ff31077a726be0292795091b1f0bc04ecca4742e997e6f7795d1ed5feb4d5fe99ea06c2d81fbdc001"
+      "sig": "32113e5e9339d9ce2211f10113d9ecc91879ac68c46c7f95ab89c74081fbbad5d081f30674a032a79ca943b4646ac1d336677acf6b4e9259b706c7c2ed2a0f07"
+     }
+    ]
+   }
+  },
+  {
+   "accept": true,
+   "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
+   "name": "a key disabled by two of two approvers",
+   "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "at": "2026-10-05T12:00:00Z",
+    "kind": "key-state",
+    "object_id": "release-signing",
+    "prev_digest": "",
+    "schema": "regalia.opstate/v1",
+    "state": "enabled",
+    "version": 1
+   },
+   "python_reason": "",
+   "value": {
+    "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+     "at": "2026-10-05T12:00:00Z",
+     "kind": "key-state",
+     "object_id": "release-signing",
+     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "schema": "regalia.opstate/v1",
+     "state": "disabled",
+     "version": 2
+    },
+    "signatures": [
+     {
+      "party": "alice",
+      "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
+     },
+     {
+      "party": "bob",
+      "sig": "51df0dee7935af2d8cbb25fe7ba901a1092ab1cdde91810d3d1586496ed443f79372160296650facf6b7a95b062179abcc7939de7c86f5d21c747a4286d9d108"
      }
     ]
    }
@@ -2622,30 +2667,35 @@
    "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
    "name": "a key enabled again",
    "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
     "at": "2026-10-05T12:00:00Z",
     "kind": "key-state",
     "object_id": "release-signing",
+    "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
     "schema": "regalia.opstate/v1",
-    "state": "disabled"
+    "state": "disabled",
+    "version": 2
    },
    "python_reason": "",
-   "required": 2,
    "value": {
     "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
+     "prev_digest": "54776b27f44c2ab6b272addc00374a50b7508a5f18b0f0f357f968980263a6a3",
      "schema": "regalia.opstate/v1",
-     "state": "enabled"
+     "state": "enabled",
+     "version": 3
     },
     "signatures": [
      {
       "party": "bob",
-      "sig": "3972e8e6865015487338ba403678ca6e4560be9452c10d06897dd6f8bd84339bfc04a3426c6c5b419b6878e96523d617a7471b512967fb0a85a62a557b24a905"
+      "sig": "1b121a659bb9f07902597435e28607f499daaa139db810bbc12625ab72334d3ad2191385196cbb15c6c0933625540c3b516fc7305dd20c895aff0aa75a17510a"
      },
      {
       "party": "alice",
-      "sig": "3b1e1a858479a9374424d56a69213045f19b93dbeb1b26f398257d15db75afa141973dab8da9b1213195e32b5581e43bb3cd3b2edd7854e97f5647e07c35db02"
+      "sig": "1fcb7acc454bc815033f1952f5ecf4de1301039f26eca18c362163b65e3811fce8ac23acce17aecdf1b85a037e8ff2fcc4af07c92413c30a282f7ee981d60707"
      }
     ]
    }
@@ -2655,30 +2705,35 @@
    "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
    "name": "a key destroyed",
    "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
     "at": "2026-10-05T12:00:00Z",
     "kind": "key-state",
     "object_id": "release-signing",
+    "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
     "schema": "regalia.opstate/v1",
-    "state": "disabled"
+    "state": "disabled",
+    "version": 2
    },
    "python_reason": "",
-   "required": 2,
    "value": {
     "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
+     "prev_digest": "54776b27f44c2ab6b272addc00374a50b7508a5f18b0f0f357f968980263a6a3",
      "schema": "regalia.opstate/v1",
-     "state": "destroyed"
+     "state": "destroyed",
+     "version": 3
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "20fdf9f1c94d65f75bf930d18188c64c2a0d1b57f9c3f4cce7a6cac998542b2c4a9ff9e94880cf890e5a607a875f5bb8dc09cbf825ce057f873d6f1259393706"
+      "sig": "2aa78712c12c65c56eb378aade35e8b3beb33643839a3509c5751fbd057a10aef5b722939217f9f09014acb4658d423a2b735187f2c7dc28ff7fdfbe07cdd20c"
      },
      {
       "party": "bob",
-      "sig": "5613beb0c89f40ea5d5ac74ecd6035f328bb17784f1e9ce1abcce10cc84f613efc2e071c36384bd546296c1cdaf4da3701a059123cccf03f3ad50a0cfccd800c"
+      "sig": "92d68e6db4357b10baac5dd2bcb2cf210f75dd6d1787d42d9c396bb2df3352f0e6ca84b401a66db414e15a4df6f231f25c2928b70be922eafd129242f4002b0f"
      }
     ]
    }
@@ -2686,22 +2741,33 @@
   {
    "accept": true,
    "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
-   "name": "one of one approvers when one is required",
-   "previous": null,
+   "name": "an entry under the set before a rotation still verifies",
+   "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "at": "2026-10-05T12:00:00Z",
+    "kind": "key-state",
+    "object_id": "release-signing",
+    "prev_digest": "",
+    "schema": "regalia.opstate/v1",
+    "state": "enabled",
+    "version": 1
+   },
    "python_reason": "",
-   "required": 1,
    "value": {
     "entry": {
+     "approver_set": "fdd1ebecfb19a52f5422e2f43cb737edf6731827dccee4e9927ec69ceeb5127c",
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
+     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
      "schema": "regalia.opstate/v1",
-     "state": "disabled"
+     "state": "disabled",
+     "version": 2
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "1ab01088e3262c7a8edff5d88c9368aa61c262008da5db26100826a749dfe79ad9537ac9132f45932b9c67b5eee29b89da9daf62741e974394a21d25cc160803"
+      "sig": "a7b8f5a219edbb9d8314ea62c2bf831e7e43d4c708c708e2712ef8c9d3e00856c08a758a4515e93707988825a80e537c34fd22e618bea2641456bd2c7248b107"
      }
     ]
    }
@@ -2731,7 +2797,6 @@
     "schema": "regalia.opstate/v1"
    },
    "python_reason": "SPENT: the nonce d3e6a034dfb02da1 was spent by a at 2026-10-05T11:59:00Z",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -2768,7 +2833,6 @@
    "name": "a spend under another nonce's key",
    "previous": null,
    "python_reason": "the entry belongs under /regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4, not /regalia/v1/nonces/1111111111111111111111111111111111111111111111111111111111111111",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -2805,7 +2869,6 @@
    "name": "a spend signed by a key no lease names",
    "previous": null,
    "python_reason": "a's session signature does not verify",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -2842,7 +2905,6 @@
    "name": "a spend signed as another node",
    "previous": null,
    "python_reason": "the entry is signed as b, boot 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0; it names a, boot 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -2879,7 +2941,6 @@
    "name": "a spend signed in another boot",
    "previous": null,
    "python_reason": "the entry is signed as a, boot 11111111-2222-3333-4444-555555555555; it names a, boot 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -2916,7 +2977,6 @@
    "name": "a spend by a boot with no session on record",
    "previous": null,
    "python_reason": "no verified lease names a session key for a in boot 11111111-2222-3333-4444-555555555555",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -2953,7 +3013,6 @@
    "name": "a spend whose signature has no domain",
    "previous": null,
    "python_reason": "a's session signature does not verify",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -2990,7 +3049,6 @@
    "name": "a spend after the node's lease ran out",
    "previous": null,
    "python_reason": "the signing node's lease had run out when it spent",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -3027,7 +3085,6 @@
    "name": "a spend after the request expired",
    "previous": null,
    "python_reason": "the request had expired when it was spent",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -3064,7 +3121,6 @@
    "name": "approvers not sorted",
    "previous": null,
    "python_reason": "approvers must be sorted, each once",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -3101,7 +3157,6 @@
    "name": "an approver twice",
    "previous": null,
    "python_reason": "approvers must be sorted, each once",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -3138,7 +3193,6 @@
    "name": "an unknown field",
    "previous": null,
    "python_reason": "the spend entry fields mismatch: missing=[] unknown=['note']",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -3176,7 +3230,6 @@
    "name": "another schema",
    "previous": null,
    "python_reason": "schema must be regalia.opstate/v1",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -3213,7 +3266,6 @@
    "name": "an unknown kind",
    "previous": null,
    "python_reason": "kind must be one of spend, sequence, quota, key-state",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -3250,7 +3302,6 @@
    "name": "a node's entry with two signatures",
    "previous": null,
    "python_reason": "a node's entry carries exactly one signature",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -3292,7 +3343,6 @@
    "name": "an entry over 4096 bytes",
    "previous": null,
    "python_reason": "the entry is over 4096 bytes",
-   "required": 2,
    "value": {
     "entry": {
      "approvers": [
@@ -3366,7 +3416,6 @@
     "value": 7
    },
    "python_reason": "the sequence cosmoshub-4/validator-1 is at 7; 7 is not above it",
-   "required": 2,
    "value": {
     "entry": {
      "at": "2026-10-05T12:00:00Z",
@@ -3402,7 +3451,6 @@
     "value": 7
    },
    "python_reason": "the sequence cosmoshub-4/validator-1 is at 7; 6 is not above it",
-   "required": 2,
    "value": {
     "entry": {
      "at": "2026-10-05T12:00:00Z",
@@ -3441,7 +3489,6 @@
     "utc_date": "2026-10-05"
    },
    "python_reason": "the total 101 is over the cap 100",
-   "required": 2,
    "value": {
     "entry": {
      "at": "2026-10-05T12:00:00Z",
@@ -3483,7 +3530,6 @@
     "utc_date": "2026-10-05"
    },
    "python_reason": "a quota total only grows within its day (4, then 3)",
-   "required": 2,
    "value": {
     "entry": {
      "at": "2026-10-05T12:00:00Z",
@@ -3512,26 +3558,31 @@
    "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
    "name": "one of two required approvals",
    "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
     "at": "2026-10-05T12:00:00Z",
     "kind": "key-state",
     "object_id": "release-signing",
+    "prev_digest": "",
     "schema": "regalia.opstate/v1",
-    "state": "enabled"
+    "state": "enabled",
+    "version": 1
    },
    "python_reason": "1 of 2 required approvals",
-   "required": 2,
    "value": {
     "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
+     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
      "schema": "regalia.opstate/v1",
-     "state": "disabled"
+     "state": "disabled",
+     "version": 2
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "1ab01088e3262c7a8edff5d88c9368aa61c262008da5db26100826a749dfe79ad9537ac9132f45932b9c67b5eee29b89da9daf62741e974394a21d25cc160803"
+      "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
      }
     ]
    }
@@ -3541,30 +3592,35 @@
    "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
    "name": "the same approver twice",
    "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
     "at": "2026-10-05T12:00:00Z",
     "kind": "key-state",
     "object_id": "release-signing",
+    "prev_digest": "",
     "schema": "regalia.opstate/v1",
-    "state": "enabled"
+    "state": "enabled",
+    "version": 1
    },
    "python_reason": "alice approved twice",
-   "required": 2,
    "value": {
     "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
+     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
      "schema": "regalia.opstate/v1",
-     "state": "disabled"
+     "state": "disabled",
+     "version": 2
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "1ab01088e3262c7a8edff5d88c9368aa61c262008da5db26100826a749dfe79ad9537ac9132f45932b9c67b5eee29b89da9daf62741e974394a21d25cc160803"
+      "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
      },
      {
       "party": "alice",
-      "sig": "1ab01088e3262c7a8edff5d88c9368aa61c262008da5db26100826a749dfe79ad9537ac9132f45932b9c67b5eee29b89da9daf62741e974394a21d25cc160803"
+      "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
      }
     ]
    }
@@ -3574,30 +3630,107 @@
    "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
    "name": "an approver not in the set",
    "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
     "at": "2026-10-05T12:00:00Z",
     "kind": "key-state",
     "object_id": "release-signing",
+    "prev_digest": "",
     "schema": "regalia.opstate/v1",
-    "state": "enabled"
+    "state": "enabled",
+    "version": 1
    },
    "python_reason": "mallory is not an approver",
-   "required": 2,
    "value": {
     "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
+     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
      "schema": "regalia.opstate/v1",
-     "state": "disabled"
+     "state": "disabled",
+     "version": 2
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "1ab01088e3262c7a8edff5d88c9368aa61c262008da5db26100826a749dfe79ad9537ac9132f45932b9c67b5eee29b89da9daf62741e974394a21d25cc160803"
+      "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
      },
      {
       "party": "mallory",
-      "sig": "17818eb6b22157e4238d12ed439c304a57968ddba6f510f0f3377a07d7539b9898955bd74021a462c394d75e8b9d6945a84bb43988d77f6f57df85d9cc251907"
+      "sig": "fc3525fbb30a8d6377b334543e375be74ea69a4cc470c06050ae1e3711b2de19c14a427ab0a972180babbeb3a9f9b36d55f3a67cc197ab876ae73e400c5e1508"
+     }
+    ]
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
+   "name": "bob approving under the old set, which did not hold him",
+   "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "at": "2026-10-05T12:00:00Z",
+    "kind": "key-state",
+    "object_id": "release-signing",
+    "prev_digest": "",
+    "schema": "regalia.opstate/v1",
+    "state": "enabled",
+    "version": 1
+   },
+   "python_reason": "bob is not an approver",
+   "value": {
+    "entry": {
+     "approver_set": "fdd1ebecfb19a52f5422e2f43cb737edf6731827dccee4e9927ec69ceeb5127c",
+     "at": "2026-10-05T12:00:00Z",
+     "kind": "key-state",
+     "object_id": "release-signing",
+     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "schema": "regalia.opstate/v1",
+     "state": "disabled",
+     "version": 2
+    },
+    "signatures": [
+     {
+      "party": "bob",
+      "sig": "7adf34fef75d297b5a914329232dad67da3f6b5b15a90180531b6fe6befcbc036ababb741d9e10c22d2fd7e6a61b502879461120b9ca2da82e6c4793d1e1af01"
+     }
+    ]
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
+   "name": "an approver set nobody knows",
+   "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "at": "2026-10-05T12:00:00Z",
+    "kind": "key-state",
+    "object_id": "release-signing",
+    "prev_digest": "",
+    "schema": "regalia.opstate/v1",
+    "state": "enabled",
+    "version": 1
+   },
+   "python_reason": "the approver set eeeeeeeeeeeeeeee is not one this verifier knows",
+   "value": {
+    "entry": {
+     "approver_set": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+     "at": "2026-10-05T12:00:00Z",
+     "kind": "key-state",
+     "object_id": "release-signing",
+     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "schema": "regalia.opstate/v1",
+     "state": "disabled",
+     "version": 2
+    },
+    "signatures": [
+     {
+      "party": "alice",
+      "sig": "15b8f887b560969350c74905c69cc8aed9a4da0ca0ec204ecaa0526c72f7c89d6fe4edaf0b16d8905bd312c3938bed8311fd1bb6068c371e0d25f45fa781c10e"
+     },
+     {
+      "party": "bob",
+      "sig": "cf6e197ad2c672ba09770492b6be1fb3d4a7799287ad944a3bcd1543a8c83f749f8278953c58bf8c66807c65a4d8c1edbb82e72d84d599abd0c8cde45a7bf802"
      }
     ]
    }
@@ -3607,30 +3740,207 @@
    "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
    "name": "a destroyed key enabled again",
    "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
     "at": "2026-10-05T12:00:00Z",
     "kind": "key-state",
     "object_id": "release-signing",
+    "prev_digest": "54776b27f44c2ab6b272addc00374a50b7508a5f18b0f0f357f968980263a6a3",
     "schema": "regalia.opstate/v1",
-    "state": "destroyed"
+    "state": "destroyed",
+    "version": 3
    },
    "python_reason": "the key release-signing is destroyed: its state is final",
-   "required": 2,
    "value": {
     "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
+     "prev_digest": "c3607f730ed2c9d35c888ad293052929e53b067d168e2524d46bf49511329b40",
      "schema": "regalia.opstate/v1",
-     "state": "enabled"
+     "state": "enabled",
+     "version": 4
     },
     "signatures": [
      {
       "party": "alice",
-      "sig": "3b1e1a858479a9374424d56a69213045f19b93dbeb1b26f398257d15db75afa141973dab8da9b1213195e32b5581e43bb3cd3b2edd7854e97f5647e07c35db02"
+      "sig": "dfe094adce03380d0f94bbe3388f173665c2f3b21f7e3e3305b1a59ba66587e8486b2dcbbb762daf4e4352a2479a8cf9150a34eb126af9735298d554e3c63e0d"
      },
      {
       "party": "bob",
-      "sig": "3972e8e6865015487338ba403678ca6e4560be9452c10d06897dd6f8bd84339bfc04a3426c6c5b419b6878e96523d617a7471b512967fb0a85a62a557b24a905"
+      "sig": "b96381041e8dbb574e1ff70ed95dde1919c4d1824d699a626e442bd71ce2ce5444c59fa81891b3daba4f3936078d52c197c6c47f44534f925f3efb1fdcb08504"
+     }
+    ]
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
+   "name": "REPLAY: the old approved enabled put back after a disable",
+   "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "at": "2026-10-05T12:00:00Z",
+    "kind": "key-state",
+    "object_id": "release-signing",
+    "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+    "schema": "regalia.opstate/v1",
+    "state": "disabled",
+    "version": 2
+   },
+   "python_reason": "REPLAY: the key release-signing is at version 2; this entry is version 1 over another state",
+   "value": {
+    "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+     "at": "2026-10-05T12:00:00Z",
+     "kind": "key-state",
+     "object_id": "release-signing",
+     "prev_digest": "",
+     "schema": "regalia.opstate/v1",
+     "state": "enabled",
+     "version": 1
+    },
+    "signatures": [
+     {
+      "party": "alice",
+      "sig": "5877c6116bb4af11a8ed8f5624bf4eddcb1c619889281cf33832a8f3b8f6c8ae4901d712c040b2430262fe2fb35cd25d9222ab4fb0bdd2cb7f771b88021caf09"
+     },
+     {
+      "party": "bob",
+      "sig": "32113e5e9339d9ce2211f10113d9ecc91879ac68c46c7f95ab89c74081fbbad5d081f30674a032a79ca943b4646ac1d336677acf6b4e9259b706c7c2ed2a0f07"
+     }
+    ]
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
+   "name": "a later version that names another previous",
+   "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "at": "2026-10-05T12:00:00Z",
+    "kind": "key-state",
+    "object_id": "release-signing",
+    "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+    "schema": "regalia.opstate/v1",
+    "state": "disabled",
+    "version": 2
+   },
+   "python_reason": "REPLAY: the key release-signing is at version 2; this entry is version 3 over another state",
+   "value": {
+    "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+     "at": "2026-10-05T12:00:00Z",
+     "kind": "key-state",
+     "object_id": "release-signing",
+     "prev_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+     "schema": "regalia.opstate/v1",
+     "state": "enabled",
+     "version": 3
+    },
+    "signatures": [
+     {
+      "party": "alice",
+      "sig": "4fe7286c224e761ad2e3f529e54fa648ee4dd2fcc1fca794a5c835651c1dc4b1295e2c7636c11f1d0d401af5ffce1be19d4efab676008b588212f67aabc4e701"
+     },
+     {
+      "party": "bob",
+      "sig": "ed75f05393f8ca7d4cbda5bcb51e45b3ab887e4c2ec93d6b1d1f73a98ebf9b974356b39369471d265fd8d6b4661766bace9fd4a2283b2b0c31637019e5d3c70c"
+     }
+    ]
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
+   "name": "a version that skips one",
+   "previous": {
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "at": "2026-10-05T12:00:00Z",
+    "kind": "key-state",
+    "object_id": "release-signing",
+    "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+    "schema": "regalia.opstate/v1",
+    "state": "disabled",
+    "version": 2
+   },
+   "python_reason": "REPLAY: the key release-signing is at version 2; this entry is version 4 over another state",
+   "value": {
+    "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+     "at": "2026-10-05T12:00:00Z",
+     "kind": "key-state",
+     "object_id": "release-signing",
+     "prev_digest": "54776b27f44c2ab6b272addc00374a50b7508a5f18b0f0f357f968980263a6a3",
+     "schema": "regalia.opstate/v1",
+     "state": "enabled",
+     "version": 4
+    },
+    "signatures": [
+     {
+      "party": "alice",
+      "sig": "73819354171c4535e90df06da548f267a0429ba667d29da38998f4dc241e9b485769f9d7c8d80920c831d4cc7ab7f0c42c835ff0fb446846a077bb2c86ee3f0a"
+     },
+     {
+      "party": "bob",
+      "sig": "2858edb63cd9ca977d42d417ac4fa205757df18b58efd9a8ff84e89d694d45c8bbd0a5b1bdb6669472f2825146fc3cf26fab8e68ebe3bff8519f81aa99655907"
+     }
+    ]
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/keys/d16bd61811baa2c5dfceaa07bfb6d9504ec404da8694b699da99b4ba5ecee61e/state",
+   "name": "version 2 where the key has no state",
+   "previous": null,
+   "python_reason": "the key release-signing has no state on record; version 2 replaces one",
+   "value": {
+    "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+     "at": "2026-10-05T12:00:00Z",
+     "kind": "key-state",
+     "object_id": "release-signing",
+     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
+     "schema": "regalia.opstate/v1",
+     "state": "disabled",
+     "version": 2
+    },
+    "signatures": [
+     {
+      "party": "alice",
+      "sig": "a41d47cd1de51b375b57f3fdf8eca0d41db4c7b8cd5826f1e401849fa754597c535090d9f575253c13ee48d07bd257db91c5a7983e021f3f860fe647cd21e90e"
+     },
+     {
+      "party": "bob",
+      "sig": "51df0dee7935af2d8cbb25fe7ba901a1092ab1cdde91810d3d1586496ed443f79372160296650facf6b7a95b062179abcc7939de7c86f5d21c747a4286d9d108"
+     }
+    ]
+   }
+  },
+  {
+   "accept": false,
+   "key": "/regalia/v1/nonces/0000000000000000000000000000000000000000000000000000000000000000",
+   "name": "version 1 that names a previous",
+   "previous": null,
+   "python_reason": "the first state of a key replaces nothing (prev_digest \"\")",
+   "value": {
+    "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+     "at": "2026-10-05T12:00:00Z",
+     "kind": "key-state",
+     "object_id": "release-signing",
+     "prev_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+     "schema": "regalia.opstate/v1",
+     "state": "enabled",
+     "version": 1
+    },
+    "signatures": [
+     {
+      "party": "alice",
+      "sig": "45e584382b272baa362a589c5f5e7b071e17c65c9ae4fe7ec39c7282958cd5a095150cc2acde4e26b476b55d7eaae27d2a05eb317199889eb5ab992ea6d99403"
+     },
+     {
+      "party": "bob",
+      "sig": "57b9f81e8dc00f48bb964870ddcbc93ecde610adf55a94dda5f43b32bfb0919e3a75f6d950e31d97492925b1bc40732c6b1708f3e2fe95addc058d5c7459fa01"
      }
     ]
    }
@@ -3641,20 +3951,22 @@
    "name": "a key state signed by a node session",
    "previous": null,
    "python_reason": "an approval fields mismatch: missing=[] unknown=['boot_id']",
-   "required": 2,
    "value": {
     "entry": {
+     "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
      "at": "2026-10-05T12:00:00Z",
      "kind": "key-state",
      "object_id": "release-signing",
+     "prev_digest": "d1eca7913e129ec03976cfb7b5df415c1b9421303997d886363a6c13cb8ea564",
      "schema": "regalia.opstate/v1",
-     "state": "disabled"
+     "state": "disabled",
+     "version": 2
     },
     "signatures": [
      {
       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
       "party": "a",
-      "sig": "57dca8337cb1c83630f748971d789541ea3fb9d7730aae332771b3329340811417ae8233a577ecf98717c0ddf0766d6eb1976a3a72d449fdb587f171d607b305"
+      "sig": "aca2716adc1ab95deedd8fd257dc53b0cf187a594c2eddf9bb4c593257f6d2cc0e8a23b3c819f97d8c96ec0f58c388f12d7c5ab972af74622bc42c139410b801"
      }
     ]
    }
@@ -3677,7 +3989,6 @@
     "utc_date": "2026-10-05"
    },
    "python_reason": "a sequence entry cannot replace a quota entry",
-   "required": 2,
    "value": {
     "entry": {
      "at": "2026-10-05T12:00:00Z",
