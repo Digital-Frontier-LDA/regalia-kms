@@ -298,7 +298,11 @@ def esp_advance_settled(node, esp, lock_path=ESP_LOCK, advance=None):
     the ESP and the anchor would stay one epoch behind until the NEXT publication (regalia-kms-24 and 3e on main's
     three-node-recovery; on a host, the unit's boot run beside sync's first publication). So the published file is read
     before and after each run; a run that saw what is published now is the last one. Still changing after the bound (a
-    sync publishing faster than a run, not something sync does), it is refused, and the unit's Restart= tries again."""
+    sync publishing faster than a run, not something sync does), it is refused, and the unit's Restart= tries again.
+    That cannot strand a node (24): every run that completes has written the ESP and moved the anchor to the chain it
+    read, so each run makes progress and the anchor is never more than one publication behind; and the refusal is
+    what guarantees ANOTHER run (Restart=on-failure, 15 s later, re-reading the newest), where a success after the
+    bound could leave a lost trigger behind it."""
     advance = advance or esp_advance
     path = node.path(PUBLISHED)
     for _ in range(ESP_SETTLE_RUNS):
