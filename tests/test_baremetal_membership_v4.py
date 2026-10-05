@@ -53,6 +53,8 @@ def p256_sig(key, message, high=False):
 NODE_KEYS = {nid: p256(i) for i, nid in enumerate(("a", "b", "c", "d"))}
 OWNER_KEYS = [ed25519(10 + i) for i in range(3)]
 STRANGER = p256(99)
+K_A = p256(60)                                                   # the anchor-policy authority (#361)
+CARD_RECORD = {"sequence": 1, "digest": "ca" * 32}               # the card ceremony's record (#405): a placeholder digest
 
 
 def ssh(i):
@@ -73,7 +75,7 @@ def manifest4(epoch, prev, nodes, **fields):
            "heartbeat_signers": {"threshold": 2, "parties": ["a", "b", "c", "owner"]},
            "activation_signers": {"threshold": 2, "parties": ["a", "b", "c"]},
            "revocation_signers": [{"threshold": 2, "parties": ["a", "b", "c"]}, {"threshold": 1, "parties": ["owner"]}],
-           "nodes": nodes}
+           "anchor_policy_key": typed(K_A), "card_record": dict(CARD_RECORD), "nodes": nodes}
     man.update(fields)
     return man
 
@@ -229,6 +231,14 @@ class MoveToV4(Case):
         beat = hbt.beat(m4, 1, key=REVOKE)
         self.refused("envelope fields mismatch: missing=['signatures'] unknown=['signature']", hb.signed, beat, m4)
 
+    def test_nothing_moves_a_chain_back_from_v4(self):
+        """#242 B3 keys the anchor's layout on the tip's schema (v4: policy only), so a v3 epoch after v4 would bring the
+        owner-written layout back: refused, even signed by the root (24)."""
+        m4 = m.accept(self.m3, sign(self.v4(), ROOT), ROOT_PUB)
+        back = manifest3(3, m.digest(m4), [{k: v for k, v in n.items() if k != "signing_key"} for n in m4["nodes"]])
+        self.refused("schema regalia.membership/v3 cannot follow regalia.membership/v4: the schema only moves forward",
+                     m.accept, m4, sign(back, ROOT), ROOT_PUB)
+
     def test_only_the_root_moves_to_v4(self):
         self.refused("only the root can change the schema (regalia.membership/v3 to regalia.membership/v4)",
                      m.accept, self.m3, sign(self.v4(), REVOKE, "revocation"), ROOT_PUB)
@@ -308,13 +318,84 @@ class Quorum(Case):
                              quorum(self.changed(change), A, B), ROOT_PUB)
 
     def test_the_root_changes_the_signers(self):
-        man = self.changed(lambda x: (x["heartbeat_signers"].update(threshold=3), x["owner_keys"].pop()))
+        man = self.changed(lambda x: (x["heartbeat_signers"].update(threshold=3), x["owner_keys"].pop(),
+                                      x.update(card_record={"sequence": 2, "digest": "cb" * 32})))
         self.assertEqual(m.accept(self.first, sign(man, ROOT), ROOT_PUB)["heartbeat_signers"]["threshold"], 3)
 
     def test_a_retired_tombstone_is_terminal_for_a_quorum_too(self):
         retired = m.accept(self.first, quorum(self.next(c="RETIRED"), O1), ROOT_PUB)
         back = manifest4(3, m.digest(retired), nodes4(c="QUARANTINED"))
         self.refused("tombstone: c is RETIRED, which is terminal for every signer", m.accept, retired, sign(back, ROOT), ROOT_PUB)
+
+
+class AnchorPolicyAndCardRecord(Case):
+    """#361: K_A, set at genesis, never changed by any signer; #405: the card ceremony's record, the root's alone,
+    whose sequence rises when it changes and without which owner_keys do not change."""
+
+    invalid = Format.invalid
+
+    def test_the_fields_are_validated(self):
+        for name, change, reason in (
+                ("no anchor policy key", lambda x: x.pop("anchor_policy_key"), "manifest fields mismatch"),
+                ("no card record", lambda x: x.pop("card_record"), "manifest fields mismatch"),
+                # a placeholder, as for the bare signing key above: refused before any value is read
+                ("a bare anchor policy key", lambda x: x.update(anchor_policy_key="04" + "11" * 64), "anchor_policy_key must be a typed key"),
+                ("an Ed25519 anchor policy key", lambda x: x.update(anchor_policy_key={"alg": "ed25519", "key": "00" * 32}),
+                 "anchor_policy_key: alg must be one of ecdsa-p256"),
+                ("an anchor policy key off the curve", lambda x: x.update(anchor_policy_key={"alg": "ecdsa-p256", "key": "04" + "01" * 64}),
+                 "not a point on P-256"),
+                ("the anchor policy key a node's signing key", lambda x: x.update(anchor_policy_key=typed(NODE_KEYS["b"])),
+                 "anchor_policy_key is already used (signing_key of b)"),
+                ("the anchor policy key an owner key", lambda x: x["owner_keys"].append(typed(K_A)),
+                 "anchor_policy_key is already used (owner_keys[3])"),
+                ("a card record with an extra field", lambda x: x["card_record"].update(at="x"), "card_record fields mismatch"),
+                ("a card record without a digest", lambda x: x["card_record"].pop("digest"), "card_record fields mismatch"),
+                ("a card record sequence 0", lambda x: x["card_record"].update(sequence=0), "card_record.sequence must be an integer from 1"),
+                ("a card record sequence true", lambda x: x["card_record"].update(sequence=True), "card_record.sequence must be an integer from 1"),
+                ("a card record sequence 2^31", lambda x: x["card_record"].update(sequence=2 ** 31), "card_record.sequence must be an integer from 1"),
+                ("a card record digest in capitals", lambda x: x["card_record"].update(digest="CA" * 32), "card_record.digest must be 64 lowercase hex"),
+                ("a card record digest short", lambda x: x["card_record"].update(digest="ca" * 31), "card_record.digest must be 64 lowercase hex")):
+            with self.subTest(name):
+                self.invalid(reason, change)
+
+    def test_the_anchor_policy_key_is_not_the_root(self):
+        man = copy.deepcopy(self.first)
+        man["anchor_policy_key"] = typed(p256(50))
+        envelope = {"manifest": man, "signature": {"signer": "root", "key": pub(p256(50)),
+                                                   "sig": p256_sig(p256(50), m.DOMAIN + m.canonical(man))}}
+        self.refused("anchor_policy_key is a pinned root key", m.accept, None, envelope, [ROOT_PUB, typed(p256(50))])
+
+    def test_no_signer_changes_the_anchor_policy_key(self):
+        man = self.changed(lambda x: x.update(anchor_policy_key=typed(STRANGER)))
+        reason = "anchor_policy_key is set at genesis and never changes, for any signer"
+        self.refused(reason, m.accept, self.first, sign(man, ROOT), ROOT_PUB)
+        self.refused(reason, m.accept, self.first, quorum(man, A, B), ROOT_PUB)
+        self.refused(reason, m.accept, self.first, quorum(man, O1), ROOT_PUB)
+
+    def test_a_quorum_cannot_change_the_card_record(self):
+        man = self.changed(lambda x: x.update(card_record={"sequence": 2, "digest": "cb" * 32}))
+        self.refused("a revocation quorum cannot change card_record", m.accept, self.first, quorum(man, A, B), ROOT_PUB)
+
+    def test_the_root_moves_the_card_record_forward_only(self):
+        later = {"sequence": 3, "digest": "cb" * 32}
+        current = m.accept(self.first, sign(self.changed(lambda x: x.update(card_record=later)), ROOT), ROOT_PUB)
+        self.assertEqual(current["card_record"], later)
+        for name, record in (("the same sequence, another digest", {"sequence": 3, "digest": "cc" * 32}),
+                             ("a lower sequence", {"sequence": 2, "digest": "cc" * 32})):
+            with self.subTest(name):
+                man = manifest4(3, m.digest(current), nodes4(), card_record=record)
+                self.refused("card_record changes only to a later card ceremony's record (sequence %d after 3)" % record["sequence"],
+                             m.accept, current, sign(man, ROOT), ROOT_PUB)
+
+    def test_owner_keys_change_only_with_a_new_card_record(self):
+        man = self.changed(lambda x: x["owner_keys"].pop())
+        self.refused("owner_keys change only with a new card_record", m.accept, self.first, sign(man, ROOT), ROOT_PUB)
+
+    def test_the_move_from_v3_sets_both(self):
+        """v3 has neither field; the root's v3 -> v4 step is where K_A and the card record are first set."""
+        v3 = m.accept(None, sign(manifest3(1, "", [{k: v for k, v in n.items() if k != "signing_key"} for n in nodes4()]), ROOT), ROOT_PUB)
+        v4 = m.accept(v3, sign(manifest4(2, m.digest(v3), nodes4()), ROOT), ROOT_PUB)
+        self.assertEqual((v4["anchor_policy_key"], v4["card_record"]), (typed(K_A), CARD_RECORD))
 
 
 class Replacement(Case):

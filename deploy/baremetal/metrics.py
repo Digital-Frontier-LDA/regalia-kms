@@ -52,8 +52,10 @@ UNLOCK_CAUSES = ("rate", "connections")     # regalia-kms-48's #70 PR 3: refusal
 WRITERS = {
     "authtime": ("authtime", ("authtime.prom",)),
     # the heartbeat watch's, and the unlock listener's refusal counter (#317)
-    "sync": ("sync", ("heartbeat.prom", "unlock.prom")),
-    "admission": ("admission", ("lease.prom",)),      # not admission.prom: a trail is called admission (its shipper's file)
+    "sync": ("sync", ("heartbeat.prom", "unlock.prom", "membership.prom")),     # membership.prom: the anchor's lag (#66 B3)
+    "admission": ("admission", ("lease.prom",)),
+    # regalia-esp-advance (root): its own view of the anchor, not sync's (regalia-kms-48: sync parses peers' input)
+    "esp-advance": ("esp-advance", ("esp-advance.prom",)),      # not admission.prom: a trail is called admission (its shipper's file)
     "audit-ship": ("audit-ship", None),     # one file per trail: <trail>.prom (cmd/regalia-audit-ship -metrics)
 }
 
@@ -71,6 +73,17 @@ METRICS = {
     "regalia_heartbeat_checked_timestamp_seconds": ("gauge", "When this file was written.", {}, "sync"),
     "regalia_unlock_refused_total": ("counter", "Unlock requests refused before any work was done, by cause.",
                                      {"cause": UNLOCK_CAUSES}, "sync"),
+    # #66 B3: sync holds and publishes the chain, the ESP advance anchors it; a lasting gap is an ESP advance that fails
+    "regalia_membership_epoch": ("gauge", "The epoch of the membership chain this node's sync holds and publishes.", {}, "sync"),
+    "regalia_membership_anchor_epoch": ("gauge", "The epoch of the TPM anchor: the last chain regalia-esp-advance wrote to the ESP "
+                                        "and anchored. Rollback protection stands at this epoch.", {}, "sync"),
+    # #66 B3, written by regalia-esp-advance itself (root) at every run, success or not
+    "regalia_esp_advance_ok": ("gauge", "1 when regalia-esp-advance's last run wrote the ESP and anchored it, 0 when it failed.",
+                               {}, "esp-advance"),
+    "regalia_esp_anchor_epoch": ("gauge", "The TPM anchor's epoch as regalia-esp-advance read it at its last run.", {}, "esp-advance"),
+    "regalia_esp_boot_renderable": ("gauge", "1 when the initrd can render a boot configuration from the chain on the ESP; 0: the "
+                                    "next boot asks for the recovery key.", {}, "esp-advance"),
+    "regalia_esp_advance_run_timestamp_seconds": ("gauge", "When regalia-esp-advance last ran.", {}, "esp-advance"),
     "regalia_admission_serving": ("gauge", "1 while this node holds a runtime lease that lets the KMS daemon serve, else 0.",
                                   {}, "admission"),
     "regalia_admission_lease_seconds_left": ("gauge", "Seconds left on the runtime lease held; 0 with none.", {}, "admission"),

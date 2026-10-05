@@ -2230,6 +2230,158 @@
     "public_fails": [],
     "unreadable": []
    }
+  },
+  {
+   "chain": "v4",
+   "length": 3,
+   "name": "a v4 chain, an owner-written anchor",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "policy": null,
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": null,
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": null,
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x1500016 is owner-written: under regalia.membership/v4 the anchor is written by policy only (re-anchor it)"
+  },
+  {
+   "chain": "v4",
+   "high_water": 3,
+   "length": 3,
+   "name": "a v4 chain, a policy-written anchor",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "v4",
+   "length": 3,
+   "name": "a v4 chain, owner-written slots beside a policy-written counter",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": null,
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": null,
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x150001a is owner-written: under regalia.membership/v4 the anchor is written by policy only (re-anchor it)"
+  },
+  {
+   "chain": "v4",
+   "high_water": 3,
+   "length": 5,
+   "name": "a v4 chain ahead of a policy-written anchor",
+   "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264154,
+      "data": "000000000000002d",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "policy": null,
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264138,
+      "data": "0000000000000003007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f99316c3edc81e1bc24c3",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638bf951c8b2d94eceb6",
+      "policy": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
   }
  ],
  "chains": {
@@ -3065,6 +3217,662 @@
      "schema": "regalia.membership/v1"
     },
     "sig": "c5ff3f8e1bf36713bbf26e9d35e8f5395cc7103201c601a8dc759c051870c336fab39dcb075b0cdda5bef62edd61ce95abc63714bb49377197a3a94107c49205"
+   }
+  ],
+  "v4": [
+   {
+    "manifest": {
+     "activation_signers": {
+      "parties": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
+     },
+     "epoch": 1,
+     "heartbeat_max_lifetime_s": 21600,
+     "heartbeat_signers": {
+      "parties": [
+       "n1",
+       "n2",
+       "n3",
+       "owner"
+      ],
+      "threshold": 2
+     },
+     "issued_at": "2026-10-04T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "04090c251cf31689dafc990500e755cb9c487be8925f52c535ee2020fa30784c7cbcc3afa32033cc26a4b4576d0a6af8c4e16f65cb37038dfdef6ced715c3a7c9c"
+       },
+       "ssh_host_pub": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "0448188407751b6790cdd016dc039d1b69499a6172275d03c4c11a70fc868790db7f1f41a8b60dee3c7a9660bffe63f418e0c8d3378cf5519b148989ec30dd516f"
+       },
+       "ssh_host_pub": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "048ea1a809ce4d33d73c95c62f44b5c70f9e4fa95a21a25416592ce84889b4aeaa4c524070f2726d8e6cc719dbc5ff55c219aa47318083c89fd80b78105e5aa6fa"
+       },
+       "ssh_host_pub": "5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "owner_heartbeat_lifetime_s": 3600,
+     "owner_keys": [
+      {
+       "alg": "ed25519",
+       "public": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "",
+     "revocation_signers": [
+      {
+       "parties": [
+        "n1",
+        "n2",
+        "n3"
+       ],
+       "threshold": 2
+      },
+      {
+       "parties": [
+        "owner"
+       ],
+       "threshold": 1
+      }
+     ],
+     "schema": "regalia.membership/v4"
+    },
+    "sig": "713982fa5c9e55087bc3a994619f73af40b9640fc8bcf78ad38625d2e7be28d01f9bb3979eec59a7de7030ecd1ae97b1364ee13f24586a563b765a5a0b32bd03"
+   },
+   {
+    "manifest": {
+     "activation_signers": {
+      "parties": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
+     },
+     "epoch": 2,
+     "heartbeat_max_lifetime_s": 21600,
+     "heartbeat_signers": {
+      "parties": [
+       "n1",
+       "n2",
+       "n3",
+       "owner"
+      ],
+      "threshold": 2
+     },
+     "issued_at": "2026-10-04T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "04090c251cf31689dafc990500e755cb9c487be8925f52c535ee2020fa30784c7cbcc3afa32033cc26a4b4576d0a6af8c4e16f65cb37038dfdef6ced715c3a7c9c"
+       },
+       "ssh_host_pub": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "0448188407751b6790cdd016dc039d1b69499a6172275d03c4c11a70fc868790db7f1f41a8b60dee3c7a9660bffe63f418e0c8d3378cf5519b148989ec30dd516f"
+       },
+       "ssh_host_pub": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "048ea1a809ce4d33d73c95c62f44b5c70f9e4fa95a21a25416592ce84889b4aeaa4c524070f2726d8e6cc719dbc5ff55c219aa47318083c89fd80b78105e5aa6fa"
+       },
+       "ssh_host_pub": "5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "owner_heartbeat_lifetime_s": 3600,
+     "owner_keys": [
+      {
+       "alg": "ed25519",
+       "public": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "357eaa7d135a221ec1356d0a5796735497b04b96fb861d9c806cd711f3852376",
+     "revocation_signers": [
+      {
+       "parties": [
+        "n1",
+        "n2",
+        "n3"
+       ],
+       "threshold": 2
+      },
+      {
+       "parties": [
+        "owner"
+       ],
+       "threshold": 1
+      }
+     ],
+     "schema": "regalia.membership/v4"
+    },
+    "sig": "b43f3c84e14e74b6695d0e39b09f9c9d567ae8c77a087d4960bdfec16f988e72d9ca4fa89148f1e2fc0bbb765d5e997bf633e739a2d3a2fd9d4db27458448502"
+   },
+   {
+    "manifest": {
+     "activation_signers": {
+      "parties": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
+     },
+     "epoch": 3,
+     "heartbeat_max_lifetime_s": 21600,
+     "heartbeat_signers": {
+      "parties": [
+       "n1",
+       "n2",
+       "n3",
+       "owner"
+      ],
+      "threshold": 2
+     },
+     "issued_at": "2026-10-04T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "04090c251cf31689dafc990500e755cb9c487be8925f52c535ee2020fa30784c7cbcc3afa32033cc26a4b4576d0a6af8c4e16f65cb37038dfdef6ced715c3a7c9c"
+       },
+       "ssh_host_pub": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "0448188407751b6790cdd016dc039d1b69499a6172275d03c4c11a70fc868790db7f1f41a8b60dee3c7a9660bffe63f418e0c8d3378cf5519b148989ec30dd516f"
+       },
+       "ssh_host_pub": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "048ea1a809ce4d33d73c95c62f44b5c70f9e4fa95a21a25416592ce84889b4aeaa4c524070f2726d8e6cc719dbc5ff55c219aa47318083c89fd80b78105e5aa6fa"
+       },
+       "ssh_host_pub": "5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "owner_heartbeat_lifetime_s": 3600,
+     "owner_keys": [
+      {
+       "alg": "ed25519",
+       "public": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "c53ffe285ade57a23ae4e055ad17f4165ffbf98ac976ae57df56aa3acdd4638b",
+     "revocation_signers": [
+      {
+       "parties": [
+        "n1",
+        "n2",
+        "n3"
+       ],
+       "threshold": 2
+      },
+      {
+       "parties": [
+        "owner"
+       ],
+       "threshold": 1
+      }
+     ],
+     "schema": "regalia.membership/v4"
+    },
+    "sig": "54510dabf7fbd0cca740beaff3e0b01f56cfd9feac21b025ba18e98fa38bfa02897df429391b30cecceeeac0e4e86d1afdf40e298f5a519b359a7f6e21315f0c"
+   },
+   {
+    "manifest": {
+     "activation_signers": {
+      "parties": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
+     },
+     "epoch": 4,
+     "heartbeat_max_lifetime_s": 21600,
+     "heartbeat_signers": {
+      "parties": [
+       "n1",
+       "n2",
+       "n3",
+       "owner"
+      ],
+      "threshold": 2
+     },
+     "issued_at": "2026-10-04T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "04090c251cf31689dafc990500e755cb9c487be8925f52c535ee2020fa30784c7cbcc3afa32033cc26a4b4576d0a6af8c4e16f65cb37038dfdef6ced715c3a7c9c"
+       },
+       "ssh_host_pub": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "0448188407751b6790cdd016dc039d1b69499a6172275d03c4c11a70fc868790db7f1f41a8b60dee3c7a9660bffe63f418e0c8d3378cf5519b148989ec30dd516f"
+       },
+       "ssh_host_pub": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "048ea1a809ce4d33d73c95c62f44b5c70f9e4fa95a21a25416592ce84889b4aeaa4c524070f2726d8e6cc719dbc5ff55c219aa47318083c89fd80b78105e5aa6fa"
+       },
+       "ssh_host_pub": "5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "owner_heartbeat_lifetime_s": 3600,
+     "owner_keys": [
+      {
+       "alg": "ed25519",
+       "public": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "007ef4834ab350a8accdde262cac45226e23a6433a6cabd64cc998b9202f9931",
+     "revocation_signers": [
+      {
+       "parties": [
+        "n1",
+        "n2",
+        "n3"
+       ],
+       "threshold": 2
+      },
+      {
+       "parties": [
+        "owner"
+       ],
+       "threshold": 1
+      }
+     ],
+     "schema": "regalia.membership/v4"
+    },
+    "sig": "1b068d962c6df90107ab0c0c2af52fa5ac66264deb15dda547a77ae23e6d5dbefdd56ae064f2592b58368306075a6d08f36a5ca973fde1b78ed19156d8b98a01"
+   },
+   {
+    "manifest": {
+     "activation_signers": {
+      "parties": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
+     },
+     "epoch": 5,
+     "heartbeat_max_lifetime_s": 21600,
+     "heartbeat_signers": {
+      "parties": [
+       "n1",
+       "n2",
+       "n3",
+       "owner"
+      ],
+      "threshold": 2
+     },
+     "issued_at": "2026-10-04T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "04090c251cf31689dafc990500e755cb9c487be8925f52c535ee2020fa30784c7cbcc3afa32033cc26a4b4576d0a6af8c4e16f65cb37038dfdef6ced715c3a7c9c"
+       },
+       "ssh_host_pub": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "0448188407751b6790cdd016dc039d1b69499a6172275d03c4c11a70fc868790db7f1f41a8b60dee3c7a9660bffe63f418e0c8d3378cf5519b148989ec30dd516f"
+       },
+       "ssh_host_pub": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "048ea1a809ce4d33d73c95c62f44b5c70f9e4fa95a21a25416592ce84889b4aeaa4c524070f2726d8e6cc719dbc5ff55c219aa47318083c89fd80b78105e5aa6fa"
+       },
+       "ssh_host_pub": "5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "owner_heartbeat_lifetime_s": 3600,
+     "owner_keys": [
+      {
+       "alg": "ed25519",
+       "public": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "9d7188bb425b4968389cc4e8aaa1907f10b23e52ea6ce54540dd381b1a6166a1",
+     "revocation_signers": [
+      {
+       "parties": [
+        "n1",
+        "n2",
+        "n3"
+       ],
+       "threshold": 2
+      },
+      {
+       "parties": [
+        "owner"
+       ],
+       "threshold": 1
+      }
+     ],
+     "schema": "regalia.membership/v4"
+    },
+    "sig": "272c20d7a41e15d1132009b54c9858053ca40292eaaa99ba7586ebc42b677ecf9d18dd56f3807eda37973ee48ed32b3589d7e0ee8fbfd4c75eac531d9861cf0f"
+   },
+   {
+    "manifest": {
+     "activation_signers": {
+      "parties": [
+       "n1",
+       "n2",
+       "n3"
+      ],
+      "threshold": 2
+     },
+     "anchor_policy_key": {
+      "alg": "ecdsa-p256",
+      "public": "04513e008b2441b2f6cd859c567059797a7c813872f7f907426b25c7d47908eba447f2ad52b1b547cc135a0961d9fa441305064fc946da4939d3471367b1f05f76"
+     },
+     "card_record": {
+      "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+      "sequence": 1
+     },
+     "epoch": 6,
+     "heartbeat_max_lifetime_s": 21600,
+     "heartbeat_signers": {
+      "parties": [
+       "n1",
+       "n2",
+       "n3",
+       "owner"
+      ],
+      "threshold": 2
+     },
+     "issued_at": "2026-10-04T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "04090c251cf31689dafc990500e755cb9c487be8925f52c535ee2020fa30784c7cbcc3afa32033cc26a4b4576d0a6af8c4e16f65cb37038dfdef6ced715c3a7c9c"
+       },
+       "ssh_host_pub": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "0448188407751b6790cdd016dc039d1b69499a6172275d03c4c11a70fc868790db7f1f41a8b60dee3c7a9660bffe63f418e0c8d3378cf5519b148989ec30dd516f"
+       },
+       "ssh_host_pub": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "signing_key": {
+        "alg": "ecdsa-p256",
+        "public": "048ea1a809ce4d33d73c95c62f44b5c70f9e4fa95a21a25416592ce84889b4aeaa4c524070f2726d8e6cc719dbc5ff55c219aa47318083c89fd80b78105e5aa6fa"
+       },
+       "ssh_host_pub": "5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "owner_heartbeat_lifetime_s": 3600,
+     "owner_keys": [
+      {
+       "alg": "ed25519",
+       "public": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "1f0b90c49b963d5cac7db05c17fbbe000f1209816a9724af43725d899a719917",
+     "revocation_signers": [
+      {
+       "parties": [
+        "n1",
+        "n2",
+        "n3"
+       ],
+       "threshold": 2
+      },
+      {
+       "parties": [
+        "owner"
+       ],
+       "threshold": 1
+      }
+     ],
+     "schema": "regalia.membership/v4"
+    },
+    "sig": "394d2daf44ac56d26ab0ef58170cf549974a826fde7d5a16acf32055ec329ea1b454cb8032477196ba15e206a81e8c82cc39bc824505a827307a4a2610d08606"
    }
   ]
  },

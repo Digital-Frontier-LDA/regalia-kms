@@ -1128,6 +1128,110 @@ class PolicyLayout(unittest.TestCase):
         self.assertNotIn("0x150001b", self.tpm.policies)
 
 
+class PolicyOnlyUnderV4(unittest.TestCase):
+    """#242 B3: under a v4 chain tip (production) the anchor is written by policy only: an owner-written counter or slot is
+    Unusable, which a re-anchor repairs; under v1-v3 (a lab image's chain) both layouts read. The tip's schema is the one
+    fact the Python and the Go initrd both hold (24); the Store judges by its own verified chain's tip."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.tpm = FakeTpm()
+        self.digest = lambda epoch: "%02x" % epoch * 32 if epoch else "00" * 32
+        first = m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.tpm)
+        first.define()
+        first.anchor(3, self.digest)
+
+    def hw(self, schema, **kw):
+        return m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.tpm, schema=schema, **kw)
+
+    def test_owner_written_reads_under_v1_to_v3_and_with_no_chain(self):
+        for schema in (m.SCHEMA, m.SCHEMA_V2, m.SCHEMA_V3, None):
+            with self.subTest(schema=schema):
+                self.assertEqual((self.hw(schema).value(), self.hw(schema).unusable()), (3, None))
+
+    def test_owner_written_is_unusable_under_v4(self):
+        with self.assertRaises(m.Unusable) as caught:
+            self.hw(m.SCHEMA_V4).value()
+        self.assertEqual(str(caught.exception), "NV index 0x1500016 is owner-written: under regalia.membership/v4 the anchor is written by "
+                         "policy only (re-anchor it)")
+        self.assertIn("is owner-written", self.hw(m.SCHEMA_V4).unusable())        # what a re-anchor is for
+
+    def test_the_tip_is_asked_for_once_and_only_for_an_owner_written_index(self):
+        asked = []
+        for index in ("0x1500016", "0x150001a", "0x150001b"):
+            self.tpm.nv[index][0] |= FakeTpm.BITS["policywrite"]
+            self.tpm.policies[index] = POLICY
+        hw = self.hw(lambda: asked.append(1) or m.SCHEMA_V4, policy=POLICY)
+        self.assertEqual((hw.value(), hw.record()[0], asked), (3, 3, []))              # every index policy-written: never asked
+        self.tpm.nv["0x150001b"][0] &= ~FakeTpm.BITS["policywrite"]                   # one owner-written slot
+        hw = self.hw(lambda: asked.append(1) or m.SCHEMA_V4, policy=POLICY)
+        self.assertIn("0x150001b is owner-written", hw.unusable())
+        self.assertEqual(len(asked), 1)
+
+    def test_a_re_anchor_under_v4_lays_the_anchor_down_by_policy(self):
+        hw = self.hw(m.SCHEMA_V4, define_policy=POLICY)
+        self.assertIsNotNone(hw.unusable())
+        hw.redefine(4, self.digest(4))
+        self.assertEqual((self.hw(m.SCHEMA_V4, policy=POLICY).value(), self.hw(m.SCHEMA_V4, policy=POLICY).unusable()), (4, None))
+        self.assertEqual({self.tpm.policies.get(i) for i in ("0x1500016", "0x150001a", "0x150001b")}, {POLICY})
+
+    def test_the_store_judges_by_its_own_chain_s_tip(self):
+        """A Store whose verified chain is v4 refuses an owner-written anchor though its caller named no schema."""
+        import tests.test_baremetal_membership_v4 as v4
+        first = m.HighWater("0x1500030", lock_path=self.d + "/s.lock", run=self.tpm)
+        first.define()
+        envelope = sign(v4.manifest4(1, "", v4.nodes4()), ROOT)
+        with self.assertRaisesRegex(m.Unusable, "is owner-written: under regalia.membership/v4"):
+            m.Store(self.d + "/membership.json", ROOT_PUB, m.HighWater("0x1500030", lock_path=self.d + "/s.lock", run=self.tpm)).commit(envelope)
+
+    def test_a_move_to_v4_over_an_owner_written_anchor_is_refused_before_the_disk(self):
+        """ed's ordering: a node whose anchor is owner-written cannot take the root's v3 -> v4 step: refused with nothing
+        moved (the disk still at v3, the anchor where it was), not left with a v4 chain over an anchor it then refuses.
+        Re-anchoring it by policy first is the way (MEMBERSHIP-RECOVERY.md). The same for sync's store, which never
+        anchors (#66 B3, anchors=False): its disk does not move to a v4 tip the ESP advance would then refuse to anchor."""
+        import tests.test_baremetal_membership_v4 as v4
+        lab = [{k: x for k, x in n.items() if k != "signing_key"} for n in v4.nodes4()]
+        m3 = v4.manifest3(1, "", lab)
+        for anchors, index in ((True, "0x1500030"), (False, "0x1500040")):
+            with self.subTest(anchors=anchors):
+                m.HighWater(index, lock_path=self.d + "/s.lock", run=self.tpm).define()
+                path = "%s/membership-%s.json" % (self.d, anchors)
+                store = m.Store(path, ROOT_PUB, m.HighWater(index, lock_path=self.d + "/s.lock", run=self.tpm), anchors=anchors)
+                store.commit(sign(m3, ROOT))
+                with open(path, "rb") as f:
+                    before = f.read()
+                with self.assertRaisesRegex(m.Unusable, "is owner-written: under regalia.membership/v4"):
+                    store.commit(sign(v4.manifest4(2, m.digest(m3), v4.nodes4()), ROOT))
+                with open(path, "rb") as f:
+                    self.assertEqual(f.read(), before)
+                self.assertEqual(m.HighWater(index, lock_path=self.d + "/s.lock", run=self.tpm, schema=m.SCHEMA_V3).value(),
+                                 1 if anchors else 0)
+                # regalia-kms-ed: the refused judgement is undone, so this store's anchor still reads for the chain it holds
+                self.assertEqual(store.hw.value(), 1 if anchors else 0)
+
+    def test_a_v4_chain_is_not_restored_over_an_owner_written_anchor(self):
+        """regalia-kms-ed: restore() judges by the chain it fetched, not by what the disk held (a rolled-back or lost file
+        names no schema, or an older one): a v4 chain over an owner-written anchor is refused, the disk untouched, for
+        both stores; the node is re-anchored instead (reanchor)."""
+        import tests.test_baremetal_membership_v4 as v4
+        lab = [{k: x for k, x in n.items() if k != "signing_key"} for n in v4.nodes4()]
+        m3 = v4.manifest3(1, "", lab)
+        fetched = [sign(m3, ROOT), sign(v4.manifest4(2, m.digest(m3), v4.nodes4()), ROOT)]
+        for anchors, index in ((True, "0x1500050"), (False, "0x1500060")):
+            with self.subTest(anchors=anchors):
+                hw = m.HighWater(index, lock_path=self.d + "/r.lock", run=self.tpm)
+                hw.define()
+                hw.anchor(1, m.Store._digests([m3]))
+                path = "%s/restored-%s.json" % (self.d, anchors)
+                store = m.Store(path, ROOT_PUB, m.HighWater(index, lock_path=self.d + "/r.lock", run=self.tpm), anchors=anchors)
+                with self.assertRaisesRegex(m.Unusable, "is owner-written: under regalia.membership/v4"):
+                    store.restore(fetched)
+                self.assertFalse(os.path.exists(path))
+                self.assertEqual(m.HighWater(index, lock_path=self.d + "/r.lock", run=self.tpm, schema=m.SCHEMA_V3).value(), 1)
+                self.assertEqual(store.hw.value(), 1)          # the refused judgement undone (regalia-kms-ed)
+
+
 class TornWrites(unittest.TestCase):
     """A power cut during the record's NV write. The slot being written is left with part of the new record
     over the old one; the command fails, and the process is gone. Whatever the cut, the node comes back: the
