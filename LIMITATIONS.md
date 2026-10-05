@@ -167,6 +167,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - The lone survivor's stateless serving under the owner's authorization (D32 item 6) has no gate path yet.
   - The session key's private half lives in the Go heap. It is never written, but it isn't locked against
     swap: the hosts are expected to run without swap, and nothing checks that.
+  - **Once the runtime lease v2 (#489) is in, production must set the three settings.** Without them the
+    daemon writes neither file, so its node requests no lease and stops serving.
+  - **Restoring etcd from a snapshot moves its revision back.** The cache refuses a store that went backwards
+    and publishes nothing, so the file goes stale. Every issuer's revision floor refuses too (#489). Both
+    fail closed. The recovery step after a restore is to restart `regalia-kms` and `regalia-sync` on every
+    node: a fresh cache, a fresh floor, then one lease of fail-closed. It belongs in the etcd recovery runbook
+    when that is written.
 
 ## Tokens and the HSM gate (#72)
 
