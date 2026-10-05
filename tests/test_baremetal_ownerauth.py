@@ -357,6 +357,76 @@ class SetAndCheck(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("swtpm") and shutil.which("tpm2_changeauth"), "needs swtpm and tpm2-tools")
+class Rotation(unittest.TestCase):
+    """`enrol ownerauth --rotate-from` (regalia-kms-24's assignment): a SET value changed to a new one, both checked against
+    their records first, the change in a session salted to the EK, the new value proven, a rerun idempotent."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.key = Ed25519PrivateKey.generate()
+        self.current, self.new = os.urandom(32), os.urandom(32)
+        self.records = {}
+        self.write("current", self.current, "2026-10-05T10:00:00Z")
+        self.write("new", self.new, "2026-10-05T11:00:00Z")
+        self.tpm = FakeTpm(owner_auth=self.current)
+
+    def write(self, name, raw, at):
+        envelope, self.pin = resigned(lambda r: (r["nodes"]["a"].update(check=ownerauth.Auth(raw).check("a")), r.update(at=at)),
+                                      self.key)
+        self.records[name] = os.path.join(self.d, name + ".json")
+        with open(self.records[name], "w") as f:
+            f.write(json.dumps(envelope))
+
+    def rotate(self, first=None, second=None):
+        stream = io.BytesIO(((first or self.current).hex() + "\n" + (second or self.new).hex() + "\n").encode())
+        return enrol.set_ownerauth("a", self.pin, self.records["new"], stream, run=self.tpm, ek_name=self.tpm.ek_name.hex(),
+                                   rotate_from=self.records["current"])
+
+    def test_rotated_in_a_salted_session_then_a_rerun_changes_nothing(self):
+        self.assertIn("is rotated to a's NEW envelope value, and answers to it", self.rotate())
+        self.assertEqual(self.tpm.owner_auth, self.new)
+        self.assertEqual(self.tpm.salted_with, [self.tpm.ek_name])          # one change, salted to the enrolled EK
+        self.assertIn("already answers to a's NEW envelope value: nothing was changed", self.rotate())
+        self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.new, [self.tpm.ek_name]))
+
+    def test_either_value_not_its_record_s_is_refused_before_the_tpm(self):
+        for first, second in ((os.urandom(32), None), (None, os.urandom(32))):
+            with self.subTest(wrong="current" if first else "new"), \
+                    self.assertRaisesRegex(m.Refused, "the owner authorization given is not a's"):
+                self.rotate(first, second)
+            self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.current, []))
+
+    def test_a_tpm_holding_neither_or_empty_and_a_same_value_are_refused(self):
+        self.tpm.owner_auth = os.urandom(32)
+        with self.assertRaisesRegex(m.Refused, "is neither the current value given nor the new one: this TPM was provisioned otherwise"):
+            self.rotate()
+        self.tpm.owner_auth = None
+        with self.assertRaisesRegex(m.Refused, "the TPM's owner authorization is empty: there is nothing to rotate"):
+            self.rotate()
+        self.assertEqual(self.tpm.salted_with, [])
+        with self.assertRaisesRegex(m.Refused, "the new owner authorization is the current one: nothing to rotate"):
+            ownerauth.rotate_owner(ownerauth.Auth(self.current), ownerauth.Auth(self.current), self.tpm.ek_name.hex(), run=self.tpm)
+        with self.assertRaisesRegex(enrol.Refused, "--check and --rotate-from are different commands"):
+            enrol.set_ownerauth("a", self.pin, self.records["new"], io.BytesIO(b""), check=True, run=self.tpm,
+                                rotate_from=self.records["current"])
+
+
+    def test_never_back_to_an_older_or_equal_record(self):
+        """regalia-kms-51: an operator who picks an older root-signed record must not re-arm envelopes that retired or lost
+        cards open; both `at` are root-signed, so the order is."""
+        for at in ("2026-10-05T10:00:00Z", "2026-10-05T09:59:59Z"):
+            with self.subTest(at=at):
+                self.write("new", self.new, at)
+                with self.assertRaisesRegex(enrol.Refused, "the new record is not newer than the current one \\(%s, not after "
+                                            "2026-10-05T10:00:00Z\\)" % at):
+                    self.rotate()
+                self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.current, []))
+        self.write("new", self.new, "5 October")
+        with self.assertRaisesRegex(enrol.Refused, "is not a UTC time"):
+            self.rotate()
+
+
 class OnSwtpm(unittest.TestCase):
     """A real TPM: the channel's hex form, set from empty, refused when set, and the anchor only with it."""
 
@@ -409,6 +479,19 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual((hw.value(), hw.record()[0]), (2, 2))
         hw.redefine(4, "04" * 32)
         self.assertEqual(hw.value(), 4)
+        # rotation (regalia-kms-24's assignment): the set value to a new one, in a session salted to the EK, the current
+        # value authorizing it (never sent); then the anchor answers to the new value only, and a rerun changes nothing
+        new = ownerauth.Auth(bytes.fromhex("ff00ee00dd00cc00bb00aa00998877665544332211000000ffeeddccbbaa0000"))
+        with self.assertRaisesRegex(m.Refused, "is not the one enrolment recorded"):
+            ownerauth.rotate_owner(self.auth, new, "000b" + "00" * 32, self.tcti)
+        self.assertTrue(ownerauth.holds(self.auth, self.tcti))                 # another EK: nothing was sent
+        self.assertIs(ownerauth.rotate_owner(self.auth, new, ek_name, self.tcti), True)
+        self.assertEqual((ownerauth.holds(new, self.tcti), ownerauth.holds(self.auth, self.tcti)), (True, False))
+        rotated = m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock", owner_auth=new)
+        rotated.redefine(5, "05" * 32)
+        self.assertEqual(rotated.value(), 5)
+        self.assertIs(ownerauth.rotate_owner(self.auth, new, ek_name, self.tcti), False)    # resumed: nothing to change
+        self.assertTrue(ownerauth.holds(new, self.tcti))
 
 
 @unittest.skipUnless(shutil.which("swtpm") and shutil.which("tpm2_changeauth"), "needs swtpm and tpm2-tools")

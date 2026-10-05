@@ -935,7 +935,14 @@ removing only what it can prove it made.
   - `seal-hsm-pin.sh` passes the value to tpm2-tools as a file in a root-only directory on /run (tmpfs), removed on
     exit. A run killed outright leaves it until reboot. The script doesn't check it against the record: a wrong
     value is refused by the TPM.
-  - Rotating a set value is not built.
+  - **Rotation** (`enrol ownerauth --rotate-from CURRENT_RECORD --record NEW_RECORD`): standard input carries the current
+    value, then the new one (`(gpg --decrypt current.yk.gpg; gpg --decrypt new.yk.gpg) | sudo ...`). Both are checked
+    against their records under the pinned root before the TPM is touched. The new record must be strictly later
+    (`at`; both are root-signed): a rotation never goes back to an older record, whose envelopes retired or lost cards
+    may open (regalia-kms-51). The change is one `tpm2_changeauth` in a session salted to the enrolled EK, where the
+    current value authorizes (never sent) and the new one is the encrypted parameter; then the new value is proven.
+    A rerun after a stop is idempotent. The ceremony's rotation run, with fresh values and envelopes to the current
+    owner cards only, is regalia-ceremony#135. Measured on swtpm.
   - On the TPM bus (measured on swtpm, #414): owner calls are authorized in HMAC sessions that tpm2-tools opens
     itself, so the value is never sent. Setting it (changeauth's new value is a parameter) goes in a session salted
     to the EK `enrol init` recorded, with parameter encryption. The EK's Name is checked first (`--enrol-dir`), so a

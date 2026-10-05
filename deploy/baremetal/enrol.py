@@ -59,6 +59,7 @@ import base64
 import contextlib
 import glob
 import hashlib
+import io
 import json
 import os
 import re
@@ -2008,16 +2009,44 @@ def enrolled_ek_name(directory, node_id):
 
 
 def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None, run=subprocess.run, directory=ENROL_DIR,
-                  ek_name=None):
+                  ek_name=None, rotate_from=None):
     """`enrol ownerauth` (#242 step C): this TPM's owner authorization from the node's envelope, the value on `stream`
     (gpg --decrypt ownerauth-<node>.yk.gpg | ...), checked against ownerauth.record.json verified under the pinned
     root BEFORE the TPM is touched. Sets it from EMPTY only (ownerauth.set_owner refuses one already set, never
     overwriting it). `check`: changes nothing, and proves in ONE owner-authorized call that the TPM's owner
     authorization is this node's envelope value. The value is set in a session salted to the EK `enrol init` recorded
-    (`ek_name`, else read from `directory`'s journal; #414). Returns what to print."""
+    (`ek_name`, else read from `directory`'s journal; #414).
+    `rotate_from` (a rotation, ownerauth.rotate_owner): the record of the value the TPM holds now. Then `stream` carries
+    that CURRENT value first and the NEW one (of `record_path`) second, each "<64 hex>\n", and BOTH are checked against
+    their records under the pinned root before the TPM is touched. Returns what to print."""
+    require(not (check and rotate_from), "--check and --rotate-from are different commands: give one")
+    if rotate_from is not None:
+        # both values in one read: read_value reads one byte past its 65 to see trailing input, which would eat the
+        # second value's first; so exactly 130 bytes, each half judged by read_value on its own
+        raw = stream.read(131)
+        raw = raw.encode() if isinstance(raw, str) else raw
+        require(len(raw) == 130, "a rotation takes, on standard input, the CURRENT value then the NEW one, each 64 lowercase "
+                "hex and a newline (e.g. (gpg --decrypt old.yk.gpg; gpg --decrypt new.yk.gpg) | ...), nothing else")
+        with open(rotate_from, "rb") as f:
+            current_envelope = membership.load(f.read(membership.MAX_BYTES + 1), membership.MAX_BYTES)
+        current = ownerauth.from_envelope(io.BytesIO(raw[:65]), current_envelope, root_key, node_id)
+        stream = io.BytesIO(raw[65:])
     with open(record_path, "rb") as f:
         envelope = membership.load(f.read(membership.MAX_BYTES + 1), membership.MAX_BYTES)
     auth = ownerauth.from_envelope(stream, envelope, root_key, node_id)
+    if rotate_from is not None:
+        # never back to an older record (regalia-kms-51): a rotation cuts out retired or lost cards, whose envelopes an older
+        # record's are. Both records are root-signed and the TPM's answer to the current value proves which is current, so
+        # their `at` is a signed order, not a clock: the new one must be later
+        stamps = [e["record"]["at"] for e in (current_envelope, envelope)]
+        require(all(isinstance(t, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", t) for t in stamps),
+                "a record's `at` is not a UTC time (%%Y-%%m-%%dT%%H:%%M:%%SZ): the records cannot be ordered. Nothing was changed")
+        require(stamps[1] > stamps[0], "the new record is not newer than the current one (%s, not after %s): a rotation never "
+                "goes back to an older record, whose envelopes retired or lost cards may open. Nothing was changed" % (stamps[1], stamps[0]))
+        if ownerauth.rotate_owner(current, auth, ek_name or enrolled_ek_name(directory, node_id), tcti, run):
+            return ("the TPM's owner authorization is rotated to %s's NEW envelope value, and answers to it; from now on every "
+                    "owner-authorized tool takes the new record (--ownerauth %s)" % (node_id, record_path))
+        return "the TPM's owner authorization already answers to %s's NEW envelope value: nothing was changed" % node_id
     if check:
         require(ownerauth.posture(tcti, run)["owner"], "the TPM's owner authorization is empty: nothing to check; set it "
                 "(this command without --check)")
@@ -2043,6 +2072,8 @@ def main(argv=None):
     o.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex: the record is verified under it")
     o.add_argument("--record", required=True, help="the ceremony's ownerauth.record.json")
     o.add_argument("--check", action="store_true", help="change nothing: prove the TPM's owner authorization is this envelope's")
+    o.add_argument("--rotate-from", metavar="OLD_RECORD.json", help="rotate a SET owner authorization: the record of the value "
+                   "the TPM holds now; standard input carries that current value, then the new one (of --record)")
     o.add_argument("--enrol-dir", default=ENROL_DIR, help="the enrolment directory: the EK `init` recorded salts the session")
     g = sub.add_parser("challenge", help="(the root's side, no TPM) a credential to the bundle's EK and AK, for `activate`")
     g.add_argument("--bundle", required=True)
@@ -2105,7 +2136,8 @@ def main(argv=None):
     if args.command == "ownerauth":
         try:
             ownerauth.measured_once()             # the value stays off the TPM bus only on measured tools (#414)
-            print(set_ownerauth(args.node_id, args.root_key, args.record, sys.stdin.buffer, check=args.check, directory=args.enrol_dir))
+            print(set_ownerauth(args.node_id, args.root_key, args.record, sys.stdin.buffer, check=args.check, directory=args.enrol_dir,
+                                rotate_from=args.rotate_from))
         except (Refused, membership.Refused, OSError, ValueError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1

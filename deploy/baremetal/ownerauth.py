@@ -45,7 +45,8 @@ CURRENT LIMITATIONS (#242):
     yk_sha256/bg_sha256 are for the ceremony's own proof);
   * set() takes the owner authorization from EMPTY only. A TPM whose owner authorization is already set is refused,
     with the way on (its value is this envelope's: nothing to do, `check` proves it; otherwise the TPM's owner
-    hierarchy must be cleared by its owner first). Changing a set value to a new one (a rotation) is not built;
+    hierarchy must be cleared by its owner first). Changing a set value to a new one is rotate_owner's (`enrol ownerauth
+    --rotate-from OLD_RECORD`): the current value authorizes, the new one is sent encrypted, both checked first;
   * a child process (enrolment's steps as regalia-sync) takes the value from its root parent through an inherited
     memfd (child_fd, --ownerauth-fd) and does not re-verify the record: the parent verified it. While that child runs,
     the OWNER authorization is held by a process of uid regalia-sync, the network-facing sync daemon's user: enrolment
@@ -451,6 +452,48 @@ def set_owner(auth, ek_name, tcti=None, run=subprocess.run):
             "owner authorization may now be UNKNOWN. Re-run `enrol ownerauth --check` with this envelope; if that fails, "
             "clear the owner hierarchy with the lockout authorization (tpm2_clear -c l, #57) or from the firmware's TPM "
             "menu, and set it again" % why)
+
+
+def rotate_owner(old, new, ek_name, tcti=None, run=subprocess.run):
+    """The TPM's owner authorization changed from `old` (the value it holds) to `new` (#242, regalia-kms-24): one
+    tpm2_changeauth in a session salted to the node's EK with parameter encryption (salted_session, #414), `old` as that
+    session's authorization (`-p session:<ctx>+file:/dev/fd/N`: never sent, only an HMAC keyed by it) and `new` its
+    encrypted parameter, each through its own sealed memfd; then `new` proven (holds). Measured on swtpm: A to B, a wrong
+    `old` refused with the TPM unchanged, B back to A.
+    The CALLER checks both values against their records first: a wrong value reaching the TPM costs a dictionary-attack
+    strike (swtpm answers an owner authorization failure with TPM_RC_AUTH_FAIL, 0x98e). Resumable: a TPM that no longer
+    answers to `old` but answers to `new` (a run that stopped after the change) is left as it is; that costs the one
+    strike of asking for `old` first. Returns True if it changed the TPM, False if it already held `new`."""
+    require(isinstance(old, Auth) and isinstance(new, Auth), "the owner authorizations are not ownerauth.Auth values")
+    require(not hmac.compare_digest(old._raw, new._raw), "the new owner authorization is the current one: nothing to rotate. "
+            "Nothing was changed")
+    measured_once()
+    require(posture(tcti, run)["owner"], "the TPM's owner authorization is empty: there is nothing to rotate. Set it with "
+            "`enrol ownerauth` (without --rotate-from). Nothing was changed")
+    if not holds(old, tcti, run):
+        require(holds(new, tcti, run), "the TPM's owner authorization is neither the current value given nor the new one: "
+                "this TPM was provisioned otherwise, or the records are another node's. Nothing was changed")
+        return False
+    with salted_session(ek_name, tcti, run) as session:
+        fds = (_value_fd(old), _value_fd(new))
+        try:
+            done = run(["tpm2_changeauth", "-c", "o", "-p", "session:%s+file:/dev/fd/%d" % (session, fds[0]),
+                        "file:/dev/fd/%d" % fds[1]], capture_output=True, env=_env(tcti), pass_fds=fds)
+        finally:
+            for fd in fds:
+                os.close(fd)
+    require(done.returncode == 0, "the TPM did not change the owner authorization: %s. It should still be the current "
+            "value; `enrol ownerauth --check` with the current record tells" % _tail(done.stderr))
+    try:
+        proven, why = holds(new, tcti, run), "it does not answer to it"
+    except Refused as refused:
+        proven, why = False, str(refused)
+    # no-stranding: the TPM said it changed the authorization, and the change cannot be proven
+    require(proven, "the TPM accepted the change but the new value could not be proven (%s): the owner authorization is "
+            "the new value or, if the change did not take, still the current one. `enrol ownerauth --check` with each "
+            "record tells; if neither answers, clear the owner hierarchy with the lockout authorization (tpm2_clear -c l, "
+            "#57) or from the firmware's TPM menu, and set it again" % why)
+    return True
 
 
 AUTH_FAILURE = re.compile(r"\(0x0*9(?:a2|8e)\)", re.IGNORECASE)   # TPM_RC_BAD_AUTH / TPM_RC_AUTH_FAIL, session 1

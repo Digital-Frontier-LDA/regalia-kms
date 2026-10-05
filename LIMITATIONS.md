@@ -84,7 +84,15 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     - Moving the owner calls into the root parent is #419.
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
-  - Rotating a set owner authorization is not built.
+  - **Rotating a set owner authorization: built, with these limits** (`enrol ownerauth --rotate-from`).
+    - The ceremony's rotation run, which makes the fresh values and the new record, is regalia-ceremony#135 (51), not
+      yet built. Until then no new record exists to rotate to.
+    - A rerun after a stop first asks the TPM for the CURRENT value, which it no longer holds. That costs one
+      dictionary-attack strike: swtpm answers an owner authorization failure with TPM_RC_AUTH_FAIL. A value that fails
+      its record never reaches the TPM.
+    - Every owner-authorized tool must be given the NEW record from then on. Nothing on the host remembers which record
+      is current; the TPM's answer is the only proof.
+    - Measured on swtpm with tpm2-tools 5.7, not on the DL360's TPM.
 - **Re-anchoring on a real host has three known faults, fixed in #391 (not merged):**
   - Run as root, `reanchor` writes `membership.json` as root with mode 0600, so the node's `regalia-sync`
     cannot read its own chain afterwards and the node cannot serve.
