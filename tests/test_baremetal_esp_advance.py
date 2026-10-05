@@ -172,5 +172,78 @@ class AnchorLag(EspCase):
         self.assertEqual({name: value for name, _, value in published[0][1]}.get("regalia_esp_advance_ok"), 0)
 
 
+class Settled(EspCase):
+    """regalia-kms-24 and 3e on main's three-node-recovery: a publication landing DURING a run is folded into it by the
+    path unit, which starts nothing afterwards. esp_advance_settled runs again while the published chain changed under
+    the run, so the ESP and the anchor reach what is published."""
+
+    def test_a_chain_published_during_the_run_is_followed_by_another_run(self):
+        node.publish(self.sync, self.n.path(node.PUBLISHED))                  # epoch 1 published
+        runs = []
+
+        def advance(n, esp, lock_path):
+            result = node.esp_advance(n, esp, lock_path=lock_path)
+            runs.append(result[0])
+            if len(runs) == 1:                                                # sync publishes epoch 2 while run 1 is active
+                self.sync.commit(self.e2)
+                node.publish(self.sync, self.n.path(node.PUBLISHED))
+            return result
+        epoch = node.esp_advance_settled(self.n, self.esp, lock_path=self.lock, advance=advance)[0]
+        self.assertEqual((runs, epoch, self.n.anchor().value()), ([1, 2], 2, 2))
+        self.assertEqual(self.on_esp(), [self.e1, self.e2])
+
+    def test_one_run_when_nothing_changed_and_a_refusal_when_it_never_settles(self):
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+        calls = []
+        node.esp_advance_settled(self.n, self.esp, lock_path=self.lock,
+                                 advance=lambda n, esp, lock_path: calls.append(1) or node.esp_advance(n, esp, lock_path=lock_path))
+        self.assertEqual(len(calls), 1)
+        published = self.n.path(node.PUBLISHED)
+
+        def churn(n, esp, lock_path):                                         # a file that changes under every run
+            with open(published, "ab") as f:
+                f.write(b" ")
+            return (1, "", False, None)
+        with self.assertRaises(m.Refused) as caught:
+            node.esp_advance_settled(self.n, self.esp, lock_path=self.lock, advance=churn)
+        self.assertIn("changed during each of %d runs" % node.ESP_SETTLE_RUNS, str(caught.exception))
+
+    def test_a_second_run_is_refused_while_one_holds_the_run(self):
+        """regalia-kms-95: two runs interleaved could write an OLDER chain to the ESP after the other anchored a newer one
+        (an ESP below its anchor: a ROLLBACK at the next boot). One run at a time, on node.ESP_LOCK's file; the second is
+        refused, never interleaved."""
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+        inner, ran = [], []
+
+        def first(n, esp, lock_path):
+            inner.append(lock_path)
+            with self.assertRaises(m.Refused) as caught:                       # a second run while the first is inside
+                node.esp_advance_settled(self.n, self.esp, lock_path=self.lock,
+                                         advance=lambda *a, **k: ran.append(1))
+            self.assertIn("another regalia-esp-advance run, or a re-anchor, holds", str(caught.exception))
+            return node.esp_advance(n, esp, lock_path=lock_path)
+        self.assertEqual(node.esp_advance_settled(self.n, self.esp, lock_path=self.lock, advance=first)[0], 1)
+        self.assertEqual(ran, [])                                              # the second never touched the ESP or anchor
+        self.assertEqual(inner, [self.lock + ".anchor"])                       # the anchor's own lock is another file
+
+    def test_esp_advance_and_reanchor_serialize_on_one_lock(self):
+        """regalia-kms-24: reanchor (#391) holds node.ESP_LOCK for its whole re-anchor. The ESP advance takes the same file
+        for its whole run: either one, held, refuses the other."""
+        from deploy.baremetal import reanchor
+        self.assertEqual(reanchor.ESP_LOCK, node.ESP_LOCK)
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+        with reanchor.esp_lock_held(self.lock) as held:                         # a re-anchor is running
+            self.assertTrue(held)
+            with self.assertRaises(m.Refused):
+                node.esp_advance_settled(self.n, self.esp, lock_path=self.lock)
+        self.assertEqual(self.n.anchor().value(), 1)
+
+        def during(n, esp, lock_path):                                         # an ESP advance is running
+            with self.assertRaises(m.Refused) as caught, reanchor.esp_lock_held(self.lock):
+                pass
+            self.assertIn("regalia-esp-advance holds the anchor's lock", str(caught.exception))
+            return node.esp_advance(n, esp, lock_path=lock_path)
+        node.esp_advance_settled(self.n, self.esp, lock_path=self.lock, advance=during)
+
 if __name__ == "__main__":
     unittest.main()
