@@ -69,9 +69,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     anchor is a lab node's, or one laid down before B2b. sync refuses the next chain, and the ESP advance reports
     `regalia_esp_advance_ok 0`. The repair is `reanchor` (MEMBERSHIP-RECOVERY.md), which needs two peer chains,
     or one and the owner's statement (`--one-source`, above).
-  - **The v3 → v4 step is refused on such a node, with nothing moved.** Every node must be re-anchored by policy
-    before the root signs the first v4 manifest. No tool checks the whole fleet's layout first; each node's refusal is
-    what tells.
+  - **The v3 → v4 step is refused on such a node, with nothing moved.** This concerns lab nodes only: production
+    starts at a v4 genesis, and every v4 enrolment defines its anchor by policy (#419), so no production node has an
+    owner-written anchor. A lab fleet moving to v4 is re-anchored by policy node by node first; no tool checks the
+    whole fleet's layout beforehand (not needed for production: regalia-kms-24 and 95, 2026-10-05), and each node's
+    refusal names the fix.
   - Under a v1–v3 (lab) chain both layouts still read, by design: lab images write with the owner authorization.
   - Anyone holding the owner authorization can still undefine the indices. That is a denial (Unusable), which a
     re-anchor repairs; it cannot write them under v4.
@@ -83,16 +85,14 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     unsalted. A bus probe on the DL360 sees those, not the value.
   - The value cannot be zeroed in Python memory. While an owner-authorized call runs, the value is readable through
     /proc by root (a memfd; `seal-hsm-pin.sh` uses a root-only file on /run).
-  - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path
-    is held by unit tests and by swtpm tests of the anchor's owner calls.
-  - During `enrol commit` the owner authorization is held by a process of uid regalia-sync, the network-facing
-    sync daemon's user. **Who could read it, and when:**
-    - Who: root, and any process of uid regalia-sync (through /proc/<pid>/fd, or by attaching to the step where
-      Yama allows).
-    - When: only while commit's `_anchor` and `_first-heartbeat` steps run, seconds each, at enrolment.
-    - commit refuses to start a step while any other process of that uid exists (`pgrep -u regalia-sync`). The race
-      left is a process of that uid starting during a step: at enrolment the node's services are not yet running.
-    - Moving the owner calls into the root parent is #419.
+  - `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420, `InitOnSwtpm`), from
+    `enrol ownerauth`'s salted set to epoch 1. Its regalia-sync steps run in-process there, not through `runuser`
+    as that user (that needs root and the user, a CI e2e).
+  - Under v4 the owner authorization never enters a process of regalia-sync (#419): `enrol commit` makes every
+    owner-authorized definition itself, as root, and its regalia-sync steps commit by policy. With a lab chain
+    (v1–v3, owner-written) the value is still handed to them (a memfd, refused while another process of that uid
+    runs). Under v4 the node is fresh at its sync's first pull (10–60 s after enrolment), not at once: the heartbeat
+    counter is defined one below the highest heartbeat the root parent verified.
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.
