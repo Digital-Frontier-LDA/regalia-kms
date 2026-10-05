@@ -498,7 +498,7 @@ def main(argv=None, out=None):
     import argparse
     import json
     import sys
-    from deploy.baremetal import keyfd, manifest, measurements
+    from deploy.baremetal import enrol, keyfd, manifest, measurements
     out = out or sys.stdout
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.anchorpolicy", description="K_A's approvals (#361), on the offline laptop")
     sub = ap.add_subparsers(dest="command", required=True)
@@ -552,7 +552,7 @@ def main(argv=None, out=None):
                 measurements.bind(tip, current)               # the document the tip commits to, and no other
                 generations = rotation_generations(current, pem, point)
             result = fill(document, pem, point, _key_from_fd(args.key_fd, point), generations)
-    except (Refused, OSError, ValueError) as error:
+    except (Refused, enrol.Refused, OSError, ValueError) as error:          # enrol's: the genesis proof and rotation_of
         print("anchorpolicy: refused: %s" % error, file=sys.stderr)
         return 2
     out.write(json.dumps(result, indent=1, sort_keys=True) + "\n")

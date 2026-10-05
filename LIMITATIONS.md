@@ -179,6 +179,15 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   approvals (C2) and the writes under them (C3) are not built: until then no index is written under R. Its value
   is the TPM's saved highest count, so it differs per node (regalia-kms-95). Measured on swtpm only. A node
   enrolled before C1 has no R and is refused at the genesis ("made before #361 C1").
+- **K_A's approvals are made and carried, and nothing uses them yet** (#361 C2). A signed set's
+  `signing.anchor_approvals` holds K_A's signature per class over P(K_sys, G) for THAT node's rotation
+  counter. The signer (`anchorpolicy approve`, `approve-first`, `approve-increment`) takes G from each
+  node's AK-quoted first value at the genesis, and from the current root-committed document at a rotation
+  (the same G for a key already approved, one above the highest otherwise). It never takes a typed G. The
+  node's use of them (the composite write session) is C3; until then the approvals are only validated by
+  form, at load, and by signature, in the signer. The signer runs on the offline laptop under
+  regalia-ceremony's offline-keys (its TOOLS entries come in an rc PR after this merges); it is unit-tested
+  with keys on pipes, not yet run there.
 - **K_A is taken from the sealed set's generation record** (`--offline-keys-record`, regalia-kms-95 on
   #438). It is verified under the pinned root, and its published key must equal the entry. Its private
   half is shown only by the record's `operation_proof` ("verified": the generating tool's own check of a
