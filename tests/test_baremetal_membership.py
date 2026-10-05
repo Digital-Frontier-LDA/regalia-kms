@@ -797,9 +797,10 @@ class RecordWrites(unittest.TestCase):
             hw.value()
         self.assertEqual(hw.remains(), (None, [(0, "00" * 32), (0, "00" * 32)]))
 
-    def test_a_failed_read_names_the_tpm_s_reason_in_the_journal_and_the_refusal_is_unchanged(self):
+    def test_a_failed_read_names_the_tpm_s_reason_in_the_journal_and_in_the_refusal(self):
         """#448/#450: an intermittent "cannot read 8 bytes" in CI said nothing of why. What tpm2_nvread printed goes to
-        stderr (the unit's journal); the refusal's text is the shared vectors' and does not change."""
+        stderr (the unit's journal, #452), and since #450 the refusal ends with it ("; the TPM said: ..."), which the Go
+        reader's comparison drops."""
         import contextlib
         import io
         hw = self.defined()
@@ -812,7 +813,7 @@ class RecordWrites(unittest.TestCase):
                 with contextlib.redirect_stderr(journal), self.assertRaises(m.Refused) as caught:
                     hw.unusable()
                 self.assertIn(reason, str(caught.exception))
-                self.assertNotIn("TPM_RC_RETRY", str(caught.exception))        # the refusal stays the vectors'
+                self.assertTrue(str(caught.exception).endswith("; the TPM said: ERROR: TPM_RC_RETRY"), str(caught.exception))
                 self.assertIn("regalia: tpm2_nvread %s failed (exit 1, 0 bytes out): " % index, journal.getvalue())
                 self.assertIn("Received a non-TPM Error | ERROR: TPM_RC_RETRY", journal.getvalue())
         self.fault = lambda argv: None
@@ -821,6 +822,63 @@ class RecordWrites(unittest.TestCase):
         with contextlib.redirect_stderr(journal):
             m._said("nvread", "0x1500016", subprocess.CompletedProcess(["tpm2_nvread"], 1, "", "ERROR: TPM_RC_YIELDED\n"))
         self.assertIn("regalia: tpm2_nvread 0x1500016 failed (exit 1, 0 bytes out): ERROR: TPM_RC_YIELDED", journal.getvalue())
+
+    SESSION_MEMORY = (1, b"", b"WARNING:esys:Esys_StartAuthSession_Finish() Received TPM Error\nERROR: Esys_StartAuthSession(0x903) - "
+                              b"tpm:warn(2.0): out of memory for session contexts")      # as CI captured it (#452)
+
+    def flaky(self, index, answers):
+        """tpm2_nvread of `index` answers `answers` in turn (a tuple: it fails so; None: the TPM's own read), then reads."""
+        answers = list(answers)
+        return lambda argv: (answers.pop(0) if answers else None) if argv[:2] == ["tpm2_nvread", index] else None
+
+    def test_a_transient_answer_is_asked_again_and_reads(self):
+        """#450: the anchor's reads are asked again on a transient TPM answer (SESSION_MEMORY, as CI captured it; RETRY;
+        a TCTI that could not connect), with back-off, and read the value."""
+        import contextlib
+        import io
+        hw = self.defined()
+        for label, answer in (("session memory", self.SESSION_MEMORY),
+                              ("retry", (1, b"", b"ERROR: Esys_NV_Read(0x922) - tpm:warn(2.0): the TPM was not able to start the command")),
+                              ("tcti", (1, b"", b"ERROR:tcti:src/tss2-tcti/tcti-swtpm.c:614:Tss2_Tcti_Swtpm_Init() Cannot connect to "
+                                                b"swtpm TPM socket: Connection refused"))):
+            with self.subTest(label):
+                waits = []
+                hw._sleep = waits.append
+                self.fault = self.flaky("0x1500016", [answer, answer])
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(hw.value(), 0)
+                self.assertEqual(waits, [m.READ_BACKOFF, m.READ_BACKOFF * 2])
+        self.fault = lambda argv: None
+
+    def test_any_other_answer_is_refused_at_once_naming_the_tpm(self):
+        """#450: the TPM's refusal of the read is never retried, and the refusal names what the TPM said."""
+        import contextlib
+        import io
+        hw = self.defined()
+        waits = []
+        hw._sleep = waits.append
+        said = (1, b"", b"ERROR: Esys_NV_Read(0x14a) - tpm:error(2.0): NV access authorization fails")
+        self.fault = self.flaky("0x1500016", [said] * 9)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(m.Refused) as caught:
+            hw.value()
+        self.assertEqual(str(caught.exception), "cannot read 8 bytes from NV index 0x1500016; the TPM said: ERROR: "
+                         "Esys_NV_Read(0x14a) - tpm:error(2.0): NV access authorization fails")
+        self.assertEqual(waits, [])
+        self.fault = lambda argv: None
+
+    def test_a_transient_answer_that_persists_is_refused_after_the_bound(self):
+        import contextlib
+        import io
+        hw = self.defined()
+        waits = []
+        hw._sleep = waits.append
+        self.fault = self.flaky("0x150001b", [self.SESSION_MEMORY] * 9)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(m.Refused) as caught:
+            hw.unusable()
+        self.assertIn("cannot read 48 bytes from the record index 0x150001b: the anchor is unavailable (fail closed); the TPM said: "
+                      "ERROR: Esys_StartAuthSession(0x903) - tpm:warn(2.0): out of memory for session contexts", str(caught.exception))
+        self.assertEqual(waits, [m.READ_BACKOFF * 2 ** i for i in range(m.READ_TRIES - 1)])
+        self.fault = lambda argv: None
 
     def test_a_record_read_that_fails_is_refused_whatever_it_printed(self):
         hw = self.defined()

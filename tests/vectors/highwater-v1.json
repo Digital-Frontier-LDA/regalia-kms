@@ -1660,7 +1660,7 @@
    "length": 3,
    "name": "a slot the TPM describes and does not read",
    "policy": null,
-   "refused": "cannot read 48 bytes from the record index 0x150001b: the anchor is unavailable (fail closed)",
+   "refused": "cannot read 48 bytes from the record index 0x150001b: the anchor is unavailable (fail closed); the TPM said: the TPM said no",
    "tpm": {
     "broken": false,
     "nv": {
@@ -1700,7 +1700,7 @@
    "length": 3,
    "name": "a base the TPM does not read",
    "policy": null,
-   "refused": "cannot read 8 bytes from NV index 0x1500017",
+   "refused": "cannot read 8 bytes from NV index 0x1500017; the TPM said: the TPM said no",
    "tpm": {
     "broken": false,
     "nv": {

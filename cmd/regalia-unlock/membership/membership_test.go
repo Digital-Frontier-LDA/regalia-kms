@@ -19,6 +19,7 @@ var reasonDetail = []struct {
 }{
 	{regexp.MustCompile(`"([^"]*)"`), "'$1'"},
 	{regexp.MustCompile(`: missing=.*$`), ""},
+	{regexp.MustCompile(`; the TPM said: .*$`), ""}, // #450: the Python names tpm2_nvread's reason; the Go reader reads otherwise
 	{regexp.MustCompile(` \([^()]*\)$`), ""},
 	{regexp.MustCompile(`state .+ is not a known state`), "state is not a known state"},
 }
