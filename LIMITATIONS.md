@@ -26,6 +26,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **Activation by quorum: not built** (#432). The decided design (ADR D28.6) has no fencing host:
+  activation needs 2 signatures from {a, b, c, owner}. On `main` only the format carries
+  `activation_signers`, and nothing reads it. Runtime leases (`lease.py`) are issued by **one** active
+  peer, and `regalia-fence` is still the authority for which site signs ([`FENCING.md`](FENCING.md)).
 - **Recovery with only one surviving peer: not built.** `recover` and `reanchor` need two peer chains
   today. With one peer left, a node cannot be recovered or re-anchored. The design is decided, with the
   owner co-signing as the second source behind `--one-source` (#387, PR #395). With **both** peers gone,
