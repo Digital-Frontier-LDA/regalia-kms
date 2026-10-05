@@ -609,8 +609,13 @@ def renewal_step(node_id, manifest, clock, signer, ask, peers, state_dir, trail)
         start, expires = validate(held["lease"])
         verify(held, manifest)                       # signed as the Gate will check it, or this node does not hold it (d9)
     except Refused as refused:
-        trail({"event": "activation", "outcome": "DENY", "epoch": manifest["epoch"],
-               "reason": ("the lease file does not verify, so this node holds no lease: %s" % refused)[:240]})
+        rec = held["lease"].get("recovery") if isinstance(held.get("lease"), dict) else None
+        ended = (isinstance(rec, dict) and isinstance(rec.get("authorization"), dict)
+                 and rec["authorization"].get("quarantine_epoch") != manifest["epoch"])
+        reason = ("the recovery authorization ended with epoch %d: the owner signs a new one for this epoch (owner.py "
+                  "sign-activation), or the nodes return" % manifest["epoch"]) if ended else (
+                  "the lease file does not verify, so this node holds no lease: %s" % refused)
+        trail({"event": "activation", "outcome": "DENY", "epoch": manifest["epoch"], "reason": reason[:240]})
         return state
     now = _now(clock)
     state.update(holder=now < expires, expires=expires)

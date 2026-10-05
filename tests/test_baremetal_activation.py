@@ -704,7 +704,7 @@ class Running(Record):
         events = []
         ended = act.renewal_step("c", m3, rp.clock(rp.now + 600), c, None, [], state, events.append)
         self.assertEqual((ended["recovery"], ended["holder"], ended["renewed"]), (False, False, False))
-        self.assertIn("does not verify", events[-1]["reason"])                # its recovery lease ended with the epoch: no lease
+        self.assertIn("the recovery authorization ended with epoch 3", events[-1]["reason"])     # named, for the operator (d9)
 
 
 class Commands(unittest.TestCase):
