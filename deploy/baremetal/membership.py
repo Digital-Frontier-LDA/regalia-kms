@@ -1419,26 +1419,31 @@ class Store:
                 current = nxt
             # judged by the FETCHED chain's tip (#242 B3, regalia-kms-ed): a v4 chain is never restored over an owner-written
             # anchor (whatever the disk held, or did not), which only a re-anchor repairs
+            previous = self.hw._schema
             self._judge_by(manifests)
-            hw = self.hw.value()
-            require(current["epoch"] >= hw, "the fetched chain ends at epoch %d, below the TPM high-water %d: "
-                    "fetch from a peer that is not behind" % (current["epoch"], hw))
-            # before anything is written: advance() would refuse this jump AFTER the file was replaced,
-            # leaving a disk ahead of the TPM that load() could never anchor
-            require(current["epoch"] - hw <= self.hw.MAX_JUMP, "the fetched chain ends at epoch %d, %d above the TPM high-water: "
-                    "the jump exceeds the bound %d: anomaly" % (current["epoch"], current["epoch"] - hw, self.hw.MAX_JUMP))
-            # also before anything is written: a chain that is not the anchored one never reaches the disk (read without
-            # the anchor's lock when this store is not its writer: see _load)
             try:
-                self.hw.verify(self._digests(manifests), lock=self.anchors)
-            except Refused as refused:              # lock-free (not the writer): a CONFLICT that does not stay is a write racing
-                if self.anchors or str(refused).startswith("ROLLBACK"):
-                    raise
-                self.hw.verify(self._digests(manifests), lock=False)
-            self._continues_disk(envelopes)
-            if self.documents is not None:              # #332: the epoch restored to is judged by its own document
-                self.documents(current)
-            self._write(copy.deepcopy(envelopes))
+                hw = self.hw.value()
+                require(current["epoch"] >= hw, "the fetched chain ends at epoch %d, below the TPM high-water %d: "
+                        "fetch from a peer that is not behind" % (current["epoch"], hw))
+                # before anything is written: advance() would refuse this jump AFTER the file was replaced,
+                # leaving a disk ahead of the TPM that load() could never anchor
+                require(current["epoch"] - hw <= self.hw.MAX_JUMP, "the fetched chain ends at epoch %d, %d above the TPM high-water: "
+                        "the jump exceeds the bound %d: anomaly" % (current["epoch"], current["epoch"] - hw, self.hw.MAX_JUMP))
+                # also before anything is written: a chain that is not the anchored one never reaches the disk (read without
+                # the anchor's lock when this store is not its writer: see _load)
+                try:
+                    self.hw.verify(self._digests(manifests), lock=self.anchors)
+                except Refused as refused:              # lock-free (not the writer): a CONFLICT that does not stay is a write racing
+                    if self.anchors or str(refused).startswith("ROLLBACK"):
+                        raise
+                    self.hw.verify(self._digests(manifests), lock=False)
+                self._continues_disk(envelopes)
+                if self.documents is not None:              # #332: the epoch restored to is judged by its own document
+                    self.documents(current)
+                self._write(copy.deepcopy(envelopes))
+            except BaseException:
+                self.hw._schema = previous                 # refused before the disk holds it: judged by the chain held (regalia-kms-ed)
+                raise
             if self.anchors:                            # else: the ESP advance anchors it, ESP first
                 self.hw.anchor(current["epoch"], self._digests(manifests))
                 self.hw.check(current["epoch"])
@@ -1472,19 +1477,24 @@ class Store:
                 manifests.append(nxt)
                 current = nxt
             digest_of = self._digests(manifests)
+            previous = self.hw._schema
             self._judge_by(manifests)
-            require(self.hw.unusable() is not None, "the TPM anchor is usable: it is not reset. A chain that is rolled back, lost or "
-                    "substituted is restored under the anchor it has (restore)")
-            counter, records = self.hw.remains()
-            for held, what in sorted([(counter, "its counter")] * (counter is not None) + [(epoch, "a record slot") for epoch, _ in records], reverse=True):
-                require(current["epoch"] >= held, "the fetched chain ends at epoch %d, below epoch %d, which this node's TPM still holds "
-                        "(%s): re-anchoring does not go back" % (current["epoch"], held, what))
-            for epoch, recorded in records:
-                require(digest_of(epoch) == recorded, "CONFLICT: a record slot that still reads names another manifest at epoch %d than "
-                        "the fetched chain: nothing is re-anchored; record an incident" % epoch)
-            self._continues_disk(envelopes)
-            self.reanchor_began = True
-            self._write(copy.deepcopy(envelopes))
+            try:
+                require(self.hw.unusable() is not None, "the TPM anchor is usable: it is not reset. A chain that is rolled back, lost or "
+                        "substituted is restored under the anchor it has (restore)")
+                counter, records = self.hw.remains()
+                for held, what in sorted([(counter, "its counter")] * (counter is not None) + [(epoch, "a record slot") for epoch, _ in records], reverse=True):
+                    require(current["epoch"] >= held, "the fetched chain ends at epoch %d, below epoch %d, which this node's TPM still holds "
+                            "(%s): re-anchoring does not go back" % (current["epoch"], held, what))
+                for epoch, recorded in records:
+                    require(digest_of(epoch) == recorded, "CONFLICT: a record slot that still reads names another manifest at epoch %d than "
+                            "the fetched chain: nothing is re-anchored; record an incident" % epoch)
+                self._continues_disk(envelopes)
+                self.reanchor_began = True
+                self._write(copy.deepcopy(envelopes))
+            except BaseException:
+                self.hw._schema = previous                 # refused before the disk holds it: judged by the chain held (regalia-kms-ed)
+                raise
             self.hw.redefine(current["epoch"], digest_of(current["epoch"]))
             self.hw.check(current["epoch"])
             self.chain, self.manifests = copy.deepcopy(envelopes), manifests
@@ -1525,17 +1535,20 @@ class Store:
         # judged by the NEW tip before the disk is written (#242 B3): a move to v4 over an owner-written anchor is refused
         # here, with nothing moved, instead of leaving a v4 chain on the disk over an anchor it then refuses. The same for
         # a store that never anchors (#66 B3): the ESP advance would refuse that anchor only after the disk had moved
+        previous = self.hw._schema
         self._judge_by(self.manifests + [nxt])
-        hw = self.hw.value()
-        self.hw._slots()
-        if not self.anchors:                            # the disk only: the ESP advance moves the anchor, ESP first
-            require(nxt["epoch"] - hw <= self.hw.MAX_JUMP, "epoch %d is %d above the TPM high-water: the jump exceeds the bound %d "
-                    "until the ESP advance anchors what is held" % (nxt["epoch"], nxt["epoch"] - hw, self.hw.MAX_JUMP))
+        try:
+            hw = self.hw.value()
+            self.hw._slots()
+            if not self.anchors:                        # the disk only: the ESP advance moves the anchor, ESP first
+                require(nxt["epoch"] - hw <= self.hw.MAX_JUMP, "epoch %d is %d above the TPM high-water: the jump exceeds the bound "
+                        "%d until the ESP advance anchors what is held" % (nxt["epoch"], nxt["epoch"] - hw, self.hw.MAX_JUMP))
             self._write(self.chain + [envelope])
-            self.chain, self.manifests = self.chain + [envelope], self.manifests + [nxt]
-            return nxt
-        self._write(self.chain + [envelope])
-        self.hw.anchor(nxt["epoch"], self._digests(self.manifests + [nxt]))
+        except BaseException:
+            self.hw._schema = previous                 # refused before the disk holds it: judged by the chain held (regalia-kms-ed)
+            raise
+        if self.anchors:
+            self.hw.anchor(nxt["epoch"], self._digests(self.manifests + [nxt]))
         self.chain, self.manifests = self.chain + [envelope], self.manifests + [nxt]
         return nxt
 

@@ -1207,6 +1207,8 @@ class PolicyOnlyUnderV4(unittest.TestCase):
                     self.assertEqual(f.read(), before)
                 self.assertEqual(m.HighWater(index, lock_path=self.d + "/s.lock", run=self.tpm, schema=m.SCHEMA_V3).value(),
                                  1 if anchors else 0)
+                # regalia-kms-ed: the refused judgement is undone, so this store's anchor still reads for the chain it holds
+                self.assertEqual(store.hw.value(), 1 if anchors else 0)
 
     def test_a_v4_chain_is_not_restored_over_an_owner_written_anchor(self):
         """regalia-kms-ed: restore() judges by the chain it fetched, not by what the disk held (a rolled-back or lost file
@@ -1227,6 +1229,7 @@ class PolicyOnlyUnderV4(unittest.TestCase):
                     store.restore(fetched)
                 self.assertFalse(os.path.exists(path))
                 self.assertEqual(m.HighWater(index, lock_path=self.d + "/r.lock", run=self.tpm, schema=m.SCHEMA_V3).value(), 1)
+                self.assertEqual(store.hw.value(), 1)          # the refused judgement undone (regalia-kms-ed)
 
 
 class TornWrites(unittest.TestCase):
