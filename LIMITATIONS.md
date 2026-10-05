@@ -26,6 +26,22 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **The shared operational state, `opstate/v1`: format only** (#432, ADR-0002 D32; `deploy/baremetal/opstate.py`,
+  `tests/vectors/opstate-v1.json`). Built:
+  - the entries (spend, sequence, quota, key-state), the etcd key each lives under, their verification, each kind's
+    transition rule, and one Reserve's transaction rule, as a library with a vector for the Go side.
+  Not built yet:
+  - nothing writes or reads etcd: the daemon's transactions and watch cache are regalia-kms-ed's;
+  - the per-boot session key that signs a node's entries, and `sessions/<node>/<boot_id>`, wait for the runtime
+    lease v2 (regalia-kms-95), and the caller supplies the resolver;
+  - the D25 approver set for a key-state change is the caller's, not yet read from the policy;
+  - garbage collection by hour-bucketed etcd leases.
+  **Accepted:**
+  - etcd isn't Byzantine-tolerant. A member with root can withhold entries or serve old ones. It cannot forge an
+    entry, because every entry carries its own signatures. A whole-cluster rollback is caught by the revision in the
+    signed heartbeats (planned, #432).
+  - A transaction that loses a race is retried at most three times, one round trip each, then refused.
+  - Quota days are UTC days.
 - **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
   refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
   its verification under the current manifest's `activation_signers`, each node's grant record and
