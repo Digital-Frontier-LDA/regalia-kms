@@ -173,36 +173,36 @@ class CardRecord(Case):
 
     def test_a_certificate_missing_from_the_directory(self):
         os.unlink(os.path.join(self.d, "22222222.dec.attest.der"))
-        self.refused("owner card 22222222 (dev-backup): no certificate in %s has the DEC attestation's SHA-256" % self.d)
+        self.refused("owner card 22222222 (owner-backup): no certificate in %s has the DEC attestation's SHA-256" % self.d)
 
     def test_another_card_s_serial(self):
         self.replace("11111111", "aut", serial="55555555")
-        self.refused("owner card 11111111 (dev-main): its AUT attestation names the card 55555555, not 11111111")
+        self.refused("owner card 11111111 (owner-main): its AUT attestation names the card 55555555, not 11111111")
 
     def test_an_imported_key(self):
         self.replace("22222222", "sig", source=0)
-        self.refused("owner card 22222222 (dev-backup): its SIG attestation says the key was imported, not generated on the card (D5)")
+        self.refused("owner card 22222222 (owner-backup): its SIG attestation says the key was imported, not generated on the card (D5)")
 
     def test_a_touch_policy_not_fixed(self):
         self.replace("11111111", "dec", touch=1)
-        self.refused("owner card 11111111 (dev-main): its DEC attestation gives the touch policy 1, not fixed (2, D30.7)")
+        self.refused("owner card 11111111 (owner-main): its DEC attestation gives the touch policy 1, not fixed (2, D30.7)")
 
     def test_the_sig_key_is_the_recorded_owner_key(self):
         self.replace("11111111", "sig", public=ed25519.Ed25519PrivateKey.generate().public_key())
-        self.refused("owner card 11111111 (dev-main): its SIG attestation is of another key than the recorded owner key")
+        self.refused("owner card 11111111 (owner-main): its SIG attestation is of another key than the recorded owner key")
 
     def test_sig_and_dec_fingerprints_are_the_ownerauth_recipient_s(self):
         self.replace("11111111", "sig", fingerprint="F" * 40)
-        self.refused("owner card 11111111 (dev-main): its SIG attestation's fingerprint %s is not the card's ownerauth recipient's primary A"
+        self.refused("owner card 11111111 (owner-main): its SIG attestation's fingerprint %s is not the card's ownerauth recipient's primary A"
                      % ("F" * 40))
         self.setUp()
         self.replace("22222222", "dec", fingerprint="F" * 40)
-        self.refused("owner card 22222222 (dev-backup): its DEC attestation's fingerprint %s is not the card's ownerauth recipient's subkey D"
+        self.refused("owner card 22222222 (owner-backup): its DEC attestation's fingerprint %s is not the card's ownerauth recipient's subkey D"
                      % ("F" * 40))
 
     def test_the_aut_key_is_the_card_s_ssh_signing_key(self):
         self.replace("22222222", "aut", public=ed25519.Ed25519PrivateKey.generate().public_key())
-        self.refused("owner card 22222222 (dev-backup): its AUT attestation is of another key than the card's SSH signing key")
+        self.refused("owner card 22222222 (owner-backup): its AUT attestation is of another key than the card's SSH signing key")
 
     def test_one_slot_s_certificate_named_for_another(self):
         record = copy.deepcopy(self.record)
@@ -215,14 +215,24 @@ class CardRecord(Case):
         with self.assertRaisesRegex(cr.Refused, r"'Yubico OPGP Attestation B 1', which no vendored Yubico certificate is"):
             cr.verify(self.sign(self.record), self.root, [self.line(self.record)], attestations=self.d)    # the real, pinned trust
 
-    def test_a_directory_holding_something_else_is_refused_by_name(self):
-        self.write("notes.txt", b"not a certificate")
-        self.refused("notes.txt is not a certificate (PEM or DER)")
-        os.unlink(os.path.join(self.d, "notes.txt"))
+    def test_the_disc_layout_and_what_is_refused_in_it(self):
+        """regalia-kms-51's layout: one owner-card-<serial>/ per card, its .der beside a .gpg and a .json that are not
+        read; a *.der that is no certificate, or a link, is refused by name."""
+        card = os.path.join(self.d, "owner-card-11111111")
+        os.mkdir(card)
+        for name in os.listdir(self.d):
+            if name.startswith("11111111."):
+                os.rename(os.path.join(self.d, name), os.path.join(card, name.split(".", 1)[1]))
+        for name, data in (("owner-card-11111111.gpg", b"public certificate"), ("owner-card-11111111.json", b"{}")):
+            with open(os.path.join(card, name), "wb") as f:
+                f.write(data)
+        self.assertEqual(self.verify()["attestations"], "verified")
+        self.write("notes.der", b"not a certificate")
+        self.refused("notes.der is not a DER certificate")
+        os.unlink(os.path.join(self.d, "notes.der"))
         os.symlink(os.path.join(self.d, "att.der"), os.path.join(self.d, "link.der"))
         with self.assertRaises(cr.Refused):
             self.verify()
-
 
 if __name__ == "__main__":
     unittest.main()

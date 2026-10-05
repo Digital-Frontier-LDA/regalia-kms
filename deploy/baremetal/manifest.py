@@ -225,7 +225,7 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
     the release card's key, the root's and every node's signing key are each other than the owner keys. `owners`
     ({card serial: key}) and `release_key` come from the card record (card_record_keys); checked here again, as a
     library caller may give them otherwise."""
-    require(isinstance(owners, dict) and len(owners) == 2, "the owner's keys are exactly two cards' (D30), not %r" % (owners,))
+    require(isinstance(owners, dict) and len(owners) == 2, "the owner's keys are exactly the two owner cards' (D30.7), not %r" % (owners,))
     for serial, key in sorted(owners.items()):
         _raw_ed25519(key, "the owner card %s's key" % serial)
         require(isinstance(serial, str) and serial.upper() not in membership.BENCH_TOKENS,
@@ -583,8 +583,15 @@ def _propose_genesis(args, root, confirm=None, say=print):
             "system phase%s)" % (node_id, quoted["7"], quoted["11"], ", PCR 7 too" if pcr7_judged[node_id] else
                                  ", PCR 7 compared across the nodes only"))
     say("card record: session %s, made %s, signed by the pinned root" % (cards["session"], cards["at"]))
-    say("card record %d of %d (the newest on this laptop's signing record), digest %s, supersedes %s: check both against "
-        "the ceremony sheet" % (cards["sequence"], cards["of"], cards["digest"], cards["supersedes"] or "nothing (the first)"))
+    say("card record %d of %d (%s), digest %s, supersedes %s: check both against "
+        "the ceremony sheet" % (cards["sequence"], cards["of"], "pinned by the chain" if cards.get("pinned") else
+                                "the newest on this laptop's signing record", cards["digest"], cards["supersedes"] or "nothing (the first)"))
+    if cards["baseline"] is not None:
+        # a rebuilt state directory (#406): the history before its baseline is the sheet's or the chain's, not this laptop's
+        say("this laptop's signing record was REBUILT: card records 1..%d stand as one baseline from the %s, digest %s: check it "
+            "against the ceremony sheet" % (cards["baseline"]["sequence"], cards["baseline"]["source"], cards["baseline"]["digest"]))
+    if cards["supersedes_checked"] is False and cards["baseline"] is not None:
+        say("supersedes not checked: history before %d rebuilt from %s" % (cards["baseline"]["sequence"], cards["baseline"]["source"]))
     say("attestations: each owner card's SIG, DEC and AUT keys generated on that card, touch fixed, under Yubico's pinned "
         "root (%s)" % cards["attestations"])
     roles = {serial: role for role, serial in cards["roles"].items()}

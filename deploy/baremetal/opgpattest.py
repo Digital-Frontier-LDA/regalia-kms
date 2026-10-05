@@ -163,16 +163,23 @@ def verify(leaf, devices, slot, now=None, anchors=None):
 
 
 def certificates(directory):
-    """Every certificate in `directory`'s regular files (PEM, one or more; or one DER), as {SHA-256 of its DER: cert}.
-    At most MAX_FILES files of MAX_FILE_BYTES each; a symbolic link, a non-regular file or an unreadable certificate
-    is refused by name, so a disc that holds something else is noticed, not skipped."""
+    """Every certificate in `directory`'s DER files, as {SHA-256 of its DER: cert}: the ceremony disc's layout
+    (regalia-kms-51, regalia-ceremony#140), one subdirectory per owner card, owner-card-<serial>/{att,sig,dec,aut}.der,
+    beside that card's .gpg and .json, which are not read. *.der files directly in `directory` are taken too. At most
+    MAX_FILES certificates of MAX_FILE_BYTES each; a symbolic link, a non-regular *.der or one that is not a certificate
+    is refused by name, so a damaged disc is noticed, not skipped. Matching is by digest, so names never matter."""
     from cryptography import x509
     from cryptography.hazmat.primitives import serialization
-    names = sorted(os.listdir(directory))
-    require(0 < len(names) <= MAX_FILES, "%s holds %d files: the attestations are 1 to %d certificate files" % (directory, len(names), MAX_FILES))
-    out = {}
-    for name in names:
+    paths = []
+    for name in sorted(os.listdir(directory)):
         path = os.path.join(directory, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            paths += [os.path.join(path, n) for n in sorted(os.listdir(path)) if n.endswith(".der")]
+        elif name.endswith(".der"):
+            paths.append(path)
+    require(0 < len(paths) <= MAX_FILES, "%s holds %d certificate files (*.der): the attestations are 1 to %d" % (directory, len(paths), MAX_FILES))
+    out = {}
+    for path in paths:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
         try:
             require(stat.S_ISREG(os.fstat(fd).st_mode), "%s is not a regular file" % path)
@@ -182,11 +189,10 @@ def certificates(directory):
             os.close(fd)
         require(len(data) <= MAX_FILE_BYTES, "%s is over %d bytes" % (path, MAX_FILE_BYTES))
         try:
-            certs = x509.load_pem_x509_certificates(data) if data.lstrip().startswith(b"-----BEGIN") else [x509.load_der_x509_certificate(data)]
+            cert = x509.load_der_x509_certificate(data)
         except ValueError:
-            raise Refused("%s is not a certificate (PEM or DER)" % path) from None
-        for cert in certs:
-            out[hashlib.sha256(cert.public_bytes(serialization.Encoding.DER)).hexdigest()] = cert
+            raise Refused("%s is not a DER certificate" % path) from None
+        out[hashlib.sha256(cert.public_bytes(serialization.Encoding.DER)).hexdigest()] = cert
     return out
 
 

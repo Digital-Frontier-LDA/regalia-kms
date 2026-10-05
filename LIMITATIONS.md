@@ -156,11 +156,22 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 
 ## The owner's and the release cards (ADR D30)
 
-- **Not measured**: the developer-card layout has not been shown on a staging YubiKey. The layout
-  is the owner key in OpenPGP SIG, owner-auth in DEC, and SSH commit signing in AUT. The three checks
-  still to run are a raw Ed25519 signature from SIG through OpenSC, an OpenPGP certificate built on the
-  existing card key with DEC bound to it, and git SSH signing from AUT. If the first fails, the owner key
-  moves to PIV.
+- **Not measured**: the owner-card layout (D30.7: its own OWNER pair, owner-main and owner-backup; the
+  developer cards hold no KMS key and appear in no KMS record) has not been shown on a staging YubiKey.
+  The layout is the owner key in OpenPGP SIG, owner-auth in DEC, and the KMS admin SSH key in AUT. The
+  three checks still to run are a raw Ed25519 signature from SIG through OpenSC, an OpenPGP certificate
+  built on the existing card key with DEC bound to it, and SSH signing from AUT. If the first fails, the
+  owner key moves to PIV.
+- **Not measured: the two-pair ceremony.** The card record's roles, ownerauth's recipients and the SSH
+  signers name the owner pair; the vectors and the writer's output are regenerated (rc#121 62ddc3e,
+  rc#128 d74a7aa), and no ceremony has yet run with two pairs.
+- **The owner authorization's recipients are not compared here with the card record's owner cards**
+  (regalia-kms-d9 on #451). Both records are root-signed, so only a ceremony mistake can make them
+  differ, for example step a encrypting to an export that is not the two owner cards the card record
+  names. D30.7 makes that likely at the first ceremony, because the export used to be the developer
+  cards'. `enrol ownerauth` does not take the card record. regalia-ceremony's ownerauth step refuses
+  unless its `--yk-keys` DEC subkeys equal the root-signed card record's `ownerauth_recipients`
+  (rc#133, not merged).
 - **Not measured: touch-required behaviour** on the owner and release keys. It needs the owner at
   the bench.
 - **Accepted:** a release card stolen together with its PIN can sign a release. Mitigations: touch is
@@ -209,7 +220,15 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   real laptop can sign. The marker and log path is unit-tested only until the first-ceremony rehearsal.
 - **The laptop's signing record is not hash-chained** (#405). A deleted line, a cut tail or a state
   directory restored from an older backup is not detected; #405 would anchor the newest card-record
-  digest in the root-signed manifest. A lost state directory has no recovery path yet (#406).
+  digest in the root-signed manifest.
+- **A lost state directory is rebuilt from a baseline, not from its history** (#406). regalia-ceremony's
+  rebuild (rc#131) writes ONE `card-record-baseline` line standing for card records 1..N, the root-signed
+  rebuild record, and record N+1. This reader checks all three. What it cannot check: before genesis
+  the baseline is only as true as the ceremony sheet it was typed from ("sheet"), and nothing arbitrates
+  a fork. A Shamir root reconstructed elsewhere can sign a later record this laptop never sees. After
+  genesis, the chain's `card_record` pin (#405) decides, given as `pin` to `cardrecord.verify`. Nothing
+  in this repository passes it yet: the one reader here, `propose --genesis`, runs before any chain. The
+  lost manifest-signing lines are not rebuilt: their evidence is the chain and the ceremony log.
 - **The bench-token lists are kept by hand** (`membership.BENCH_NITROKEYS`, `BENCH_PICOS`,
   `BENCH_YUBIKEYS`). A new bench token must be added there. A test keeps the drills' staging list equal
   to it, and nothing ties it to the operators' staging registry.
