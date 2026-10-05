@@ -177,6 +177,7 @@ class Cluster:
         self.manifest = None
         self.keys = {}
         self.authtimes = {}
+        self.authtime_writers = {}                    # node -> (its writer thread, the Event that halts it at power-off)
         self.loops = {}
         self.services = {n: () for n in names}        # what start() last started on each node, until stop()
         self.client = os.environ.get("REGALIA_UNLOCK_BIN", "")
@@ -552,9 +553,37 @@ class Cluster:
         service = authtime.Service(str(n.run / "authtime.json"), ["nts1.e2e3.invalid", "nts2.e2e3.invalid"], reading=reading)
         self.authtimes[n.name] = service
         service.step()
-        thread = threading.Thread(target=service.run, args=(lambda: self.stop_threads,), kwargs={"interval": 5}, daemon=True)
+        self._authtime_writer(n.name)
+
+    def _authtime_writer(self, name):
+        """The node's authtime writer, every 5 s, as its unit would run on a host: only while the node is powered.
+        stop(power=...) halts it before emptying the node's /run (a powered-off node runs nothing, and a writer still
+        renaming its temp file there raced the emptying: three-node-outage on 8eb35a6); start() runs it again."""
+        service, off = self.authtimes[name], threading.Event()
+
+        def loop():
+            while not self.stop_threads and not off.is_set():
+                service.step()
+                off.wait(5)
+        thread = threading.Thread(target=loop, daemon=True)
         thread.start()
         self.threads.append(thread)
+        self.authtime_writers[name] = (thread, off)
+
+    def _authtime_halt(self, name):
+        """The node's authtime writer stopped, and waited for: nothing writes its /run after this returns."""
+        thread, off = self.authtime_writers.get(name, (None, None))
+        if thread is None:
+            return
+        off.set()
+        thread.join(30)
+        if thread.is_alive():
+            raise RuntimeError("%s's authtime writer did not stop: its /run is not emptied under it" % name)
+
+    def _authtime_resume(self, name):
+        thread, _ = self.authtime_writers.get(name, (None, None))
+        if name in self.authtimes and (thread is None or not thread.is_alive()):
+            self._authtime_writer(name)
 
     # ---- running ----
 
@@ -598,6 +627,7 @@ class Cluster:
         if not self.time[name]:                       # booted again: its time is checked again (chrony, on a host)
             self.time[name] = True
             self.authtimes[name].step()
+        self._authtime_resume(name)                   # its writer runs again once it is booted (halted at power-off)
         for service in services:
             if service == "wg-apply" and not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
                 raise RuntimeError("%s's sync published no chain" % name)
@@ -825,8 +855,11 @@ class Cluster:
             sh("cryptsetup", "close", "e2e3-" + name, check=False)
         if power:
             self.time[name] = False
+            self._authtime_halt(name)                 # nothing of this node writes its /run while it is off
+            # its authtime writer is halted above; an entry that vanishes anyway (a belt) is gone, not an error
             for entry in n.run.iterdir():
-                shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+                with contextlib.suppress(FileNotFoundError):
+                    shutil.rmtree(entry) if entry.is_dir() and not entry.is_symlink() else entry.unlink()
             for interface in ("wg-svc", "wg-unlock", "wg-boot"):
                 n.in_ns("ip", "link", "del", interface, check=False)
             self.power_cycle(name, orderly=(power == "cycle"))
