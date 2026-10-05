@@ -233,10 +233,23 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   recovery scenarios (#402). Outage, leases and replace are not covered. The time trail and the update trail
   are never checked end to end in a three-node scenario. In recovery, "each node's change to serving" is not
   tied to a step, and the victims' not-serving lines are not checked.
-- **`regalia-sync` says nothing in the journal about its rounds** (#470). Its decisions (pulls, applies,
-  refusals and their reasons) are only in its hash-chained trail. `journalctl -u regalia-sync` shows systemd's
-  start and stop lines, so an operator asking why a node is behind its peers must read the trail. In the
-  three-node fixture, `advance()` now prints the puller's trail when a node doesn't take an epoch (#469).
+- **`regalia-sync`'s journal is a summary; the trail is the record** (#470). Each pull round now writes one
+  line per peer to the journal: an epoch applied, nothing newer, `DENY <event> from <peer>: <reason>` (the
+  trail's reason, word for word), or the peer did not answer, with the error class. Each peer's line is
+  rate-bounded: it is written when the outcome changes, and the same outcome repeats at most every 15 minutes.
+  What the journal does not say:
+  - A refused round names only its last DENY. If a round applies an epoch and the heartbeat after it is then
+    refused, the line says `DENY sync-heartbeat`, and the new epoch shows up in the next round's line.
+  - A taken heartbeat is not reported, and neither is its freshness.
+  - Unlock, enrolment and beat-sign answers given to peers are not reported.
+  - A DENY that repeats inside the 15-minute window is written once. Repeats are matched with digit runs
+    ignored, so a reason that carries a count, a time or a sequence doesn't write a line every round. A DENY
+    whose reason differs only in its numbers therefore stays hidden for up to 15 minutes.
+  - The journal lines aren't hash-chained or shipped. Anyone who can write the journal can edit or drop
+    them. The trail is the evidence.
+
+  For any of these, read the trail. In the three-node fixture, `advance()` prints the puller's trail when a
+  node doesn't take an epoch (#469).
 - **Collector receipts carry no signed time** (#398), so a stale receipt still verifies. This matters
   for the one-peer recovery witness (#387).
 
