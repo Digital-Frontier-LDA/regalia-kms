@@ -215,10 +215,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   [`deploy/baremetal/MONITORING.md`](deploy/baremetal/MONITORING.md)). The real service has not been
   chosen or deployed. The audit collector's conformance suite runs against the reference collector in
   CI. **Monitoring has no conformance command** (MONITORING.md section 5: not built).
-- **Audit completeness is checked in some scenarios only.** `audit_complete` runs in the theft, rolling and
-  recovery scenarios (#402). Outage, leases and replace are not covered. The time trail and the update trail
-  are never checked end to end in a three-node scenario. In recovery, "each node's change to serving" is not
-  tied to a step, and the victims' not-serving lines are not checked.
+- **Audit completeness: every three-node scenario but netns and reanchor.** `audit_complete` runs in theft,
+  rolling, recovery (#402), outage, leases and replace. Each also finds the decisions it turns on by name in the
+  deciding node's own stream. In recovery, each node's change to serving is tied to the step-2 pair that restored it
+  (that peer's lease, in that pair's window), and each step-7 victim's not-serving line is checked. Not covered:
+  netns (no audit decisions of its own) and the re-anchor rehearsal (its trail is the operator tool's, checked
+  line by line there, not shipped). **The time trail and the update trail are still never checked end to end in a
+  three-node scenario:** both write to fixed host paths the fixture would first have to give each node.
 - **`regalia-sync` says nothing in the journal about its rounds** (#470). Its decisions (pulls, applies,
   refusals and their reasons) are only in its hash-chained trail. `journalctl -u regalia-sync` shows systemd's
   start and stop lines, so an operator asking why a node is behind its peers must read the trail. In the

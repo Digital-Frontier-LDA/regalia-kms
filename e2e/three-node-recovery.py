@@ -33,8 +33,9 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
   8  #340: every line of every node's sync and admission trail is in the audit collector (a real collector and each
      node's real shipper: Cluster(audit=True)), and the decisions this scenario turns on are there by name, in the
      stream of the node that made them: every directed unlock of step 2, a's refusal of b's second session (5), a's
-     refusal of b's seventh lease request (6), the lone node's refused proposal and its hand recovery (7), and each
-     node's change to serving. Not here: the time trail (the fixture's time stand-in writes none) and the update
+     refusal of b's seventh lease request (6), the lone node's refused proposal and its hand recovery (7), each
+     node's change to serving on the lease of the peer that restored it in step 2, and each step-7 victim's not
+     serving after its start (and no change to serving). Not here: the time trail (the fixture's time stand-in writes none) and the update
      trail (1b's call writes none)
 
 L always: a live lease in the node's admission, whose holder names the peer as issuer, and that peer's trail
@@ -162,6 +163,7 @@ def scenario(cluster):
 
     header("2  PoC 10.1: every directed relationship, X restored by P alone")
     step2 = time.time()
+    restored = []                                       # (target, peer, from, to) for step 8: its change to serving, by peer
     for target, peer in itertools.permutations(names, 2):
         third = next(n for n in names if n not in (target, peer))
         cluster.stop(target)
@@ -172,6 +174,7 @@ def scenario(cluster):
         cluster.start(target, SERVICES)
         ok(until(lambda: leased(cluster, target, peer, since), 120, 2) is True, "L: %s holds a lease %s issued" % (target, peer),
            cluster.journal(target, "admission")[-600:])
+        restored.append((target, peer, since, time.time()))
         cluster.start(third, SERVICES)
         until(lambda: cluster.lease(third), 120, 2)
 
@@ -289,6 +292,7 @@ def scenario(cluster):
 
     header("7  N: a quarantined, then retired; b reported stolen: no key, no lease, and why")
     alone_at = []                                       # (node, epoch, since) of each hand recovery, for step 8
+    victims = []                                        # (node, state, epoch, since its start) of each one that may not serve
     for victim, signer, state in (("a", "owner", "QUARANTINED"), ("a", "root", "RETIRED"), ("b", "owner", "REVOKED_STOLEN")):
         before = cluster.manifest
         survivors = [n for n in names if n != victim and may(before, n, "authorize")]
@@ -338,6 +342,7 @@ def scenario(cluster):
            % (victim, state, manifest["epoch"], ", ".join(survivors)), got)
         since = time.time()
         cluster.start(victim, SERVICES)
+        victims.append((victim, state, manifest["epoch"], since))
         refused = "may not serve under epoch %d" % manifest["epoch"]
 
         def why():
@@ -380,8 +385,24 @@ def scenario(cluster):
             for n, e, t in alone_at}
     ok(bool(hand) and all(all(v) for v in hand.values()),
        "the lone node's refused proposal and its hand recovery (owner-beat) in step 7 are in its own stream %s" % hand, cluster.beat_events(names))
-    serving = {n: bool(cluster.audit_has(n, "admission", event="admission-serving", outcome="ALLOW")) for n in names}
-    ok(all(serving.values()), "each node's change to serving is in its own admission stream", serving)
+    # tied to step 2 (LIMITATIONS.md, Audit and monitoring): each target restored by one peer alone records its change to
+    # serving on THAT peer's lease, within that pair's own window (whole seconds, both ends inclusive)
+    def served(target, peer, start, end):
+        return [e for e in cluster.audit_has(target, "admission", since=start, event="admission-serving", outcome="ALLOW", peer=peer)
+                if e.get("at", 0) <= int(end)]
+    serving = {"%s<-%s" % (t, p): len(served(t, p, start, end)) for t, p, start, end in restored}
+    ok(len(restored) == 6 and all(serving.values()),
+       "each node's change to serving in step 2, on the lease of the one peer that restored it, is in its own admission stream", serving)
+    # and the victims of step 7: each, started under an epoch that says it may not serve, records that it does not serve
+    # (its admission's first round after the start) and never that it serves (they stay down after it: strict is not needed)
+    stopped = {"%s %s@%d" % (n, st, ep): (len(cluster.audit_has(n, "admission", since=t, event="admission-serving", outcome="DENY")),
+                                          len(cluster.audit_has(n, "admission", since=t, event="admission-serving", outcome="ALLOW")))
+               for n, st, ep, t in victims}
+    ok(len(victims) == 3 and all(deny and not allow for deny, allow in stopped.values()),
+       "each step-7 victim's not serving after its start is in its own admission stream, and no change to serving (DENY, ALLOW) %s" % stopped,
+       {"%s %s@%d" % (n, st, ep): [{k: e.get(k) for k in ("at", "outcome", "peer", "reason")}
+                                   for e in cluster.audit_has(n, "admission", since=t, event="admission-serving")][-4:]
+        for n, st, ep, t in victims})
 
 
 def main():

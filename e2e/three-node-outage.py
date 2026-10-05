@@ -3,7 +3,8 @@
 each node its real services in its own namespace against its own TPM, the nodes signing their own heartbeats; no
 authority host; the owner's keys on a SoftHSM token, signed through the real owner.py halves).
 
-    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-outage.py
+    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> REGALIA_AUDIT_BIN=<dir with built regalia-audit-ship, regalia-audit-collector> \
+        sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN python3 -Es e2e/three-node-outage.py
 
 IT CHANGES THE MACHINE (namespaces, interfaces, loop devices, dm-crypt mappings, transient units), so it runs
 only on a GitHub-hosted runner, or on a throwaway host whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
@@ -23,6 +24,10 @@ then the other two by themselves, through that node; then the nodes sign their o
      (fail closed). Judged by position in a's trail, not by time: after a's first refusal for want of time, no
      signature as proposer or co-signer. One signature already in flight across the switch is allowed (the Proposer
      reads authenticated time once per step): a stated limitation, not a failure
+  6  #340: every line of every node's sync and admission trail is in the audit collector (a real collector and each
+     node's real shipper: Cluster(audit=True)), and the decisions this scenario turns on are there by name, in the
+     stream of the node that made them: c's revocation committed (step 4), and a's refusals for want of authenticated
+     time, as proposer and as co-signer (step 5)
 """
 import base64
 import json
@@ -172,6 +177,21 @@ def scenario(cluster):
        "co-signer, and says why (fail closed)%s" % (" (one signature in flight across the switch, allowed)" if in_flight else ""),
        {"co-sign answer": answer, "refused at": refused_at, "signed after": signed, "in flight": in_flight, "events": recent(cluster, "a")})
 
+    header("6  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
+    wrong = cluster.audit_complete()
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t, _, _ in threenode.AUDIT_TRAILS}
+    ok(wrong == {}, "every node's trails are written and in the collector line for line: sequence from 1, chained from genesis, "
+       "each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
+       {"%s.%s" % k: v for k, v in wrong.items()})
+    revoked = {n: bool(cluster.audit_has(n, "sync", event="revoke-commit", outcome="ALLOW", epoch=2)) for n in ("a", "b")}
+    ok(any(revoked.values()), "c's revocation (epoch 2, step 4) committed in the stream of the node that committed it %s" % revoked)
+    untimed = lambda r: bool(r) and "time is not authenticated" in r
+    as_proposer = cluster.audit_has("a", "sync", event="beat-propose", outcome="DENY", reason=untimed)
+    as_cosigner = cluster.audit_has("a", "sync", event="sync-beat-sign", outcome="DENY", reason=untimed)
+    ok(bool(as_proposer) and bool(as_cosigner),
+       "a's refusals for want of authenticated time (step 5), as proposer (%d) and as co-signer (%d), are in a's stream"
+       % (len(as_proposer), len(as_cosigner)))
+
 
 def main():
     try:
@@ -187,11 +207,13 @@ def main():
     if present:
         print("three-node-outage: refused: %s exists: another run's leftovers are still here" % ", ".join(present))
         return 2
-    if os.geteuid() != 0 or not os.access(os.environ.get("REGALIA_UNLOCK_BIN", "/nonexistent"), os.X_OK):
-        print("three-node-outage: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
+    if os.geteuid() != 0 or not os.access(os.environ.get("REGALIA_UNLOCK_BIN", "/nonexistent"), os.X_OK) or not all(
+            os.access(os.path.join(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"), b), os.X_OK) for b in ("regalia-audit-ship", "regalia-audit-collector")):
+        print("three-node-outage: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock and REGALIA_AUDIT_BIN a directory "
+              "with the built regalia-audit-ship and regalia-audit-collector (#340)")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work)
+    cluster = threenode.Cluster(work, audit=True)                    # the nodes' trails shipped to a real collector (#340)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once
