@@ -11,7 +11,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +26,7 @@ import (
 	"time"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/adapters/gpgsign"
+	"github.com/Digital-Frontier-LDA/regalia-kms/adapters/gpgsign/internal/protected"
 )
 
 const usage = `usage:
@@ -32,6 +35,10 @@ const usage = `usage:
   regalia-sign [--config FILE] --export-key
   regalia-sign [--config FILE] --fingerprint
   regalia-sign --status-fd=2 -bsau KEY        (as git's gpg.program; signs stdin to stdout)
+Under a policy that requires approval, any of --detach, --clearsign and --export-key is done in two
+steps, with an approver signing the pending record in between (regalia-approve):
+  regalia-sign [--config FILE] --prepare PENDING [--valid-for 5m] --detach FILE
+  regalia-sign [--config FILE] --complete PENDING --approval FILE [--approval FILE …] --detach FILE
 The configuration is --config, or the file named by REGALIA_SIGN_CONFIG.
 `
 
@@ -47,6 +54,12 @@ type invocation struct {
 	binary      bool
 	exportKey   bool
 	fingerprint bool
+
+	// The two-step form for a policy that requires approval.
+	prepare   string   // the pending record to write
+	complete  string   // the pending record to complete
+	approvals []string // approval files, with --complete
+	validFor  string   // how long the prepared request stays valid, with --prepare
 
 	// The gpg-compatible form git uses: -b (detach) -s (sign) -a (armor) -u KEY.
 	gpgDetach, gpgSign, gpgArmor bool
@@ -77,11 +90,17 @@ func parse(args []string) (invocation, error) {
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		name, inline, hasInline := strings.Cut(argument, "=")
+		// An empty value is refused, never read as "option absent": `--prepare= --detach FILE`, from
+		// an unset variable in a script, would otherwise be the one-step command and reach the KMS.
 		take := func() (string, error) {
-			if hasInline {
-				return inline, nil
+			taken, err := inline, error(nil)
+			if !hasInline {
+				taken, err = value(&index, name)
 			}
-			return value(&index, name)
+			if err == nil && taken == "" {
+				err = fmt.Errorf("%s needs a value that is not empty", name)
+			}
+			return taken, err
 		}
 		var err error
 		switch {
@@ -99,6 +118,17 @@ func parse(args []string) (invocation, error) {
 			result.exportKey = true
 		case argument == "--fingerprint":
 			result.fingerprint = true
+		case name == "--prepare":
+			result.prepare, err = take()
+		case name == "--complete":
+			result.complete, err = take()
+		case name == "--valid-for":
+			result.validFor, err = take()
+		case name == "--approval":
+			var file string
+			if file, err = take(); err == nil {
+				result.approvals = append(result.approvals, file)
+			}
 		case name == "--status-fd":
 			var text string
 			if text, err = take(); err == nil {
@@ -156,7 +186,24 @@ func parse(args []string) (invocation, error) {
 		// vocabulary (a clear-signed or inline signature, an unnamed key) is not what this makes.
 		return result, errors.New("the gpg form supported is a detached armored signature: -bsau KEY")
 	}
-	if result.output != "" && result.detach == "" && result.clearsign == "" {
+	if result.prepare != "" || result.complete != "" {
+		if result.prepare != "" && result.complete != "" {
+			return result, errors.New("--prepare and --complete are two separate steps")
+		}
+		if result.fingerprint || gpgForm {
+			return result, errors.New("--prepare and --complete go with --detach, --clearsign or --export-key")
+		}
+	}
+	if (len(result.approvals) > 0) != (result.complete != "") {
+		return result, errors.New("--complete needs at least one --approval, and --approval goes only with --complete")
+	}
+	if result.validFor != "" && result.prepare == "" {
+		return result, errors.New("--valid-for goes with --prepare")
+	}
+	if result.prepare != "" && result.output != "" {
+		return result, errors.New("--prepare writes only the pending record; --output goes with the completing step")
+	}
+	if result.output != "" && result.detach == "" && result.clearsign == "" && !(result.exportKey && result.complete != "") {
 		return result, errors.New("--output goes with --detach or --clearsign")
 	}
 	if result.binary && result.detach == "" {
@@ -200,6 +247,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	case request.fingerprint:
 		fmt.Fprintln(stdout, key.Fingerprint())
 		return 0
+	case request.prepare != "":
+		if err := prepare(ctx, key, request, stdin, stdout, now()); err != nil {
+			return fail(1, err)
+		}
+		return 0
+	case request.complete != "":
+		if err := complete(ctx, key, request, stdin, stdout, now()); err != nil {
+			return fail(1, err)
+		}
+		return 0
 	case request.exportKey:
 		if err := key.ExportPublic(ctx, stdout); err != nil {
 			return fail(1, err)
@@ -239,6 +296,123 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 			signed.HashAlgo, signed.PubKeyAlgo, signed.HashAlgo, signed.Created.Unix(), key.Fingerprint())
 	}
 	return 0
+}
+
+// maxRecordBytes bounds a pending record or an approval: each is a few hundred bytes of JSON.
+const maxRecordBytes = 64 << 10
+
+// mode says what the command line asks to be signed, and where it comes from and goes by default.
+func (request invocation) mode() (mode gpgsign.Mode, source, destination string) {
+	switch {
+	case request.exportKey:
+		return gpgsign.ModeExportKey, "", request.output
+	case request.clearsign != "":
+		mode, source = gpgsign.ModeClearSign, request.clearsign
+	case request.binary:
+		mode, source = gpgsign.ModeDetachBinary, request.detach
+	default:
+		mode, source = gpgsign.ModeDetach, request.detach
+	}
+	destination = request.output
+	if destination == "" && source != "-" {
+		destination = source + ".asc"
+		if mode == gpgsign.ModeDetachBinary {
+			destination = source + ".sig"
+		}
+	}
+	return mode, source, destination
+}
+
+// document reads what is to be signed, whole. Both steps hash it and feed it, so it is read once.
+func document(source string, stdin io.Reader) ([]byte, error) {
+	switch source {
+	case "":
+		return nil, nil // a key export signs no document
+	case "-":
+		return io.ReadAll(stdin)
+	}
+	contents, err := os.ReadFile(source)
+	if err != nil {
+		return nil, errors.New("open the file to sign")
+	}
+	return contents, nil
+}
+
+// prepare writes the pending record and tells the operator what an approver will be shown. It does
+// not contact the KMS.
+func prepare(ctx context.Context, key *gpgsign.Key, request invocation, stdin io.Reader, stdout io.Writer, at time.Time) error {
+	validFor := 5 * time.Minute
+	if request.validFor != "" {
+		parsed, err := time.ParseDuration(request.validFor)
+		if err != nil {
+			return errors.New("--valid-for is a duration such as 5m")
+		}
+		validFor = parsed
+	}
+	mode, source, _ := request.mode()
+	contents, err := document(source, stdin)
+	if err != nil {
+		return err
+	}
+	pending, err := key.Prepare(ctx, mode, bytes.NewReader(contents), at, validFor)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(pending, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := installNew(request.prepare, string(encoded)+"\n"); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "prepared, not signed. To be approved before %s:\n  key          %s\n  object       %s (%s, %s)\n  what         %s, dated %s\n",
+		pending.ExpiresAt, pending.Fingerprint, pending.ObjectID, pending.Purpose, pending.Environment, pending.Mode, pending.Created)
+	if pending.DocumentSHA256 != "" {
+		fmt.Fprintf(stdout, "  file sha256  %s\n", pending.DocumentSHA256)
+	}
+	fmt.Fprintf(stdout, "  record       %s\n", request.prepare)
+	return nil
+}
+
+// complete reads the pending record and the approvals, and finishes the signature.
+func complete(ctx context.Context, key *gpgsign.Key, request invocation, stdin io.Reader, stdout io.Writer, at time.Time) error {
+	record, err := protected.ReadBounded(request.complete, maxRecordBytes)
+	if err != nil {
+		return errors.New("the pending-signature file is unreadable or too large")
+	}
+	pending, err := gpgsign.ReadPending(record)
+	if err != nil {
+		return err
+	}
+	mode, source, destination := request.mode()
+	if mode != pending.Mode {
+		return fmt.Errorf("the pending signature is a %s, and this command asks for a %s", pending.Mode, mode)
+	}
+	var approvals []gpgsign.Approval
+	for _, file := range request.approvals {
+		contents, err := protected.ReadBounded(file, maxRecordBytes)
+		if err != nil {
+			return errors.New("the approval file is unreadable or too large")
+		}
+		approval, err := gpgsign.ReadApproval(contents)
+		if err != nil {
+			return err
+		}
+		approvals = append(approvals, approval)
+	}
+	contents, err := document(source, stdin)
+	if err != nil {
+		return err
+	}
+	var signed strings.Builder
+	if _, err := key.Complete(ctx, &signed, bytes.NewReader(contents), pending, approvals, at); err != nil {
+		return err
+	}
+	if destination == "" || destination == "-" {
+		_, err := io.WriteString(stdout, signed.String())
+		return err
+	}
+	return installNew(destination, signed.String())
 }
 
 // signToFile signs request.detach or request.clearsign and writes the result beside the file (or to
@@ -282,41 +456,9 @@ func signToFile(ctx context.Context, key *gpgsign.Key, request invocation, stdin
 	return installNew(destination, signed.String())
 }
 
-// installNew puts contents at destination, whole or not at all, and never over an existing file.
-//
-// The contents are written to a temporary file in the same directory and then LINKED to the final
-// name. A reader of that name — an apt client, a web server in front of the repository — therefore
-// sees either no file or the complete one, never the first half of an InRelease. And link(2) fails
-// when the name exists, so "never replace" is decided by the filesystem in one step, not by a check
-// followed by a create.
+// installNew is shared with regalia-approve (internal/protected).
 func installNew(destination, contents string) error {
-	temporary, err := os.CreateTemp(filepath.Dir(destination), ".regalia-sign-*")
-	if err != nil {
-		return errors.New("create the output file")
-	}
-	defer os.Remove(temporary.Name())
-	if _, err := io.WriteString(temporary, contents); err != nil {
-		_ = temporary.Close()
-		return errors.New("write the output file")
-	}
-	if err := temporary.Chmod(0o644); err != nil {
-		_ = temporary.Close()
-		return errors.New("write the output file")
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return errors.New("write the output file")
-	}
-	if err := temporary.Close(); err != nil {
-		return errors.New("write the output file")
-	}
-	if err := os.Link(temporary.Name(), destination); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("%s already exists; remove it first", filepath.Base(destination))
-		}
-		return errors.New("create the output file")
-	}
-	return nil
+	return protected.InstallNew(destination, contents)
 }
 
 // verifyWithGPG replaces this process with the real gpg, arguments unchanged. Verifying needs the
