@@ -6,6 +6,7 @@ import datetime
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -607,12 +608,17 @@ class InitOnSwtpm(unittest.TestCase):
             with self.assertRaisesRegex(enrol.Refused, "under regalia.membership/v4 the TPM's owner authorization is set"):
                 enrol.commit(self.dir, envelope, root, enrol.fingerprint(root), document, nt.SITE, example, as_sync=in_process,
                              out=io.StringIO(), first_beat=first_beat, bootstrap=True)
-            listed = subprocess.run(["tpm2_getcap", "handles-nv-index"], capture_output=True, text=True).stdout.lower()
-            self.assertNotIn("0x1500016", listed)                                          # nothing defined
+            listed = {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", subprocess.run(["tpm2_getcap", "handles-nv-index"],
+                                                                                         capture_output=True, text=True).stdout)}
+            enrolment = {int(example[k], 16) + d for k in ("nv_epoch", "nv_heartbeat", "nv_signing") for d in range(6)}
+            self.assertEqual(listed & enrolment, set())          # nothing defined: no anchor, slot or counter index (1e)
             epoch, digest = enrol.commit(self.dir, envelope, root, enrol.fingerprint(root), document, nt.SITE, example,
                                          as_sync=in_process, out=io.StringIO(), first_beat=first_beat, bootstrap=True,
                                          ownerauth_given=given)
             self.assertEqual((epoch, digest), (1, m.digest(man)))
+            listed = {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", subprocess.run(["tpm2_getcap", "handles-nv-index"],
+                                                                                         capture_output=True, text=True).stdout)}
+            self.assertTrue({int(example[k], 16) for k in ("nv_epoch", "nv_heartbeat", "nv_signing")} <= listed)   # the control
             public_area = subprocess.run(["tpm2_nvreadpublic", "0x01500016"], capture_output=True, text=True).stdout
             self.assertIn("authorization policy: %s" % signkey.policy(pem).hex().upper(), public_area)    # policy-written
             from deploy.baremetal import node as nm
