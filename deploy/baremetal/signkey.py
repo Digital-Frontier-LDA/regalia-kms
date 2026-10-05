@@ -278,15 +278,29 @@ def boot_signatures(signatures=None):
 
 
 @contextlib.contextmanager
-def policy_session(pem, tcti=None, run=subprocess.run, signatures=None):
+def policy_session(pem, tcti=None, run=subprocess.run, signatures=None, anchor=None):
     """A policy session that satisfies PolicyAuthorize(the system-phase PCR key `pem`) for THIS boot: PolicyPCR of the
     TPM's PCR 11 now, then PolicyAuthorize with that key's signature over it (from this boot's tpm2-pcr-signature.json),
     its ticket from TPM2_VerifySignature. Yields the session's context file, for `-P session:<file>` (or -p). The one
     session every policy-authorized use takes (#242): the signing key here (sign), the TPM anchor's counter and record
     slots and the heartbeat counter (membership.HighWater). A session authorizes ONE command (the TPM resets its policy
     when it is used), so open one per command. The TPM's Name for the PCR key is required to be the one the policy is
-    computed from BEFORE its signature is checked, and the session is flushed whatever happens."""
+    computed from BEFORE its signature is checked, and the session is flushed whatever happens.
+
+    UNDER K_A (#361 C3), `anchor` = {"k_a": point, "node_id", "generation": G, "class", "signature": K_A's r||s}: the
+    session goes on, after PolicyAuthorize(K_sys), with PolicyNV(R <= G) on this node's rotation counter (its Name, from
+    K_A and the node, is checked against the TPM's first) and PolicyAuthorize(Name(K_A), the class's policyRef) with
+    K_A's approval of exactly that digest (anchorpolicy.approved), its ticket from TPM2_VerifySignature. The approval
+    is checked in software before the TPM is asked: another node's, key's, G's or class's is refused by name."""
     signatures = boot_signatures(signatures)
+    if anchor is not None:
+        from deploy.baremetal import anchorpolicy      # here: anchorpolicy imports membership, which this module imports
+        require(isinstance(anchor, dict) and set(anchor) == {"k_a", "node_id", "generation", "class", "signature"},
+                "the anchor approval is {k_a, node_id, generation, class, signature}")
+        approved_policy = anchorpolicy.approved_for(pem, anchor["k_a"], anchor["generation"], anchor["node_id"])
+        approval_der = anchorpolicy.verify_approval(anchor["k_a"], approved_policy, anchor["class"], anchor["signature"],
+                                                    "K_A's approval of the %s class for %s" % (anchor["class"], anchor["node_id"]))
+        rotation = anchorpolicy.rotation_name(int(anchorpolicy.ROTATION_INDEX, 16), anchor["k_a"], anchor["node_id"]).hex()
     with tempfile.TemporaryDirectory(prefix="signkey-") as d:
         p = {n: os.path.join(d, n) for n in ("pcr11", "pcr.pem", "pcr.ctx", "pcr.name", "pol", "pol.sig", "ticket", "session")}
         _tpm(run, tcti, "pcrread", "sha256:11", "-o", p["pcr11"])
@@ -301,9 +315,33 @@ def policy_session(pem, tcti=None, run=subprocess.run, signatures=None):
         try:
             _tpm(run, tcti, "policypcr", "-S", p["session"], "-l", "sha256:11")
             _tpm(run, tcti, "policyauthorize", "-S", p["session"], "-i", p["pol"], "-n", p["pcr.name"], "-t", p["ticket"])
+            if anchor is not None:
+                _anchor_steps(p["session"], d, anchor, approved_policy, approval_der, rotation, tcti, run)
             yield p["session"]
         finally:
             run(["tpm2_flushcontext", p["session"]], capture_output=True, env=_env(tcti))
+
+
+def _anchor_steps(session, d, anchor, approved_policy, approval_der, rotation, tcti, run):
+    """PolicyNV(R <= G) then PolicyAuthorize(Name(K_A), class) in `session` (policy_session's K_A part)."""
+    from deploy.baremetal import anchorpolicy
+    index = anchorpolicy.ROTATION_INDEX
+    held = anchorpolicy.nv_name_of(index, lambda argv, **kw: run(argv, env=_env(tcti), **kw))
+    require(held == rotation, "the rotation counter at %s is not %s's under this K_A (Name %s, not %s): nothing is written"
+            % (index, anchor["node_id"], held, rotation))
+    p = {n: os.path.join(d, n) for n in ("g", "ka.pem", "ka.ctx", "ka.name", "ka.msg", "ka.sig", "ka.approved", "ka.ticket")}
+    _write(p["g"], anchor["generation"].to_bytes(8, "big"))
+    _tpm(run, tcti, "policynv", "-S", session, "-i", p["g"], index, "ule")
+    _write(p["ka.pem"], anchorpolicy.k_a_pem(anchor["k_a"]))
+    _write(p["ka.msg"], anchorpolicy.authorize_message(approved_policy, anchor["class"]))
+    _write(p["ka.sig"], approval_der)
+    _write(p["ka.approved"], approved_policy)
+    _tpm(run, tcti, "loadexternal", "-C", "o", "-G", "ecc", "-u", p["ka.pem"], "-c", p["ka.ctx"], "-n", p["ka.name"])
+    require(_read(p["ka.name"]) == anchorpolicy.k_a_name(anchor["k_a"]), "the TPM names K_A otherwise than this policy does")
+    _tpm(run, tcti, "verifysignature", "-c", p["ka.ctx"], "-g", "sha256", "-m", p["ka.msg"], "-s", p["ka.sig"], "-f", "ecdsa", "-t", p["ka.ticket"])
+    run(["tpm2_flushcontext", p["ka.ctx"]], capture_output=True, env=_env(tcti))
+    _tpm(run, tcti, "policyauthorize", "-S", session, "-i", p["ka.approved"], "-n", p["ka.name"], "-q",
+         anchorpolicy._ref(anchor["class"]).hex(), "-t", p["ka.ticket"])
 
 
 def sign(message, pem, tcti=None, run=subprocess.run, signatures=None):
