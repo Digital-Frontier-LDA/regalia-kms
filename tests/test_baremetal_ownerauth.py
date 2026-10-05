@@ -475,5 +475,17 @@ class OnTheWire(unittest.TestCase):
         print("\ntpm2-tools %s: the owner authorization never crossed the bus (%d commands read)" % (version, len(sent)), file=sys.stderr)
 
 
+def setUpModule():
+    """The channel refuses an unmeasured tpm2-tools once per process (ownerauth.measured_once). These tests are about
+    behaviour, and OnTheWire IS the measurement: the gate is marked passed for the module, and OnlyMeasuredTools
+    tests it with the mark cleared."""
+    global _saved_checked
+    _saved_checked, ownerauth._tools_checked = ownerauth._tools_checked, True
+
+
+def tearDownModule():
+    ownerauth._tools_checked = _saved_checked
+
+
 if __name__ == "__main__":
     unittest.main()

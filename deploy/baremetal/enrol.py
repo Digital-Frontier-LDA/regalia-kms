@@ -2038,7 +2038,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.command == "ownerauth":
         try:
-            ownerauth.require_measured_tools()             # the value stays off the TPM bus only on measured tools (#414)
+            ownerauth.measured_once()             # the value stays off the TPM bus only on measured tools (#414)
             print(set_ownerauth(args.node_id, args.root_key, args.record, sys.stdin.buffer, check=args.check, directory=args.enrol_dir))
         except (Refused, membership.Refused, OSError, ValueError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
@@ -2119,7 +2119,7 @@ def main(argv=None):
             # once the fingerprint is typed; then the fingerprint, at the terminal
             given = ownerauth.read_arguments(args)
             if given is not None:
-                ownerauth.require_measured_tools()         # the value stays off the TPM bus only on measured tools (#414)
+                ownerauth.measured_once()         # the value stays off the TPM bus only on measured tools (#414)
             prompt = "The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): "
             if given is not None:
                 typed = ownerauth.console(prompt)

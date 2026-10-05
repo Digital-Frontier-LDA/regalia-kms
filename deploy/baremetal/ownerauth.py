@@ -308,6 +308,7 @@ def owner_call(auth):
         yield list(OWNER), {}
         return
     require(isinstance(auth, Auth), "the owner authorization is not an ownerauth.Auth")
+    measured_once()
     fd = _value_fd(auth)
     try:
         yield list(OWNER) + ["-P", "file:/dev/fd/%d" % fd], {"pass_fds": (fd,)}
@@ -350,7 +351,9 @@ EK_HANDLE = "0x81010001"               # the node's EK, persistent since `enrol 
 # never crosses the TPM bus (#414; tests/test_baremetal_ownerauth.py OnSwtpm's wire test). A version that sent -P as
 # a password session would put it back on the bus in clear, every test still green: the tools refuse another
 # (require_measured_tools, regalia-kms-d9).
-MEASURED_TOOLS = ("5.7",)
+# 5.7: measured on the dev qube (Debian 13, as the production image); 5.6: CI's runner, by OnTheWire in job
+# 111570576171 ("tpm2-tools 5.6: the owner authorization never crossed the bus (108 commands read)").
+MEASURED_TOOLS = ("5.6", "5.7")
 
 
 def tools_version(run=subprocess.run):
@@ -362,9 +365,22 @@ def tools_version(run=subprocess.run):
     return found.group(1)
 
 
+_tools_checked = False                 # once per process (measured_once): set by a test that measures or fakes the tools
+
+
+def measured_once():
+    """The channel's own gate (regalia-kms-d9 on #423): every owner call with a value, its set and its proof go through
+    owner_call, set_owner or holds, which refuse unless tpm2-tools is measured (require_measured_tools), once per process.
+    So a new owner-call tool cannot forget it, and enrolment's regalia-sync step checks for itself."""
+    global _tools_checked
+    if not _tools_checked:
+        require_measured_tools(subprocess.run)
+        _tools_checked = True
+
+
 def require_measured_tools(run=subprocess.run):
     """Refused unless tpm2-tools is a version measured to keep the owner authorization off the TPM bus (MEASURED_TOOLS):
-    run by every tool before it makes an owner call with a value."""
+    the channel runs it before its first owner call with a value (measured_once); the tools run it up front as well."""
     version = tools_version(run)
     require(version in MEASURED_TOOLS, "tpm2-tools %s is not a version measured to keep the owner authorization off the "
             "TPM bus (%s): it might send it in clear. Measure it (tests/test_baremetal_ownerauth.py, OnSwtpm's wire test, on "
@@ -407,6 +423,7 @@ def set_owner(auth, ek_name, tcti=None, run=subprocess.run):
     and never guessed at (its way on is in the message). The new value travels encrypted, in a session salted to
     the node's EK (salted_session, #414). Then proven by an owner-authorized call with it (holds)."""
     require(isinstance(auth, Auth), "the owner authorization is not an ownerauth.Auth")
+    measured_once()
     require(srk_persistent(tcti, run), "systemd's storage root key (%s) is not persistent: systemd-tpm2-setup makes it at "
             "boot, and once the owner authorization is set systemd cannot. Boot the node once with systemd-tpm2-setup "
             "enabled (or run /usr/lib/systemd/systemd-tpm2-setup), then this again. Nothing was changed" % SRK)

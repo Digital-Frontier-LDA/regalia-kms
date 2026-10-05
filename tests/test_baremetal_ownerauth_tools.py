@@ -220,6 +220,30 @@ class OnlyMeasuredTools(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, "cannot tell tpm2-tools' version"):
             ownerauth.require_measured_tools(self.version("", rc=1))
 
+    def test_the_channel_itself_refuses_an_unmeasured_tpm2_tools_once_per_process(self):
+        auth = ownerauth.from_envelope(value("a"), RECORD, PIN, "a")
+        asked = []
+
+        def tools(argv, **kw):
+            asked.append(argv)
+            return unittest.mock.Mock(returncode=0, stdout=b'tool="tpm2_createprimary" version="4.3"', stderr=b"")
+        with unittest.mock.patch.object(ownerauth, "_tools_checked", False), unittest.mock.patch("subprocess.run", tools):
+            with self.assertRaisesRegex(m.Refused, "tpm2-tools 4.3 is not a version measured"):
+                with ownerauth.owner_call(auth):
+                    self.fail("an owner call was made on an unmeasured tpm2-tools")
+            with self.assertRaisesRegex(m.Refused, "tpm2-tools 4.3 is not a version measured"):
+                ownerauth.set_owner(auth, "000b" + "e5" * 32, run=FakeTpm())
+        measured = ownerauth.MEASURED_TOOLS[0]
+        good = lambda argv, **kw: asked.append(argv) or unittest.mock.Mock(returncode=0, stdout=('version="%s"' % measured).encode(), stderr=b"")
+        asked.clear()
+        with unittest.mock.patch.object(ownerauth, "_tools_checked", False), unittest.mock.patch("subprocess.run", good):
+            for _ in range(3):
+                with ownerauth.owner_call(auth):
+                    pass
+            self.assertEqual(len(asked), 1)                                  # once per process
+        with ownerauth.owner_call(None):                                     # an empty owner authorization: no gate
+            pass
+
     def test_a_proof_whose_key_cannot_be_flushed_says_so(self):
         tpm = FakeTpm()
         auth = ownerauth.from_envelope(value("a"), RECORD, PIN, "a")
@@ -263,7 +287,7 @@ class ReanchorTakesIt(unittest.TestCase):
         argv = ["--membership", d + "/m.json", "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "a",
                 "--authority", d + "/authority.json", "--peer", "c=%s/c.json" % d, "--ownerauth", record]
         with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
-                unittest.mock.patch.object(ownerauth, "require_measured_tools", lambda run=None: None):
+                unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
             rc = reanchor.main(argv, ask=lambda prompt: None, highwater=highwater)
         self.assertEqual(rc, 1)
         self.assertIn("stop after the anchor is built", err.getvalue())
@@ -274,7 +298,7 @@ class ReanchorTakesIt(unittest.TestCase):
         stdin.buffer.isatty = lambda: False
         err = io.StringIO()
         with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
-                unittest.mock.patch.object(ownerauth, "require_measured_tools", lambda run=None: None):
+                unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
             self.assertEqual(reanchor.main(argv, ask=lambda prompt: None, highwater=highwater), 1)
         self.assertIn("is not a's", err.getvalue())
         self.assertEqual(built, {})
@@ -307,12 +331,24 @@ class RecountTakesIt(unittest.TestCase):
         run = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, b"inactive\n", b"")
         with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
                 unittest.mock.patch.object(node, "heartbeat_counter", counter), unittest.mock.patch.dict(os.environ, {}, clear=False), \
-                unittest.mock.patch.object(ownerauth, "require_measured_tools", lambda run=None: None):
+                unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
             os.environ.pop("TPM2TOOLS_TCTI", None)
             rc = recount.main(["--config", config, "--audit-log", d + "/audit.jsonl", "--ownerauth", record], ask=lambda p: None, run=run)
         self.assertEqual(rc, 1, err.getvalue())
         self.assertIn("stop after the counter is built", err.getvalue())
         self.assertEqual(built["owner_auth"].check("a"), RECORD["record"]["nodes"]["a"]["check"])
+
+
+def setUpModule():
+    """The channel refuses an unmeasured tpm2-tools once per process (ownerauth.measured_once). These tests are about
+    behaviour, and OnTheWire IS the measurement: the gate is marked passed for the module, and OnlyMeasuredTools
+    tests it with the mark cleared."""
+    global _saved_checked
+    _saved_checked, ownerauth._tools_checked = ownerauth._tools_checked, True
+
+
+def tearDownModule():
+    ownerauth._tools_checked = _saved_checked
 
 
 if __name__ == "__main__":
