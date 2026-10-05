@@ -69,6 +69,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 from deploy.baremetal import lease, membership
@@ -78,7 +79,7 @@ Refused, require = membership.Refused, membership.require
 SCHEMA = "regalia.admission/v2"
 FIELDS = ("schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "hsm_serials", "lease_issued_at",
           "requested_boottime_ms", "serve_until_boottime_ms", "reason")
-MARGIN = 10                # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
+MARGIN = 5                 # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
 NEVER = "1970-01-01T00:00:00Z"
 # The daemon reads this file with a limit of 4096 bytes (internal/admission/admission.go, maxFileBytes) and
 # refuses a larger one as "oversized", which would hide the reason. So the reason here is bounded well below
@@ -86,7 +87,11 @@ NEVER = "1970-01-01T00:00:00Z"
 # answer (node.admission_service, "admission-renew"), and each change between serving and not serving with its reason
 # ("admission-serving", Service below).
 ADMISSION_REASON_LIMIT = 1024
-RETRY_FIRST, RETRY_MAX = 5, 60     # seconds between renewal attempts while they fail: 5, 10, 20, 40, 60, 60, ...
+# seconds each connection of a renewal may take (sync's transport: connect, ask, answer). A renewal is two asks to a
+# peer (nonce, lease) and goes to the next peer on failure, so a round with both peers silent ends within
+# 2 * 2 * RENEW_TIMEOUT: inside the window between a renewal falling due and the margin (#432, 3e's #473 finding)
+RENEW_TIMEOUT = 3
+RETRY_FIRST, RETRY_MAX = 2, 10     # seconds between renewal attempts while they fail: 2, 4, 8, 10, 10, ... (within a 30 s lease)
 BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 MAX_REQUESTS = 16
 MAX_SERIALS = 16           # tokens one node may hold that the daemon will serve from (its reader's bound too)
@@ -174,6 +179,10 @@ class Service:
         self.daemon_started = daemon_started      # () -> the daemon's start on the boot clock (ms), or None
         self.boot = boot()
         self.requests_path = path + ".requests"   # nonce -> when it was asked for; survives a restart of this service
+        # #486: the file and the trail are written under this lock, by step() and by lapse(), which the lapse watcher
+        # calls at the bound of the admission last written. A renewal round runs outside it, so a round held by a
+        # silent peer never delays "not serving" past the bound.
+        self.lock, self.written = threading.Lock(), None
 
     def _requests(self):
         try:
@@ -235,8 +244,8 @@ class Service:
         return self._requests().get(held["lease"]["nonce"], 0) <= started
 
     def step(self):
-        """One round: renew if due, check, write. Returns the document written."""
-        manifest, envelope, serve_until, reason, left = None, None, 0, "", 0
+        """One round: renew if due, then check and write (_publish). Returns the document written."""
+        manifest, reason = None, ""
         try:
             manifest = self.manifest()
             require(manifest is not None, "this node holds no manifest")
@@ -259,13 +268,40 @@ class Service:
                     reason = "renewal failed: %s" % failure
                     self.retry_wait = min(max(self.retry_wait * 2, RETRY_FIRST), RETRY_MAX)
                     self.retry_at = self.boottime() + self.retry_wait * 1000
-            before = self.boottime()              # read BEFORE the check: the bound can only come out earlier
-            left = self.holder.check(manifest)
-            envelope = self.holder.held()
-            require(left > MARGIN, "the lease has %d s left, inside the %d s margin" % (left, MARGIN))
-            serve_until, reason = before + (left - MARGIN) * 1000, ""
-        except Refused as refusal:   # serve_until is still 0: it is set only by a check that passed
-            reason = (reason + "; " if reason else "") + str(refusal)
+        except Refused as refusal:
+            return self._publish(manifest, (reason + "; " if reason else "") + str(refusal), refused=True)
+        return self._publish(manifest, reason)
+
+    def lapse(self):
+        """At the bound of the admission last written: if it has run out, write and record "not serving" now, whatever
+        a renewal round is doing (#486). Returns the document written, or None when the bound has not passed."""
+        with self.lock:
+            last = self.written
+            if not last or not last["serve_until_boottime_ms"] or self.boottime() < last["serve_until_boottime_ms"]:
+                return None
+        try:
+            manifest = self.manifest()
+        except Exception:                         # noqa: BLE001 - the check below refuses a missing manifest itself
+            manifest = None
+        return self._publish(manifest, "the admission ran out at its bound")
+
+    def _publish(self, manifest, reason, refused=False):
+        """Check the lease held, write the document and record a change, under the lock. `refused`: the round already
+        refused (no manifest, too many tokens): nothing is checked, and the node does not serve."""
+        with self.lock:
+            return self._publish_locked(manifest, reason, refused)
+
+    def _publish_locked(self, manifest, reason, refused):
+        envelope, serve_until, left = None, 0, 0
+        if not refused:
+            try:
+                before = self.boottime()          # read BEFORE the check: the bound can only come out earlier
+                left = self.holder.check(manifest)
+                envelope = self.holder.held()
+                require(left > MARGIN, "the lease has %d s left, inside the %d s margin" % (left, MARGIN))
+                serve_until, reason = before + (left - MARGIN) * 1000, ""
+            except Refused as refusal:            # serve_until is still 0: it is set only by a check that passed
+                reason = (reason + "; " if reason else "") + str(refusal)
         serving = bool(serve_until)
         if serving and self.recorded is not True and self.record is not None:
             try:                                  # TO serving: on the trail first, or not at all
@@ -286,18 +322,37 @@ class Service:
         if self.metrics is not None:
             self.metrics([("regalia_admission_serving", {}, 1 if serve_until else 0),
                           ("regalia_admission_lease_seconds_left", {}, max(0, int(left)) if serve_until else 0)])
+        self.written = document
         return document
 
-    def run(self, stop, interval=5):
-        """step() every `interval` seconds until `stop()` is true. An error other than a refusal (the disk,
-        the TPM) is not swallowed into a stale file: zero is written, then the error is raised."""
-        while not stop():
-            try:
-                self.step()
-            except Exception as failure:
-                write(self.path, self._document(None, None, 0, "the lease service failed: %s" % failure))
-                raise
-            time.sleep(interval)
+    def run(self, stop, interval=5, sleep=time.sleep, watch=0.5):
+        """step() every `interval` seconds until `stop()` is true, with a lapse watcher beside it: a thread that calls
+        lapse() every `watch` seconds, so the change to not serving is on file and on the trail within `watch` of the
+        bound, even while a round waits on a silent peer (#486; the daemon itself stops at serve_until on its own
+        clock either way). An error other than a refusal (the disk, the TPM) is not swallowed into a stale file:
+        zero is written, then the error is raised."""
+        done = threading.Event()
+
+        def watcher():
+            while not done.wait(watch):
+                try:
+                    self.lapse()
+                except Exception as failure:      # noqa: BLE001 - the round reports its own errors; this one says so and goes on
+                    self.warn("regalia-admission: the lapse watcher failed: %s" % (str(failure) or type(failure).__name__))
+        thread = threading.Thread(target=watcher, name="admission-lapse", daemon=True)
+        thread.start()
+        try:
+            while not stop():
+                try:
+                    self.step()
+                except Exception as failure:
+                    with self.lock:
+                        write(self.path, self._document(None, None, 0, "the lease service failed: %s" % failure))
+                    raise
+                sleep(interval)
+        finally:
+            done.set()
+            thread.join(timeout=5)
 
 
 def read(path):
