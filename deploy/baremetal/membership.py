@@ -193,6 +193,35 @@ def _said(tool, index, done):
         pass
 
 
+# A TPM answer worth asking again (#450): the warnings a busy TPM or resource manager gives (TPM 2.0 Part 2, TPM_RC_WARN
+# 0x900): OBJECT_MEMORY 0x902, SESSION_MEMORY 0x903 (measured in CI on #452: "out of memory for session contexts", the
+# fixture's swtpm serving several node services with no resource manager), MEMORY 0x904, SESSION_HANDLES 0x905,
+# OBJECT_HANDLES 0x906, YIELDED 0x908, TESTING 0x90A, RETRY 0x922, NV_RATE 0x923; and a TCTI that could not reach the TPM
+# for now (TSS2_TCTI_RC_TRY_AGAIN, a refused or busy socket). Anything else is the TPM's answer, never retried.
+TRANSIENT_RC = frozenset((0x902, 0x903, 0x904, 0x905, 0x906, 0x908, 0x90A, 0x922, 0x923))
+TRANSIENT_TCTI = re.compile(r"0x000a0009|TRY_AGAIN|Connection refused|Resource temporarily unavailable", re.IGNORECASE)
+READ_TRIES, READ_BACKOFF = 5, 0.25                         # 5 tries, waits 0.25, 0.5, 1, 2 s: at most 3.75 s
+
+
+def _stderr(done):
+    err = done.stderr or b""
+    return err if isinstance(err, str) else err.decode("utf-8", "replace")
+
+
+def transient(done):
+    """Whether a failed tpm2_* call's answer is worth asking again (TRANSIENT_RC, TRANSIENT_TCTI)."""
+    text = _stderr(done)
+    codes = {int(c, 16) & 0xFFF for c in re.findall(r"\(0x([0-9a-fA-F]+)\)", text)}
+    return bool(codes & TRANSIENT_RC) or TRANSIENT_TCTI.search(text) is not None
+
+
+def tpm_said(done):
+    """The refusal's tail naming the TPM's reason (#450): "; the TPM said: <its last line>", bounded. The shared vectors
+    pin the refusal before it; the Go reader's comparison drops it (membership_test.go, reasonDetail)."""
+    lines = [l.strip() for l in _stderr(done).splitlines() if l.strip()]
+    return "; the TPM said: %s" % (lines[-1][-200:] if lines else "nothing (exit %s)" % done.returncode)
+
+
 @contextlib.contextmanager
 def _exclusive(lock_path):
     """An exclusive flock held for the block: every read-modify-write of the anchor or the stored
@@ -954,11 +983,24 @@ class HighWater:
         found = re.search(rb"(?m)^\s*authorization policy:\s*([0-9A-Fa-f]*)\s*$", r.stdout)
         return found.group(1).decode().lower() if found else ""
 
-    def _read8(self, index):
-        r = self._tpm("nvread", index, "-C", index, "-s", "8")
-        if r.returncode != 0 or len(r.stdout) != 8:
+    def _nvread(self, index, size):
+        """tpm2_nvread of `size` bytes with the index's own authorization, asked again on a transient answer (#450:
+        READ_TRIES, backing off from READ_BACKOFF), never on any other. Returns the last answer; the caller refuses."""
+        import time
+        sleep = getattr(self, "_sleep", time.sleep)
+        for attempt in range(READ_TRIES):
+            r = self._tpm("nvread", index, "-C", index, "-s", str(size))
+            if r.returncode == 0 and len(r.stdout) == size:
+                return r
             _said("nvread", index, r)
-        require(r.returncode == 0 and len(r.stdout) == 8, "cannot read 8 bytes from NV index %s" % index)
+            if attempt == READ_TRIES - 1 or not transient(r):
+                return r
+            sleep(READ_BACKOFF * 2 ** attempt)
+        return r
+
+    def _read8(self, index):
+        r = self._nvread(index, 8)
+        require(r.returncode == 0 and len(r.stdout) == 8, "cannot read 8 bytes from NV index %s%s" % (index, tpm_said(r)))
         return int.from_bytes(r.stdout, "big")
 
     def define(self):
@@ -1159,11 +1201,9 @@ class HighWater:
         self._as_defined(index, a, "slot")
         if not a & self.WRITTEN:
             return None
-        r = self._tpm("nvread", index, "-C", index, "-s", str(self.RECORD_BYTES))
-        if r.returncode != 0 or len(r.stdout) != self.RECORD_BYTES:
-            _said("nvread", index, r)
+        r = self._nvread(index, self.RECORD_BYTES)
         require(r.returncode == 0 and len(r.stdout) == self.RECORD_BYTES, "cannot read %d bytes from the record index %s: the anchor "
-                "is unavailable (fail closed)" % (self.RECORD_BYTES, index))
+                "is unavailable (fail closed)%s" % (self.RECORD_BYTES, index, tpm_said(r)))
         epoch, held = int.from_bytes(r.stdout[:8], "big"), r.stdout[8:40].hex()
         return (epoch, held) if r.stdout == self.slot_bytes(epoch, held) else None
 
@@ -1222,13 +1262,13 @@ class HighWater:
     def _read_any(self, index, size, attributes):
         """The index's bytes, read with its own authorization (authread) or, failing that, the owner's: for
         remains(), which must see what an index holds whatever else is wrong with it. Refused if neither reads."""
-        r = self._tpm("nvread", index, "-C", index, "-s", str(size))
+        r = self._nvread(index, size)
         if (r.returncode != 0 or len(r.stdout) != size) and attributes & self.OWNERREAD:
             r = self._owner("nvread", index, "-s", str(size))
-        if r.returncode != 0 or len(r.stdout) != size:
-            _said("nvread", index, r)
+            if r.returncode != 0 or len(r.stdout) != size:
+                _said("nvread", index, r)
         require(r.returncode == 0 and len(r.stdout) == size, "cannot read %d bytes from NV index %s: what the anchor holds cannot "
-                "be known (fail closed)" % (size, index))
+                "be known (fail closed)%s" % (size, index, tpm_said(r)))
         return r.stdout
 
     def remains(self):

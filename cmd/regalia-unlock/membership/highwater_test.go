@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"testing"
 )
@@ -103,6 +104,9 @@ func fakeOf(t *testing.T, state map[string]any) fakeNV {
 	return f
 }
 
+// tpmSaid is the tail the Python's anchor reads add with tpm2_nvread's own reason (#450).
+var tpmSaid = regexp.MustCompile(`; the TPM said: .*$`)
+
 func TestEveryAnchorIsReadAlike(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "vectors", "highwater-v1.json"))
 	if err != nil {
@@ -148,7 +152,8 @@ func TestEveryAnchorIsReadAlike(t *testing.T) {
 			}
 		default:
 			seen["refused"]++
-			if !errors.As(err, &refused) || refused.Reason != c["refused"] {
+			// #450: the Python names tpm2_nvread's reason ("; the TPM said: ..."); the Go reader reads NV otherwise
+			if !errors.As(err, &refused) || refused.Reason != tpmSaid.ReplaceAllString(c["refused"].(string), "") {
 				t.Errorf("%s: Python: refused: %s\nGo: %#v", name, c["refused"], err)
 			}
 		}

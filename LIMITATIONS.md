@@ -142,13 +142,20 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   refusal that the unit's `Restart=` retries). A publication that lands between a run's last read and its exit is the
   remaining window: the next publication, or the unit's next start, catches it up. `RegaliaMembershipAnchorBehind`
   warns if that window ever holds for 15 minutes.
-- **One transient TPM error fails an anchor read.** `HighWater` reads the anchor's NV indices with one
-  `tpm2_nvread` each and refuses on any failure, with no retry inside the tool. The services' units restart
-  (the ESP advance every 15 s; sync and admission on their own schedules) and the next run reads again. CI's
-  three-node fixture showed it intermittently on its shared software TPMs (#448). Since this change the tool's own
-  error text goes to the journal; if it names a transient TPM code (`TPM_RC_RETRY`, `TPM_RC_YIELDED`,
-  `TPM_RC_TESTING`, a busy socket), a small bounded retry on those codes alone is the next step. The refusal's own
-  text still carries no TPM reason (#450).
+- **An anchor read retries transient TPM answers only, briefly** (#450). `HighWater` reads each anchor index with
+  `tpm2_nvread` and asks again, at most 5 times over 3.75 s, only on a transient answer: the TPM's memory and handle
+  warnings (0x902–0x906; CI's three-node fixture captured SESSION_MEMORY, 0x903, on its shared software TPMs with no
+  resource manager), YIELDED, TESTING, RETRY and NV_RATE, or a TCTI that could not connect. Any other answer is
+  refused at once, and the refusal ends with what the TPM said ("; the TPM said: ..."), which the Go reader's
+  comparison drops. Past the bound the services' units restart (the ESP advance every 15 s) and read again.
+  Limits:
+  - Only the anchor's `tpm2_nvread` retries. Its `nvreadpublic`, the counters' reads and the policy sessions do not,
+    and neither does the Go reader in the initrd (`nv.go`, `highwater.go`). At boot that reader is the TPM's only client,
+    so the memory warnings don't arise; but a RETRY or TESTING during the TPM's early self-test stops at the console
+    instead of retrying (regalia-kms-ed).
+  - Each failed try writes its own journal line (#452), up to 5 per read: one line per attempt, not 5 failures.
+  - On a host the kernel's resource manager (`/dev/tpmrm0`) virtualizes sessions and objects, so the memory warnings
+    are a CI condition there; the retry list is the TPM 2.0 warning set, not measured on the DL360.
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
