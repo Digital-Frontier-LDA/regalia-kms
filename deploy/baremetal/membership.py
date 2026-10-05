@@ -1275,7 +1275,7 @@ class Store:
                       the recorded manifest at the recorded epoch, and a continuation of what is on disk.
     reanchor(chain)   gives the node a new TPM anchor and installs the chain under it, when the anchor
                       itself is unusable and restore() must refuse too. An operator's decision, taken on
-                      the authority and a peer that agree (reanchor.py; MEMBERSHIP-RECOVERY.md).
+                      two other nodes that agree (reanchor.py; MEMBERSHIP-RECOVERY.md).
     commit(envelope)  accepts the next manifest onto the loaded chain, writes the file durably
                       (temp file, fsync, rename, fsync of the directory), THEN increments the TPM counter,
                       THEN writes the TPM record; a crash between any two is completed by the next load(),
@@ -1388,7 +1388,7 @@ class Store:
         """Give this node a NEW anchor and install a chain under it: the recovery when the anchor itself is
         unusable (no valid record, an index not defined, counter and record out of step), which no chain
         from a peer can repair. It forgets what this TPM knew, so the caller must have established the
-        chain from more than this node's word: reanchor.py takes it from the authority and a peer that agree.
+        chain from more than this node's word: reanchor.py takes it from two other nodes that agree.
 
         A usable anchor is never reset. A TPM that does not answer is not re-anchored either: nothing is
         known about its anchor then. And NOTHING THE TPM STILL HOLDS IS FORGOTTEN: the chain must reach the

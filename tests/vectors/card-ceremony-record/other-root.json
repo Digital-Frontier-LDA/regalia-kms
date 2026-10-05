@@ -55,6 +55,7 @@
   },
   "root_fingerprint": "6a3803d5f059902a1c6dafbc9ba4729212f7caac08634cc3ae76b27529f03827",
   "schema": "regalia.card-ceremony-record/v1",
+  "sequence": 1,
   "session": "0123456789abcdef0123456789abcdef",
   "ssh_signers": [
    {
@@ -66,7 +67,8 @@
     "serial": "40000002"
    }
   ],
+  "supersedes": "",
   "tool": "card-ceremony-vectors/1"
  },
- "signature": "190d0b1012560aece1ae502e55cc3fc1f2a729e8e2b8ef8fe0944a0ab49db086812b0efdb02a996e2e084f43ee948fba9e3a3aaa7526d27a0377956056976e01"
+ "signature": "c394ddb901931e59408fc08f92ff4e144ab526aad92f3f8bf043a3a41a82b7b7888c7b523dd6371a7bbeb59a21142637d7dea6274347a3359e11322566e72300"
 }

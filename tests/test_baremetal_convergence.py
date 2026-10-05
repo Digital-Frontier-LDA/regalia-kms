@@ -34,7 +34,8 @@ def exchange(receiver, sender):
 
 class Case(rt.Case):
     """a, b, c ACTIVE at epoch 1. b and c each hold the chain in a Store anchored to their own TPM counter,
-    and a heartbeat for epoch 1. `authority` is the revocation authority's own copy of the chain."""
+    and a heartbeat for epoch 1. `seed` is a third copy of the chain, where each new manifest is committed first
+    and from which the peers pull (a node's, as any; #199 retired the revocation authority)."""
 
     def store(self, name):
         anchor = m.HighWater("0x1500016", lock_path=os.path.join(self.d, name + "-hw.lock"), run=hbt.FakeTpm())
@@ -44,16 +45,16 @@ class Case(rt.Case):
     def setUp(self):
         super().setUp()
         self.e1 = rt.sign(self.m1)
-        self.stores = {name: self.store(name) for name in ("b", "c", "authority")}
+        self.stores = {name: self.store(name) for name in ("b", "c", "seed")}
         for store in self.stores.values():
             store.commit(self.e1)
         self.events = []
 
     def revoke(self, previous, state="REVOKED_STOLEN", node="a"):
-        """The next manifest, signed by the REVOCATION key (no root ceremony), published by the authority."""
+        """The next manifest, signed by the REVOCATION key (no root ceremony), committed to the seed first."""
         nodes = [self.entry(n, state if n == node else next(x["state"] for x in previous["nodes"] if x["node_id"] == n)) for n in ("a", "b", "c")]
         envelope = rt.sign(self.chain(previous, nodes), hbt.REVOKE, "revocation")
-        self.stores["authority"].commit(envelope)
+        self.stores["seed"].commit(envelope)
         return envelope
 
     def heartbeat(self, manifest):
@@ -61,10 +62,10 @@ class Case(rt.Case):
         return hbt.beat(manifest, self.sequence, issued=self.now)
 
     def publish(self, to):
-        """The authority's bundle for one peer: what it lacks, and a heartbeat for the authority's manifest."""
-        authority = self.stores["authority"]
+        """The seed's bundle for one peer: what it lacks, and a heartbeat for the seed's manifest."""
+        seed = self.stores["seed"]
         return convergence.apply_bundle(self.stores[to], self.peers[to]["freshness"],
-                                        convergence.bundle(authority, convergence.summary(self.stores[to]), self.heartbeat(authority.load())))
+                                        convergence.bundle(seed, convergence.summary(self.stores[to]), self.heartbeat(seed.load())))
 
     def unlock(self, peer, requester="a", session=lt.SESSION):
         """Peer `peer` decides, by ITS manifest, whether to unlock `requester`; audited."""
@@ -106,7 +107,7 @@ class Exchange(Case):
         b, c = self.stores["b"], self.stores["c"]
         b.commit(self.revoke(self.m1))
         rival = rt.sign(self.chain(self.m1, [self.entry("a"), self.entry("b"), self.entry("c", "DRAINING")]), hbt.REVOKE, "revocation")
-        c.commit(rival)                                  # validly signed, chained to epoch 1: the authority signed twice
+        c.commit(rival)                                  # validly signed, chained to epoch 1: the revocation key signed twice
         for one, other in ((b, c), (c, b)):
             self.refused("CONFLICT: the peer holds a different manifest at epoch 2", convergence.compare, one, convergence.summary(other))
             self.refused("CONFLICT", convergence.missing, one, convergence.summary(other))
@@ -191,7 +192,7 @@ class Exchange(Case):
         self.refused("the heartbeat is for epoch 2, the current manifest is epoch 1", fresh.accept, alone, b.load())
         self.refused("the heartbeat is for epoch 2, the current manifest is epoch 1", convergence.apply_bundle, b, fresh, {"envelopes": [], "heartbeat": alone})
         self.assertEqual(b.load()["epoch"], 1)
-        now_at, left = convergence.apply_bundle(b, fresh, convergence.bundle(self.stores["authority"], convergence.summary(b), alone))
+        now_at, left = convergence.apply_bundle(b, fresh, convergence.bundle(self.stores["seed"], convergence.summary(b), alone))
         self.assertEqual((now_at["epoch"], left), (2, hb.MAX_LIFETIME))
         self.assertEqual(fresh.check(b.load()), hb.MAX_LIFETIME)
         # delivered again: the manifests are held already, and the heartbeat's sequence is spent
@@ -201,23 +202,23 @@ class Exchange(Case):
         self.refused("a heartbeat cannot be taken before the first manifest", convergence.apply_bundle, self.store("new"), fresh, {"envelopes": [], "heartbeat": alone})
 
     def test_a_node_far_behind_catches_up_in_chunks_and_gets_the_heartbeat_with_the_last(self):
-        authority, c, fresh = self.stores["authority"], self.stores["c"], self.peers["c"]["freshness"]
+        seed, c, fresh = self.stores["seed"], self.stores["c"], self.peers["c"]["freshness"]
         previous = self.m1
         for state in ("DRAINING", "QUARANTINED", "RETIRED", "REVOKED_STOLEN"):      # epochs 2 to 5
             previous = self.revoke(previous, state)["manifest"]
         beat = self.heartbeat(previous)
-        self.assertEqual(len(convergence.missing(authority, convergence.summary(c))), 4)
-        self.assertEqual([e["manifest"]["epoch"] for e in convergence.missing(authority, convergence.summary(c), limit=3)], [2, 3, 4])
+        self.assertEqual(len(convergence.missing(seed, convergence.summary(c))), 4)
+        self.assertEqual([e["manifest"]["epoch"] for e in convergence.missing(seed, convergence.summary(c), limit=3)], [2, 3, 4])
         rounds = []
-        while convergence.compare(c, convergence.summary(authority)) == "behind":
-            sent = convergence.bundle(authority, convergence.summary(c), beat, limit=3)
+        while convergence.compare(c, convergence.summary(seed)) == "behind":
+            sent = convergence.bundle(seed, convergence.summary(c), beat, limit=3)
             now_at, left = convergence.apply_bundle(c, fresh, sent)
             rounds.append((len(sent["envelopes"]), sent["heartbeat"] is not None, now_at["epoch"], left))
         self.assertEqual(rounds, [(3, False, 4, None), (1, True, 5, hb.MAX_LIFETIME)])
         self.assertEqual(fresh.check(c.load()), hb.MAX_LIFETIME)
         for bad in (0, 1001, True, "3"):
             with self.subTest(limit=bad):
-                self.refused("limit must be 1 to 1000", convergence.missing, authority, convergence.summary(c), bad)
+                self.refused("limit must be 1 to 1000", convergence.missing, seed, convergence.summary(c), bad)
 
     def test_a_held_epoch_resent_under_a_signer_that_could_not_have_made_it_is_refused(self):
         """Epoch 2 is a root-only change (a node enrolled). The same manifest re-signed by the revocation key
@@ -252,7 +253,7 @@ class Exchange(Case):
         self.refused("CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded", c.restore, [self.e1, rival2, rival3])
         with open(c.path, "rb") as f:
             self.assertEqual(f.read(), m.canonical([self.e1, e2]))                           # refused: nothing written
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: self.stores["authority"].envelopes()}), {"epoch": 3, "manifest_digest": m.digest(e3["manifest"])})
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes()}), {"epoch": 3, "manifest_digest": m.digest(e3["manifest"])})
         self.assertEqual(c.load()["epoch"], 3)
         # a disk AHEAD of the fetched chain (a crash after the write, before the TPM moved) is not shortened
         d = self.store("d")
@@ -267,10 +268,10 @@ class Exchange(Case):
             self.assertEqual(f.read(), m.canonical([self.e1, e2, e3]))
         self.assertEqual(d.load()["epoch"], 3)                                               # load() completes that crash by itself
         os.unlink(c.path)                                                                    # lost altogether
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: self.stores["authority"].envelopes()})["epoch"], 3)
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes()})["epoch"], 3)
         with open(c.path, "w") as f:
             f.write("{")                                                                     # or unreadable
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: self.stores["authority"].envelopes()})["epoch"], 3)
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes()})["epoch"], 3)
         # or well-formed JSON with a corrupt tail: only the valid prefix counts, and a tail of junk as long as
         # the real chain, or longer, does not make the fetched chain "shorter"
         for label, tail in (("an empty object", [{}]), ("junk entries", [{}, {"manifest": {}}, "x", 7]),
@@ -280,12 +281,12 @@ class Exchange(Case):
                     f.write(m.canonical([self.e1] + tail))
                 with self.assertRaises(m.Refused):
                     c.load()
-                self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: self.stores["authority"].envelopes()})["epoch"], 3)
+                self.assertEqual(convergence.recover(c, {"b": b.envelopes()})["epoch"], 3)
                 self.assertEqual(c.load()["epoch"], 3)
         # a node that is merely behind may be restored forward too: its TPM anchor moves with the chain
         behind = self.store("behind")
         behind.commit(self.e1)
-        self.assertEqual((convergence.recover(behind, {"b": b.envelopes(), convergence.AUTHORITY: self.stores["authority"].envelopes()})["epoch"], behind.hw.value()), (3, 3))
+        self.assertEqual((convergence.recover(behind, {"b": b.envelopes()})["epoch"], behind.hw.value()), (3, 3))
         self.refused("the fetched chain repeats epoch 1", c.restore, [self.e1, self.e1, e2, e3])
         # a chain further above the anchor than the anchor will move in one go: refused before anything is written
         far = self.store("far")
@@ -305,7 +306,7 @@ class Exchange(Case):
         """Two validly signed chains of the same length (the revocation key signed twice at epoch 2) look
         alike to a node that holds neither. Its TPM record names the manifest it accepted at epoch 2, so
         the other branch is refused whoever gives it, and however many agree on it."""
-        b, c, authority = self.stores["b"], self.stores["c"], self.stores["authority"]
+        b, c, seed = self.stores["b"], self.stores["c"], self.stores["seed"]
         e2 = self.revoke(self.m1)                                            # the accepted branch: a is REVOKED_STOLEN
         for store in (b, c):
             convergence.catch_up(store, [e2])
@@ -314,32 +315,29 @@ class Exchange(Case):
         os.unlink(c.path)                                                    # c loses its chain
         self.assertTrue(c.pinned())
         self.refused("CONFLICT: the manifest at epoch 2 is not the one this node's TPM recorded", convergence.recover, c, {"b": fork})
-        self.refused("CONFLICT: the manifest at epoch 2 is not the one this node's TPM recorded", convergence.recover, c, {"b": fork, convergence.AUTHORITY: fork})
         self.refused("recovery needs whole chains from 2 different sources that agree (1 given)", convergence.recover, c, {"b": b.envelopes()}, 2)   # still the operator's to ask for
         self.refused("CONFLICT: the sources' chains differ at epoch 2", convergence.recover, c, {"a": fork, "b": b.envelopes()})
-        self.refused("CONFLICT: the sources' chains differ at epoch 2", convergence.recover, c, {"b": b.envelopes(), convergence.AUTHORITY: authority.envelopes(), "a": fork})
-        # one source cannot be counted twice, and a source must be the authority or a node the chain lets authorize
+        # one source cannot be counted twice, and a source must be a node the chain lets authorize
         self.assertEqual(len({"b": fork, **{"b": fork}}), 1)
         self.refused("'a' is not a source this chain trusts", convergence.recover, c, {"a": b.envelopes(), "b": b.envelopes()})     # a is revoked on it
         self.refused("'z' is not a source this chain trusts", convergence.recover, c, {"z": b.envelopes(), "b": b.envelopes()})
-        # the authority's tag is not a node ID, so no node can be filed as the authority by being named "authority"
-        self.assertIsNone(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", convergence.AUTHORITY))
+        # #199: there is no authority source any more: a name that is not a node of the chain is refused
         self.refused("'authority' is not a source this chain trusts", convergence.recover, c, {"authority": b.envelopes(), "b": b.envelopes()})
         self.refused("is not a source this chain trusts", convergence.recover, c, {"x": fork, "a": fork})                             # the fork, from two names it does not list as peers
         self.assertFalse(os.path.exists(c.path))                             # nothing was installed
         for label, reason, chains in (
-                ("a source that is behind", "ends at epoch 1, below the TPM high-water 2: that source is behind", {"b": b.envelopes(), convergence.AUTHORITY: [self.e1]}),
-                ("a source with a forged link", "signature does not verify", {"b": b.envelopes(), convergence.AUTHORITY: [self.e1, dict(e2, signature=dict(e2["signature"], sig="00" * 64))]}),
-                ("a source that repeats an epoch", "a fetched chain repeats epoch 1", {"b": b.envelopes(), convergence.AUTHORITY: [self.e1, self.e1, e2]}),
-                ("an empty source", "sources must map each source", {"b": b.envelopes(), convergence.AUTHORITY: []}),
+                ("a source that is behind", "ends at epoch 1, below the TPM high-water 2: that source is behind", {"b": b.envelopes(), "a": [self.e1]}),
+                ("a source with a forged link", "signature does not verify", {"b": b.envelopes(), "a": [self.e1, dict(e2, signature=dict(e2["signature"], sig="00" * 64))]}),
+                ("a source that repeats an epoch", "a fetched chain repeats epoch 1", {"b": b.envelopes(), "a": [self.e1, self.e1, e2]}),
+                ("an empty source", "sources must map each source", {"b": b.envelopes(), "a": []}),
                 ("a list, not a mapping", "sources must map each source", [b.envelopes(), b.envelopes()])):
             with self.subTest(label):
                 self.refused(reason, convergence.recover, c, chains)
         for bad in (0, True, "2"):
             self.refused("minimum must be an integer >= 1", convergence.recover, c, {"b": b.envelopes()}, bad)
         with unittest.mock.patch.object(convergence, "MAX_ENVELOPES", 0):
-            self.refused("a chain is oversized", convergence.recover, c, {"b": b.envelopes(), convergence.AUTHORITY: authority.envelopes()})
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: authority.envelopes()})["epoch"], 2)
+            self.refused("a chain is oversized", convergence.recover, c, {"b": b.envelopes()})
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes()})["epoch"], 2)
         self.assertEqual(c.load()["nodes"][0]["state"], "REVOKED_STOLEN")
         # one source is enough by default, because the record pins epoch 2; and then a longer source brings the newer epochs
         os.unlink(c.path)
@@ -348,15 +346,16 @@ class Exchange(Case):
         os.unlink(c.path)
         self.assertEqual(convergence.recover(c, {"b": b.envelopes()}, minimum=1)["epoch"], 2)
         os.unlink(c.path)
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: authority.envelopes()})["epoch"], 3)   # the longest of the agreeing chains
+        convergence.catch_up(b, [e3])
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes()})["epoch"], 3)   # b has taken epoch 3 meanwhile: the longer chain
 
     def test_in_the_crash_window_the_record_does_not_pin_the_anchored_epoch_and_one_source_is_refused(self):
         """A crash after the counter moved to epoch 3 and before the record was written: the record names
         epoch 2. Two chains that differ only at epoch 3 both match it, so the default is two sources again."""
-        b, c, authority = self.stores["b"], self.stores["c"], self.stores["authority"]
+        b, c, seed = self.stores["b"], self.stores["c"], self.stores["seed"]
         e2 = self.revoke(self.m1, "QUARANTINED")
         e3 = self.revoke(e2["manifest"])                                     # the accepted epoch 3: a is REVOKED_STOLEN
-        for store in (b, authority):
+        for store in (b, seed):
             convergence.catch_up(store, [e2, e3])
         convergence.catch_up(c, [e2])
         c.hw.advance(3)                                                      # the counter, and then the crash; the disk is lost too
@@ -366,13 +365,14 @@ class Exchange(Case):
         fork = [self.e1, e2, fork3]                                          # a is never revoked on it, and it matches the record at epoch 2
         self.refused("recovery needs whole chains from 2 different sources that agree (1 given)", convergence.recover, c, {"b": fork})
         self.refused("recovery needs whole chains from 2 different sources that agree (1 given)", convergence.recover, c, {"b": b.envelopes()})
-        self.refused("CONFLICT: the sources' chains differ at epoch 3", convergence.recover, c, {"b": fork, convergence.AUTHORITY: authority.envelopes()})
         self.assertFalse(os.path.exists(c.path))
         self.assertEqual(c.hw.record(), (2, m.digest(e2["manifest"])))       # no refusal repaired the record
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: authority.envelopes()})["epoch"], 3)
+        # #199: with a revoked and no authority any more, b is the only other node that may vouch: the two sources the
+        # crash window asks for cannot be had, and taking b's chain alone is the operator's explicit decision
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes()}, minimum=1)["epoch"], 3)
         self.assertEqual((c.pinned(), c.hw.record(), c.load()["nodes"][0]["state"]), (True, (3, m.digest(e3["manifest"])), "REVOKED_STOLEN"))
         os.unlink(c.path)                                                    # repaired: the record pins epoch 3, and the fork is refused by it
-        self.refused("CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded", convergence.recover, c, {"b": fork, convergence.AUTHORITY: fork})
+        self.refused("CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded", convergence.recover, c, {"b": fork})
         self.assertEqual(convergence.recover(c, {"b": b.envelopes()})["epoch"], 3)
 
     def test_the_partition_bound_is_24_hours_and_the_accepted_skew(self):
@@ -390,7 +390,7 @@ class Exchange(Case):
         self.later(hb.MAX_LIFETIME)
         self.assertEqual(convergence.exposure(c, fresh), 0)
         self.assertEqual(convergence.exposure(c, fresh, running=True), lease.MAX_LIFETIME)   # a lease it issued just before is still out
-        self.assertEqual(convergence.exposure(self.stores["authority"], self.peer("b", "-none")["freshness"]), 0)   # no heartbeat at all
+        self.assertEqual(convergence.exposure(self.stores["seed"], self.peer("b", "-none")["freshness"]), 0)   # no heartbeat at all
 
     def test_every_decision_leaves_one_event_naming_the_epoch(self):
         self.assertGreater(self.unlock("b"), 0)
@@ -478,7 +478,7 @@ class Theft(Case):
         self.revoke(e2["manifest"])
         self.publish("b")
         self.assertGreater(self.unlock("c"), 0)                              # c has not heard yet
-        # the authority's heartbeat for epoch 3 reaches c without the manifests: refused, and c knows it is behind
+        # the heartbeat for epoch 3 reaches c without the manifests: refused, and c knows it is behind
         late = self.heartbeat(b.load())
         self.refused("the heartbeat is for epoch 3, the current manifest is epoch 1", self.peers["c"]["freshness"].accept, late, c.load())
         # one message from b (its own lease renewal, say) is enough
@@ -598,12 +598,11 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual(c.hw.record(), (3, m.digest(m3)))
         self.refused("CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded", convergence.recover, c, {"b": [e1, e2, fork3]})
         self.assertEqual(convergence.recover(c, {"b": b.envelopes()})["epoch"], 3)
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: [e1, e2, e3]})["epoch"], 3)   # b's chain and the authority's agree
         self.assertEqual((c.load()["epoch"], c.hw.value()), (3, 3))
         self.refused("a may not be unlocked under epoch 3", hb.authorize, c.load(), "c", "a", self.fresh["c"])
         os.unlink(c.path)                                                    # the file lost altogether: the same recovery
         self.refused("ROLLBACK", c.load)
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: [e1, e2, e3]})["epoch"], 3)
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes()})["epoch"], 3)
 
 
 if __name__ == "__main__":

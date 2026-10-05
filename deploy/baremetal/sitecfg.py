@@ -47,16 +47,15 @@ network_probe.py checks the result from each zone, so the two can never describe
       "interface": "wg-svc",                         # the WireGuard interface of the running services (regalia-sync)
       "listen_port": 51821,                          # its UDP port, ONE for the whole mesh: every node listens on this
                                                      #   number, and it is reachable from the peers' addresses only
-      "sync_port": 7444,                             # TCP, inside the tunnel only: deploy/baremetal/sync.py
-      "authority": null                              # or where the revocation authority is, and its WireGuard key:
-    }                                                #   {"key": "<64 hex>", "underlay": "203.0.113.50", "port": 51821}
+      "sync_port": 7444                              # TCP, inside the tunnel only: deploy/baremetal/sync.py
+    }
 
 Inside the service tunnel every address is in SERVICE_PREFIX and is derived from a node's WireGuard key
 (deploy/baremetal/wgsvc.py), so this file names none of them.
 
 WHO is a WireGuard peer, and with which key, is never in this file: it comes from the signed membership
-manifest (deploy/baremetal/bootnet.py, wgsvc.py). This file says only where the nodes are. The one key
-here is the revocation authority's, which is not a node of the manifest.
+manifest (deploy/baremetal/bootnet.py, wgsvc.py). This file says only where the nodes are, and names no key.
+(#199 retired the revocation authority, the one peer that was not a node of the manifest.)
 """
 import ipaddress
 import json
@@ -74,8 +73,7 @@ OUTBOUND_KEYS = ("name", "cidr", "proto", "port")
 MESH_KEYS = ("node_id", "interface", "listen_port", "address", "unlock_port", "nic_mac", "prefix", "gateway", "peers")
 MAC = r"[0-9a-f]{2}(:[0-9a-f]{2}){5}"
 MESH_PEER_KEYS = ("node_id", "underlay", "address")
-SERVICE_KEYS = ("interface", "listen_port", "sync_port", "authority")
-SERVICE_AUTHORITY_KEYS = ("key", "underlay", "port")
+SERVICE_KEYS = ("interface", "listen_port", "sync_port")
 NODE_EXPORTER_PORT = 9100                  # node_exporter, from monitoring_cidrs only, behind mutual TLS (#305)
 SERVICE_PREFIX = "fd72:6567:6c61::/48"     # every address inside the service tunnel (wgsvc.PREFIX: a test holds them equal)
 NODE_ID = r"[a-z0-9][a-z0-9-]{0,31}"
@@ -249,8 +247,8 @@ def _boot_mesh(mesh, cfg):
 
 
 def _service_mesh(mesh, cfg):
-    """The service tunnel (#80), or None. It names an interface and two ports of its own, and where the
-    revocation authority is. The nodes are the boot mesh's: this host's ID and the peers' underlays."""
+    """The service tunnel (#80), or None. It names an interface and two ports of its own. The nodes are the boot
+    mesh's: this host's ID and the peers' underlays."""
     if mesh is None:
         return None
     boot = cfg["boot_mesh"]
@@ -267,23 +265,7 @@ def _service_mesh(mesh, cfg):
     require(sync not in (cfg["kms_port"], cfg["ssh_port"], boot["unlock_port"], NODE_EXPORTER_PORT),
             "service_mesh.sync_port must differ from kms_port, ssh_port, boot_mesh.unlock_port and node_exporter's %d: one number, "
             "one service" % NODE_EXPORTER_PORT)
-    out = {"interface": mesh["interface"], "listen_port": listen, "sync_port": sync, "authority": None}
-    authority = mesh["authority"]
-    if authority is not None:
-        require(isinstance(authority, dict) and set(authority) == set(SERVICE_AUTHORITY_KEYS),
-                "service_mesh.authority must be null or hold exactly %s" % list(SERVICE_AUTHORITY_KEYS))
-        require(isinstance(authority["key"], str) and re.fullmatch(r"[0-9a-f]{64}", authority["key"]),
-                "service_mesh.authority.key must be a WireGuard public key, 64 lowercase hex characters")
-        underlay = _address(authority["underlay"], "service_mesh.authority.underlay")
-        taken = {cfg["host_ipv4"], boot["address"]} | {p["underlay"] for p in boot["peers"]} | {p["address"] for p in boot["peers"]}
-        require(underlay not in taken, "service_mesh.authority.underlay is a node's address: the authority is another host")
-        # The zone rules match on addresses alone. An authority inside a zone would also be handed that
-        # zone's port on the wire (the KMS port, or SSH), which nothing about "authority" says.
-        for zone, network in [(k, n) for k in ("client_cidrs", "monitoring_cidrs", "admin_cidrs") for n in cfg[k]] + [("outbound", o["cidr"]) for o in cfg["outbound"]]:
-            require(ipaddress.ip_address(underlay) not in ipaddress.ip_network(network),
-                    "service_mesh.authority.underlay %s is inside %s (%s): the authority is not a client, a monitor, an admin or a sink" % (underlay, zone, network))
-        out["authority"] = {"key": authority["key"], "underlay": underlay, "port": _port(authority["port"], "service_mesh.authority.port")}
-    return out
+    return {"interface": mesh["interface"], "listen_port": listen, "sync_port": sync}
 
 
 def _unique(pairs):

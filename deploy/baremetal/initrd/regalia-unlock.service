@@ -34,6 +34,11 @@ Before=initrd-switch-root.target shutdown.target
 
 [Service]
 Type=exec
+# Its lines on the console too, not only in the initrd's journal (#75, regalia-kms-d9): what an operator at the iLO
+# reads when a host does not come up — the initrd-phase PCR 11 it says first, each attempt and each refusal. None is
+# a secret (the key never leaves the process but into the request's answer).
+StandardOutput=journal+console
+StandardError=journal+console
 # Everything that differs per host comes from the ESP, none from the image: the image is the same for
 # every host (one PCR 11 to sign). systemd-stub packs the ESP's loader/credentials/<name>.cred files into
 # the initrd at /.extra/global_credentials/ and measures them into PCR 12, which the peers attest. The

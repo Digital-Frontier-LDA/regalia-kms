@@ -1,6 +1,6 @@
 # The node's side of the three-site transport (deploy/baremetal/sync.py, unlock.py): it answers peers on
 # the service tunnel and booting nodes on the unlock tunnel, pulls manifests and heartbeats from the
-# peers and the revocation authority, keeps the membership store, and runs the heartbeat watch.
+# peers, keeps the membership store, and runs the heartbeat watch.
 # It is the one process that parses what other machines send, so it is not root and holds NO
 # capability. The TPM through the tss group (the store's anchor, the heartbeat counter, the lease
 # signatures). It publishes the verified chain, 0644, for the root services to verify for themselves.

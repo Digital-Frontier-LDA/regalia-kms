@@ -19,10 +19,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 
 ## Membership, heartbeats and recovery (deploy/baremetal)
 
-- **The authority host is being retired (#386).** Until #386 merges, `authority.py` and its units are
-  still in the tree, and MEMBERSHIP-RECOVERY.md still names "the authority's" chain for the
-  crash-window recovery. They are not part of the production design: heartbeats and revocations are
-  signed by 2 of {the three nodes, the owner} (#199).
+- **The root's permissive epochs reach the cluster by hand** (#386 retired the authority host).
+  An image approval, or a replacement, signed by the root on the offline laptop, is given to ONE
+  running node with `deliver` (root, at its console), and the others pull it. Nothing carries them
+  automatically. In the three-node scenarios, an owner-signed epoch is committed by the harness into
+  the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
+  revocation goes through `revoke.py import`, which the scenarios exercise separately
+  (`revoke_by_owner`).
 - **Recovery with only one surviving peer: not built.** `recover` and `reanchor` need two peer chains
   today. With one peer left, a node cannot be recovered or re-anchored. The design is decided, with the
   owner co-signing as the second source behind `--one-source` (#387, PR #395). With **both** peers gone,
@@ -111,20 +114,28 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is
   built, the attestation will show the touch policy ("fixed"), the key source, the serial and the
   fingerprint. OpenPGP has **no PIN-policy attestation**, so "PIN always" stays a recorded setting.
-- **The card record has no freshness check** (#403). Any record the pinned root has ever signed is
-  accepted, so after a card replacement an older record would bring back the retired cards' keys. Until
-  then the operator checks the printed session and time against the ceremony sheet. It must be closed
-  before any card is replaced.
-- **The laptop's signing record is not hash-chained** (#405), and a lost signing-record directory has
-  no recovery path yet (#406). Freshness checks built on the record (#403, #408) are only as strong as
-  the laptop it lives on.
+- **Card-record freshness is per laptop** (#403, #408). A record is accepted only if it is the newest
+  card record on the ceremony laptop's root signing record (`signing-record.jsonl`, in the state
+  directory marked `regalia-signing-state.json`). That is newest on THIS laptop, not newest of the
+  root: a Shamir root rebuilt elsewhere with a fresh state directory signs a valid "sequence 1". The
+  card ceremony's `--first-card-record` makes that visible (regalia-ceremony#111). `propose --genesis`
+  prints `card record N of M` with its digests, for the operator to check against the ceremony sheet.
+- **Nothing writes the state-directory marker yet.** `manifest sign` refuses a directory without it and
+  never writes one; the card ceremony's writer (regalia-ceremony#111) is not built. Until it lands, no
+  real laptop can sign. The marker and log path is unit-tested only until the first-ceremony rehearsal.
+- **The laptop's signing record is not hash-chained** (#405). A deleted line, a cut tail or a state
+  directory restored from an older backup is not detected; #405 would anchor the newest card-record
+  digest in the root-signed manifest. A lost state directory has no recovery path yet (#406).
 - **The bench-token lists are kept by hand** (`membership.BENCH_NITROKEYS`, `BENCH_PICOS`,
   `BENCH_YUBIKEYS`). A new bench token must be added there. A test keeps the drills' staging list equal
   to it, and nothing ties it to the operators' staging registry.
 - **Build provenance** hashes only the files in `REPO_FILES`. It compares the Go release by **name**
   with `go.mod`, not the toolchain binary, which the builder verifies through the Go checksum database.
-  `build-initrd.sh` runs git as the checkout's owner with no global or system configuration (#384).
-  `uki.py`'s own checkout is being given the same rule.
+  `build-initrd.sh` runs git as the checkout's owner with no global or system configuration (#384), and
+  so does `uki.py`'s own checkout (#404): repo-git.sh's exact environment, no file under the signer's
+  HOME. `uki.py` also refuses any untracked file but `__pycache__` bytecode, ignore rules included
+  (`build-initrd.sh` to follow). The build record is unsigned; two builders' records must agree. The
+  signer's clone must be writable by the signer alone: a `.pyc` planted by another writer would run.
 
 ## Audit and monitoring
 
@@ -133,9 +144,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   [`deploy/baremetal/MONITORING.md`](deploy/baremetal/MONITORING.md)). The real service has not been
   chosen or deployed. The audit collector's conformance suite runs against the reference collector in
   CI. **Monitoring has no conformance command** (MONITORING.md section 5: not built).
-- **Audit completeness is checked in some scenarios only.** `audit_complete` runs in the theft and
-  rolling scenarios. Recovery is #402, and outage, leases and replace are not covered. The time trail
-  and the update trail are never checked end to end in a three-node scenario.
+- **Audit completeness is checked in some scenarios only.** `audit_complete` runs in the theft, rolling and
+  recovery scenarios (#402). Outage, leases and replace are not covered. The time trail and the update trail
+  are never checked end to end in a three-node scenario. In recovery, "each node's change to serving" is not
+  tied to a step, and the victims' not-serving lines are not checked.
 - **Collector receipts carry no signed time** (#398), so a stale receipt still verifies. This matters
   for the one-peer recovery witness (#387).
 

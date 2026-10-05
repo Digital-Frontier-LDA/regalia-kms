@@ -858,7 +858,7 @@ CONFIG_DIR = "/etc/regalia/"
 # chronyd -f, by units/chrony.service.d/regalia.conf (#303). In /etc/chrony, not CONFIG_DIR: the distribution's AppArmor
 # profile for chronyd reads /etc/chrony/** and nothing else of /etc. A file of its own: Debian's chrony.conf, a package
 # conffile, is never touched.
-CHRONY_CONF = "/etc/chrony/regalia.conf"   # the same as authtime.CHRONY_CONF, the authority host's install (held equal by a test)
+CHRONY_CONF = "/etc/chrony/regalia.conf"   # the same as authtime.CHRONY_CONF (held equal by a test)
 
 
 def _same(target, digest):
@@ -1029,7 +1029,7 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
 
 def first_heartbeat(config_path, run=subprocess.run, bootstrap=False, owner_auth=None):
     """As regalia-sync (it owns the heartbeat state and the counter's lock), for a node first named above epoch 1:
-    the highest heartbeat any reachable peer or the authority holds, verified under this node's manifest, taken as
+    the highest heartbeat any reachable peer holds, verified under this node's manifest, taken as
     its FIRST (heartbeat.Freshness.accept_first: same checks as accept, live by authenticated time with no
     system-clock fallback, its counter defined AT that sequence with no increment loop, and its issued_at the
     held time). A `heartbeat-first` event goes to the sync trail before (INCOMPLETE) and after (ALLOW). Returns
@@ -1088,7 +1088,7 @@ def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bo
         return None, None                     # the bootstrap's own counter, before any heartbeat exists
     event = {"event": "heartbeat-first", "node": node_id, "epoch": manifest["epoch"]}
     if not found:
-        require(bootstrap, "no peer and no authority gave a heartbeat that verifies under epoch %d (%s): the node cannot start "
+        require(bootstrap, "no peer gave a heartbeat that verifies under epoch %d (%s): the node cannot start "
                 "its heartbeat counter yet; run commit again once one answers (or, at a network's bootstrap, before any "
                 "heartbeat was ever issued, with --bootstrap)" % (manifest["epoch"], "; ".join(failures) or "none reachable"))
         require(manifest["epoch"] == 1, "--bootstrap is the first bring-up of a cluster, under epoch 1; this manifest is epoch %d: "
@@ -2016,7 +2016,7 @@ def main(argv=None):
     k.add_argument("--replace", metavar="OLD_NODE_ID", help="this host replaces that node (#76): the manifest must say so")
     ownerauth.add_arguments(k)
     k.add_argument("--bootstrap", action="store_true", help="the network has issued no heartbeat yet: start the counter at 0 "
-                   "if no reachable peer or authority holds one")
+                   "if no reachable peer holds one")
     h = sub.add_parser("_first-heartbeat", help=argparse.SUPPRESS)
     h.add_argument("--config", required=True)
     h.add_argument("--bootstrap", action="store_true")
