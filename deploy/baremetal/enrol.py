@@ -2175,10 +2175,24 @@ def _ownerauth_hold(directory, digest):
 
 
 def _ownerauth_replace(directory, digest, untrusted):
-    """Hold `digest`, first moving an untrustworthy held file aside (renamed, never followed: a link moves as a link)."""
+    """Hold `digest`, first keeping an untrustworthy held file aside under the first free name (ownerauth.json.untrusted,
+    then .untrusted.2, ...): hard-linked, never followed (a link is kept as a link) and never over an earlier one, whose
+    evidence stays (regalia-kms-d9). Returns the name it is kept under, or None."""
+    kept = None
     if untrusted:
-        os.replace(os.path.join(directory, OWNERAUTH_STATE), os.path.join(directory, OWNERAUTH_STATE + ".untrusted"))
-    _ownerauth_hold(directory, digest)
+        path = os.path.join(directory, OWNERAUTH_STATE)
+        for n in range(1, 100):
+            name = OWNERAUTH_STATE + ".untrusted" + ("" if n == 1 else ".%d" % n)
+            try:
+                os.link(path, os.path.join(directory, name), follow_symlinks=False)   # fails if the name exists: no overwrite
+            except FileExistsError:
+                continue
+            kept = name
+            break
+        require(kept is not None, "%s already keeps 99 untrustworthy owner-authorization files: inspect and move them. "
+                "Nothing was recorded" % directory)
+    _ownerauth_hold(directory, digest)            # renamed over the held name: the kept link is the old file
+    return kept
 
 
 def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None, run=subprocess.run, directory=ENROL_DIR,
@@ -2253,9 +2267,9 @@ def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None
             # one way (regalia-kms-d9): missing -> written; a node that already holds another record is not overwritten
             require(held is None or held == digest_of(envelope), "this node already holds another owner-authorization record "
                     "(%s...): --adopt only records one for a node that holds none. Nothing was changed" % (held or "")[:16])
-            _ownerauth_replace(directory, digest_of(envelope), untrusted)
+            kept = _ownerauth_replace(directory, digest_of(envelope), untrusted)
             return "the TPM's owner authorization is %s's envelope value; the node now holds this record%s" % (
-                node_id, " (the untrustworthy file it replaced is kept as %s.untrusted)" % OWNERAUTH_STATE if untrusted else "")
+                node_id, " (the untrustworthy file it replaced is kept as %s)" % kept if kept else "")
         on = ("the node holds this record" if held == digest_of(envelope) else "the node holds NO record of it (--adopt)"
               if held is None else "but the node holds ANOTHER record (%s...)" % held[:16])
         return "the TPM's owner authorization is %s's envelope value; %s" % (node_id, on)

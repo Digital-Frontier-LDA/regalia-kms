@@ -15,6 +15,7 @@ import os
 import pathlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -485,6 +486,15 @@ class Rotation(unittest.TestCase):
                 self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
                 self.assertTrue(os.path.lexists(path + ".untrusted"))
                 ownerauth.require_held(current, self.d)                              # the tools work again
+        # a second episode keeps the first one's evidence: its file goes under the next free name, both stay
+        with open(path + ".untrusted") as f:
+            first = f.read()
+        os.chmod(path, 0o644)
+        self.assertIn("kept as ownerauth.json.untrusted.2", check("current", self.current, adopt=True))
+        with open(path + ".untrusted") as f:
+            self.assertEqual(f.read(), first)
+        self.assertEqual(stat.S_IMODE(os.stat(path + ".untrusted.2").st_mode), 0o644)
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
         self.assertEqual(self.tpm.salted_with, [])
 
     def test_no_salted_changeauth_near_dictionary_attack_lockout(self):
