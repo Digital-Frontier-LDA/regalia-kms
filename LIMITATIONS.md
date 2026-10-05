@@ -133,9 +133,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   [`deploy/baremetal/MONITORING.md`](deploy/baremetal/MONITORING.md)). The real service has not been
   chosen or deployed. The audit collector's conformance suite runs against the reference collector in
   CI. **Monitoring has no conformance command** (MONITORING.md section 5: not built).
-- **Audit completeness is checked in some scenarios only.** `audit_complete` runs in the theft and
-  rolling scenarios. Recovery is #402, and outage, leases and replace are not covered. The time trail
-  and the update trail are never checked end to end in a three-node scenario.
+- **Audit completeness is checked in some scenarios only.** `audit_complete` runs in the theft, rolling and
+  recovery scenarios (#402). Outage, leases and replace are not covered. The time trail and the update trail
+  are never checked end to end in a three-node scenario. In recovery, "each node's change to serving" is not
+  tied to a step, and the victims' not-serving lines are not checked.
 - **Collector receipts carry no signed time** (#398), so a stale receipt still verifies. This matters
   for the one-peer recovery witness (#387).
 
