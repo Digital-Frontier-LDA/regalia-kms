@@ -816,6 +816,11 @@ class RecordWrites(unittest.TestCase):
                 self.assertIn("regalia: tpm2_nvread %s failed (exit 1, 0 bytes out): " % index, journal.getvalue())
                 self.assertIn("Received a non-TPM Error | ERROR: TPM_RC_RETRY", journal.getvalue())
         self.fault = lambda argv: None
+        # a run that gives text, not bytes (text=True, a fake), is named all the same (95's read)
+        journal = io.StringIO()
+        with contextlib.redirect_stderr(journal):
+            m._said("nvread", "0x1500016", subprocess.CompletedProcess(["tpm2_nvread"], 1, "", "ERROR: TPM_RC_YIELDED\n"))
+        self.assertIn("regalia: tpm2_nvread 0x1500016 failed (exit 1, 0 bytes out): ERROR: TPM_RC_YIELDED", journal.getvalue())
 
     def test_a_record_read_that_fails_is_refused_whatever_it_printed(self):
         hw = self.defined()

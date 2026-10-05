@@ -185,7 +185,8 @@ def _said(tool, index, done):
     is so the next one is named rather than guessed at (an intermittent refusal in CI, #448). Never raises."""
     try:
         import sys
-        text = (done.stderr or b"").decode("utf-8", "replace").strip().replace("\n", " | ")
+        err = done.stderr or b""
+        text = (err if isinstance(err, str) else err.decode("utf-8", "replace")).strip().replace("\n", " | ")
         print("regalia: tpm2_%s %s failed (exit %s, %d bytes out): %s" % (tool, index, done.returncode, len(done.stdout or b""), text[-400:] or "no output"),
               file=sys.stderr)
     except Exception:                                   # noqa: BLE001 - a diagnostic never changes the outcome
@@ -1209,6 +1210,8 @@ class HighWater:
         r = self._tpm("nvread", index, "-C", index, "-s", str(size))
         if (r.returncode != 0 or len(r.stdout) != size) and attributes & self.OWNERREAD:
             r = self._owner("nvread", index, "-s", str(size))
+        if r.returncode != 0 or len(r.stdout) != size:
+            _said("nvread", index, r)
         require(r.returncode == 0 and len(r.stdout) == size, "cannot read %d bytes from NV index %s: what the anchor holds cannot "
                 "be known (fail closed)" % (size, index))
         return r.stdout
