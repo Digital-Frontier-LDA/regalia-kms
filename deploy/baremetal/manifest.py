@@ -223,7 +223,7 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
     the release card's key, the root's and every node's signing key are each other than the owner keys. `owners`
     ({card serial: key}) and `release_key` come from the card record (card_record_keys); checked here again, as a
     library caller may give them otherwise."""
-    require(isinstance(owners, dict) and len(owners) == 2, "the owner's keys are exactly two cards' (D30), not %r" % (owners,))
+    require(isinstance(owners, dict) and len(owners) == 2, "the owner's keys are exactly the two owner cards' (D30.7), not %r" % (owners,))
     for serial, key in sorted(owners.items()):
         _raw_ed25519(key, "the owner card %s's key" % serial)
         require(isinstance(serial, str) and serial.upper() not in membership.BENCH_TOKENS,

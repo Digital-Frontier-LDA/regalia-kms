@@ -12,7 +12,7 @@
     "attested": true,
     "comment": "an extra field",
     "key": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
-    "role": "dev-main",
+    "role": "owner-main",
     "serial": "40000001"
    },
    {
@@ -23,7 +23,7 @@
     },
     "attested": true,
     "key": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d",
-    "role": "dev-backup",
+    "role": "owner-backup",
     "serial": "40000002"
    }
   ],
@@ -71,5 +71,5 @@
   "supersedes": "",
   "tool": "card-ceremony-vectors/1"
  },
- "signature": "88b2d4ce1eb26b93ecb3c4b5d9b12896106e58b623f8c87ef08e54cf77d2a172752fd74a0668b091d663b737ee0d34bed27b41163fc3f440be6dee3dfa32ad03"
+ "signature": "8a5b67b3bd86d406668c36a9dc2a396200003cd1907b5ba76b4adf281531976acc7764420e9b139fafe35688654bdc33b56d80048987073f0eb9ab742cfdb30a"
 }

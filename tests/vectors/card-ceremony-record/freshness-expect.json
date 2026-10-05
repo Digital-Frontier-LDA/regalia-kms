@@ -23,7 +23,7 @@
   "expect": "ok",
   "pin": [
    3,
-   "1f4723bf834b6c31e7f960c42bc7ce1be87928f603d43140785d96cabdf7a430"
+   "12b6acdeb07ab653253d2a63705a38e2aa4d9946cf64e1e7e43ba0b9e073d0ce"
   ],
   "record": "rebuilt-3.json"
  },
@@ -51,7 +51,7 @@
   "expect": "this card record is not the one the chain pins (sequence 2)",
   "pin": [
    2,
-   "3cc298a4d4466a5941e0c19e7e5dd5b95a9724fd1a8584117d167174da008acb"
+   "9c8f6679dc4977127367e5b981438aa16cddbf47720364d70b15f65662b56ee7"
   ],
   "record": "rebuilt-3.json"
  },

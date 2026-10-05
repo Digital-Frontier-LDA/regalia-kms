@@ -1,7 +1,7 @@
 """The card-ceremony record, verified by the side that consumes it (regalia-ceremony#111 step 2; ADR-0002 D30).
 
-The card ceremony writes `cards.record.json`: which cards hold the owner's two keys (the developer pair's OpenPGP SIG
-keys) and which hold the release key, signed by the membership root in the offline session that made them. The
+The card ceremony writes `cards.record.json`: which cards hold the owner's two keys (the OWNER pair's OpenPGP SIG
+keys, ADR-0002 D30.7: never the developer cards, which hold no KMS key) and which hold the release key, signed by the membership root in the offline session that made them. The
 genesis proposal takes owner_keys and the release key from it (manifest propose --genesis --card-record) instead of
 having them typed. This module is that consumer's own check: it imports nothing of regalia-ceremony, and it PINS the
 root (regalia-ceremony's own verify_record checks only that a record is consistent with itself).
@@ -14,7 +14,7 @@ Refused, by name, unless:
   * the record's root_entry is the PINNED root (Ed25519) and root_fingerprint is the SHA-256 of its raw key, and the
     signature verifies under that pinned key over RECORD_DOMAIN + canonical(record);
   * every field is as the producer writes it, none missing and none unknown, at every level (FIELDS);
-  * owner_keys are exactly two, the roles dev-main and dev-backup, with distinct serials and keys, Ed25519, and each
+  * owner_keys are exactly two, the roles owner-main and owner-backup (D30.7), with distinct serials and keys, Ed25519, and each
     attested on its card (D5), naming the SHA-256 of its SIG and DEC keys' attestation certificates, all four distinct;
   * the release key is Ed25519, imported, not attested, on two distinct cards, its key no owner key and its cards no
     owner card (D30.3);
@@ -62,7 +62,7 @@ Refused, require = membership.Refused, membership.require
 RECORD_DOMAIN = b"regalia-ceremony-record/v1\x00"
 SCHEMA = "regalia.card-ceremony-record/v1"
 EVENT = "card-ceremony"
-ROLES = ("dev-main", "dev-backup")
+ROLES = ("owner-main", "owner-backup")      # the OWNER pair (D30.7): the developer cards are in no KMS record
 FIELDS = {
     "record": ("schema", "event", "owner_keys", "ownerauth_recipients", "ssh_signers", "release_key", "session", "root_entry",
                "root_fingerprint", "tool", "at", "sequence", "supersedes"),
@@ -352,7 +352,7 @@ def verify(envelope, root, signing_lines, pin=None):
             isinstance(record["supersedes"], str) and HEX64.fullmatch(record["supersedes"]) is not None,
             "supersedes is not \"\" at sequence 1, or the previous record's digest (64 hex) after it")
     owners, roles, certificates = {}, {}, []
-    require(isinstance(record["owner_keys"], list) and len(record["owner_keys"]) == 2, "owner_keys is not exactly two keys (D30)")
+    require(isinstance(record["owner_keys"], list) and len(record["owner_keys"]) == 2, "owner_keys is not exactly two keys: the two owner cards' (D30.7)")
     for i, entry in enumerate(record["owner_keys"]):
         where = "owner_keys[%d]" % i
         _exact(entry, "owner_key", where)
@@ -377,8 +377,8 @@ def verify(envelope, root, signing_lines, pin=None):
     cards = [_serial(c, "release_key.cards[%d]" % i) for i, c in enumerate(release["cards"])]       # each a serial, before any set
     require(len(cards) == 2 and len(set(cards)) == 2, "release_key.cards is not two distinct cards")
     require(release["imported"] is True and release["attested"] is False, "release_key is not an imported (unattested) key, as the ceremony makes it")
-    require(key not in owners.values(), "the release key is an owner key: the release card is never an owner key (D30.3)")
-    require(not set(cards) & set(owners), "a release card is an owner card (D30.3): %s" % ", ".join(sorted(set(cards) & set(owners))))
+    require(key not in owners.values(), "the release key is an owner key: the release cards hold no owner key (D30.3, D30.7)")
+    require(not set(cards) & set(owners), "a release card is an owner card (D30.3, D30.7): %s" % ", ".join(sorted(set(cards) & set(owners))))
     bench = sorted(s for s in set(owners) | set(cards) if s in membership.BENCH_YUBIKEYS)
     require(not bench, "a bench YubiKey is named (%s): the ceremony never uses a bench serial (D28.5, D30)" % ", ".join(bench))
     fingerprints = []                     # every OpenPGP key an ownerauth recipient names: one card's, never two cards'
