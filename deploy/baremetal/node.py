@@ -287,6 +287,29 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
     return epoch, hashlib.sha256(chain).hexdigest(), rewritten, unrenderable
 
 
+ESP_SETTLE_RUNS = 5          # runs of esp_advance at most, while the published chain keeps changing under it
+
+
+def esp_advance_settled(node, esp, lock_path=ESP_LOCK, advance=None):
+    """esp_advance, run again while the published chain changed DURING the run, at most ESP_SETTLE_RUNS times.
+
+    regalia-esp-advance.path's PathChanged= is edge-triggered: a publication that lands while a run is already active
+    is folded into that run by systemd and starts nothing afterwards. If that run had read the chain before it changed,
+    the ESP and the anchor would stay one epoch behind until the NEXT publication (regalia-kms-24 and 3e on main's
+    three-node-recovery; on a host, the unit's boot run beside sync's first publication). So the published file is read
+    before and after each run; a run that saw what is published now is the last one. Still changing after the bound (a
+    sync publishing faster than a run, not something sync does), it is refused, and the unit's Restart= tries again."""
+    advance = advance or esp_advance
+    path = node.path(PUBLISHED)
+    for _ in range(ESP_SETTLE_RUNS):
+        before = _read_regular(path, membership.MAX_CHAIN_BYTES + 1)
+        result = advance(node, esp, lock_path=lock_path)
+        if _read_regular(path, membership.MAX_CHAIN_BYTES + 1) == before:
+            return result
+    raise Refused("the published membership chain changed during each of %d runs: not settled; the unit tries again"
+                  % ESP_SETTLE_RUNS)
+
+
 def esp_metrics(node, ok, renderable=None, publish=None):
     """regalia-esp-advance's own metrics (#66 B3), written at every run, success or not, by root: the anchor as IT reads
     it, so a sync that lies in membership.prom does not silence the alerts on these (regalia-kms-48), and whether the
@@ -944,7 +967,7 @@ def main(argv=None):
             print("wg-svc and %s applied under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
         elif args.service == "esp-advance":
             try:
-                epoch, sha, rewritten, unrenderable = esp_advance(node, args.esp, lock_path=args.esp_lock)
+                epoch, sha, rewritten, unrenderable = esp_advance_settled(node, args.esp, lock_path=args.esp_lock)
             except BaseException:
                 esp_metrics(node, ok=False)
                 raise
