@@ -673,10 +673,12 @@ the client are on the console with no kernel argument. It is not secret. When a 
     fifteen minutes behind, and `regalia-node check` prints both. regalia-esp-advance (root) writes its own
     `esp-advance.prom` at every run, success or not (`regalia_esp_advance_ok`, the anchor as it reads it, and
     `regalia_esp_boot_renderable`): `RegaliaEspAdvanceFailing` and `RegaliaNextBootNeedsRecoveryKey` do not depend
-    on sync telling the truth. **Not covered:** a compromised sync that stops publishing altogether. Then
-    regalia-esp-advance never runs, its last `ok` stays 1, and sync's own file can say anything. That is the
-    withholding a compromised sync could always do (it could refuse to commit); peers that hold a newer epoch
-    still see this node's heartbeats and leases judged under their own. **What the operator does:** read
+    on sync telling the truth. A compromised sync that stops publishing altogether is not seen on that node
+    (regalia-esp-advance never runs, its last `ok` stays 1, and sync's own file can say anything); it is seen
+    ACROSS the nodes: `RegaliaMembershipBehindFleet` and `RegaliaAnchorBehindFleet` (the root's reading of the
+    anchor, so a sync that writes its peers' epoch does not hide it) warn when a node stays 30 minutes below
+    the highest epoch its peers hold, compared within one scrape job (one cluster). A retired or revoked node
+    lags by design: take it out of the scrape. **What the operator does:** read
     `journalctl -u regalia-esp-advance`, fix the cause (mount the ESP, free space), then
     `systemctl start regalia-esp-advance`; check that `regalia-node check` shows `anchor` equal to `epoch`.
     `update.py apply` refuses to reboot a node in that state, and one whose chain the initrd could not render
