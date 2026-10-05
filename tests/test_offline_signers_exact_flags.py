@@ -5,6 +5,7 @@ keyfd.exact: no abbreviation, and every single-value option taken once, on the p
 import contextlib
 import io
 import unittest
+import unittest.mock
 
 from deploy.baremetal import manifest, uki
 
@@ -42,6 +43,34 @@ class ExactFlags(unittest.TestCase):
         with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
             uki.main(uki_base + ["--initrd-key-fd", "9", "--initrd-key-fd", "0"])
         self.assertIn("--initrd-key-fd given twice", err.getvalue())
+
+    def test_every_plain_option_of_every_subcommand_is_taken_once(self):
+        """regalia-kms-95: exact() wraps add_argument; an option added another way (before it, through parents=, an
+        argument group) would stay last-wins. Every "--" option with a plain store action, in the parser and every
+        subcommand, must be keyfd.Once, and no parser may take abbreviations."""
+        import argparse
+        from deploy.baremetal import keyfd
+
+        class Built(Exception):
+            pass
+        for main in (manifest.main, uki.main):
+            built = []
+
+            def capture(parser, *a, **kw):
+                built.append(parser)
+                raise Built()
+            with self.subTest(tool=main.__module__), unittest.mock.patch.object(argparse.ArgumentParser, "parse_args", capture):
+                with self.assertRaises(Built):
+                    main([])
+                parsers = [built[0]] + [p for action in built[0]._actions if isinstance(action, argparse._SubParsersAction)
+                                        for p in action.choices.values()]
+                self.assertGreater(len(parsers), 3)
+                self.assertTrue(any(type(action) is keyfd.Once for p in parsers for action in p._actions), "no option is a Once")
+                for parser in parsers:
+                    self.assertFalse(parser.allow_abbrev, parser.prog)
+                    for action in parser._actions:
+                        if any(o.startswith("--") for o in action.option_strings) and type(action) is argparse._StoreAction:
+                            self.fail("%s %s is a plain store action: given twice, the last would win" % (parser.prog, action.option_strings))
 
     def test_uki_sign_takes_no_abbreviation(self):
         base = ["sign"] + [x for flag in ("--linux", "--initrd", "--cmdline", "--os-release", "--stub", "--pcrpkey", "--initrd-build",
