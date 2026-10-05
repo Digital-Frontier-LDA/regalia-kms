@@ -652,6 +652,9 @@ func Accept(current map[string]any, envelope any, root any) (map[string]any, err
 		if err := cardRecordRules(current, candidate); err != nil {
 			return nil, err
 		}
+		if err := recoveryEndRules(current, candidate); err != nil {
+			return nil, err
+		}
 	}
 	return candidate, nil
 }
