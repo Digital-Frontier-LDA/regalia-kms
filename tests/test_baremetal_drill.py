@@ -3,7 +3,9 @@ restore, and the report."""
 import json
 import os
 import shutil
+import signal
 import subprocess
+import tempfile
 import unittest
 
 from deploy.baremetal import drill, membership as m
@@ -200,6 +202,101 @@ class Report(unittest.TestCase):
         for operator, witness, run_id in (("a", "a", "r1"), ("a", "", "r1"), ("a", "b", "r 1"), ("a", "b", "../x")):
             with self.assertRaises(m.Refused):
                 drill.report(run_id, operator, witness, {}, {})
+
+
+class FailedInstall(unittest.TestCase):
+    def test_a_failed_install_leaves_no_timer_and_no_table(self):
+        # 24 on #498: after the timer is armed, any later failure takes it (and a loaded table) back
+        for failing in (lambda argv: argv[:2] == ["nft", "-c"], lambda argv: argv[:3] == ["nft", "-f", "-"]):
+            server = FakeServer(fail=failing)
+            with self.assertRaises(m.Refused):
+                drill.Partition(server).install("b", 600)
+            self.assertEqual((server.table, server.timer), (False, False))
+
+
+class Journal(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d)
+        self.path = os.path.join(self.d, "faults.jsonl")
+
+    def test_restore_replays_every_pending_undo_newest_first_and_marks_it(self):
+        journal = drill.Journal(self.path)
+        first = journal.fault("power-off", "c", {"action": "power-on", "node": "c"})
+        second = journal.fault("partition", "b", {"action": "unpartition", "node": "b"})
+        done = []
+        restored, failed = journal.restore({"power-on": lambda n: done.append(("on", n)), "unpartition": lambda n: done.append(("cut", n))})
+        self.assertEqual(done, [("cut", "b"), ("on", "c")])                  # newest first
+        self.assertEqual(([r["id"] for r in restored], failed, journal.pending()), ([second, first], [], []))
+        self.assertEqual(journal.restore({}), ([], []))                     # nothing left to do
+
+    def test_a_failed_undo_stays_pending_and_is_said(self):
+        journal = drill.Journal(self.path)
+        journal.fault("power-off", "c", {"action": "power-on", "node": "c"})
+        restored, failed = journal.restore({"power-on": drill.power_on_by_hand})
+        self.assertEqual(restored, [])
+        self.assertIn("power c on through its iLO by hand", failed[0]["error"])
+        self.assertEqual(len(journal.pending()), 1)
+
+    def test_the_fault_is_on_disk_before_the_cut_and_restore_undoes_it(self):
+        # the journal line exists before the server is touched at all
+        seen = []
+        server = FakeServer()
+
+        def ssh(node, argv, input=None):
+            if not seen:
+                seen.append([e["kind"] for e in drill.Journal(self.path).entries()])
+            return server(node, argv, input)
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(drill.main(["partition", "--node", "b", "--journal", self.path], ssh=ssh), 0)
+        self.assertEqual(seen, [["fault"]])
+        self.assertTrue(server.table)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(drill.main(["restore", "--journal", self.path], ssh=server), 0)
+        self.assertEqual((server.table, server.timer, drill.Journal(self.path).pending()), (False, False, []))
+
+
+class Canary(unittest.TestCase):
+    def test_every_key_must_be_canary_in_the_key_state_store(self):
+        store = {"canary-sign-1": "canary-sign", "prod-validator": "cosmos-validator", "named-canary-but-not": "sign",
+                 "canary-validator": "cosmos-validator"}                    # NAMED canary-*, a production key in the store
+        self.assertEqual(drill.canary_only(["canary-sign-1"], store.get)[0], True)
+        good, saw = drill.canary_only(["canary-sign-1", "prod-validator", "named-canary-but-not"], store.get)
+        self.assertFalse(good)
+        self.assertIn("prod-validator", saw)
+        self.assertIn("named-canary-but-not", saw)                        # the name does not count, the store does
+        good, saw = drill.canary_only(["canary-sign-1", "canary-validator"], store.get)
+        self.assertFalse(good, "a key NAMED canary-* whose purpose in the store is production passed")
+        self.assertIn("canary-validator", saw)
+        self.assertEqual(drill.canary_only([], store.get)[0], False)        # no key named: not a canary run
+
+
+class Signals(unittest.TestCase):
+    def test_sigterm_mid_run_still_restores_and_fails_the_run(self):
+        log = []
+
+        def inject():
+            os.kill(os.getpid(), signal.SIGTERM)
+            log.append("after the signal")                               # never reached
+        before = signal.getsignal(signal.SIGTERM)
+        out = drill.run([{"name": "S1", "inject": inject, "judge": lambda: {}}], abort=lambda: None,
+                        restore=lambda: log.append("restore"))
+        self.assertEqual(log, ["restore"])
+        self.assertIn("ABORTED: signal %d" % signal.SIGTERM, out["stopped"])
+        self.assertIs(signal.getsignal(signal.SIGTERM), before)              # the handler put back
+
+
+class Integers(unittest.TestCase):
+    def test_times_are_integer_ms_and_a_float_or_nan_is_refused(self):
+        out = drill.run([{"name": "S1", "inject": lambda: {}, "judge": lambda: {"x": (True, "y")}}], abort=lambda: None,
+                        restore=lambda: None, clock=lambda: 1791228593.25)
+        self.assertEqual(out["scenarios"][0]["started_ms"], 1791228593250)
+        drill.report("r1", "a", "b", out, {})
+        for bad in (0.5, float("nan")):
+            with self.assertRaisesRegex(m.Refused, "float|NaN"):
+                drill.report("r1", "a", "b", {"passed": True, "rtt": [1, {"x": bad}]}, {})
 
 
 if __name__ == "__main__":
