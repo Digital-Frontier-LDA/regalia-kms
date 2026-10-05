@@ -9,11 +9,12 @@ IT CHANGES THE MACHINE (namespaces, interfaces, queueing disciplines inside the 
 dm-crypt mappings, transient units), so it runs only on a GitHub-hosted runner, or on a throwaway host whose
 /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK. It needs the kernel's netem module (linux-modules-extra on the runner).
 
-  1  three nodes, then the WAN: every pair's round trip measured on the underlay, at least 80 ms (netem is on)
+  1  three nodes, then the WAN: every pair's round trip measured on the underlay, at least 80 ms (netem is on); measured
+     again once the services are up and at the end
   2  every node leased across the WAN, and every node's sync pulls from both others
   3  a's lease renewed across the WAN
-  4  failover: a's issuer cut off entirely (netem loss 100%); a renewed by the other peer with no gap in serving;
-     the cut-off node stops serving by itself at its lease's end
+  4  failover: a's issuer cut off entirely (netem loss 100%, its pings to both peers lost); a renewed by the other
+     peer with no gap in serving (sampled every 0.5 s); the cut-off node stops serving by itself at its lease's end
   5  heal: the cut-off node rejoins and is leased again
   6  a new epoch across the WAN: every node takes it and the nodes sign its heartbeat (the stateful path today)
 
@@ -82,8 +83,24 @@ def renewed(cluster, name, after, by=None):
 
 def answered(cluster, server, caller, since=0.0):
     """Whether `server`'s sync answered a pull from `caller` (ALLOW) at or after `since` (unix seconds)."""
-    return any(e.get("event") == "sync-pull" and e.get("subject") == caller and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
+    return any(e.get("event") == "sync-pull" and e.get("subject") == caller and e.get("outcome") == "ALLOW" and e.get("at", 0) >= int(since)
                for e in cluster.trail(server))
+
+
+def wan_holds(cluster, when):
+    """Every pair's round trip still at least 80 ms: netem is still on every underlay (3e: start(), wg-apply and a
+    power cycle touch the namespaces' interfaces)."""
+    for name, other in (("a", "b"), ("b", "c"), ("c", "a")):
+        measured = rtt(cluster, name, other)
+        ok(measured is not None and measured[1] >= 80, "%s: %s -> %s round trip %s ms, netem still on" % (when, name, other, measured), measured)
+
+
+def cut_off(cluster, name):
+    """Whether `name` reaches neither other node on the underlay: every ping lost."""
+    others = [o for o in ("a", "b", "c") if o != name]
+    said = [cluster.member(name).in_ns("ping", "-c", "3", "-i", "0.2", "-W", "1", "-q", cluster.member(o).underlay, check=False).stdout
+            for o in others]
+    return all("100% packet loss" in s for s in said), said
 
 
 def scenario(cluster):
@@ -113,8 +130,10 @@ def scenario(cluster):
     for server in names:
         for caller in names:
             if caller != server:
-                ok(until(lambda: answered(cluster, server, caller), 120, 2) is True,
+                ok(until(lambda: answered(cluster, server, caller, started), 120, 2) is True,
                    "%s answered %s's pull across the WAN" % (server, caller), cluster.journal(caller, "sync")[-400:])
+
+    wan_holds(cluster, "services up")
 
     header("3  a's lease renewed across the WAN")
     first, _ = held(cluster, "a")
@@ -128,12 +147,14 @@ def scenario(cluster):
     other = next(n for n in ("b", "c") if n != issuer)
     netem(cluster, issuer, CUT)
     cut = time.time()
+    lost, said = cut_off(cluster, issuer)
+    ok(lost, "%s is cut off: its pings to both peers are all lost" % issuer, said)
     gaps, got, end = [], None, time.time() + renewal + 120
     while time.time() < end and not got:
         if not cluster.lease("a"):
             gaps.append(round(time.time() - cut))
         got = renewed(cluster, "a", current, by=other)
-        time.sleep(2)
+        time.sleep(0.5)                              # 3e: a gap shorter than the sampling interval would be missed
     ok(bool(got), "with %s cut off, a's next lease is %s's (%s)" % (issuer, other, got and got[0]), held(cluster, "a"))
     ok(not gaps, "and a served at every sample from the cut until %s's lease came" % other, gaps)
     print("  MEASURED: %s cut off -> a renewed by %s: %.0f s" % (issuer, other, time.time() - cut))
@@ -160,6 +181,7 @@ def scenario(cluster):
         ok(cluster.node(name).store().load()["epoch"] == manifest["epoch"], "%s holds epoch %d" % (name, manifest["epoch"]))
     fresh = cluster.fresh(names, epoch=manifest["epoch"], timeout=300)
     ok(all(fresh.values()), "every node holds epoch %d's heartbeat, signed by the nodes, across the WAN" % manifest["epoch"], fresh)
+    wan_holds(cluster, "at the end")
     print("  MEASURED: epoch %d delivered on %s -> every node holds it and its heartbeat: %.0f s" % (manifest["epoch"], other, time.time() - began))
 
 
