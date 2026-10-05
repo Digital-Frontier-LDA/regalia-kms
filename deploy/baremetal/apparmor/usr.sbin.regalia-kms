@@ -3,8 +3,8 @@
 # FIRST IN COMPLAIN MODE (-C: violations are logged, nothing is refused), because this profile has
 # never confined a running daemon:
 #
-#   sudo install -m 0644 deploy/baremetal/apparmor/usr.local.sbin.regalia-kms /etc/apparmor.d/
-#   sudo apparmor_parser -r -C /etc/apparmor.d/usr.local.sbin.regalia-kms
+#   sudo install -m 0644 deploy/baremetal/apparmor/usr.sbin.regalia-kms /etc/apparmor.d/
+#   sudo apparmor_parser -r -C /etc/apparmor.d/usr.sbin.regalia-kms
 #   sudo systemctl restart regalia-kms      # the unit asks for it: AppArmorProfile=regalia-kms
 #   # exercise a sign, a wrap, a token removal and a service restart, then:
 #   sudo journalctl -k -g 'apparmor=.*profile="regalia-kms"'
@@ -12,7 +12,7 @@
 # Correct the profile for every legitimate ALLOWED line and repeat until there is none. ONLY THEN
 # enforce (the same file, without -C), and measure:
 #
-#   sudo apparmor_parser -r /etc/apparmor.d/usr.local.sbin.regalia-kms
+#   sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.regalia-kms
 #   sudo systemctl restart regalia-kms
 #   sudo python3 deploy/baremetal/host_probe.py   # kms_apparmor_enforced
 #
@@ -53,7 +53,7 @@ profile regalia-kms {
   # ---- the binary ----
   # deploy/systemd/regalia-kms.service ExecStart; os_probe.ALLOWED_TOKEN_CLIENT_EXES; the file IMA
   # measures (host_probe.KMS_BINARY). Mapped and read, never executed again.
-  /usr/local/sbin/regalia-kms mr,
+  /usr/sbin/regalia-kms mr,
 
   # ---- configuration: read-only ----
   # -config                         internal/config/config.go Load
@@ -159,5 +159,5 @@ profile regalia-kms {
   audit deny /etc/regalia-kms/** wkl,
   # Nor writes its own admission: only the lease service says whether this node may serve.
   audit deny /run/regalia/** wkl,
-  audit deny /usr/local/sbin/** wkl,
+  audit deny /usr/sbin/** wkl,
 }

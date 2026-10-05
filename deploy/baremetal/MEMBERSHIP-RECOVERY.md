@@ -11,7 +11,7 @@ That is deliberate. This page says, for each refusal, what happened and how the 
 |---|---|---|---|
 | `ROLLBACK: the membership on disk is epoch N but the TPM high-water is M` | The file is older than what this node accepted: a restored disk, or the file was lost | The node, from a peer | `convergence.recover`: one source is enough while the record names the manifest at the anchored epoch |
 | `CONFLICT: the manifest at epoch N is not the one this node's TPM recorded` | The file holds another validly signed chain: a substituted disk, and a key that signed twice for one epoch | The node, from a peer, **and an incident** | `convergence.recover`; if the disk still holds the other chain the restore refuses it too: record the incident, keep the file as evidence, remove it, recover |
-| `recovery needs whole chains from 2 different sources` | A crash fell between the counter and the record; the record names the epoch below | The node, from two sources | `convergence.recover` with the chains of two other nodes the manifest lets authorize (#199: there is no authority to be the second source). With only one such node left (the other revoked or down), nothing goes on by itself: an operator calls `convergence.recover(..., minimum=1)` deliberately, after checking that node's chain by hand as for a re-anchor (below), against the chain the owner signs revocations against. No tool does this yet |
+| `recovery needs whole chains from 2 different sources` | A crash fell between the counter and the record; the record names the epoch below | The node, from two sources | `convergence.recover` with the chains of two other nodes the manifest lets authorize (#199: there is no authority to be the second source). `recover.py apply --peer a=A.json --peer c=C.json`. With only one such node left (the other revoked or down), nothing goes on by itself: the OWNER is the second source (#387, below, "One other node and the owner") |
 | `cannot write the record index …` / `did not take the write` | The TPM refused a write, or power was lost during one | Nobody needs to | Start the service again: `load()` completes it. A record write that was cut half-way damages one slot only; the other still holds the epoch before |
 | `the fetched chain ends at epoch N, below the TPM high-water M` | The peer asked is itself behind | The node | Ask another peer |
 | `epoch jump N exceeds the bound 1000: anomaly` | The chain offered is more than 1000 epochs ahead of this node's anchor | The node, in steps; an operator to look first | Manifests change rarely, so first find out why a node is so far behind. Then: a node whose chain on disk is intact catches up through `convergence.catch_up`, which applies at most 1000 envelopes a message and commits them one by one. A node whose chain is lost restores the chain cut at its anchored epoch + 1000 (`Store.restore` of the first epochs), then catches up the rest the same way. Nothing is anchored more than 1000 epochs at a time, and nothing needs a re-anchor |
@@ -66,12 +66,34 @@ believes the chain it was given, exactly as a newly enrolled node does. So:
   without a writable log nothing is done.
 
 ```sh
-python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.json --root-key "$ROOT_KEY_HEX" \
-    --tpm-index 0x1500016 --node-id b --peer a=a-chain.json --peer c=c-chain.json \
-    --audit-log /var/log/regalia/reanchor.jsonl
+gpg --decrypt ownerauth-b.yk.gpg | sudo python3 -Es -m deploy.baremetal.reanchor \
+    --membership /var/lib/regalia-sync/membership.json --root-key "$ROOT_KEY_HEX" \
+    --tpm-index 0x1500016 --tcti device:/dev/tpmrm0 --node-id b --node-config /etc/regalia/node.json \
+    --peer a=a-chain.json --peer c=c-chain.json --ownerauth ownerauth.record.json
 ```
 
-It needs the TPM's owner authorization, as defining the anchor did at commissioning. The TPM is
+The membership file is the node's sync store (`state_dir` in `node.json`); the root key, the index and the
+TPM are `node.json`'s `root_key`, `nv_epoch` and `tcti`. `--node-config` is needed on every node whose anchor
+is written by its approved-image policy (#242): all of them since then. The audit log defaults to the
+reanchor trail (`trails.py`). Run as root, it writes the membership file as root; when it is done (or
+INCOMPLETE) it gives that file, and any lock it made, back to the owner of the state directory
+(`regalia-sync`, as `enrol` made it), or the node's own sync could not read its chain (#388). The lock it
+takes is the node's own (`highwater.lock` in the state directory, `node.Node.anchor()`'s). The node's one
+run-time writer of the anchor, `regalia-esp-advance` (#410), takes its own lock (`/run/regalia-esp-advance/`),
+so the two do not serialize: stop the node's units first, `regalia-esp-advance.path` included (below).
+
+Once the phrase is typed it writes the chain to the ESP (`--esp`, default `/efi`), as `regalia-esp-advance`
+does, and only then replaces the anchor: the initrd accepts an ESP chain ahead of its anchor and refuses one below
+it (a ROLLBACK), so no reboot after the command, or in the middle of it, lands below the new anchor. Before
+anything is asked it checks that the ESP holds a chain (every enrolled node's does): none there is an ESP not
+mounted at `--esp`.
+
+It needs the TPM's owner authorization, as defining the anchor did at commissioning (#242 step C,
+`ownerauth.py`): this node's value comes on standard input from its envelope, decrypted with the owner's
+card, and is checked against the ceremony's signed `ownerauth.record.json` under the pinned root before the
+TPM is touched. It is never typed and never an argument. The phrase is then read from the terminal itself.
+Without `--ownerauth` the commands use an empty owner authorization, which only a TPM whose owner
+authorization was never set accepts (the software TPMs of the tests). The TPM is
 tpm2-tools' default one, or the one named with `--tcti`; a `TPM2TOOLS_TCTI` left in the environment is
 refused, because it could point at another TPM, which would truthfully report the indices missing. That
 authorization is what authorizes the change. The typed phrase is a deliberate act, not a secret: it can
@@ -80,11 +102,12 @@ be computed from the chain files.
 | Exit status | Audit line | Meaning | What to do |
 |---|---|---|---|
 | 0 | `ALLOW` | Done | Start the service |
-| 1 | `DENY`, or none if the arguments were refused | Refused. Nothing was changed | Read the reason |
+| 1 | `DENY`, or none if the arguments were refused | Refused. Nothing was changed in the TPM or the chain. If the refusal came after the phrase (a TPM refusing the redefinition before it began), the ESP may already hold the new chain: ahead of the anchor, which the initrd accepts. A lock the run made as root is given back too, as at status 0 | Read the reason. If it also says a lock or file could not be given back, do as for status 5 |
 | 2 | none | The command line itself is wrong (a missing or unknown option). Nothing was read or changed | Correct the arguments |
 | 3 | `INCOMPLETE` | The re-anchor had begun and a step failed (the chain file could not be written, or a TPM command was refused). The verified chain may or may not be on disk yet; the node's membership does not load | If the reason is a storage error (disk full, read-only), fix that first. Then **run the same command again with the same chains**: it completes from wherever it stopped. A shorter or different chain is refused: the file on disk, if it was written, and whatever the TPM still holds bind the second attempt |
 | none | a `reanchor-requested` line with no outcome after it | The process was killed or the power was lost while it ran: there is no exit status and no outcome line. Anything from nothing changed to finished is possible | The same as status 3: run the same command again with the same chains. If the anchor is already usable, it says so and changes nothing; start the service |
 | 4 | request line only | Done, but the outcome could not be written to the audit log | Record it by hand; the message gives the epoch and digest |
+| 5 | `ALLOW` | Done, but the membership file could not be given back to the owner of the state directory | Run the `chown -h --reference=… -- …` command the message prints, then start the service. Until then the node's sync cannot read its chain. If the message says **do NOT chown it** (a link, a second name, or another user's file in regalia-sync's directory), it prints no command: chowning it could give away what the entry names. Look at it with `ls -l`, find out what made it, and remove the entry by name before running again |
 
 ### Deciding that the sources are right
 
@@ -107,6 +130,128 @@ are what the two peers really hold. That is the operator's part, before typing t
 If the sources disagree with each other, stop: two manifests were signed for one epoch. That is an
 incident for the root key's holder, not something to resolve on this host.
 
+## One other node and the owner (#387)
+
+When only one other node that may authorize is left (the other revoked, or down for good), a node in the
+crash window (`recovery needs whole chains from 2 different sources`) or with an unusable anchor would have
+no second source. The owner is the second source, as for heartbeats and revocations (#199: 2 of {a, b, c,
+owner}). Nothing does this by itself:
+
+```sh
+# 1. on the node, root at its console: this operation's session (a fresh nonce and the boot ID, 15 minutes)
+python3 -Es -m deploy.baremetal.recover session --config /etc/regalia/node.json
+# 2. on the owner's machine or the offline laptop, with the ONE peer's chain fetched as in step 1 above,
+#    the laptop's manifest signing record, and the audit collector's export and receipt of each node's sync stream
+python3 -Es -m deploy.baremetal.owner sign-recovery --purpose recover --node-id b --session SESSION --session-issued ISSUED \
+    --chain a-chain.json --root-key "$ROOT_KEY_HEX" --record signing-record.jsonl \
+    --witness a-sync.json:a-receipt.json --stream site-a.sync [--witness ... --stream ...] \
+    --receipt-keys collector-keys.json --collector-identity ID [--counter-epoch N] \
+    --module /usr/lib/x86_64-linux-gnu/opensc-pkcs11.so --serial SERIAL --out statement.json
+# 3. back on the node, root at its console
+python3 -Es -m deploy.baremetal.recover apply --config /etc/regalia/node.json --peer a=a-chain.json \
+    --one-source --owner-statement statement.json
+#    or, for an unusable anchor: reanchor ... --peer a=a-chain.json --one-source --owner-statement statement.json \
+#        --node-config /etc/regalia/node.json      (with sign-recovery --purpose reanchor)
+```
+
+The owner's tool refuses, and signs nothing, when the peer's tip is below the highest epoch the laptop's
+signing record holds a verified signature for, or the chain does not hold that exact manifest there; when
+it is below the node's counter (`--counter-epoch`, where it still reads); or when the audit collector's
+signed record of any node's sync stream shows a higher epoch (a revocation withheld). It shows every epoch
+above the signing record with its changes, says the record is a lower bound, and asks the operator to type
+a line naming the purpose, node, epoch and digest; with no collector consulted the line must end in
+`no collector`. The statement is signed with an approval key that must be one of the TIP manifest's
+`owner_keys`, over `regalia-recover/v1\0` or `regalia-reanchor/v1\0` and the canonical statement.
+
+The node refuses, and changes nothing, unless: the chain verifies from the pinned root and extends the
+manifest the node's own disk still holds (same digest at that epoch: no fork); the statement is over that
+tip, names this node, this purpose and the session it printed in THIS boot, and has not expired by
+authenticated time; its key is one of the tip's `owner_keys` and the signature verifies; and no second node
+that may authorize answers over the service tunnel (if one does, use the two nodes). Then the operator types
+the phrase at the console's terminal. The outcome is recorded in the sync trail (`recover`) or the
+re-anchor log, which names `owner` among the sources.
+
+**What is left.** The owner and one node together can install a chain neither of the others has seen:
+that is the 2-of-{a, b, c, owner} rule itself, not a gap in it. What it cannot catch: the owner and ONE
+COMPROMISED PEER offering a tip at or above the laptop's floor that predates a revocation two nodes signed.
+Such a revocation is restrictive and never root-signed, so it is in no signing record; only the collector
+holds it. Without the collector (`no collector` typed, and so in the signed line's record), the operator's
+answer to "do you know of any later revocation" is the only guard left. A witness export that is old
+verifies too, and only lowers what the collector is said to have seen: fetch it during the operation.
+The collector's receipt signs no time, so nothing yet refuses an old one (#398 will bind it). The check
+that no second node answers asks over this node's own service tunnel: a node whose tunnel is down cannot
+tell a dead peer from an unreachable one, and it counts both as not answering. The owner's judgement and
+the witness cover that case, not the probe.
+The statement expires 15 minutes after the node issued the session, by the node's authenticated time, never
+by the laptop's clock. The statement cannot be replayed into another operation, boot, node or tip, and
+expires within 15 minutes.
+
+### In a total outage (#388)
+
+All three servers are down, and when the first one comes back its anchor is unusable (one of the operator rows
+above). There is no authority host to give a chain, so the two chains come from the two other servers, and
+they are opened by hand too. Rehearsed end to end on three nodes by `e2e/three-node-reanchor.py` (CI job
+`three-node-reanchor`).
+
+1. **The damaged server (here b): start nothing on it yet.** It is opened last (step 5).
+2. **Open the two other servers (a and c) by hand**, each at its own console with its own recovery key
+   (the PIN card and the host cards, [PIN-CUSTODY.md](../../PIN-CUSTODY.md)): the outage runbook's first step, done on both. Once
+   both run, they sign each other's heartbeats; the owner's hand recovery (`owner.py beat`) is needed only if
+   one of them runs alone.
+3. **Take each one's chain from it:** `/var/lib/regalia-sync/chain.json` (`node.PUBLISHED`: the chain its
+   sync verified and published), copied from a, and from c, over SSH under each one's manifest-pinned host
+   key. Never both from one place, never from b. Both must end at the same epoch; if
+   one is behind, let them sync and take both again.
+4. **Check the sources** ("Deciding that the sources are right", above): each peer's own `rollout epoch`,
+   the last signing record, and why b's anchor is unusable.
+5. **Open b by hand** with its own recovery key. It boots, and its services start by themselves: its sync
+   refuses its membership (the reason above). **Stop them before anything else**:
+   `systemctl stop regalia-esp-advance.path regalia-esp-advance regalia-sync regalia-admission`, and check
+   with `systemctl is-active` that all four are inactive, so that nothing but the command touches the anchor
+   (`regalia-esp-advance` is the node's one run-time writer of it, #410, under a lock of its own). The
+   command checks it too: it refuses while any of the four runs, and holds `regalia-esp-advance`'s own lock for
+   its whole run, so an advance started meanwhile waits for it. Then run the command above at b's console
+   as root, with `--peer a=a-chain.json --peer c=c-chain.json`. Read what it prints, then type the phrase.
+6. **Status 0: start b's services** (`systemctl start regalia-sync regalia-admission regalia-esp-advance.path`),
+   then **`systemctl start regalia-esp-advance`** and check that `regalia-node check` shows `anchor` equal to
+   `epoch`. The command already wrote the ESP before the anchor, so the advance finds it right and agrees; it is
+   also what the node runs at every boot. b loads its membership
+   at the chain's epoch under the new anchor, takes the heartbeat a and c signed, asks them for a lease and
+   serves again; it issues leases to them in turn. Any other status: the table above.
+
+**A server whose two peers are both destroyed is not re-anchored.** No two other nodes can give it a chain,
+and nothing else may: a single source is refused by design. That is a **root ceremony**: new nodes enrolled
+under a root-signed manifest (`replacement.py`, `enrol.py`), with the owner's keys and the shares it needs.
+With only ONE other node left (the other destroyed or revoked), a single peer's chain is refused as now. The
+decided path (regalia-kms-24 on #388, the v4 rule 2 of {a, b, c, owner}) is **the owner as the second source**:
+an owner-key signature, by touch on a developer card, over that peer chain's tip digest and epoch, verified
+against the `owner_keys` the chain itself names; behind `--one-source`, with a phrase typed at `/dev/tty`, and
+recorded. The same applies to `convergence.recover(..., minimum=1)` in the refusals table. **#387, to build:**
+until it lands there is no tool for this case, and both peers gone remains a root ceremony.
+
+**What the rehearsal does not show.** It is one run of the path on software TPMs, not evidence about a host:
+
+- **The TPM is a software TPM.** No DL360's TPM has been re-anchored, and nothing here shows how a physical TPM
+  behaves if power is lost during the redefinition (the unit tests cut the power at every TPM command, also on a
+  software TPM).
+- **One kind of damage.** The epoch counter is undefined, with a record slot still valid. Other operator rows of the
+  table (both record slots invalid, an inconsistent counter, a foreign index) reach the same command, but are
+  rehearsed only in `tests/test_baremetal_reanchor.py`. A replaced TPM is a node replacement, not this path.
+- **"Opened by hand" is the fixture's `cryptsetup open` with the recovery key**, on a loop device, as root on the
+  runner: not the initrd's prompt at a physical console, and the node does not boot through its initrd.
+- **The operator's checks are not run.** The chains are copied as local files, not fetched over SSH under pinned host
+  keys. Neither each peer's `rollout epoch` nor the comparison with the signing record ("Deciding that the sources
+  are right") is exercised. a and c stay stopped while their chains are taken; on hosts they run, and the
+  same-epoch rule is what keeps their two copies consistent.
+- **The terminal is a pty** driving `systemd-run --pty` in b's namespace. It shows the command needs a terminal and
+  reads the phrase from it, but not a physical console.
+- **A set TPM owner authorization is not rehearsed.** The fixture's software TPMs keep an empty one, and the
+  rehearsal runs `reanchor` without `--ownerauth`. The owner-authorized path (#242 step C: the value from the
+  envelope on standard input, given to tpm2-tools through a memfd) is held by `tests/test_baremetal_ownerauth.py`
+  and the swtpm tests of the anchor's owner calls, not by this rehearsal (as for `enrol commit`, #420).
+- **Not rehearsed:** one peer left (the owner as the second source, #387, to build) and both peers destroyed (a
+  root ceremony).
+
 ## What is tested, and what is not
 
 - A record write cut at every byte is repaired by the next load; cuts all the way through a restore
@@ -120,6 +265,13 @@ incident for the root key's holder, not something to resolve on this host.
   command run again completes; the audit lines, `INCOMPLETE` included (also when that line cannot be
   written); a `TPM2TOOLS_TCTI` in the environment is refused and the TPM used is named in the log. One
   run on a software TPM.
+- One other node and the owner (`tests/test_baremetal_recover.py`, and `--one-source` in
+  `tests/test_baremetal_reanchor.py`): the statement's domain; each refusal of the node (another node,
+  operation, purpose, tip, an expired statement, a key not in the tip's `owner_keys`, a forged signature, a
+  fork of the disk's manifest, another boot's session, a second node answering); each refusal of the owner's
+  tool (below the signing record, another manifest at its epoch, below the counter, the collector above the
+  tip, a tampered or foreign witness, a mistyped line, a key not in `owner_keys`), with nothing signed. The
+  whole operation on three nodes is not run in CI yet (#391).
 - **A damaged newest slot leaves no trace.** If the newer slot is unreadable, the node falls back to
   the older one and repairs from the disk, as after a crash. Nothing records that it happened.
 - **Not tested: a physical TPM.** Whether a real TPM can leave a half-written NV index after a power

@@ -90,7 +90,7 @@ TOKEN_CLIENTS = ("ykman", "yubico-piv-tool", "pkcs11-tool", "pkcs15-tool", "open
 PCSCD_SOCKET = "/run/pcscd/pcscd.comm"
 # A pcscd client is identified by the binary its pid runs, not by the name ss prints: a process
 # name is whatever the process set it to.
-ALLOWED_TOKEN_CLIENT_EXES = ("/usr/local/sbin/regalia-kms",)
+ALLOWED_TOKEN_CLIENT_EXES = ("/usr/sbin/regalia-kms",)
 
 
 class Host:

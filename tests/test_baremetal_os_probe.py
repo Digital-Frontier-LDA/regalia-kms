@@ -49,7 +49,7 @@ os_probe.KNOWN_RULES_FILES["/usr/share/polkit-1/rules.d/50-default.rules"] = has
 
 def exec_start(arguments="-config " + CONFIG, load="loaded"):
     """What `systemctl show -p ExecStart,LoadState` prints for the shipped unit (systemd 257)."""
-    binary = "/usr/local/sbin/regalia-kms"
+    binary = "/usr/sbin/regalia-kms"
     return ("ExecStart={ path=%s ; argv[]=%s %s ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; "
             "code=(null) ; status=0/0 }\nLoadState=%s\n" % (binary, binary, arguments, load))
 # What `systemctl show` prints for a unit that sets none of this (measured, systemd 257).
@@ -127,7 +127,7 @@ class FakeHost:
             self.commands[("test", "-e", directory)] = ""
             self.commands[("stat", "-L", "-c", "%u %a", directory)] = "0 755\n"
             self.commands[("stat", "-L", "-c", "%u %a", os.path.dirname(directory))] = "0 755\n"
-        self.links = {"/proc/20/exe": "/usr/local/sbin/regalia-kms", "/proc/10/exe": "/usr/sbin/pcscd"}
+        self.links = {"/proc/20/exe": "/usr/sbin/regalia-kms", "/proc/10/exe": "/usr/sbin/pcscd"}
         for target in os_probe.HIBERNATING_TARGETS:
             self.commands[("systemctl", "is-enabled", target)] = "masked\n"
         self.installed = set()
