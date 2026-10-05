@@ -196,10 +196,25 @@ def _said(tool, index, done):
 @contextlib.contextmanager
 def _exclusive(lock_path):
     """An exclusive flock held for the block: every read-modify-write of the anchor or the stored
-    chain is serialized across processes on the host."""
+    chain is serialized across processes on the host.
+
+    NEVER THROUGH A LINK (#388, regalia-kms-1e): the locks live in regalia-sync's state directory, and root opens them
+    there too (reanchor). A link planted in place of a lock would have root open, or create, any file read-write; so
+    the last component is never followed (O_NOFOLLOW: a symbolic link is refused, and nothing is created through it)
+    and what was opened must be a regular file with one name (a hard link to another file is refused)."""
+    import errno
     import os
-    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    import stat
     try:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as failure:
+        if failure.errno == errno.ELOOP:
+            raise Refused("the lock %s is a symbolic link: it is not taken through one" % lock_path) from None
+        raise
+    try:
+        held = os.fstat(fd)
+        if not stat.S_ISREG(held.st_mode) or held.st_nlink != 1:
+            raise Refused("the lock %s is not a regular file with one name: it is not taken" % lock_path)
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:
