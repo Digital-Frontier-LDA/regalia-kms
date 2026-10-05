@@ -208,3 +208,80 @@ class Signer:
         _, expires = self.record.check(lease, now)
         self.record.record(lease, expires)
         return {"party": self.node_id, "key": self.key, "sig": self._sign(message(lease))}
+
+
+# ---- issuance between the nodes (#432 §5): the proposer is the node to be activated; one other node co-signs ----
+
+def _now(clock):
+    seconds, authenticated = clock()
+    require(authenticated is True, "time is not authenticated: no activation is signed")
+    return int(seconds)
+
+
+def cosign(manifest, me, caller, envelope, clock, signer, synced):
+    """This node's signature over the activation `envelope` that `caller` (the node the tunnel identified) proposed and
+    signed for ITSELF, or Refused. `synced()` is d9's boot rule: True once, since this boot, this node has pulled from
+    every node its current manifest lets authorize, or holds a newer epoch than it booted with. Until then it co-signs
+    nothing: two fenced nodes powered back on inside a partition must not activate each other on an old manifest."""
+    rule = manifest["activation_signers"]
+    nodes = membership.validate(manifest)
+    counting = [p for p in rule["parties"] if p != membership.OWNER and p in nodes and nodes[p]["state"] not in membership.NOT_COUNTING]
+    require(me in counting, "%s does not count toward activation under epoch %d: it co-signs nothing" % (me, manifest["epoch"]))
+    require(caller in counting and caller != me, "%s does not count toward activation under epoch %d" % (caller, manifest["epoch"]))
+    require(synced(), "since its boot this node has not pulled from every node that may authorize: it co-signs no activation yet")
+    membership.exact(envelope, ("lease", "signatures"), "the activation proposal")
+    lease = envelope["lease"]
+    validate(lease)
+    require(lease["node_id"] == caller, "%s proposes an activation for %s: a node proposes only its own" % (caller, lease["node_id"]))
+    require("recovery" not in lease, "a recovery lease is the owner's (owner.py), never proposed over sync")
+    parties = membership.counting_parties(manifest, message(lease), envelope["signatures"], "activation proposal")
+    require(parties == {caller}, "the proposal is not signed by %s alone" % caller)
+    return signer(lease, manifest, _now(clock))
+
+
+def proposal(node_id, site, registry_digest, manifest, epoch, now):
+    """A lease for this node's own activation, from now for MAX_LEASE_S, under its current manifest."""
+    return {"schema": SCHEMA, "node_id": node_id, "site": site, "registry_digest": registry_digest, "activation_epoch": epoch,
+            "manifest_epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest),
+            "not_before": _stamp(now), "expires_at": _stamp(now + MAX_LEASE_S)}
+
+
+def _stamp(seconds):
+    import time
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(seconds)))
+
+
+def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers, trail):
+    """This node's activation: its own signature, then one co-signer from `peers` (in order), the epoch one above the
+    highest this node knows (its grant record's). A co-signer's refusal may name its own last epoch ("last grant, N");
+    the proposal is retried ONCE at the highest such N + 1, never in a loop (#432, ed). Returns the envelope the Gate
+    takes, or Refused. `ask(peer, envelope)` returns that peer's signature or raises Refused; `trail(event)` records
+    each attempt."""
+    now = _now(clock)
+    last, _ = signer.record.state(now)
+    epoch = (last["activation_epoch"] if last else 0) + 1
+    refusals = []
+    for attempt in range(2):
+        lease = proposal(node_id, site, registry_digest, manifest, epoch, now)
+        own = signer(lease, manifest, now)
+        envelope = {"lease": lease, "signatures": [own]}
+        seen = []
+        for peer in peers:
+            try:
+                theirs = ask(peer, envelope)
+            except Refused as refused:
+                refusals.append("%s: %s" % (peer, refused))
+                found = re.search(r"last grant, (\d+)", str(refused))
+                if found:
+                    seen.append(int(found.group(1)))
+                continue
+            done = {"lease": lease, "signatures": [own, theirs]}
+            verify(done, manifest)
+            trail({"event": "activation", "outcome": "ALLOW", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site, "peer": peer})
+            return done
+        if attempt or not seen or max(seen) < epoch:
+            break
+        epoch = max(seen) + 1
+    trail({"event": "activation", "outcome": "DENY", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site,
+           "reason": "; ".join(refusals)[:240]})
+    raise Refused("no node co-signed this activation: %s" % "; ".join(refusals))

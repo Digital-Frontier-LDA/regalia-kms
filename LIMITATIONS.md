@@ -26,9 +26,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
-- **Activation by quorum: not built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
-  refined by #432; see the ADR. On `main` only the format carries `activation_signers`, and nothing
-  reads it. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
+- **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
+  refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
+  its verification under the current manifest's `activation_signers`, each node's grant record and
+  signer, and the co-signer's and proposer's checks, as a library with unit tests. **Nothing issues or
+  enforces an activation in the running system yet:** no `nv_activation` index is defined at
+  enrolment, sync has no activation ops, there is no `owner.py sign-activation`, and the Go Gate still
+  takes `regalia-fence`'s single key. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
   the authority for which site signs ([`FENCING.md`](FENCING.md)).
   **Accepted in the design:**
   - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
