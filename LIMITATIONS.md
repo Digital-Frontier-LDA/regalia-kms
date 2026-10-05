@@ -49,6 +49,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     clock runs more than 60 s ahead of the signer's could collect it before the request expires, and the nonce could
     then be spent again. Authenticated time (NTS) on every server bounds that, and `may_sign` refuses a request that
     expires within 60 s.
+  - A node's session key vouches only until the node's signing key is replaced (its window ends at the replacing
+    manifest's issued_at). A node still running the old key between then and its adoption of the new epoch writes
+    nothing that verifies. That fails closed.
+  - An entry's `at` is judged on arrival (`fresh`, within 60 s of the reader's clock). A reader that only lists
+    entries later can't tell a backdated entry inside a session's window; the collector judges `at` against when it
+    saw the entry's create revision.
   - Session entries are never deleted, so every old spend stays verifiable. They are about 300 bytes each, one per
     daemon start.
   - Quota days are UTC days.

@@ -226,6 +226,12 @@ sign_case("BURNED: another lease held now", S, NOW, "ef" * 32, "2026-10-05T12:00
 sign_case("BURNED: the lease lapsed before the HSM", S, NOW + 15, "cd" * 32, "2026-10-05T12:00:20Z", False)
 sign_case("BURNED: the request expires within the skew", spend(expires_at="2026-10-05T12:01:00Z"), NOW, "cd" * 32, "2026-10-05T12:00:20Z", False)
 
+FRESH = []
+for name, now, accept in (("an entry arriving when it is dated", NOW - 5, True), ("an entry arriving a minute late, at the margin", NOW - 5 + 60, True),
+                          ("an entry dated more than the margin before it arrived (backdated)", NOW - 5 + 61, False),
+                          ("an entry dated more than the margin after it arrived", NOW - 5 - 61, False)):
+    FRESH.append({"name": name, "entry": spend(), "now": now, "accept": accept})
+
 SESSION_CASES = []
 
 
@@ -303,6 +309,14 @@ def resolver(sessions):
     return known
 
 
+def decide_fresh(c):
+    try:
+        opstate.fresh(c["entry"], c["now"])
+        return True, ""
+    except m.Refused as refused:
+        return False, str(refused)
+
+
 def decide_session(c):
     try:
         _, until = opstate.verify_session(c["key"], c["value"], CHAIN)
@@ -352,7 +366,7 @@ def main():
         got, why = decide_case(c)
         assert got == c["accept"], (c["name"], why)
         c["python_reason"] = why
-    for group, decide in ((CHECKS, decide_check), (SIGNS, decide_sign), (SESSION_CASES, decide_session)):
+    for group, decide in ((CHECKS, decide_check), (SIGNS, decide_sign), (SESSION_CASES, decide_session), (FRESH, decide_fresh)):
         for c in group:
             got, why = decide(c)
             assert got == c["accept"], (c["name"], why)
@@ -364,7 +378,7 @@ def main():
     doc = {"schema": "regalia.opstate-vectors/v1", "domain": opstate.DOMAIN.decode().rstrip("\0") + "\\0", "max_batch": opstate.MAX_BATCH,
            "sessions": SESSIONS, "approver_sets": APPROVER_SETS, "skew_s": opstate.SKEW_S, "payload_hex": PAYLOAD.hex(), "cases": CASES,
            "approval_checks": CHECKS, "sign_checks": SIGNS,
-           "chain": CHAIN, "session_checks": SESSION_CASES, "batches": BATCHES}
+           "chain": CHAIN, "session_checks": SESSION_CASES, "fresh_checks": FRESH, "batches": BATCHES}
     json.dump(composed(copy.deepcopy(doc)), sys.stdout, indent=1, sort_keys=True)
     sys.stdout.write("\n")
 

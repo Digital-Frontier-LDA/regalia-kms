@@ -336,6 +336,7 @@ def _ed25519(key_hex, sig_hex, raw, label):
 
 def verify(key, value, sessions, approver_sets=None):
     """The entry stored at etcd key `key` as `value`, if it verifies, else Refused (and the entry is unavailable).
+    Called on every read; fresh() is the check at arrival that makes an entry's `at` real time.
     `sessions(node_id, boot_id, session_key, at)` is true when a verified session entry (verify_session) names that key
     for that node and boot and `at` (the entry's) lies in its window: from its issued_at, before its valid_until. A
     daemon start makes a key, so one boot may have several.
@@ -375,6 +376,18 @@ def verify(key, value, sessions, approver_sets=None):
         counted.add(party)
     require(len(counted) >= required, "%d of %d required approvals" % (len(counted), required))
     return entry
+
+
+def fresh(entry, now):
+    """At the moment a reader observes an entry's creation (its watch, or a co-signer acting on it), Refused unless the
+    entry's `at` is within SKEW_S of the reader's authenticated `now`. A session window bounds `at`, but `at` is signed
+    by the session key itself: a replaced key that vouched for a backdated session could also backdate its entries into
+    that window (regalia-kms-1e on #492). Judged on arrival, the window bounds real time, not claimed time. A collector
+    judges `at` likewise against the time it saw the entry's create revision arrive."""
+    validate(entry)
+    at = heartbeat.parse_time(entry["at"], "at")
+    require(abs(now - at) <= SKEW_S, "the entry is dated %s, %d s from this reader's clock when it arrived (more than %d s): refused"
+            % (entry["at"], int(now - at), SKEW_S))
 
 
 def transition(previous, entry):

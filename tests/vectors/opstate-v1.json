@@ -5040,6 +5040,120 @@
   }
  ],
  "domain": "regalia-opstate/v1\\0",
+ "fresh_checks": [
+  {
+   "accept": true,
+   "entry": {
+    "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   },
+   "name": "an entry arriving when it is dated",
+   "now": 1791201600,
+   "python_reason": ""
+  },
+  {
+   "accept": true,
+   "entry": {
+    "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   },
+   "name": "an entry arriving a minute late, at the margin",
+   "now": 1791201660,
+   "python_reason": ""
+  },
+  {
+   "accept": false,
+   "entry": {
+    "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   },
+   "name": "an entry dated more than the margin before it arrived (backdated)",
+   "now": 1791201661,
+   "python_reason": "the entry is dated 2026-10-05T12:00:00Z, 61 s from this reader's clock when it arrived (more than 60 s): refused"
+  },
+  {
+   "accept": false,
+   "entry": {
+    "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+    "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+    "approvers": [
+     "alice",
+     "bob"
+    ],
+    "at": "2026-10-05T12:00:00Z",
+    "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "environment": "production",
+    "expires_at": "2026-10-05T12:05:00Z",
+    "kind": "spend",
+    "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "lease_expires_at": "2026-10-05T12:00:20Z",
+    "node_id": "a",
+    "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+    "object_id": "release-signing",
+    "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+    "principal": "spiffe://regalia/ci/release",
+    "purpose": "sign",
+    "schema": "regalia.opstate/v1"
+   },
+   "name": "an entry dated more than the margin after it arrived",
+   "now": 1791201539,
+   "python_reason": "the entry is dated 2026-10-05T12:00:00Z, -61 s from this reader's clock when it arrived (more than 60 s): refused"
+  }
+ ],
  "max_batch": 64,
  "payload_hex": "726567616c69612072656c6561736520312e30206d616e6966657374",
  "schema": "regalia.opstate-vectors/v1",
@@ -5057,7 +5171,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "19355ef90e6dd3d029d6ab8dd43c90d5fc61db133d6b9ab546dc7a83a3eaf96241194737a6562d7314f07fb7bc285b4ba4bded76030d6a46ddd3b8f2493da6c6"
+    "signature": "17f11bd3acb2f578d1c5ff4d0b32be820f466ad5cb2b8a5228a50e3f3888550d137a5c0b8f0a7273dd0af084b952923000c7347bb9ede81bfb1bc8c8f31eab0a"
    }
   },
   {
@@ -5073,7 +5187,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618"
     },
-    "signature": "2c032fb15325749e3a1df32c560855924b390df792efe610c25f295129d348156c484d205d22f91efc8f8e17451dbd91b0a258914ad5cc9be957a09ef9c59b31"
+    "signature": "03d7fa310b2454326e876be1bf9d61938f2a0fbd69e05697e4379c547f1c52503d2a944bcb979f91390c32eb5c617d3f34c0504d7ba8c06b75631673982c1ba4"
    }
   },
   {
@@ -5089,7 +5203,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
     },
-    "signature": "33ce0e18412dd4bed1aea32b88ed4fab85b042c85b7b1e8bedd4f80c7bf7b0f6795de025adb5faeddc8a5c053b2deaa7918ee247ccd8c2f254c4e6ffcca1fc7b"
+    "signature": "63869a6ac36bccdb69e7c51bfe39ca3a7b0b0c368d605b6c64e4d35773db64f27cd6f2ec9670941d1fa6c2131c602970798ae90e6f7d1572af41437aab457fd0"
    }
   },
   {
@@ -5105,7 +5219,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "5bb1e3c3891839e91c9aabd845ea742298cc7727169becc6d764e461144b229409f20d90b25245da7a556192c6de5b6cfb53e230f0428d3775c0a2cf66b0be3d"
+    "signature": "d157d4f0172bd628bb2d21d9c3a0d665ca1cb63e652c62296e3f1f1638a738c25078aa2f39caa81bfa6373ac47cee4e68c7fd34d817872720d8b0e415607c765"
    }
   },
   {
@@ -5121,7 +5235,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "a8327d1d83c39b06c4db3cd0a9d9e4f25d91a9ad3285cbaa9ade65e4dda8d354297a0e7006a996e2377cd89c715a7ef1789ddb7119aec82605ef24ef8249cae9"
+    "signature": "98eeb75bc8bba0e13c63b1be0f21b44605c5638e997599d37644ff1fbc828a615933ab97faa1b76b87badaac7f960e84afcf7fb5f1ad651773c1c21a168b7bf4"
    }
   },
   {
@@ -5137,7 +5251,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "7ecf16c2cb4c7cc941bb06c0c6e25ed5232300dcbb0f793c65f30178f12e1d4c02413b4717214b7621e92655e674ef7a57504eaed22ac8b3f19f17fae1c6ea46"
+    "signature": "e8a8a8a45b04334b7bb6d790d963b14fdf2ecdba892d146b4da622d0c607acba6f1092d0b13f7db361c4ceead034299efe8fb72de384e0365efd842493b40246"
    }
   },
   {
@@ -5153,7 +5267,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "a806519d61cf26a839101861e3264c1d497663a10ff76bd2dff5113d5ae1e2d6729f73842d343dd22804e743dbc187d444e8e8dee8e996a2d0375805a1f44571"
+    "signature": "e082aa2104c1d14bfa7d6db0a088196b35a7faa56ed7f46e2a62f765e526b14b5e0e1de0cd7f69ec3705e5502a3a896f718fe09958d888fad6adb3cc261d5948"
    }
   },
   {
@@ -5169,7 +5283,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "ffed07ec3ca6f34509674e6a5913f71159f13fbcbc5e5a040bd29d5d51f762ce6c73ccb0e62cab8eea0883853bcf7b27c341a3c468de456699d3362974900d6f"
+    "signature": "793bdb36af945770c101c7331dba9f7af5e0b3b9a4c55fc19a2b6616ed24e58a075ea87155d4a23e73c4203884463d2cf87201c6e74ee874cf30e6c6397a2632"
    }
   },
   {
@@ -5185,7 +5299,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "00000000000000000000000000000000000000000000000000000000000000"
     },
-    "signature": "8d875afc8a8c9ef1c159b21586f3ee3a1a44ddf960505e33c272dab447916c554c4c9386ccc9887426176e0d13d6a9c9a6ca161ed0171b832067794b57c49fc3"
+    "signature": "c2daf739e77ebbf551efef9081d541a39fafcf018f32501b9ee0a8eaf6d23cf751eba0937ece9a9afd2770249857d24318895572e068fa3b826379848589960a"
    }
   },
   {
@@ -5201,7 +5315,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "dd68b58f15d5263ac62ca3964489336a85a142fc1af41235c6b478274c98bc4b01b238a266cbdef204ae2d86353f43f7c4b2165c2a8c038a12642b0a6729dec0"
+    "signature": "6ea8e9ab204d518bea5f2d3428827044ca5491eaa74673111023b4404e1afbcd2baf0efc96a0ba9d66f568055f1fdf7a2f27640f98a06ddede427b8a4c8ca4f1"
    }
   }
  ],

@@ -61,6 +61,14 @@ class Vectors(unittest.TestCase):
                 except m.Refused as refused:
                     got, why = False, str(refused)
                 self.assertEqual((got, why), (c["accept"], c["python_reason"]))
+        for c in doc["fresh_checks"]:
+            with self.subTest(c["name"]):
+                try:
+                    opstate.fresh(c["entry"], c["now"])
+                    got, why = True, ""
+                except m.Refused as refused:
+                    got, why = False, str(refused)
+                self.assertEqual((got, why), (c["accept"], c["python_reason"]))
         for c in doc["sign_checks"]:
             with self.subTest(c["name"]):
                 try:
