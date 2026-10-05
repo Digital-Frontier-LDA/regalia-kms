@@ -28,10 +28,16 @@ an authorization. A production (v4) enrolment requires both set (#242; the locko
 tpm-lockout.sh).
 
 CURRENT LIMITATIONS (#242):
-  * the owner authorization crosses the TPM bus IN CLEAR when used: tpm2-tools sends `-P` as a password session, and
-    changeauth sends the new value as a command parameter. A discrete TPM on a header (the DL360 Gen9's) can be
-    sniffed by someone with physical access while it is used (enrolment, a re-anchor, a recount). An encrypted HMAC
-    session salted to the EK or SRK would close it; not built (#414);
+  * ON THE TPM BUS (#414, measured on swtpm with tpm2-tools 5.7): an owner call's `-P` is authorized in an HMAC
+    session that tpm2-tools opens itself, so the value is never sent, only HMACs keyed by it; setting it (changeauth's
+    new value, a parameter) goes in a session salted to the node's EK with parameter encryption (salted_session), the
+    EK's Name checked against enrolment's first; the proof (holds) is an owner createprimary, which sends no value.
+    That an owner call's -P goes in an HMAC session is tpm2-tools' own choice, measured for MEASURED_TOOLS only; the
+    tools refuse another version (require_measured_tools), and CI's wire test measures the version it runs.
+    The EK's Name is the one `enrol init` recorded, which the root's challenge/activate bound (its credential is made
+    to that EK). Residual: the automatic HMAC sessions are unsalted and unbound. They expose nothing of a 256-bit random value, but
+    they do not encrypt PARAMETERS: an owner call's own parameters (an NV index's attributes and policy, a record's
+    epoch and digest) cross in clear, none of them secret;
   * the value is a Python object (bytes, and the 64-hex text it was read from): it cannot be zeroed, and lives in the
     process's memory until it exits, as the offline keys' do;
   * the break-glass envelope (.bg.age) is decrypted by the operator with age, and the value reaches these tools on
@@ -302,6 +308,7 @@ def owner_call(auth):
         yield list(OWNER), {}
         return
     require(isinstance(auth, Auth), "the owner authorization is not an ownerauth.Auth")
+    measured_once()
     fd = _value_fd(auth)
     try:
         yield list(OWNER) + ["-P", "file:/dev/fd/%d" % fd], {"pass_fds": (fd,)}
@@ -339,10 +346,84 @@ def require_production(tcti=None, run=subprocess.run):
     require(held["lockout"], "the TPM's lockout authorization is empty: set it first (deploy/baremetal/tpm-lockout.sh --set, #57)")
 
 
-def set_owner(auth, tcti=None, run=subprocess.run):
+EK_HANDLE = "0x81010001"               # the node's EK, persistent since `enrol init` (attest.EK_HANDLE)
+# tpm2-tools versions MEASURED to authorize an owner call's -P in an HMAC session they open themselves, so the value
+# never crosses the TPM bus (#414; tests/test_baremetal_ownerauth.py OnSwtpm's wire test). A version that sent -P as
+# a password session would put it back on the bus in clear, every test still green: the tools refuse another
+# (require_measured_tools, regalia-kms-d9).
+# 5.7: measured on the dev qube (Debian 13, as the production image); 5.6: CI's runner, by OnTheWire in job
+# 111570576171 ("tpm2-tools 5.6: the owner authorization never crossed the bus (108 commands read)").
+MEASURED_TOOLS = ("5.6", "5.7")
+
+
+def tools_version(run=subprocess.run):
+    """tpm2-tools' version, as `tpm2_createprimary --version` reports it (version="5.7")."""
+    r = run(["tpm2_createprimary", "--version"], capture_output=True)
+    text = r.stdout.decode("utf-8", "replace") if isinstance(r.stdout, bytes) else (r.stdout or "")
+    found = re.search(r'version="([^"]+)"', text)
+    require(r.returncode == 0 and found is not None, "cannot tell tpm2-tools' version (tpm2_createprimary --version)")
+    return found.group(1)
+
+
+_tools_checked = False                 # once per process (measured_once): set by a test that measures or fakes the tools
+
+
+def measured_once():
+    """The channel's own gate (regalia-kms-d9 on #423): every owner call with a value, its set and its proof go through
+    owner_call, set_owner or holds, which refuse unless tpm2-tools is measured (require_measured_tools), once per process.
+    So a new owner-call tool cannot forget it, and enrolment's regalia-sync step checks for itself."""
+    global _tools_checked
+    if not _tools_checked:
+        require_measured_tools(subprocess.run)
+        _tools_checked = True
+
+
+def require_measured_tools(run=subprocess.run):
+    """Refused unless tpm2-tools is a version measured to keep the owner authorization off the TPM bus (MEASURED_TOOLS):
+    the channel runs it before its first owner call with a value (measured_once); the tools run it up front as well."""
+    version = tools_version(run)
+    require(version in MEASURED_TOOLS, "tpm2-tools %s is not a version measured to keep the owner authorization off the "
+            "TPM bus (%s): it might send it in clear. Measure it (tests/test_baremetal_ownerauth.py, OnSwtpm's wire test, on "
+            "this version) and add it to ownerauth.MEASURED_TOOLS (#414). Nothing was done"
+            % (version, ", ".join(MEASURED_TOOLS)))
+
+
+@contextlib.contextmanager
+def salted_session(ek_name, tcti=None, run=subprocess.run, handle=EK_HANDLE):
+    """An HMAC session salted to this node's EK, with parameter encryption both ways (#414): for the one command that
+    sends an owner authorization as a PARAMETER, changeauth's new value, which otherwise crosses the TPM bus in clear
+    (measured on swtpm). The EK at `handle` is first required to be the one enrolment recorded (`ek_name`, the Name's
+    hex), so a key substituted on the bus is refused, not only passive sniffing. Yields the session's context file,
+    flushed after."""
+    import tempfile
+    require(isinstance(ek_name, str) and re.fullmatch(r"[0-9a-f]{68}", ek_name) is not None,
+            "the EK's Name to salt with is not 68 hex (enrolment's record)")
+    with tempfile.TemporaryDirectory(prefix="ownerauth-") as d:
+        r = run(["tpm2_readpublic", "-c", handle, "-n", d + "/ek.name"], capture_output=True, env=_env(tcti))
+        require(r.returncode == 0, "the TPM holds no EK at %s: `enrol init` makes it, and it salts this session. Nothing was "
+                "sent" % handle)
+        with open(d + "/ek.name", "rb") as f:
+            held = f.read(35).hex()                        # a Name is 34 bytes (SHA-256); a longer file fails the match
+        require(held == ek_name, "the EK at %s is not the one enrolment recorded (%s..., not %s...): no session is salted to "
+                "it, and nothing was sent" % (handle, held[:16], ek_name[:16]))
+        ctx = d + "/session.ctx"
+        r = run(["tpm2_startauthsession", "--hmac-session", "-c", handle, "-S", ctx], capture_output=True, env=_env(tcti))
+        require(r.returncode == 0, "the TPM did not start a session salted to its EK: %s. Nothing was sent" % _tail(r.stderr))
+        try:
+            r = run(["tpm2_sessionconfig", ctx, "--enable-encrypt", "--enable-decrypt"], capture_output=True, env=_env(tcti))
+            require(r.returncode == 0, "the salted session's parameter encryption could not be set: %s. Nothing was sent"
+                    % _tail(r.stderr))
+            yield ctx
+        finally:
+            run(["tpm2_flushcontext", ctx], capture_output=True, env=_env(tcti))
+
+
+def set_owner(auth, ek_name, tcti=None, run=subprocess.run):
     """The TPM's owner authorization set to `auth`, from EMPTY only: one already set is refused, never overwritten
-    and never guessed at (its way on is in the message). Then proven by an owner-authorized call with it."""
+    and never guessed at (its way on is in the message). The new value travels encrypted, in a session salted to
+    the node's EK (salted_session, #414). Then proven by an owner-authorized call with it (holds)."""
     require(isinstance(auth, Auth), "the owner authorization is not an ownerauth.Auth")
+    measured_once()
     require(srk_persistent(tcti, run), "systemd's storage root key (%s) is not persistent: systemd-tpm2-setup makes it at "
             "boot, and once the owner authorization is set systemd cannot. Boot the node once with systemd-tpm2-setup "
             "enabled (or run /usr/lib/systemd/systemd-tpm2-setup), then this again. Nothing was changed" % SRK)
@@ -351,11 +432,14 @@ def set_owner(auth, tcti=None, run=subprocess.run):
             "ownerauth --check` proves it, in one try). If not, this TPM was provisioned by someone else: its owner "
             "hierarchy must be cleared by whoever holds its lockout authorization (tpm2_clear) or from the firmware's TPM "
             "menu, and this run again. Nothing was changed")
-    fd = _value_fd(auth)
-    try:
-        done = run(["tpm2_changeauth", "-c", "o", "file:/dev/fd/%d" % fd], capture_output=True, env=_env(tcti), pass_fds=(fd,))
-    finally:
-        os.close(fd)
+    with salted_session(ek_name, tcti, run) as session:
+        fd = _value_fd(auth)
+        try:
+            # -p session: the (empty) old authorization through the salted session; the new value its encrypted parameter
+            done = run(["tpm2_changeauth", "-c", "o", "-p", "session:" + session, "file:/dev/fd/%d" % fd],
+                       capture_output=True, env=_env(tcti), pass_fds=(fd,))
+        finally:
+            os.close(fd)
     require(done.returncode == 0, "the TPM did not set the owner authorization: %s. It should be unchanged; `enrol "
             "ownerauth --check` with this envelope tells" % _tail(done.stderr))
     try:
@@ -378,19 +462,25 @@ def _tail(stderr):
 
 
 def holds(auth, tcti=None, run=subprocess.run):
-    """Whether the TPM's owner authorization is `auth`: ONE owner-authorized call that changes nothing (changeauth to
-    the same value). False ONLY when the TPM answers with an authorization failure (0x9a2, or 0x98e); anything else
-    (a busy TPM, a TCTI error, a missing tool) is a refusal, never read as "not this value" (regalia-kms-d9)."""
+    """Whether the TPM's owner authorization is `auth`: ONE owner-authorized call that changes nothing, a primary key
+    under the owner hierarchy created and flushed at once (regalia-kms-24 on #414). tpm2-tools authorizes it in an
+    HMAC session, so the value is never sent, only HMACs keyed by it (measured on swtpm); a changeauth to the same
+    value would send it as a parameter. False ONLY when the TPM answers with an authorization failure (0x9a2, or
+    0x98e); anything else (a busy TPM, a TCTI error, a missing tool) is a refusal, never "not this value" (d9)."""
+    import tempfile
     require(isinstance(auth, Auth), "the owner authorization is not an ownerauth.Auth")
-    fds = []
-    try:
-        for _ in range(2):
-            fds.append(_value_fd(auth))
-        done = run(["tpm2_changeauth", "-c", "o", "-p", "file:/dev/fd/%d" % fds[0], "file:/dev/fd/%d" % fds[1]],
-                   capture_output=True, env=_env(tcti), pass_fds=tuple(fds))
-    finally:
-        for fd in fds:
-            os.close(fd)
+    with tempfile.TemporaryDirectory(prefix="ownerauth-") as d:
+        with owner_call(auth) as (owner, kw):
+            done = run(["tpm2_createprimary", *owner, "-G", "ecc256", "-c", d + "/proof.ctx"], capture_output=True,
+                       env=_env(tcti), **kw)
+        # The proof's transient key: through the kernel's resource manager (/dev/tpmrm0, production) it is flushed when
+        # the tool exits. Only a private simulator has no manager and keeps it (as attest.node_init says): there every
+        # transient object is flushed, and a flush that fails is said (a slot stays taken until the TPM restarts).
+        # (flushcontext takes no saved OBJECT context, only a session's or a handle.)
+        if done.returncode == 0 and (tcti or os.environ.get("TPM2TOOLS_TCTI", "")).startswith(("swtpm", "mssim")):
+            flushed = run(["tpm2_flushcontext", "-t"], capture_output=True, env=_env(tcti))
+            require(flushed.returncode == 0, "the owner authorization answered, but the proof's transient key could not be "
+                    "flushed (%s): a TPM object slot stays taken until the TPM restarts" % _tail(flushed.stderr))
     if done.returncode == 0:
         return True
     require(AUTH_FAILURE.search(_tail(done.stderr)) is not None,

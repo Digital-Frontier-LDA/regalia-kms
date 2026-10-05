@@ -886,8 +886,12 @@ removing only what it can prove it made.
     exit. A run killed outright leaves it until reboot. The script doesn't check it against the record: a wrong
     value is refused by the TPM.
   - Rotating a set value is not built.
-  - The owner authorization crosses the TPM bus in clear when used (password sessions): sniffable on a discrete TPM
-    by someone with physical access during enrolment, a re-anchor or a recount (#414).
+  - On the TPM bus (measured on swtpm, #414): owner calls are authorized in HMAC sessions that tpm2-tools opens
+    itself, so the value is never sent. Setting it (changeauth's new value is a parameter) goes in a session salted
+    to the EK `enrol init` recorded, with parameter encryption. The EK's Name is checked first (`--enrol-dir`), so a
+    key substituted on the bus is refused. The proof is an owner `createprimary`, which sends no value. Residual:
+    those automatic sessions are unsalted, so an owner call's own parameters (NV attributes and policies, record
+    epochs and digests) cross in clear. None of them is secret.
 - `check` verifies a root-signed manifest chain against this host and writes nothing.
 - `commit` takes the chain, the root fingerprint typed by hand, the measurements document, the site
   configuration and the signed boot image (`--image --image-record --initrd-pub --system-pub
