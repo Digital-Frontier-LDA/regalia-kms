@@ -30,6 +30,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   activation needs 2 signatures from {a, b, c, owner}. On `main` only the format carries
   `activation_signers`, and nothing reads it. Runtime leases (`lease.py`) are issued by **one** active
   peer, and `regalia-fence` is still the authority for which site signs ([`FENCING.md`](FENCING.md)).
+  **Accepted in the design, under review on #432:** {a, b} and {c, owner} are disjoint quorums, so in
+  a partition both sides could activate a different site. So the normal path is 2 of the 3 nodes,
+  which always overlap. Activation by the owner plus one node is a recovery step behind three checks:
+  a quarantine epoch for the other nodes, a typed hard-fencing attestation, and a wait. A false fencing
+  attestation in that step could allow two active sites, as with Vault's `peers.json` recovery. The
+  owner alone never activates.
 - **Recovery with only one surviving peer: not built.** `recover` and `reanchor` need two peer chains
   today. With one peer left, a node cannot be recovered or re-anchored. The design is decided, with the
   owner co-signing as the second source behind `--one-source` (#387, PR #395). With **both** peers gone,
