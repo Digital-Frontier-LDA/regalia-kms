@@ -597,8 +597,23 @@ class Command(Case):
         os.makedirs(self.d + "/unmounted")
         rc, asked = self.program("--esp", self.d + "/unmounted")
         self.assertEqual((rc, asked, self.hw.slots()), (1, [], before))
-        self.assertIn("holds no boot chain: is the ESP mounted there?", self.said.getvalue())
+        self.assertIn("holds no boot chain", self.said.getvalue())
+        self.assertIn("is the ESP mounted there?", self.said.getvalue())
         self.assertFalse(os.path.exists(self.d + "/unmounted/EFI"))
+
+    def test_a_chain_on_the_esp_that_does_not_verify_refuses_before_anything_is_asked(self):
+        # regalia-kms-1e on #391: a stray file on an unmounted /efi, or another network's ESP, is not this node's
+        self.lose_record()
+        before = self.hw.slots()
+        esp = self.esp()
+        forged = json.loads(m.canonical(self.envs[:2]))
+        forged[-1]["signature"] = "00" * 64
+        for content in (b"not a chain", m.canonical(forged)):
+            with open(reanchor.esp_chain_path(esp), "wb") as f:
+                f.write(content)
+            rc, asked = self.program()
+            self.assertEqual((rc, asked, self.hw.slots()), (1, [], before))
+            self.assertIn("does not verify under --root-key", self.said.getvalue())
 
     def test_refused_while_the_nodes_units_run(self):
         # regalia-kms-24 on #391: nothing but reanchor may touch the anchor; regalia-esp-advance writes it at run time

@@ -272,12 +272,25 @@ def esp_chain_path(esp):
     return os.path.join(esp, enrol._rendered_path(bootcreds.CHAIN_ON_ESP))
 
 
-def check_esp(esp):
-    """Before anything is asked: the ESP is there, as enrolment left it. Every enrolled node has a chain on it; none at
-    `esp` is an ESP not mounted there (a write would go to the root file system, and the next boot would still read
-    the old chain below the new anchor: a ROLLBACK)."""
-    require(os.path.isfile(esp_chain_path(esp)) and not os.path.islink(esp_chain_path(esp)),
-            "%s holds no boot chain: is the ESP mounted there? Give it with --esp" % esp)
+def check_esp(esp, root_key):
+    """Before anything is asked: the ESP is there, as enrolment left it, and it is THIS network's. Every enrolled node
+    has a chain on it; none at `esp` is an ESP not mounted there (a write would go to the root file system, and the next
+    boot would still read the old chain below the new anchor: a ROLLBACK). What is there must verify as a chain under the
+    pinned root (regalia-kms-1e on #391): a stray file on an unmounted /efi, or another network's ESP, is refused by name."""
+    path = esp_chain_path(esp)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        raise Refused("%s holds no boot chain (%s): is the ESP mounted there? Give it with --esp" % (esp, path)) from None
+    try:
+        require(stat.S_ISREG(os.fstat(fd).st_mode), "%s is not a regular file: is the ESP mounted at %s?" % (path, esp))
+        data = os.read(fd, membership.MAX_CHAIN_BYTES + 1)
+    finally:
+        os.close(fd)
+    try:
+        membership.accept_chain(None, membership.load(data, membership.MAX_CHAIN_BYTES), root_key)
+    except (Refused, ValueError, KeyError, TypeError) as refused:
+        raise Refused("the chain on %s does not verify under --root-key (%s): not this network's ESP, or not an ESP" % (esp, refused)) from None
 
 
 def write_esp(esp, envelopes):
@@ -440,7 +453,7 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None, active=active_unit
         policies = NodePolicies(args.node_config, args.node_id)
         # nothing else may touch the anchor while it is replaced: the node's units stopped (the procedure's step 5), and
         # regalia-esp-advance's own lock held from here to the end (it writes the anchor under that lock, not the node's)
-        check_esp(args.esp)
+        check_esp(args.esp, args.root_key)
         running = active()
         require(not running, "%s %s running: stop %s first (MEMBERSHIP-RECOVERY.md, step 5), so that nothing but this "
                 "command touches the anchor" % (", ".join(running), "is" if len(running) == 1 else "are", " ".join(running)))
