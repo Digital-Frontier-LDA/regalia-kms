@@ -16,7 +16,9 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 - **A3.** A total outage (all three down) is restored by one manual recovery at one node, after which
   A1/A2 restore the rest.
 - **A4.** No single provider, datacenter, network path or device failure stops the cluster from
-  serving (one serving site at a time under fencing; the others are standby). Every site needs a
+  serving. **Since ADR-0002 D32 (2026-10-05), every server serves** under its own majority-co-signed lease,
+  and stateful operations commit on a majority (FENCING.md). What follows is the single-active design D32
+  supersedes: one serving site at a time under fencing, the others standby. Every site needs a
   short-lived activation lease, and recovery does not grant one (FENCING.md). **Decided (ADR-0002 D28 and #351, 2026-10-04), not
   built:** the lease's issuer is **majority agreement**, not a separate authority host: an activation lease
   needs two signatures from {node a, node b, node c, the owner}, two of the three servers being the normal
@@ -114,8 +116,8 @@ global", and only as strong as the peers' authenticated time.
 **3. Bootstrap eligibility versus service signing authority.** Different capabilities with different
 issuers. ACTIVE (or MAINTENANCE) membership makes a node *eligible to be unlocked*; ACTIVE makes a
 peer *eligible to authorize*; neither makes a node a signer. Serving needs the fencing authority's
-lease (FENCING.md: no overlapping sites; today one independent signer, decided to become two of {a, b, c,
-the owner}, #351, not built); key use needs the HSM's own
+lease (FENCING.md; since D32, each server's own lease, co-signed by 2 of the 3 servers and non-exclusive,
+not built; today one independent signer); key use needs the HSM's own
 authorization. Peer runtime leases (#74) must not become a second activation authority.
 
 ## Device profiles and their assurance
