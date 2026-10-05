@@ -302,7 +302,7 @@ class Exchange(Case):
         epoch, _ = self.enrolled("b")
         for state, kept in (("QUARANTINED", [epoch]), ("REVOKED_STOLEN", [])):
             with self.subTest(state):
-                self.revoke(self.stores["authority"].load(), state)
+                self.revoke(self.stores["seed"].load(), state)
                 self.publish("b")
                 self.refused("hello: the peer refused (DENIED)", self.ask, "b", epoch)
                 self.denied("a may not be unlocked under epoch %d" % self.stores["b"].load()["epoch"])
@@ -327,7 +327,7 @@ class Exchange(Case):
     def test_the_target_quotes_the_epoch_the_peer_states_and_holds_no_manifest(self):
         epoch, secret = self.enrolled("b")
         # c was quarantined while a was down: b is at epoch 2, a's boot configuration is from epoch 1
-        self.revoke(self.stores["authority"].load(), "QUARANTINED", node="c")
+        self.revoke(self.stores["seed"].load(), "QUARANTINED", node="c")
         self.publish("b")
         self.assertEqual(self.ask("b", epoch), secret)
         self.assertEqual([json.loads(raw)["op"] for _, raw, _ in self.wire], ["hello", "unlock"])

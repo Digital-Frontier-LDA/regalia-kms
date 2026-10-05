@@ -45,8 +45,8 @@ What part 1 shows, on the units as shipped (deploy/baremetal/units):
 
 Part 2: peer b, in a network namespace, on its own software TPM (a socket: it is the fixture, not what is
 tested), running the product's sync.Server with a real attestation verifier and lease signer, reached
-over real WireGuard. No revocation authority is configured: b receives what the root and the revocation
-key sign, by hand.
+over real WireGuard. b receives what the root and the revocation key sign, by hand (a v1 chain: the
+fixture's, not the v4 nodes' quorum).
 
 HOW PART 2 DIFFERS FROM PRODUCTION, stated so nothing is read into it:
   * a's TPM is behind tpm2-abrmd (D-Bus), not the kernel's /dev/tpmrm0: the units' DevicePolicy is not
@@ -94,7 +94,7 @@ import tests.test_baremetal_heartbeat as hbt                                    
 
 PREFIX = "/usr/lib/regalia-kms"
 UNITS = ("regalia-authtime.service", "regalia-wg-apply.service", "regalia-wg-apply.path", "regalia-boot-session.service",
-         "regalia-admission.service", "regalia-sync.service", "regalia-authority-authtime.service")
+         "regalia-admission.service", "regalia-sync.service")
 ADMISSION_FILE = "/run/regalia/admission/admission.json"
 DAEMON_UNITS = ("regalia-kms.service", "regalia-audit-collector.service")
 NS, A_TCTI = "regalia-e2e-b", "device:/dev/tpmrm0"
@@ -392,7 +392,7 @@ def provision(work):
             "boot_mesh": {"node_id": "a", "interface": "wg-unlock", "listen_port": 51820, "address": "10.89.0.1", "unlock_port": 7443, "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                           "peers": [{"node_id": "b", "underlay": "192.0.2.20", "address": "10.89.0.2"},
                                     {"node_id": "c", "underlay": "192.0.2.30", "address": "10.89.0.3"}]},
-            "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444, "authority": None}}
+            "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444}}
     pathlib.Path("/etc/regalia/site.json").write_text(json.dumps(site))
     pathlib.Path("/etc/regalia/node.json").write_text(json.dumps(cfg))
     # the modes the units' StateDirectoryMode gives them; the store must be regalia-sync's (#190: an
@@ -455,21 +455,6 @@ def scenario(work, binaries, user):
     ok(isinstance(said, str) and "regalia_chrony_latch_set 0" in said and stat.S_IMODE(prom.stat().st_mode) == 0o640
        and grp.getgrgid(prom.stat().st_gid).gr_name == metrics.GROUP,
        "regalia-authtime writes its metrics, 0640, group %s, from its sandbox" % metrics.GROUP, said if isinstance(said, str) else "absent")
-    # #71: the authority host's unit, the same service from authority.json (run_dir and time_servers alone), in its
-    # own sandbox: it publishes the same root-owned status the authority believes
-    sh("systemctl", "stop", "regalia-authtime.service")
-    status.unlink()
-    pathlib.Path("/etc/regalia/authority.json").write_text(json.dumps({"schema": "regalia.authority/v1", "run_dir": "/run/regalia",
-                                                                      "time_servers": ["127.0.0.2", "127.0.0.3"]}))
-    sh("systemctl", "start", "regalia-authority-authtime.service")
-    from_authority = until(lambda: json.loads(status.read_text())["authenticated"] and json.loads(status.read_text()), 120, 2)
-    ok(isinstance(from_authority, dict) and os.stat(status).st_uid == 0 and oct(os.stat(status).st_mode & 0o777) == "0o644",
-       "regalia-authority-authtime (authority.json) publishes authenticated, root's 0644 in /run/regalia",
-       from_authority if isinstance(from_authority, dict) else journal("regalia-authority-authtime.service"))
-    sh("systemctl", "stop", "regalia-authority-authtime.service")
-    os.unlink("/etc/regalia/authority.json")
-    sh("systemctl", "start", "regalia-authtime.service")
-    until(lambda: json.loads(status.read_text())["authenticated"], 120, 2)
     servers[1].terminate()
     servers[1].wait(10)
     gone = until(lambda: not json.loads(status.read_text())["authenticated"] and json.loads(status.read_text()), 150, 3)
@@ -803,7 +788,7 @@ def part2(work, binaries, user, ctx, servers, status):
     sh("ip", "link", "set", "e2e-b0", "up")
     for argv in (["ip", "link", "set", "lo", "up"], ["ip", "address", "add", "192.0.2.20/24", "dev", "eth0"], ["ip", "link", "set", "eth0", "up"]):
         in_ns(argv, check=True, capture_output=True)
-    own = wgsvc.reconcile(m1, "b", {"a": "192.0.2.10", "c": "192.0.2.30"}, ctx["private"]["b"], None, run=in_ns)
+    own = wgsvc.reconcile(m1, "b", {"a": "192.0.2.10", "c": "192.0.2.30"}, ctx["private"]["b"], run=in_ns)
     ok(own == address["b"], "b's wg-svc is up at its key's address, with a and c as its peers, read back", own)
     # b's side, as a node holds it: the store under its TPM anchor, a heartbeat, the verifier, the signer
     b_tcti = ctx["b_tcti"]

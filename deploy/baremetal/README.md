@@ -420,9 +420,8 @@ restored disk cannot roll back: the epoch is anchored in the TPM).
 - The document travels with the epoch. A node that receives a manifest naming a document it lacks fetches
   it from the same source (sync's `measurements` request) before committing. A node does not commit an epoch,
   nor move its TPM anchor to it, without that epoch's document.
-- An operator brings a new document to one place only:
-  - the authority, `authority accept --chain FILE --documents DOC`; or
-  - one node, `python3 -Es -m deploy.baremetal.measurements install --doc DOC --config /etc/regalia/node.json`.
+- An operator brings a new document to one node only:
+  `python3 -Es -m deploy.baremetal.measurements install --doc DOC --config /etc/regalia/node.json`.
 
 Each node has one accepted set, or two while an update is under way.
 
@@ -451,8 +450,10 @@ An update is three documents:
    with the PCR-signing key (so the PIN and the disk unseal under it with no reseal), and write the
    CURRENT + NEXT document. `measurements.transition(old, new)` must say `approve`.
 2. **Approve.** The root's operator computes `measurements.version(document)` from the file in hand, at
-   signing time, and the root signs manifest N+1 with that as `policy_version`. Give the authority the
-   manifest and the document together (`accept --documents`); sync brings both to every node (#332).
+   signing time, and the root signs manifest N+1 with that as `policy_version`. Give both to one node,
+   `sudo python3 -Es -m deploy.baremetal.deliver --config /etc/regalia/node.json --chain CHAIN.json --documents
+   DOC.json` (as regalia-sync it puts the document, commits the epoch through the node's Store and republishes the
+   chain); sync brings both to every other node (#332). (`deliver` replaces #199's retired `authority accept`.)
 3. **One node at a time.** On each node, in the order of the node IDs, `rollout.may_reboot(...)` must
    pass before the reboot: an update is approved for this node and it is not yet on NEXT; every node
    before it has been seen back on NEXT by this node's own verifier; and every peer that will have to
@@ -764,10 +765,10 @@ the client are on the console with no kernel argument. It is not secret. When a 
 - **`unlock.judge_tokens`** judges the LUKS2 header for the probe: one path per expected peer, each with
   a keyslot of its own, and no `systemd-tpm2` token left.
 
-**A dependency this adds.** A peer helps only while it holds a live heartbeat from the revocation
-authority (#69). If the authority is unreachable for longer than a heartbeat lives, a host that
-reboots stays locked until someone types its recovery key. Where the authority runs and who is alerted
-when heartbeats stop are decided before commissioning.
+**A dependency this adds.** A peer helps only while it holds a live heartbeat (#69), signed by two of {the
+nodes, the owner} (#199). If no two of them can sign for longer than a heartbeat lives, a host that
+reboots stays locked until someone types its recovery key, or the owner co-signs a heartbeat at a node's
+console (`owner.py beat`, at most an hour). `regalia-node.rules.yml` alerts while heartbeats run out.
 
 **The boot mesh (#66).** Unlock requests travel over WireGuard, and the network decides who can reach
 a peer's unlock port at all (`deploy/baremetal/bootnet.py`, proven in network namespaces by
@@ -794,8 +795,7 @@ underlay addresses it uses). Inside it every address is derived from a node's Wi
 fixed prefix (`sitecfg.SERVICE_PREFIX`), so the site config names none of them. The host firewall gains,
 and only with a `service_mesh`:
 
-- WireGuard (its UDP port) with the peers' declared addresses, and the revocation authority's if one is
-  configured;
+- WireGuard (its UDP port) with the peers' declared addresses, and nobody else's;
 - the sync port inside the tunnel, only between addresses of that prefix, in both directions;
 - **nothing else on that interface**, IPv4 or IPv6, in or out: the rule that drops the rest of the
   interface comes before every zone rule, so a zone's address inside the tunnel opens nothing.
@@ -910,7 +910,7 @@ removing only what it can prove it made.
 - `commit --replace OLD_ID` (#76): a host that replaces a node is enrolled only as the replacement typed.
   The manifest that first names it must retire `OLD_ID` and change nothing else (replacement's rules);
   without `--replace`, such a manifest is refused, and so is any other ID.
-- The heartbeat counter starts at a heartbeat this node verifies from a peer or the authority
+- The heartbeat counter starts at a heartbeat this node verifies from a peer
   (`Freshness.accept_first`), never at 0 on a running network. `--bootstrap` allows 0 only at epoch 1, when
   no reachable source holds a heartbeat. An existing counter is checked against the network.
 - **What stays on disk in the clear, and for how long.**
@@ -969,11 +969,10 @@ unit runs it before each start); `regalia-audit-ship conformance` checks a candi
 - **Its own user, no capability.** `regalia-audit-ship` (`units/regalia-audit-ship.sysusers.conf`) reads
   each trail through that trail's group only, given per instance by
   `units/regalia-audit-ship@<trail>.service.d/reader.conf`. Each service trail has a reader group of its own
-  (`regalia-audit-sync`, `-admission`, `-authority`; #286). Its writer belongs to it and gives the trail that
+  (`regalia-audit-sync`, `-admission`; #286). Its writer belongs to it and gives the trail that
   group, and its shipper belongs to it and to nothing of the writer's, so the shipper reads the trail and no
   other file the writer makes. The operator tools' trails use `regalia-audit`. Trails are 0640, and
-  `/var/log/regalia` is root:regalia-audit 2750 (`trails.py` makes both so). The authority's state directory
-  is 0751: its shipper passes through to the trail, and every other file there is 0600.
+  `/var/log/regalia` is root:regalia-audit 2750 (`trails.py` makes both so).
   The client key in `/etc/regalia/audit-ship/` is 0640 root:regalia-audit-ship.
 - **Rotation.** A trail past 16 MiB is archived as `<trail>.<last seq>` (20 digits) and a new file begun.
   Its first line continues the chain (seq and prev), so the archives and the current file verify as one
@@ -1034,7 +1033,7 @@ the reason itself goes to the time trail.
 | `regalia-audit-ship@<trail>` | `/run/regalia-metrics/audit-ship/<trail>.prom` | `regalia_audit_trail_*{trail}` |
 
 - **Who can read the files.** Each directory is its writer's, group `regalia-metrics`, setgid, 2750
-  (`regalia.tmpfiles.conf`, and `regalia-audit-ship.tmpfiles.conf` on the authority host too). The directory is
+  (`regalia.tmpfiles.conf` and `regalia-audit-ship.tmpfiles.conf`). The directory is
   the control: nobody outside the group can reach a file in it. The Python writers make files 0640; the Go
   shipper makes them 0644. A host upgraded from before #305 keeps a stale
   `/var/lib/regalia-audit-ship/<trail>.prom` that nothing reads any more: remove it by its exact name.
@@ -1077,81 +1076,28 @@ the reason itself goes to the time trail.
 - **Tests:** `tests/test_node_alert_firing.py` holds every rule to the registry and drives a fault at each one
   under `promtool test rules`. Each must fire, and stay silent when healthy.
 
-### The revocation authority (#199)
+### Heartbeats and revocations: the nodes' quorum (#199)
 
-> **Decided (ADR-0002 D28 and #351, 2026-10-04), not built:** there is no authority host. Heartbeats need two signatures from {node a,
-> node b, node c, the owner} (each node with a TPM key usable only under the approved image's PCR policy;
-> the owner with any of the owner's YubiKey 5 approval keys), and revocation and quarantine need two of the
-> nodes, or the owner alone (#199, membership schema v4). What follows describes `authority.py` as it is
-> today, the single-signer process that the node quorum replaces.
+There is no authority host (ADR-0002 D28, #351; membership schema v4). `authority.py`, its units and the
+site field `service_mesh.authority` are gone: a site file that still names one is refused.
 
-`deploy/baremetal/authority.py`, run by `units/regalia-authority.service` on the authority host (not a KMS
-node), signs the heartbeats that keep the nodes authorizing and the manifests that revoke a node, and
-publishes both on its service-tunnel address. The nodes pull from it when their site configuration names
-it (`service_mesh.authority`).
-
-| Command | What it does |
-|---|---|
-| `init --chain F` | first start, as the service's own user: defines the TPM anchor and the sequence counter, takes the root's chain |
-| `accept --chain F` | as the service's own user: takes root-signed manifests from the ceremony (the Store verifies them) |
-| `serve` | the one process that signs: publishes, a heartbeat every `interval_s`, and answers the control socket |
-| `revoke --node N --state QUARANTINED\|REVOKED_STOLEN --reason R` | as root on this host, asks the running `serve` (control socket, root peers only): it signs and commits the restrictive manifest, then a heartbeat for it at once |
-| `status` | the same way: epoch, sequence, last heartbeat, pending, signer kind |
-| `wg-apply` | as root (`units/regalia-authority-wg-apply.service`, CAP_NET_ADMIN only): its `wg-svc`, every node of the published chain a peer; run again by `regalia-authority-wg-apply.path` at every new chain, so a revoked node leaves this tunnel too |
-| `wg-key [--replace]` | as root: makes its WireGuard service key (`wg_service_key`), `root:regalia-authority` 0640, and prints the public key for every node's `service_mesh.authority.key`. `--replace` rotates it the same way (then every node's site configuration takes the new key). Made only this way, so its ownership holds |
-
-- **Sequence, signed once:** a number is reserved on its own TPM counter before signing (a crash loses it,
-  never reuses it; a restored disk cannot move the counter back; no TPM, no authority). It is signed at
-  most once: a number handed to the signer is spent even if signing fails, a failure after signing
-  republishes the same bytes (kept in the state directory), and bytes that expire unpublished are
-  dropped with their number. The key
-  is checked against the manifest before reserving, and failures back off from 60 s to `interval_s`.
-- **Time:** it signs only while `authtime` says the clock is authenticated: `<run_dir>/authtime.json`, believed only
-  from a root-owned file in a root-owned directory (`run_dir` is `/run/regalia`, as on a node). On the authority
-  host `units/regalia-authority-authtime.service` publishes it: regalia-authtime's unit in all but its command,
-  `python3 -Es -m deploy.baremetal.authtime serve --config /etc/regalia/authority.json`, which reads that
-  configuration's `run_dir` and `time_servers` alone (the same entry point a node's `node.py authtime` calls).
-  chrony there is NTS-only as on a node, in this order, as root: install `units/chrony.service.d/regalia.conf`
-  (chronyd `-f /etc/chrony/regalia.conf`, and the latch on `/var/lib/regalia-time`, #303); run
-  `python3 -Es -m deploy.baremetal.authtime chrony-conf --config /etc/regalia/authority.json --install`, which writes
-  `/etc/chrony/regalia.conf` as enrolment does on a node (refused, and left, if a different file is there; Debian's
-  own `chrony.conf` is never touched); then `systemctl daemon-reload && systemctl restart chrony`. `authority.json`'s
-  `run_dir` must be `/run/regalia` (validated: the unit's only writable directory, root's);
-  `units/regalia-authority.tmpfiles.conf` and `regalia-authority.sysusers.conf` make its directories and groups.
-  Without authenticated time the authority signs nothing (fail closed; each transition on the time trail, #303).
-  No firewall or metrics are built for the authority host: it goes away with #199 (#324 and #341 are on hold).
-- **What root reads:** the store (`membership.json`) is the service user's alone, 0600. `serve` publishes the
-  verified chain as `chain.json` (0644) after `init`, `accept` and every revocation's commit, at its start and at
-  every beat; `wg-apply` reads that, verifying it from the root key and against the TPM anchor, as a node's
-  `wg-apply` reads regalia-sync's (#71, found by the three-node outage test).
-- **Interval:** at least `heartbeat.MIN_INTERVAL_S` (600 s) times the number of authorities, and at most a
-  quarter of the heartbeat's lifetime. A node accepts a sequence jump that grows by one per 600 s since
-  the last heartbeat it accepted, so a node back from a month's repair catches up, while a sequence
-  running faster than time is refused.
-- **One writer:** `serve` holds `writer.lock` in the state directory for its life, `init` and `accept`
-  for their write, each only as the service's own user.
-- **The one-year limit:** a node accepts a sequence jump of at most `heartbeat.MAX_ALLOWANCE` (about a
-  year of 600 s steps), however long it was away. A node offline for longer, or caught mid catch-up for
-  longer across a revocation-key rotation, refuses the next heartbeat and needs the counter's recovery
-  command: `python3 -Es -m deploy.baremetal.recount` (#244). The same command redefines the authority's
-  own sequence counter, or a node's heartbeat counter, when either is unusable: at a floor no lower than
-  the old counter and every given heartbeat that verifies against the current manifest, typed and audited.
-- **A revocation** changes one node's state to QUARANTINED or REVOKED_STOLEN, nothing else. Membership's
-  rule for revocation-signed changes is checked by the Store before it is kept. Anything permissive is
-  the root's. If the process stops between the manifest and its heartbeat, the next start signs the
-  heartbeat first.
-- **The owner's decisions are settings in `/etc/regalia/authority.json`:**
-  - `signer.kind`: `file` now, a stopgap recorded on every trail line and in `status`; `pkcs11` once a
-    token is chosen (a Nitrokey, key generated on the token, ADR-0002 D19). The `pkcs11` signer signs in
-    process with PyKCS11 (Debian `python3-pykcs11`), choosing the token by serial and reading that serial in
-    the very session that logs in, so its PIN reaches no other card (#262). A PIN the token refuses is
-    never presented again: the signer latches (`<state_dir>/pin-latch.json`, read at every start, one
-    `pin-latch` line in the trail), and logs in to no token whose PIN tries are running low. The way out:
-    fix the credential; reset the token's counter with one correct login (`pkcs11-tool --login --test`
-    with the right PIN), since the refusal left it low; then `authority.py clear-pin-latch` as root; then
-    restart the service;
-  - `sequence_offset`/`sequence_stride`: kept for several authorities, refused above one until a second can
-    take over (#231);
-  - `interval_s`, `lifetime_s`;
-  - `revoke_requesters`: `local-root` only. Nothing takes a revocation request from the network.
-- **Where the authority runs: nowhere separate** (decided, ADR-0002 D28, #351): its job moves onto the nodes' quorum, as does the fencing authority's (A4).
+- **Heartbeats** need two signatures from {node a, node b, node c, the owner} (the manifest's
+  `heartbeat_signers`). Each node signs with its TPM signing key (`signkey.py`), usable only under the approved
+  image's PCR policy; `beat.py` proposes one from each node every `beat_interval_s` (node.json, at least
+  `heartbeat.MIN_INTERVAL_S`, 600 s) and the peers co-sign over sync. A node's highest signed sequence is its own
+  TPM counter (`nv_signing`); the highest accepted is `nv_heartbeat`, which `recount.py` redefines when it is
+  unusable (#244).
+- **The hand recovery** when fewer than two nodes run: `python3 -Es -m deploy.baremetal.owner beat`, as root at
+  the node's console. The node proposes and signs, the owner's YubiKey co-signs after the typed confirmation, and the
+  heartbeat lives at most the manifest's `owner_heartbeat_lifetime_s` (one hour by the genesis default; a
+  manifest may set it from 300 s up to `heartbeat_max_lifetime_s`).
+- **Revocation and quarantine** (`revoke.py`) need one of the manifest's `revocation_signers` rules: two nodes,
+  each from root at its own console (`propose`, then `cosign`, which shows the change and takes the typed epoch
+  and digest before the TPM signs), or the owner alone, off the nodes (`export`, `owner.py sign-manifest` on the
+  owner's machine, `import` on a node). Only QUARANTINED or REVOKED_STOLEN, nothing else; anything permissive
+  is the root's. Nothing takes a revocation request from the network.
+- **The owner's keys** are the YubiKey 5 approval keys (Ed25519, `owner_keys`), used through `p11sign.py`: the
+  token chosen by serial and read in the session that logs in; a refused PIN latches, and only the tool's
+  `clear-pin-latch` (manifest.py's) removes it, after the credential is fixed.
+- **Time:** a node signs only under authenticated time (`authtime`, NTS-only chrony; fail closed, each
+  transition on the time trail, #303).
