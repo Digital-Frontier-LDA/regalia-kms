@@ -234,6 +234,39 @@ class NoOwnerLayoutUnderV4(unittest.TestCase):
         self.assertIsNone(node.define_policy(self.cfg, manifest=manifest, pem_path=self.d + "/pcr.pem"))
 
 
+class TheTipANodeIsJudgedBy(unittest.TestCase):
+    """#242 B3: node._tip_schema, what the node's anchor and heartbeat counter are judged by: the verified tip of the chain
+    it holds (sync's store first, else the published chain); None before it holds any (an anchor defined at enrolment);
+    a held chain that does not verify under the pinned root is refused, never taken for "no chain"."""
+
+    def setUp(self):
+        import tests.test_baremetal_membership as tm
+        import tests.test_baremetal_membership_v4 as v4
+        self.tm, self.v4 = tm, v4
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.cfg = {"state_dir": self.d, "root_key": tm.ROOT_PUB, "node_id": "a"}
+
+    def hold(self, name, *envelopes):
+        pathlib.Path(self.d, name).write_text(json.dumps(list(envelopes)))
+
+    def test_none_before_any_chain(self):
+        self.assertIsNone(node._tip_schema(self.cfg))
+
+    def test_the_held_tip_s_schema_the_store_first(self):
+        lab = [{k: x for k, x in n.items() if k != "signing_key"} for n in self.v4.nodes4()]
+        m3 = self.v4.manifest3(1, "", lab)
+        self.hold(node.PUBLISHED, sign(m3, self.tm.ROOT))
+        self.assertEqual(node._tip_schema(self.cfg), m.SCHEMA_V3)
+        self.hold("membership.json", sign(m3, self.tm.ROOT), sign(self.v4.manifest4(2, m.digest(m3), self.v4.nodes4()), self.tm.ROOT))
+        self.assertEqual(node._tip_schema(self.cfg), m.SCHEMA_V4)
+
+    def test_a_held_chain_that_does_not_verify_is_refused(self):
+        self.hold("membership.json", sign(self.v4.manifest4(1, "", self.v4.nodes4()), self.tm.REVOKE))
+        with self.assertRaises(m.Refused):
+            node._tip_schema(self.cfg)
+
+
 class OneDefinitionOnePolicy(unittest.TestCase):
     """A definer's policy is asked for ONCE per definition: the counter and both record slots are laid down under the
     same answer, never one index under one key and the next under another (a key file replaced mid-definition)."""

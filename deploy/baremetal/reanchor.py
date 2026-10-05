@@ -295,6 +295,8 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None, owner_check=_owner
         # the owner authorization re-anchoring deletes and defines with (#242), from the node's envelope on standard
         # input, judged now; the phrase is then typed at the terminal itself
         owner_auth = ownerauth.from_arguments(args, args.root_key, args.node_id)
+        if owner_auth is not None:
+            ownerauth.measured_once()             # the value stays off the TPM bus only on measured tools (#414)
         if owner_auth is not None and ask is None:
             ask = ownerauth.console
         require(ask is not None or (tty or sys.stdin.isatty)(), "the phrase must be typed at a terminal: standard input is not one")

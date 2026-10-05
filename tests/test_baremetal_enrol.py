@@ -3,12 +3,15 @@ nothing that this enrolment did not make is touched, and a crash at any call is 
 import base64
 import copy
 import datetime
+import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -80,14 +83,14 @@ class InitOnSwtpm(unittest.TestCase):
         bundle = self.init()
         self.assertEqual(bundle["schema"], enrol.SCHEMA_BUNDLE)
         self.assertEqual(bundle["hsm_serials"], TOKENS, "#363: the tokens' serials, read at init")
-        keep, answer = self.proven(bundle)
-        self.assertEqual(enrol.entry(bundle, SYSTEM_PUB, keep, answer)["hsm_serials"], TOKENS)
+        keep, activation = self.proven(bundle)
+        self.assertEqual(enrol.entry(bundle, SYSTEM_PUB, keep, activation)["hsm_serials"], TOKENS)
         with open(self.ssh + ".pub") as f:
             raw = base64.b64decode(f.read().split()[1])[-32:].hex()
-        self.assertEqual((bundle["ssh_host_pub"], enrol.entry(bundle, SYSTEM_PUB, keep, answer)["ssh_host_pub"]), (raw, raw),
+        self.assertEqual((bundle["ssh_host_pub"], enrol.entry(bundle, SYSTEM_PUB, keep, activation)["ssh_host_pub"]), (raw, raw),
                          "the host's SSH key, read at init, as the manifest carries it")
         with self.assertRaisesRegex(enrol.Refused, "it was made before #371"):
-            enrol.entry({k: v for k, v in bundle.items() if k != "ssh_host_pub"}, SYSTEM_PUB, keep, answer)
+            enrol.entry({k: v for k, v in bundle.items() if k != "ssh_host_pub"}, SYSTEM_PUB, keep, activation)
         os.rename(self.ssh + ".pub", self.ssh + ".pub.kept")
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", self.d + "/other"], check=True)
         os.rename(self.d + "/other.pub", self.ssh + ".pub")
@@ -98,7 +101,7 @@ class InitOnSwtpm(unittest.TestCase):
             with self.assertRaisesRegex(enrol.Refused, "not the ones this enrolment recorded"):
                 self.init()
         with self.assertRaisesRegex(enrol.Refused, "it was made before #363"):
-            enrol.entry({k: v for k, v in bundle.items() if k != "hsm_serials"}, SYSTEM_PUB, keep, answer)
+            enrol.entry({k: v for k, v in bundle.items() if k != "hsm_serials"}, SYSTEM_PUB, keep, activation)
         self.assertEqual(stat.S_IMODE(os.stat(self.dir).st_mode), 0o700)
         for path in (self.wg, self.dir + "/wg-boot.key"):
             self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600, path)
@@ -151,22 +154,24 @@ class InitOnSwtpm(unittest.TestCase):
     def proven(self, bundle, rand=os.urandom):
         """The AK's proof, as the ceremony runs it: `challenge` on the root's side, `activate` on this host's TPM."""
         credential, keep = enrol.challenge(bundle, rand=rand)
-        return keep, enrol.activate(credential)
+        return keep, enrol.activate(credential, bundle)
 
     def test_the_ak_is_proven_to_be_in_the_ek_s_tpm_before_its_certification_counts(self):
         """CodeRabbit on #358: the AK's certification of the signing key is worth something only once the AK is shown to be
         in the TPM the EK names (credential activation). Without the right answer, entry prints nothing."""
         bundle = self.init()
-        keep, answer = self.proven(bundle)
-        self.assertNotIn(answer, json.dumps(keep), "the root's machine keeps the secret itself")
-        self.assertEqual(enrol.entry(bundle, SYSTEM_PUB, keep, answer)["node_id"], "a")
+        keep, activation = self.proven(bundle)
+        self.assertNotIn(activation["answer"], json.dumps(keep), "the root's machine keeps the secret itself")
+        self.assertEqual(enrol.entry(bundle, SYSTEM_PUB, keep, activation)["node_id"], "a")
         with self.assertRaisesRegex(enrol.Refused, "the answer is not the challenge's secret"):
-            enrol.entry(bundle, SYSTEM_PUB, keep, "00" * 32)
-        with self.assertRaisesRegex(enrol.Refused, "the answer is the 64 hex"):
-            enrol.entry(bundle, SYSTEM_PUB, keep, None)
+            enrol.entry(bundle, SYSTEM_PUB, keep, dict(activation, answer="00" * 32))
+        with self.assertRaisesRegex(enrol.Refused, "the activation's answer is not 64 hex"):
+            enrol.entry(bundle, SYSTEM_PUB, keep, dict(activation, answer=None))
+        with self.assertRaisesRegex(enrol.Refused, "a bare answer, from before #399, is not taken"):
+            enrol.entry(bundle, SYSTEM_PUB, keep, activation["answer"])
         other_keep = dict(keep, ak_name="000b" + "11" * 32)
         with self.assertRaisesRegex(enrol.Refused, "made for another bundle"):
-            enrol.entry(bundle, SYSTEM_PUB, other_keep, answer)
+            enrol.entry(bundle, SYSTEM_PUB, other_keep, activation)
         # a bundle naming an AK its public area is not: no challenge is made for it
         with self.assertRaisesRegex(enrol.Refused, "the bundle's AK Name is not its AK's"):
             enrol.challenge(dict(bundle, ak_name="000b" + "22" * 32))
@@ -180,7 +185,53 @@ class InitOnSwtpm(unittest.TestCase):
             other_ak = f.read()
         credential, _ = enrol.challenge(dict(bundle, ak_public=other_ak.hex(), ak_name=attest.name_of(attest.public_area(other_ak, "ak")).hex()))
         with self.assertRaises(attest.Refused):
-            enrol.activate(credential)
+            enrol.activate(credential, bundle)
+
+    def test_the_ak_quotes_the_whole_identity_bound_to_this_challenge(self):
+        """#399 (regalia-kms-d9's read): `activate` has the AK quote PCRs 7 and 11 over the bundle's identity fields, bound to
+        THIS challenge's secret. A field changed on the way, a quote from an earlier challenge, or PCR values that are
+        not the quoted ones are refused, each by its own guard; the values are the TPM's own."""
+        bundle = self.init()
+        keep, activation = self.proven(bundle)
+        got, pcrs = enrol.proven_entry(bundle, SYSTEM_PUB, keep, activation)
+        out = self.d + "/pcrs"
+        subprocess.run(["tpm2_pcrread", "sha256:7,11", "-o", out], check=True, capture_output=True)
+        with open(out, "rb") as f:
+            raw = f.read()
+        self.assertEqual(pcrs, {"7": raw[:32].hex(), "11": raw[32:].hex()})
+        other_wg = base64.b64encode(bytes(range(32))).decode()
+        for field, value in (("wg_service_pub", other_wg), ("wg_boot_pub", other_wg), ("hsm_serials", ["DENK0599999"]),
+                             ("ssh_host_pub", "ab" * 32), ("signing_key", "04" + "cd" * 64)):
+            with self.subTest(changed=field), self.assertRaisesRegex(attest.Refused, "the quote does not sign this identity under this challenge"):
+                enrol.entry(dict(bundle, **{field: value}), SYSTEM_PUB, keep, activation)
+        # a second ceremony's challenge: the first activation's quote does not answer it, though this TPM made both
+        keep2, activation2 = self.proven(bundle)
+        with self.assertRaisesRegex(attest.Refused, "the quote does not sign this identity under this challenge"):
+            enrol.entry(bundle, SYSTEM_PUB, keep2, dict(activation2, quote=activation["quote"], signature=activation["signature"]))
+        real = activation["pcr_values"]["11"]                            # a fresh swtpm's PCR 11 may be all zeros: flip it
+        moved = dict(activation["pcr_values"], **{"11": ("ff" if real[:2] != "ff" else "00") + real[2:]})
+        with self.assertRaisesRegex(attest.Refused, "the reported PCR values do not match the quote"):
+            enrol.entry(bundle, SYSTEM_PUB, keep, dict(activation, pcr_values=moved))
+        with self.assertRaisesRegex(enrol.Refused, "the activation is another node's \\(b\\)"):
+            enrol.entry(bundle, SYSTEM_PUB, keep, dict(activation, node_id="b"))
+        with self.assertRaisesRegex(membership.Refused, "the activation fields mismatch"):
+            enrol.entry(bundle, SYSTEM_PUB, keep, dict(activation, note="x"))
+        # quotes this TPM's AK made for something else: an enrolment record's (#190) over the same payload, and an identity
+        # quote over another PCR selection. Neither stands in for the identity quote.
+        secret_sha = hashlib.sha256(bytes.fromhex(activation["answer"])).digest()
+        q, sg = self.d + "/q", self.d + "/s"
+        for make, reason in ((lambda: attest.quote_document(enrol.identity_payload(bundle), list(enrol.IDENTITY_PCRS), q, sg),
+                              "the quote does not sign this identity under this challenge"),
+                             (lambda: attest.quote_identity(enrol.identity_payload(bundle), secret_sha, [7], q, sg),
+                              "the identity quote covers PCRs \\[7\\], not \\[7, 11\\]")):
+            for path in (q, sg):
+                if os.path.exists(path):
+                    os.unlink(path)
+            make()
+            with open(q, "rb") as fq, open(sg, "rb") as fs:
+                forged = dict(activation, quote=fq.read().hex(), signature=fs.read().hex())
+            with self.subTest(reason=reason), self.assertRaisesRegex((attest.Refused, enrol.Refused), reason):
+                enrol.entry(bundle, SYSTEM_PUB, keep, forged)
 
     def test_commit_rechecks_the_signing_key_before_it_writes(self):
         """CodeRabbit on #358: commit re-checks the signing key at its handle by the Name the journal recorded, and that
@@ -204,20 +255,21 @@ class InitOnSwtpm(unittest.TestCase):
         """#199: the bundle carries the signing key's public area and the AK's certification; `entry` (the root's side)
         accepts it only for the system-phase key the root names, and a second init keeps the same key."""
         bundle = self.init()
-        keep, answer = self.proven(bundle)
-        got = enrol.entry(bundle, SYSTEM_PUB, keep, answer)
+        keep, activation = self.proven(bundle)
+        got = enrol.entry(bundle, SYSTEM_PUB, keep, activation)
         self.assertEqual(sorted(got), sorted(enrol.ENTRY_KEYS))
         self.assertEqual((got["node_id"], got["ek_name"], got["ak_name"]), ("a", bundle["ek_name"], bundle["ak_name"]))
         self.assertEqual(got["signing_key"], {"alg": "ecdsa-p256", "key": bundle["signing_key"]})
         self.assertEqual(self.init()["signing_key"], bundle["signing_key"])
         with self.assertRaisesRegex(membership.Refused, "not PolicyAuthorize of this system-phase PCR key"):
-            enrol.entry(bundle, OTHER_PUB, keep, answer)
+            enrol.entry(bundle, OTHER_PUB, keep, activation)
         with self.assertRaisesRegex(enrol.Refused, "made for another system-phase PCR key"):
             self.init(system_pub=OTHER_PUB)
         # a bundle whose signing key another TPM certified: the AK's signature does not cover it
-        forged = dict(bundle, signing_public=bundle["signing_public"][:-2] + "00")
+        last = bundle["signing_public"][-2:]                    # always another byte: "00" over a "00" changed nothing (1 in 256)
+        forged = dict(bundle, signing_public=bundle["signing_public"][:-2] + ("00" if last != "00" else "01"))
         with self.assertRaises(membership.Refused):
-            enrol.entry(forged, SYSTEM_PUB, keep, answer)
+            enrol.entry(forged, SYSTEM_PUB, keep, activation)
         # another AK of this TPM, named consistently in the bundle (its Name recomputes): the certification is not its
         other = self.d + "/other-ak"
         subprocess.run(["tpm2_createak", "-C", attest.EK_HANDLE, "-c", other + ".ctx", "-G", "ecc", "-g", "sha256", "-s", "ecdsa",
@@ -230,10 +282,10 @@ class InitOnSwtpm(unittest.TestCase):
         secret = os.urandom(32)
         _, sw_keep = enrol.challenge(swapped, rand=lambda n: secret)
         with self.assertRaisesRegex(membership.Refused, "does not verify under the AK"):
-            enrol.entry(swapped, SYSTEM_PUB, sw_keep, secret.hex())
+            enrol.entry(swapped, SYSTEM_PUB, sw_keep, dict(activation, answer=secret.hex()))
         for k in ("signing_public", "signing_certify", "signing_sig"):
             with self.subTest(missing=k), self.assertRaisesRegex(enrol.Refused, "no %s: it was made before #199" % k):
-                enrol.entry({x: v for x, v in bundle.items() if x != k}, SYSTEM_PUB, keep, answer)
+                enrol.entry({x: v for x, v in bundle.items() if x != k}, SYSTEM_PUB, keep, activation)
 
     def test_a_signing_key_this_enrolment_did_not_make_is_refused_and_left_alone(self):
         foreign = signkey.create(OTHER_PUB)                      # somebody's key at the signing handle
@@ -280,8 +332,8 @@ class InitOnSwtpm(unittest.TestCase):
                 self.assertEqual(enrol._wg_public_of(self.wg, subprocess.run), bundle["wg_service_pub"])
                 self.assertEqual(enrol._wg_public_of(self.dir + "/wg-boot.key", subprocess.run), bundle["wg_boot_pub"])
                 self.assertEqual(signkey.identity(signkey.public(), SYSTEM_PUB)[1], bundle["signing_key"])
-                keep, answer = self.proven(bundle)
-                self.assertEqual(enrol.entry(bundle, SYSTEM_PUB, keep, answer)["signing_key"], {"alg": "ecdsa-p256", "key": bundle["signing_key"]})
+                keep, activation = self.proven(bundle)
+                self.assertEqual(enrol.entry(bundle, SYSTEM_PUB, keep, activation)["signing_key"], {"alg": "ecdsa-p256", "key": bundle["signing_key"]})
 
     def _plant(self, index, data):
         with open(self.d + "/nv.bin", "wb") as f:
@@ -533,6 +585,96 @@ class InitOnSwtpm(unittest.TestCase):
             self.assertEqual(enrol.commit(self.dir, rt.sign(man), root, enrol.fingerprint(root), document, nt.SITE, example,
                                           as_sync=in_process, out=io.StringIO(), first_beat=first_beat), (1, digest))
 
+
+    def test_commit_under_v4_with_the_owner_authorization_set(self):
+        """#420: the production enrolment, on a real TPM whose owner and lockout authorizations are set (#242). init on
+        this TPM; the root's challenge, activate and entry; a v4 manifest naming this host; the measurements naming the
+        image's system-phase key; the signed image booted. `enrol commit` without the owner authorization refuses before
+        anything is written, and with it (from the envelope's record, under the root the fingerprint confirms) defines
+        the anchor and the counters by policy, through the owner channel, and commits epoch 1."""
+        import tests.test_baremetal_membership as tm
+        import tests.test_baremetal_membership_v4 as v4
+        import tests.test_baremetal_node as nt
+        import tests.test_baremetal_ownerauth as toa
+        from deploy.baremetal import measurements, ownerauth, signkey
+        from deploy.baremetal import membership as m
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "e2e", "lib"))
+        import signed_boot as sb
+        tcti = os.environ["TPM2TOOLS_TCTI"]
+        os.makedirs(self.d + "/keys")
+        private, public = sb.key(self.d + "/keys")
+        with open(public, "rb") as f:
+            pem = f.read()
+        serials = ["DENK0500001", "36000001"]                        # not bench tokens: a v4 chain refuses those
+        with unittest.mock.patch.object(enrol, "token_serials", lambda module, run=None: list(serials)):
+            bundle = self.init(system_pub=pem)
+        keep, answer = self.proven(bundle)
+        nodes = v4.nodes4()
+        nodes[0] = dict(nodes[0], **enrol.entry(bundle, pem, keep, answer))
+        # the signed image this host booted, and the measurements naming its system-phase key for every node
+        image = sb.image("approved")
+        signature, _ = sb.signature(image, private, public)
+        with open(self.d + "/tpm2-pcr-signature.json", "w") as f:
+            json.dump({"sha256": [signature]}, f)
+        sb.boot(image)
+        signed = {"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32},
+                  "phases": {"initrd": {"11": "a1" * 32}, "system": {"11": "b1" * 32}},
+                  "signing": {"initrd": "11" * 32, "system": signkey.pcr_key_fingerprint(pem), "secure_boot_cert": "22" * 32}}
+        document = {"schema": measurements.SCHEMA, "name": "signed-images", "nodes": {n: {"accepted": [signed]} for n in "abc"}}
+        man = v4.manifest4(1, "", nodes, policy_version=measurements.version(document))
+        envelope, root = tm.sign(man, tm.ROOT), tm.ROOT_PUB
+        # the TPM as production's: systemd's SRK persistent, then the owner and lockout authorizations set
+        value = toa.VECTOR["values"]["a"][:64]
+        for argv in (["tpm2_createprimary", "-C", "o", "-c", self.d + "/srk.ctx"],
+                     ["tpm2_evictcontrol", "-C", "o", "-c", self.d + "/srk.ctx", ownerauth.SRK], ["tpm2_flushcontext", "-t"]):
+            self.assertEqual(subprocess.run(argv, capture_output=True).returncode, 0, argv)
+        for hierarchy in ("o", "l"):
+            with open(self.d + "/auth", "w") as f:
+                f.write("hex:" + value)
+            self.assertEqual(subprocess.run(["tpm2_changeauth", "-c", hierarchy, "file:" + self.d + "/auth"], capture_output=True).returncode, 0)
+        os.unlink(self.d + "/auth")
+        record, record_root = toa.resigned(lambda r: None, key=tm.ROOT)     # the envelope's record, under this chain's root
+        self.assertEqual(record_root, root)
+        given = (ownerauth.read_value(io.BytesIO((value + "\n").encode())), record)
+        etc = self.d + "/etc-regalia/"
+        os.makedirs(etc)
+        example = {"schema": "regalia.node/v1", "node_id": "x", "site": etc + "site.json", "root_key": "00" * 32, "tcti": tcti,
+                   "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "nv_signing": "0x0150001c", "state_dir": self.d + "/state",
+                   "admission_dir": self.d + "/admission", "run_dir": self.d + "/run", "wg_service_key": self.wg,
+                   "measurements": etc + "measurements.json", "pcrs": [7, 11],
+                   "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
+
+        def in_process(config, chain, owner_auth=None):         # the regalia-sync step, in process
+            return enrol.anchor_and_store(config, chain, owner_auth=owner_auth)
+
+        def first_beat(config, bootstrap=False, owner_auth=None):
+            from deploy.baremetal import node as nm
+            n = nm.Node(nm.load(config))
+            return enrol.take_first_heartbeat(n.node_id, n.store().load(), n.store(), n.freshness(owner_auth), {}, lambda e: None, bootstrap)
+        with unittest.mock.patch.object(enrol, "CONFIG_DIR", etc), unittest.mock.patch.object(enrol, "NODE_JSON", etc + "node.json"), \
+                unittest.mock.patch.object(enrol, "CHRONY_CONF", self.d + "/etc-chrony/regalia.conf"), \
+                unittest.mock.patch.object(signkey, "PCR_PUBLIC_KEY_PATH", public), \
+                unittest.mock.patch.object(signkey, "PCR_SIGNATURE_PATHS", (self.d + "/tpm2-pcr-signature.json",)):
+            with self.assertRaisesRegex(enrol.Refused, "under regalia.membership/v4 the TPM's owner authorization is set"):
+                enrol.commit(self.dir, envelope, root, enrol.fingerprint(root), document, nt.SITE, example, as_sync=in_process,
+                             out=io.StringIO(), first_beat=first_beat, bootstrap=True)
+            listed = {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", subprocess.run(["tpm2_getcap", "handles-nv-index"],
+                                                                                         capture_output=True, text=True).stdout)}
+            enrolment = {int(example[k], 16) + d for k in ("nv_epoch", "nv_heartbeat", "nv_signing") for d in range(6)}
+            self.assertEqual(listed & enrolment, set())          # nothing defined: no anchor, slot or counter index (1e)
+            epoch, digest = enrol.commit(self.dir, envelope, root, enrol.fingerprint(root), document, nt.SITE, example,
+                                         as_sync=in_process, out=io.StringIO(), first_beat=first_beat, bootstrap=True,
+                                         ownerauth_given=given)
+            self.assertEqual((epoch, digest), (1, m.digest(man)))
+            listed = {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", subprocess.run(["tpm2_getcap", "handles-nv-index"],
+                                                                                         capture_output=True, text=True).stdout)}
+            self.assertTrue({int(example[k], 16) for k in ("nv_epoch", "nv_heartbeat", "nv_signing")} <= listed)   # the control
+            public_area = subprocess.run(["tpm2_nvreadpublic", "0x01500016"], capture_output=True, text=True).stdout
+            self.assertIn("authorization policy: %s" % signkey.policy(pem).hex().upper(), public_area)    # policy-written
+            from deploy.baremetal import node as nm
+            here = nm.Node(nm.load(etc + "node.json"))
+            self.assertEqual((here.anchor().value(), here.anchor().record()), (1, (1, digest)))          # read with no auth
+            self.assertEqual(enrol.Journal(self.dir, "a").get("heartbeat_first")["bootstrap"], True)
 
 
 class Tokens(unittest.TestCase):

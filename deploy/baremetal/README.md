@@ -653,6 +653,48 @@ the client are on the console with no kernel argument. It is not secret. When a 
   chain the same way, renders what the initrd will render (refusing, e.g., a host left with no peer), and
   writes the site document and the chain, and removes the four files an earlier stage rendered onto the ESP.
 
+  **A new manifest reaches the ESP before the TPM anchor does** (the ESP advance). The initrd refuses an ESP
+  chain below its anchor (ROLLBACK, boot 12 of the boot test), so the order matters. `regalia-sync` commits and
+  publishes a manifest WITHOUT moving the anchor (`membership.Store(anchors=False)`). `regalia-esp-advance`
+  (root, no capability, run by its `.path` unit on each new published chain; §8) verifies the published chain,
+  writes it to `/efi/EFI/regalia/membership.json` (fsynced, renamed, read back), and only then moves the anchor.
+  A crash between the two leaves the ESP ahead, which the initrd accepts up to the jump bound (boot 10), and the
+  next run completes it. **Current limitations:**
+  - It writes only the chain. A change to the site (the measured `regalia.site.cred`) still goes through
+    enrolment's render; nothing at run time rewrites it.
+  - Until it has run, the node's own services act on the published chain while the anchor is behind it (the
+    chain is root-signed and not below the anchor, so this is not a rollback). `regalia-sync` refuses to run more
+    than the jump bound (1000 epochs) ahead.
+  - The ESP must be mounted at `/efi` (the unit's `RequiresMountsFor=`). If it is not, or a run keeps failing
+    for another reason (an ESP full or read-only, a directory on it refused, a TPM refusal), the run is retried
+    every 15 s and the anchor stays behind: rollback protection stands at the anchor's epoch, and sync stops
+    1000 epochs ahead. It is SEEN: sync writes the held epoch and the anchor's to `membership.prom`
+    (`regalia_membership_epoch`, `regalia_membership_anchor_epoch`), `RegaliaMembershipAnchorBehind` warns after
+    fifteen minutes behind, and `regalia-node check` prints both. regalia-esp-advance (root) writes its own
+    `esp-advance.prom` at every run, success or not (`regalia_esp_advance_ok`, the anchor as it reads it, and
+    `regalia_esp_boot_renderable`): `RegaliaEspAdvanceFailing` and `RegaliaNextBootNeedsRecoveryKey` do not depend
+    on sync telling the truth. **Not covered:** a compromised sync that stops publishing altogether. Then
+    regalia-esp-advance never runs, its last `ok` stays 1, and sync's own file can say anything. That is the
+    withholding a compromised sync could always do (it could refuse to commit); peers that hold a newer epoch
+    still see this node's heartbeats and leases judged under their own. **What the operator does:** read
+    `journalctl -u regalia-esp-advance`, fix the cause (mount the ESP, free space), then
+    `systemctl start regalia-esp-advance`; check that `regalia-node check` shows `anchor` equal to `epoch`.
+    `update.py apply` refuses to reboot a node in that state, and one whose chain the initrd could not render
+    (the next boot would ask for the recovery key).
+  - The run is recorded in the journal only. It has no hash-chained trail of its own (#278). The commit it
+    follows is in the sync trail.
+  - The anchor's run-time writer lock is its own (`/run/regalia-esp-advance/highwater.lock`). Enrolment and
+    `reanchor.py`, run by hand, take a different lock, so do not run them while the node's units run.
+  - Enrolment still anchors epoch 1 before it writes the ESP: its render verifies the chain against the anchor,
+    so the order is not cheap to swap. A crash in between leaves no chain on the ESP, and the next boot asks for
+    the recovery key, as every boot does until `enrol paths` is done. The ways out: rerun `enrol commit`, which
+    resumes from its journal (the anchor step is a no-op on a chain already held; the rendered files are
+    replaced), or let `regalia-esp-advance` run at boot, which writes the published chain to the ESP.
+  - Proven by unit tests (`tests/test_baremetal_esp_advance.py`, `test_baremetal_store_anchors.py`), under a
+    real systemd (`e2e/node-units-systemd.py` step 7, on a plain `/efi` directory and not a FAT partition), and
+    by QEMU boots of the three ESP/anchor orders (boots 10-12). Those boots write the ESP with the test's own
+    code, not with the service, and no physical host has run it.
+
   **Nothing in the initrd acts on a credential by name.** The image's command line (signed, in PCR 11)
   carries `systemd.import_credentials=no`: systemd imports no credential from any source, not the ESP,
   not SMBIOS type 11 or QEMU's fw_cfg (which nothing the peers attest measures), not the command line.
@@ -811,7 +853,7 @@ the single-site baseline (initramfs-tools, TPM-only crypttab); they change when 
 
 ## 8. The node's running services (three-site, #80): not commissioned yet
 
-Five systemd units in `deploy/baremetal/units/`, all run from one configuration, `/etc/regalia/node.json`
+Six systemd units in `deploy/baremetal/units/`, all run from one configuration, `/etc/regalia/node.json`
 (`deploy/baremetal/node.py`; schema `regalia.node/v1`, every field required):
 
 | Unit | Runs as | Privilege | Does |
@@ -820,7 +862,8 @@ Five systemd units in `deploy/baremetal/units/`, all run from one configuration,
 | `regalia-wg-apply` (+ `.path`) | root | `CAP_NET_ADMIN` | makes `wg-svc` and `wg-unlock` what the current manifest says, reads them back, brings them up only then; re-run whenever the published chain changes |
 | `regalia-boot-session` | root | none, no network, no device; a oneshot | on a boot where the unlock client presented no session (recovery key), makes one and writes the pair in `/run/regalia` |
 | `regalia-admission` | `regalia-admission` (#191) | none; the TPM through `tss`; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission/admission.json`, its own directory and nothing else. Its trail (`admission_dir/audit.jsonl`, #340) holds each renewal (`admission-renew`: the issuing peer; a refusal whole the first time of its kind, then counted, one line a minute at most, so a node cut off writes tens of lines a day; attempts back off from 5 s to 60 s while they fail) and each change between serving and not (`admission-serving`, with the reason): it serves only once that change is recorded, and stops serving at once, recording after (a failed record is logged loudly and tried again) |
-| `regalia-sync` | `regalia-sync` | none; the TPM through `tss` | answers peers and booting nodes, pulls manifests and heartbeats, keeps the membership store, runs the heartbeat watch |
+| `regalia-sync` | `regalia-sync` | none; the TPM through `tss` | answers peers and booting nodes, pulls manifests and heartbeats, keeps the membership store (never moving the TPM anchor), runs the heartbeat watch |
+| `regalia-esp-advance` (+ `.path`) | root | none, no network; the TPM through `tss`; writes `/efi` only | on each new published chain: writes it to the ESP (`EFI/regalia/membership.json`), then moves the TPM anchor to it (§7, #66 B3) |
 
 - **One writer of the membership chain.** `regalia-sync` owns the store and publishes the verified chain
   (`/var/lib/regalia-sync/chain.json`, 0644). The other services (wg-apply, admission) verify that copy
@@ -850,13 +893,20 @@ removing only what it can prove it made.
 - The root's side, on its own machine and without a TPM, in three steps:
   - `challenge --bundle B --out CRED --keep KEEP` makes a credential to the bundle's EK and AK Name. KEEP holds only
     the secret's SHA-256.
-  - `activate --credential CRED`, run as root on the node, prints the secret. Only the TPM that holds that EK and
-    that AK can release it, which proves the AK is the EK's. Without that proof, the AK's certification of the
-    signing key would prove nothing.
-  - `entry --bundle B --system-pub PEM --keep KEEP --answer HEX` checks the answer. It then checks the bundle: the
-    EK and AK Names from their public areas, and the signing key certified by that AK, with the attributes and
-    policy of the root's own system-phase key. Only then does it print the node's identity fields as a v4
-    manifest entry carries them.
+  - `activate --credential CRED --out ACTIVATION`, run as root on the node, writes the secret its TPM releases
+    and, with it, the AK's quote of PCRs 7 and 11 over the node's identity fields (its bundle.json: both
+    WireGuard keys, the signing key, the token serials, the SSH host key), bound to this challenge by the secret's
+    SHA-256 (#399). Only the TPM that holds that EK and that AK can release the secret, which proves the AK is the
+    EK's; the quote then says every other field is what that TPM's node stated now, on the image it booted. The
+    activation holds no lasting secret: the answer opens this one challenge only.
+  - `entry --bundle B --system-pub PEM --keep KEEP --activation ACTIVATION` checks the answer, the EK and AK Names
+    from their public areas, the signing key certified by that AK (with the attributes and policy of the root's
+    own system-phase key), and the identity quote over the bundle's own fields. Only then does it print the
+    node's identity fields as a v4 manifest entry carries them, and the PCR 7 and 11 values quoted.
+  - `manifest propose --genesis` takes each node as `--node BUNDLE KEEP ACTIVATION` (no entry file in between)
+    and runs the same checks, then JUDGES each node's quoted PCR 11 against the genesis measurements' system-phase
+    value (PCR 7 too where they give it, else the nodes must agree). Enrolment on an image the measurements do not
+    list, a bench image included, is therefore refused at the genesis: enrol on the reviewed production image.
 - `ownerauth` (#242 step C), after `init` and before `commit`: `gpg --decrypt ownerauth-X.yk.gpg | enrol ownerauth
   --node-id X --root-key ROOT --record ownerauth.record.json` sets the TPM's owner authorization to this node's
   value from the ceremony's envelope (regalia-ceremony#111; the break-glass `.bg.age` gives the same value through
@@ -886,8 +936,12 @@ removing only what it can prove it made.
     exit. A run killed outright leaves it until reboot. The script doesn't check it against the record: a wrong
     value is refused by the TPM.
   - Rotating a set value is not built.
-  - The owner authorization crosses the TPM bus in clear when used (password sessions): sniffable on a discrete TPM
-    by someone with physical access during enrolment, a re-anchor or a recount (#414).
+  - On the TPM bus (measured on swtpm, #414): owner calls are authorized in HMAC sessions that tpm2-tools opens
+    itself, so the value is never sent. Setting it (changeauth's new value is a parameter) goes in a session salted
+    to the EK `enrol init` recorded, with parameter encryption. The EK's Name is checked first (`--enrol-dir`), so a
+    key substituted on the bus is refused. The proof is an owner `createprimary`, which sends no value. Residual:
+    those automatic sessions are unsalted, so an owner call's own parameters (NV attributes and policies, record
+    epochs and digests) cross in clear. None of them is secret.
 - `check` verifies a root-signed manifest chain against this host and writes nothing.
 - `commit` takes the chain, the root fingerprint typed by hand, the measurements document, the site
   configuration and the signed boot image (`--image --image-record --initrd-pub --system-pub

@@ -75,6 +75,9 @@ class FakeTpm:
         # the real channel does (-P file:/dev/fd/N, the pipe holding "hex:<64 hex>"), else the TPM says no
         self.owner_auth, self.lockout_set = owner_auth, False
         self.persistent = {"0x81000001"}                     # systemd's SRK, as systemd-tpm2-setup leaves it at boot
+        # the node's EK at 0x81010001 (enrol init), by its Name; sessions salted to it (#414), and the changeauth calls
+        # made through one (salted_with: the EK each changeauth's session was salted to, None for none)
+        self.ek_name, self.sessions, self.salted_with = bytes.fromhex("000b" + "e5" * 32), {}, []
 
     @staticmethod
     def _from_fd(where, kw):
@@ -105,21 +108,50 @@ class FakeTpm:
         if tool == "getcap" and index == "properties-variable":
             return ok(("TPM2_PT_PERMANENT:\n  ownerAuthSet:              %d\n  endorsementAuthSet:        0\n  lockoutAuthSet:            %d\n"
                        % (self.owner_auth is not None, self.lockout_set)).encode())
+        if tool == "readpublic" and index == "-c" and argv[2] == "0x81010001" and "-n" in argv:
+            if self.ek_name is None:
+                return no
+            with open(argv[argv.index("-n") + 1], "wb") as f:
+                f.write(self.ek_name)
+            return ok()
+        if tool == "startauthsession":                       # --hmac-session -c <salt key> -S <ctx>
+            if argv[argv.index("-c") + 1] != "0x81010001" or self.ek_name is None:
+                return no
+            self.sessions[argv[argv.index("-S") + 1]] = {"salt": self.ek_name, "encrypt": False}
+            return ok()
+        if tool == "sessionconfig":
+            if index not in self.sessions:
+                return no
+            self.sessions[index]["encrypt"] = "--enable-encrypt" in argv and "--enable-decrypt" in argv
+            return ok()
+        if tool == "flushcontext":
+            self.sessions.pop(index, None)
+            return ok()
         if tool == "changeauth" and argv[1:3] == ["-c", "o"]:   # [-p OLD] NEW, both through the channel
-            rest, old = argv[3:], None
+            rest, old, session = argv[3:], None, None
             if rest[:1] == ["-p"]:
-                old, rest = self._from_fd(rest[1], kw), rest[2:]
-                if old is None:
+                given = rest[1]
+                if given.startswith("session:"):             # session:<ctx>[+file:/dev/fd/N]
+                    session, _, given = given[len("session:"):].partition("+")
+                    if session not in self.sessions:
+                        return no
+                old = self._from_fd(given, kw) if given else None
+                rest = rest[2:]
+                if given and old is None:
                     return no
             new = self._from_fd(rest[0], kw) if len(rest) == 1 else None
             if new is None or not new.startswith(b"hex:") or len(new) != 68:
                 return no
             if old != self._held():
                 return bad_auth
+            encrypted = session is not None and self.sessions[session]["encrypt"]
+            self.salted_with.append(self.sessions[session]["salt"] if encrypted else None)
             self.owner_auth = bytes.fromhex(new[4:].decode())
             return ok()
         if "-C" in argv and argv[argv.index("-C") + 1] == "o" and tool != "loadexternal" and not self._owner_ok(argv, kw):
             return bad_auth                                  # the owner authorization not given, or not the one held
+        if tool == "createprimary":                          # owner-authorized above; a transient primary, nothing kept
+            return ok()
         if tool == "getcap" and index == "handles-persistent":
             return ok("".join("- %s\n" % h for h in sorted(self.persistent)).encode())
         if tool == "getcap":                                 # tpm2_getcap handles-nv-index: what the TPM says it holds
