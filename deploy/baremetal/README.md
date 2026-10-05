@@ -857,6 +857,37 @@ removing only what it can prove it made.
     EK and AK Names from their public areas, and the signing key certified by that AK, with the attributes and
     policy of the root's own system-phase key. Only then does it print the node's identity fields as a v4
     manifest entry carries them.
+- `ownerauth` (#242 step C), after `init` and before `commit`: `gpg --decrypt ownerauth-X.yk.gpg | enrol ownerauth
+  --node-id X --root-key ROOT --record ownerauth.record.json` sets the TPM's owner authorization to this node's
+  value from the ceremony's envelope (regalia-ceremony#111; the break-glass `.bg.age` gives the same value through
+  `age --decrypt`). The value comes on standard input only. It is checked against the record verified under the
+  pinned root BEFORE the TPM is touched (`deploy/baremetal/ownerauth.py`), and it is never written to disk. Every
+  owner-authorized TPM call then gets it through one channel: a sealed in-memory file descriptor, never the command
+  line (readable through /proc by root while the call runs). It sets the authorization from EMPTY only: a TPM whose owner authorization is already set is refused, never
+  overwritten. `--check` changes nothing and proves, in one call, that the TPM's value is this envelope's.
+  It also refuses while systemd's storage root key (0x81000001) is not persistent: systemd-tpm2-setup makes it at
+  boot, and once the owner authorization is set systemd can no longer create it.
+  From then on every tool that makes an owner-authorized call takes the value the same way (#242 C2):
+  `gpg --decrypt ownerauth-X.yk.gpg | sudo <tool> ... --ownerauth ownerauth.record.json`, for `enrol commit`,
+  `reanchor` and `recount`, and `seal-hsm-pin.sh --init-import-key --ownerauth-stdin`. The value always comes on
+  standard input, never on another descriptor: sudo closes every one above 2. What the operator types (commit's
+  root fingerprint, the reanchor and recount phrases) is then read from the terminal itself. `commit` hands the value
+  to its regalia-sync steps through an inherited sealed memfd (runuser keeps it). Under v4 `commit` refuses unless
+  the TPM's owner and lockout authorizations are both set and the value is given.
+  **Current limitations:**
+  - `init` takes no owner authorization; it runs before `ownerauth`.
+  - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path is
+    held by unit tests: the decision, the handoff to the regalia-sync steps, and every owner call site against a TPM
+    stand-in that refuses a missing value. The anchor's owner calls are also proven on swtpm.
+  - While commit's regalia-sync steps run, the owner authorization is held by a process of that uid, the
+    network-facing sync daemon's. commit refuses to hand it over while any other process of the uid exists, which
+    leaves a race with one starting meanwhile; doing the owner calls in the root parent is #419.
+  - `seal-hsm-pin.sh` passes the value to tpm2-tools as a file in a root-only directory on /run (tmpfs), removed on
+    exit. A run killed outright leaves it until reboot. The script doesn't check it against the record: a wrong
+    value is refused by the TPM.
+  - Rotating a set value is not built.
+  - The owner authorization crosses the TPM bus in clear when used (password sessions): sniffable on a discrete TPM
+    by someone with physical access during enrolment, a re-anchor or a recount (#414).
 - `check` verifies a root-signed manifest chain against this host and writes nothing.
 - `commit` takes the chain, the root fingerprint typed by hand, the measurements document, the site
   configuration and the signed boot image (`--image --image-record --initrd-pub --system-pub

@@ -50,7 +50,7 @@ import re
 import sys
 import time
 
-from deploy.baremetal import heartbeat, membership, trails
+from deploy.baremetal import heartbeat, membership, ownerauth, trails
 
 Refused, require = membership.Refused, membership.require
 
@@ -173,7 +173,7 @@ def recount(counter, manifest, documents, typed, sink, floor_path):
             for index in counter._indices():
                 if int(index, 16) in defined:
                     began.append(index)
-                    require(counter._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
+                    require(counter._owner("nvundefine", index).returncode == 0, "cannot delete NV index %s" % index)
             began.append("define")
             counter._define_at(planned["floor"])           # under the same lock; no increment loop up to the floor
         value = counter.value()
@@ -205,6 +205,7 @@ def main(argv=None, ask=None, run=None):
                     help="another heartbeat to take the floor from (e.g. a node's freshness state, on the authority); repeatable")
     ap.add_argument("--audit-log", default=trails.where("recount"),
                     help="the audit trail (default %(default)s, its place in trails.py's registry)")
+    ownerauth.add_arguments(ap)
     args = ap.parse_args(argv)
 
     def record(event):                 # hash-chained, whole or not at all, never through a link (trails.py, #278)
@@ -223,7 +224,12 @@ def main(argv=None, ask=None, run=None):
         if raw["schema"] == node.SCHEMA:
             cfg = node.validate(raw)
             index, defaults = cfg["nv_heartbeat"], [os.path.join(cfg["state_dir"], "freshness.json")]
-            counter = node.heartbeat_counter(cfg, run)            # the service's own construction and lock
+            # the owner authorization the recount deletes and defines with (#242), from the node's envelope on standard
+            # input, judged now; the phrase is then typed at the terminal itself
+            owner_auth = ownerauth.from_arguments(args, cfg["root_key"], cfg["node_id"])
+            if owner_auth is not None and ask is None:
+                ask = ownerauth.console
+            counter = node.heartbeat_counter(cfg, run, owner_auth)  # the service's own construction and lock
             active = run(["systemctl", "is-active", "regalia-sync.service"], capture_output=True, timeout=10)
             state = active.stdout.decode(errors="replace").strip()
             # only a stopped service passes: "activating", "deactivating", "reloading" or a systemctl that failed
@@ -232,6 +238,8 @@ def main(argv=None, ask=None, run=None):
                     "(systemctl stop regalia-sync)" % (state or "no answer from systemctl"))
         else:
             cfg = authority.validate(raw)
+            require(args.ownerauth is None, "--ownerauth is for a node: the authority (a lab host, being retired, #386) keeps an "
+                    "empty owner authorization")
             index, defaults = cfg["nv_sequence"], [os.path.join(cfg["state_dir"], n) for n in (authority.HEARTBEAT, authority.PENDING)]
             writer = authority.one_writer(cfg["state_dir"])       # refused while regalia-authority runs: one writer
             counter = authority.sequence_counter(cfg, run)
