@@ -161,11 +161,11 @@ def scenario(cluster):
             expiry[0] = lease_expiry(cluster, "a") or expiry[0]
             return False
         return True
-    done = until(stopped, lease.MAX_LIFETIME + admission.MARGIN + 60, 2)
+    done = until(stopped, lease.MAX_LIFETIME + admission.MARGIN + 60, 0.5)   # sampled finely against a 30 s lease (3e)
     stop_at = time.time()
     took = stop_at - revoked_at
     due = (expiry[0] - admission.MARGIN) if expiry[0] else None
-    ok(done is True and due is not None and expiry[0] - revoked_at <= lease.MAX_LIFETIME and abs(stop_at - due) <= 10,
+    ok(done is True and due is not None and expiry[0] - revoked_at <= lease.MAX_LIFETIME and abs(stop_at - due) <= 3,
        "a's admission stopped serving by itself %.0f s after the revocation: at its last lease's end less the %d s margin "
        "(expected %.0f s; that lease had at most %d s left)" % (took, admission.MARGIN, (due or 0) - revoked_at, lease.MAX_LIFETIME),
        {"stop_minus_due": round(stop_at - due, 1) if due else None, "held": held(cluster, "a")})
