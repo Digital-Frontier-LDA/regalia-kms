@@ -179,6 +179,20 @@ class Unusable(Refused):
     Distinct from a TPM that did not answer (a plain Refused): only this is what re-anchoring repairs."""
 
 
+def _said(tool, index, done):
+    """What tpm2_<tool> said when it failed on `index`, on this process's stderr (the unit's journal): the TPM's own reason
+    for an anchor read that is then refused. The refusal's text does not change (the shared vectors pin it, #450); this
+    is so the next one is named rather than guessed at (an intermittent refusal in CI, #448). Never raises."""
+    try:
+        import sys
+        err = done.stderr or b""
+        text = (err if isinstance(err, str) else err.decode("utf-8", "replace")).strip().replace("\n", " | ")
+        print("regalia: tpm2_%s %s failed (exit %s, %d bytes out): %s" % (tool, index, done.returncode, len(done.stdout or b""), text[-400:] or "no output"),
+              file=sys.stderr)
+    except Exception:                                   # noqa: BLE001 - a diagnostic never changes the outcome
+        pass
+
+
 @contextlib.contextmanager
 def _exclusive(lock_path):
     """An exclusive flock held for the block: every read-modify-write of the anchor or the stored
@@ -927,6 +941,8 @@ class HighWater:
 
     def _read8(self, index):
         r = self._tpm("nvread", index, "-C", index, "-s", "8")
+        if r.returncode != 0 or len(r.stdout) != 8:
+            _said("nvread", index, r)
         require(r.returncode == 0 and len(r.stdout) == 8, "cannot read 8 bytes from NV index %s" % index)
         return int.from_bytes(r.stdout, "big")
 
@@ -1129,6 +1145,8 @@ class HighWater:
         if not a & self.WRITTEN:
             return None
         r = self._tpm("nvread", index, "-C", index, "-s", str(self.RECORD_BYTES))
+        if r.returncode != 0 or len(r.stdout) != self.RECORD_BYTES:
+            _said("nvread", index, r)
         require(r.returncode == 0 and len(r.stdout) == self.RECORD_BYTES, "cannot read %d bytes from the record index %s: the anchor "
                 "is unavailable (fail closed)" % (self.RECORD_BYTES, index))
         epoch, held = int.from_bytes(r.stdout[:8], "big"), r.stdout[8:40].hex()
@@ -1192,6 +1210,8 @@ class HighWater:
         r = self._tpm("nvread", index, "-C", index, "-s", str(size))
         if (r.returncode != 0 or len(r.stdout) != size) and attributes & self.OWNERREAD:
             r = self._owner("nvread", index, "-s", str(size))
+        if r.returncode != 0 or len(r.stdout) != size:
+            _said("nvread", index, r)
         require(r.returncode == 0 and len(r.stdout) == size, "cannot read %d bytes from NV index %s: what the anchor holds cannot "
                 "be known (fail closed)" % (size, index))
         return r.stdout
