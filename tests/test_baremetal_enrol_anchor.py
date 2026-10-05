@@ -115,6 +115,24 @@ class Anchor(nt.Case):
             self.anchor(self.chain(1))
         self.assertFalse(os.path.exists(node.path("membership.json")))
 
+    def test_the_activation_counter_is_defined_at_zero_and_taken_only_as_left(self):
+        """#432: enrolment defines the node's activation counter at 0 as it does the signing counter; one someone else moved
+        is refused before the first write."""
+        node = self.node()
+        self.anchor(self.chain(2))
+        activation = node_module.activation_counter(node.cfg, node.run)
+        self.assertEqual(activation.value(), 0)
+        self.assertEqual(self.anchor(self.chain(2))[0], 2)                       # resumed: left as it is
+        self.assertEqual(activation.value(), 0)
+        self.setUp()
+        node = self.node()
+        moved = hb.Counter(node.cfg["nv_activation"], node.tcti, node.run, lock_path=node.path("other.lock"))
+        moved.define()
+        moved.advance(2)
+        with self.assertRaisesRegex(enrol.Refused, "the activation counter's indices"):
+            self.anchor(self.chain(1))
+        self.assertFalse(os.path.exists(node.path("membership.json")))
+
     def test_a_heartbeat_counter_already_moved_is_refused(self):
         node = self.node()
         held = node.freshness().counter

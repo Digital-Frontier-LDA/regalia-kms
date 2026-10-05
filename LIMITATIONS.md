@@ -30,8 +30,8 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
   its verification under the current manifest's `activation_signers`, each node's grant record and
   signer, and the co-signer's and proposer's checks, as a library with unit tests. **Nothing issues or
-  enforces an activation in the running system yet:** no `nv_activation` index is defined at
-  enrolment, sync has no activation ops, there is no `owner.py sign-activation`, and the Go Gate still
+  enforces an activation in the running system yet:** the `nv_activation` counter is defined at
+  enrolment but nothing advances it yet, sync has no activation ops, there is no `owner.py sign-activation`, and the Go Gate still
   takes `regalia-fence`'s single key. By the rule, a new cluster's first activation waits about 11 minutes
   (`RECOVERY_WAIT_S`): every node starts with no grant record, so each is busy for that long after it
   starts. Expected at first bring-up, not a fault. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still

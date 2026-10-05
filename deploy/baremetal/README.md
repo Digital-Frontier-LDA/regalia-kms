@@ -1139,6 +1139,11 @@ site field `service_mesh.authority` are gone: a site file that still names one i
   `heartbeat.MIN_INTERVAL_S`, 600 s) and the peers co-sign over sync. A node's highest signed sequence is its own
   TPM counter (`nv_signing`); the highest accepted is `nv_heartbeat`, which `recount.py` redefines when it is
   unusable (#244).
+- **Activation** (which site signs, #432) is being built to replace `regalia-fence`: 2 of the 3 nodes normally, the
+  owner with one node only as a fenced recovery step (`activation.py`; `owner.py sign-activation`). Each node counts
+  the activation leases it has signed on its own TPM counter, `nv_activation` (node.json), defined at 0 at
+  enrolment and written by policy; its record beside it, `activation-grant.json` in the state directory, stands only
+  while it matches. Until the sync ops and the Go Gate land, nothing issues or enforces an activation (LIMITATIONS.md).
 - **The hand recovery** when fewer than two nodes run: `python3 -Es -m deploy.baremetal.owner beat`, as root at
   the node's console. The node proposes and signs, the owner's YubiKey co-signs after the typed confirmation, and the
   heartbeat lives at most the manifest's `owner_heartbeat_lifetime_s` (one hour by the genesis default; a

@@ -554,7 +554,7 @@ class InitOnSwtpm(unittest.TestCase):
         root = hbt.pub(hbt.ROOT)
         example = {"schema": "regalia.node/v1", "node_id": "x", "site": etc + "site.json", "root_key": "00" * 32,
                    "tcti": os.environ["TPM2TOOLS_TCTI"], "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018",
-                   "nv_signing": "0x0150001c", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
+                   "nv_signing": "0x0150001c", "nv_activation": "0x0150001e", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
                    "wg_service_key": self.wg, "measurements": etc + "measurements.json", "pcrs": [7, 11],
                    "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
         with unittest.mock.patch.object(enrol, "CONFIG_DIR", etc), unittest.mock.patch.object(enrol, "NODE_JSON", etc + "node.json"), \
@@ -639,7 +639,7 @@ class InitOnSwtpm(unittest.TestCase):
         etc = self.d + "/etc-regalia/"
         os.makedirs(etc)
         example = {"schema": "regalia.node/v1", "node_id": "x", "site": etc + "site.json", "root_key": "00" * 32, "tcti": tcti,
-                   "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "nv_signing": "0x0150001c", "state_dir": self.d + "/state",
+                   "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "nv_signing": "0x0150001c", "nv_activation": "0x0150001e", "state_dir": self.d + "/state",
                    "admission_dir": self.d + "/admission", "run_dir": self.d + "/run", "wg_service_key": self.wg,
                    "measurements": etc + "measurements.json", "pcrs": [7, 11],
                    "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
@@ -660,7 +660,7 @@ class InitOnSwtpm(unittest.TestCase):
                              out=io.StringIO(), first_beat=first_beat, bootstrap=True)
             listed = {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", subprocess.run(["tpm2_getcap", "handles-nv-index"],
                                                                                          capture_output=True, text=True).stdout)}
-            enrolment = {int(example[k], 16) + d for k in ("nv_epoch", "nv_heartbeat", "nv_signing") for d in range(6)}
+            enrolment = {int(example[k], 16) + d for k in ("nv_epoch", "nv_heartbeat", "nv_signing", "nv_activation") for d in range(6)}
             self.assertEqual(listed & enrolment, set())          # nothing defined: no anchor, slot or counter index (1e)
             epoch, digest = enrol.commit(self.dir, envelope, root, enrol.fingerprint(root), document, nt.SITE, example,
                                          as_sync=in_process, out=io.StringIO(), first_beat=first_beat, bootstrap=True,
@@ -668,7 +668,7 @@ class InitOnSwtpm(unittest.TestCase):
             self.assertEqual((epoch, digest), (1, m.digest(man)))
             listed = {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", subprocess.run(["tpm2_getcap", "handles-nv-index"],
                                                                                          capture_output=True, text=True).stdout)}
-            self.assertTrue({int(example[k], 16) for k in ("nv_epoch", "nv_heartbeat", "nv_signing")} <= listed)   # the control
+            self.assertTrue({int(example[k], 16) for k in ("nv_epoch", "nv_heartbeat", "nv_signing", "nv_activation")} <= listed)   # the control
             public_area = subprocess.run(["tpm2_nvreadpublic", "0x01500016"], capture_output=True, text=True).stdout
             self.assertIn("authorization policy: %s" % signkey.policy(pem).hex().upper(), public_area)    # policy-written
             from deploy.baremetal import node as nm

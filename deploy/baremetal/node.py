@@ -85,7 +85,7 @@ from deploy.baremetal import (admission, trails, attest, authtime, beat, bootnet
 Refused, require = membership.Refused, membership.require
 
 SCHEMA = "regalia.node/v1"
-KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "nv_signing", "state_dir", "admission_dir", "run_dir",
+KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "nv_signing", "nv_activation", "state_dir", "admission_dir", "run_dir",
         "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval", "beat_interval_s")
 PUBLISHED = "chain.json"        # in the state directory: the verified chain, for the root services
 MAX_BYTES = 64 * 1024
@@ -116,7 +116,8 @@ def validate(doc):
     # slots; the heartbeat counter and the signing counter (#199): counter and base each), never retyped here
     taken = {"nv_epoch": membership.HighWater(_index(doc["nv_epoch"], "nv_epoch")).indices(),
              "nv_heartbeat": heartbeat.Counter(_index(doc["nv_heartbeat"], "nv_heartbeat")).indices(),
-             "nv_signing": heartbeat.Counter(_index(doc["nv_signing"], "nv_signing")).indices()}
+             "nv_signing": heartbeat.Counter(_index(doc["nv_signing"], "nv_signing")).indices(),
+             "nv_activation": heartbeat.Counter(_index(doc["nv_activation"], "nv_activation")).indices()}
     names = list(taken)
     for i, one in enumerate(names):
         for other in names[i + 1:]:
@@ -385,6 +386,25 @@ def signing_counter(cfg, run=subprocess.run):
     authorization; enrolment defines it."""
     return heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "signing-counter.lock"),
                              policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg))
+
+
+def activation_counter(cfg, run=subprocess.run):
+    """This node's activation counter (#432): how many activation leases it has signed, one increment each
+    (activation.GrantRecord). Its own index; written by policy like the signing counter (#242); enrolment defines it."""
+    return heartbeat.Counter(cfg["nv_activation"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "activation-counter.lock"),
+                             policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg))
+
+
+ACTIVATION_RECORD = "activation-grant.json"   # in the state directory: activation.GrantRecord's disk half
+
+
+def node_activation_signer(node, started, pem_path=None):
+    """`node`'s activation.Signer (#432): its grant record (the activation counter and ACTIVATION_RECORD, busy for the
+    recovery wait after `started`, this start's authenticated time) and its TPM signing key, as node_beat_signer's."""
+    from deploy.baremetal import activation
+    beat_signer = node_beat_signer(node, pem_path)
+    record = activation.GrantRecord(activation_counter(node.cfg, node.run), node.path(ACTIVATION_RECORD), started)
+    return activation.Signer(node.node_id, record, beat_signer._sign, beat_signer.key)
 
 
 def node_beat_signer(node, pem_path=None):

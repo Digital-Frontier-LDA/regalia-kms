@@ -1043,6 +1043,10 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     # policy as the anchor, since a node that has signed nothing starts there
     signing = heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=n.path("signing-counter.lock"), define_policy=policy,
                                 image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth)
+    # the activation counter (#432: how many activation leases this node has signed): the same, at 0
+    activation_counter = heartbeat.Counter(cfg["nv_activation"], cfg["tcti"], run, lock_path=n.path("activation-counter.lock"),
+                                           define_policy=policy, image_key=lambda: node_module.image_key(cfg, manifest=tip),
+                                           owner_auth=owner_auth)
 
     def defined(owner, indices):
         return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]
@@ -1060,6 +1064,10 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     require(not signing_present or (len(signing_present) == 2 and signing.value() == 0),
             "the TPM already holds the signing counter's indices (%s), not as an enrolment leaves them (both, at 0): "
             "enrolment does not take them over" % ", ".join(signing_present))
+    activation_present = defined(activation_counter, (activation_counter.index, activation_counter.base_index))
+    require(not activation_present or (len(activation_present) == 2 and activation_counter.value() == 0),
+            "the TPM already holds the activation counter's indices (%s), not as an enrolment leaves them (both, at 0): "
+            "enrolment does not take them over" % ", ".join(activation_present))
     already = 0
     if os.path.exists(store.path):
         store.load()                                   # refuses a store the TPM anchor does not vouch for
@@ -1086,6 +1094,8 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
         store.commit(envelope, final=index == len(rest) - 1)
     if not signing_present:
         signing.define()                              # at 0, under the anchor's policy; written by policy from then on
+    if not activation_present:
+        activation_counter.define()                   # at 0: a node that has granted nothing (#432); busy for the wait at first
     manifest = store.load()
     return manifest["epoch"], membership.digest(manifest)
 
