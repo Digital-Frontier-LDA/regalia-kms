@@ -883,8 +883,15 @@ def part2(work, binaries, user, ctx, servers, status):
        journal("regalia-esp-advance.service")[-800:])
     ok(on_esp.exists() and on_esp.read_bytes() == pathlib.Path("/var/lib/regalia-sync/chain.json").read_bytes(),
        "the ESP's chain is the published chain, byte for byte")
-    said = sh("journalctl", "-u", "regalia-esp-advance.service", "-o", "cat", "--no-pager", check=False).stdout
-    ok("the ESP's membership chain is epoch 2" in said, "its run said so", said[-600:])
+    # its LAST line, printed only after the anchor moved: the anchor can be read in the TPM before the run has exited and
+    # its output reached the journal (main at 4d23879 read the journal in between). Flushed, then waited for, bounded.
+    def finished():
+        sh("journalctl", "--sync", check=False)
+        text = sh("journalctl", "-u", "regalia-esp-advance.service", "-o", "cat", "--no-pager", check=False).stdout
+        return text if "the ESP's membership chain is epoch 2" in text and "and the TPM anchor with it" in text else False
+    said = until(finished, 30, 1)
+    ok(isinstance(said, str), "its run said so, at its end: the ESP's membership chain is epoch 2, and the TPM anchor with it",
+       journal("regalia-esp-advance.service")[-600:])
     sandbox = show("regalia-esp-advance.service", "User", "CapabilityBoundingSet", "PrivateNetwork", "ReadWritePaths")
     ok((sandbox.get("User"), sandbox.get("CapabilityBoundingSet"), sandbox.get("PrivateNetwork")) == ("root", "", "yes")
        and sandbox.get("ReadWritePaths") == ESP + " -/run/regalia-metrics/esp-advance",
