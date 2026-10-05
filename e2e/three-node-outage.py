@@ -20,7 +20,9 @@ then the other two by themselves, through that node; then the nodes sign their o
      heartbeats again, with no owner. Then the total outage again.
   4  a and b revoke c (REVOKED_STOLEN), each at its own console (revoke.py): their wg-apply drops c from wg-svc
   5  a's time no longer authenticated (its authtime.json says so): a signs no heartbeat, and its trail says why
-     (fail closed)
+     (fail closed). Judged by position in a's trail, not by time: after a's first refusal for want of time, no
+     signature as proposer or co-signer. One signature already in flight across the switch is allowed (the Proposer
+     reads authenticated time once per step): a stated limitation, not a failure
 """
 import base64
 import json
@@ -132,25 +134,39 @@ def scenario(cluster):
        {n: sorted(cluster.wg_peers(n, "wg-svc")) for n in ("a", "b")})
 
     header("5  without authenticated time a node signs nothing")
+    # BY POSITION IN a's TRAIL, NOT BY TIME (regalia-kms-48 and 3e): a trail's "at" is whole seconds, and a signature
+    # a's Proposer began before its clock read saw the switch is legitimate. So: the trail's length before the switch;
+    # then a's first refusal for want of time after it, which must exist; then nothing signed after THAT refusal.
+    # Between the switch and the refusal, one signature in flight is allowed (the Proposer reads the time once per
+    # step): the stated limitation (LIMITATIONS.md, Tests)
+    switched_at = len(cluster.trail("a"))
     cluster.time["a"] = False                        # chrony stops vouching (the stand-in's switch)
     ok(until(lambda: not json.loads((cluster.nodes["a"].run / "authtime.json").read_text())["authenticated"], 30, 1) is True,
        "a's authtime.json says not authenticated")
-    since = time.time()
-    # as a proposer: Proposer.step reads authenticated time before it asks whether it is due, and the sync loop records
-    # the refusal at once (one line per cause), so a's first loop after the switch says it
-    refused = until(lambda: any(e.get("event") == "beat-propose" and e.get("outcome") == "DENY" and "time is not authenticated" in e.get("reason", "")
-                                and e.get("at", 0) >= since for e in cluster.trail("a")), 180, 3)
+
+    def first_refusal():
+        # as a proposer: Proposer.step reads authenticated time before it asks whether it is due, and the sync loop
+        # records the refusal at once (one line per cause), so a's first loop after the switch says it
+        return next((i for i, e in enumerate(cluster.trail("a")) if i >= switched_at and e.get("event") == "beat-propose"
+                     and e.get("outcome") == "DENY" and "time is not authenticated" in (e.get("reason") or "")), None)
+    refused_at = until(lambda: first_refusal(), 180, 3)
+    # an index (always > 0: the trail held lines before the switch); `until` gives back None, or an exception, otherwise
+    refused = isinstance(refused_at, int) and not isinstance(refused_at, bool)
     # and as a co-signer (regalia-kms-3e): b's tunnel asks a to co-sign a well-formed body; beat.cosign reads the time
     # before it judges the proposer's signature, so a refuses for want of time, whatever b would have signed
     current = cluster.manifest
     body = {"schema": threenode.heartbeat.SCHEMA, "epoch": current["epoch"], "sequence": 10 ** 6, "issued_at": threenode.beat_stamp(time.time()),
             "expires_at": threenode.beat_stamp(time.time() + 3600), "manifest_digest": threenode.membership.digest(current)}
     answer = cluster.ask("b", "a", "beat-sign", heartbeat=body, signature={"party": "b", "key": "00" * 65, "sig": "00" * 64})[0]
-    signed = [e for e in cluster.trail("a") if e.get("event") in ("beat-propose", "sync-beat-sign") and e.get("outcome") == "ALLOW"
-              and e.get("at", 0) >= since]
-    ok(refused is True and answer.get("ok") is False and "time is not authenticated" in answer.get("refused", "") and not signed,
-       "time no longer authenticated: a signs no heartbeat, as proposer or as co-signer, and says why (fail closed)",
-       {"co-sign answer": answer, "events": recent(cluster, "a")})
+    trail = cluster.trail("a")
+    signed = [e for i, e in enumerate(trail) if refused and i > refused_at and e.get("event") in ("beat-propose", "sync-beat-sign")
+              and e.get("outcome") == "ALLOW"]
+    in_flight = [e for i, e in enumerate(trail) if refused and switched_at <= i < refused_at and e.get("event") == "beat-propose"
+                 and e.get("outcome") == "ALLOW"]
+    ok(refused and answer.get("ok") is False and "time is not authenticated" in answer.get("refused", "") and not signed and len(in_flight) <= 1,
+       "time no longer authenticated: after its first refusal for want of time, a signs no heartbeat, as proposer or as "
+       "co-signer, and says why (fail closed)%s" % (" (one signature in flight across the switch, allowed)" if in_flight else ""),
+       {"co-sign answer": answer, "refused at": refused_at, "signed after": signed, "in flight": in_flight, "events": recent(cluster, "a")})
 
 
 def main():
