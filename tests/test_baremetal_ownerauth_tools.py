@@ -61,6 +61,7 @@ class TheChildDescriptor(unittest.TestCase):
     def test_a_sealed_memfd_read_once(self):
         auth = ownerauth.from_envelope(value("a"), RECORD, PIN, "a")
         fd = ownerauth.child_fd(auth)
+        self.assertFalse(os.get_inheritable(fd))                    # only the child named in pass_fds gets it (d9)
         with self.assertRaises(PermissionError):
             os.pwrite(fd, b"x", 0)
         self.assertEqual(ownerauth.read_fd(fd).check("a"), auth.check("a"))
@@ -78,6 +79,8 @@ class TheChildDescriptor(unittest.TestCase):
         seen = {}
 
         def run(argv, **kw):
+            if argv[0] == "pgrep":                                   # no process of regalia-sync
+                return unittest.mock.Mock(returncode=1, stdout="", stderr="")
             fd = int(argv[argv.index("--ownerauth-fd") + 1])
             seen.update(fds=kw.get("pass_fds"), fd=fd, value=os.pread(fd, 100, 0))
             return unittest.mock.Mock(returncode=0, stdout="ANCHORED epoch 1 digest %s\n" % ("ab" * 32), stderr="")
@@ -85,6 +88,16 @@ class TheChildDescriptor(unittest.TestCase):
         self.assertEqual((seen["fds"], seen["value"]), ((seen["fd"],), VECTOR["values"]["a"].encode()))
         with self.assertRaises(OSError):
             os.fstat(seen["fd"])
+        # regalia-kms-d9: never while a process of regalia-sync runs (it could read the memfd), and nothing is handed over
+        handed = []
+
+        def busy(argv, **kw):
+            if argv[0] == "pgrep":
+                return unittest.mock.Mock(returncode=0, stdout="4242\n", stderr="")
+            handed.append(argv)
+        with self.assertRaisesRegex(enrol.Refused, "a process of regalia-sync is running"):
+            enrol.run_as_sync("/etc/regalia/node.json", [{}], run=busy, owner_auth=auth)
+        self.assertEqual(handed, [])
         calls = []
         enrol.run_as_sync("/etc/regalia/node.json", [{}], run=lambda argv, **kw: calls.append((argv, kw)) or
                           unittest.mock.Mock(returncode=0, stdout="ANCHORED epoch 1 digest %s\n" % ("ab" * 32), stderr=""))

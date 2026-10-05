@@ -1114,13 +1114,26 @@ def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bo
     return sequence, left
 
 
+def _no_sync_process(run):
+    """Refused while any process of uid regalia-sync exists (regalia-kms-d9 on #418): the owner authorization handed to
+    enrolment's regalia-sync step is readable by every process of that uid (/proc/<pid>/fd) while the step runs, so
+    none may be there. A residual race with a process starting meanwhile stays (stated; #419 removes the handoff)."""
+    done = run(["pgrep", "-u", SYNC_USER], capture_output=True, text=True)
+    require(done.returncode == 1, "a process of %s is running (%s): the owner authorization is handed to enrolment's %s step "
+            "only while none is (stop regalia-sync and its services first; pgrep -u %s)" % (
+                SYNC_USER, (done.stdout or "pgrep failed").split()[:5], SYNC_USER, SYNC_USER) if done.returncode == 0 else
+            "cannot tell whether a process of %s is running (pgrep exit %d): the owner authorization is not handed over" % (
+                SYNC_USER, done.returncode))
+
+
 @contextlib.contextmanager
-def _owner_fd(owner_auth):
+def _owner_fd(owner_auth, run=subprocess.run):
     """(argv, kw) handing the owner authorization to a regalia-sync step: an inherited memfd (ownerauth.child_fd) named
     by --ownerauth-fd, closed here after the step; nothing when there is none (an empty owner authorization)."""
     if owner_auth is None:
         yield [], {}
         return
+    _no_sync_process(run)
     fd = ownerauth.child_fd(owner_auth)
     try:
         yield ["--ownerauth-fd", str(fd)], {"pass_fds": (fd,)}
@@ -1129,7 +1142,7 @@ def _owner_fd(owner_auth):
 
 
 def run_first_heartbeat_as_sync(config_path, run=subprocess.run, bootstrap=False, owner_auth=None):
-    with _owner_fd(owner_auth) as (extra, kw):
+    with _owner_fd(owner_auth, run) as (extra, kw):
         done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
                     "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_first-heartbeat", "--config", config_path]
                    + (["--bootstrap"] if bootstrap else []) + extra,
@@ -1149,7 +1162,7 @@ def run_as_sync(config_path, chain, run=subprocess.run, owner_auth=None):
     root so `-m` finds it. The chain goes on its standard input: the enrolment directory is root's (0700),
     and regalia-sync could not read a file there. The journal stays with the caller."""
     # env -i: nothing of root's environment reaches the step (the TCTI comes from node.json, not from here)
-    with _owner_fd(owner_auth) as (extra, kw):
+    with _owner_fd(owner_auth, run) as (extra, kw):
         done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
                     "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", "-"]
                    + extra, cwd=PACKAGE_ROOT, capture_output=True, text=True, input=membership.canonical(chain).decode(), **kw)

@@ -44,8 +44,10 @@
 #       hex and a newline), never typed nor an argument (not another descriptor: sudo closes every one above 2).
 #       Commissioning before `enrol ownerauth` needs none.
 #       LIMITATION: the value is passed to tpm2-tools as a file in a root-only directory on /run (tmpfs),
-#       removed on exit (a shell has no memfd), and it is not checked against ownerauth.record.json here:
-#       a wrong value is refused by the TPM (an authorization failure, no dictionary-attack count), nothing made.
+#       removed on exit (a shell has no memfd); a run killed outright (SIGKILL, the OOM killer) skips that, and
+#       the file stays until reboot: remove /run/regalia-ownerauth.* by hand. It is not checked against
+#       ownerauth.record.json here: a wrong value is refused by the TPM (an authorization failure, no
+#       dictionary-attack count), nothing made.
 #
 # SIGNED PCR 11 POLICY (#57): PCR 11 (the kernel image, as systemd-stub measures a UKI) is never bound
 # directly, since every kernel update would strand the PIN. It is bound through a SIGNED policy:

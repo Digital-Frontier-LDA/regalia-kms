@@ -41,7 +41,10 @@ CURRENT LIMITATIONS (#242):
     with the way on (its value is this envelope's: nothing to do, `check` proves it; otherwise the TPM's owner
     hierarchy must be cleared by its owner first). Changing a set value to a new one (a rotation) is not built;
   * a child process (enrolment's steps as regalia-sync) takes the value from its root parent through an inherited
-    memfd (child_fd, --ownerauth-fd) and does not re-verify the record: the parent verified it;
+    memfd (child_fd, --ownerauth-fd) and does not re-verify the record: the parent verified it. While that child runs,
+    the OWNER authorization is held by a process of uid regalia-sync, the network-facing sync daemon's user: enrolment
+    refuses to hand it over while any other process of that uid exists (enrol._no_sync_process), and moving the owner
+    calls into the root parent is #419;
   * enrol commit reads the value (standard input) before the operator types the root's fingerprint (at the terminal),
     and checks it against the record (confirm) only once that fingerprint has confirmed the root key;
 """
@@ -200,10 +203,11 @@ def read_fd(fd):
 
 
 def child_fd(auth):
-    """A sealed memfd holding the value in read_value's form, inheritable, for ONE child process given `--ownerauth-fd N`
-    (enrolment's steps run as regalia-sync): the caller passes it with pass_fds and closes it after."""
+    """A sealed memfd holding the value in read_value's form, for ONE child process given `--ownerauth-fd N` (enrolment's
+    steps run as regalia-sync): close-on-exec, so only the child the caller names in pass_fds inherits it (subprocess
+    makes it inheritable there alone, regalia-kms-d9); the caller closes it after."""
     import fcntl
-    fd = os.memfd_create("regalia-ownerauth", os.MFD_ALLOW_SEALING)
+    fd = os.memfd_create("regalia-ownerauth", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
     try:
         os.write(fd, auth._raw.hex().encode() + b"\n")
         os.lseek(fd, 0, os.SEEK_SET)
@@ -251,12 +255,13 @@ def console(prompt, tty="/dev/tty"):
     try:
         fd = os.open(tty, os.O_RDWR | os.O_NOCTTY)
     except OSError as error:
-        raise Refused("there is no terminal to type at (%s): this is typed at the host's console" % error.strerror) from None
+        raise Refused("there is no terminal to type at (%s): this is typed at the host's console. Nothing was written"
+                      % error.strerror) from None
     try:
         require(os.isatty(fd), "%s is not a terminal: this is typed at the host's console" % tty)
         os.write(fd, prompt.encode())
         with os.fdopen(os.dup(fd), "r", encoding="utf-8", errors="replace") as t:   # read-only: a tty does not seek
-            line = t.readline()
+            line = t.readline(4096)                        # one line, bounded
     finally:
         os.close(fd)
     return line.rstrip("\n") if line else None

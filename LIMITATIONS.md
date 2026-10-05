@@ -35,8 +35,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     be sniffed by someone with physical access during enrolment, a re-anchor or a recount.
   - The value cannot be zeroed in Python memory. While an owner-authorized call runs, the value is readable through
     /proc by root (a memfd; `seal-hsm-pin.sh` uses a root-only file on /run).
-  - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM. The path is held
-    by unit tests and by swtpm tests of the anchor's owner calls.
+  - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path
+    is held by unit tests and by swtpm tests of the anchor's owner calls.
+  - During `enrol commit` the owner authorization is held by a process of uid regalia-sync, the network-facing
+    sync daemon's user. commit refuses while another process of that uid exists. Moving the owner calls into the
+    root parent is #419.
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.

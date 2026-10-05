@@ -868,11 +868,15 @@ removing only what it can prove it made.
   the TPM's owner and lockout authorizations are both set and the value is given.
   **Current limitations:**
   - `init` takes no owner authorization; it runs before `ownerauth`.
-  - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM. The path is held
-    by unit tests: the decision, the handoff to the regalia-sync steps, and every owner call site against a TPM
+  - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path is
+    held by unit tests: the decision, the handoff to the regalia-sync steps, and every owner call site against a TPM
     stand-in that refuses a missing value. The anchor's owner calls are also proven on swtpm.
+  - While commit's regalia-sync steps run, the owner authorization is held by a process of that uid, the
+    network-facing sync daemon's. commit refuses to hand it over while any other process of the uid exists, which
+    leaves a race with one starting meanwhile; doing the owner calls in the root parent is #419.
   - `seal-hsm-pin.sh` passes the value to tpm2-tools as a file in a root-only directory on /run (tmpfs), removed on
-    exit, and does not check it against the record: a wrong value is refused by the TPM.
+    exit. A run killed outright leaves it until reboot. The script doesn't check it against the record: a wrong
+    value is refused by the TPM.
   - Rotating a set value is not built.
   - The owner authorization crosses the TPM bus in clear when used (password sessions): sniffable on a discrete TPM
     by someone with physical access during enrolment, a re-anchor or a recount (#414).
