@@ -111,6 +111,22 @@ class Refusals(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, "does not verify under the K_A it names"):
             ap.read_first(dict(FIRST, increment_first="%064x%064x" % (r, min(s_, m.P256_ORDER - s_))))
 
+    def test_a_failed_read_is_not_absence(self):
+        """regalia-kms-95 on #462: nv_name_of returns None only when the TPM's list lacks the index."""
+        import subprocess
+
+        def tpm(listed, answers=True):
+            def run(argv, **kw):
+                if argv[0] == "tpm2_nvreadpublic":
+                    return subprocess.CompletedProcess(argv, 1, b"", b"busy")
+                return subprocess.CompletedProcess(argv, 0 if answers else 1, b"- 0x1500016\n" + (b"- 0x1500020\n" if listed else b""), b"no TCTI")
+            return run
+        self.assertIsNone(ap.nv_name_of("0x01500020", tpm(listed=False)))
+        with self.assertRaisesRegex(m.Refused, "the TPM lists NV index 0x01500020 and did not give its public area"):
+            ap.nv_name_of("0x01500020", tpm(listed=True))
+        with self.assertRaisesRegex(m.Refused, "listing the TPM's NV indices \\(the TPM does not answer\\) failed"):
+            ap.nv_name_of("0x01500020", tpm(listed=False, answers=False))
+
     def test_classes_never_share_a_policy(self):
         policies = {ap.class_policy(V["k_a"]["point"], c) for c in ap.REFS}
         self.assertEqual(len(policies), len(ap.REFS))

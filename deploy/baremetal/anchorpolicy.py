@@ -203,10 +203,16 @@ def _must(done, what):
 
 
 def nv_name_of(index, run=None):
-    """The Name tpm2_nvreadpublic reports for `index` (hex), or None when the TPM does not hold it."""
+    """The Name tpm2_nvreadpublic reports for `index` (hex), or None when the TPM does not hold it. A failed read is not
+    taken for absence (regalia-kms-95, as HighWater._public): None only when the TPM's own list lacks the index; a TPM
+    that does not answer, or lists the index and does not give it, is a refusal."""
     import re
     done = _tpm(run, "nvreadpublic", index)
     if done.returncode != 0:
+        listed = _must(_tpm(run, "getcap", "handles-nv-index"), "listing the TPM's NV indices (the TPM does not answer)")
+        out = listed.stdout.decode() if isinstance(listed.stdout, bytes) else listed.stdout
+        require(int(index, 16) not in {int(h, 16) for h in re.findall(r"0x[0-9A-Fa-f]+", out)},
+                "the TPM lists NV index %s and did not give its public area" % index)
         return None
     out = done.stdout.decode() if isinstance(done.stdout, bytes) else done.stdout
     found = re.search(r"(?m)^\s*name:\s*([0-9a-fA-F]+)\s*$", out)
@@ -256,6 +262,8 @@ def start_rotation(index, point, approval_der, run=None):
             _tpm(run, "flushcontext", "-t")
             _must(_tpm(run, "loadexternal", "-C", "o", "-G", "ecc", "-u", path("ka.pem"), "-c", path("ka.ctx"), "-n", path("ka.name")),
                   "loading K_A")
+            with open(path("ka.name"), "rb") as f:                # the template checked before the TPM is asked anything else
+                require(f.read() == k_a_name(point), "the TPM's Name of K_A is not the one computed for it")
             _must(_tpm(run, "verifysignature", "-c", path("ka.ctx"), "-g", "sha256", "-m", path("message"), "-s", path("sig.der"),
                        "-f", "ecdsa", "-t", path("ticket")), "the TPM's check of K_A's approval of the rotation counter's first increment")
             if held is None:
@@ -269,8 +277,6 @@ def start_rotation(index, point, approval_der, run=None):
             try:
                 _must(_tpm(run, "policycommandcode", "-S", path("s.ctx"), "TPM2_CC_NV_Increment"), "PolicyCommandCode")
                 _must(_tpm(run, "policynvwritten", "-S", path("s.ctx"), "c"), "PolicyNvWritten")
-                with open(path("ka.name"), "rb") as f:
-                    require(f.read() == k_a_name(point), "the TPM's Name of K_A is not the one computed for it")
                 _must(_tpm(run, "policyauthorize", "-S", path("s.ctx"), "-i", path("approved"), "-n", path("ka.name"),
                            "-q", REFS["rotation"].hex(), "-t", path("ticket")), "PolicyAuthorize(K_A, \"rotation\")")
                 _must(_tpm(run, "nvincrement", index, "-C", index, "-P", "session:" + path("s.ctx")),
