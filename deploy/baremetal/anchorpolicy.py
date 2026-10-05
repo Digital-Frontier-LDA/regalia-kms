@@ -443,15 +443,24 @@ def fill(document, k_sys_pem, k_a_point, key, generations):
     fingerprint = signkey.pcr_key_fingerprint(k_sys_pem)
     filled = []
     for node_id, node in sorted(out["nodes"].items()):
+        node["accepted"] = list(node["accepted"])
         for i, entry in enumerate(node["accepted"]):
             if entry.get("signing", {}).get("system") != fingerprint:
                 continue
             require(node_id in generations, "%s has a set signed by this system-phase key and no generation to approve it at" % node_id)
+            # each node's set its own object: deepcopy keeps the sharing of a document built in memory with one set for
+            # several nodes, and filling one node would then overwrite another's approvals
+            entry = node["accepted"][i] = copy.deepcopy(entry)
             entry["signing"]["anchor_approvals"] = approvals_for(key, k_sys_pem, k_a_point, generations[node_id], node_id)
             check_approvals(entry["signing"]["anchor_approvals"], k_sys_pem, k_a_point, node_id,
                             "nodes.%s.accepted[%d].signing.anchor_approvals" % (node_id, i))
             filled.append(node_id)
     require(filled, "no set in the document is signed by this system-phase key (%s): nothing to approve" % fingerprint)
+    for node_id in filled:                                      # each block checked again, once every node is filled
+        for i, entry in enumerate(out["nodes"][node_id]["accepted"]):
+            if entry.get("signing", {}).get("system") == fingerprint:
+                check_approvals(entry["signing"]["anchor_approvals"], k_sys_pem, k_a_point, node_id,
+                                "nodes.%s.accepted[%d].signing.anchor_approvals" % (node_id, i))
     measurements.validate(out)
     return out
 

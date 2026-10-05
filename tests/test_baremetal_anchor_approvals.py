@@ -76,6 +76,16 @@ class Approvals(unittest.TestCase):
                     measurements.validate(bad)
         self.assertEqual(ap.check_approvals(approvals, SYSTEM_PUB, POINT, "a"), 3)
 
+    def test_one_set_object_shared_by_several_nodes_gets_each_node_s_approvals(self):
+        """A document built in memory with ONE set object for every node (deepcopy keeps the sharing): each node's approvals
+        are its own, not the last node's (found by C3's swtpm enrolment test)."""
+        shared = signed_set()
+        doc = {"schema": measurements.SCHEMA, "name": "signed", "nodes": {n: {"accepted": [shared]} for n in "abc"}}
+        filled = ap.fill(doc, SYSTEM_PUB, POINT, K_A, GENERATIONS)
+        for node_id, g in GENERATIONS.items():
+            self.assertEqual(ap.check_approvals(filled["nodes"][node_id]["accepted"][0]["signing"]["anchor_approvals"], SYSTEM_PUB, POINT, node_id), g)
+        self.assertNotIn("anchor_approvals", shared["signing"], "the caller's document was changed")
+
     def test_fill_touches_only_this_key_s_sets_and_refuses_a_node_without_g(self):
         doc = document(signed_set(), signed_set(OTHER_PUB, "image-2", ("d4", "e5")))
         filled = ap.fill(doc, SYSTEM_PUB, POINT, K_A, GENERATIONS)
