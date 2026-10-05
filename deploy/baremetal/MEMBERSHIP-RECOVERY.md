@@ -57,9 +57,10 @@ believes the chain it was given, exactly as a newly enrolled node does. So:
   without a writable log nothing is done.
 
 ```sh
-sudo python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia-sync/membership.json --root-key "$ROOT_KEY_HEX" \
+gpg --decrypt ownerauth-b.yk.gpg | sudo python3 -Es -m deploy.baremetal.reanchor \
+    --membership /var/lib/regalia-sync/membership.json --root-key "$ROOT_KEY_HEX" \
     --tpm-index 0x1500016 --tcti device:/dev/tpmrm0 --node-id b --node-config /etc/regalia/node.json \
-    --peer a=a-chain.json --peer c=c-chain.json
+    --peer a=a-chain.json --peer c=c-chain.json --ownerauth ownerauth.record.json
 ```
 
 The membership file is the node's sync store (`state_dir` in `node.json`); the root key, the index and the
@@ -71,7 +72,12 @@ INCOMPLETE) it gives that file, and any lock it made, back to the owner of the s
 takes is the node's own (`highwater.lock` in the state directory), so it and the node's sync never change
 the anchor at the same moment. Stop the node's services first all the same (below).
 
-It needs the TPM's owner authorization, as defining the anchor did at commissioning. The TPM is
+It needs the TPM's owner authorization, as defining the anchor did at commissioning (#242 step C,
+`ownerauth.py`): this node's value comes on standard input from its envelope, decrypted with the owner's
+card, and is checked against the ceremony's signed `ownerauth.record.json` under the pinned root before the
+TPM is touched. It is never typed and never an argument. The phrase is then read from the terminal itself.
+Without `--ownerauth` the commands use an empty owner authorization, which only a TPM whose owner
+authorization was never set accepts (the software TPMs of the tests). The TPM is
 tpm2-tools' default one, or the one named with `--tcti`; a `TPM2TOOLS_TCTI` left in the environment is
 refused, because it could point at another TPM, which would truthfully report the indices missing. That
 authorization is what authorizes the change. The typed phrase is a deliberate act, not a secret: it can
@@ -161,13 +167,10 @@ until it lands there is no tool for this case, and both peers gone remains a roo
   same-epoch rule is what keeps their two copies consistent.
 - **The terminal is a pty** driving `systemd-run --pty` in b's namespace. It shows the command needs a terminal and
   reads the phrase from it, but not a physical console.
-- **TPM owner authorization: today the commands assume it is EMPTY.** The anchor's define and undefine pass none
-  (`-C o`), on the software TPM and on hosts alike. #242 decided the opposite posture: the owner authorization is
-  SET, held off-host in envelopes for the developer cards, with the lockout authorization set too; after the
-  definition every write goes by policy. The fix (the anchor's define and undefine take the owner authorization
-  by file descriptor, never on the command line, and enrolment refuses an empty one under v4) is tracked as a
-  must-land item (regalia-kms-24, with regalia-kms-95). Until it lands, this command, like enrolment, works only
-  on a TPM whose owner authorization is empty.
+- **A set TPM owner authorization is not rehearsed.** The fixture's software TPMs keep an empty one, and the
+  rehearsal runs `reanchor` without `--ownerauth`. The owner-authorized path (#242 step C: the value from the
+  envelope on standard input, given to tpm2-tools through a memfd) is held by `tests/test_baremetal_ownerauth.py`
+  and the swtpm tests of the anchor's owner calls, not by this rehearsal (as for `enrol commit`, #420).
 - **Not rehearsed:** one peer left (the owner as the second source, #387, to build) and both peers destroyed (a
   root ceremony).
 

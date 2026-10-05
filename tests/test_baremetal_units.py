@@ -204,6 +204,26 @@ class Units(unittest.TestCase):
         self.assertIn("u regalia-sync - ", users)
         self.assertIn("u regalia-admission - ", users)
 
+    def test_the_esp_advance_writes_the_esp_and_the_anchor_only(self):
+        """#66 B3: root with no capability, its own command; it writes the ESP and nothing else on disk, reaches no
+        network, and runs on every new published chain."""
+        service = self.service("regalia-esp-advance")
+        self.assertEqual(service["ExecStart"],
+                         "/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json esp-advance --esp /efi")
+        self.assertIn('"esp-advance"', re.search(r'choices=\(([^)]*)\)', pathlib.Path(node.__file__).read_text()).group(1))
+        self.assertEqual((service["User"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
+                         ("root", "", "", "yes"))
+        self.assertEqual((service["ProtectSystem"], service["ReadWritePaths"], service["PrivateNetwork"], service["RestrictAddressFamilies"]),
+                         ("strict", "/efi -/run/regalia-metrics/esp-advance", "yes", "AF_UNIX"))
+        self.assertEqual((service["DevicePolicy"], service["DeviceAllow"], service["SupplementaryGroups"]), ("closed", "/dev/tpmrm0 rw", "tss"))
+        # the anchor's writer lock, its own (node.ESP_LOCK)
+        self.assertEqual("/run/%s/highwater.lock" % service["RuntimeDirectory"], node.ESP_LOCK)
+        self.assertEqual((service["Restart"], service["TimeoutStartSec"], service["LimitCORE"]), ("on-failure", "60", "0"))
+        self.assertEqual(unit("regalia-esp-advance.service")["Unit"]["RequiresMountsFor"], "/efi")
+        self.assertEqual(unit("regalia-esp-advance.service")["Unit"]["StartLimitIntervalSec"], "0")
+        self.assertEqual(unit("regalia-esp-advance.path")["Path"],
+                         {"PathChanged": "/var/lib/regalia-sync/" + node.PUBLISHED, "Unit": "regalia-esp-advance.service"})
+
     def test_no_unit_is_left_for_the_retired_authority_host(self):
         """#199 step 5c: the nodes sign heartbeats by quorum and revoke.py revokes; no unit, user or directory of the
         revocation authority's host remains."""
@@ -215,11 +235,12 @@ class Units(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
     def test_systemd_accepts_the_units_and_scores_them_well_exposed_at_most_a_little(self):
-        paths = [str(UNITS / (name + ".service")) for name in SERVICES] + [str(UNITS / "regalia-wg-apply.path")]
+        paths = [str(UNITS / (name + ".service")) for name in SERVICES + ("regalia-esp-advance",)] + \
+            [str(UNITS / "regalia-wg-apply.path"), str(UNITS / "regalia-esp-advance.path")]
         done = subprocess.run(["systemd-analyze", "verify", "--man=no", "--recursive-errors=no"] + paths, capture_output=True, text=True)
         problems = [line for line in done.stderr.splitlines() if "chrony.service" not in line and "network-online" not in line and line.strip()]
         self.assertEqual(problems, [])
-        for name in SERVICES:
+        for name in SERVICES + ("regalia-esp-advance",):
             with self.subTest(name):
                 done = subprocess.run(["systemd-analyze", "security", "--offline=yes", "--no-pager", str(UNITS / (name + ".service"))],
                                       capture_output=True, text=True)
@@ -351,6 +372,7 @@ class NodeMetricsDirectories(unittest.TestCase):
     made by tmpfiles; its unit may write there and nowhere new; node_exporter's user is the group's member."""
     OWNERS = {"authtime": ("regalia-authtime.service", "root"), "sync": ("regalia-sync.service", "regalia-sync"),
               "admission": ("regalia-admission.service", "regalia-admission"),
+              "esp-advance": ("regalia-esp-advance.service", "root"),
               "audit-ship": ("regalia-audit-ship@.service", "regalia-audit-ship")}
 
     def test_each_writer_s_directory_is_its_own_and_its_unit_may_write_there(self):

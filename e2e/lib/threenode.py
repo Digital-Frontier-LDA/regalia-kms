@@ -32,6 +32,11 @@ Stand-ins, each named where it is made, and each replaceable when the real piece
     passed as a plain credential (on a host LoadCredentialEncrypted= unseals it under the TPM's policy), and
     the key socket (socket activation, systemd-cryptsetup's side played by this fixture);
   * regalia-wg-apply.path: the same trigger (PathChanged= on the published chain), a transient path unit.
+  * regalia-esp-advance (#66 B3): the node's real command, as root with the installed unit's identity, at start and
+    from a transient path unit on the published chain; its ESP is a directory of the node's own (esp/, not a FAT
+    partition, and nothing boots from it) and its anchor lock is in the node's run directory. sync (and deliver,
+    through the node's Store) never moves the TPM anchor: this does, so advance() checks that each running node's
+    anchor follows the epoch.
 
 Underlay: a bridge in a switch namespace, node i at 192.0.2.(10*i)/24. Each node's site configuration names
 the others' underlay addresses, its boot mesh (wg-unlock) and its service mesh (wg-svc), as on a host.
@@ -177,6 +182,7 @@ class Cluster:
         self.manifest = None
         self.keys = {}
         self.authtimes = {}
+        self.authtime_writers = {}                    # node -> (its writer thread, the Event that halts it at power-off)
         self.loops = {}
         self.services = {n: () for n in names}        # what start() last started on each node, until stop()
         self.client = os.environ.get("REGALIA_UNLOCK_BIN", "")
@@ -524,12 +530,18 @@ class Cluster:
         """The node as its services see it (deploy/baremetal/node.Node), from its configuration."""
         return node.Node(node.load(str(self.nodes[name].cfg_path)))
 
+    @staticmethod
+    def enrolled_store(here):
+        """The store as enrolment builds it (enrol.py commit): ANCHORING, so a node starts with its anchor at the chain
+        it was enrolled with. The node's own services use node.store(), which never anchors (#66 B3)."""
+        return membership.Store(here.path("membership.json"), here.cfg["root_key"], here.anchor(), documents=here.documents().require_for)
+
     def _anchor_and_store(self, n):
         here = self.node(n.name)
         anchor = here.anchor()
         anchor.define()
         here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
-        here.store().commit(self.chain[0])
+        self.enrolled_store(here).commit(self.chain[0])
         with self._as_booted(n.name):                 # laid down by the node's policy (node.define_policy: the system key its measurements name)
             node.heartbeat_counter(here.cfg).define()
             node.signing_counter(here.cfg).define()  # #199: the highest sequence this node has signed
@@ -552,9 +564,37 @@ class Cluster:
         service = authtime.Service(str(n.run / "authtime.json"), ["nts1.e2e3.invalid", "nts2.e2e3.invalid"], reading=reading)
         self.authtimes[n.name] = service
         service.step()
-        thread = threading.Thread(target=service.run, args=(lambda: self.stop_threads,), kwargs={"interval": 5}, daemon=True)
+        self._authtime_writer(n.name)
+
+    def _authtime_writer(self, name):
+        """The node's authtime writer, every 5 s, as its unit would run on a host: only while the node is powered.
+        stop(power=...) halts it before emptying the node's /run (a powered-off node runs nothing, and a writer still
+        renaming its temp file there raced the emptying: three-node-outage on 8eb35a6); start() runs it again."""
+        service, off = self.authtimes[name], threading.Event()
+
+        def loop():
+            while not self.stop_threads and not off.is_set():
+                service.step()
+                off.wait(5)
+        thread = threading.Thread(target=loop, daemon=True)
         thread.start()
         self.threads.append(thread)
+        self.authtime_writers[name] = (thread, off)
+
+    def _authtime_halt(self, name):
+        """The node's authtime writer stopped, and waited for: nothing writes its /run after this returns."""
+        thread, off = self.authtime_writers.get(name, (None, None))
+        if thread is None:
+            return
+        off.set()
+        thread.join(30)
+        if thread.is_alive():
+            raise RuntimeError("%s's authtime writer did not stop: its /run is not emptied under it" % name)
+
+    def _authtime_resume(self, name):
+        thread, _ = self.authtime_writers.get(name, (None, None))
+        if name in self.authtimes and (thread is None or not thread.is_alive()):
+            self._authtime_writer(name)
 
     # ---- running ----
 
@@ -598,6 +638,9 @@ class Cluster:
         if not self.time[name]:                       # booted again: its time is checked again (chrony, on a host)
             self.time[name] = True
             self.authtimes[name].step()
+        self._authtime_resume(name)                   # its writer runs again once it is booted (halted at power-off)
+        if "sync" in services:                        # its path unit FIRST, as paths.target precedes the services on a host:
+            self._esp_watch(n)                        # sync publishes at once, and a change before the watch is missed
         for service in services:
             if service == "wg-apply" and not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
                 raise RuntimeError("%s's sync published no chain" % name)
@@ -607,6 +650,8 @@ class Cluster:
             if service == "wg-apply":                 # and again at every new chain, as regalia-wg-apply.path runs it
                 self._run(n, "wg-apply", unit=self.unit(name, "wg-watch"),
                           extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
+        if "sync" in services:                        # and regalia-esp-advance's run at start, as its unit's WantedBy= gives
+            self._esp_advance(n)
         self.services[name] = tuple(dict.fromkeys(self.services[name] + tuple(services)))   # stop() clears it
         if self.audit and name in self.nodes:         # the node's trail shippers run with it, as regalia-audit-ship@ does
             self._ship_start(name)
@@ -635,6 +680,46 @@ class Cluster:
                 return None
         if not until(lambda: epoch() == self.manifest["epoch"], 180, 2):
             raise RuntimeError("%s, started at epoch %d, did not take epoch %d by its sync" % (name, held, self.manifest["epoch"]))
+        # #66 B3 (regalia-kms-48's read): and its regalia-esp-advance wrote what it caught up on to its ESP, then anchored it
+        target = self.manifest["epoch"]
+        if not until(lambda: self.anchored(name) == target and self.esp_epoch(name) == target, 60, 1):
+            raise RuntimeError("%s caught up on epoch %d, but its TPM anchor is at %s and its ESP at %s: regalia-esp-advance did not "
+                               "follow | %s" % (name, target, self.anchored(name), self.esp_epoch(name), self.journal(name, "esp-watch")[-800:]))
+
+    def esp(self, name):
+        """The node's ESP stand-in (a directory: what regalia-esp-advance writes; nothing boots from it here)."""
+        return self.nodes[name].dir / "esp"
+
+    def _esp_args(self, n):
+        esp = self.esp(n.name)
+        if not esp.exists():
+            esp.mkdir(mode=0o755)
+            os.chmod(esp, 0o755)
+        return ("--esp", str(esp), "--esp-lock", str(n.run / "esp-advance.lock"))
+
+    def _esp_watch(self, n):
+        """#66 B3: regalia-esp-advance.path's stand-in, at every new published chain: the chain to the node's ESP, then
+        the TPM anchor. A run that fails is in its journal; anchored() says where the anchor is."""
+        self._run(n, "esp-advance", unit=self.unit(n.name, "esp-watch"), args=self._esp_args(n),
+                  extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
+
+    def _esp_advance(self, n):
+        """regalia-esp-advance's run at start (its unit is WantedBy=multi-user.target), once sync has published: the path
+        unit's own service, started and waited for, so that two runs never overlap (one unit, as on a host)."""
+        if not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
+            raise RuntimeError("%s's sync published no chain" % n.name)
+        unit = self.unit(n.name, "esp-watch") + ".service"
+        if sh("systemctl", "start", unit, check=False).returncode != 0:
+            raise RuntimeError("%s's regalia-esp-advance failed at start: %s" % (n.name, self.journal(n.name, "esp-watch")[-1500:]))
+
+    def anchored(self, name):
+        """The node's TPM anchor epoch (read as root)."""
+        return self.node(name).anchor().value()
+
+    def esp_epoch(self, name):
+        """The epoch of the chain on the node's ESP stand-in, or None."""
+        path = self.esp(name) / "EFI" / "regalia" / "membership.json"
+        return membership.load(path.read_bytes(), membership.MAX_CHAIN_BYTES)[-1]["manifest"]["epoch"] if path.exists() else None
 
     def _run(self, n, service, oneshot=False, unit=None, extra=(), args=()):
         argv = ["systemd-run", "--unit", unit or self.unit(n.name, service), "--collect"] + list(extra)
@@ -716,7 +801,7 @@ class Cluster:
         here.anchor().define()
         here.documents().put(document)
         for i, held in enumerate(self.chain):
-            here.store().commit(held, final=i == len(self.chain) - 1)
+            self.enrolled_store(here).commit(held, final=i == len(self.chain) - 1)
         with self._as_booted(new):                    # laid down by its policy, as at build (#389: the system key its set names)
             node.heartbeat_counter(here.cfg).define()
             node.signing_counter(here.cfg).define()
@@ -816,7 +901,8 @@ class Cluster:
         emptied (tmpfs on a host), its tunnels gone, its TPM through the power loss (power_cycle) and its time no
         longer authenticated until it starts again. power=None: the services only, as a crash."""
         n = self.member(name)
-        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply")] + [self.unit(name, "wg-watch") + t for t in (".path", ".service")] + \
+        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply")] + \
+                [self.unit(name, w) + t for w in ("wg-watch", "esp-watch") for t in (".path", ".service")] + \
                 [self.unit(name, "ship-" + trail) for trail, _, _ in AUDIT_TRAILS]:
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
@@ -825,8 +911,11 @@ class Cluster:
             sh("cryptsetup", "close", "e2e3-" + name, check=False)
         if power:
             self.time[name] = False
+            self._authtime_halt(name)                 # nothing of this node writes its /run while it is off
+            # its authtime writer is halted above; an entry that vanishes anyway (a belt) is gone, not an error
             for entry in n.run.iterdir():
-                shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+                with contextlib.suppress(FileNotFoundError):
+                    shutil.rmtree(entry) if entry.is_dir() and not entry.is_symlink() else entry.unlink()
             for interface in ("wg-svc", "wg-unlock", "wg-boot"):
                 n.in_ns("ip", "link", "del", interface, check=False)
             self.power_cycle(name, orderly=(power == "cycle"))
@@ -1178,6 +1267,13 @@ class Cluster:
         for name in running:
             if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
                 raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], seed))
+        # #66 B3: neither deliver nor sync moves the anchor; each running node's regalia-esp-advance writes the epoch to its
+        # ESP and then anchors it. Checked at every advance, so tier N keeps the anchor's progression (regalia-kms-24)
+        for name in [seed] + running:
+            if not until(lambda: self.anchored(name) == manifest["epoch"] and self.esp_epoch(name) == manifest["epoch"], 60, 1):
+                raise RuntimeError("%s's TPM anchor is at %s and its ESP at %s, not epoch %d: regalia-esp-advance did not follow | %s"
+                                   % (name, self.anchored(name), self.esp_epoch(name), manifest["epoch"],
+                                      self.journal(name, "esp-watch")[-800:]))
         self._beaten(manifest, owner_recovery)
         return manifest, since
 
@@ -1336,15 +1432,16 @@ class Cluster:
             return json.loads(answer.read())
 
     def _receipt_problem(self, name, trail, lines, stream):
-        """What is wrong with the head of the node's stream as its receipt states it, or None: the signature (Ed25519 over
-        internal/audit.ReceiptPreimage, with the receipt key) and what it names, the collector's last event, the trail's last
-        line and the running line chain over every line, recomputed here; and the shipper's head file, naming as many lines
-        committed."""
+        """What is wrong at position len(lines) of the node's stream (the SNAPSHOT's end, audit_complete) as its receipt
+        states it, or None: the signature (Ed25519 over internal/audit.ReceiptPreimage, with the receipt key) and what it
+        names, the collector's event there, the snapshot's last line and the running line chain over the snapshot,
+        recomputed here; and the shipper's head file, naming at least that many lines committed (it goes on shipping)."""
         import ssl
         from cryptography.hazmat.primitives import serialization
         from cryptography.exceptions import InvalidSignature
+        n = len(lines)
         try:
-            got = self.receipt(name, trail, len(stream))
+            got = self.receipt(name, trail, n)
         except OSError as failure:
             return "no receipt for the head (%s)" % failure
         chain = "0" * 64
@@ -1358,42 +1455,61 @@ class Cluster:
             key.verify(bytes.fromhex(got.get("signature", "")), preimage)
         except (InvalidSignature, ValueError):
             return "the head receipt's signature does not verify under the receipt key"
-        want = (len(stream), stream[-1].get("hash"), hashlib.sha256(lines[-1]).hexdigest(), chain)
+        want = (n, stream[n - 1].get("hash"), hashlib.sha256(lines[-1]).hexdigest(), chain)
         if (got.get("sequence"), got.get("event_hash"), got.get("line_sha256"), got.get("line_chain")) != want:
-            return "the head receipt names %r, not the stream's head %r" % (got, want)
+            return "the receipt at %d names %r, not %r" % (n, got, want)
         try:
             head = json.loads((self.audit_dir / "heads" / ("%s-%s.head.json" % (name, trail))).read_text())
         except (OSError, ValueError) as failure:
             return "the shipper's head file cannot be read (%s)" % failure
-        if head.get("committed") != len(stream):
-            return "the shipper's head file says %r committed, the collector holds %d" % (head.get("committed"), len(stream))
+        if not isinstance(head.get("committed"), int) or not n <= head["committed"] <= len(stream):
+            return "the shipper's head file says %r committed: not between the snapshot's %d and the collector's %d" % (
+                head.get("committed"), n, len(stream))
         return None
 
     def audit_complete(self, timeout=180):
-        """{(node, trail): what is wrong} for every node trail (sync, admission) whose collector stream is not exactly the
-        trail. A trail must have been written (an empty trail is not complete), and its stream must hold every line, in
-        order: event i at sequence i+1, the first chained to genesis and each to the one before, each naming its line by
-        its SHA-256 (newline included), each DENY still a deny; and the stream's head must be what its signed receipt and
-        the shipper's head file say. Empty when complete. Waits up to `timeout` for the shippers' passes. A node stopped
-        by the scenario ships what its trail holds once it runs again: its shippers are started here."""
+        """{(node, trail): what is wrong} for every node trail (sync, admission) the collector does not hold, line for
+        line, UP TO A SNAPSHOT of the trail taken when this is called. The trails go on growing while it waits (the
+        services run): judged against the trail as re-read at each look, a line written after the shipper's last pass
+        failed it (regalia-kms#409, d9: 400 trail lines, 399 in the collector). So the snapshot, taken first, is the
+        point of judgement, and the collector must hold AT LEAST it:
+          - a trail must have been written (an empty one is not complete);
+          - the trail as it is now still begins with the snapshot (append-only);
+          - every event the collector holds (the snapshot's and any after it) is the trail's line at its position: event i
+            at sequence i+1, the first chained to genesis and each to the one before, naming its line by its SHA-256
+            (newline included), each DENY still a deny;
+          - at the snapshot's end, the signed receipt and the shipper's head file say so.
+        Empty when complete. Waits up to `timeout` for the shippers' passes. A node stopped by the scenario ships what its
+        trail holds once it runs again: its shippers are started here."""
         for name in self.nodes:
             self._ship_start(name)
+
+        def read(name, trail):
+            path = self._trail_path(name, trail)
+            return path.read_bytes().splitlines(keepends=True) if path.exists() else []
+        snapshot = {(name, trail): read(name, trail) for name in self.nodes for trail, _, _ in AUDIT_TRAILS}
 
         def problems(receipts=False):
             wrong = {}
             for name in self.nodes:
                 for trail, _, _ in AUDIT_TRAILS:
-                    path = self._trail_path(name, trail)
-                    lines = path.read_bytes().splitlines(keepends=True) if path.exists() else []
-                    stream = self.audit_stream(name, trail)
+                    lines = snapshot[(name, trail)]
                     if not lines:
                         wrong[(name, trail)] = "the trail was never written"
                         continue
-                    if len(stream) != len(lines):
+                    stream = self.audit_stream(name, trail)
+                    now = read(name, trail)
+                    if now[:len(lines)] != lines:
+                        wrong[(name, trail)] = "the trail no longer begins with the %d lines it held: it was rewritten" % len(lines)
+                        continue
+                    if len(stream) < len(lines):
                         said = self.journal(name, "ship-" + trail, 3).strip().replace("\n", " | ")
                         wrong[(name, trail)] = "%d trail lines, %d in the collector (its shipper: %s)" % (len(lines), len(stream), said[-300:])
                         continue
-                    for i, (line, event) in enumerate(zip(lines, stream)):
+                    if len(stream) > len(now):
+                        wrong[(name, trail)] = "the collector holds %d events, the trail only %d lines" % (len(stream), len(now))
+                        continue
+                    for i, (line, event) in enumerate(zip(now, stream)):
                         detail = event.get("detail") or {}
                         if event.get("sequence") != i + 1:
                             wrong[(name, trail)] = "event %d carries sequence %r" % (i, event.get("sequence"))
@@ -1417,21 +1533,37 @@ class Cluster:
         return problems(receipts=True)
 
     def moved_by_sync(self, name, since, epoch):
-        """The peer whose sync round moved `name` to `epoch`, from its collector stream since `since`; None if none did. A
-        sync-apply event is filed under the manifest held when its round BEGAN (sync.Client.pull), so the round that
-        moved the node is the last ALLOW filed under the epoch before, ahead of the node's first event under `epoch`
-        (regalia-kms-1e and 3e on #370; lifted here from rolling-threenode.py for every scenario)."""
+        """The peer whose sync round moved `name` to `epoch`, from its collector stream since `since`; None if none did
+        (regalia-kms-1e and 3e on #370 and #393; one copy for every scenario).
+
+        A sync-apply event is filed under the manifest held when its round BEGAN (sync.Client.pull), and a pull goes round
+        after round on ONE source until it has nothing more: the round that moved the node is the LAST sync-apply before
+        the node's first pull event under `epoch` (that round's sync-heartbeat, or the next round's sync-apply), filed
+        under the epoch before and from the same peer. Not merely the last ALLOW: every pull that received nothing is an
+        ALLOW under the old epoch too, and must not stand in for the move. A round refused after it had moved the
+        membership counts only when it says so ("had moved from epoch N-1 to N"), and the answer says it was refused."""
         events = self.audit_has(name, "sync", since=since)
-        first = next((i for i, e in enumerate(events) if e.get("epoch") == epoch), None)
+        first = next((i for i, e in enumerate(events) if e.get("epoch") == epoch and e.get("event") in ("sync-heartbeat", "sync-apply")), None)
         if first is None:
             return None
-        rounds = [e for e in events[:first] if e.get("event") == "sync-apply" and e.get("outcome") == "ALLOW" and e.get("epoch") == epoch - 1]
-        return rounds[-1].get("peer") if rounds else None
+        rounds = [e for e in events[:first] if e.get("event") == "sync-apply"]
+        if not rounds or rounds[-1].get("epoch") != epoch - 1 or rounds[-1].get("peer") != events[first].get("peer"):
+            return None
+        moved = rounds[-1]
+        if moved.get("outcome") == "ALLOW":
+            return moved.get("peer")
+        if "had moved from epoch %d to %d" % (epoch - 1, epoch) in (moved.get("reason") or ""):
+            return "%s (refused after it moved)" % moved.get("peer")
+        return None
 
     def audit_has(self, name, trail, since=0, **fields):
         """The node's trail lines that its COLLECTOR stream holds (line i taken from the trail only where it hashes to
         what event i names: what the collector committed is that line, nothing read from free text), whose fields include
-        `fields` (a value that is a callable is a predicate), at or after `since` (their "at")."""
+        `fields` (a value that is a callable is a predicate), at or after `since` (their "at").
+
+        A TRAIL'S "at" IS WHOLE SECONDS (node.Trail: int(now())), and `since` is usually a time.time(): a line written in
+        the same second as `since` was taken has an "at" BELOW it. So `since` is taken to its second: never a line
+        missed for that (rolling-threenode's step 9 failed so, now and then: regalia-kms-24, after #370)."""
         path = self._trail_path(name, trail)
         lines = path.read_bytes().splitlines(keepends=True) if path.exists() else []
         out = []
@@ -1442,7 +1574,7 @@ class Cluster:
                 value = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(value, dict) or value.get("at", 0) < since:
+            if not isinstance(value, dict) or value.get("at", 0) < int(since):
                 continue
             if all(v(value.get(k)) if callable(v) else value.get(k) == v for k, v in fields.items()):
                 out.append(value)

@@ -33,7 +33,8 @@ therefore costs one ERROR an hour and no RECOVERED: the trail goes on saying it 
 
 THE FRACTION IS OF THE HEARTBEAT'S OWN LIFETIME, not of the manifest's bound: heartbeats signed for 12
 hours under a 24-hour bound would otherwise be at "50 % left" the moment each one arrives. When they are
-signed to the bound, the two are the same number. (An owner's hand-recovery heartbeat lives at most an hour.)
+signed to the bound, the two are the same number. (An owner's hand-recovery heartbeat lives at most the manifest's owner_heartbeat_lifetime_s: one hour by
+the genesis default, and a manifest may set it from 300 s up to heartbeat_max_lifetime_s.)
 
 THE CONDITION THIS PUTS ON THE SIGNERS: they renew before half of a heartbeat's lifetime is used. The nodes
 renew every beat_interval_s (15 minutes for 6-hour heartbeats, beat.py), well before. If the schedule cannot

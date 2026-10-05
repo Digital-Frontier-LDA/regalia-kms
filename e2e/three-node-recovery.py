@@ -2,7 +2,8 @@
 """#70 (Phase 10), PR 2: every directed peer recovery path, and the nodes that must NOT be restored, on three
 nodes (e2e/lib/threenode.py: each its real services in its own namespace, against its own TPM).
 
-    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-recovery.py
+    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> REGALIA_AUDIT_BIN=<dir with built regalia-audit-ship, regalia-audit-collector> \
+        sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN python3 -Es e2e/three-node-recovery.py
 
 IT CHANGES THE MACHINE (namespaces, interfaces, loop devices, dm-crypt mappings, transient units), so it runs
 only on a GitHub-hosted runner, or on a throwaway host whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
@@ -18,7 +19,8 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
   3  PoC 10.2-10.4: for each survivor, the two others power-cycled and both unlocked through the survivor
      before either starts (the survivor the only source); both then hold leases the survivor issued
   4  PoC 10.5: two returners ask one survivor at the same time: both get their key from it
-  5  PoC 10.5, the session binding: b's initrd, unlocked once, runs its client again in the same TPM boot with
+  5  PoC 10.5: b crashed in its running system (the same boot) asks and is refused for its phase (#397); then the
+     session binding: b's initrd, unlocked once, runs its client again in the same TPM boot with
      a second session and a gives it nothing, while c, in a new boot, unlocks through a at the same time; b
      power-cycled then unlocks through a
   6  PoC 10.5, the rate limits: b's lease requests to a, its admission stopped and its bucket full: the
@@ -28,6 +30,12 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
      control first (a node that may still ask opens its volume: the setup works), then the epoch given to one
      survivor and taken by the others with their sync; the survivors' wg-unlock drops the node; it gets no key,
      and no lease, with the reason (a survivor's DENY naming its state, or it is off wg-svc)
+  8  #340: every line of every node's sync and admission trail is in the audit collector (a real collector and each
+     node's real shipper: Cluster(audit=True)), and the decisions this scenario turns on are there by name, in the
+     stream of the node that made them: every directed unlock of step 2, a's refusal of b's second session (5), a's
+     refusal of b's seventh lease request (6), the lone node's refused proposal and its hand recovery (7), and each
+     node's change to serving. Not here: the time trail (the fixture's time stand-in writes none) and the update
+     trail (1b's call writes none)
 
 L always: a live lease in the node's admission, whose holder names the peer as issuer, and that peer's trail
 saying it issued one.
@@ -148,6 +156,7 @@ def scenario(cluster):
     ok(got["private_left"] == [], "the leases' private directory under /run is gone when the collection returns", got)
 
     header("2  PoC 10.1: every directed relationship, X restored by P alone")
+    step2 = time.time()
     for target, peer in itertools.permutations(names, 2):
         third = next(n for n in names if n not in (target, peer))
         cluster.stop(target)
@@ -161,6 +170,7 @@ def scenario(cluster):
         cluster.start(third, SERVICES)
         until(lambda: cluster.lease(third), 120, 2)
 
+    step2_end = time.time()
     header("3  PoC 10.2-10.4: two nodes down, the survivor restores both")
     for survivor in names:
         down = [n for n in names if n != survivor]
@@ -199,6 +209,26 @@ def scenario(cluster):
     # a new session; c, power-cycled (a new boot), asks the same survivor at the same time. In its initrd: an unlock is
     # judged in the initrd phase (#396), so a booted system that crashed is refused for its phase before its session
     survivor, crashed, rebooted = "a", "b", "c"
+    # #397, first: b crashes in its RUNNING system (its services stop, its TPM does not: PCR 11 in the system phase) and
+    # a client asks for its disk with a new session. Refused for its PHASE, before any session is judged: a booted
+    # system that crashed never gets its disk key back without a reboot
+    cluster.stop(crashed, power=None)
+    for interface in ("wg-unlock", "wg-svc"):                 # its running system's tunnels down (wg-boot takes wg-unlock's port)
+        cluster.nodes[crashed].in_ns("ip", "link", "del", interface, check=False)
+    (cluster.nodes[crashed].run / "boot-session").unlink(missing_ok=True)   # so the client asks rather than standing down
+    since = time.time()
+    # two rounds to each peer: with the session-binding check's own rounds below, b's unlock requests to a in this minute
+    # stay well under the listener's per-subject rate limit (a later added round could otherwise read as a refusal of
+    # the session binding when it is the rate's: regalia-kms-48)
+    got = cluster.unlock(crashed, timeout=90, rounds=2)
+    phase = "the node is in the system phase"                   # each peer's attestation refusal, in its unlock trail
+    denied = {p: [e.get("reason") for e in cluster.trail(p) if e.get("event") == "unlock" and e.get("subject") == crashed
+                  and e.get("outcome") == "DENY" and e.get("at", 0) >= since - 1] for p in (survivor, rebooted)}
+    ok("error" not in got and got.get("rc") != 0 and got.get("peer") is None
+       and all(any(phase in (r or "") for r in denied[p]) for p in (survivor, rebooted)),
+       "N: %s, crashed in its running system (the same boot, PCR 11 in the system phase), gets no key from %s or %s, both "
+       "saying why: %s" % (crashed, survivor, rebooted, phase), {"client": got, "denied": denied})
+    survivor_5, crashed_5 = survivor, crashed           # for step 8
     cluster.stop(rebooted)
     cluster.stop(crashed)                                       # a new boot, never started: PCR 11 in the initrd phase
     first = cluster.unlock(crashed)
@@ -240,7 +270,7 @@ def scenario(cluster):
     sh("systemctl", "stop", cluster.unit("b", "admission"), check=False)
     time.sleep(61)
     count, per = 6, 60                                   # deploy/baremetal/sync.py RATE["lease"]
-    since = time.time()
+    since = rated = time.time()
     answers = cluster.ask("b", "a", "lease-nonce", times=count + 1, node_id="b")
     ok([a.get("ok") for a in answers] == [True] * count + [False]
        and "RATE: more than %d lease requests in %d s from b" % (count, per) in answers[-1].get("refused", ""),
@@ -253,6 +283,7 @@ def scenario(cluster):
     until(lambda: cluster.lease("b"), 150, 3)
 
     header("7  N: a quarantined, then retired; b reported stolen: no key, no lease, and why")
+    alone_at = []                                       # (node, epoch, since) of each hand recovery, for step 8
     for victim, signer, state in (("a", "owner", "QUARANTINED"), ("a", "root", "RETIRED"), ("b", "owner", "REVOKED_STOLEN")):
         before = cluster.manifest
         survivors = [n for n in names if n != victim and may(before, n, "authorize")]
@@ -281,6 +312,7 @@ def scenario(cluster):
             ok(bool(tried) and not cluster.holds_heartbeat(alone, manifest["epoch"]),
                "%s, the only node left that counts, tried to sign epoch %d's heartbeat, found no co-signer, and holds none: alone it "
                "signs nothing" % (alone, manifest["epoch"]), cluster.beat_events([alone]))
+            alone_at.append((alone, manifest["epoch"], since))
             envelope = cluster.owner_beat(alone)
             lives = threenode.heartbeat.parse_time(envelope["heartbeat"]["expires_at"], "e") - threenode.heartbeat.parse_time(envelope["heartbeat"]["issued_at"], "i")
             ok(cluster.holds_heartbeat(alone, manifest["epoch"]) and cluster.heartbeat_signers(alone) == [alone, "owner"] and lives <= 3600,
@@ -319,6 +351,33 @@ def scenario(cluster):
            "N: and no lease, because %s" % reason, cluster.journal(victim, "admission")[-400:])
         cluster.stop(victim)
 
+    header("8  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
+    wrong = cluster.audit_complete()
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t in ("sync", "admission")}
+    ok(wrong == {}, "every node's sync and admission trail is written and in the collector line for line: sequence from 1, chained from "
+       "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
+       {"%s.%s" % k: v for k, v in wrong.items()})
+    # within step 2's own time (later steps unlock too): strictly before the second step 3 began
+    gave = {(target, peer): bool([e for e in cluster.audit_has(peer, "sync", since=step2, event="unlock", subject=target, outcome="ALLOW")
+                                  if e.get("at", 0) < int(step2_end)])
+            for target, peer in itertools.permutations(names, 2)}
+    ok(all(gave.values()), "every directed unlock of step 2 is in the stream of the peer that gave it",
+       {"%s<-%s" % k: v for k, v in gave.items() if not v})
+    second = cluster.audit_has(survivor_5, "sync", since=asked - 1, event="unlock", subject=crashed_5, outcome="DENY",
+                               reason=lambda r: bool(r) and "a second boot session in the same boot" in r)
+    ok(bool(second), "%s's refusal of %s's second session in one boot (step 5) is in %s's stream" % (survivor_5, crashed_5, survivor_5))
+    limited = cluster.audit_has("a", "sync", since=rated - 1, event="sync-lease-nonce", subject="b", outcome="DENY",
+                                reason=lambda r: bool(r) and "RATE: more than 6 lease requests in 60 s from b" in r)
+    ok(bool(limited), "a's refusal of b's seventh lease request in a minute (step 6) is in a's stream")
+    hand = {"%s@%d" % (n, e): (bool(cluster.audit_has(n, "sync", since=t, event="beat-propose", epoch=e, outcome="DENY",
+                                                      reason=lambda r: bool(r) and "no other node counts" in r)),
+                               bool(cluster.audit_has(n, "sync", since=t, event="owner-beat", epoch=e, outcome="ALLOW")))
+            for n, e, t in alone_at}
+    ok(bool(hand) and all(all(v) for v in hand.values()),
+       "the lone node's refused proposal and its hand recovery (owner-beat) in step 7 are in its own stream %s" % hand, cluster.beat_events(names))
+    serving = {n: bool(cluster.audit_has(n, "admission", event="admission-serving", outcome="ALLOW")) for n in names}
+    ok(all(serving.values()), "each node's change to serving is in its own admission stream", serving)
+
 
 def main():
     try:
@@ -334,11 +393,13 @@ def main():
     if present:
         print("three-node-recovery: refused: %s exists: another run's leftovers are still here" % ", ".join(present))
         return 2
-    if os.geteuid() != 0 or not os.access(os.environ.get("REGALIA_UNLOCK_BIN", "/nonexistent"), os.X_OK):
-        print("three-node-recovery: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
+    if os.geteuid() != 0 or not os.access(os.environ.get("REGALIA_UNLOCK_BIN", "/nonexistent"), os.X_OK) or not all(
+            os.access(os.path.join(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"), b), os.X_OK) for b in ("regalia-audit-ship", "regalia-audit-collector")):
+        print("three-node-recovery: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock and REGALIA_AUDIT_BIN a directory "
+              "with the built regalia-audit-ship and regalia-audit-collector (#340)")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work)
+    cluster = threenode.Cluster(work, audit=True)
     try:
         scenario(cluster)
     except Exception as failure:          # noqa: BLE001 - a step that could not run is a failure, said once

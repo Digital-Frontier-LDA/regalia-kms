@@ -32,7 +32,7 @@ NOT SHOWN HERE (MEMBERSHIP-RECOVERY.md, "What the rehearsal does not show"):
   * a real console: "by hand" is the fixture's cryptsetup with the recovery key, and the terminal is a pty;
   * the operator's checks: the chains are copied as local files, not fetched over SSH under pinned host keys, and
     neither the peers' `rollout epoch` nor the signing record is compared;
-  * a set TPM owner authorization: today the anchor's commands assume an empty one; #242 sets it (fix tracked);
+  * a set TPM owner authorization: the software TPMs keep an empty one, so reanchor runs without --ownerauth;
   * one peer left (the owner as the second source, #387) and both peers destroyed (a root ceremony).
 """
 import json

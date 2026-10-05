@@ -3,8 +3,10 @@ manifest ceremony needs to name it (#190).
 
     sudo python3 -Es -m deploy.baremetal.enrol init --node-id a --system-pub SYSTEM-PCR-KEY.pem
     python3 -Es -m deploy.baremetal.enrol challenge --bundle bundle.json --out CRED.bin --keep KEEP.json   (the root's side, no TPM)
-    sudo python3 -Es -m deploy.baremetal.enrol activate --credential CRED.bin                      (on the node: prints the answer)
-    python3 -Es -m deploy.baremetal.enrol entry --bundle bundle.json --system-pub SYSTEM-PCR-KEY.pem --keep KEEP.json --answer HEX
+    sudo python3 -Es -m deploy.baremetal.enrol activate --credential CRED.bin --out ACTIVATION.json   (on the node)
+    python3 -Es -m deploy.baremetal.enrol entry --bundle bundle.json --system-pub SYSTEM-PCR-KEY.pem --keep KEEP.json --activation ACTIVATION.json
+    gpg --decrypt ownerauth-a.yk.gpg | sudo python3 -Es -m deploy.baremetal.enrol ownerauth --node-id a --root-key ROOT \
+        --record ownerauth.record.json [--check]    (after `init`, before `commit`: the TPM owner authorization, #242)
 
 WHAT IT MAKES, each on the host and never imported (ADR-0002 D5's rule, applied to node keys):
   * the EK and a restricted signing AK, persistent in the TPM (attest.node_init, 0x81010001/0x81010002);
@@ -31,9 +33,12 @@ loader/credentials, never replacing a file, with their SHA-256 and size journall
 WHAT IT PRINTS: the identity bundle (bundle.json in the enrolment directory), public values only: the EK
 and AK public areas and Names, the EK certificate when the TPM carries one (checked here to certify THIS
 EK; the ceremony verifies it to the manufacturer's CA), both WireGuard public keys, the signing key's public
-area with the AK's certification of it, and the TPM's firmware version. `entry`, on the root's machine,
-checks a bundle without a TPM (signkey.verify_certification against the root's own system-phase PCR key) and
-prints the node's identity fields as a v4 manifest entry carries them. Without an EK certificate, the EK Name and its SHA-256 are shown on screen, to be copied
+area with the AK's certification of it, and the TPM's firmware version. `activate` (on the node) answers the root's
+challenge AND has the AK quote PCRs 7 and 11 over the bundle's identity fields, bound to that challenge (#399).
+`entry`, on the root's machine, checks a bundle without a TPM: the answer, the signing key (signkey.verify_certification
+against the root's own system-phase PCR key) and the identity quote over the bundle's own fields, and prints the node's
+identity fields as a v4 manifest entry carries them (`manifest propose --genesis --node` runs the same checks itself, and
+judges the quoted PCR 11 against the genesis measurements). Without an EK certificate, the EK Name and its SHA-256 are shown on screen, to be copied
 by hand to the ceremony (the fallback the ceremony records).
 
 WHAT IT REFUSES: a persistent object at the EK, AK or signing key handle, or a WG-SERVICE key, that this
@@ -51,6 +56,7 @@ before that object or file existed. Anything else at its handle or path is refus
 """
 import argparse
 import base64
+import contextlib
 import glob
 import hashlib
 import json
@@ -64,7 +70,7 @@ import sys
 import tempfile
 import time
 
-from deploy.baremetal import attest, espcreds, measurements, membership, signkey
+from deploy.baremetal import attest, espcreds, measurements, membership, ownerauth, signkey
 
 SCHEMA_JOURNAL = "regalia.enrol-journal/v1"
 SCHEMA_BUNDLE = "regalia.enrol-bundle/v1"
@@ -153,8 +159,9 @@ def persistent_handles(run):
     return {h.lower() for h in re.findall(r"0x[0-9a-fA-F]{8}", out)}
 
 
-def _evict(handle, run):
-    _run(["tpm2_evictcontrol", "-C", "o", "-c", handle], run, text=True)
+def _evict(handle, run, owner_auth=None):
+    with ownerauth.owner_call(owner_auth) as (owner, kw):
+        _run(["tpm2_evictcontrol", *owner, "-c", handle], run, text=True, **kw)
 
 
 def _name_at(handle, directory, run):
@@ -186,7 +193,7 @@ def _this_tpms_ek(directory, run):
                 os.unlink(p)
 
 
-def identity(journal, directory, run):
+def identity(journal, directory, run, owner_auth=None):
     """The EK and AK, persistent; their public areas in the enrolment directory.
 
     RESUME EVICTS ONLY WHAT IT CAN PROVE IT MADE. The EK is derived from the TPM's seed: an object at the EK
@@ -220,7 +227,7 @@ def identity(journal, directory, run):
         require(recorded is not None and _name_at(attest.AK_HANDLE, directory, run) == recorded,
                 "the TPM already holds a persistent object at %s, which this enrolment did not make. A host that "
                 "was enrolled is re-enrolled only as a new node, through replacement (#76)" % attest.AK_HANDLE)
-        _evict(attest.AK_HANDLE, run)            # recorded right after it was created: ours, unseen
+        _evict(attest.AK_HANDLE, run, owner_auth)  # recorded right after it was created: ours, unseen
     journal.started("identity")
     with tempfile.TemporaryDirectory(prefix="enrol-") as d:
         if ek_h not in persistent_handles(run):
@@ -233,7 +240,8 @@ def identity(journal, directory, run):
         ak_name = attest.name_of(attest.public_area(ak_blob, "the AK")).hex()
         journal.doc["steps"]["identity"]["ak_name"] = ak_name       # recorded BEFORE it is made persistent
         _atomic_json(journal.path, journal.doc)
-        _run(["tpm2_evictcontrol", "-C", "o", "-c", ctx, attest.AK_HANDLE], run, text=True)
+        with ownerauth.owner_call(owner_auth) as (owner, kw):
+            _run(["tpm2_evictcontrol", *owner, "-c", ctx, attest.AK_HANDLE], run, text=True, **kw)
         if os.environ.get("TPM2TOOLS_TCTI", "").startswith(("swtpm", "mssim")):
             _run(["tpm2_flushcontext", "-t"], run, check=False, text=True)   # no resource manager (see attest.node_init)
     for k, blob in (("ek", ek_blob), ("ak", ak_blob)):
@@ -247,7 +255,7 @@ def identity(journal, directory, run):
     return facts
 
 
-def signing_key(journal, directory, system_pub, ids, run):
+def signing_key(journal, directory, system_pub, ids, run, owner_auth=None):
     """The signing key (signkey.py) at signkey.HANDLE, made once and certified by the AK. #234's rules: an object at
     the handle is removed only when the journal recorded its Name before it was made persistent (a crash between the
     two); anything else there is refused, never evicted."""
@@ -265,14 +273,14 @@ def signing_key(journal, directory, system_pub, ids, run):
         require(recorded is not None and _name_at(signkey.HANDLE, directory, run) == recorded,
                 "the TPM already holds a persistent object at %s, which this enrolment did not make. A host that was "
                 "enrolled is re-enrolled only as a new node, through replacement (#76)" % signkey.HANDLE)
-        _evict(signkey.HANDLE, run)              # recorded right after it was created: ours, unseen
+        _evict(signkey.HANDLE, run, owner_auth)  # recorded right after it was created: ours, unseen
 
     def record(name):
         journal.doc["steps"]["signing_key"]["signing_name"] = name         # BEFORE it is made persistent
         _atomic_json(journal.path, journal.doc)
 
     journal.started("signing_key")
-    blob = signkey.create(system_pub, run=run, record=record)
+    blob = signkey.create(system_pub, run=run, record=record, owner_auth=owner_auth)
     info, sig = signkey.certify(run=run)
     entry = signkey.verify_certification(blob, info, sig, bytes.fromhex(ids["ak_public"]), ids["ek_name"], system_pub, run=run)
     facts = {"signing_public": blob.hex(), "signing_certify": info.hex(), "signing_sig": sig.hex(), "signing_key": entry["key"],
@@ -414,6 +422,12 @@ def recheck_signing_key(journal, directory, run):
 
 ENTRY_KEYS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key", "hsm_serials", "ssh_host_pub")
 CHALLENGE_SCHEMA = "regalia.enrol-challenge/v1"
+# #399: the node's identity as its AK quotes it at `activate`, and what activate gives back
+IDENTITY_SCHEMA = "regalia.enrol-identity/v1"
+IDENTITY_FIELDS = ("node_id", "ek_name", "ak_name", "signing_key", "wg_service_pub", "wg_boot_pub", "hsm_serials", "ssh_host_pub")
+IDENTITY_PCRS = (7, 11)                 # the Secure Boot state and the image, as booted when the node was enrolled
+ACTIVATION_SCHEMA = "regalia.enrol-activation/v1"
+ACTIVATION_FIELDS = ("schema", "node_id", "answer", "pcr_values", "quote", "signature")
 
 
 def _bundle_identity(bundle):
@@ -446,39 +460,72 @@ def challenge(bundle, run=subprocess.run, rand=os.urandom):
     return credential, keep
 
 
-def activate(credential, run=subprocess.run):
+def identity_payload(bundle):
+    """What a node's AK quotes at `activate` and the root's side checks at `entry` (#399): the bundle's identity fields as
+    the bundle states them, canonical. Built from the bundle both times, so a field changed after the quote, or a
+    stale quote over older fields, never matches."""
+    require(isinstance(bundle, dict), "not an identity bundle")
+    missing = [k for k in IDENTITY_FIELDS if k not in bundle]
+    require(not missing, "the bundle has no %s" % ", ".join(missing))
+    return membership.canonical(dict({k: bundle[k] for k in IDENTITY_FIELDS}, schema=IDENTITY_SCHEMA))
+
+
+def _pcr_values(pcrs, run):
+    """This TPM's current SHA-256 PCR values for `pcrs`, as {str(index): hex}."""
+    with tempfile.TemporaryDirectory(prefix="enrol-pcrs-") as d:
+        out = os.path.join(d, "pcrs")
+        attest.tpm2("pcrread", "sha256:" + ",".join(str(i) for i in sorted(pcrs)), "-o", out, run=run)
+        with open(out, "rb") as f:
+            raw = f.read()
+    require(len(raw) == 32 * len(pcrs), "tpm2_pcrread gave %d bytes for %d PCRs" % (len(raw), len(pcrs)))
+    return {str(i): raw[32 * n:32 * n + 32].hex() for n, i in enumerate(sorted(pcrs))}
+
+
+def activate(credential, bundle, run=subprocess.run):
     """On the node (root): the secret its TPM releases for `credential` under its persistent EK and AK (attest.node_activate),
-    as hex, for the operator to carry back to the root's machine."""
+    then the AK's quote of PCRs 7 and 11 over this node's identity (`bundle`, its own bundle.json), bound to this very
+    challenge by the secret's SHA-256 (#399; regalia-kms-d9). Returns the activation the operator carries back to the
+    root's machine: the answer, the PCR values the quote covers (read just before it: the root's side checks them
+    against the quote's digest, so a PCR that moved in between is refused), and the quote. Nothing in it is a lasting
+    secret: the answer opens this one challenge only, whose keep holds only its hash."""
+    require(isinstance(bundle, dict) and bundle.get("schema") == SCHEMA_BUNDLE, "not an identity bundle")
+    payload = identity_payload(bundle)
     with tempfile.TemporaryDirectory(prefix="enrol-activate-") as d:
         path, out = os.path.join(d, "credential"), os.path.join(d, "secret")
         with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
             f.write(credential)
         attest.node_activate(path, out, run=run)
         with open(out, "rb") as f:
-            return f.read().hex()
+            secret = f.read()
+        values = _pcr_values(IDENTITY_PCRS, run)
+        qpath, spath = os.path.join(d, "quote"), os.path.join(d, "sig")
+        attest.quote_identity(payload, hashlib.sha256(secret).digest(), IDENTITY_PCRS, qpath, spath, run=run)
+        with open(qpath, "rb") as q, open(spath, "rb") as s:
+            quote, signature = q.read(), s.read()
+    return {"schema": ACTIVATION_SCHEMA, "node_id": bundle["node_id"], "answer": secret.hex(), "pcr_values": values,
+            "quote": quote.hex(), "signature": signature.hex()}
 
 
-def entry(bundle, system_pub, keep, answer, run=subprocess.run):
+def entry(bundle, system_pub, keep, activation, run=subprocess.run):
     """The root's side, on its own machine and without a TPM: a node's identity fields as a v4 manifest entry carries
     them, from its bundle, once everything in it that can be checked is. The EK and AK Names are recomputed from their
     public areas, and the signing key is accepted only as signkey.verify_certification accepts it: certified by THIS
     AK under THIS EK, with the attributes and the PolicyAuthorize of `system_pub` (the root's own copy of the
     system-phase PCR key, never the node's word). The EK certificate is the ceremony's to verify, as before.
 
-    `keep` and `answer` are the AK's proof (challenge, then activate on the node): the secret only the TPM holding this EK
-    and this AK could release. Without it the AK's certification proves nothing, and nothing is printed."""
+    `keep` and `activation` are the AK's proof (challenge, then activate on the node): the secret only the TPM holding this
+    EK and this AK could release. Without it the AK's certification proves nothing, and nothing is printed. With it, the
+    AK's quote over the bundle's identity fields, bound to this challenge (#399), says every printed field is what THAT
+    TPM's node stated at activation: a WireGuard key, SSH host key or serial changed on the way is refused."""
+    return proven_entry(bundle, system_pub, keep, activation, run)[0]
+
+
+def proven_entry(bundle, system_pub, keep, activation, run=subprocess.run):
+    """entry(), and the PCR 7 and 11 values the node's AK quoted when it was activated ({"7": hex, "11": hex}), for the
+    genesis to judge against the measurements (manifest propose --genesis, #399)."""
     for k in ("wg_service_pub", "wg_boot_pub", "signing_public", "signing_certify", "signing_sig"):
         require(isinstance(bundle.get(k), str), "the bundle has no %s%s" % (k, ": it was made before #199" if k.startswith("signing") else ""))
-    _, ak_public = _bundle_identity(bundle)
-    require(isinstance(keep, dict) and keep.get("schema") == CHALLENGE_SCHEMA, "the kept challenge is not one `enrol challenge` wrote")
-    require((keep.get("node_id"), keep.get("ek_name"), keep.get("ak_name")) == (bundle["node_id"], bundle["ek_name"], bundle["ak_name"]),
-            "the kept challenge was made for another bundle")
-    require(isinstance(answer, str) and re.fullmatch(r"[0-9a-f]{64}", answer or "") is not None, "the answer is the 64 hex `enrol activate` printed")
-    import hmac
-    require(hmac.compare_digest(hashlib.sha256(bytes.fromhex(answer)).hexdigest(), keep.get("secret_sha256", "")),
-            "the answer is not the challenge's secret: the AK is not proven to be in the TPM this EK names")
-    signing = signkey.verify_certification(bytes.fromhex(bundle["signing_public"]), bytes.fromhex(bundle["signing_certify"]),
-                                           bytes.fromhex(bundle["signing_sig"]), ak_public, bundle["ek_name"], system_pub, run=run)
+    ek_public, ak_public = _bundle_identity(bundle)
     wg = {k: base64.b64decode(bundle[k], validate=True).hex() for k in ("wg_service_pub", "wg_boot_pub")}
     require(all(len(v) == 64 for v in wg.values()), "a WireGuard public key is 32 bytes")
     serials = bundle.get("hsm_serials")
@@ -486,8 +533,29 @@ def entry(bundle, system_pub, keep, answer, run=subprocess.run):
             and len(set(serials)) == len(serials), "the bundle has no hsm_serials, or a malformed list: it was made before #363")
     require(isinstance(bundle.get("ssh_host_pub"), str) and re.fullmatch(r"[0-9a-f]{64}", bundle["ssh_host_pub"]) is not None,
             "the bundle has no ssh_host_pub (64 hex): it was made before #371")
+    require(isinstance(keep, dict) and keep.get("schema") == CHALLENGE_SCHEMA, "the kept challenge is not one `enrol challenge` wrote")
+    require((keep.get("node_id"), keep.get("ek_name"), keep.get("ak_name")) == (bundle["node_id"], bundle["ek_name"], bundle["ak_name"]),
+            "the kept challenge was made for another bundle")
+    require(isinstance(activation, dict) and activation.get("schema") == ACTIVATION_SCHEMA,
+            "the activation is not one `enrol activate` wrote (a bare answer, from before #399, is not taken)")
+    membership.exact(activation, ACTIVATION_FIELDS, "the activation")
+    require(activation["node_id"] == bundle["node_id"], "the activation is another node's (%s)" % activation["node_id"])
+    answer = activation["answer"]
+    require(isinstance(answer, str) and re.fullmatch(r"[0-9a-f]{64}", answer) is not None, "the activation's answer is not 64 hex")
+    import hmac
+    require(hmac.compare_digest(hashlib.sha256(bytes.fromhex(answer)).hexdigest(), keep.get("secret_sha256", "")),
+            "the answer is not the challenge's secret: the AK is not proven to be in the TPM this EK names")
+    signing = signkey.verify_certification(bytes.fromhex(bundle["signing_public"]), bytes.fromhex(bundle["signing_certify"]),
+                                           bytes.fromhex(bundle["signing_sig"]), ak_public, bundle["ek_name"], system_pub, run=run)
+    for k in ("quote", "signature"):
+        require(isinstance(activation[k], str) and re.fullmatch(r"(?:[0-9a-f]{2})+", activation[k]) is not None, "the activation's %s is not hex" % k)
+    quoted = attest.verify_identity(identity_payload(bundle), hashlib.sha256(bytes.fromhex(answer)).digest(), ak_public, bundle["ek_name"],
+                                    bytes.fromhex(activation["quote"]), bytes.fromhex(activation["signature"]), run)
+    require(quoted["pcrs"] == sorted(IDENTITY_PCRS), "the identity quote covers PCRs %s, not %s" % (quoted["pcrs"], sorted(IDENTITY_PCRS)))
+    require(activation["pcr_values"] is not None, "the activation reports no PCR values")
+    values = attest.check_reported_values(activation["pcr_values"], sorted(IDENTITY_PCRS), bytes.fromhex(quoted["pcr_digest"]))
     return dict(zip(ENTRY_KEYS, (bundle["node_id"], bundle["ek_name"], bundle["ak_name"], wg["wg_service_pub"], wg["wg_boot_pub"], signing,
-                                 list(serials), bundle["ssh_host_pub"])))
+                                 list(serials), bundle["ssh_host_pub"]))), dict(values)
 
 
 def _der_exact(raw, index):
@@ -945,7 +1013,7 @@ def first_epoch(envelopes, root_key, node_id):
     return None
 
 
-def anchor_and_store(config_path, chain, run=subprocess.run):
+def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     """Phase 2's trust anchors, run AS regalia-sync (the user that owns them from then on, #214): the
     membership epoch anchor (membership.HighWater: the counter, its base and the two record slots, #68),
     the store committed with the whole chain, so the anchor stands at its last epoch N, the heartbeat counter
@@ -967,13 +1035,14 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     tip = membership.accept_chain(None, envelopes, cfg["root_key"])
     policy = lambda: node_module.define_policy(cfg, manifest=tip)
     hw = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=n.path("highwater.lock"), define_policy=policy,
-                              image_key=lambda: node_module.image_key(cfg, manifest=tip))
+                              image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth)
     store = membership.Store(n.path("membership.json"), cfg["root_key"], hw, documents=n.documents().require_for)
-    counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"), policy=policy)
+    counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"), policy=policy,
+                                owner_auth=owner_auth)
     # the signing counter (#199: the highest heartbeat sequence this node has signed): defined HERE, at 0, under the same
     # policy as the anchor, since a node that has signed nothing starts there
     signing = heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=n.path("signing-counter.lock"), define_policy=policy,
-                                image_key=lambda: node_module.image_key(cfg, manifest=tip))
+                                image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth)
 
     def defined(owner, indices):
         return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]
@@ -1021,7 +1090,7 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     return manifest["epoch"], membership.digest(manifest)
 
 
-def first_heartbeat(config_path, run=subprocess.run, bootstrap=False):
+def first_heartbeat(config_path, run=subprocess.run, bootstrap=False, owner_auth=None):
     """As regalia-sync (it owns the heartbeat state and the counter's lock), for a node first named above epoch 1:
     the highest heartbeat any reachable peer holds, verified under this node's manifest, taken as
     its FIRST (heartbeat.Freshness.accept_first: same checks as accept, live by authenticated time with no
@@ -1035,7 +1104,7 @@ def first_heartbeat(config_path, run=subprocess.run, bootstrap=False):
     store = n.store()
     manifest = store.load()             # the store the anchor step committed, checked against the TPM anchor (the
     #                                     published chain does not exist yet: the sync service writes it)
-    return take_first_heartbeat(n.node_id, manifest, store, n.freshness(), n.sources(manifest),
+    return take_first_heartbeat(n.node_id, manifest, store, n.freshness(owner_auth), n.sources(manifest),
                                 node_module.Trail(n.path("sync-audit.jsonl")), bootstrap, note=lambda text: print("NOTE " + " ".join(text.split())))
 
 
@@ -1108,11 +1177,39 @@ def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bo
     return sequence, left
 
 
-def run_first_heartbeat_as_sync(config_path, run=subprocess.run, bootstrap=False):
-    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_first-heartbeat", "--config", config_path]
-               + (["--bootstrap"] if bootstrap else []),
-               cwd=PACKAGE_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+def _no_sync_process(run):
+    """Refused while any process of uid regalia-sync exists (regalia-kms-d9 on #418): the owner authorization handed to
+    enrolment's regalia-sync step is readable by every process of that uid (/proc/<pid>/fd) while the step runs, so
+    none may be there. A residual race with a process starting meanwhile stays (stated; #419 removes the handoff)."""
+    done = run(["pgrep", "-u", SYNC_USER], capture_output=True, text=True)
+    require(done.returncode == 1, "a process of %s is running (%s): the owner authorization is handed to enrolment's %s step "
+            "only while none is (stop regalia-sync and its services first; pgrep -u %s)" % (
+                SYNC_USER, (done.stdout or "pgrep failed").split()[:5], SYNC_USER, SYNC_USER) if done.returncode == 0 else
+            "cannot tell whether a process of %s is running (pgrep exit %d): the owner authorization is not handed over" % (
+                SYNC_USER, done.returncode))
+
+
+@contextlib.contextmanager
+def _owner_fd(owner_auth, run=subprocess.run):
+    """(argv, kw) handing the owner authorization to a regalia-sync step: an inherited memfd (ownerauth.child_fd) named
+    by --ownerauth-fd, closed here after the step; nothing when there is none (an empty owner authorization)."""
+    if owner_auth is None:
+        yield [], {}
+        return
+    _no_sync_process(run)
+    fd = ownerauth.child_fd(owner_auth)
+    try:
+        yield ["--ownerauth-fd", str(fd)], {"pass_fds": (fd,)}
+    finally:
+        os.close(fd)
+
+
+def run_first_heartbeat_as_sync(config_path, run=subprocess.run, bootstrap=False, owner_auth=None):
+    with _owner_fd(owner_auth, run) as (extra, kw):
+        done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                    "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_first-heartbeat", "--config", config_path]
+                   + (["--bootstrap"] if bootstrap else []) + extra,
+                   cwd=PACKAGE_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL, **kw)
     require(done.returncode == 0, "the first-heartbeat step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     m = re.search(r"^FIRST-HEARTBEAT (\S+) (\S+)$", done.stdout, re.M)
     require(m is not None, "the first-heartbeat step did not report its result")
@@ -1123,14 +1220,15 @@ def run_first_heartbeat_as_sync(config_path, run=subprocess.run, bootstrap=False
     return int(m.group(1)), (None if m.group(2) == "-" else float(m.group(2)))
 
 
-def run_as_sync(config_path, chain, run=subprocess.run):
+def run_as_sync(config_path, chain, run=subprocess.run, owner_auth=None):
     """anchor_and_store, in a process of regalia-sync with the tss group (the TPM), started from the package
     root so `-m` finds it. The chain goes on its standard input: the enrolment directory is root's (0700),
     and regalia-sync could not read a file there. The journal stays with the caller."""
     # env -i: nothing of root's environment reaches the step (the TCTI comes from node.json, not from here)
-    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", "-"],
-               cwd=PACKAGE_ROOT, capture_output=True, text=True, input=membership.canonical(chain).decode())
+    with _owner_fd(owner_auth, run) as (extra, kw):
+        done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                    "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", "-"]
+                   + extra, cwd=PACKAGE_ROOT, capture_output=True, text=True, input=membership.canonical(chain).decode(), **kw)
     require(done.returncode == 0, "the anchor step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     m = re.search(r"^ANCHORED epoch (\d+) digest ([0-9a-f]{64})$", done.stdout, re.M)
     require(m is not None, "the anchor step did not report its result")
@@ -1826,19 +1924,37 @@ def render_credentials(journal, esp, site, chain, root_key, anchor, device=None)
     return record
 
 
+def commit_owner_auth(manifest, given, root_key, node_id, run=subprocess.run):
+    """The owner authorization enrolment commits with (#242): `given` (Auth, record), read from standard input before
+    the fingerprint was typed, judged against the record under `root_key` (the typed fingerprint's by now). Under v4
+    (production) the TPM's owner and lockout authorizations must both be SET, and the value given: refused otherwise,
+    before anything is written. None: an empty owner authorization (a v1-v3 lab chain without --ownerauth)."""
+    owner_auth = None if given is None else ownerauth.confirm(given[0], given[1], root_key, node_id)
+    if manifest["schema"] == membership.SCHEMA_V4:
+        ownerauth.require_production(run=run)
+        require(owner_auth is not None, "under %s the TPM's owner authorization is set and enrolment takes it from this "
+                "node's envelope: gpg --decrypt ownerauth-%s.yk.gpg | enrol commit ... --ownerauth ownerauth.record.json"
+                % (membership.SCHEMA_V4, node_id))
+    return owner_auth
+
+
 def commit(directory, chain, root_key, typed, document, site, example, boot=None, run=subprocess.run, prefix="", as_sync=None,
-           out=sys.stdout, replace=None, first_beat=None, bootstrap=False):
+           out=sys.stdout, replace=None, first_beat=None, bootstrap=False, ownerauth_given=None):
     """Phase 2 (#190): this host's TPM identity re-checked by Name, the manifest chain checked again (never trusted
     from an earlier `check`), the boot image checked (approved_image), the configuration installed, the state
     directory made regalia-sync's, the anchor, the store and the heartbeat counter set up AS regalia-sync, and the
     two boot credentials sealed onto the ESP. `boot` = {"image", "record", "initrd_pub", "system_pub",
     "secure_boot_cert", "esp"}; the CLI always gives it, and only tests of the earlier steps leave it out, which
-    stops after the anchors. The peers' paths and the enrolment record follow in later steps."""
+    stops after the anchors. The peers' paths and the enrolment record follow in later steps.
+    `ownerauth_given`: (ownerauth.Auth, ownerauth.record.json) as read from standard input before the operator typed the
+    root's fingerprint; judged here once that fingerprint has confirmed the root key, before anything is written. Under
+    v4 the TPM's owner and lockout authorizations must both be set (#242: ownerauth.require_production)."""
     journal = Journal(directory, _bundle(directory)["node_id"])
     require(journal.state("identity") == "done", "this host has no identity yet: run `enrol init` first")
     identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
     recheck_signing_key(journal, directory, run)                    # and the signing key at its own (#199; CodeRabbit on #358)
     manifest = check_manifest(directory, chain, root_key, typed, document, replace)
+    owner_auth = commit_owner_auth(manifest, ownerauth_given, root_key, journal.doc["node_id"], run)
     note = signing_note(directory, manifest)
     if note:
         print(note, file=out)
@@ -1852,7 +1968,8 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     # before the anchor: the store commits no epoch whose document it does not hold
     store_documents(prefix + config["state_dir"], document, as_sync is None)
     journal.started("anchor")
-    epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain if isinstance(chain, list) else [chain])
+    owner = {} if owner_auth is None else {"owner_auth": owner_auth}      # an empty owner authorization: as before (#242)
+    epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain if isinstance(chain, list) else [chain], **owner)
     require(epoch == manifest["epoch"] and digest == membership.digest(manifest),
             "the anchor stands at epoch %d (%s), not at the manifest checked (%d)" % (epoch, digest[:16], manifest["epoch"]))
     journal.done("anchor", epoch=epoch, digest=digest)
@@ -1860,7 +1977,7 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
         # the heartbeat counter starts AT the network's current sequence whenever the node enrols (#190), at 0 only at
         # the network's bootstrap (--bootstrap)
         journal.started("heartbeat_first")
-        sequence, left = (first_beat or run_first_heartbeat_as_sync)(prefix + NODE_JSON, bootstrap=bootstrap)
+        sequence, left = (first_beat or run_first_heartbeat_as_sync)(prefix + NODE_JSON, bootstrap=bootstrap, **owner)
         journal.done("heartbeat_first", sequence=sequence, bootstrap=bool(bootstrap and sequence == 0 and left is None))
         print("FIRST HEARTBEAT: %s" % ("nothing to do (a heartbeat held, or the counter defined)" if sequence is None else
                                       "network bootstrap: the counter starts at 0" if left is None else
@@ -1881,6 +1998,36 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     return epoch, digest
 
 
+def enrolled_ek_name(directory, node_id):
+    """The Name (hex) of the EK `enrol init` recorded for this host: what the owner authorization's salted session is
+    salted to (#414). Refused before init has run (or finished)."""
+    journal = Journal(directory, node_id)
+    require(journal.state("identity") == "done", "%s has no finished identity step: run `enrol init` first (its EK salts "
+            "the session the owner authorization is set in)" % directory)
+    return journal.get("identity")["ek_name"]
+
+
+def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None, run=subprocess.run, directory=ENROL_DIR,
+                  ek_name=None):
+    """`enrol ownerauth` (#242 step C): this TPM's owner authorization from the node's envelope, the value on `stream`
+    (gpg --decrypt ownerauth-<node>.yk.gpg | ...), checked against ownerauth.record.json verified under the pinned
+    root BEFORE the TPM is touched. Sets it from EMPTY only (ownerauth.set_owner refuses one already set, never
+    overwriting it). `check`: changes nothing, and proves in ONE owner-authorized call that the TPM's owner
+    authorization is this node's envelope value. The value is set in a session salted to the EK `enrol init` recorded
+    (`ek_name`, else read from `directory`'s journal; #414). Returns what to print."""
+    with open(record_path, "rb") as f:
+        envelope = membership.load(f.read(membership.MAX_BYTES + 1), membership.MAX_BYTES)
+    auth = ownerauth.from_envelope(stream, envelope, root_key, node_id)
+    if check:
+        require(ownerauth.posture(tcti, run)["owner"], "the TPM's owner authorization is empty: nothing to check; set it "
+                "(this command without --check)")
+        require(ownerauth.holds(auth, tcti, run), "the TPM's owner authorization is NOT %s's envelope value: this TPM was "
+                "provisioned otherwise, or the envelope is another node's. Nothing was changed" % node_id)
+        return "the TPM's owner authorization is %s's envelope value" % node_id
+    ownerauth.set_owner(auth, ek_name or enrolled_ek_name(directory, node_id), tcti, run)
+    return "the TPM's owner authorization is set to %s's envelope value, and answers to it; keep the envelope, never the value" % node_id
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.enrol", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="command", required=True)
@@ -1891,17 +2038,26 @@ def main(argv=None):
     p.add_argument("--pkcs11-module", default=OPENSC_MODULE, help="the PKCS#11 module that reads the SmartCard-HSM's serial")
     p.add_argument("--system-pub", required=True, help="the system-phase PCR key's public half (PEM): the signing key is usable "
                    "only under PCR 11 policies it signed")
+    o = sub.add_parser("ownerauth", help="set this TPM's owner authorization from the node's envelope, on standard input (#242)")
+    o.add_argument("--node-id", required=True)
+    o.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex: the record is verified under it")
+    o.add_argument("--record", required=True, help="the ceremony's ownerauth.record.json")
+    o.add_argument("--check", action="store_true", help="change nothing: prove the TPM's owner authorization is this envelope's")
+    o.add_argument("--enrol-dir", default=ENROL_DIR, help="the enrolment directory: the EK `init` recorded salts the session")
     g = sub.add_parser("challenge", help="(the root's side, no TPM) a credential to the bundle's EK and AK, for `activate`")
     g.add_argument("--bundle", required=True)
     g.add_argument("--out", required=True, help="the credential, to carry to the node")
     g.add_argument("--keep", required=True, help="what the root's machine keeps: the secret's SHA-256, never the secret")
-    a = sub.add_parser("activate", help="(on the node, root) the secret its TPM releases for the root's credential")
+    a = sub.add_parser("activate", help="(on the node, root) the secret its TPM releases for the root's credential, and its AK's "
+                       "quote of this node's identity bound to it (#399)")
     a.add_argument("--credential", required=True)
+    a.add_argument("--directory", default=ENROL_DIR, help="this node's enrolment directory (its bundle.json is what is quoted)")
+    a.add_argument("--out", required=True, help="the activation, to carry back to the root's machine (written once, never replaced)")
     e = sub.add_parser("entry", help="(the root's side, no TPM) check a bundle and print the node's v4 identity fields")
     e.add_argument("--bundle", required=True)
     e.add_argument("--system-pub", required=True, help="the root's own copy of the system-phase PCR key's public half (PEM)")
     e.add_argument("--keep", required=True, help="the file `challenge` kept")
-    e.add_argument("--answer", required=True, help="the 64 hex `activate` printed on the node")
+    e.add_argument("--activation", required=True, help="the file `activate` wrote on the node")
     c = sub.add_parser("check", help="check the root-signed manifest against this host, writing nothing")
     c.add_argument("--manifest", required=True, help="the root-signed epoch-1 envelope, or a JSON list of the "
                    "envelopes from epoch 1 to the one that first names this host")
@@ -1924,11 +2080,13 @@ def main(argv=None):
     k.add_argument("--esp", required=True, help="the ESP's mount point: the sealed credentials go to ESP/loader/credentials")
     k.add_argument("--enrol-dir", default=ENROL_DIR)
     k.add_argument("--replace", metavar="OLD_NODE_ID", help="this host replaces that node (#76): the manifest must say so")
+    ownerauth.add_arguments(k)
     k.add_argument("--bootstrap", action="store_true", help="the network has issued no heartbeat yet: start the counter at 0 "
                    "if no reachable peer holds one")
     h = sub.add_parser("_first-heartbeat", help=argparse.SUPPRESS)
     h.add_argument("--config", required=True)
     h.add_argument("--bootstrap", action="store_true")
+    h.add_argument("--ownerauth-fd", type=int, help=argparse.SUPPRESS)     # commit's memfd (_owner_fd): commit verified it
     q = sub.add_parser("paths", help="the peers' AKs and this node's LUKS path from each peer; then local.bin goes")
     q.add_argument("--esp", required=True, help="the ESP's mount point (the sealed unlock-local credential is read from it)")
     q.add_argument("--device", default=ROOT_DEVICE)
@@ -1942,7 +2100,16 @@ def main(argv=None):
     a = sub.add_parser("_anchor", help=argparse.SUPPRESS)
     a.add_argument("--config", required=True)
     a.add_argument("--chain", required=True, choices=["-"], help="always -: the chain comes on standard input")
+    a.add_argument("--ownerauth-fd", type=int, help=argparse.SUPPRESS)     # commit's memfd (_owner_fd): commit verified it
     args = ap.parse_args(argv)
+    if args.command == "ownerauth":
+        try:
+            ownerauth.measured_once()             # the value stays off the TPM bus only on measured tools (#414)
+            print(set_ownerauth(args.node_id, args.root_key, args.record, sys.stdin.buffer, check=args.check, directory=args.enrol_dir))
+        except (Refused, membership.Refused, OSError, ValueError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        return 0
     if args.command == "verify-record":
         try:
             with open(args.record, "rb") as f:
@@ -1986,7 +2153,8 @@ def main(argv=None):
         return 3 if missing else 0
     if args.command == "_first-heartbeat":           # run by commit, as regalia-sync
         try:
-            sequence, left = first_heartbeat(args.config, bootstrap=args.bootstrap)
+            owner_auth = None if args.ownerauth_fd is None else ownerauth.read_fd(args.ownerauth_fd)
+            sequence, left = first_heartbeat(args.config, bootstrap=args.bootstrap, owner_auth=owner_auth)
         except (Refused, membership.Refused, OSError, ValueError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
@@ -1995,7 +2163,8 @@ def main(argv=None):
     if args.command == "_anchor":                    # run by commit, as regalia-sync
         try:
             chain = membership.load(sys.stdin.buffer.read(membership.MAX_CHAIN_BYTES + 1), membership.MAX_CHAIN_BYTES)
-            epoch, digest = anchor_and_store(args.config, chain)
+            owner_auth = None if args.ownerauth_fd is None else ownerauth.read_fd(args.ownerauth_fd)
+            epoch, digest = anchor_and_store(args.config, chain, owner_auth=owner_auth)
         except (Refused, membership.Refused, OSError, ValueError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
@@ -2012,12 +2181,22 @@ def main(argv=None):
             for name in ("measurements", "site", "example"):
                 with open(getattr(args, name)) as f:
                     loaded[name] = json.load(f)
-            require(sys.stdin.isatty(), "the root key's fingerprint is typed at the console; standard input is not a terminal")
-            typed = input("The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): ")
+            # the envelope's value FIRST, on standard input (gpg asks for the card's PIN on the console and exits), judged
+            # once the fingerprint is typed; then the fingerprint, at the terminal
+            given = ownerauth.read_arguments(args)
+            if given is not None:
+                ownerauth.measured_once()         # the value stays off the TPM bus only on measured tools (#414)
+            prompt = "The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): "
+            if given is not None:
+                typed = ownerauth.console(prompt)
+                require(typed is not None, "no fingerprint was typed")
+            else:
+                require(sys.stdin.isatty(), "the root key's fingerprint is typed at the console; standard input is not a terminal")
+                typed = input(prompt)
             boot = {"image": args.image, "record": args.image_record, "initrd_pub": args.initrd_pub, "system_pub": args.system_pub,
                     "secure_boot_cert": args.secure_boot_cert, "esp": args.esp}
             commit(args.enrol_dir, chain, args.root_key, typed, loaded["measurements"], loaded["site"], loaded["example"], boot,
-                   replace=args.replace, bootstrap=args.bootstrap)
+                   replace=args.replace, bootstrap=args.bootstrap, ownerauth_given=given)
         except (Refused, membership.Refused, attest.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
@@ -2056,9 +2235,16 @@ def main(argv=None):
         return 0
     if args.command == "activate":
         try:
+            _safe_directory(args.directory)                      # root's, 0700, trusted ancestors: what is quoted is the node's own
+            with open(os.path.join(args.directory, "bundle.json"), "rb") as f:
+                bundle = membership.load(f.read(membership.MAX_BYTES + 1))
             with open(args.credential, "rb") as f:
-                print("ANSWER %s" % activate(f.read(4096)))
-        except (Refused, attest.Refused, OSError) as error:
+                done = activate(f.read(4096), bundle)
+            with open(os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600), "w") as f:
+                f.write(json.dumps(done, sort_keys=True) + "\n")
+            print("WRITTEN: the activation %s (to the root's machine, beside the kept challenge). PCR 7 %s, PCR 11 %s, as booted now"
+                  % (args.out, done["pcr_values"]["7"], done["pcr_values"]["11"]))
+        except (Refused, membership.Refused, attest.Refused, OSError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
         return 0
@@ -2068,8 +2254,12 @@ def main(argv=None):
                 document = membership.load(f.read(membership.MAX_BYTES + 1))
             with open(args.keep, "rb") as f:
                 keep = membership.load(f.read(4096))
+            with open(args.activation, "rb") as f:
+                activation = membership.load(f.read(65536))
             with open(args.system_pub, "rb") as f:
-                print(json.dumps(entry(document, f.read(65536), keep, args.answer), indent=1, sort_keys=True))
+                got, pcrs = proven_entry(document, f.read(65536), keep, activation)
+            print(json.dumps(got, indent=1, sort_keys=True))
+            print("quoted at activation (informational; the genesis judges them): PCR 7 %s, PCR 11 %s" % (pcrs["7"], pcrs["11"]), file=sys.stderr)
         except (Refused, membership.Refused, attest.Refused, OSError, ValueError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1

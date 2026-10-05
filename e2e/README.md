@@ -123,3 +123,11 @@ by a tool it knows.
 
 OpenSC ignores a reader whose name CONTAINS an `ignored_readers` entry (a substring match): that is
 why overlapping reader names are refused, and why `ignored_readers = " "` ignores every reader.
+
+## The boot test's console (`unlock-boot-qemu.sh`)
+
+The boot test reads the guest's serial console. Its images' command line adds `systemd.journald.forward_to_console=1`,
+except the tier Q images (#75: boot 2k), and a production image's command line has no such argument. So a line that
+reaches the console only through that forwarding **would not be on a production console** (the iLO's). In boots other
+than tier Q, the console greps don't prove what a production console shows (#413, which lists every grep and whose line
+it is). The tier Q boots prove it for the unlock client, whose unit puts its own lines on the console (#412).

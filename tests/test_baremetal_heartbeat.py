@@ -68,16 +68,92 @@ class FakeTpm:
     BITS = {"ownerwrite": 0x2, "authwrite": 0x4, "policywrite": 0x8, "ppwrite": 0x1, "writedefine": 0x2000, "ownerread": 0x20000, "authread": 0x40000,
             "no_da": 0x2000000, "orderly": 0x4000000, "clear_stclear": 0x8000000}
 
-    def __init__(self, highest=0):
+    def __init__(self, highest=0, owner_auth=None):
         self.nv, self.highest, self.broken = {}, highest, False
         self.policies = {}                                   # index -> authPolicy (hex), for an index defined with one (-L)
+        # the owner authorization (32 bytes, #242 C), None while it is empty. Set, an owner call (-C o) must give it as
+        # the real channel does (-P file:/dev/fd/N, the pipe holding "hex:<64 hex>"), else the TPM says no
+        self.owner_auth, self.lockout_set = owner_auth, False
+        self.persistent = {"0x81000001"}                     # systemd's SRK, as systemd-tpm2-setup leaves it at boot
+        # the node's EK at 0x81010001 (enrol init), by its Name; sessions salted to it (#414), and the changeauth calls
+        # made through one (salted_with: the EK each changeauth's session was salted to, None for none)
+        self.ek_name, self.sessions, self.salted_with = bytes.fromhex("000b" + "e5" * 32), {}, []
+
+    @staticmethod
+    def _from_fd(where, kw):
+        """What an auth argument names through the channel (a passed pipe fd), or None for anything else (a value on argv)."""
+        if not isinstance(where, str) or not where.startswith("file:/dev/fd/"):
+            return None
+        fd = int(where[len("file:/dev/fd/"):])
+        return os.read(fd, 200) if fd in kw.get("pass_fds", ()) else None
+
+    def _held(self):
+        return None if self.owner_auth is None else b"hex:" + self.owner_auth.hex().encode()
+
+    def _owner_ok(self, argv, kw):
+        """An owner-authorized call carries the authorization the TPM holds, through the channel (none while it is empty)."""
+        if "-P" not in argv:
+            return self.owner_auth is None
+        return self._held() is not None and self._from_fd(argv[argv.index("-P") + 1], kw) == self._held()
 
     def __call__(self, argv, input=None, **kw):
         tool, index = argv[0][len("tpm2_"):], argv[1]
         ok = lambda out=b"": subprocess.CompletedProcess(argv, 0, out, b"")
         no = subprocess.CompletedProcess(argv, 1, b"", b"the TPM said no")
+        # what tpm2-tools prints for a wrong authorization (TPM_RC_BAD_AUTH, session 1), as on swtpm
+        bad_auth = subprocess.CompletedProcess(argv, 1, b"", b"ERROR: Esys_HierarchyChangeAuth(0x9A2) - tpm:session(1):"
+                                               b"authorization failure without DA implications")
         if self.broken:
             return no
+        if tool == "getcap" and index == "properties-variable":
+            return ok(("TPM2_PT_PERMANENT:\n  ownerAuthSet:              %d\n  endorsementAuthSet:        0\n  lockoutAuthSet:            %d\n"
+                       % (self.owner_auth is not None, self.lockout_set)).encode())
+        if tool == "readpublic" and index == "-c" and argv[2] == "0x81010001" and "-n" in argv:
+            if self.ek_name is None:
+                return no
+            with open(argv[argv.index("-n") + 1], "wb") as f:
+                f.write(self.ek_name)
+            return ok()
+        if tool == "startauthsession":                       # --hmac-session -c <salt key> -S <ctx>
+            if argv[argv.index("-c") + 1] != "0x81010001" or self.ek_name is None:
+                return no
+            self.sessions[argv[argv.index("-S") + 1]] = {"salt": self.ek_name, "encrypt": False}
+            return ok()
+        if tool == "sessionconfig":
+            if index not in self.sessions:
+                return no
+            self.sessions[index]["encrypt"] = "--enable-encrypt" in argv and "--enable-decrypt" in argv
+            return ok()
+        if tool == "flushcontext":
+            self.sessions.pop(index, None)
+            return ok()
+        if tool == "changeauth" and argv[1:3] == ["-c", "o"]:   # [-p OLD] NEW, both through the channel
+            rest, old, session = argv[3:], None, None
+            if rest[:1] == ["-p"]:
+                given = rest[1]
+                if given.startswith("session:"):             # session:<ctx>[+file:/dev/fd/N]
+                    session, _, given = given[len("session:"):].partition("+")
+                    if session not in self.sessions:
+                        return no
+                old = self._from_fd(given, kw) if given else None
+                rest = rest[2:]
+                if given and old is None:
+                    return no
+            new = self._from_fd(rest[0], kw) if len(rest) == 1 else None
+            if new is None or not new.startswith(b"hex:") or len(new) != 68:
+                return no
+            if old != self._held():
+                return bad_auth
+            encrypted = session is not None and self.sessions[session]["encrypt"]
+            self.salted_with.append(self.sessions[session]["salt"] if encrypted else None)
+            self.owner_auth = bytes.fromhex(new[4:].decode())
+            return ok()
+        if "-C" in argv and argv[argv.index("-C") + 1] == "o" and tool != "loadexternal" and not self._owner_ok(argv, kw):
+            return bad_auth                                  # the owner authorization not given, or not the one held
+        if tool == "createprimary":                          # owner-authorized above; a transient primary, nothing kept
+            return ok()
+        if tool == "getcap" and index == "handles-persistent":
+            return ok("".join("- %s\n" % h for h in sorted(self.persistent)).encode())
         if tool == "getcap":                                 # tpm2_getcap handles-nv-index: what the TPM says it holds
             return ok("".join("- %s\n" % name for name in sorted(self.nv)).encode()) if index == "handles-nv-index" else no
         if tool == "nvdefine":

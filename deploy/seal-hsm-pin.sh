@@ -38,6 +38,16 @@
 #       the ceremony's RSA-OAEP (SHA-256) blob; the TPM decrypts it, then every check below runs as for
 #       a typed PIN (card, counter, tested on the card, sealed, read back). A blob made for another
 #       TPM, or altered, fails to decrypt and no card try is spent.
+#   gpg --decrypt ownerauth-<node>.yk.gpg | sudo deploy/seal-hsm-pin.sh --init-import-key --ownerauth-stdin ...
+#       on a TPM whose owner authorization is set (#242): the import key is created and persisted under the
+#       owner hierarchy, which then takes this node's value from its envelope, on STANDARD INPUT (64 lowercase
+#       hex and a newline), never typed nor an argument (not another descriptor: sudo closes every one above 2).
+#       Commissioning before `enrol ownerauth` needs none.
+#       LIMITATION: the value is passed to tpm2-tools as a file in a root-only directory on /run (tmpfs),
+#       removed on exit (a shell has no memfd); a run killed outright (SIGKILL, the OOM killer) skips that, and
+#       the file stays until reboot: remove /run/regalia-ownerauth.* by hand. It is not checked against
+#       ownerauth.record.json here: a wrong value is refused by the TPM (an authorization failure, no
+#       dictionary-attack count), nothing made.
 #
 # SIGNED PCR 11 POLICY (#57): PCR 11 (the kernel image, as systemd-stub measures a UKI) is never bound
 # directly, since every kernel update would strand the PIN. It is bound through a SIGNED policy:
@@ -88,6 +98,7 @@ CREDSTORE="${REGALIA_CREDSTORE:-/etc/credstore.encrypted}"
 fail(){ printf 'seal-hsm-pin: FAIL: %s\n' "$*" >&2; exit 1; }
 say(){ printf 'seal-hsm-pin: %s\n' "$*" >&2; }
 INIT_IMPORT=0; FROM_BLOB=""; IMPORT_HANDLE="0x81000101"; IMPORT_PUB="/root/regalia-pin-import.pub.pem"; REPLACE_IMPORT=0
+OWNERAUTH_STDIN=0; OWNER_P=()
 # A value-taking option with no value must fail, not loop: without set -e a failed `shift 2` would
 # leave the argument in place and the loop would spin forever.
 need(){ [ $# -ge 2 ] && [ -n "$2" ] || fail "$1 needs a value"; }
@@ -97,7 +108,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --replace) REPLACE=1; shift;; --bench-host-key) BENCH=1; shift;; --retries) need "$@"; RETRIES="$2"; shift 2;;
   --init-import-key) INIT_IMPORT=1; shift;; --replace-import-key) REPLACE_IMPORT=1; shift;;
   --from-blob) need "$@"; FROM_BLOB="$2"; shift 2;; --import-handle) need "$@"; IMPORT_HANDLE="$2"; shift 2;;
-  --import-pub) need "$@"; IMPORT_PUB="$2"; shift 2;;
+  --import-pub) need "$@"; IMPORT_PUB="$2"; shift 2;; --ownerauth-stdin) OWNERAUTH_STDIN=1; shift;;
   --tpm2-public-key) need "$@"; PUBKEY="$2"; shift 2;; --tpm2-public-key-pcrs) need "$@"; PUBKEY_PCRS="$2"; shift 2;;
   --tpm2-signature) need "$@"; SIGNATURE="$2"; shift 2;;
   -h|--help) sed -n '2,/^set -uo pipefail$/{/^set -uo pipefail$/!p}' "$0"; exit 0;; *) fail "unknown argument '$1' (see --help)";; esac; done
@@ -123,10 +134,33 @@ if [ "$INIT_IMPORT" = 1 ]; then
   work="$(mktemp -d)"
   flush_own(){ local c; for c in "$work"/*.ctx; do [ -f "$c" ] && tpm2_flushcontext "$c" >/dev/null 2>&1; done
     case "${TPM2TOOLS_TCTI:-}" in swtpm*|mssim*) tpm2_flushcontext -t >/dev/null 2>&1 ;; esac; }
-  trap 'flush_own; rm -rf "$work"' EXIT
+  oa_dir=""
+  trap 'flush_own; rm -rf "$work"; [ -n "$oa_dir" ] && rm -rf "$oa_dir"' EXIT
+  # the owner authorization (#242), from its envelope on standard input: into a root-only tmpfs file for tpm2-tools'
+  # -P file: (a pipe cannot be seeked, and tpm2-tools seeks it; the value never on argv)
+  if [ "$OWNERAUTH_STDIN" = 1 ]; then
+    # only a tpm2-tools measured to keep the owner authorization off the TPM bus (#414): the list is ownerauth.py's
+    # MEASURED_TOOLS, read from it (one source), checked before the value is even read
+    measured="$(sed -n 's/^MEASURED_TOOLS = (\(.*\))$/\1/p' "$(dirname "$0")/baremetal/ownerauth.py" | tr -d '"' | tr ',' ' ' | tr -s ' ')"
+    measured="${measured# }"; measured="${measured% }"
+    [ -n "$measured" ] || fail "cannot read MEASURED_TOOLS from $(dirname "$0")/baremetal/ownerauth.py"
+    tools="$(tpm2_createprimary --version 2>/dev/null | sed -n 's/.*version="\([^"]*\)".*/\1/p')"
+    [ -n "$tools" ] || fail "cannot tell tpm2-tools' version (tpm2_createprimary --version)"
+    case " $measured " in
+      *" $tools "*) ;;
+      *) fail "tpm2-tools ${tools:-?} is not a version measured to keep the owner authorization off the TPM bus ($measured): measure it and add it to ownerauth.MEASURED_TOOLS (#414). Nothing was done" ;;
+    esac
+    [ -t 0 ] && fail "standard input is a terminal: with --ownerauth-stdin it carries the decrypted envelope, never typed"
+    IFS= read -r oa || fail "nothing could be read from standard input"
+    [[ "$oa" =~ ^[0-9a-f]{64}$ ]] || { oa=""; fail "standard input does not hold 64 lowercase hex and a newline (the decrypted envelope)"; }
+    oa_dir="$(umask 077; mktemp -d -p /run regalia-ownerauth.XXXXXX)" || fail "cannot make a private directory on /run"
+    (umask 077; printf 'hex:%s' "$oa" > "$oa_dir/auth") || fail "cannot write the owner authorization to $oa_dir"
+    oa=""
+    OWNER_P=(-P "file:$oa_dir/auth")
+  fi
   if tpm2_readpublic -Q -c "$IMPORT_HANDLE" >/dev/null 2>&1; then
     [ "$REPLACE_IMPORT" = 1 ] || fail "the TPM already holds a key at $IMPORT_HANDLE; pass --replace-import-key to make a new one (PIN blobs made for the old key stop working)"
-    tpm2_evictcontrol -Q -C o -c "$IMPORT_HANDLE" >/dev/null || fail "cannot remove the old key at $IMPORT_HANDLE"
+    tpm2_evictcontrol -Q -C o "${OWNER_P[@]}" -c "$IMPORT_HANDLE" >/dev/null || fail "cannot remove the old key at $IMPORT_HANDLE"
   fi
   flush_own
   # noda, on the key and on its parent: neither is subject to the TPM's dictionary-attack counter.
@@ -134,13 +168,13 @@ if [ "$INIT_IMPORT" = 1 ]; then
   # protects is that only THIS TPM can), so that protection guards nothing here, and it has a cost:
   # the TPM adds a failed try at the next start whenever such a key was used and the power then went
   # without a TPM2_Shutdown, and at the limit it refuses every key (measured on swtpm, #57).
-  tpm2_createprimary -Q -C o -g sha256 -G ecc256:aes128cfb \
+  tpm2_createprimary -Q -C o "${OWNER_P[@]}" -g sha256 -G ecc256:aes128cfb \
     -a 'restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda' -c "$work/primary.ctx" || fail "tpm2_createprimary failed"
   tpm2_create -Q -C "$work/primary.ctx" -G rsa3072 -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda' \
     -u "$work/k.pub" -r "$work/k.priv" || fail "tpm2_create failed"
   flush_own
   tpm2_load -Q -C "$work/primary.ctx" -u "$work/k.pub" -r "$work/k.priv" -c "$work/k.ctx" || fail "tpm2_load failed"
-  tpm2_evictcontrol -Q -C o -c "$work/k.ctx" "$IMPORT_HANDLE" >/dev/null || fail "cannot persist the key at $IMPORT_HANDLE"
+  tpm2_evictcontrol -Q -C o "${OWNER_P[@]}" -c "$work/k.ctx" "$IMPORT_HANDLE" >/dev/null || fail "cannot persist the key at $IMPORT_HANDLE"
   flush_own
   # tpm2_readpublic creates the file 0660 whatever the umask; it is a public key, readable by anyone.
   tpm2_readpublic -Q -c "$IMPORT_HANDLE" -f pem -o "$IMPORT_PUB" && chmod 0644 "$IMPORT_PUB" || fail "cannot export the public key"
