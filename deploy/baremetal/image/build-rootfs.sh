@@ -168,19 +168,25 @@ goenv=(env -i PATH="$(dirname "$GO"):$PATH" LC_ALL=C TZ=UTC HOME="$W/go/home" GO
        GOMODCACHE="$W/go/mod" GOTOOLCHAIN="$GO_VERSION" GOFLAGS=-mod=readonly
        ${CALLER_GOPROXY:+GOPROXY="$CALLER_GOPROXY"} ${CALLER_HTTPS_PROXY:+HTTPS_PROXY="$CALLER_HTTPS_PROXY"})
 "${goenv[@]}" "$GO" mod download >"$W/go-download.log" 2>&1 || { tail -20 "$W/go-download.log"; die "the modules could not be fetched"; }
-TOOLCHAIN="$W/go/mod/golang.org/toolchain@v0.0.1-$GO_VERSION.linux-amd64"
-[ -x "$TOOLCHAIN/bin/go" ] || die "the toolchain $GO_VERSION is not in the module cache ($TOOLCHAIN)"
+# the toolchain GOTOOLCHAIN selected: the one it downloaded into the module cache, or the launching go itself when
+# that already is go.mod's release (it is then not downloaded). Either way, the release is checked
+TOOLCHAIN="$("${goenv[@]}" "$GO" env GOROOT)" || die "the toolchain's GOROOT cannot be read"
+[ -x "$TOOLCHAIN/bin/go" ] || die "the toolchain $GO_VERSION has no bin/go ($TOOLCHAIN)"
+[ "$("${goenv[@]}" "$TOOLCHAIN/bin/go" env GOVERSION)" = "$GO_VERSION" ] || die "the toolchain at $TOOLCHAIN is not $GO_VERSION"
 
 # ---- the BUILD tree: [built] compiled in it, against the snapshot's libraries
 BUILD="$W/build"
 echo "### the build tree: Debian $SUITE as of $SNAPSHOT, with $BUILD_PACKAGES"
 tree "$BUILD" "$BUILD_PACKAGES"
-mkdir -p "$BUILD/build/src" "$BUILD/build/gomod" "$BUILD/build/cache" "$BUILD/build/home" "$BUILD/build/out"
+mkdir -p "$BUILD/build/src" "$BUILD/build/gomod" "$BUILD/build/goroot" "$BUILD/build/cache" "$BUILD/build/home" "$BUILD/build/out"
 repo_git archive --format=tar "$COMMIT" | tar -x -C "$BUILD/build/src" || die "the commit could not be exported"
-mount --bind "$W/go/mod" "$BUILD/build/gomod"; MOUNTED+=("$BUILD/build/gomod")
-mount -o remount,bind,ro "$BUILD/build/gomod"
+# the module cache and the toolchain, read-only: nothing inside the tree can change what was verified outside it
+for pair in "$W/go/mod:$BUILD/build/gomod" "$TOOLCHAIN:$BUILD/build/goroot"; do
+  mount --bind "${pair%%:*}" "${pair#*:}"; MOUNTED+=("${pair#*:}")
+  mount -o remount,bind,ro "${pair#*:}"
+done
 for fs in proc dev; do mount --bind "/$fs" "$BUILD/$fs"; MOUNTED+=("$BUILD/$fs"); done
-inbuild(){ chroot "$BUILD" env -i PATH="/build/gomod/golang.org/toolchain@v0.0.1-$GO_VERSION.linux-amd64/bin:/usr/bin:/bin" LC_ALL=C TZ=UTC \
+inbuild(){ chroot "$BUILD" env -i PATH="/build/goroot/bin:/usr/bin:/bin" GOROOT=/build/goroot LC_ALL=C TZ=UTC \
              HOME=/build/home GOCACHE=/build/cache GOMODCACHE=/build/gomod GOTOOLCHAIN=local GOPROXY=off GOFLAGS=-mod=readonly \
              SOURCE_DATE_EPOCH="$EPOCH" "$@"; }
 for entry in "${BUILT[@]}"; do
