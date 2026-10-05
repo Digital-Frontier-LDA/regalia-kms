@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -533,6 +534,91 @@ class InitOnSwtpm(unittest.TestCase):
             self.assertEqual(enrol.commit(self.dir, rt.sign(man), root, enrol.fingerprint(root), document, nt.SITE, example,
                                           as_sync=in_process, out=io.StringIO(), first_beat=first_beat), (1, digest))
 
+
+    def test_commit_under_v4_with_the_owner_authorization_set(self):
+        """#420: the production enrolment, on a real TPM whose owner and lockout authorizations are set (#242). init on
+        this TPM; the root's challenge, activate and entry; a v4 manifest naming this host; the measurements naming the
+        image's system-phase key; the signed image booted. `enrol commit` without the owner authorization refuses before
+        anything is written, and with it (from the envelope's record, under the root the fingerprint confirms) defines
+        the anchor and the counters by policy, through the owner channel, and commits epoch 1."""
+        import tests.test_baremetal_membership as tm
+        import tests.test_baremetal_membership_v4 as v4
+        import tests.test_baremetal_node as nt
+        import tests.test_baremetal_ownerauth as toa
+        from deploy.baremetal import measurements, ownerauth, signkey
+        from deploy.baremetal import membership as m
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "e2e", "lib"))
+        import signed_boot as sb
+        tcti = os.environ["TPM2TOOLS_TCTI"]
+        os.makedirs(self.d + "/keys")
+        private, public = sb.key(self.d + "/keys")
+        with open(public, "rb") as f:
+            pem = f.read()
+        serials = ["DENK0500001", "36000001"]                        # not bench tokens: a v4 chain refuses those
+        with unittest.mock.patch.object(enrol, "token_serials", lambda module, run=None: list(serials)):
+            bundle = self.init(system_pub=pem)
+        keep, answer = self.proven(bundle)
+        nodes = v4.nodes4()
+        nodes[0] = dict(nodes[0], **enrol.entry(bundle, pem, keep, answer))
+        # the signed image this host booted, and the measurements naming its system-phase key for every node
+        image = sb.image("approved")
+        signature, _ = sb.signature(image, private, public)
+        with open(self.d + "/tpm2-pcr-signature.json", "w") as f:
+            json.dump({"sha256": [signature]}, f)
+        sb.boot(image)
+        signed = {"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32},
+                  "phases": {"initrd": {"11": "a1" * 32}, "system": {"11": "b1" * 32}},
+                  "signing": {"initrd": "11" * 32, "system": signkey.pcr_key_fingerprint(pem), "secure_boot_cert": "22" * 32}}
+        document = {"schema": measurements.SCHEMA, "name": "signed-images", "nodes": {n: {"accepted": [signed]} for n in "abc"}}
+        man = v4.manifest4(1, "", nodes, policy_version=measurements.version(document))
+        envelope, root = tm.sign(man, tm.ROOT), tm.ROOT_PUB
+        # the TPM as production's: systemd's SRK persistent, then the owner and lockout authorizations set
+        value = toa.VECTOR["values"]["a"][:64]
+        for argv in (["tpm2_createprimary", "-C", "o", "-c", self.d + "/srk.ctx"],
+                     ["tpm2_evictcontrol", "-C", "o", "-c", self.d + "/srk.ctx", ownerauth.SRK], ["tpm2_flushcontext", "-t"]):
+            self.assertEqual(subprocess.run(argv, capture_output=True).returncode, 0, argv)
+        for hierarchy in ("o", "l"):
+            with open(self.d + "/auth", "w") as f:
+                f.write("hex:" + value)
+            self.assertEqual(subprocess.run(["tpm2_changeauth", "-c", hierarchy, "file:" + self.d + "/auth"], capture_output=True).returncode, 0)
+        os.unlink(self.d + "/auth")
+        record, record_root = toa.resigned(lambda r: None, key=tm.ROOT)     # the envelope's record, under this chain's root
+        self.assertEqual(record_root, root)
+        given = (ownerauth.read_value(io.BytesIO((value + "\n").encode())), record)
+        etc = self.d + "/etc-regalia/"
+        os.makedirs(etc)
+        example = {"schema": "regalia.node/v1", "node_id": "x", "site": etc + "site.json", "root_key": "00" * 32, "tcti": tcti,
+                   "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "nv_signing": "0x0150001c", "state_dir": self.d + "/state",
+                   "admission_dir": self.d + "/admission", "run_dir": self.d + "/run", "wg_service_key": self.wg,
+                   "measurements": etc + "measurements.json", "pcrs": [7, 11],
+                   "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
+
+        def in_process(config, chain, owner_auth=None):         # the regalia-sync step, in process
+            return enrol.anchor_and_store(config, chain, owner_auth=owner_auth)
+
+        def first_beat(config, bootstrap=False, owner_auth=None):
+            from deploy.baremetal import node as nm
+            n = nm.Node(nm.load(config))
+            return enrol.take_first_heartbeat(n.node_id, n.store().load(), n.store(), n.freshness(owner_auth), {}, lambda e: None, bootstrap)
+        with unittest.mock.patch.object(enrol, "CONFIG_DIR", etc), unittest.mock.patch.object(enrol, "NODE_JSON", etc + "node.json"), \
+                unittest.mock.patch.object(enrol, "CHRONY_CONF", self.d + "/etc-chrony/regalia.conf"), \
+                unittest.mock.patch.object(signkey, "PCR_PUBLIC_KEY_PATH", public), \
+                unittest.mock.patch.object(signkey, "PCR_SIGNATURE_PATHS", (self.d + "/tpm2-pcr-signature.json",)):
+            with self.assertRaisesRegex(enrol.Refused, "under regalia.membership/v4 the TPM's owner authorization is set"):
+                enrol.commit(self.dir, envelope, root, enrol.fingerprint(root), document, nt.SITE, example, as_sync=in_process,
+                             out=io.StringIO(), first_beat=first_beat, bootstrap=True)
+            listed = subprocess.run(["tpm2_getcap", "handles-nv-index"], capture_output=True, text=True).stdout.lower()
+            self.assertNotIn("0x1500016", listed)                                          # nothing defined
+            epoch, digest = enrol.commit(self.dir, envelope, root, enrol.fingerprint(root), document, nt.SITE, example,
+                                         as_sync=in_process, out=io.StringIO(), first_beat=first_beat, bootstrap=True,
+                                         ownerauth_given=given)
+            self.assertEqual((epoch, digest), (1, m.digest(man)))
+            public_area = subprocess.run(["tpm2_nvreadpublic", "0x01500016"], capture_output=True, text=True).stdout
+            self.assertIn("authorization policy: %s" % signkey.policy(pem).hex().upper(), public_area)    # policy-written
+            from deploy.baremetal import node as nm
+            here = nm.Node(nm.load(etc + "node.json"))
+            self.assertEqual((here.anchor().value(), here.anchor().record()), (1, (1, digest)))          # read with no auth
+            self.assertEqual(enrol.Journal(self.dir, "a").get("heartbeat_first")["bootstrap"], True)
 
 
 class Tokens(unittest.TestCase):
