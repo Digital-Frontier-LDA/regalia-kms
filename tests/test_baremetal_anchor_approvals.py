@@ -218,6 +218,27 @@ class Signer(unittest.TestCase):
         self.assertEqual((code, out.getvalue()), (2, ""))
         self.assertIn("is another root's signing state: nothing is signed", err.getvalue())
 
+    def test_the_card_record_reader_takes_the_new_kinds_as_lines_with_a_kind(self):
+        """regalia-kms-d9: the approvals' lines share the root's signing record with the card-record lines; cardrecord's
+        reader (the one reader of that record here) judges them only as objects with a kind, never refuses or counts them."""
+        import pathlib
+        from deploy.baremetal import cardrecord as cr
+        here = pathlib.Path(__file__).parent / "vectors" / "card-ceremony-record"
+        root = (here / "root.hex").read_text().strip()
+        state = self.state(root)
+        lines = (here / "signing-record.jsonl").read_text().splitlines()
+        extra = [{"kind": "anchor-first", "node_id": "a", "at": 1, "provenance": "x"},
+                 {"kind": "anchor-approval", "node_id": "a", "k_sys": "ab" * 32, "generation": 3, "classes": ["anchor"], "at": 2, "provenance": "x"},
+                 {"kind": "anchor-increment", "node_id": "a", "from": 3, "at": 3, "provenance": "x"}]
+        mixed = [extra[0], json.loads(lines[0]), extra[1], json.loads(lines[1]), extra[2]]
+        with open(os.path.join(state, cr.SIGNING_RECORD), "w") as f:
+            f.write("".join(json.dumps(l, sort_keys=True) + "\n" for l in mixed))
+        os.chmod(os.path.join(state, cr.SIGNING_RECORD), 0o600)
+        got = cr.verify(json.loads((here / "sequence-2.json").read_text()), root, cr.read_signing_state(state, root))
+        self.assertEqual((got["sequence"], got["of"]), (2, 2))
+        with self.assertRaisesRegex(m.Refused, "not the newest the root signed"):
+            cr.verify(json.loads((here / "valid.json").read_text()), root, cr.read_signing_state(state, root))
+
     def test_approve_at_a_rotation(self):
         from tests.test_baremetal_membership import ROOT_PUB
         current = ap.fill(document(), SYSTEM_PUB, POINT, K_A, GENERATIONS)
