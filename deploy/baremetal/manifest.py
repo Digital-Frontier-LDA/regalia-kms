@@ -174,16 +174,18 @@ def _raw_ed25519(value, what):
     return value
 
 
-def card_record_keys(envelope, root, signing_state):
+def card_record_keys(envelope, root, signing_state, attestations=None):
     """The owner's two keys and the release card's, from the card ceremony's record (regalia-ceremony#111, ADR-0002 D30)
     and nowhere else: verified by cardrecord.verify under the PINNED root first, so a key is never typed, and only if it
     is the NEWEST card record the root signed by the laptop's signing record in `signing_state` (--state-dir, #403). The
-    genesis root is one Ed25519 key (D28); a pin naming anything else is refused here. Returns cardrecord.verify's result."""
+    genesis root is one Ed25519 key (D28); a pin naming anything else is refused here. `attestations`: the directory of the
+    owner cards' attestation certificates, each owner key then shown generated on its card (cardrecord.attested, #400).
+    Returns cardrecord.verify's result."""
     entries = membership.root_entries(root)
     require(len(entries) == 1 and entries[0][0] == "ed25519",
             "the genesis root is one Ed25519 key (D28): a card record is verified under that key only, not %s"
             % ", ".join(alg for alg, _ in entries))
-    return cardrecord.verify(envelope, entries[0][1], cardrecord.read_signing_state(signing_state, entries[0][1]))
+    return cardrecord.verify(envelope, entries[0][1], cardrecord.read_signing_state(signing_state, entries[0][1]), attestations=attestations)
 
 
 def judge_enrolled(document, enrolled):
@@ -552,10 +554,11 @@ def _propose_genesis(args, root, confirm=None, say=print):
     pinned root before anything else is read: never typed, so there is no second way to give them."""
     require(args.chain is None and not args.from_rollout and not args.set_state and not (args.old or args.new or args.state),
             "--genesis takes no --chain, --from-rollout, --set-state or measurements step: nothing comes before it")
-    require(args.measurements and args.card_record and args.state_dir,
-            "--genesis needs --measurements, --card-record and --state-dir (the laptop's root signing record, #403)")
+    require(args.measurements and args.card_record and args.state_dir and args.attestations,
+            "--genesis needs --measurements, --card-record, --attestations (the owner cards' attestation certificates, #400) and "
+            "--state-dir (the laptop's root signing record, #403)")
     require(args.node and args.system_pub, "--genesis needs --node BUNDLE KEEP ACTIVATION for each node, and --system-pub (#399)")
-    cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root, args.state_dir)
+    cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root, args.state_dir, attestations=args.attestations)
     owners, release_key = cards["owners"], cards["release_key"]
     with open(args.system_pub, "rb") as f:
         system_pub = f.read(65536)
@@ -582,6 +585,8 @@ def _propose_genesis(args, root, confirm=None, say=print):
     say("card record: session %s, made %s, signed by the pinned root" % (cards["session"], cards["at"]))
     say("card record %d of %d (the newest on this laptop's signing record), digest %s, supersedes %s: check both against "
         "the ceremony sheet" % (cards["sequence"], cards["of"], cards["digest"], cards["supersedes"] or "nothing (the first)"))
+    say("attestations: each owner card's SIG, DEC and AUT keys generated on that card, touch fixed, under Yubico's pinned "
+        "root (%s)" % cards["attestations"])
     roles = {serial: role for role, serial in cards["roles"].items()}
     order = sorted(owners)
     for serial in order:
@@ -672,6 +677,8 @@ def main(argv=None):
     c.add_argument("--card-record", metavar="CARDS.json",
                    help="--genesis: the card ceremony's record (regalia-ceremony#111, cards.record.json), signed by the pinned "
                         "root: the owner's two keys and the release card's, from it and never typed")
+    c.add_argument("--attestations", metavar="DIR", help="--genesis: the owner cards' OpenPGP attestation certificates (the ceremony "
+                   "disc's cards/, DER): each owner key, its DEC and AUT keys shown generated on its card, under Yubico's root (#400)")
     c.add_argument("--state-dir", metavar="DIR", help="--genesis: the ceremony laptop's state directory (its root signing record "
                    "and regalia-signing-state.json): the card record must be the newest the root signed (#403)")
     c.add_argument("--heartbeat-max-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["heartbeat_max_lifetime_s"])
@@ -718,8 +725,9 @@ def main(argv=None):
             return _propose_genesis(args, root)
         if args.command == "propose":
             require(args.chain is not None, "give --chain (or --genesis)")
-            require(not (args.node or args.system_pub or args.measurements or args.card_record or args.state_dir or args.heartbeat_max_lifetime_s
-                         or args.owner_heartbeat_lifetime_s), "--node, --system-pub, --measurements, --card-record, --state-dir and the "
+            require(not (args.node or args.system_pub or args.measurements or args.card_record or args.attestations or args.state_dir
+                         or args.heartbeat_max_lifetime_s or args.owner_heartbeat_lifetime_s), "--node, --system-pub, --measurements, "
+                    "--card-record, --attestations, --state-dir and the "
                     "lifetimes are for --genesis only")
         if args.command == "sign" and args.genesis:
             # the first ceremony: no chain at all, the offline root only (see GENESIS above)

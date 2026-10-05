@@ -186,11 +186,18 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   judgement assumes the host had finished booting (systemd-pcrphase "ready" extended) when `activate`
   ran, which a software TPM cannot show: a bench item (#297), and the refusal says to re-run once
   `systemctl is-system-running` reports running. Run only on software TPMs so far.
-- **Card attestation: not built** (#400). Nothing yet produces the YubiKeys' OpenPGP attestation
-  certificates (`ykman openpgp keys attest`). The card record's `attestation_sha256` values are
-  placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is
-  built, the attestation will show the touch policy ("fixed"), the key source, the serial and the
-  fingerprint. OpenPGP has **no PIN-policy attestation**, so "PIN always" stays a recorded setting.
+- **Card attestation: verified at genesis, the producer not merged yet** (#400). `propose --genesis
+  --attestations DIR` (required) checks each owner card's SIG, DEC and AUT attestation, found by the SHA-256
+  of its DER. Each must chain through the card's "YubiKey OPGP Attestation" certificate to Yubico
+  Attestation Root 1 (pinned by hash; the intermediates are vendored, so a new Yubico intermediate needs
+  the bundle updated). Each must name the card's serial, say "generated on the card" and "touch fixed".
+  SIG's key must be the owner key; SIG's and DEC's OpenPGP fingerprints must be the ownerauth recipient's
+  primary and subkey; AUT's key must be the card's SSH signing key. Measured on one real card (YubiKey
+  35718625, firmware 5.7.4); the record's own cases use a stand-in Yubico hierarchy, since only a bench
+  card has been attested. Revocation is not checked (Yubico publishes no CRL for these). The producer
+  that writes the certificates to the disc (regalia-ceremony's owner-cards.py) is not merged yet.
+  OpenPGP has **no PIN-policy attestation**, so "PIN always" stays a recorded setting. The release key is
+  imported, never attested (D30.3).
 - **Card-record freshness is per laptop** (#403, #408). A record is accepted only if it is the newest
   card record on the ceremony laptop's root signing record (`signing-record.jsonl`, in the state
   directory marked `regalia-signing-state.json`). That is newest on THIS laptop, not newest of the
