@@ -79,13 +79,13 @@ import tempfile
 import threading
 import time
 
-from deploy.baremetal import (admission, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
+from deploy.baremetal import (activation, admission, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
                               measurements, membership, metrics, signkey, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
 
 SCHEMA = "regalia.node/v1"
-KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "nv_signing", "state_dir", "admission_dir", "run_dir",
+KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "nv_signing", "nv_activation", "state_dir", "admission_dir", "run_dir",
         "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval", "beat_interval_s")
 PUBLISHED = "chain.json"        # in the state directory: the verified chain, for the root services
 MAX_BYTES = 64 * 1024
@@ -116,7 +116,8 @@ def validate(doc):
     # slots; the heartbeat counter and the signing counter (#199): counter and base each), never retyped here
     taken = {"nv_epoch": membership.HighWater(_index(doc["nv_epoch"], "nv_epoch")).indices(),
              "nv_heartbeat": heartbeat.Counter(_index(doc["nv_heartbeat"], "nv_heartbeat")).indices(),
-             "nv_signing": heartbeat.Counter(_index(doc["nv_signing"], "nv_signing")).indices()}
+             "nv_signing": heartbeat.Counter(_index(doc["nv_signing"], "nv_signing")).indices(),
+             "nv_activation": heartbeat.Counter(_index(doc["nv_activation"], "nv_activation")).indices()}
     names = list(taken)
     for i, one in enumerate(names):
         for other in names[i + 1:]:
@@ -385,6 +386,25 @@ def signing_counter(cfg, run=subprocess.run):
     authorization; enrolment defines it."""
     return heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "signing-counter.lock"),
                              policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg))
+
+
+def activation_counter(cfg, run=subprocess.run):
+    """This node's activation counter (#432): how many activation leases it has signed, one increment each
+    (activation.GrantRecord). Its own index; written by policy like the signing counter (#242); enrolment defines it."""
+    return heartbeat.Counter(cfg["nv_activation"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "activation-counter.lock"),
+                             policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg))
+
+
+ACTIVATION_RECORD = "activation-grant.json"   # in the state directory: activation.GrantRecord's disk half
+
+
+def node_activation_signer(node, started, pem_path=None):
+    """`node`'s activation.Signer (#432): its grant record (the activation counter and ACTIVATION_RECORD, busy for the
+    recovery wait after `started`, this start's authenticated time) and its TPM signing key, as node_beat_signer's."""
+    from deploy.baremetal import activation
+    beat_signer = node_beat_signer(node, pem_path)
+    record = activation.GrantRecord(activation_counter(node.cfg, node.run), node.path(ACTIVATION_RECORD), started)
+    return activation.Signer(node.node_id, record, beat_signer._sign, beat_signer.key)
 
 
 def node_beat_signer(node, pem_path=None):
@@ -750,6 +770,10 @@ class Sync:
         self.trail = Trail(node.path("sync-audit.jsonl"), "sync")
         self.signer = lease.TpmSigner(node.tcti, node.run)
         self._beat_signer = None        # beat.Signer, made at the first heartbeat signed (beat_signer())
+        # #432: the activation signer, made at the first activation co-signed; d9's boot rule (pulled since THIS start from
+        # every node that may authorize, or an epoch newer than the one it started with); the start's authenticated time
+        self._activation_signer, self._started = None, None
+        self.pulled, self.boot_epoch, self.peer_epochs = set(), None, {}
         self.published = None
         # the unlock listener's refusals, by cause (#317), in regalia-sync's metrics directory
         self.refusals = metrics.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", metrics.UNLOCK_CAUSES)
@@ -774,7 +798,8 @@ class Sync:
                                enrolpeer.tpm_identity(self.node.tcti, self.node.run), enrolpeer.tpm_activate(self.node.tcti, self.node.run))
         # attester_for itself: each request is judged under the manifest held then, by that manifest's document (#332)
         return sync.Server(self.node.node_id, self.store, self.freshness, self.node.attester_for, self.signer,
-                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents(), cosigner=self.cosign)
+                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents(), cosigner=self.cosign,
+                           activator=self.activate)
 
     # ---- heartbeats signed by the nodes (#199, beat.py) ----
 
@@ -787,6 +812,86 @@ class Sync:
     def cosign(self, manifest, caller, body, signature):
         """sync.Server's cosigner: beat.cosign with this node's parts."""
         return beat.cosign(manifest, self.node.node_id, caller, body, signature, self.freshness, self.node.clock(), self.beat_signer())
+
+    # ---- activation by quorum (#432, activation.py) ----
+
+    def started(self):
+        """This start's authenticated time, read once, at the first authenticated reading after the start (a later reading
+        only lengthens the grant record's busy window: the safe side)."""
+        if self._started is None:
+            seconds, authenticated = self.node.clock()()
+            require(authenticated is True, "time is not authenticated: no activation is signed")
+            self._started = int(seconds)
+        return self._started
+
+    def activation_signer(self):
+        if self._activation_signer is None:
+            self._activation_signer = node_activation_signer(self.node, self.started())
+        return self._activation_signer
+
+    def synced(self):
+        """d9's boot rule: since this start, a pull answered by every other node the current manifest lets authorize, or an
+        epoch newer than the one this start began with."""
+        manifest = self.manifest()
+        if self.boot_epoch is not None and manifest["epoch"] > self.boot_epoch:
+            return True
+        others = [n["node_id"] for n in manifest["nodes"] if n["node_id"] != self.node.node_id and membership.may(manifest, n["node_id"], "authorize")]
+        return all(o in self.pulled for o in others)
+
+    READMISSION = "activation-readmission.json"
+
+    def readmitted(self):
+        """#432 amendment 5, rule 6 (d9): after an epoch at which this node counts again (activation.readmission_epoch), it
+        co-signs nothing until EVERY other node its current manifest lets authorize, the survivor of a recovery included,
+        has answered a pull at or past that epoch, and RECOVERY_WAIT_S after that, on its authenticated clock: a survivor
+        still self-renewing under the epoch before holds it back instead of overlapping it. Progress is kept in
+        READMISSION (the epoch, when all were seen, cleared), so a restart neither forgets the wait nor redoes a cleared one.
+        A survivor that does not count in the restoring epoch (it may never answer) is waited out until that epoch's
+        recovery_ends_by, judged on THIS node's authenticated clock (ed), then the usual wait."""
+        self.store.load()
+        epoch = activation.readmission_epoch(self.store.manifests, self.node.node_id)
+        if epoch is None:
+            return True
+        path = self.node.path(self.READMISSION)
+        try:
+            with open(path) as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            state = {}
+        if state.get("epoch") != epoch:
+            state = {"epoch": epoch, "seen_all_at": None, "cleared": False}
+        if state.get("cleared") is True:
+            return True
+        manifest = self.manifest()
+        restoring = next(mm for mm in self.store.manifests if mm["epoch"] == epoch)
+        others = {n["node_id"] for n in manifest["nodes"] if n["node_id"] != self.node.node_id and membership.may(manifest, n["node_id"], "authorize")}
+        survivors = activation.recovery_survivors(self.store.manifests, epoch) - {self.node.node_id}
+        # the survivor of the recovery is waited for whatever its state now (d9); one that may never answer (it does not
+        # count in the restoring epoch) is waited out instead: until recovery_ends_by, the owner's last authorization's end
+        unheard = {s for s in survivors if self.peer_epochs.get(s, 0) < epoch}
+        silent = {s for s in unheard if s not in membership.activation_counting(restoring)}
+        seconds, authenticated = self.node.clock()()
+        if authenticated is not True:
+            return False
+        if silent:
+            ends = restoring.get("recovery_ends_by")
+            if ends is None or int(seconds) < ends:
+                return False
+            unheard -= silent                            # waited out: from here the usual wait runs from now
+        if unheard or not all(self.peer_epochs.get(o, 0) >= epoch for o in others):
+            return False
+        if state.get("seen_all_at") is None:
+            state["seen_all_at"] = int(seconds)
+        state["cleared"] = int(seconds) >= state["seen_all_at"] + activation.RECOVERY_WAIT_S
+        # written whole and fsynced; losing it only makes this node wait again, never shorter (d9)
+        activation.write_json(path, state, mode=0o600)
+        return state["cleared"]
+
+    def activate(self, manifest, caller, lease):
+        """sync.Server's activator: activation.cosign with this node's parts, once it is past a readmission (readmitted())."""
+        require(self.readmitted(), "this node counts again after not counting: it co-signs no activation until every node that may "
+                "authorize has been seen at that epoch, and %d s after (#432)" % activation.RECOVERY_WAIT_S)
+        return activation.cosign(manifest, self.node.node_id, caller, lease, self.node.clock(), self.activation_signer(), self.synced)
 
     def proposer(self):
         def ask(peer, body, signature):
@@ -832,10 +937,14 @@ class Sync:
         sources = self.node.sources(self.manifest())
         client = sync.Client(self.node.node_id, self.store, self.freshness, sources, self.trail, documents=self.node.documents())
         changed = False
+        if self.boot_epoch is None:
+            self.boot_epoch = self.manifest()["epoch"]
         for name in sorted(sources):
             with contextlib.suppress(Refused):
                 client.pull(name)
+                self.pulled.add(name)                  # answered since this start (d9's boot rule, synced())
             changed = self.publish() or changed
+        self.peer_epochs.update(client.peer_epochs)     # what each peer said it holds (readmitted())
         return changed
 
     def watch(self):

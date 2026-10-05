@@ -9,14 +9,20 @@ A quorum gives it only if every two quorums share a signer that keeps a durable 
 grant. {a, b} and {c, owner} share none. So:
   * NORMAL: `activation_signers`' threshold of NODE parties (2 of the 3). Any two such sets intersect, and the shared
     node's grant record (GrantRecord) refuses an overlapping lease for another site.
-  * RECOVERY: the owner with fewer nodes, only with a `recovery` block: the other node parties QUARANTINED or REVOKED in
-    the current manifest (verify() checks it), and a typed attestation that they are hard-fenced until they hold that
-    epoch (recorded, not checkable here). The owner alone never activates.
+  * RECOVERY (#432 amendment 5): the owner signs ONE recovery authorization (at most the manifest's
+    recovery_authorization_max_s, 7 days by default) naming the surviving node, its site and registry, and the
+    quarantine manifest (epoch and digest) under which every other node party has stopped counting, with a typed
+    attestation that they are hard-fenced until they hold that epoch. While the verifier's CURRENT manifest IS that one,
+    the survivor renews its own leases alone, each carrying the authorization, through its own grant record. Any new
+    epoch ends it. The owner alone never activates: the survivor's signature is in every lease.
   * Accepted risk (LIMITATIONS.md): an attestation false when made, or a fenced node rejoined before it holds the
     quarantine epoch.
 
     lease = {"schema": "regalia.activation/v2", "node_id", "site", "registry_digest", "activation_epoch",
-             "manifest_epoch", "manifest_digest", "not_before", "expires_at"[, "recovery": {"fenced", "quarantine_epoch"}]}
+             "manifest_epoch", "manifest_digest", "not_before", "expires_at"[, "recovery": AUTHORIZATION]}
+    AUTHORIZATION = {"authorization": {"schema": "regalia.activation-recovery/v1", "node_id", "site", "registry_digest",
+                                       "quarantine_epoch", "quarantine_digest", "not_before", "expires_at", "fenced"},
+                     "signature": {"party": "owner", "key", "sig"}}     (over AUTH_DOMAIN + canonical(authorization))
     envelope = {"lease": lease, "signatures": [{"party", "key", "sig"}, ...]}     (membership.counting_parties' form)
 
 signed over DOMAIN + canonical(lease). DOMAIN is activation's own: a heartbeat or manifest signature is never one.
@@ -35,7 +41,9 @@ SCHEMA = "regalia.activation/v2"
 DOMAIN = b"regalia-activation/v2\0"
 LEASE_KEYS = ("schema", "node_id", "site", "registry_digest", "activation_epoch", "manifest_epoch", "manifest_digest",
               "not_before", "expires_at")
-RECOVERY_KEYS = ("fenced", "quarantine_epoch")
+AUTH_SCHEMA = "regalia.activation-recovery/v1"
+AUTH_DOMAIN = b"regalia-activation-recovery/v1\0"
+AUTH_KEYS = ("schema", "node_id", "site", "registry_digest", "quarantine_epoch", "quarantine_digest", "not_before", "expires_at", "fenced")
 MAX_LEASE_S = 600                 # internal/fencing.MaxLeaseDuration (10 min): one bound, a test holds the two equal
 SKEW_S = 60                       # a signer's allowance for not_before ahead of its authenticated time (the Gate has none)
 # the recovery path's wait, and a node's busy window after a start without its record: any activation lease AND any
@@ -69,13 +77,61 @@ def validate(lease):
     require(start < expires, "expires_at must be after not_before")
     require(expires - start <= MAX_LEASE_S, "an activation lease lives at most %d s (this one: %d)" % (MAX_LEASE_S, expires - start))
     if "recovery" in lease:
-        rec = lease["recovery"]
-        membership.exact(rec, RECOVERY_KEYS, "the recovery block")
-        require(isinstance(rec["fenced"], str) and rec["fenced"].strip() and len(rec["fenced"].encode()) <= MAX_FENCED_BYTES
-                and rec["fenced"].isprintable(), "recovery.fenced must be printable text of at most %d bytes" % MAX_FENCED_BYTES)
-        _epoch(rec["quarantine_epoch"], "recovery.quarantine_epoch")
-        require(rec["quarantine_epoch"] <= lease["manifest_epoch"], "the quarantine epoch is above the lease's manifest")
+        membership.exact(lease["recovery"], ("authorization", "signature"), "the recovery block")
+        auth = lease["recovery"]["authorization"]
+        validate_authorization(auth)
+        require(lease["manifest_epoch"] == auth["quarantine_epoch"], "a recovery lease names the quarantine manifest, epoch %d"
+                % auth["quarantine_epoch"])
     return start, expires
+
+
+def validate_authorization(auth):
+    """The owner's recovery authorization, schema only. Returns (not_before, expires)."""
+    membership.exact(auth, AUTH_KEYS, "the recovery authorization")
+    require(auth["schema"] == AUTH_SCHEMA, "schema must be %s" % AUTH_SCHEMA)
+    require(isinstance(auth["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", auth["node_id"]) is not None, "node_id must be a node ID")
+    require(isinstance(auth["site"], str) and SITE.fullmatch(auth["site"]) is not None, "site must be a registry site name")
+    require(isinstance(auth["registry_digest"], str) and DIGEST.fullmatch(auth["registry_digest"]) is not None,
+            "registry_digest must be sha256:<64 hex>")
+    _epoch(auth["quarantine_epoch"], "quarantine_epoch")
+    membership.hex_field(auth["quarantine_digest"], 64, "quarantine_digest")
+    require(isinstance(auth["fenced"], str) and auth["fenced"].strip() and len(auth["fenced"].encode()) <= MAX_FENCED_BYTES
+            and auth["fenced"].isprintable(), "fenced must be printable text of at most %d bytes" % MAX_FENCED_BYTES)
+    start, expires = heartbeat.parse_time(auth["not_before"], "not_before"), heartbeat.parse_time(auth["expires_at"], "expires_at")
+    require(start < expires, "the authorization's expires_at must be after its not_before")
+    return start, expires
+
+
+def authorization_message(auth):
+    validate_authorization(auth)
+    return AUTH_DOMAIN + membership.canonical(auth)
+
+
+def _authorization_holds(signed, current, node_id=None):
+    """The owner's recovery authorization `signed` ({"authorization", "signature"}) checked against the CURRENT manifest:
+    the owner's signature by one of its owner_keys; the manifest IS the quarantine manifest (epoch and digest); every
+    other node party of activation_signers does not count in it; the survivor does; its life within the manifest's
+    recovery_authorization_max_s. Returns the authorization."""
+    membership.exact(signed, ("authorization", "signature"), "the signed recovery authorization")
+    auth = signed["authorization"]
+    start, expires = validate_authorization(auth)
+    parties = membership.counting_parties(current, authorization_message(auth), [signed["signature"]], "recovery authorization")
+    require(parties == {membership.OWNER}, "the recovery authorization is not the owner's")
+    require(current["epoch"] == auth["quarantine_epoch"] and membership.digest(current) == auth["quarantine_digest"],
+            "the recovery authorization is for epoch %d's manifest; this node's is epoch %d: a new epoch ends it"
+            % (auth["quarantine_epoch"], current["epoch"]))
+    require(expires - start <= current["recovery_authorization_max_s"], "the recovery authorization lives %d s, more than the "
+            "manifest's recovery_authorization_max_s (%d)" % (expires - start, current["recovery_authorization_max_s"]))
+    rule, nodes = current["activation_signers"], membership.validate(current)
+    survivor = auth["node_id"]
+    require(survivor in rule["parties"] and survivor in nodes and nodes[survivor]["state"] not in membership.NOT_COUNTING,
+            "%s does not count toward activation under epoch %d" % (survivor, current["epoch"]))
+    loose = [p for p in rule["parties"] if p not in (membership.OWNER, survivor) and p in nodes and nodes[p]["state"] not in membership.NOT_COUNTING]
+    require(not loose, "the recovery path needs every other node party quarantined or revoked under epoch %d; %s %s not"
+            % (current["epoch"], ", ".join(loose), "is" if len(loose) == 1 else "are"))
+    if node_id is not None:
+        require(survivor == node_id, "the recovery authorization is for %s, not %s" % (survivor, node_id))
+    return auth
 
 
 def message(lease):
@@ -103,20 +159,23 @@ def verify(envelope, current):
     rule = current["activation_signers"]
     counted = membership.counting_parties(current, raw, envelope["signatures"], "activation lease") & set(rule["parties"])
     node_parties = {p for p in counted if p != membership.OWNER}
-    if membership.OWNER not in counted:
-        require("recovery" not in lease, "a recovery block without the owner's signature: refused")
+    if "recovery" not in lease:
+        require(membership.OWNER not in counted, "the owner signs a recovery authorization, never a lease")
         require(len(node_parties) >= rule["threshold"], "%d of the nodes signed (%s); activation needs %d"
                 % (len(node_parties), ", ".join(sorted(node_parties)) or "none", rule["threshold"]))
         return lease
-    # the owner counts only as the recovery path: with a node, the other node parties stopped in the CURRENT manifest
-    require("recovery" in lease, "the owner's signature counts only on the recovery path (a lease with a recovery block)")
-    require(node_parties, "the owner alone never activates a site")
-    require(len(node_parties) + 1 >= rule["threshold"], "the owner and %d node(s) are below the threshold %d" % (len(node_parties), rule["threshold"]))
-    others = [p for p in rule["parties"] if p != membership.OWNER and p not in node_parties]
-    loose = [p for p in others if p in nodes and nodes[p]["state"] not in membership.NOT_COUNTING]
-    require(not loose, "the recovery path needs every other node party quarantined or revoked under epoch %d; %s %s not"
-            % (current["epoch"], ", ".join(loose), "is" if len(loose) == 1 else "are"))
-    require(lease["recovery"]["quarantine_epoch"] <= current["epoch"], "the quarantine epoch is newer than this node's manifest")
+    # the owner, through a recovery authorization only: it counts while the CURRENT manifest is its quarantine manifest;
+    # the lease is for its node, site and registry, inside its window, and signed by that node (#432 amendment 5)
+    require(membership.OWNER not in counted, "the owner signs a recovery authorization, never a lease")
+    auth = _authorization_holds(lease["recovery"], current)
+    require((lease["node_id"], lease["site"], lease["registry_digest"]) == (auth["node_id"], auth["site"], auth["registry_digest"]),
+            "the recovery authorization is for %s, site %s; the lease names %s, site %s" % (auth["node_id"], auth["site"], lease["node_id"], lease["site"]))
+    a_start, a_end = heartbeat.parse_time(auth["not_before"], "not_before"), heartbeat.parse_time(auth["expires_at"], "expires_at")
+    l_start, l_end = heartbeat.parse_time(lease["not_before"], "not_before"), heartbeat.parse_time(lease["expires_at"], "expires_at")
+    require(a_start <= l_start and l_end <= a_end, "the lease's window is not inside the recovery authorization's")
+    require(node_parties == {auth["node_id"]}, "a recovery lease is signed by the survivor %s (signed by: %s)"
+            % (auth["node_id"], ", ".join(sorted(node_parties)) or "nobody"))
+    require(len(node_parties) + 1 >= rule["threshold"], "the survivor and the owner's authorization are below the threshold %d" % rule["threshold"])
     return lease
 
 
@@ -237,6 +296,61 @@ class Signer:
             return {"party": self.node_id, "key": self.key, "sig": self._sign(message(lease))}
 
 
+def write_json(path, value, mode=0o644):
+    """Replaced atomically (a temporary file, fsynced, renamed, the directory fsynced): readers see whole files only."""
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
+    with os.fdopen(fd, "w") as f:
+        json.dump(value, f, sort_keys=True)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+    dirfd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+    try:
+        os.fsync(dirfd)
+    finally:
+        os.close(dirfd)
+
+
+# ---- leaving recovery (#432 amendment 5, rule 6; d9) ----
+
+def counts(manifest, node_id):
+    """Whether `node_id` counts toward activation under `manifest`."""
+    nodes = membership.validate(manifest)
+    return (node_id in manifest.get("activation_signers", {}).get("parties", ()) and node_id in nodes
+            and nodes[node_id]["state"] not in membership.NOT_COUNTING)
+
+
+def recovery_survivors(manifests, epoch):
+    """The survivors of the recovery that may have run before `epoch` (#432 amendment 5, d9): walking back from the epoch
+    before through every epoch BELOW the activation threshold (membership.below_quorum), each node party that counted
+    ALONE in one of them. A node coming back at `epoch` must see each at or past it, whatever its state in `epoch`: a
+    survivor still on an old epoch may still be self-renewing (N alone, N+1 nobody, N+2 back still waits for N's)."""
+    by_epoch = {mm["epoch"]: mm for mm in manifests}
+    out, e = set(), epoch - 1
+    while e in by_epoch and by_epoch[e].get("schema") == membership.SCHEMA_V4 and membership.below_quorum(by_epoch[e]):
+        alone = membership.activation_counting(by_epoch[e])
+        if len(alone) == 1:
+            out |= alone
+        e -= 1
+    return out
+
+
+def readmission_epoch(manifests, node_id):
+    """The latest epoch at which `node_id` counts toward activation again after not counting (or not being a node) in
+    the epoch before, from the chain's manifests (epoch 1 first), or None. Such a node co-signs nothing until every
+    authorizing peer, the survivor of any recovery included, has been seen at or past that epoch, and RECOVERY_WAIT_S
+    after that (node.Sync): a survivor still renewing under an authorization for the epoch before then holds it back
+    instead of overlapping it."""
+    latest = None
+    for before, after in zip(manifests, manifests[1:]):
+        if after.get("schema") == membership.SCHEMA_V4 and counts(after, node_id) and not (
+                before.get("schema") == membership.SCHEMA_V4 and counts(before, node_id)):
+            latest = after["epoch"]
+    return latest
+
+
 # ---- issuance between the nodes (#432 §5): the proposer is the node to be activated; one other node co-signs ----
 
 def _now(clock):
@@ -323,3 +437,112 @@ def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers,
     trail({"event": "activation", "outcome": "DENY", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site,
            "reason": "; ".join(refusals)[:240]})
     raise Refused("no node co-signed this activation: %s" % "; ".join(refusals))
+
+
+# ---- the recovery path (#432 §2): the owner and one node, after fencing ----
+
+def recovery_text(others, how, epoch):
+    """The attestation the owner's tool records: what was done to the other nodes, and that it lasts until they hold
+    the quarantine epoch (d9: "hard-fenced" must hold until they have taken it, not only now)."""
+    require(isinstance(how, str) and how.strip() and how.isprintable(), "say how the other nodes are fenced (printable text)")
+    return "%s: %s; they will not rejoin until they hold epoch %d" % (", ".join(others), how.strip(), epoch)
+
+
+def owner_recovery_authorization(tip, survivor, site, registry_digest, survivor_record, how, now, confirm, open_signer,
+                                 life_s=None, witness_latest=None):
+    """The owner's recovery authorization (owner.py sign-activation, off the nodes; #432 amendment 5), or Refused. `tip` is
+    the survivor's newest manifest, verified from the pinned root by the caller: the quarantine manifest. Refused unless
+    every other node party of activation_signers has stopped counting in it, and the line naming survivor, site, epoch and
+    expiry is typed. The wait since the latest grant (the survivor's exported record, the collector's when consulted) is
+    checked here on this machine's clock only to say when to come back: the survivor enforces it on its own authenticated
+    clock and its own record when it installs the authorization (install_authorization, d9). `life_s`: at most, and by
+    default, the manifest's recovery_authorization_max_s. Returns {"authorization", "signature"}."""
+    rule = tip["activation_signers"]
+    nodes = membership.validate(tip)
+    require(survivor in rule["parties"] and survivor in nodes and nodes[survivor]["state"] not in membership.NOT_COUNTING,
+            "%s does not count toward activation under epoch %d" % (survivor, tip["epoch"]))
+    others = [p for p in rule["parties"] if p not in (membership.OWNER, survivor)]
+    loose = [p for p in others if p in nodes and nodes[p]["state"] not in membership.NOT_COUNTING]
+    require(not loose, "quarantine %s first (a revocation the owner may sign alone): the recovery path is open only once every "
+            "other node party has stopped counting" % ", ".join(loose))
+    latest = max([int(survivor_record.get("expires_at", 0))] + ([int(witness_latest)] if witness_latest else []))
+    require(now >= latest + RECOVERY_WAIT_S, "the latest grant known expires at %d: come back at %d (%d s from now); the survivor "
+            "checks this itself" % (latest, latest + RECOVERY_WAIT_S, latest + RECOVERY_WAIT_S - now))
+    life = tip["recovery_authorization_max_s"] if life_s is None else int(life_s)
+    require(0 < life <= tip["recovery_authorization_max_s"], "an authorization lives at most %d s under epoch %d"
+            % (tip["recovery_authorization_max_s"], tip["epoch"]))
+    auth = {"schema": AUTH_SCHEMA, "node_id": survivor, "site": site, "registry_digest": registry_digest, "quarantine_epoch": tip["epoch"],
+            "quarantine_digest": membership.digest(tip), "not_before": _stamp(now), "expires_at": _stamp(now + life),
+            "fenced": recovery_text(others, how, tip["epoch"])}
+    validate_authorization(auth)
+    want = "authorize %s %s %d until %s" % (survivor, site, tip["epoch"], auth["expires_at"])
+    shown = ("A RECOVERY AUTHORIZATION: %s (site %s) activates itself ALONE, renewing its own leases, until %s or until any new\n"
+             "epoch, whichever comes first, under epoch %d:\n  attested: %s\n  latest known grant expired at %d%s\n"
+             "  If any of %s is alive and can reach another node, or rejoins before it holds epoch %d, two sites can sign. STOP if so.\n"
+             "Type exactly: %s\n> " % (survivor, site, auth["expires_at"], tip["epoch"], auth["fenced"], latest,
+                                        "" if witness_latest else " (the audit collector NOT consulted)", ", ".join(others), tip["epoch"], want))
+    require((confirm(shown) or "").strip() == want, "the line typed is not this authorization's: nothing is signed")
+    owners = {e["key"] for e in tip["owner_keys"] if e["alg"] == "ed25519"}
+    signer = open_signer()
+    require(signer.public() in owners, "the token's key is not one of the tip manifest's owner_keys: nothing is signed")
+    return {"authorization": auth, "signature": {"party": membership.OWNER, "key": signer.public(),
+                                                 "sig": signer.sign(authorization_message(auth)).hex()}}
+
+
+AUTHORIZATIONS = "activation-authorizations.jsonl"   # the owner's record (manifest.py's AUTHORIZATIONS, the same file)
+
+
+def issuable(record_lines, quarantine_epoch):
+    """Refused when the owner's record shows `quarantine_epoch` CLOSED (an epoch after it already stated recovery_ends_by,
+    manifest.py): an authorization issued for it now could outlive the time that epoch promised (d9)."""
+    closed = [line["through_epoch"] for line in record_lines if line.get("event") == "closed"]
+    require(not closed or quarantine_epoch > max(closed), "the record shows recovery epochs up to %d closed (recovery_ends_by "
+            "stated): no authorization is issued for epoch %d" % (max(closed) if closed else 0, quarantine_epoch))
+
+
+def issued_line(signed):
+    """The record line of an authorization the owner's tool issued (manifest.py's recovery_ends_by reads it)."""
+    auth = signed["authorization"]
+    return {"event": "issued", "quarantine_epoch": auth["quarantine_epoch"], "node_id": auth["node_id"], "site": auth["site"],
+            "expires_at": heartbeat.parse_time(auth["expires_at"], "expires_at")}
+
+
+def install_authorization(manifest, me, signed, clock, record):
+    """The survivor's acceptance of the owner's recovery authorization (root at its console; #432 amendment 5), or Refused:
+    it holds against THIS node's current manifest (_authorization_holds), it is for this node, it has not expired, and,
+    on this node's authenticated clock and under its grant lock, RECOVERY_WAIT_S has passed since this node's own last
+    grant expired (d9: the laptop's clock and the exported record decide nothing). Returns the authorization; the caller
+    keeps the signed one in the state directory and records the install in the trail."""
+    auth = _authorization_holds(signed, manifest, node_id=me)
+    now = _now(clock)
+    _, expires = validate_authorization(auth)
+    require(now < expires, "the recovery authorization has expired")
+    with _locked(record.lock_path):
+        last, busy = record.state(now)
+        require(busy is None, busy or "")
+        if last is not None:
+            require(now >= last["expires_at"] + RECOVERY_WAIT_S, "this node granted site %s until %d: the authorization may be "
+                    "installed from %d (this node's authenticated time)" % (last["site"], last["expires_at"], last["expires_at"] + RECOVERY_WAIT_S))
+    return auth
+
+
+def self_renew(node_id, manifest, clock, signer, signed, trail):
+    """The survivor's own lease under an installed recovery authorization: the epoch one above its last grant, the
+    authorization's site and registry, at most MAX_LEASE_S and never past the authorization. It goes through this node's
+    grant record like any lease (lock, overlap, epoch), carries the authorization, and must verify as the Gate will.
+    Recorded in the trail (24). Returns the envelope."""
+    auth = _authorization_holds(signed, manifest, node_id=node_id)
+    now = _now(clock)
+    _, auth_end = validate_authorization(auth)
+    require(now < auth_end, "the recovery authorization has expired: the owner signs a new one, or the nodes return")
+    last, _ = signer.record.state(now)
+    epoch = (last["activation_epoch"] if last else 0) + 1
+    lease = proposal(node_id, auth["site"], auth["registry_digest"], manifest, epoch, now)
+    lease["expires_at"] = _stamp(min(now + MAX_LEASE_S, auth_end))
+    lease["recovery"] = signed
+    own = signer(lease, manifest, now)
+    done = {"lease": lease, "signatures": [own]}
+    verify(done, manifest)
+    trail({"event": "activation-recovery", "outcome": "ALLOW", "epoch": manifest["epoch"], "activation_epoch": epoch,
+           "site": auth["site"], "until": auth["expires_at"]})
+    return done

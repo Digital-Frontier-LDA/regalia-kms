@@ -200,6 +200,22 @@ def main(argv=None):
     for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
                      ("--opensc-conf", {}), ("--pin-env", {})):
         k.add_argument(flag, **kw)                  # the same token options as `beat`
+    v = sub.add_parser("sign-activation", help="(off the nodes) the owner's RECOVERY AUTHORIZATION (#432): one node left activates "
+                       "itself, renewing its own leases, until it expires or any new epoch")
+    v.add_argument("--chain", required=True, help="the surviving node's signed chain (a JSON list of envelopes)")
+    v.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
+    v.add_argument("--survivor", required=True, help="the node to activate")
+    v.add_argument("--site", required=True, help="its registry site")
+    v.add_argument("--registry-digest", required=True, help="sha256:<64 hex>, the registry's digest")
+    v.add_argument("--record", required=True, help="the survivor's grant record, exported from it (activation-grant.json)")
+    v.add_argument("--life-s", type=int, help="the authorization's life, at most (and by default) the manifest's recovery_authorization_max_s")
+    v.add_argument("--witness-latest", type=int, help="the latest activation expiry the audit collector holds, when consulted")
+    v.add_argument("--state-dir", required=True, help="this machine's state directory: the record of every authorization the owner "
+                   "issued (activation-authorizations.jsonl), which manifest.py reads when an epoch ends a recovery")
+    v.add_argument("--out", required=True)
+    for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
+                     ("--opensc-conf", {}), ("--pin-env", {})):
+        v.add_argument(flag, **kw)
     for name in ("_propose", "_accept"):
         s = sub.add_parser(name)
         s.add_argument("--config", required=True)
@@ -246,6 +262,40 @@ def main(argv=None):
             with os.fdopen(fd, "w") as f:
                 json.dump(envelope, f, sort_keys=True)
             print("WRITTEN: %s, signed by the owner; import it on a node (revoke.py import)" % args.out)
+            return 0
+        if args.op == "sign-activation":
+            off_the_nodes()
+            import time
+            from deploy.baremetal import activation, manifest as manifest_tool
+            root = manifest_tool.root_key(args.root_key)
+            tip = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), root)
+            record = manifest_tool.read_json(args.record, 4096)
+            book = os.path.join(args.state_dir, activation.AUTHORIZATIONS)
+            try:
+                with open(book) as f:
+                    lines = [json.loads(line) for line in f if line.strip()]
+            except FileNotFoundError:
+                lines = []
+            activation.issuable(lines, tip["epoch"])                  # an epoch already closed gets no authorization (d9)
+            # what was done to the other nodes: typed at this terminal, recorded in the lease, never on the command line
+            how = keyfd.tty_line("How are the other nodes fenced (powered off at..., cut from...)? ")
+
+            def confirm_line(text):
+                print(text)
+                return keyfd.tty_line("> ")
+            envelope = activation.owner_recovery_authorization(tip, args.survivor, args.site, args.registry_digest, record, how,
+                                                               int(time.time()), confirm_line, open_signer, life_s=args.life_s,
+                                                               witness_latest=args.witness_latest)
+            # recorded BEFORE it leaves this machine: the root's recovery_ends_by is computed from this record
+            with open(book, "a") as f:
+                f.write(json.dumps(activation.issued_line(envelope), sort_keys=True) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, "w") as f:
+                json.dump(envelope, f, sort_keys=True)
+            print("WRITTEN: %s, the owner's recovery authorization for %s until %s (or the next epoch); install it at the "
+                  "survivor's console (activation recover)" % (args.out, args.survivor, envelope["authorization"]["expires_at"]))
             return 0
         beat_by_hand(args.config, open_signer, confirm)
     except (Refused, OSError, ValueError, KeyError) as refusal:

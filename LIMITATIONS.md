@@ -27,25 +27,34 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
 - **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
-  refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
-  its verification under the current manifest's `activation_signers`, each node's grant record and
-  signer, and the co-signer's and proposer's checks, as a library with unit tests. **Nothing issues or
-  enforces an activation in the running system yet:** no `nv_activation` index is defined at
-  enrolment, sync has no activation ops, there is no `owner.py sign-activation`, and the Go Gate still
-  takes `regalia-fence`'s single key. By the rule, a new cluster's first activation waits about 11 minutes
-  (`RECOVERY_WAIT_S`): every node starts with no grant record, so each is busy for that long after it
-  starts. Expected at first bring-up, not a fault. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
-  the authority for which site signs ([`FENCING.md`](FENCING.md)).
+  refined by #432 (amendments 1–5); see the ADR. Built as a library with unit tests (`activation.py`,
+  #440 and #453): the activation lease and its verification under the current manifest; each node's grant
+  record (`nv_activation`, defined at enrolment) and signer; co-signing over sync (`activate-sign`) with the
+  boot rule; and the recovery path (one owner authorization, the survivor's install and self-renewal, the
+  rule for leaving recovery). **Nothing issues or enforces an activation in the running system yet:**
+  node.Sync's renewal and the operator's `promote`/`release`/`recover` commands are #432 step 2d, and the
+  Go Gate still takes `regalia-fence`'s single key (step 3). Runtime leases (`lease.py`) are issued by
+  **one** active peer, and `regalia-fence` is still the authority for which site signs ([`FENCING.md`](FENCING.md)).
+  By the rule, a new cluster's first activation waits about 11 minutes (`RECOVERY_WAIT_S`): every node
+  starts with no grant record. Expected at first bring-up, not a fault.
   **Accepted in the design:**
   - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
-  - Activation by the owner plus one node is a recovery step behind three conditions, and every renewal
-    on that path repeats all three:
-    1. a quarantine epoch for the other nodes;
-    2. a typed hard-fencing attestation, which holds until the fenced nodes hold that epoch;
-    3. a wait counted from the latest lease expiry any record shows, plus the skew margin.
-  - The owner alone never activates.
-  - Two active sites remain possible only if a fencing attestation is false when it is made, or if an
-    operator rejoins a fenced node before it holds the quarantine epoch.
+  - **The recovery path is one owner authorization** (the owner's direction, 2026-10-05: no touch per
+    lease). With every other node party quarantined, the owner signs once, for at most the manifest's
+    `recovery_authorization_max_s` (7 days by default), and the survivor then renews its own leases. Any
+    new epoch ends the authorization. The owner alone never activates.
+  - **A false fencing attestation now lasts up to the authorization's life** (7 days by default), not one
+    lease. Two active sites remain possible only if the attestation is false when made, or if an operator
+    rejoins a fenced node before it holds the quarantine epoch.
+  - **`recovery_ends_by` is only as complete as the owner's record.** The epoch ending a recovery states
+    the latest expiry of the owner's authorizations, taken from `activation-authorizations.jsonl` on the
+    owner's machine (0 means "the record holds none"). The owner must sign recovery authorizations only on
+    the machine that holds that record. A value typed on another machine is the owner's word, and the
+    owner must issue nothing for those epochs after typing it.
+  - **Leaving recovery has a window with no active site.** A returning node co-signs nothing until every
+    authorizing peer, the survivor included, has been seen at the restoring epoch, and then for
+    `RECOVERY_WAIT_S` (about 11 minutes). A survivor quarantined at the exit that cannot be heard is waited
+    out until `recovery_ends_by`. Safety over liveness, by design.
   - **Availability cost:** with one node dead and not yet quarantined, an unplanned reboot of a second
     node stops lease renewals until the owner quarantines the dead one, because of the boot rule. An
     alert after a set number of minutes unreachable prompts the owner.
@@ -169,6 +178,19 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   judgement assumes the host had finished booting (systemd-pcrphase "ready" extended) when `activate`
   ran, which a software TPM cannot show: a bench item (#297), and the refusal says to re-run once
   `systemctl is-system-running` reports running. Run only on software TPMs so far.
+- **K_A and the card record are pinned in the v4 manifest, and nothing uses K_A yet** (#361, #405).
+  `anchor_policy_key` is set at genesis and no signer, the root included, changes it: every node's
+  anchor, counters and signing key will be defined under it, so losing or replacing K_A means a new
+  genesis and re-enrolling every node (its Shamir backup, D28, guards the loss). No node defines or
+  uses an object under K_A until #361's PR C. `card_record` pins the card ceremony record's sequence
+  and digest, never the record itself: a node cannot read a card record (it has no laptop signing
+  record to judge it by), so it holds only that the root moved to a later one whenever owner_keys
+  changed, not what that record says.
+- **K_A is taken from the sealed set's generation record** (`--offline-keys-record`, regalia-kms-95 on
+  #438). It is verified under the pinned root, and its published key must equal the entry. Its private
+  half is shown only by the record's `operation_proof` ("verified": the generating tool's own check of a
+  challenge signature, vouched for by the root's signature on the record). It is not re-proven at
+  genesis: a sealed file damaged after generation is found only at the first approval K_A signs.
 - **Card attestation: not built** (#400). Nothing yet produces the YubiKeys' OpenPGP attestation
   certificates (`ykman openpgp keys attest`). The card record's `attestation_sha256` values are
   placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is

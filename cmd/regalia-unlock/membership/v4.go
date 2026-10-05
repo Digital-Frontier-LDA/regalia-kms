@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 )
 
@@ -21,23 +22,29 @@ import (
 const (
 	SchemaV4          = "regalia.membership/v4"
 	ownerHeartbeatMin = 300
-	ownerParty        = "owner" // the owner's party name in a signer rule (never a node_id)
-	heartbeatFloor    = 2       // no single party keeps a cluster alive, or (naming a node) revokes, alone
+	recoveryAuthMin   = 3600          // membership.RECOVERY_AUTH_MIN_S (#432 amendment 5)
+	recoveryAuthMax   = 7 * 24 * 3600 // membership.RECOVERY_AUTH_MAX_S
+	ownerParty        = "owner"       // the owner's party name in a signer rule (never a node_id)
+	heartbeatFloor    = 2             // no single party keeps a cluster alive, or (naming a node) revokes, alone
 	nodeRuleFloor     = 2
 	maxOwnerKeys      = 8
 	maxRules          = 4
 	maxSignatures     = 16
+	maxCardSequence   = 1<<31 - 1 // membership.MAX_CARD_SEQUENCE: exact in every JSON reader
 )
 
 var (
-	signingKeyAlgs = []string{"ecdsa-p256"}            // a TPM has no Ed25519
-	ownerKeyAlgs   = []string{"ed25519", "ecdsa-p256"} // the approval YubiKeys' OpenPGP applet (#126), or P-256
-	signerFields   = []string{"owner_heartbeat_lifetime_s", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers"}
+	signingKeyAlgs      = []string{"ecdsa-p256"}            // a TPM has no Ed25519
+	ownerKeyAlgs        = []string{"ed25519", "ecdsa-p256"} // the approval YubiKeys' OpenPGP applet (#126), or P-256
+	anchorPolicyKeyAlgs = []string{"ecdsa-p256"}            // K_A (#361): a key the TPM loads (tpm2_loadexternal)
+	signerFields        = []string{"owner_heartbeat_lifetime_s", "recovery_authorization_max_s", "recovery_ends_by", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers"}
+	// #361/#405: K_A (immutable, every signer) and the card ceremony's record that names owner_keys (the root's)
+	v4OnlyFields   = []string{"anchor_policy_key", "card_record"}
 	singleRules    = []string{"heartbeat_signers", "activation_signers"} // one rule each; revocation_signers is a list
-	v4ManifestKeys = append(without(v2ManifestKeys, "revocation_keys"), signerFields...)
+	v4ManifestKeys = append(append(without(v2ManifestKeys, "revocation_keys"), signerFields...), v4OnlyFields...)
 	v4NodeKeys     = append(append([]string(nil), v2NodeKeys...), "signing_key")
 	// what only the root may change: a quorum (or a v1-v3 revocation key) leaves every one as it was
-	rootFields = append([]string{"policy_version", "revocation_keys", "heartbeat_max_lifetime_s"}, signerFields...)
+	rootFields = append(append([]string{"policy_version", "revocation_keys", "heartbeat_max_lifetime_s"}, signerFields...), "card_record")
 	// named in a signer rule, but not counting
 	notCounting = map[string]bool{"RETIRED": true, "REVOKED_STOLEN": true, "QUARANTINED": true}
 )
@@ -107,6 +114,16 @@ func signerRules(manifest map[string]any, byID map[string]map[string]any, seen m
 	if !isInt || most == nil || life.Cmp(big.NewInt(ownerHeartbeatMin)) < 0 || life.Cmp(most) > 0 {
 		return refuse("owner_heartbeat_lifetime_s must be an integer from %d to heartbeat_max_lifetime_s", ownerHeartbeatMin)
 	}
+	recovery, isInt := integer(manifest["recovery_authorization_max_s"])
+	if !isInt || recovery.Cmp(big.NewInt(recoveryAuthMin)) < 0 || recovery.Cmp(big.NewInt(recoveryAuthMax)) > 0 {
+		return refuse("recovery_authorization_max_s must be an integer from %d to %d", recoveryAuthMin, recoveryAuthMax)
+	}
+	if ends := manifest["recovery_ends_by"]; ends != nil {
+		value, isInt := integer(ends)
+		if !isInt || value.Sign() < 0 || value.BitLen() > 63 {
+			return refuse("recovery_ends_by must be null or an integer from 0")
+		}
+	}
 	rule := func(value any, label string, ownerAlone bool) error {
 		object, err := exact(value, []string{"threshold", "parties"}, label)
 		if err != nil {
@@ -164,6 +181,81 @@ func signerRules(manifest map[string]any, byID map[string]map[string]any, seen m
 			return err
 		}
 	}
+	// K_A (#361): a P-256 key, as tpm2_loadexternal loads it, and no other key of this manifest (checked last, after the
+	// nodes' identities and owner_keys: `seen` holds them all)
+	_, key, err := typedKey(manifest["anchor_policy_key"], "anchor_policy_key", anchorPolicyKeyAlgs)
+	if err != nil {
+		return err
+	}
+	if other, used := seen[key]; used {
+		return refuse("anchor_policy_key is already used (%s)", other)
+	}
+	record, err := exact(manifest["card_record"], []string{"sequence", "digest"}, "card_record")
+	if err != nil {
+		return err
+	}
+	sequence, isInt := integer(record["sequence"])
+	if !isInt || sequence.Cmp(big.NewInt(1)) < 0 || sequence.Cmp(big.NewInt(maxCardSequence)) > 0 {
+		return refuse("card_record.sequence must be an integer from 1 to %d", maxCardSequence)
+	}
+	return hexField(record["digest"], 64, "card_record.digest")
+}
+
+// cardRecordRules is membership._card_record_rules: the root's own v4 rules for card_record (#405): a new card
+// record has a higher sequence, and owner_keys, which the card ceremony's record names, change only with a new one.
+// (A quorum changes neither: rootFields.)
+func cardRecordRules(current, candidate map[string]any) error {
+	old, fresh := current["card_record"].(map[string]any), candidate["card_record"].(map[string]any)
+	if !equal(fresh, old) {
+		newSeq, _ := integer(fresh["sequence"])
+		oldSeq, _ := integer(old["sequence"])
+		if newSeq.Cmp(oldSeq) <= 0 {
+			return refuse("card_record changes only to a later card ceremony's record (sequence %s after %s)", newSeq, oldSeq)
+		}
+		return nil
+	}
+	if !equal(candidate["owner_keys"], current["owner_keys"]) {
+		return refuse("owner_keys change only with a new card_record: the card ceremony's record names them")
+	}
+	return nil
+}
+
+// activationCounting is membership.activation_counting: the node parties of activation_signers that count.
+func activationCounting(manifest map[string]any) map[string]bool {
+	nodes := map[string]map[string]any{}
+	for _, raw := range manifest["nodes"].([]any) {
+		node := raw.(map[string]any)
+		nodes[node["node_id"].(string)] = node
+	}
+	out := map[string]bool{}
+	for _, raw := range manifest["activation_signers"].(map[string]any)["parties"].([]any) {
+		party := raw.(string)
+		if node, ok := nodes[party]; ok && party != ownerParty && !notCounting[node["state"].(string)] {
+			out[party] = true
+		}
+	}
+	return out
+}
+
+// belowQuorum is membership.below_quorum: fewer counting node parties of activation_signers than its threshold.
+func belowQuorum(manifest map[string]any) bool {
+	threshold, _ := integer(manifest["activation_signers"].(map[string]any)["threshold"])
+	return big.NewInt(int64(len(activationCounting(manifest)))).Cmp(threshold) < 0
+}
+
+// recoveryEndRules is membership._recovery_end_rules (#432 amendment 5, d9): an epoch that brings the counting node
+// parties back to the activation threshold, from below it, states recovery_ends_by.
+func recoveryEndRules(current, candidate map[string]any) error {
+	if belowQuorum(current) && !belowQuorum(candidate) && candidate["recovery_ends_by"] == nil {
+		back := []string{}
+		for party := range activationCounting(candidate) {
+			back = append(back, party)
+		}
+		sort.Strings(back)
+		return refuse("this epoch brings the counting nodes back to the activation threshold (%s) after an epoch below it: it "+
+			"must state recovery_ends_by, the latest expiry of the owner's recovery authorizations, 0 when none was issued "+
+			"(manifest.py propose --recovery-ends-by)", strings.Join(back, ", "))
+	}
 	return nil
 }
 
@@ -192,6 +284,7 @@ func apartFromRoot(manifest map[string]any, root any) error {
 			keys = append(keys, labelled{"signing_key of " + node["node_id"].(string), signing.(map[string]any)["key"].(string)})
 		}
 	}
+	keys = append(keys, labelled{"anchor_policy_key", manifest["anchor_policy_key"].(map[string]any)["key"].(string)})
 	for _, k := range keys {
 		if roots[k.key] {
 			return refuse("%s is a pinned root key: the payload root is never a quorum party", k.label)

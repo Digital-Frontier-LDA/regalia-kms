@@ -205,6 +205,10 @@ class Enrolment(ea.Anchor):
         from deploy.baremetal import node as node_module
         signing = node_module.signing_counter(self.node().cfg)
         self.assertEqual((signing.value(), signing.advance(1)), (0, 1))
+        # the activation counter (#432): the same layout and the same run-time writes, by policy
+        self.assertRegex(self.public(self.cfg["nv_activation"]), r"value: 0x2006001A\b")
+        activation = node_module.activation_counter(self.node().cfg)
+        self.assertEqual((activation.value(), activation.advance(1)), (0, 1))
 
     def set_owner_auth(self, raw, lockout=True):
         """The TPM's owner authorization set as `enrol ownerauth` leaves it (and its lockout one, #57), test-side."""
@@ -236,7 +240,7 @@ class Enrolment(ea.Anchor):
         chain = self.chain(3)
         with self.assertRaisesRegex(m.Refused, "the TPM's owner authorization is set and none was given"):
             self.anchor(chain)
-        enrolment = {int(self.cfg[k], 16) + d for k in ("nv_epoch", "nv_heartbeat", "nv_signing") for d in range(6)}
+        enrolment = {int(self.cfg[k], 16) + d for k in ("nv_epoch", "nv_heartbeat", "nv_signing", "nv_activation") for d in range(6)}
         self.assertEqual(self.defined() & enrolment, set())                              # nothing defined, no index at all
         epoch, digest = enrol.anchor_and_store(self.path, chain, run=self.tpm, owner_auth=auth)
         self.assertEqual((epoch, digest), (3, m.digest(chain[-1]["manifest"])))
