@@ -622,6 +622,7 @@ class Client:
     def __init__(self, node_id, store, freshness, transports, sink, documents=None):
         """`documents` (measurements.Documents): where the measurement document of an epoch about to be committed is
         put, fetched from the same source first when it is not held (#332)."""
+        self.peer_epochs = {}           # source -> the epoch its last pull answer said it holds (#432)
         self.node_id, self.store, self.freshness, self.transports, self.sink = node_id, store, freshness, transports, sink
         self.documents = documents
 
@@ -728,6 +729,7 @@ class Client:
                 started = convergence.summary(self.store)
                 answer = self._ask(source, "pull", summary=started, sequence=sequence)
                 convergence.validate_summary(answer["summary"])
+                self.peer_epochs[source] = answer["summary"]["epoch"]    # what the peer said it holds (#432 amendment 5's exit)
                 bundle = answer["bundle"]
                 require(isinstance(bundle, dict) and isinstance(bundle.get("envelopes"), list)
                         and len(bundle["envelopes"]) <= MAX_ENVELOPES, "a bundle carries at most %d envelopes" % MAX_ENVELOPES)

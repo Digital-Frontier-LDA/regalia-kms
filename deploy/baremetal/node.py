@@ -773,7 +773,7 @@ class Sync:
         # #432: the activation signer, made at the first activation co-signed; d9's boot rule (pulled since THIS start from
         # every node that may authorize, or an epoch newer than the one it started with); the start's authenticated time
         self._activation_signer, self._started = None, None
-        self.pulled, self.boot_epoch = set(), None
+        self.pulled, self.boot_epoch, self.peer_epochs = set(), None, {}
         self.published = None
         # the unlock listener's refusals, by cause (#317), in regalia-sync's metrics directory
         self.refusals = metrics.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", metrics.UNLOCK_CAUSES)
@@ -838,8 +838,48 @@ class Sync:
         others = [n["node_id"] for n in manifest["nodes"] if n["node_id"] != self.node.node_id and membership.may(manifest, n["node_id"], "authorize")]
         return all(o in self.pulled for o in others)
 
+    READMISSION = "activation-readmission.json"
+
+    def readmitted(self):
+        """#432 amendment 5, rule 6 (d9): after an epoch at which this node counts again (activation.readmission_epoch), it
+        co-signs nothing until EVERY other node its current manifest lets authorize, the survivor of a recovery included,
+        has answered a pull at or past that epoch, and RECOVERY_WAIT_S after that, on its authenticated clock: a survivor
+        still self-renewing under the epoch before holds it back instead of overlapping it. Progress is kept in
+        READMISSION (the epoch, when all were seen, cleared), so a restart neither forgets the wait nor redoes a cleared one."""
+        self.store.load()
+        epoch = activation.readmission_epoch(self.store.manifests, self.node.node_id)
+        if epoch is None:
+            return True
+        path = self.node.path(self.READMISSION)
+        try:
+            with open(path) as f:
+                state = json.load(f)
+        except (OSError, ValueError):
+            state = {}
+        if state.get("epoch") != epoch:
+            state = {"epoch": epoch, "seen_all_at": None, "cleared": False}
+        if state.get("cleared") is True:
+            return True
+        manifest = self.manifest()
+        others = [n["node_id"] for n in manifest["nodes"] if n["node_id"] != self.node.node_id and membership.may(manifest, n["node_id"], "authorize")]
+        if not all(self.peer_epochs.get(o, 0) >= epoch for o in others):
+            return False
+        seconds, authenticated = self.node.clock()()
+        if authenticated is not True:
+            return False
+        if state.get("seen_all_at") is None:
+            state["seen_all_at"] = int(seconds)
+        state["cleared"] = int(seconds) >= state["seen_all_at"] + activation.RECOVERY_WAIT_S
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, path)
+        return state["cleared"]
+
     def activate(self, manifest, caller, lease):
-        """sync.Server's activator: activation.cosign with this node's parts."""
+        """sync.Server's activator: activation.cosign with this node's parts, once it is past a readmission (readmitted())."""
+        require(self.readmitted(), "this node counts again after not counting: it co-signs no activation until every node that may "
+                "authorize has been seen at that epoch, and %d s after (#432)" % activation.RECOVERY_WAIT_S)
         return activation.cosign(manifest, self.node.node_id, caller, lease, self.node.clock(), self.activation_signer(), self.synced)
 
     def proposer(self):
@@ -893,6 +933,7 @@ class Sync:
                 client.pull(name)
                 self.pulled.add(name)                  # answered since this start (d9's boot rule, synced())
             changed = self.publish() or changed
+        self.peer_epochs.update(client.peer_epochs)     # what each peer said it holds (readmitted())
         return changed
 
     def watch(self):

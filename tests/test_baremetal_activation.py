@@ -66,9 +66,7 @@ class Format(Case):
         cases = [("lives at most 600", dict(expires_at=stamp(T0 + 601))), ("expires_at must be after", dict(expires_at=stamp(T0))),
                  ("site must be a registry site", dict(site="a")), ("registry_digest must be", dict(registry_digest="ab" * 32)),
                  ("activation_epoch must be", dict(activation_epoch=0)), ("activation_epoch must be", dict(activation_epoch=True)),
-                 ("recovery.fenced must be printable", dict(recovery={"fenced": "x" * 513, "quarantine_epoch": 1})),
-                 ("recovery.fenced must be printable", dict(recovery={"fenced": "off\n", "quarantine_epoch": 1})),
-                 ("the quarantine epoch is above", dict(recovery={"fenced": "b and c off until epoch 2", "quarantine_epoch": 2}))]
+                 ("the recovery block fields mismatch", dict(recovery={"fenced": "x", "quarantine_epoch": 1}))]
         for reason, over in cases:
             with self.subTest(reason):
                 self.refused(reason, act.validate, lease(self.m1, **over))
@@ -81,22 +79,22 @@ class Quorum(Case):
         self.assertEqual(act.verify(signed(body, "b", "c"), self.m1), body)        # the subject need not sign
         self.refused("1 of the nodes signed (a); activation needs 2", act.verify, signed(body, "a"), self.m1)
 
-    def test_the_owner_counts_only_on_the_recovery_path(self):
+    def test_the_owner_never_signs_a_lease(self):
+        """The owner counts only through a recovery authorization (RecoveryPath), never as a lease signer."""
         body = lease(self.m1)
-        self.refused("counts only on the recovery path", act.verify, signed(body, "a", m.OWNER), self.m1)
-        self.refused("the owner alone never activates", act.verify, signed(lease(self.m1, recovery={"fenced": "x", "quarantine_epoch": 1}), m.OWNER), self.m1)
-        self.refused("a recovery block without the owner", act.verify,
-                     signed(lease(self.m1, recovery={"fenced": "x", "quarantine_epoch": 1}), "a", "b"), self.m1)
+        self.refused("never a lease", act.verify, signed(body, "a", m.OWNER), self.m1)
+        self.refused("never a lease", act.verify, signed(body, m.OWNER), self.m1)
 
     def test_recovery_needs_every_other_node_party_stopped_in_the_current_manifest(self):
-        """{a, b} and {c, owner} do not intersect: the owner's path is open only once a and b no longer count."""
-        rec = {"fenced": "a and b are powered off and will not rejoin until they hold epoch 2", "quarantine_epoch": 2}
-        m2 = manifest4(2, m.digest(self.m1), nodes4(a="QUARANTINED", b="QUARANTINED"), activation_signers=dict(RULE))
-        body = lease(m2, node_id="c", site="site-c", recovery=rec)
-        self.assertEqual(act.verify(signed(body, "c", m.OWNER), m2)["node_id"], "c")
+        """{a, b} and {c, owner} do not intersect: the owner's authorization counts only once a and b no longer count."""
         m2b = manifest4(2, m.digest(self.m1), nodes4(a="QUARANTINED"), activation_signers=dict(RULE))
+        auth = {"schema": act.AUTH_SCHEMA, "node_id": "c", "site": "site-c", "registry_digest": "sha256:" + "ab" * 32,
+                "quarantine_epoch": 2, "quarantine_digest": m.digest(m2b), "not_before": stamp(T0), "expires_at": stamp(T0 + 3600),
+                "fenced": "a, b: off; they will not rejoin until they hold epoch 2"}
+        rec = {"authorization": auth, "signature": {"party": m.OWNER, "key": pub(OWNER_KEYS[0]),
+                                                    "sig": OWNER_KEYS[0].sign(act.authorization_message(auth)).hex()}}
         body = lease(m2b, node_id="c", site="site-c", recovery=rec)
-        self.refused("b is not", act.verify, signed(body, "c", m.OWNER), m2b)
+        self.refused("b is not", act.verify, signed(body, "c"), m2b)
 
     def test_an_older_lease_is_counted_under_the_current_signers(self):
         """No serving gap at an epoch change; a node the current manifest stopped counting is not counted."""
@@ -245,8 +243,11 @@ class Issuance(Record):
                 args = dict(manifest=self.m1, me="b", caller="a", lease=body, clock=self.clock(), signer=b, synced=lambda: True)
                 args.update(over)
                 self.refused(reason, act.cosign, *args.values())
-        self.refused("a recovery lease is the owner's", act.cosign, self.m1, "b", "a",
-                     dict(body, recovery={"fenced": "x", "quarantine_epoch": 1}), self.clock(), b, lambda: True)
+        auth = {"schema": act.AUTH_SCHEMA, "node_id": "a", "site": "site-a", "registry_digest": "sha256:" + "ab" * 32,
+                "quarantine_epoch": 1, "quarantine_digest": m.digest(self.m1), "not_before": stamp(T0), "expires_at": stamp(T0 + 3600),
+                "fenced": "x"}
+        rec = {"authorization": auth, "signature": {"party": m.OWNER, "key": pub(OWNER_KEYS[0]), "sig": "00" * 64}}
+        self.refused("a recovery lease is the owner's", act.cosign, self.m1, "b", "a", dict(body, recovery=rec), self.clock(), b, lambda: True)
         self.assertEqual(b.record.counter.v, 0)               # nothing refused was granted
 
     def test_a_partition_minority_cannot_activate_a_second_site(self):
@@ -339,61 +340,133 @@ class OwnerKey:
 
 
 class RecoveryPath(Record):
-    """The owner and one node, only once the other node parties stopped counting, after the wait, with the line typed."""
-    node, clock = Issuance.node, Issuance.clock               # the helpers only, not Issuance's tests
+    """#432 amendment 5: one owner authorization, then the survivor renews its own leases alone, while the current manifest
+    IS the quarantine manifest. Every binding (node, site, registry, window, epoch) is refused when broken."""
+    node, clock = Issuance.node, Issuance.clock
 
     def setUp(self):
         super().setUp()
         self.m2 = manifest4(2, m.digest(self.m1), nodes4(a="QUARANTINED", b="QUARANTINED"), activation_signers=dict(RULE))
-        self.shown = []
+        self.shown, self.events = [], []
+        self.now = T0 + act.RECOVERY_WAIT_S
 
-    def owner_half(self, typed=None, tip=None, record=None, now=None, journal=0, key=OWNER_KEYS[0], witness=None):
+    def authorize(self, typed=None, tip=None, record=None, now=None, key=OWNER_KEYS[0], witness=None, life=None, survivor="c"):
         tip = tip or self.m2
         record = record if record is not None else {"activation_epoch": 40, "expires_at": T0}
-        now = now if now is not None else T0 + act.RECOVERY_WAIT_S
-        want = typed if typed is not None else "activate c site-c %d" % (max(record.get("activation_epoch", 0), journal) + 1)
-        return act.owner_recovery_lease(tip, "c", "site-c", "sha256:" + "ab" * 32, record, journal, "powered off at the PDU", now,
-                                        lambda text: (self.shown.append(text), want)[1], lambda: OwnerKey(key), witness_latest=witness)
+        now = now if now is not None else self.now
+        expires = act._stamp(now + (life if life is not None else tip["recovery_authorization_max_s"]))
+        want = typed if typed is not None else "authorize %s site-c %d until %s" % (survivor, tip["epoch"], expires)
+        return act.owner_recovery_authorization(tip, survivor, "site-c", "sha256:" + "ab" * 32, record, "powered off at the PDU", now,
+                                                lambda text: (self.shown.append(text), want)[1], lambda: OwnerKey(key),
+                                                life_s=life, witness_latest=witness)
 
-    def test_the_owner_and_the_survivor_activate_it_and_the_gate_accepts(self):
-        env = self.owner_half(journal=55)
-        self.assertEqual(env["lease"]["activation_epoch"], 56)                # above the daemon's journal head (ed)
-        self.assertIn("they will not rejoin until they hold epoch 2", env["lease"]["recovery"]["fenced"])
-        self.assertIn("NOT consulted", self.shown[0])
+    def survivor(self):
         c = self.node("c")
-        done = act.recovery_cosign(self.m2, "c", env, self.clock(T0 + act.RECOVERY_WAIT_S), c)
-        self.assertEqual(sorted(s["party"] for s in done["signatures"]), ["c", m.OWNER])
-        self.assertEqual(act.verify(done, self.m2)["node_id"], "c")
+        return c
 
-    def test_what_the_owner_s_tool_refuses_with_nothing_signed(self):
+    def test_one_touch_then_the_survivor_renews_alone_and_the_gate_accepts(self):
+        signed = self.authorize()
+        self.assertIn("they will not rejoin until they hold epoch 2", signed["authorization"]["fenced"])
+        self.assertIn("NOT consulted", self.shown[0])
+        c = self.survivor()
+        self.assertEqual(act.install_authorization(self.m2, "c", signed, self.clock(self.now), c.record)["node_id"], "c")
+        first = act.self_renew("c", self.m2, self.clock(self.now), c, signed, self.events.append)
+        self.assertEqual([x["party"] for x in first["signatures"]], ["c"])          # no owner signature on the lease
+        self.assertEqual(act.verify(first, self.m2)["node_id"], "c")
+        later = self.now + 5 * 24 * 3600                                           # days later, no touch
+        again = act.self_renew("c", self.m2, self.clock(later), c, signed, self.events.append)
+        self.assertEqual(again["lease"]["activation_epoch"], first["lease"]["activation_epoch"] + 1)
+        self.assertEqual(act.verify(again, self.m2)["site"], "site-c")
+        self.assertEqual([e["event"] for e in self.events], ["activation-recovery", "activation-recovery"])
+        end = heartbeat.parse_time(signed["authorization"]["expires_at"], "e")
+        self.refused("has expired", act.self_renew, "c", self.m2, self.clock(end), c, signed, self.events.append)
+
+    def test_a_new_epoch_ends_it_everywhere(self):
+        signed = self.authorize()
+        c = self.survivor()
+        lease_env = act.self_renew("c", self.m2, self.clock(self.now), c, signed, lambda e: None)
+        m3 = manifest4(3, m.digest(self.m2), nodes4(a="QUARANTINED", b="QUARANTINED"), activation_signers=dict(RULE))
+        self.refused("a new epoch ends it", act.verify, lease_env, m3)
+        self.refused("a new epoch ends it", act.install_authorization, m3, "c", signed, self.clock(self.now), c.record)
+        self.refused("a new epoch ends it", act.self_renew, "c", m3, self.clock(self.now), c, signed, lambda e: None)
+
+    def test_every_binding_of_the_lease_to_the_authorization_is_enforced(self):
+        """d9, 24: the authorization is not "this node may activate any site"."""
+        signed = self.authorize()
+        c = self.survivor()
+        good = act.self_renew("c", self.m2, self.clock(self.now), c, signed, lambda e: None)
+
+        def resigned(**over):
+            body = dict(good["lease"], **over)
+            return {"lease": body, "signatures": signed_by_c(body)}
+
+        def signed_by_c(body):
+            return [{"party": "c", "key": pub(NODE_KEYS["c"]), "sig": p256_sig(NODE_KEYS["c"], act.message(body))}]
+        self.refused("the lease names c, site site-x", act.verify, resigned(site="site-x"), self.m2)
+        self.refused("the lease names c, site site-c", act.verify, resigned(registry_digest="sha256:" + "cd" * 32), self.m2)
+        self.refused("not inside the recovery authorization's", act.verify,
+                     resigned(not_before=act._stamp(self.now - 3600), expires_at=act._stamp(self.now - 3000)), self.m2)
+        other = dict(good["lease"], node_id="a")                     # a's lease under c's authorization, signed by a
+        self.refused("may not serve", act.verify, {"lease": other, "signatures": [{"party": "a", "key": pub(NODE_KEYS["a"]),
+                     "sig": p256_sig(NODE_KEYS["a"], act.message(other))}]}, self.m2)
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        outsider = Ed25519PrivateKey.generate()                      # an Ed25519 key in no owner_keys
+        stranger = dict(signed, signature={"party": m.OWNER, "key": pub(outsider), "sig": outsider.sign(act.authorization_message(signed["authorization"])).hex()})
+        with self.assertRaises(m.Refused):                           # a key not in the manifest's owner_keys
+            act.verify({"lease": dict(good["lease"], recovery=stranger), "signatures": signed_by_c(dict(good["lease"], recovery=stranger))}, self.m2)
+        owner_on_lease = {"lease": good["lease"], "signatures": good["signatures"] + [{"party": m.OWNER, "key": pub(OWNER_KEYS[0]),
+                          "sig": OWNER_KEYS[0].sign(act.message(good["lease"])).hex()}]}
+        self.refused("never a lease", act.verify, owner_on_lease, self.m2)
+
+    def test_an_authorization_must_be_the_owner_s_within_the_cap_and_its_lease_the_survivor_s(self):
+        signed = self.authorize()
+        c = self.survivor()
+        good = act.self_renew("c", self.m2, self.clock(self.now), c, signed, lambda e: None)
+        auth = signed["authorization"]
+        # the authorization signed by a node's key (c's own), not the owner's
+        by_node = {"authorization": auth, "signature": {"party": "c", "key": pub(NODE_KEYS["c"]),
+                                                        "sig": p256_sig(NODE_KEYS["c"], act.authorization_message(auth))}}
+        self.refused("is not the owner's", act.install_authorization, self.m2, "c", by_node, self.clock(self.now), c.record)
+        # an authorization the owner signed for longer than the manifest allows (built by hand: the tool refuses to)
+        long = dict(auth, expires_at=act._stamp(heartbeat.parse_time(auth["not_before"], "n") + 604801))
+        too_long = {"authorization": long, "signature": {"party": m.OWNER, "key": pub(OWNER_KEYS[0]),
+                                                         "sig": OWNER_KEYS[0].sign(act.authorization_message(long)).hex()}}
+        self.refused("more than the manifest's recovery_authorization_max_s", act.install_authorization, self.m2, "c", too_long,
+                     self.clock(self.now), c.record)
+        # c's lease under c's authorization, but signed by a (quarantined: it does not count) instead of c
+        body = good["lease"]
+        by_a = {"lease": body, "signatures": [{"party": "a", "key": pub(NODE_KEYS["a"]), "sig": p256_sig(NODE_KEYS["a"], act.message(body))}]}
+        self.refused("is signed by the survivor c", act.verify, by_a, self.m2)
+
+    def test_what_the_owner_s_tool_refuses(self):
         m2b = manifest4(2, m.digest(self.m1), nodes4(a="QUARANTINED"), activation_signers=dict(RULE))
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        self.refused("quarantine b first", lambda: self.owner_half(tip=m2b))
-        self.refused("wait until", lambda: self.owner_half(now=T0 + act.RECOVERY_WAIT_S - 1))
-        self.refused("wait until", lambda: self.owner_half(witness=T0 + 100))     # the collector knows a later grant
-        self.refused("not this activation's", lambda: self.owner_half(typed="activate c site-c 1"))
-        self.refused("not one of the tip manifest's owner_keys", lambda: self.owner_half(key=Ed25519PrivateKey.generate()))
-        self.refused("does not count toward activation", act.owner_recovery_lease, self.m2, "a", "site-a", "sha256:" + "ab" * 32,
-                     {}, 0, "x", T0 + 9999, lambda t: "", lambda: OwnerKey(OWNER_KEYS[0]))
+        self.refused("quarantine b first", lambda: self.authorize(tip=m2b))
+        self.refused("come back at", lambda: self.authorize(now=T0 + act.RECOVERY_WAIT_S - 1))
+        self.refused("come back at", lambda: self.authorize(witness=T0 + 100))
+        self.refused("not this authorization's", lambda: self.authorize(typed="authorize c site-c 2 until never"))
+        self.refused("not one of the tip manifest's owner_keys", lambda: self.authorize(key=Ed25519PrivateKey.generate()))
+        self.refused("lives at most 604800", lambda: self.authorize(life=604801))
+        self.refused("does not count toward activation", lambda: self.authorize(survivor="a"))
 
-    def test_what_the_survivor_refuses(self):
-        env = self.owner_half()
-        now = T0 + act.RECOVERY_WAIT_S
-        self.refused("is for c, not this node (a)", act.recovery_cosign, self.m2, "a", env, self.clock(now), self.node("a"))
-        forged = dict(env, signatures=[dict(env["signatures"][0], sig=OWNER_KEYS[1].sign(b"other").hex(), key=pub(OWNER_KEYS[1]))])
-        with self.assertRaises(m.Refused):
-            act.recovery_cosign(self.m2, "c", forged, self.clock(now), self.node("c"))
-        # a "recovery" lease signed by a node instead of the owner is refused BEFORE the survivor records anything
-        c0 = self.node("c")
-        by_node = {"lease": env["lease"], "signatures": signed(env["lease"], "a")["signatures"]}
-        self.refused("must carry the owner's signature", act.recovery_cosign, self.m2, "c", by_node, self.clock(now), c0)
-        self.assertEqual(c0.record.counter.v, 0)
-        # the survivor's own LIVE grant record still binds when the owner's export was stale: it granted site-a on a
-        # until later than the export said
-        stale = self.owner_half(record={"activation_epoch": 60, "expires_at": T0})
-        c = self.node("c")
-        c.record.record(lease(self.m1, activation_epoch=60, expires_at=stamp(now + 300), not_before=stamp(now - 200)), now + 300)
-        self.refused("OVERLAP", act.recovery_cosign, self.m2, "c", stale, self.clock(now), c)
+    def test_the_survivor_installs_only_its_own_on_its_own_clock(self):
+        """d9: the wait is the survivor's, on its authenticated clock and its own record, whatever the laptop said."""
+        signed = self.authorize(record={"activation_epoch": 0, "expires_at": 0})       # a stale export: the laptop sees no grant
+        c = self.survivor()
+        c.record.record(lease(self.m1, site="site-c", node_id="c", activation_epoch=60, not_before=stamp(self.now - 100),
+                              expires_at=stamp(self.now + 300)), self.now + 300)        # but c granted itself until later
+        self.refused("may be installed from", act.install_authorization, self.m2, "c", signed, self.clock(self.now), c.record)
+        later = self.now + 300 + act.RECOVERY_WAIT_S
+        act.install_authorization(self.m2, "c", signed, self.clock(later), c.record)
+        self.refused("is for c, not a", act.install_authorization, self.m2, "a", signed, self.clock(later), self.node("a").record)
+        self.refused("time is not authenticated", act.install_authorization, self.m2, "c", signed, self.clock(later, False), c.record)
+
+    def test_self_renewal_still_goes_through_the_grant_record(self):
+        signed = self.authorize()
+        c = self.survivor()
+        # c co-signed site-a on a, and that grant runs: the authorization does not let c overlap it
+        c.record.record(lease(self.m1, activation_epoch=60, not_before=stamp(self.now - 100), expires_at=stamp(self.now + 300)), self.now + 300)
+        self.refused("OVERLAP", act.self_renew, "c", self.m2, self.clock(self.now), c, signed, lambda e: None)
 
 
 class OwnerCommand(unittest.TestCase):
@@ -401,7 +474,7 @@ class OwnerCommand(unittest.TestCase):
         from unittest import mock
         from deploy.baremetal import owner
         argv = ["sign-activation", "--chain", "c.json", "--root-key", "00" * 32, "--survivor", "c", "--site", "site-c",
-                "--registry-digest", "sha256:" + "ab" * 32, "--record", "r.json", "--journal-head", "0", "--out", "o.json",
+                "--registry-digest", "sha256:" + "ab" * 32, "--record", "r.json", "--out", "o.json",
                 "--module", "/x.so", "--serial", "1"]
         with mock.patch.object(owner.os.path, "exists", return_value=True), mock.patch("sys.stderr") as err:
             self.assertEqual(owner.main(argv), 1)
@@ -464,6 +537,48 @@ class BootRule(unittest.TestCase):
         m2 = manifest4(2, m.digest(m1), nodes4(c="QUARANTINED"), activation_signers=dict(RULE))
         self.assertTrue(self.sync_(m2, pulled={"a"}, boot_epoch=2).synced())     # c may not authorize: not waited for
         self.assertTrue(self.sync_(m2, boot_epoch=1).synced())                  # a newer epoch than at the start
+
+
+class Readmission(unittest.TestCase):
+    """#432 amendment 5, rule 6 (d9): a node that counts again waits until every authorizing peer, the survivor included,
+    is seen at or past that epoch, then RECOVERY_WAIT_S; a survivor still on the epoch before holds it back."""
+
+    def chain(self):
+        m1 = manifest4(1, "", nodes4(), activation_signers=dict(RULE))
+        m2 = manifest4(2, m.digest(m1), nodes4(a="QUARANTINED", b="QUARANTINED"), activation_signers=dict(RULE))
+        m3 = manifest4(3, m.digest(m2), nodes4(), activation_signers=dict(RULE))        # a and b re-admitted
+        return [m1, m2, m3]
+
+    def test_the_epoch_a_node_counts_again(self):
+        ms = self.chain()
+        self.assertEqual((act.readmission_epoch(ms, "a"), act.readmission_epoch(ms, "c")), (3, None))
+        self.assertIsNone(act.readmission_epoch(ms[:2], "a"))                # still quarantined
+        self.assertIsNone(act.readmission_epoch(ms[:1], "a"))                # genesis: no transition
+
+    def sync_(self, peer_epochs, clock, d):
+        from deploy.baremetal import node as node_module
+        ms = self.chain()
+        s = node_module.Sync.__new__(node_module.Sync)
+        s.node = type("N", (), {"node_id": "a", "clock": lambda self: clock, "path": lambda self, leaf: os.path.join(d, leaf)})()
+        s.store = type("S", (), {"manifests": ms, "load": lambda self: ms[-1]})()
+        s.manifest, s.peer_epochs = (lambda: ms[-1]), dict(peer_epochs)
+        return s
+
+    def test_held_back_by_a_survivor_still_on_the_old_epoch_then_the_wait_then_clear(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        now = [T0]
+        clock = lambda: (now[0], True)
+        s = self.sync_({"b": 3, "c": 2}, clock, d)                           # c, the survivor, still at epoch 2
+        self.assertFalse(s.readmitted())
+        s.peer_epochs["c"] = 3                                               # c took the re-admitting epoch: it stops
+        self.assertFalse(s.readmitted())                                     # seen all at T0: the wait starts
+        now[0] = T0 + act.RECOVERY_WAIT_S - 1
+        self.assertFalse(s.readmitted())
+        now[0] = T0 + act.RECOVERY_WAIT_S
+        self.assertTrue(s.readmitted())
+        restarted = self.sync_({}, clock, d)                                 # a restart: the cleared state is kept
+        self.assertTrue(restarted.readmitted())
 
 
 if __name__ == "__main__":
