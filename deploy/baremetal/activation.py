@@ -21,6 +21,8 @@ grant. {a, b} and {c, owner} share none. So:
 
 signed over DOMAIN + canonical(lease). DOMAIN is activation's own: a heartbeat or manifest signature is never one.
 """
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -120,6 +122,17 @@ def verify(envelope, current):
 
 # ---- each node's grant record (#432 §4) ----
 
+@contextlib.contextmanager
+def _locked(path):
+    """An exclusive flock on `path`, opened without following a link (d9): held across a whole grant."""
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 class GrantRecord:
     """What this node has co-signed. `counter` (heartbeat.Counter's value()/advance(), on nv_activation) counts THIS
     node's grants, one increment each; the disk record (`path`) holds that count with the last grant's epoch, site
@@ -131,16 +144,24 @@ class GrantRecord:
 
     BUSY. When the record does not stand, this node cannot know what it granted, so it signs nothing until `started`
     (its authenticated time at THIS start, never persisted) + RECOVERY_WAIT_S: any lease it might have granted has
-    expired by then. After that it signs again, and its next grant writes a record that stands."""
+    expired by then. After that it signs again, and its next grant writes a record that stands. So a NEW cluster
+    (every counter at 0) has every node busy for RECOVERY_WAIT_S (about 11 minutes) after its first start, and its
+    first activation waits for that: correct by the rule, not a fault (d9).
+
+    One grant at a time: Signer holds `lock_path` (beside the record, opened without following a link) across
+    state, check, counter, record and signature, so two requests arriving together cannot both pass the overlap
+    check on the same `last` (d9's race)."""
 
     def __init__(self, counter, path, started):
         self.counter, self.path, self.started = counter, path, int(started)
+        self.lock_path = path + ".lock"
 
     def _held(self):
         try:
-            with open(self.path, "rb") as f:
+            fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)       # never through a link (ed)
+            with os.fdopen(fd, "rb") as f:
                 rec = json.loads(f.read(4096))
-            membership.exact(rec, ("grants", "activation_epoch", "site", "expires_at"), "the grant record")
+            membership.exact(rec, ("grants", "activation_epoch", "site", "node_id", "expires_at"), "the grant record")
             return rec
         except (OSError, ValueError, Refused):
             return None
@@ -168,9 +189,13 @@ class GrantRecord:
         if last is not None:
             require(lease["activation_epoch"] > last["activation_epoch"], "activation_epoch %d is not above this node's last grant, %d: "
                     "an epoch is granted once" % (lease["activation_epoch"], last["activation_epoch"]))
-            if last["site"] != lease["site"]:
-                require(start >= last["expires_at"], "OVERLAP: this node granted site %s until %d; a lease for %s may not begin before that"
-                        % (last["site"], last["expires_at"], lease["site"]))
+            # only a renewal (the same site on the same node) may overlap: the same site on ANOTHER node is two signers
+            # for one key, the double signing fencing exists to stop (d9). Past the skew margin, since the old site's
+            # Gate judges its expiry by its own clock and the new one's not_before by another (d9)
+            if (last["site"], last.get("node_id")) != (lease["site"], lease["node_id"]):
+                require(start >= last["expires_at"] + SKEW_S, "OVERLAP: this node granted site %s on %s until %d; a lease for site %s on %s "
+                        "may not begin before that, and the %d s skew margin" % (last["site"], last.get("node_id"), last["expires_at"],
+                                                                                lease["site"], lease["node_id"], SKEW_S))
         return start, expires
 
     def record(self, lease, expires):
@@ -179,7 +204,8 @@ class GrantRecord:
         tmp = self.path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as f:
-            json.dump({"grants": count, "activation_epoch": lease["activation_epoch"], "site": lease["site"], "expires_at": int(expires)}, f)
+            json.dump({"grants": count, "activation_epoch": lease["activation_epoch"], "site": lease["site"], "node_id": lease["node_id"],
+                       "expires_at": int(expires)}, f)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, self.path)
@@ -205,9 +231,10 @@ class Signer:
                 "%s does not count toward activation under epoch %d: it signs no activation" % (self.node_id, manifest["epoch"]))
         require(lease["manifest_epoch"] == manifest["epoch"] and lease["manifest_digest"] == membership.digest(manifest),
                 "a signer signs only for its own current manifest (epoch %d)" % manifest["epoch"])
-        _, expires = self.record.check(lease, now)
-        self.record.record(lease, expires)
-        return {"party": self.node_id, "key": self.key, "sig": self._sign(message(lease))}
+        with _locked(self.record.lock_path):                  # one grant at a time (d9)
+            _, expires = self.record.check(lease, now)
+            self.record.record(lease, expires)
+            return {"party": self.node_id, "key": self.key, "sig": self._sign(message(lease))}
 
 
 # ---- issuance between the nodes (#432 §5): the proposer is the node to be activated; one other node co-signs ----
@@ -218,24 +245,23 @@ def _now(clock):
     return int(seconds)
 
 
-def cosign(manifest, me, caller, envelope, clock, signer, synced):
-    """This node's signature over the activation `envelope` that `caller` (the node the tunnel identified) proposed and
-    signed for ITSELF, or Refused. `synced()` is d9's boot rule: True once, since this boot, this node has pulled from
-    every node its current manifest lets authorize, or holds a newer epoch than it booted with. Until then it co-signs
-    nothing: two fenced nodes powered back on inside a partition must not activate each other on an old manifest."""
+def cosign(manifest, me, caller, lease, clock, signer, synced):
+    """This node's signature over the activation `lease` that `caller` (the node the tunnel identified) proposed for
+    ITSELF, or Refused. The co-signer signs FIRST and the proposer only once it has (propose()): a refusal then costs
+    the proposer nothing, where a recorded self-grant would block it from co-signing anyone else's renewal for a lease
+    life (ed's read). Both still record before their signature leaves them, so neither can later co-sign an overlap.
+    `synced()` is d9's boot rule: True once, since this boot, this node has pulled from every node its current manifest
+    lets authorize, or holds a newer epoch than it booted with. Until then it co-signs nothing: two fenced nodes
+    powered back on inside a partition must not activate each other on an old manifest."""
     rule = manifest["activation_signers"]
     nodes = membership.validate(manifest)
     counting = [p for p in rule["parties"] if p != membership.OWNER and p in nodes and nodes[p]["state"] not in membership.NOT_COUNTING]
     require(me in counting, "%s does not count toward activation under epoch %d: it co-signs nothing" % (me, manifest["epoch"]))
     require(caller in counting and caller != me, "%s does not count toward activation under epoch %d" % (caller, manifest["epoch"]))
     require(synced(), "since its boot this node has not pulled from every node that may authorize: it co-signs no activation yet")
-    membership.exact(envelope, ("lease", "signatures"), "the activation proposal")
-    lease = envelope["lease"]
     validate(lease)
     require(lease["node_id"] == caller, "%s proposes an activation for %s: a node proposes only its own" % (caller, lease["node_id"]))
     require("recovery" not in lease, "a recovery lease is the owner's (owner.py), never proposed over sync")
-    parties = membership.counting_parties(manifest, message(lease), envelope["signatures"], "activation proposal")
-    require(parties == {caller}, "the proposal is not signed by %s alone" % caller)
     return signer(lease, manifest, _now(clock))
 
 
@@ -252,29 +278,30 @@ def _stamp(seconds):
 
 
 def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers, trail):
-    """This node's activation: its own signature, then one co-signer from `peers` (in order), the epoch one above the
-    highest this node knows (its grant record's). A co-signer's refusal may name its own last epoch ("last grant, N");
-    the proposal is retried ONCE at the highest such N + 1, never in a loop (#432, ed). Returns the envelope the Gate
-    takes, or Refused. `ask(peer, envelope)` returns that peer's signature or raises Refused; `trail(event)` records
-    each attempt."""
+    """This node's activation, the epoch one above the highest this node knows (its grant record's). Its own record is
+    CHECKED first (nothing written); then one co-signer from `peers` (in order) checks, records and signs; only then does
+    this node record and sign (cosign's docstring: a refusal costs the proposer nothing). A co-signer's refusal may name
+    its last epoch ("last grant, N"): the proposal is retried ONCE at the highest such N + 1, never in a loop (ed).
+    Returns the envelope the Gate takes, or Refused. `ask(peer, lease)` returns that peer's signature or raises Refused;
+    `trail(event)` records each attempt."""
     now = _now(clock)
     last, _ = signer.record.state(now)
     epoch = (last["activation_epoch"] if last else 0) + 1
     refusals = []
     for attempt in range(2):
         lease = proposal(node_id, site, registry_digest, manifest, epoch, now)
-        own = signer(lease, manifest, now)
-        envelope = {"lease": lease, "signatures": [own]}
+        signer.record.check(lease, now)                       # this node's own refusal, before anyone is asked
         seen = []
         for peer in peers:
             try:
-                theirs = ask(peer, envelope)
+                theirs = ask(peer, lease)
             except Refused as refused:
                 refusals.append("%s: %s" % (peer, refused))
                 found = re.search(r"last grant, (\d+)", str(refused))
                 if found:
                     seen.append(int(found.group(1)))
                 continue
+            own = signer(lease, manifest, now)                # recorded, then signed: a crash here costs a count
             done = {"lease": lease, "signatures": [own, theirs]}
             verify(done, manifest)
             trail({"event": "activation", "outcome": "ALLOW", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site, "peer": peer})

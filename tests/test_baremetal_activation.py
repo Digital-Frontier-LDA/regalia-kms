@@ -7,6 +7,8 @@ import pathlib
 import re
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 
 from deploy.baremetal import activation as act, beat, heartbeat, lease as runtime_lease, membership as m
@@ -149,12 +151,23 @@ class Record(Case):
         counter = Counter()
         rec = self.granted(counter)
         self.assertEqual(counter.v, 1)
-        self.assertEqual(rec.state(T0)[0], {"grants": 1, "activation_epoch": 7, "site": "site-a", "expires_at": T0 + 600})
+        self.assertEqual(rec.state(T0)[0], {"grants": 1, "activation_epoch": 7, "site": "site-a", "node_id": "a", "expires_at": T0 + 600})
         self.refused("an epoch is granted once", rec.check, lease(self.m1), T0 + 10)
         rec.check(lease(self.m1, activation_epoch=8, not_before=stamp(T0 + 10), expires_at=stamp(T0 + 610)), T0 + 10)   # same site: may overlap
-        self.refused("OVERLAP: this node granted site site-a until", rec.check,
+        self.refused("OVERLAP: this node granted site site-a on a until", rec.check,
                      lease(self.m1, site="site-b", activation_epoch=8, not_before=stamp(T0 + 300), expires_at=stamp(T0 + 900)), T0 + 300)
-        rec.check(lease(self.m1, site="site-b", activation_epoch=8, not_before=stamp(T0 + 600), expires_at=stamp(T0 + 1200)), T0 + 600)
+        # past the expiry but within the skew margin: still refused (the two Gates' clocks differ); after it, granted
+        self.refused("skew margin", rec.check, lease(self.m1, site="site-b", activation_epoch=8, not_before=stamp(T0 + 600),
+                                                     expires_at=stamp(T0 + 1200)), T0 + 600)
+        free = T0 + 600 + act.SKEW_S
+        rec.check(lease(self.m1, site="site-b", activation_epoch=8, not_before=stamp(free), expires_at=stamp(free + 600)), free)
+
+    def test_the_same_site_on_another_node_is_a_second_signer_not_a_renewal(self):
+        """d9: a lease for site S on node a and one for S on node c are two active signers for one key."""
+        rec = self.granted(Counter())                       # site-a on a, until T0 + 600
+        self.refused("OVERLAP", rec.check, lease(self.m1, node_id="c", activation_epoch=8, not_before=stamp(T0 + 60),
+                                                  expires_at=stamp(T0 + 660)), T0 + 60)
+        rec.check(lease(self.m1, activation_epoch=8, not_before=stamp(T0 + 60), expires_at=stamp(T0 + 660)), T0 + 60)   # renewal: a, site-a
 
     def test_a_record_that_does_not_stand_makes_the_node_busy_for_the_wait(self):
         counter = Counter()
@@ -197,10 +210,6 @@ class SignerSide(Record):
         self.assertEqual(counter.v, 1)                        # nothing refused moved the counter
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class Issuance(Record):
     """The proposer is the node to be activated; one other node co-signs over sync, after its own checks."""
 
@@ -216,28 +225,27 @@ class Issuance(Record):
         a, b = self.node("a"), self.node("b")
         events = []
 
-        def ask(peer, envelope):
-            return act.cosign(self.m1, peer, "a", envelope, self.clock(), b, lambda: True)
+        def ask(peer, body):
+            return act.cosign(self.m1, peer, "a", body, self.clock(), b, lambda: True)
         env = act.propose("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(), a, ask, ["b"], events.append)
         self.assertEqual([s["party"] for s in env["signatures"]], ["a", "b"])
         self.assertEqual(act.verify(env, self.m1)["activation_epoch"], 1)
         self.assertEqual((a.record.counter.v, b.record.counter.v, events[-1]["outcome"]), (1, 1, "ALLOW"))
 
     def test_what_a_co_signer_refuses(self):
-        a, b = self.node("a"), self.node("b")
+        b = self.node("b")
         body = lease(self.m1, activation_epoch=1)
-        env = {"lease": body, "signatures": [a(body, self.m1, T0)]}
         cases = [("has not pulled from every node", dict(synced=lambda: False)),
                  ("time is not authenticated", dict(clock=self.clock(authenticated=False))),
                  ("a node proposes only its own", dict(caller="c")),
                  ("does not count toward activation", dict(me="d"))]
         for reason, over in cases:
             with self.subTest(reason):
-                args = dict(manifest=self.m1, me="b", caller="a", envelope=env, clock=self.clock(), signer=b, synced=lambda: True)
+                args = dict(manifest=self.m1, me="b", caller="a", lease=body, clock=self.clock(), signer=b, synced=lambda: True)
                 args.update(over)
                 self.refused(reason, act.cosign, *args.values())
-        rec_env = {"lease": dict(body, recovery={"fenced": "x", "quarantine_epoch": 1}), "signatures": env["signatures"]}
-        self.refused("a recovery lease is the owner's", act.cosign, self.m1, "b", "a", rec_env, self.clock(), b, lambda: True)
+        self.refused("a recovery lease is the owner's", act.cosign, self.m1, "b", "a",
+                     dict(body, recovery={"fenced": "x", "quarantine_epoch": 1}), self.clock(), b, lambda: True)
         self.assertEqual(b.record.counter.v, 0)               # nothing refused was granted
 
     def test_a_partition_minority_cannot_activate_a_second_site(self):
@@ -245,11 +253,11 @@ class Issuance(Record):
         counting party reachable from c, c is not activated."""
         a, b, c = self.node("a"), self.node("b"), self.node("c")
         act.propose("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(), a,
-                    lambda peer, env: act.cosign(self.m1, peer, "a", env, self.clock(), b, lambda: True), ["b"], lambda e: None)
+                    lambda peer, body: act.cosign(self.m1, peer, "a", body, self.clock(), b, lambda: True), ["b"], lambda e: None)
         events = []
         with self.assertRaises(m.Refused) as caught:
             act.propose("c", "site-c", "sha256:" + "ab" * 32, self.m1, self.clock(T0 + 60), c,
-                        lambda peer, env: act.cosign(self.m1, peer, "c", env, self.clock(T0 + 60), b, lambda: True), ["b"], events.append)
+                        lambda peer, body: act.cosign(self.m1, peer, "c", body, self.clock(T0 + 60), b, lambda: True), ["b"], events.append)
         self.assertIn("OVERLAP", str(caught.exception))
         self.assertEqual(events[-1]["outcome"], "DENY")
 
@@ -258,8 +266,50 @@ class Issuance(Record):
         b.record.record(lease(self.m1, activation_epoch=40), T0 + 600)        # b granted a at epoch 40, a's record lost
         asked = []
 
-        def ask(peer, envelope):
-            asked.append(envelope["lease"]["activation_epoch"])
-            return act.cosign(self.m1, peer, "a", envelope, self.clock(), b, lambda: True)
+        def ask(peer, body):
+            asked.append(body["activation_epoch"])
+            return act.cosign(self.m1, peer, "a", body, self.clock(), b, lambda: True)
         env = act.propose("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(), a, ask, ["b"], lambda e: None)
         self.assertEqual((asked, env["lease"]["activation_epoch"]), ([1, 41], 41))
+
+    def test_a_refused_probe_costs_the_proposer_nothing_so_a_renews_through_c_when_b_fails(self):
+        """ed's scenario: a active with b; standby c probes and is refused (b holds a's grant). c recorded nothing, so
+        when b goes down a renews through c."""
+        a, b, c = self.node("a"), self.node("b"), self.node("c")
+        cos = lambda me, caller, signer, at: (lambda peer, body: act.cosign(self.m1, me, caller, body, self.clock(at), signer, lambda: True))
+        act.propose("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(), a, cos("b", "a", b, T0), ["b"], lambda e: None)
+        with self.assertRaises(m.Refused):
+            act.propose("c", "site-c", "sha256:" + "ab" * 32, self.m1, self.clock(T0 + 60), c, cos("b", "c", b, T0 + 60), ["b"], lambda e: None)
+        self.assertEqual(c.record.counter.v, 0)               # the probe recorded nothing on c
+        env = act.propose("a", "site-a", "sha256:" + "ab" * 32, self.m1, self.clock(T0 + 120), a, cos("c", "a", c, T0 + 120), ["c"], lambda e: None)
+        self.assertEqual([s["party"] for s in env["signatures"]], ["a", "c"])
+
+    def test_two_requests_at_once_for_different_sites_get_one_grant(self):
+        """d9's race: the record's check and write are one step under the grant lock."""
+        b = self.node("b")
+        orig = b.record.check
+
+        def slow_check(body, now):
+            out = orig(body, now)
+            time.sleep(0.2)                                   # widen the window between check and record
+            return out
+        b.record.check = slow_check
+        results = []
+
+        def ask(caller, site):
+            try:
+                act.cosign(self.m1, "b", caller, lease(self.m1, node_id=caller, site=site, activation_epoch=1), self.clock(), b, lambda: True)
+                results.append("ALLOW")
+            except m.Refused as refused:
+                results.append(str(refused))
+        threads = [threading.Thread(target=ask, args=("a", "site-a")), threading.Thread(target=ask, args=("c", "site-c"))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(results.count("ALLOW"), 1, results)
+        self.assertEqual(b.record.counter.v, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
