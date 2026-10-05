@@ -103,8 +103,10 @@ def scenario(cluster):
     since = time.time()
     cluster.replace("c", "c2")                       # #199: the root's envelope given to a, as advance() gives an epoch
     took = until(lambda: all(cluster.node(name).store().load()["epoch"] == 2 for name in ("a", "b"))
-                 and any(e.get("event") == "sync-apply" and e.get("peer") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
-                         for e in cluster.trail("b")), 120, 3)
+                 # epoch 1: the apply of epoch 2 is decided under epoch 1 (convergence.audited); an earlier apply in since's
+                 # second would be under another epoch (regalia-kms-d9 on #454)
+                 and any(e.get("event") == "sync-apply" and e.get("peer") == "a" and e.get("outcome") == "ALLOW" and e.get("epoch") == 1
+                         and threenode.at_or_after(e, since) for e in cluster.trail("b")), 120, 3)
     ok(took is True, "the root's replacement given to a, b took epoch 2 from a by sync: c RETIRED, c2 ACTIVE")
     fresh = cluster.fresh(["a", "b"], 2, timeout=300)
     ok(all(fresh.values()), "a and b sign epoch 2's heartbeat themselves (c2, not yet running, joins later) (%s)" % fresh,
@@ -155,7 +157,7 @@ def scenario(cluster):
     off = until(lambda: all(as_wg(service_key) not in cluster.wg_peers(p, "wg-svc") for p in peers), 60, 2)
     time.sleep(30)
     ok(off is True and not cluster.lease("c") and not any(e.get("event") == "sync-lease" and e.get("subject") == "c" and e.get("outcome") == "ALLOW"
-                                                         and e.get("at", 0) >= since for p in peers for e in cluster.trail(p)),
+                                                         and e.get("at", 0) >= since for p in peers for e in cluster.trail(p)),   # strict: nothing after (not at_or_after)
        "N: and no lease: c is off every peer's service tunnel, and nobody issued it one", cluster.journal("c", "admission")[-400:])
     # Beneath the tunnels, membership itself: c's service key put back into a's wg-svc by hand (as if a's tunnel had not
     # followed the chain); whatever c then asks of a (its sync's pulls, its admission's lease) a's sync refuses by name,
@@ -166,7 +168,7 @@ def scenario(cluster):
     cluster.nodes["a"].in_ns("wg", "set", "wg-svc", "peer", as_wg(service_key), "allowed-ips", c_address + "/128",
                              "endpoint", "%s:51821" % cluster.nodes["c"].underlay)
     named = until(lambda: [e.get("reason") for e in cluster.trail("a") if e.get("event", "").startswith("sync") and e.get("outcome") == "DENY"
-                           and "c is RETIRED under epoch 2" in e.get("reason", "") and e.get("at", 0) >= since], 120, 3)
+                           and "c is RETIRED under epoch 2" in e.get("reason", "") and threenode.at_or_after(e, since)], 120, 3)
     ok(bool(named) and not cluster.lease("c"), "and through a tunnel forced open by hand, a's sync refuses c's requests by name: c is RETIRED under epoch 2",
        {"a denied": named, "c": cluster.journal("c", "admission")[-300:]})
 

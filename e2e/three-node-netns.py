@@ -51,9 +51,12 @@ def header(text):
     sys.stdout.flush()
 
 
-def answered(cluster, server, caller, since=0.0):
-    """Whether `server`'s sync answered a pull from `caller` (ALLOW) at or after `since` (unix seconds)."""
-    return any(e.get("event") == "sync-pull" and e.get("subject") == caller and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
+def answered(cluster, server, caller, since=0.0, strict=False):
+    """Whether `server`'s sync answered a pull from `caller` (ALLOW) at or after `since` (unix seconds): to `since`'s
+    second (threenode.at_or_after), or, `strict`, from `since` itself, for a check that NOTHING was answered after it
+    (taken to the second, its grace would shrink by since's fraction: regalia-kms-d9 on #454)."""
+    return any(e.get("event") == "sync-pull" and e.get("subject") == caller and e.get("outcome") == "ALLOW"
+               and (e.get("at", 0) >= since if strict else threenode.at_or_after(e, since))
                for e in cluster.trail(server))
 
 
@@ -103,7 +106,8 @@ def scenario(cluster):
     cut = time.time()
     ok(until(lambda: answered(cluster, "b", "c", cut) and answered(cluster, "c", "b", cut), 60, 2) is True,
        "with a down, b and c still pull from each other")
-    ok(not answered(cluster, "b", "a", cut + 1) and not answered(cluster, "c", "a", cut + 1), "and nobody answered a while it was down")
+    ok(not answered(cluster, "b", "a", cut + 1, strict=True) and not answered(cluster, "c", "a", cut + 1, strict=True),   # strict: nothing after
+       "and nobody answered a while it was down")
     back = time.time()
     cluster.start("a")
     ok(until(lambda: answered(cluster, "b", "a", back) and answered(cluster, "c", "a", back), 90, 2) is True,

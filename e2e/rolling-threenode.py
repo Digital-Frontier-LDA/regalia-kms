@@ -79,14 +79,17 @@ def header(text):
 
 
 def leased_by(cluster, peer, subject, since):
-    return any(e.get("event") == "sync-lease" and e.get("subject") == subject and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
+    """Whether `peer`'s sync issued `subject` a lease at or after `since`, to since's second (threenode.at_or_after): a
+    lease issued in that second just before the step began counts too; a reboot takes seconds, so it cannot be the
+    step's own (regalia-kms-d9 on #454). Used for leases that DID happen only."""
+    return any(e.get("event") == "sync-lease" and e.get("subject") == subject and e.get("outcome") == "ALLOW" and threenode.at_or_after(e, since)
                for e in cluster.trail(peer))
 
 
 def refused_for_pcr11(cluster, peer, subject, since, value):
     """Whether `peer` refused `subject` an unlock since `since` BECAUSE of its PCR 11 (attest's reason names the PCR
     and the value the node quoted), not for any other cause a broken setup would give."""
-    return any(e.get("event") == "unlock" and e.get("subject") == subject and e.get("outcome") == "DENY" and e.get("at", 0) >= since
+    return any(e.get("event") == "unlock" and e.get("subject") == subject and e.get("outcome") == "DENY" and threenode.at_or_after(e, since)
                and ("PCR 11 is %s" % value) in e.get("reason", "") for e in cluster.trail(peer))
 
 
@@ -200,7 +203,7 @@ def scenario(cluster):
     quoted = threenode.unlock_pcr11(cluster.image_set(a, NEXT_IMAGE))
     ok(not opened(r["got"]) and all(refused_for_pcr11(cluster, p, a, r["since"], quoted) for p in (b, c)),
        "a, booted onto %s under epoch 1, gets no key: both peers refuse it for its PCR 11 (their trails)" % NEXT_IMAGE,
-       {"unlock": r["got"], "denials": [e for p in (b, c) for e in cluster.trail(p) if e.get("event") == "unlock" and e.get("at", 0) >= r["since"]]})
+       {"unlock": r["got"], "denials": [e for p in (b, c) for e in cluster.trail(p) if e.get("event") == "unlock" and threenode.at_or_after(e, r["since"])]})
     ok(r["served"], "b and c were freshly leased while a was refused")
     r = reboot(cluster, a, None)
     ok(opened(r["got"]) and r["leased"], "a, power-cycled onto CURRENT, is unlocked through %s and leased again" % r["got"].get("peer"), r["got"])
@@ -268,7 +271,7 @@ def scenario(cluster):
     quoted = threenode.unlock_pcr11(cluster.image_set(c))
     ok(not opened(r["got"]) and all(refused_for_pcr11(cluster, p, c, r["since"], quoted) for p in (a, b)),
        "c, booted onto the retired CURRENT, gets no key: both peers refuse it for its PCR 11 (their trails)",
-       {"unlock": r["got"], "denials": [e for p in (a, b) for e in cluster.trail(p) if e.get("event") == "unlock" and e.get("at", 0) >= r["since"]]})
+       {"unlock": r["got"], "denials": [e for p in (a, b) for e in cluster.trail(p) if e.get("event") == "unlock" and threenode.at_or_after(e, r["since"])]})
     ok(r["served"], "a and b were freshly leased while c was refused")
     r = reboot(cluster, c, NEXT_IMAGE)
     ok(opened(r["got"]) and r["leased"], "c, onto %s, is unlocked through %s and leased" % (NEXT_IMAGE, r["got"].get("peer")), r["got"])
@@ -291,10 +294,15 @@ def scenario(cluster):
        "a's and b's refusals of c on the retired CURRENT, for its PCR 11 (step 8), are in their streams")
     # while a was on NEXT: from its reboot onto it (step 5) until its roll back (step 6); before that it was down, after it on
     # CURRENT. A lease issued any time after step 5 would not show one issued from NEXT (regalia-kms-1e on #393)
-    ok(all([e for e in cluster.audit_has(a, "sync", since=on_next["since"], event="sync-lease", subject=s, outcome="ALLOW")
-            if int(on_next["since"]) < e.get("at", 0) < int(rolled_back["since"])] for s in (b, c)),   # whole seconds: the
-            # second step 5 began in may hold a lease from CURRENT (audit_has takes it), and no lease from NEXT
-       "the leases a issued to b and c while it was on %s (step 5, before its roll back in step 6) are in a's stream" % NEXT_IMAGE)
+    # whole seconds: the second step 5 began in may hold a lease from CURRENT (a stopped in it), so it is left out. The
+    # second step 6 began in is kept: rolled_back["since"] is taken before a stops to roll back, and its reboot onto
+    # CURRENT takes seconds, so a lease stamped in that second was issued from NEXT
+    window = (int(on_next["since"]), int(rolled_back["since"]))
+    issued = {s: [e.get("at") for e in cluster.audit_has(a, "sync", since=on_next["since"], event="sync-lease", subject=s, outcome="ALLOW")]
+              for s in (b, c)}
+    ok(all(any(window[0] < at <= window[1] for at in ats) for ats in issued.values()),
+       "the leases a issued to b and c while it was on %s (step 5, before its roll back in step 6) are in a's stream" % NEXT_IMAGE,
+       {"window (exclusive, inclusive]": window, "a's lease ALLOWs by subject, their at": issued})
     took = {n: cluster.moved_by_sync(n, retired, 3) for n in (b, c)}
     ok(all(took.values()), "the sync round that moved b and c to epoch 3, the retire, is in each one's stream (from %s)" % took,
        {n: [{k: e.get(k) for k in ("event", "epoch", "outcome", "peer", "at", "reason")} for e in cluster.audit_has(n, "sync", since=retired - 5)][:16]
