@@ -99,7 +99,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - **Accepted:** a compromised `regalia-sync` that stops publishing is not caught by these alerts (the
     advance never runs). That is the withholding a compromised sync could always do. A fleet-level rule
     comparing the three nodes' epochs is **not built**.
-  - Its run is in the journal and its metrics, not in a hash-chained trail (#278).
+  - Each run is in its own hash-chained trail (`/var/log/regalia-esp-advance/esp-advances.jsonl`, shipped
+    as `esp-advances`): an ALLOW line before the anchor moves, a DENY line for a refusal. **Accepted:** the
+    DENY line is best effort (a run that cannot write its trail is still refused, and says so in the journal
+    and in `regalia_esp_advance_ok`); a refusal by systemd before the unit runs (`/efi` not mounted) writes
+    no line, only the unit's failure.
   - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's and reanchor's
     (see #391): run those by hand only with the node's units stopped.
   - **Accepted:** enrolment (`enrol commit`) still anchors epoch 1 before it writes the ESP: its render

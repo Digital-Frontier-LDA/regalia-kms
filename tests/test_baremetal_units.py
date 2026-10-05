@@ -214,8 +214,12 @@ class Units(unittest.TestCase):
         self.assertEqual((service["User"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
                          ("root", "", "", "yes"))
         self.assertEqual((service["ProtectSystem"], service["ReadWritePaths"], service["PrivateNetwork"], service["RestrictAddressFamilies"]),
-                         ("strict", "/efi -/run/regalia-metrics/esp-advance", "yes", "AF_UNIX"))
-        self.assertEqual((service["DevicePolicy"], service["DeviceAllow"], service["SupplementaryGroups"]), ("closed", "/dev/tpmrm0 rw", "tss"))
+                         ("strict", "/efi -/run/regalia-metrics/esp-advance /var/log/regalia-esp-advance", "yes", "AF_UNIX"))
+        # the TPM through tss; its trail's reader group, so the file it writes takes it (#286)
+        self.assertEqual((service["DevicePolicy"], service["DeviceAllow"], service["SupplementaryGroups"]),
+                         ("closed", "/dev/tpmrm0 rw", "tss regalia-audit-esp-advances"))
+        from deploy.baremetal import trails
+        self.assertEqual(os.path.dirname(trails.where(node.ESP_TRAIL)), service["ReadWritePaths"].split()[-1])
         # the anchor's writer lock, its own (node.ESP_LOCK)
         self.assertEqual("/run/%s/highwater.lock" % service["RuntimeDirectory"], node.ESP_LOCK)
         self.assertEqual((service["Restart"], service["TimeoutStartSec"], service["LimitCORE"]), ("on-failure", "60", "0"))
@@ -275,7 +279,8 @@ class AuditShipUnit(unittest.TestCase):
         give the file that group) and the sysusers file of the writer's host creates it; the shipper's drop-in
         names it, and no other unit does, so the shipper reads the trail and nothing else of the writer's."""
         from deploy.baremetal import trails
-        writers = {"sync": ("regalia-sync.service", "regalia.sysusers.conf"), "admission": ("regalia-admission.service", "regalia.sysusers.conf")}
+        writers = {"sync": ("regalia-sync.service", "regalia.sysusers.conf"), "admission": ("regalia-admission.service", "regalia.sysusers.conf"),
+                   "esp-advances": ("regalia-esp-advance.service", "regalia.sysusers.conf")}
         for name, (unit_file, sysusers) in writers.items():
             with self.subTest(name):
                 group = trails.TRAILS[name][3]

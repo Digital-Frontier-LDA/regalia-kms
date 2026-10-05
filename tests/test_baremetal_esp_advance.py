@@ -56,6 +56,44 @@ class EspAdvance(EspCase):
         self.assertEqual(self.n.anchor().value(), 2)
         self.assertEqual(self.advance()[1:], (sha, False, None))                    # again: nothing to write, the anchor already there
 
+    def test_each_run_is_recorded_before_the_anchor_moves(self):
+        """#278 for the ESP advance: the trail line comes after the ESP holds the chain and BEFORE the anchor moves; a trail
+        that cannot be written leaves the anchor where it was (the ESP ahead, which the initrd accepts)."""
+        self.sync.commit(self.e2)
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+        order, lines = [], []
+        anchor = m.HighWater.anchor
+        with unittest.mock.patch.object(m.HighWater, "anchor", lambda hw, *a: (order.append("anchor"), anchor(hw, *a))[1]):
+            node.esp_advance(self.n, self.esp, lock_path=self.lock, record=lambda event: (order.append("trail"), lines.append(event)))
+        self.assertEqual(order, ["trail", "anchor"])
+        self.assertEqual({k: lines[0][k] for k in ("event", "outcome", "epoch", "manifest_digest", "esp_rewritten", "boot_renderable")},
+                         {"event": "esp-advance", "outcome": "ALLOW", "epoch": 2, "manifest_digest": m.digest(self.m2),
+                          "esp_rewritten": True, "boot_renderable": True})
+        self.assertEqual(lines[0]["chain_sha256"], hashlib.sha256(m.canonical([self.e1, self.e2])).hexdigest())
+
+    def test_a_trail_that_cannot_be_written_moves_no_anchor(self):
+        self.sync.commit(self.e2)
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+
+        def full(event):
+            raise OSError("No space left on device")
+        with self.assertRaises(OSError):
+            node.esp_advance(self.n, self.esp, lock_path=self.lock, record=full)
+        self.assertEqual((self.on_esp(), self.n.anchor().value()), ([self.e1, self.e2], 1))
+
+    def test_main_records_a_refusal_in_the_trail(self):
+        import json
+        path = os.path.join(self.d, "esp-advance.jsonl")
+        with unittest.mock.patch.object(node.trails, "where", lambda name, cfg=None: path), \
+                unittest.mock.patch.object(node.metrics, "publish", lambda *a, **k: True), \
+                unittest.mock.patch.object(node, "load", lambda p: self.cfg), \
+                unittest.mock.patch.object(node, "esp_advance", side_effect=m.Refused("ROLLBACK: below the anchor")):
+            self.assertEqual(node.main(["--config", "x", "esp-advance"]), 2)
+        with open(path) as f:
+            line = json.loads(f.read().splitlines()[-1])
+        self.assertEqual((line["event"], line["outcome"]), ("esp-advance", "DENY"))
+        self.assertIn("ROLLBACK: below the anchor", line["reason"])
+
     def test_a_crash_between_the_write_and_the_anchor_is_completed_by_the_next_run(self):
         self.sync.commit(self.e2)
         node.publish(self.sync, self.n.path(node.PUBLISHED))

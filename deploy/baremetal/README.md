@@ -681,8 +681,12 @@ the client are on the console with no kernel argument. It is not secret. When a 
     `systemctl start regalia-esp-advance`; check that `regalia-node check` shows `anchor` equal to `epoch`.
     `update.py apply` refuses to reboot a node in that state, and one whose chain the initrd could not render
     (the next boot would ask for the recovery key).
-  - The run is recorded in the journal only. It has no hash-chained trail of its own (#278). The commit it
-    follows is in the sync trail.
+  - Each run is recorded in its own hash-chained trail (`/var/log/regalia-esp-advance/esp-advances.jsonl`,
+    `trails.py`, shipped by `regalia-audit-ship@esp-advances` through the group `regalia-audit-esp-advances`):
+    an ALLOW line (epoch, manifest digest, the chain's SHA-256, whether the ESP was rewritten, whether the next
+    boot renders) after the ESP holds the chain and BEFORE the anchor moves, so a trail that cannot be written
+    leaves the anchor where it was; and a DENY line, best effort, for a refusal. A run systemd refuses before it
+    starts (`/efi` not mounted) writes no line: the unit's failure and the alerts say it.
   - The anchor's run-time writer lock is its own (`/run/regalia-esp-advance/highwater.lock`). Enrolment and
     `reanchor.py`, run by hand, take a different lock, so do not run them while the node's units run.
   - Enrolment still anchors epoch 1 before it writes the ESP: its render verifies the chain against the anchor,

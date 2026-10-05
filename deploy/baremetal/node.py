@@ -236,7 +236,10 @@ ESP_LOCK = "/run/regalia-esp-advance/highwater.lock"     # its RuntimeDirectory:
 ESP_RENDER_DEVICE = "/dev/disk/by-partlabel/regalia-root"
 
 
-def esp_advance(node, esp, lock_path=ESP_LOCK):
+ESP_TRAIL = "esp-advances"                                 # trails.TRAILS: each run before the anchor moves, each refusal
+
+
+def esp_advance(node, esp, lock_path=ESP_LOCK, record=None):
     """Bring the boot chain on the ESP (`esp`, its mount point) up to the published chain, THEN move the TPM anchor
     to it: the order that never leaves the initrd an ESP chain below its anchor (a ROLLBACK, refused at boot).
 
@@ -278,6 +281,11 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
         require(_read_regular(target, len(chain) + 1) == chain, "the chain read back from %s is not the one written" % target)
     manifests = [e["manifest"] for e in envelopes]               # verified by bootcreds.anchored
     epoch = manifests[-1]["epoch"]
+    # recorded BEFORE the anchor moves (#278: never done unrecorded): a trail that cannot be written leaves the anchor where it
+    # was and the ESP ahead of it, which the initrd accepts; the next run tries again
+    if record is not None:
+        record({"event": "esp-advance", "outcome": "ALLOW", "epoch": epoch, "manifest_digest": membership.digest(manifests[-1]),
+                "chain_sha256": hashlib.sha256(chain).hexdigest(), "esp_rewritten": rewritten, "boot_renderable": unrenderable is None})
     anchor.anchor(epoch, membership.Store._digests(manifests))
     anchor.check(epoch)
     return epoch, hashlib.sha256(chain).hexdigest(), rewritten, unrenderable
@@ -925,10 +933,13 @@ def main(argv=None):
         elif args.service == "wg-apply":
             print("wg-svc and %s applied under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
         elif args.service == "esp-advance":
+            trail = Trail(trails.where(ESP_TRAIL), ESP_TRAIL)
             try:
-                epoch, sha, rewritten, unrenderable = esp_advance(node, args.esp, lock_path=args.esp_lock)
-            except BaseException:
+                epoch, sha, rewritten, unrenderable = esp_advance(node, args.esp, lock_path=args.esp_lock, record=trail)
+            except BaseException as failure:
                 esp_metrics(node, ok=False)
+                with contextlib.suppress(Exception):      # the refusal recorded too, best effort: it is also in the journal
+                    trail({"event": "esp-advance", "outcome": "DENY", "reason": ("%s: %s" % (type(failure).__name__, failure))[:240]})
                 raise
             esp_metrics(node, ok=True, renderable=unrenderable is None)
             print("the ESP's membership chain is epoch %d (sha256 %s%s), and the TPM anchor with it"

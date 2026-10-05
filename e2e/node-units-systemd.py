@@ -93,7 +93,7 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import admission, attest, authtime, enrol, heartbeat, lease, measurements, membership, metrics, node, os_probe, sync, wgsvc   # noqa: E402
+from deploy.baremetal import admission, attest, authtime, enrol, heartbeat, lease, measurements, membership, metrics, node, os_probe, sync, trails, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                    # noqa: E402  the root and revocation keys, and beat()
 
 PREFIX = "/usr/lib/regalia-kms"
@@ -887,8 +887,15 @@ def part2(work, binaries, user, ctx, servers, status):
     ok("the ESP's membership chain is epoch 2" in said, "its run said so", said[-600:])
     sandbox = show("regalia-esp-advance.service", "User", "CapabilityBoundingSet", "PrivateNetwork", "ReadWritePaths")
     ok((sandbox.get("User"), sandbox.get("CapabilityBoundingSet"), sandbox.get("PrivateNetwork")) == ("root", "", "yes")
-       and sandbox.get("ReadWritePaths") == ESP + " -/run/regalia-metrics/esp-advance",
+       and sandbox.get("ReadWritePaths") == ESP + " -/run/regalia-metrics/esp-advance /var/log/regalia-esp-advance",
        "regalia-esp-advance as systemd applied it: root, no capability, no network, writes %s and its metrics only" % ESP, sandbox)
+    # its trail (#278): an ALLOW line for epoch 2, written before the anchor moved, the file in its shipper's group
+    esp_trail = pathlib.Path(trails.where(node.ESP_TRAIL))
+    lines = [json.loads(line) for line in esp_trail.read_text().splitlines()] if esp_trail.exists() else []
+    allowed = [e for e in lines if e.get("event") == "esp-advance" and e.get("outcome") == "ALLOW" and e.get("epoch") == 2]
+    ok(bool(allowed) and grp.getgrgid(esp_trail.stat().st_gid).gr_name == trails.TRAILS[node.ESP_TRAIL][3]
+       and allowed[-1]["manifest_digest"] == membership.digest(m2),
+       "its trail holds the run (ALLOW, epoch 2, the manifest's digest), in the group its shipper reads through", lines[-3:])
     # regalia-sync and the path units keep running from here, beside regalia-admission, as on a host
 
     header("8  the KMS daemon, and a lease from b over the tunnel")
