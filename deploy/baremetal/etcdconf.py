@@ -182,18 +182,29 @@ def render(manifest, me, genesis_digest, certs, rtt_p99_ms, state="new"):
     return json.dumps(config, indent=1, sort_keys=True) + "\n", bundle
 
 
+CONFIG_KEYS = ("name", "data-dir", "listen-peer-urls", "initial-advertise-peer-urls", "listen-client-urls", "advertise-client-urls",
+               "initial-cluster", "initial-cluster-state", "initial-cluster-token", "heartbeat-interval", "election-timeout",
+               "strict-reconfig-check", "enable-pprof", "tls-min-version", "peer-transport-security", "auto-compaction-mode",
+               "auto-compaction-retention", "quota-backend-bytes", "feature-gates", "logger", "log-outputs")
+PEER_TLS_KEYS = ("cert-file", "key-file", "client-cert-auth", "trusted-ca-file", "auto-tls")
+
+
 def check(text):
     """The safety settings of a rendered configuration, or Refused naming the first that is not as it must be: no
     client on a TCP port, peers only on the mesh, both sides authenticated by certificate, no automatic TLS."""
     config = json.loads(text)
+    require("client-transport-security" not in config, "no client TLS block: etcd ignores it on a unix socket, and it would only look like "
+            "protection")
+    # exactly these keys: etcd ignores an unknown key in its config file (regalia-kms-d9, measured on v3.6.15), so a
+    # misspelt election-timeout would fall back to the LAN default in silence
+    membership.exact(config, CONFIG_KEYS, "etcd's configuration")
+    membership.exact(config["peer-transport-security"], PEER_TLS_KEYS, "etcd's peer-transport-security")
     require(config["listen-client-urls"] == CLIENT_URL and config["advertise-client-urls"] == CLIENT_URL,
             "clients connect only over the unix socket")
     for key in ("listen-peer-urls", "initial-advertise-peer-urls"):
         for url in config[key].split(","):
             found = re.fullmatch(r"https://\[([0-9a-f:]+)\]:%d" % PEER_PORT, url)
             require(found is not None and found.group(1).startswith("fd72:6567:6c61:"), "%s %s is not on the service mesh over TLS" % (key, url))
-    require("client-transport-security" not in config, "no client TLS block: etcd ignores it on a unix socket, and it would only look like "
-            "protection")
     peer = config["peer-transport-security"]
     require(peer["client-cert-auth"] is True and peer["auto-tls"] is False, "peer-transport-security must require certificates, no auto TLS")
     require(peer["key-file"] == CREDENTIALS + "/etcd-peer.key", "the peer key must come from the unit's credentials")

@@ -122,6 +122,16 @@ class Rendered(Case):
                 target[path[-1]] = value
                 self.refused(reason, etcdconf.check, json.dumps(doc))
 
+    def test_check_takes_exactly_the_keys_render_writes_since_etcd_ignores_unknown_ones(self):
+        """d9, measured on v3.6.15: an unknown key is silently ignored, so a misspelt one would fall back to etcd's default."""
+        good = json.loads(etcdconf.render(self.m1, "a", GENESIS, etcdconf.choose(self.m1, self.offered), 20)[0])
+        misspelt = {("election_timeout" if k == "election-timeout" else k): v for k, v in good.items()}
+        self.refused("etcd's configuration fields mismatch", etcdconf.check, json.dumps(misspelt))
+        extra = dict(good, **{"experimental-something": True})
+        self.refused("etcd's configuration fields mismatch", etcdconf.check, json.dumps(extra))
+        peer = dict(good, **{"peer-transport-security": dict(good["peer-transport-security"], **{"cipher-suites": []})})
+        self.refused("peer-transport-security fields mismatch", etcdconf.check, json.dumps(peer))
+
     def test_timings_come_from_the_measured_round_trip_and_out_of_bounds_is_refused(self):
         self.assertEqual(etcdconf.timings(20), (100, 1000))           # 500 km: etcd's defaults hold
         self.assertEqual(etcdconf.timings(143.2), (150, 1500))        # a 100 ms WAN with jitter
