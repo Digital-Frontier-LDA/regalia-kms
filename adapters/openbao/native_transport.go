@@ -89,6 +89,11 @@ func (c *versionedClient) nativeAttempt(ctx context.Context, req sops.Request, o
 	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("X-Request-ID", req.RequestID)
 	httpReq.Header.Set("Idempotency-Key", req.IdempotencyKey)
+	if operation == "sign" && doc.ContentType == "application/vnd.regalia.x509-tbs" {
+		// A spent CA signature may be hidden by a lost response. Prevent the HTTP
+		// transport from replaying this POST merely because it has a nonce header.
+		httpReq.GetBody = nil
+	}
 	client := *c.http
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(httpReq)

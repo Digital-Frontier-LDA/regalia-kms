@@ -81,6 +81,7 @@ jobs:
           go vet ./...
           go build -o "$RUNNER_TEMP/openbao-plugin-kms-regalia-poc" ./cmd/openbao-plugin-kms-regalia-poc
           go build -o "$RUNNER_TEMP/openbao-plugin-kms-regalia" ./cmd/openbao-plugin-kms-regalia
+          go build -o "$RUNNER_TEMP/openbao-plugin-kms-regalia-pki-poc" ./cmd/openbao-plugin-kms-regalia-pki-poc
       - name: Scan the adapter module for reachable vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
       - name: Build the pinned earlier native plugin for upgrade and rollback
@@ -102,6 +103,10 @@ jobs:
         run: |
           umask 002
           OPENBAO_POC_BAO="$RUNNER_TEMP/bao" go test -race -count=1 -v -timeout 8m ./...
+      - name: Fuzz bounded certificate and CRL inspection
+        run: |
+          go test -run '^$' -fuzz '^FuzzPOCCertificateInspection$' -fuzztime=20000x -fuzzminimizetime=0x -parallel=2 .
+          go test -run '^$' -fuzz '^FuzzPOCCRLInspection$' -fuzztime=20000x -fuzzminimizetime=0x -parallel=2 .
       - name: Build and verify reproducible development packages
         working-directory: .
         run: |

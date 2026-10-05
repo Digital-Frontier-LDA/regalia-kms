@@ -86,14 +86,22 @@ type signingFixture struct {
 }
 
 func newSigningFixture(t *testing.T, algorithm, hashName string, key crypto.Signer) *signingFixture {
+	return newSigningFixtureWith(t, algorithm, hashName, key, softwareSigning{key}, false)
+}
+
+func newSigningFixtureWith(t *testing.T, algorithm, hashName string, key crypto.Signer, provider backend.Provider, ca bool) *signingFixture {
 	t.Helper()
 	pki := newFixturePKI(t)
+	objectID, purpose, content, principal, usage := "poc-signing-key", "openbao-transit", "application/vnd.regalia.digest", "spiffe://regalia/workload/openbao-keys-poc", "signing"
+	if ca {
+		objectID, purpose, content, principal, usage = "poc-pki-ca", "openbao-pki-poc", "application/vnd.regalia.x509-tbs", "spiffe://regalia/workload/openbao-ca-poc", "x509-ca"
+	}
 	spki, err := x509.MarshalPKIXPublicKey(key.Public())
 	if err != nil {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(spki)
-	hardware, err := backend.New(map[string]backend.Provider{"nitrokey-pkcs11": softwareSigning{key}, "yubikey-openpgp": softwareSigning{key}})
+	hardware, err := backend.New(map[string]backend.Provider{"nitrokey-pkcs11": provider, "yubikey-openpgp": provider})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +110,7 @@ func newSigningFixture(t *testing.T, algorithm, hashName string, key crypto.Sign
 		backendName = "yubikey-openpgp"
 	}
 	manifest := map[string]any{"schema_version": 1, "manifest_id": "synthetic-signing", "generated_at": "2026-10-03T00:00:00Z", "objects": []any{map[string]any{
-		"id": "poc-signing-key", "name": "Synthetic Transit key", "kind": "asymmetric-key", "classification": "restricted", "environment": "development", "owner": "fixture", "purpose": "openbao-transit", "custody": "direct-hardware", "algorithm": algorithm, "operations": []string{"sign"}, "policy_id": "poc-transit", "bindings": []any{map[string]any{"site": "poc-site", "backend": backendName, "device_id": "software-signing", "device_serial": "synthetic", "devaut_fingerprint": "sha256:" + strings.Repeat("a", 64), "object_id": "02", "public_fingerprint": "sha256:" + hex.EncodeToString(digest[:]), "state": "active", "pin_policy": "once", "touch_policy": "never"}}, "recovery": map[string]any{}, "rotation": map[string]any{}, "migration": map[string]any{}, "verification": map[string]string{"status": "verified"}}}}
+		"id": objectID, "name": "Synthetic signing fixture", "kind": "asymmetric-key", "classification": "restricted", "environment": "development", "owner": "fixture", "purpose": purpose, "custody": "direct-hardware", "algorithm": algorithm, "operations": []string{"sign"}, "policy_id": "poc-transit", "bindings": []any{map[string]any{"site": "poc-site", "backend": backendName, "device_id": "software-signing", "device_serial": "synthetic", "devaut_fingerprint": "sha256:" + strings.Repeat("a", 64), "object_id": "02", "public_fingerprint": "sha256:" + hex.EncodeToString(digest[:]), "state": "active", "pin_policy": "once", "touch_policy": "never"}}, "recovery": map[string]any{}, "rotation": map[string]any{}, "migration": map[string]any{}, "verification": map[string]string{"status": "verified"}}}}
 	if backendName == "nitrokey-pkcs11" {
 		entry := manifest["objects"].([]any)[0].(map[string]any)["bindings"].([]any)[0].(map[string]any)
 		delete(entry, "pin_policy")
@@ -113,7 +121,9 @@ func newSigningFixture(t *testing.T, algorithm, hashName string, key crypto.Sign
 	if err != nil {
 		t.Fatal(err)
 	}
-	rbac, err := auth.LoadPolicy(strings.NewReader(`{"schema_version":1,"principals":[{"uri":"spiffe://regalia/workload/openbao-keys-poc","grants":[{"objects":["poc-signing-key"],"operations":["sign"],"environments":["development"]}]}]}`))
+	grants := `{"schema_version":1,"principals":[{"uri":"spiffe://regalia/workload/openbao-keys-poc","grants":[{"objects":["poc-signing-key"],"operations":["sign"],"environments":["development"]}]}]}`
+	grants = strings.ReplaceAll(strings.ReplaceAll(grants, "poc-signing-key", objectID), "spiffe://regalia/workload/openbao-keys-poc", principal)
+	rbac, err := auth.LoadPolicy(strings.NewReader(grants))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +132,11 @@ func newSigningFixture(t *testing.T, algorithm, hashName string, key crypto.Sign
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { state.Close() })
-	semantic, err := policy.New([]policy.Policy{{ID: "poc-transit", ObjectID: "poc-signing-key", Purpose: "openbao-transit", Environment: "development", Operation: "sign", Algorithm: algorithm, ContentTypes: []string{"application/vnd.regalia.digest"}, MaxPayloadBytes: 1024, MaxFuture: 2 * time.Minute}}, state, time.Now)
+	maxPayload := int64(1024)
+	if ca {
+		maxPayload = 32 << 10
+	}
+	semantic, err := policy.New([]policy.Policy{{ID: "poc-transit", ObjectID: objectID, Purpose: purpose, Environment: "development", Operation: "sign", Algorithm: algorithm, ContentTypes: []string{content}, MaxPayloadBytes: maxPayload, MaxFuture: 2 * time.Minute}}, state, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,11 +160,11 @@ func newSigningFixture(t *testing.T, algorithm, hashName string, key crypto.Sign
 	}))
 	f := &kmsFixture{handler: handler, pki: pki, audit: sink, t: t, hardware: hardware}
 	f.start()
-	for _, c := range []map[string]string{pki.config, pki.keysConfig, pki.strangerConfig} {
+	for _, c := range []map[string]string{pki.config, pki.keysConfig, pki.caConfig, pki.strangerConfig} {
 		c["kms_url"] = f.server.URL
 	}
 	t.Cleanup(func() { f.server.Close() })
-	return &signingFixture{f, key, kms.ConfigMap{"object_id": "poc-signing-key", "purpose": "openbao-transit", "usage": "signing", "algorithm": algorithm, "hash_algorithm": hashName, "public_key_sha256": "sha256:" + hex.EncodeToString(digest[:]), "public_key": string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: spki}))}}
+	return &signingFixture{f, key, kms.ConfigMap{"object_id": objectID, "purpose": purpose, "usage": usage, "algorithm": algorithm, "hash_algorithm": hashName, "public_key_sha256": "sha256:" + hex.EncodeToString(digest[:]), "public_key": string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: spki}))}}
 }
 
 func externalProviderConfig(c map[string]string) kms.ConfigMap {
