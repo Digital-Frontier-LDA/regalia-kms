@@ -520,3 +520,23 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def anchor_approval(manifest, document, node_id, pem, cls):
+    """#361 C3: what `node_id`'s write of an object of class `cls` presents under K_A (signkey.policy_session's
+    `anchor`): K_A from the v4 `manifest`, and K_A's approval of `cls` from the node's set in `document` (the one the
+    manifest commits to) whose signing.system is the running image's key `pem` (approved_image_policy's check), at that
+    set's generation. A set without approvals, or a manifest that pins no K_A, is a refusal: never the image key alone."""
+    approved_image_policy(manifest, document, node_id, pem)            # the key is one the root approved for this node
+    require(manifest.get("schema") == membership.SCHEMA_V4 and "anchor_policy_key" in manifest,
+            "epoch %d is not a %s manifest pinning K_A: nothing is written under the anchor-policy authority" % (manifest["epoch"], membership.SCHEMA_V4))
+    fingerprint = signkey.pcr_key_fingerprint(pem)
+    sets = [e for e in bind(manifest, document)[node_id]["accepted"] if e.get("signing", {}).get("system") == fingerprint]
+    approvals = [e["signing"]["anchor_approvals"] for e in sets if "anchor_approvals" in e["signing"]]
+    require(approvals, "the set approving this image's system-phase key (%s) for %s carries no K_A approvals (anchor_approvals): "
+            "nothing is written under the anchor-policy authority until the ceremony signs them" % (fingerprint[:16], node_id))
+    approval = approvals[0]
+    require(cls in approval["classes"], "the set's K_A approvals hold no %r class" % (cls,))
+    return {"k_a": manifest["anchor_policy_key"]["key"], "node_id": node_id, "generation": approval["generation"], "class": cls,
+            "signature": approval["classes"][cls]}
+

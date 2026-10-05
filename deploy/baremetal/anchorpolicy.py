@@ -462,7 +462,7 @@ def genesis_generations(document, k_sys_pem, k_a_point, nodes):
     from deploy.baremetal import enrol
     generations = {}
     for bundle, keep, activation in nodes:
-        entry, _ = enrol.proven_entry(bundle, k_sys_pem, keep, activation)
+        entry, _ = enrol.proven_entry(bundle, k_sys_pem, keep, activation, k_a=k_a_point)
         require(entry["node_id"] not in generations, "--node names %s twice" % entry["node_id"])
         generations[entry["node_id"]] = enrol.rotation_of(bundle, k_a_point)["value"]
     return generations

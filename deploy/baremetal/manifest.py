@@ -638,7 +638,8 @@ def _propose_genesis(args, root, confirm=None, say=print):
     entries, enrolled, rotations = [], {}, {}
     for bundle_path, keep_path, activation_path in args.node:    # each node proven here: no unsigned entry file in between
         bundle = read_json(bundle_path, membership.MAX_BYTES)
-        entry, quoted = enrol.proven_entry(bundle, system_pub, read_json(keep_path, 4096), read_json(activation_path, 65536))
+        entry, quoted = enrol.proven_entry(bundle, system_pub, read_json(keep_path, 4096), read_json(activation_path, 65536),
+                                           k_a=anchor_policy["key"])
         require(entry["node_id"] not in enrolled, "--node names %s twice" % entry["node_id"])
         rotations[entry["node_id"]] = enrol.rotation_of(bundle, anchor_policy["key"])      # quoted with the identity
         entries.append(entry)

@@ -813,7 +813,8 @@ class HighWater:
     POLICY_ATTRIBUTES = {"counter": 0x0006001A, "slot": 0x0006000A}
 
     def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_indices=None, policy=None,
-                 image_key=None, signatures=None, define_policy=None, owner_auth=None, schema=None, anchor_key=None):
+                 image_key=None, signatures=None, define_policy=None, owner_auth=None, schema=None, anchor_key=None, classes=None,
+                 approvals=None):
         """`policy`: the node's approved-image write policy, PolicyAuthorize(system-phase PCR key), as 64 hex
         (the digest a policy-written index must hold as its authPolicy), or a function that returns it (the
         node's: measurements.approved_image_policy over its signed chain and the running image's key), called
@@ -849,6 +850,11 @@ class HighWater:
         self._policy_asked = False
         self._owner_auth = owner_auth
         self._schema, self._anchor_key = schema, anchor_key
+        # #361 C3: the class each kind of index is defined and written under K_A (the anchor's by default; a heartbeat
+        # counter "heartbeat", the signing counter "signing-counter"), and K_A's approvals for them (a function of the
+        # class, returning signkey.policy_session's `anchor`: node.anchor_approval)
+        self.anchor_classes = dict(self.ANCHOR_CLASSES, **(classes or {}))
+        self._approvals = approvals
         self.base_index = base_index or "0x%x" % (int(index, 16) + 1)
         # index + 2 and + 3 are left to the heartbeat's pair (0x1500018/0x1500019 beside 0x1500016)
         self.record_indices = tuple(record_indices or ("0x%x" % (int(index, 16) + 4), "0x%x" % (int(index, 16) + 5))) if self.RECORD else ()
@@ -948,6 +954,16 @@ class HighWater:
         require(callable(self._image_key), "NV index %s is written by policy and this anchor has no image key to open a policy "
                 "session with" % index)
         pem = self._image_key()
+        if self.tip_schema() == SCHEMA_V4:
+            # #361 C3: under K_A, through the composite session with K_A's approval of this index's class for this node
+            kind = "slot" if index in self.record_indices else "counter"
+            require(callable(self._approvals), "NV index %s is written under the anchor-policy authority and this anchor has no "
+                    "K_A approvals to present" % index)
+            anchor = self._approvals(self.anchor_classes[kind])
+            require(anchor.get("k_a") == self.tip_anchor_key(), "K_A's approval names another K_A than the chain tip's: nothing is written")
+            tcti = (self.env or {}).get("TPM2TOOLS_TCTI")
+            with signkey.policy_session(pem, tcti, self.run, self._signatures, anchor=anchor) as session:
+                return self._tpm(tool, index, "-C", index, "-P", "session:" + session, *args, input=input)
         require(signkey.policy(pem).hex() == self.policy, "the running image's PCR key is not the one this node's write policy names: "
                 "NV index %s is not written" % index)
         tcti = (self.env or {}).get("TPM2TOOLS_TCTI")
@@ -975,7 +991,7 @@ class HighWater:
         from deploy.baremetal import anchorpolicy           # here: anchorpolicy imports this module
         key = self.tip_anchor_key()
         require(key is not None, "the v4 chain tip names no anchor_policy_key: the anchor cannot be judged (#361)")
-        return anchorpolicy.class_policy(key, self.ANCHOR_CLASSES[kind]).hex()
+        return anchorpolicy.class_policy(key, self.anchor_classes[kind]).hex()
 
     def tip_state(self):
         """What the anchor is judged by (the tip's schema and K_A), to put back when a candidate is refused."""
@@ -1127,8 +1143,8 @@ class HighWater:
             # #361: under v4 only K_A's class policy, with no fallback to the image key's (ed and 1e, the Go reader alike)
             held, want = self._auth_policy(index), self._class_policy(kind)
             require_anchor(held == want, "NV index %s (the %s class) is not defined under the anchor-policy authority: its authPolicy is %s, "
-                           "not PolicyAuthorize(K_A %s\u2026, \"%s\") = %s" % (index, self.ANCHOR_CLASSES[kind], held or "(none)",
-                                                                       self.tip_anchor_key()[:16], self.ANCHOR_CLASSES[kind], want))
+                           "not PolicyAuthorize(K_A %s\u2026, \"%s\") = %s" % (index, self.anchor_classes[kind], held or "(none)",
+                                                                       self.tip_anchor_key()[:16], self.anchor_classes[kind], want))
         elif mask == self.POLICY_ATTRIBUTES.get(kind):
             held, policy = self._auth_policy(index), self.policy
             require_anchor(policy is not None and held == policy,

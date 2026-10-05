@@ -111,9 +111,20 @@ def policy(pem):
     return hashlib.sha256(first).digest()
 
 
-def identity(public_blob, pem):
+def key_policy(pem, k_a=None):
+    """The signing key's authPolicy: under K_A (#361 C3, `k_a` its point) PolicyAuthorize(Name(K_A), "signing"), so a
+    K_sys rotation keeps the key; without, PolicyAuthorize of the system-phase PCR key `pem` (v1-v3, and #199's first
+    form)."""
+    if k_a is None:
+        return policy(pem)
+    from deploy.baremetal import anchorpolicy           # here: anchorpolicy imports membership, which this module imports
+    return anchorpolicy.class_policy(k_a, "signing")
+
+
+def identity(public_blob, pem, k_a=None):
     """(Name, uncompressed point hex) of a signing key's TPM2B_PUBLIC, if it is exactly the key above for the PCR
-    key `pem`. Everything is read from the public area, whose hash is the Name the TPM certifies."""
+    key `pem` (or, `k_a` given, under K_A's "signing" class). Everything is read from the public area, whose hash is the
+    Name the TPM certifies."""
     area = attest.public_area(public_blob, "the signing key's public area")
     r = attest.Reader(area, "the signing key's public area")
     require(r.u("H") == attest.ALG_ECC, "the signing key must be an ECC key")
@@ -121,7 +132,8 @@ def identity(public_blob, pem):
     attributes = r.u("I")
     require(attributes == ATTRIBUTES, "the signing key must be a fixedTPM, sign-only key made in the TPM and usable only through "
             "its policy (attributes 0x%08x, not 0x%08x)" % (attributes, ATTRIBUTES))
-    require(r.sized() == policy(pem), "the signing key's policy is not PolicyAuthorize of this system-phase PCR key")
+    require(r.sized() == key_policy(pem, k_a), "the signing key's policy is not %s" % (
+        "PolicyAuthorize of this system-phase PCR key" if k_a is None else "PolicyAuthorize(K_A, \"signing\") under this K_A"))
     require(r.u("H") == attest.ALG_NULL, "a signing key has no symmetric algorithm")
     require((r.u("H"), r.u("H")) == (attest.ALG_ECDSA, attest.ALG_SHA256), "the signing key's scheme must be ECDSA with SHA-256")
     require(r.u("H") == attest.CURVE_P256, "the signing key's curve must be NIST P-256")
@@ -149,14 +161,14 @@ def parse_certify(blob):
     return out
 
 
-def verify_certification(public_blob, certification, signature, ak_public, ek_name, pem, run=subprocess.run):
+def verify_certification(public_blob, certification, signature, ak_public, ek_name, pem, run=subprocess.run, k_a=None):
     """The node's `signing_key` entry ({"alg": "ecdsa-p256", "key": <130 hex>}), if the AK `ak_public` under the EK
     named `ek_name` (hex), the node's in the manifest, certified a key of exactly this public area, and the area is
     the signing key for the system-phase PCR key `pem`. Needs no TPM. (tpm2_certify takes no qualifying data: it
     always passes TOOLS_QUALIFYING. None is needed: the certification states a fact of this TPM, which a replay
     cannot change.)"""
     require(len(public_blob) <= 1024 and len(certification) <= 1024 and len(signature) <= 256, "a signing key document is oversized")
-    name, point = identity(public_blob, pem)
+    name, point = identity(public_blob, pem, k_a)
     ak_name, spki = attest.ak_identity(ak_public)
     try:
         attest.verify_signature(spki, certification, signature, run)
@@ -223,7 +235,7 @@ def _read(path):
         return f.read()
 
 
-def create(pem, tcti=None, run=subprocess.run, record=None, owner_auth=None):
+def create(pem, tcti=None, run=subprocess.run, record=None, owner_auth=None, k_a=None):
     """Make the signing key in this TPM, persistent at HANDLE, its policy PolicyAuthorize(`pem`). Returns its
     TPM2B_PUBLIC. A handle already in use is refused: the key a manifest names is never replaced in place.
     `record(name_hex)`, if given, is called with the new key's Name after it is made and BEFORE it is persistent,
@@ -236,7 +248,7 @@ def create(pem, tcti=None, run=subprocess.run, record=None, owner_auth=None):
         # the TPM's own Name for the PCR key must be the one the policy is computed from (and the root checks)
         _tpm(run, tcti, "loadexternal", "-C", "o", "-G", "rsa", "-a", PCR_KEY_TOOL_ATTRIBUTES, "-u", p["pcr.pem"], "-c", p["pcr.ctx"], "-n", p["pcr.name"])
         require(_read(p["pcr.name"]) == pcr_key_name(pem), "the TPM names the PCR key otherwise than this policy does")
-        _write(p["policy"], policy(pem))
+        _write(p["policy"], key_policy(pem, k_a))
         with ownerauth.owner_call(owner_auth) as (owner, kw):     # the owner hierarchy's: its authorization (#242 C)
             _tpm(run, tcti, "createprimary", *owner, "-g", "sha256", "-G", "ecc256", "-c", p["srk.ctx"], **kw)
         _tpm(run, tcti, "create", "-C", p["srk.ctx"], "-g", "sha256", "-G", "ecc256:ecdsa-sha256", "-a", TOOL_ATTRIBUTES, "-L", p["policy"],
@@ -247,7 +259,7 @@ def create(pem, tcti=None, run=subprocess.run, record=None, owner_auth=None):
         with ownerauth.owner_call(owner_auth) as (owner, kw):
             _tpm(run, tcti, "evictcontrol", *owner, "-c", p["key.ctx"], HANDLE, **kw)
         blob = _read(p["key.pub"])
-    identity(blob, pem)                              # what was made is what the root will check
+    identity(blob, pem, k_a)                         # what was made is what the root will check
     return blob
 
 
@@ -344,14 +356,14 @@ def _anchor_steps(session, d, anchor, approved_policy, approval_der, rotation, t
          anchorpolicy._ref(anchor["class"]).hex(), "-t", p["ka.ticket"])
 
 
-def sign(message, pem, tcti=None, run=subprocess.run, signatures=None):
+def sign(message, pem, tcti=None, run=subprocess.run, signatures=None, anchor=None):
     """ECDSA P-256 over SHA-256(`message`) by the signing key, as r || s hex with low s, under a policy session
     (policy_session). `signatures`: the parsed tpm2-pcr-signature.json (default: the first of PCR_SIGNATURE_PATHS that
     exists)."""
     with tempfile.TemporaryDirectory(prefix="signkey-") as d:
         digest, sig = os.path.join(d, "digest"), os.path.join(d, "sig")
         _write(digest, hashlib.sha256(message).digest())
-        with policy_session(pem, tcti, run, signatures) as session:
+        with policy_session(pem, tcti, run, signatures, anchor=anchor) as session:      # under K_A at v4: the "signing" class
             _tpm(run, tcti, "sign", "-c", HANDLE, "-p", "session:" + session, "-g", "sha256", "-d", "-f", "plain", "-o", sig, digest)
         out = low_s(_read(sig))
     _, point = identity(public(tcti, run), pem)

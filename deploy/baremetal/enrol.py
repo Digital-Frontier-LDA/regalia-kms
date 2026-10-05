@@ -255,7 +255,7 @@ def identity(journal, directory, run, owner_auth=None):
     return facts
 
 
-def signing_key(journal, directory, system_pub, ids, run, owner_auth=None):
+def signing_key(journal, directory, system_pub, ids, run, owner_auth=None, k_a=None):
     """The signing key (signkey.py) at signkey.HANDLE, made once and certified by the AK. #234's rules: an object at
     the handle is removed only when the journal recorded its Name before it was made persistent (a crash between the
     two); anything else there is refused, never evicted."""
@@ -280,11 +280,12 @@ def signing_key(journal, directory, system_pub, ids, run, owner_auth=None):
         _atomic_json(journal.path, journal.doc)
 
     journal.started("signing_key")
-    blob = signkey.create(system_pub, run=run, record=record, owner_auth=owner_auth)
+    # #361 C3: made under K_A's "signing" class (k_a, from the anchor-policy file), so a K_sys rotation keeps it
+    blob = signkey.create(system_pub, run=run, record=record, owner_auth=owner_auth, k_a=k_a)
     info, sig = signkey.certify(run=run)
-    entry = signkey.verify_certification(blob, info, sig, bytes.fromhex(ids["ak_public"]), ids["ek_name"], system_pub, run=run)
+    entry = signkey.verify_certification(blob, info, sig, bytes.fromhex(ids["ak_public"]), ids["ek_name"], system_pub, run=run, k_a=k_a)
     facts = {"signing_public": blob.hex(), "signing_certify": info.hex(), "signing_sig": sig.hex(), "signing_key": entry["key"],
-             "signing_name": signkey.identity(blob, system_pub)[0].hex(), "system_pkfp": signkey.pcr_key_fingerprint(system_pub)}
+             "signing_name": signkey.identity(blob, system_pub, k_a)[0].hex(), "system_pkfp": signkey.pcr_key_fingerprint(system_pub)}
     journal.done("signing_key", **facts)
     return facts
 
@@ -507,7 +508,7 @@ def activate(credential, bundle, run=subprocess.run):
             "quote": quote.hex(), "signature": signature.hex()}
 
 
-def entry(bundle, system_pub, keep, activation, run=subprocess.run):
+def entry(bundle, system_pub, keep, activation, run=subprocess.run, k_a=None):
     """The root's side, on its own machine and without a TPM: a node's identity fields as a v4 manifest entry carries
     them, from its bundle, once everything in it that can be checked is. The EK and AK Names are recomputed from their
     public areas, and the signing key is accepted only as signkey.verify_certification accepts it: certified by THIS
@@ -518,7 +519,7 @@ def entry(bundle, system_pub, keep, activation, run=subprocess.run):
     EK and this AK could release. Without it the AK's certification proves nothing, and nothing is printed. With it, the
     AK's quote over the bundle's identity fields, bound to this challenge (#399), says every printed field is what THAT
     TPM's node stated at activation: a WireGuard key, SSH host key or serial changed on the way is refused."""
-    return proven_entry(bundle, system_pub, keep, activation, run)[0]
+    return proven_entry(bundle, system_pub, keep, activation, run, k_a)[0]
 
 
 def rotation_shape(bundle):
@@ -548,7 +549,7 @@ def rotation_of(bundle, k_a_point):
     return dict(r)
 
 
-def proven_entry(bundle, system_pub, keep, activation, run=subprocess.run):
+def proven_entry(bundle, system_pub, keep, activation, run=subprocess.run, k_a=None):
     """entry(), and the PCR 7 and 11 values the node's AK quoted when it was activated ({"7": hex, "11": hex}), for the
     genesis to judge against the measurements (manifest propose --genesis, #399)."""
     for k in ("wg_service_pub", "wg_boot_pub", "signing_public", "signing_certify", "signing_sig"):
@@ -574,8 +575,12 @@ def proven_entry(bundle, system_pub, keep, activation, run=subprocess.run):
     import hmac
     require(hmac.compare_digest(hashlib.sha256(bytes.fromhex(answer)).hexdigest(), keep.get("secret_sha256", "")),
             "the answer is not the challenge's secret: the AK is not proven to be in the TPM this EK names")
+    # #361 C3: a bundle with a rotation counter (C1 on) made its signing key under K_A's "signing" class: judged under the
+    # K_A the caller verified (the genesis's), never one the bundle names
+    require(k_a is not None, "%s's signing key is made under the anchor-policy authority: give K_A (the root-verified offline-keys "
+            "record) to judge it" % bundle.get("node_id"))
     signing = signkey.verify_certification(bytes.fromhex(bundle["signing_public"]), bytes.fromhex(bundle["signing_certify"]),
-                                           bytes.fromhex(bundle["signing_sig"]), ak_public, bundle["ek_name"], system_pub, run=run)
+                                           bytes.fromhex(bundle["signing_sig"]), ak_public, bundle["ek_name"], system_pub, run=run, k_a=k_a)
     for k in ("quote", "signature"):
         require(isinstance(activation[k], str) and re.fullmatch(r"(?:[0-9a-f]{2})+", activation[k]) is not None, "the activation's %s is not hex" % k)
     quoted = attest.verify_identity(identity_payload(bundle), hashlib.sha256(bytes.fromhex(answer)).digest(), ak_public, bundle["ek_name"],
@@ -829,7 +834,7 @@ def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY
     ids = identity(journal, directory, run)
     rotated = rotation(journal, anchor_policy, node_id, run)  # before the anchor, the counters and ownerauth (regalia-kms-95)
     cert = ek_certificate(journal, directory, run)
-    signing = signing_key(journal, directory, system_pub, ids, run)     # after the EK checks: nothing more is made on a refusal
+    signing = signing_key(journal, directory, system_pub, ids, run, k_a=anchorpolicy.read_first(anchor_policy, node_id)[1])  # after the EK checks
     hsm_serials = tokens(journal, module, run)
     ssh_key = ssh_host(journal, ssh_host_key)
     service = wg_key(journal, "wg_service", wg_service_key, run)
@@ -1095,14 +1100,18 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     # under a v4 genesis the anchor is defined under K_A, the tip's anchor_policy_key (#361), not under the image policy
     hw = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=n.path("highwater.lock"), define_policy=policy,
                               image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth,
-                              schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"))
+                              schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"),
+                              approvals=lambda cls: node_module.anchor_approval(cfg, cls, manifest=tip))
+    under_k_a = dict(schema=tip["schema"], anchor_key=tip.get("anchor_policy_key"))      # the counters too (#361 C3)
     store = membership.Store(n.path("membership.json"), cfg["root_key"], hw, documents=n.documents().require_for)
     counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"), policy=policy,
-                                owner_auth=owner_auth)
+                                owner_auth=owner_auth, classes={"counter": "heartbeat"}, **under_k_a)
     # the signing counter (#199: the highest heartbeat sequence this node has signed): defined HERE, at 0, under the same
     # policy as the anchor, since a node that has signed nothing starts there
     signing = heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=n.path("signing-counter.lock"), define_policy=policy,
-                                image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth)
+                                image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth,
+                                classes={"counter": "signing-counter"},
+                                approvals=lambda cls: node_module.anchor_approval(cfg, cls, manifest=tip), **under_k_a)
 
     def defined(owner, indices):
         return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]
@@ -1477,8 +1486,11 @@ def write_record(journal, directory, node, manifest, peers, run=subprocess.run, 
     hw = node.anchor()
     from deploy.baremetal import heartbeat
     from deploy.baremetal.node import image_policy
+    from deploy.baremetal.node import _tip_anchor_key, _tip_schema
     counter = heartbeat.Counter(node.cfg["nv_heartbeat"], node.tcti, run, lock_path=node.path("heartbeat-counter.lock"),
-                                policy=lambda: image_policy(node.cfg))      # read with the node's policy (#242)
+                                policy=lambda: image_policy(node.cfg),      # read with the node's policy (#242), under K_A at v4 (#361)
+                                schema=lambda: _tip_schema(node.cfg), anchor_key=lambda: _tip_anchor_key(node.cfg),
+                                classes={"counter": "heartbeat"})
     paths = []
     for peer in peers:
         fact = journal.get("path:" + peer)
@@ -2120,6 +2132,8 @@ def main(argv=None):
     e.add_argument("--system-pub", required=True, help="the root's own copy of the system-phase PCR key's public half (PEM)")
     e.add_argument("--keep", required=True, help="the file `challenge` kept")
     e.add_argument("--activation", required=True, help="the file `activate` wrote on the node")
+    e.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex: the offline-keys record is verified under it")
+    e.add_argument("--offline-keys-record", required=True, help="offline-keys.record.json: K_A, which the signing key is made under (#361)")
     c = sub.add_parser("check", help="check the root-signed manifest against this host, writing nothing")
     c.add_argument("--manifest", required=True, help="the root-signed epoch-1 envelope, or a JSON list of the "
                    "envelopes from epoch 1 to the one that first names this host")
@@ -2318,8 +2332,11 @@ def main(argv=None):
                 keep = membership.load(f.read(4096))
             with open(args.activation, "rb") as f:
                 activation = membership.load(f.read(65536))
+            from deploy.baremetal import manifest
+            k_a = manifest.offline_keys_record(manifest.read_json(args.offline_keys_record, membership.MAX_BYTES),
+                                               manifest.root_key(args.root_key))[0]["key"]
             with open(args.system_pub, "rb") as f:
-                got, pcrs = proven_entry(document, f.read(65536), keep, activation)
+                got, pcrs = proven_entry(document, f.read(65536), keep, activation, k_a=k_a)
             print(json.dumps(got, indent=1, sort_keys=True))
             print("quoted at activation (informational; the genesis judges them): PCR 7 %s, PCR 11 %s" % (pcrs["7"], pcrs["11"]), file=sys.stderr)
         except (Refused, membership.Refused, attest.Refused, OSError, ValueError, KeyError, TypeError) as error:
