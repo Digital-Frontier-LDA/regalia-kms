@@ -52,6 +52,13 @@ MAX_ELECTION_MS = 50000                            # etcd refuses more
 MAX_PEM_BYTES = 16 * 1024
 QUOTA_BYTES = 2 * 1024 ** 3                        # etcd's backend quota, explicit: an alert fires well before it (ETCD.md)
 COMPACTION_RETENTION = "1h"                        # periodic: the history kept for watches to resume, then compacted
+# THE TWO RETURNERS CATCH UP TOGETHER (05's read of #515, decided by regalia-kms-62). After a lone survivor's take-over,
+# both fenced servers rejoin as learners: a learner votes in nothing, so a second one changes no quorum, and both catch
+# up at once and are promoted back to back. The two-of-two window (one promoted, one still a learner) is then about the
+# time between the two promotions, not the second server's whole catch-up. etcd's default is 1 (kubeadm adds members
+# one at a time when it grows a cluster; ours rejoin after an outage). Measured on v3.6.15: with max-learners 2 a
+# second `member add --learner` is admitted, with the default it is refused "too many learner members in cluster".
+MAX_LEARNERS = 2
 CORRUPTION_GATES = "InitialCorruptCheck=true,CompactHashCheck=true"   # v3.6 feature gates: check at start, and hashes
 
 
@@ -173,6 +180,7 @@ def render(manifest, me, genesis_digest, certs, rtt_p99_ms, state="new"):
         "heartbeat-interval": beat,
         "election-timeout": election,
         "strict-reconfig-check": True,
+        "max-learners": MAX_LEARNERS,
         "enable-pprof": False,
         "tls-min-version": "TLS1.3",
         # no client TLS: on a unix:// client URL etcd ignores it (measured on v3.6.15 by regalia-kms-d9, #491), so it would
@@ -192,7 +200,7 @@ def render(manifest, me, genesis_digest, certs, rtt_p99_ms, state="new"):
 
 CONFIG_KEYS = ("name", "data-dir", "listen-peer-urls", "initial-advertise-peer-urls", "listen-client-urls", "advertise-client-urls",
                "initial-cluster", "initial-cluster-state", "initial-cluster-token", "heartbeat-interval", "election-timeout",
-               "strict-reconfig-check", "enable-pprof", "tls-min-version", "peer-transport-security", "auto-compaction-mode",
+               "strict-reconfig-check", "max-learners", "enable-pprof", "tls-min-version", "peer-transport-security", "auto-compaction-mode",
                "auto-compaction-retention", "quota-backend-bytes", "feature-gates", "logger", "log-outputs")
 PEER_TLS_KEYS = ("cert-file", "key-file", "client-cert-auth", "trusted-ca-file", "auto-tls")
 
@@ -230,5 +238,7 @@ def check(text):
     require(config["feature-gates"] == CORRUPTION_GATES, "the corruption checks are on")
     require(config["tls-min-version"] == "TLS1.3" and config["enable-pprof"] is False and config["strict-reconfig-check"] is True,
             "TLS 1.3, no pprof, strict reconfiguration checks")
+    require(config["max-learners"] == MAX_LEARNERS, "max-learners is %d: both returning servers catch up as learners at once"
+            % MAX_LEARNERS)
     require(config["election-timeout"] >= 10 * config["heartbeat-interval"] >= 10 * MIN_HEARTBEAT_MS, "the election timeout is ten heartbeats")
     return config

@@ -96,7 +96,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     - peers on the mesh over TLS 1.3, with certificates both ways, the key from the unit's credentials, and trust that is
       the rendered bundle only;
     - periodic compaction (1 h) and an explicit 2 GiB quota;
-    - the corruption checks (feature gates).
+    - the corruption checks (feature gates);
+    - `max-learners: 2`, so after a survivor's take-over both fenced servers rejoin as learners at once and are promoted
+      back to back. This shrinks the two-of-two window to about the time between the two promotions. Measured on v3.6.15:
+      etcd reads the key from the config file, and admits a second learner only with it. The rejoin's own
+      one-learner-at-a-time guard (#515) still applies until it is relaxed to match; until then the window is the second
+      server's whole catch-up.
   Not built yet:
   - enrolment making the peer and server keys (into `systemd-creds`), the self-signed certificates and the binding;
   - the bindings travelling by sync;

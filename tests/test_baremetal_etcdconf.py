@@ -95,6 +95,7 @@ class Rendered(Case):
         self.assertEqual((doc["heartbeat-interval"], doc["election-timeout"]), (100, 1000))
         self.assertEqual(doc["peer-transport-security"]["key-file"], "/run/credentials/regalia-etcd.service/etcd-peer.key")
         self.assertEqual(doc["initial-cluster-token"], "regalia-" + "ab" * 16)
+        self.assertEqual(doc["max-learners"], 2)                   # both returners catch up at once (measured on v3.6.15)
         self.assertEqual(bundle.count("-----BEGIN CERTIFICATE-----"), 3)
 
     def test_check_refuses_each_unsafe_setting_on_its_own(self):
@@ -114,7 +115,8 @@ class Rendered(Case):
                  ("an explicit quota", ["quota-backend-bytes"], 0),
                  ("the corruption checks are on", ["feature-gates"], ""),
                  ("TLS 1.3", ["tls-min-version"], "TLS1.2"),
-                 ("ten heartbeats", ["election-timeout"], 500)]
+                 ("ten heartbeats", ["election-timeout"], 500),
+                 ("max-learners is 2", ["max-learners"], 1)]
         for reason, path, value in cases:
             with self.subTest(path + [str(value)]):
                 doc = json.loads(json.dumps(good))
