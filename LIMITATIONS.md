@@ -219,6 +219,8 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       verified `sessions/` entries from the cache, and the coordinator handing the Reservation the approver set's
       digest and the counted approvals' digest (`internal/approval` returns IDs only today).
     - `Reservation.Epoch` (#428) is still stamped. It goes with that wiring.
+    - **An ambiguous commit burns the approval.** A Reserve whose transaction answers an error may still have
+      committed. It isn't retried, the HSM never signs, and the request is approved again. That fails closed.
   - The daemon's unit doesn't yet join `regalia-etcd-client`, the group that may open etcd's socket. That
     group arrives with #484's sysusers, and naming it before then would stop the unit from starting.
   - The lone survivor's stateless serving under the owner's authorization (D32 item 6) has no gate path yet.

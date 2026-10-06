@@ -187,3 +187,39 @@ func TestNoLeaseNoReservation(t *testing.T) {
 		t.Fatal("reserved with no serving lease")
 	}
 }
+
+// A collection lease gone early (revoked; lost across a force-new-cluster or a restore) is granted again, not
+// reused for the rest of its hour: no hour of refused stateful operations (48 on #508).
+func TestARevokedCollectionLeaseIsGrantedAgain(t *testing.T) {
+	w := newTwoServers(t)
+	ctx := context.Background()
+	if err := w.a.Reserve(ctx, w.reservation("018f0000000070008000000000000c01", 1, nil)); err != nil {
+		t.Fatal(err)
+	}
+	w.a.mu.Lock()
+	var revoked []clientv3.LeaseID
+	for _, id := range w.a.buckets {
+		revoked = append(revoked, id)
+	}
+	w.a.mu.Unlock()
+	if len(revoked) == 0 {
+		t.Fatal("no collection lease was cached")
+	}
+	for _, id := range revoked {
+		if _, err := w.client.Revoke(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.a.Reserve(ctx, w.reservation("018f0000000070008000000000000c02", 1, nil)); err != nil {
+		t.Fatalf("a reservation after its collection lease was revoked: %v", err)
+	}
+	w.a.mu.Lock()
+	defer w.a.mu.Unlock()
+	for _, id := range w.a.buckets {
+		for _, gone := range revoked {
+			if id == gone {
+				t.Fatal("the revoked lease is still cached")
+			}
+		}
+	}
+}
