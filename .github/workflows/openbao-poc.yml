@@ -8,6 +8,9 @@ on:
       - 'tools/package_openbao.py'
       - 'OPENBAO-COMPATIBILITY.md'
       - 'internal/**'
+      - 'cmd/regalia-x509-reconcile/**'
+      - 'e2e/openbao-pki-recovery.sh'
+      - 'e2e/openbao_pki_recovery_test.go'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/openbao-poc.yml'
@@ -19,6 +22,9 @@ on:
       - 'tools/package_openbao.py'
       - 'OPENBAO-COMPATIBILITY.md'
       - 'internal/**'
+      - 'cmd/regalia-x509-reconcile/**'
+      - 'e2e/openbao-pki-recovery.sh'
+      - 'e2e/openbao_pki_recovery_test.go'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/openbao-poc.yml'
@@ -75,6 +81,11 @@ jobs:
           echo "$OPENBAO_SHA256  $RUNNER_TEMP/openbao.tar.gz" | sha256sum --check --strict
           tar --extract --gzip --file "$RUNNER_TEMP/openbao.tar.gz" --directory "$RUNNER_TEMP" bao
           "$RUNNER_TEMP/bao" version
+      - name: Install disposable software token dependencies
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y softhsm2 opensc libpcsclite-dev
       - name: Format, vet and build the development plugin
         run: |
           test -z "$(gofmt -l .)"
@@ -100,14 +111,17 @@ jobs:
       - name: Daemon issuing profile, durable counts and audit boundary
         working-directory: .
         run: |
-          go vet ./internal/policy ./internal/operations ./internal/audit
-          go test -race -count=1 -timeout 3m ./internal/policy ./internal/operations ./internal/audit
+          go vet ./internal/policy ./internal/operations ./internal/audit ./cmd/regalia-x509-reconcile
+          go test -race -count=1 -timeout 3m ./internal/policy ./internal/operations ./internal/audit ./cmd/regalia-x509-reconcile
       - name: Unit and real-server tests (absence is a failure)
         env:
           OPENBAO_POC_REQUIRE_E2E: '1'
         run: |
           umask 002
           OPENBAO_POC_BAO="$RUNNER_TEMP/bao" go test -race -count=1 -v -timeout 8m ./...
+      - name: Shipping daemon and collector PKI recovery (absence is a failure)
+        working-directory: .
+        run: bash e2e/openbao-pki-recovery.sh
       - name: Fuzz bounded certificate and CRL inspection
         run: |
           go test -run '^$' -fuzz '^FuzzPOCCertificateInspection$' -fuzztime=20000x -fuzzminimizetime=0x -parallel=2 .

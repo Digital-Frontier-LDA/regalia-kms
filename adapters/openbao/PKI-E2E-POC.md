@@ -156,8 +156,12 @@ rotation does not create a fresh budget. The core policy tests exercise persiste
 counts after restart, stale day refusal, journal high-water rejection, competing
 writers, fencing epochs and ambiguous reservations. The OpenBao drill checks
 verified durable intent and usable revocation after exhausting leaf issuance.
-It does not test a deployed daemon restart, an external fencing authority or
-physical hardware recovery.
+The separate [process recovery drill](PKI-RECOVERY.md) now tests the shipping
+daemon and collector across SIGKILL/restart with a disposable SoftHSM token.
+The real Bao PKI drill also reconciles genuine certificates/ACME artifacts and
+the current CRL against an independent mTLS collector's authenticated head.
+Unavailable historical artifacts remain indeterminate, including superseded
+CRLs. Neither drill qualifies external fencing or physical hardware recovery.
 
 Arbitrary provider errors remain sanitized backend failures. The experimental CA
 client sends one attempt, disables HTTP replay and does not return retryable CA

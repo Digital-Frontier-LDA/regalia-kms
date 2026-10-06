@@ -98,6 +98,27 @@ credentials. Physical Cosmos qualification must use the separately gated
 `cosmos-hardware-sign-verify.sh` path with an operator-supplied credential and
 registry-selected token/object; it must never inherit or guess the SoftHSM PIN.
 
+## Development PKI process recovery
+
+Run `bash e2e/openbao-pki-recovery.sh` on Linux with Go, SoftHSM, OpenSC and PC/SC
+development headers. The runner builds the shipping daemon and audit collector
+with the race detector, provisions a fresh software token and requires both
+SIGKILL/restart arms to execute. The normal unit suite skips this hardware fixture;
+the dedicated CI step treats missing dependencies as failure.
+
+An mTLS test proxy holds a collector acknowledgement after durable authorization
+or terminal success. The daemon is killed with a signing response still pending,
+then restarted against the same journals and token. Replay and exhausted issuance
+stay refused; the separate CRL reserve produces a verifiable revocation artifact.
+Collector history retains the original events without duplicate replay records.
+
+The [recovery specification](../adapters/openbao/PKI-RECOVERY.md) and
+[reconciliation guide](../OPENBAO-PKI-RECONCILIATION.md) describe the evidence.
+This is emulated evidence, with lab runtime admission and synthetic secure-channel
+attestation. It does not qualify physical custody, live admission/fencing,
+distributed state or host power loss. All fixture credentials, token files and
+private process logs are disposable; the script does not use a physical card.
+
 ## Real cards on a shared bench
 
 Every script here that drives a real card through OpenSC shows OpenSC only the cards it names and
