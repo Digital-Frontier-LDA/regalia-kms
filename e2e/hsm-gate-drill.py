@@ -271,6 +271,7 @@ def drill(serial, label, pin, w, runtime, key_id, processes):
         document = {"schema": admission.SCHEMA, "node_id": NODE, "session_id": SESSION, "boot_id": admission.boot_id(), "epoch": 1,
                     "manifest_digest": "d1" * 32, "hsm_serials": serial, "lease_issued_at": day(0),
                     "requested_boottime_ms": (now if asked is None else asked) if serve else 0,
+                    **({"cluster_id": "c1" * 8, "state_epoch": 0, "state_revision": 1, "session_key": "e7" * 32} if serve else admission.NO_STATE),
                     "serve_until_boottime_ms": now + (lease_module.MAX_LIFETIME - admission.MARGIN) * 1000 if serve else 0,
                     "reason": "" if serve else "the drill refuses the lease"}
         tmp = runtime / "admission" / ".admission.new"
