@@ -31,12 +31,12 @@ fetch_retry_transient(){
   # "Unable to fetch some archives" and mmdebstrap's own summary ("mmdebstrap failed to run", its apt-get call failed)
   # follow a failed fetch; any other E: line (a dependency, a script, a full disk) is not a download and is final
   ! printf '%s\n' "$errors" | grep -vE '^E: (Unable to fetch some archives|Some index files failed to download|Failed to fetch |mmdebstrap failed to run|apt-get (--yes )?(download|install|update)?.*failed)' | grep -q . || return 1
-  # each failed fetch names a network cause: on its own line, or on apt's next line (it wraps the reason)
-  local fetches causes
-  fetches="$(grep -cE '^E: Failed to fetch ' "$log")"
-  [ "$fetches" -gt 0 ] || return 1
-  causes="$(grep -A1 -E '^E: Failed to fetch ' "$log" | grep -cE "$FETCH_RETRY_NETWORK")"
-  [ "$causes" -ge "$fetches" ]
+  # EACH failed fetch names a network cause of its own: on its line, or on apt's next line (it wraps the reason),
+  # never one counted for another (05 on #521: two matching lines of a reset must not cover a 404 beside it)
+  awk -v network="$FETCH_RETRY_NETWORK" '
+    pending && !/^E: Failed to fetch / { if ($0 ~ network) ok++; pending = 0 }
+    /^E: Failed to fetch / { pending = 0; fetches++; if ($0 ~ network) ok++; else pending = 1 }
+    END { exit !(fetches > 0 && ok == fetches) }' "$log"
 }
 
 # fetch_retry_tree LABEL LOG TARGET -- COMMAND...: COMMAND (an mmdebstrap building TARGET, its output in LOG),

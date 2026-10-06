@@ -90,6 +90,10 @@ cat "$out"; exit 100
     def test_any_other_failure_is_final(self):
         self.assertEqual(self.run_helper([OTHER, "ok"])[:2], (100, 1))
         self.assertEqual(self.run_helper([NOT_FOUND, "ok"])[:2], (100, 1))  # a fetch that failed for no network cause
+        # each fetch is judged on its own: a reset whose cause matches on two lines does not cover a 404 beside it (05)
+        reset_twice = RESET.replace("[IP: 146.75.38.132 443]", "[IP: 146.75.38.132 443]\n   Connection reset by peer", 1)
+        self.assertEqual(self.run_helper([reset_twice.replace("E: Unable", NOT_FOUND.split("\n")[0] + "\nE: Unable", 1), "ok"])[:2], (100, 1))
+        self.assertEqual(self.run_helper([reset_twice, "ok"])[:2], (0, 2))                  # alone, that reset is retried
         self.assertEqual(self.run_helper(["", "ok"])[:2], (100, 1))        # no apt error at all
         self.assertEqual(self.run_helper([RESET.replace("E: mmdebstrap failed to run", "E: Unable to correct problems, you have held broken packages."), "ok"])[:2], (100, 1))
 
