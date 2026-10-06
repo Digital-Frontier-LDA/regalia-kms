@@ -104,6 +104,12 @@ class LeaseJudge:
         lines = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
         return [e for e in lines if e.get("event") == "admission-serving" and e.get("at", 0) >= since_ms // 1000]
 
+    def _events(self, node, since_ms):
+        path = self.cluster._trail_path(node, "admission")
+        lines = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+        return [{"at": e.get("at"), "event": e.get("event"), "outcome": e.get("outcome"), "epoch": e.get("epoch"),
+                 "reason": (e.get("reason") or "")[:100]} for e in lines if e.get("at", 0) >= since_ms // 1000]
+
     def epoch(self):
         return self.cluster.manifest["epoch"]
 
@@ -153,7 +159,9 @@ class LeaseJudge:
         evidence = {"serving lines since the others went off": lines, "admission.json": {"mode": document.get("mode"),
                     "serve_until_boottime_ms": document.get("serve_until_boottime_ms")}, "switch bound": bound_s,
                     # and its journal: a round that raised before recording (48 on #507) would show there
-                    "admission journal": self.cluster.journal(node, "admission", lines=60)[-2500:]}
+                    "admission journal": self.cluster.journal(node, "admission", lines=60)[-2500:],
+                    # and EVERY event on its admission trail since then (renewals included): what each round did
+                    "every admission event since the others went off": self._events(node, t_off)[-25:]}
         return {"a not-serving round precedes the RECOVERY line (no lease-to-recovery without a gap)": (bool(denied_before), evidence),
                 "it switched to recovery no later than its lease's end or the install, whichever was later":
                     (first_recovery is not None and first_recovery <= bound_s, {"switched at": first_recovery, "bound": bound_s}),
