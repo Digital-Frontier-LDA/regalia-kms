@@ -40,6 +40,7 @@ def signed(document, **system):
     for node_id, pem in system.items():
         for entry in out["nodes"][node_id]["accepted"]:
             entry["signing"] = {"initrd": "11" * 32, "system": signkey.pcr_key_fingerprint(pem), "secure_boot_cert": "22" * 32}
+            entry["rootfs_sha256"] = "6e" * 32
     return out
 
 

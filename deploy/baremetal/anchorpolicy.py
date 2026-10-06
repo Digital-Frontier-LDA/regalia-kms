@@ -495,7 +495,47 @@ def rotation_generations(current, k_sys_pem, k_a_point):
             require(len(known) < 2, "keys at G %s are live on node %s; retire the older (the rollout's retire bumps its "
                     "rotation counter) before approving a third" % (" and ".join(str(g) for g in known), node_id))
             generations[node_id] = max(known) + 1
+        # d9: no approval two retires ahead of what the root published (G <= G_pub + 1)
+        g_pub = published_generation(current, node_id)
+        if node_id in generations and g_pub is not None:
+            require(generations[node_id] <= g_pub + 1, "%s would be approved at generation %d, more than one above its published "
+                    "%d: retire first" % (node_id, generations[node_id], g_pub))
     return generations
+
+
+def published_generation(current, node_id):
+    """G_pub: the generation the root has published for `node_id` in `current` (the document the chain's tip commits to).
+    After a retire, its last rotation's from + 1; before any, the oldest generation the node's sets carry (its genesis
+    G, R's first value). None when the node's sets carry no approvals."""
+    node = current["nodes"].get(node_id)
+    require(node is not None, "the current measurements have no entry for %s" % node_id)
+    g = published(node.get("rotations", []), "nodes.%s.rotations" % node_id)
+    if g is not None:
+        return g
+    known = sorted({e["signing"]["anchor_approvals"]["generation"] for e in node["accepted"] if "anchor_approvals" in e.get("signing", {})})
+    return known[0] if known else None
+
+
+def retire(document, current, key, k_a_point, node_id):
+    """C4's retire for one node: K_A's single-use increment of `node_id`'s R from G_pub, appended to `document`'s
+    nodes.<id>.rotations. G_pub comes from `current` (root-committed), never typed. Refused unless `document` already
+    gives the node approvals at G_pub + 1 (local no-stranding, agreed on #361: a node never loses its last approval
+    to a retire), and unless `document` carries every rotation `current` does (never pruned). Returns the document."""
+    import copy
+    g = published_generation(current, node_id)
+    require(g is not None, "%s's sets carry no K_A approvals: there is nothing to retire" % node_id)
+    out = copy.deepcopy(document)
+    node = out["nodes"].get(node_id)
+    require(node is not None, "the new measurements have no entry for %s" % node_id)
+    held = list(current["nodes"][node_id].get("rotations", []))
+    require(node.get("rotations", []) == held, "the new document's rotations for %s are not the current ones: a retire "
+            "appends one and never drops any" % node_id)
+    ahead = [e for e in node["accepted"] if e.get("signing", {}).get("anchor_approvals", {}).get("generation") == g + 1]
+    require(ahead, "no set in the new document gives %s approvals at generation %d: retiring G %d would leave it no approval "
+            "to write with (approve the new key first)" % (node_id, g + 1, g))
+    entry = increment_document(key, k_a_point, node_id, g)
+    node["rotations"] = held + [{"from": g, "signature": entry["signature"]}]
+    return out
 
 
 def increment_document(key, k_a_point, node_id, n):
@@ -516,17 +556,12 @@ def increment_document(key, k_a_point, node_id, n):
 
 
 def published(rotations, label="rotations"):
-    """G_pub from `rotations` (their form: each {"from", "signature"}, `from` a count rising by exactly 1), or None when
-    the node has been through no retire."""
-    require(isinstance(rotations, list), "%s is not a list" % label)
-    previous = None
-    for i, entry in enumerate(rotations):
-        require(isinstance(entry, dict) and sorted(entry) == ["from", "signature"], "%s[%d] is not {from, signature}" % (label, i))
-        _count(entry["from"], "%s[%d].from" % (label, i))
-        require(previous is None or entry["from"] == previous + 1, "%s[%d].from is %d, not %d: a retire moves R by exactly 1"
-                % (label, i, entry["from"], (previous or 0) + 1))
-        previous = entry["from"]
-    return None if previous is None else previous + 1
+    """G_pub from `rotations` (their form, attest.validate_rotations: each {"from", "signature"}, `from` a count rising by
+    exactly 1), or None when the node has been through no retire."""
+    try:
+        return attest.validate_rotations(rotations, label)
+    except attest.Refused as refused:
+        raise Refused(str(refused)) from None
 
 
 def bump(index, point, node_id, n, signature, run=None):
@@ -569,8 +604,10 @@ def bump(index, point, node_id, n, signature, run=None):
 def catch_up(index, point, node_id, rotations, booted_generation, run=None):
     """Bring this node's R up to G_pub (published(rotations)) by applying, in order, each entry from R on. Refused, with R
     as it was, when an entry at R is missing, or when the set the node is BOOTED on carries approvals below G_pub
-    (`booted_generation`, its anchor_approvals.generation): a bump would leave it no approval to write with, so it keeps
-    the old one, still valid, until it boots an image approved at G_pub (local no-stranding). Returns R."""
+    (`booted_generation`, its anchor_approvals.generation): a bump would leave it no approval to write with, so it is not
+    made. The node is then WRITE-FROZEN, not stranded (regalia-kms-62 on #517): require_current refuses every write and
+    signature under K_A while R < G_pub, which is the retire's purpose, and its way out is `update apply` onto an image
+    approved at G_pub (no K_A write needed), after which this bumps. Returns R."""
     target, r = published(rotations), read_rotation(index, run)
     if target is None or r >= target:
         return r
@@ -579,8 +616,8 @@ def catch_up(index, point, node_id, rotations, booted_generation, run=None):
             "is bumped" % (node_id, r, rotations[0]["from"]))
     require(isinstance(booted_generation, int) and booted_generation >= target,
             "%s is booted on an image whose approvals are at generation %s, below the published %d: bumping would leave it no "
-            "approval to write with, so it keeps its current one until it boots an image approved at %d"
-            % (node_id, booted_generation, target, target))
+            "approval to write with, so nothing is bumped; it writes and signs nothing under the anchor-policy authority until "
+            "it boots an image approved at %d (update apply onto it)" % (node_id, booted_generation, target, target))
     while r < target:
         r = bump(index, point, node_id, r, by_from[r]["signature"], run)
     return r
@@ -712,8 +749,10 @@ def main(argv=None, out=None):
             c.add_argument("--current", help="at a rotation: the measurements document the chain's tip commits to")
         else:
             c.add_argument("--chain", required=True, help="the signed chain; K_A is its tip's")
+            c.add_argument("--current", required=True, help="the measurements document the chain's tip commits to: G_pub comes from it")
+            c.add_argument("--document", required=True, help="the new measurements document, already approving the new key: the "
+                           "retire is appended to its nodes.<id>.rotations")
             c.add_argument("--node-id", required=True)
-            c.add_argument("--from", dest="from_n", type=int, required=True, help="the node's rotation counter's value before the increment")
     args = ap.parse_args(argv)
     try:
         # every path absolute (51): offline-keys runs this from inside its digest-checked tool tree, where a relative path
@@ -734,8 +773,12 @@ def main(argv=None, out=None):
         elif args.command == "approve-increment":
             point, tip = _pinned_by_chain(root, args.chain)
             require(args.node_id in membership.validate(tip), "%s is not a node of the chain's tip" % args.node_id)
-            result = increment_document(_key_from_fd(args.key_fd, point), point, args.node_id, args.from_n)
-            issued = [{"kind": "anchor-increment", "node_id": args.node_id, "from": args.from_n}]
+            current = measurements.load(manifest._raw(args.current, measurements.MAX_BYTES))
+            measurements.bind(tip, current)                   # the document the tip commits to, and no other
+            document = measurements.load(manifest._raw(args.document, measurements.MAX_BYTES))
+            result = retire(document, current, _key_from_fd(args.key_fd, point), point, args.node_id)
+            measurements.validate(result)
+            issued = [{"kind": "anchor-increment", "node_id": args.node_id, "from": result["nodes"][args.node_id]["rotations"][-1]["from"]}]
         else:
             genesis = bool(args.offline_keys_record or args.node)
             require(genesis != bool(args.chain or args.current), "give --offline-keys-record and --node (the genesis), or --chain and "

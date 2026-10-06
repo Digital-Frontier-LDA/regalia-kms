@@ -58,6 +58,7 @@ NOT covered here: the EK certificate chain to the TPM manufacturer (the swtpm EK
 is checked at intake, #65 PoC 5.2), and which PCRs to expect (PoC 5.2/5.3 on the real hardware).
 """
 import argparse
+import base64
 import contextlib
 import fcntl
 import hashlib
@@ -80,6 +81,10 @@ SIGNING_KEYS = ("initrd", "system", "secure_boot_cert")
 # #361 C2: K_A's approvals of the set's system-phase key for THIS node, one per class an approved image writes or signs
 # under at run time (anchorpolicy.REFS less "rotation", whose increments are approved one at a time)
 APPROVAL_CLASSES = ("anchor", "slots", "heartbeat", "signing-counter", "signing")
+# a signed image's root filesystem (#61): the SHA-256 of the rootfs.tar it is installed from (build-rootfs.sh's
+# record), REQUIRED beside "signing" and allowed nowhere else. No PCR covers it, so a quote cannot tell two roots
+# apart: it is what the installer checks, not what a peer judges
+ROOTFS_KEY = "rootfs_sha256"
 # The phases a node is judged in, and what it may ask for there: "initrd" an unlock (replacement.may_unlock),
 # "system" a runtime lease (lease.issue). Which systemd phase path each one is belongs to the image's build
 # record (#57): enter-initrd, and enter-initrd:leave-initrd:sysinit:ready.
@@ -267,6 +272,8 @@ def validate_set(entry, label):
     them per boot phase (the module text)."""
     require(is_hex(entry["tpm_firmware_version"], 16), "%s.tpm_firmware_version must be 16 hex" % label)
     _validate_pcrs(entry["pcrs"], "%s.pcrs" % label)
+    require(ROOTFS_KEY not in entry or "signing" in entry, "%s.%s: only a signed image's set (one that names its signing keys) "
+            "names its root filesystem" % (label, ROOTFS_KEY))
     if "phases" not in entry:
         require("signing" not in entry, "%s.signing: only a set with per-phase PCR 11 (a signed unified kernel image) names "
                 "signing keys" % label)
@@ -284,13 +291,61 @@ def validate_set(entry, label):
         # the keys a signed image's PCR 11 policy and Secure Boot signature are made with (uki.py's signed record):
         # a peer judges PCR values and never reads them; whoever SEALS to a PCR-signing key (enrol, #190) takes
         # only a key the approved set names, so a re-signed copy of an approved image is no approved image
-        signing = exact_keys(entry["signing"], SIGNING_KEYS + (("anchor_approvals",) if "anchor_approvals" in entry["signing"] else ()),
+        signing = exact_keys(entry["signing"], SIGNING_KEYS + tuple(k for k in ("anchor_approvals", "resigned") if k in entry["signing"]),
                              "%s.signing" % label)
         for name in SIGNING_KEYS:
             require(is_hex(signing[name], 64), "%s.signing.%s must be 64 lowercase hex" % (label, name))
         require(len({signing["initrd"], signing["system"]}) == 2, "%s.signing: the two phases' PCR keys must be two keys" % label)
         if "anchor_approvals" in signing:
             validate_approvals(signing["anchor_approvals"], "%s.signing.anchor_approvals" % label)
+        if "resigned" in signing:
+            validate_resigned(signing["resigned"], signing["system"], "%s.signing.resigned" % label)
+
+        # an image is its UKI AND the root it is installed with: one root-approved set names both (#61). The root
+        # is not measured, so this binds what is installed, not what runs (no dm-verity yet)
+        require(ROOTFS_KEY in entry, "%s: a signed image's set must name its root filesystem (%s, from build-rootfs.sh's "
+                "record)" % (label, ROOTFS_KEY))
+        require(is_hex(entry[ROOTFS_KEY], 64), "%s.%s must be 64 lowercase hex" % (label, ROOTFS_KEY))
+
+
+RESIGNED_KEYS = ("system", "pem", "pol", "sig")
+
+
+def validate_resigned(resigned, own_system, label):
+    """#361 C4b, by form only: a new system-phase key's signature over THIS image's system-phase PolicyPCR(11), made at a
+    retire so a node booted on this image can move to the new key's approvals without rebooting (uki.resign):
+    {system: the new key's pkfp, pem: its public key, pol: the policy digest, sig: base64 PKCS#1 v1.5 SHA-256}. Whether
+    the signature verifies, the policy is this set's PCR 11 and the TPM measured it is the node's to check
+    (node.catch_up_rotation), with the new key's own set."""
+    exact_keys(resigned, RESIGNED_KEYS, label)
+    require(is_hex(resigned["system"], 64) and resigned["system"] != own_system,
+            "%s.system must be 64 lowercase hex, another key than the set's own" % label)
+    require(isinstance(resigned["pem"], str) and resigned["pem"].startswith("-----BEGIN PUBLIC KEY-----") and len(resigned["pem"]) <= 2048,
+            "%s.pem must be a PEM public key" % label)
+    require(is_hex(resigned["pol"], 64), "%s.pol must be 64 lowercase hex" % label)
+    try:
+        raw = base64.b64decode(resigned["sig"], validate=True)
+    except (TypeError, ValueError):
+        raw = b""
+    require(len(raw) == 256, "%s.sig must be base64 of an RSA-2048 signature" % label)
+
+
+def validate_rotations(rotations, label):
+    """#361 C4, by form only: a node's retires, [{"from": n, "signature": r||s}, ...], each K_A's single-use approval of
+    its rotation counter's increment from n (anchorpolicy.increment_document), `from` a count from 1 rising by exactly 1
+    (a retire moves R by one). Whose signature it is, over THIS node's R, is checked where K_A is known: by the node
+    before it bumps (anchorpolicy.bump). Returns G_pub, the generation the root published (the last from + 1), or None."""
+    require(isinstance(rotations, list), "%s is not a list" % label)
+    previous = None
+    for i, entry in enumerate(rotations):
+        require(isinstance(entry, dict) and sorted(entry) == ["from", "signature"], "%s[%d] is not {from, signature}" % (label, i))
+        n = entry["from"]
+        require(type(n) is int and 1 <= n < 2 ** 63, "%s[%d].from must be a count from 1" % (label, i))
+        require(previous is None or n == previous + 1, "%s[%d].from is %d, not %d: a retire moves R by exactly 1"
+                % (label, i, n, (previous or 0) + 1))
+        require(is_hex(entry["signature"], 128), "%s[%d].signature must be 128 lowercase hex (K_A's r||s)" % (label, i))
+        previous = n
+    return None if previous is None else previous + 1
 
 
 def validate_approvals(approvals, label):
@@ -326,7 +381,7 @@ def validate_sets(sets, label):
     for i, entry in enumerate(sets):
         here = "%s.accepted[%d]" % (label, i)
         require(isinstance(entry, dict), "%s must be an object" % here)
-        exact_keys(entry, SET_KEYS + tuple(k for k in ("phases", "signing") if k in entry), here)
+        exact_keys(entry, SET_KEYS + tuple(k for k in ("phases", "signing", ROOTFS_KEY) if k in entry), here)
         require(isinstance(entry["label"], str) and re.fullmatch(r"[A-Za-z0-9._-]{1,48}", entry["label"]), "%s.label must be a short plain name" % here)
         validate_set(entry, here)
     if len(sets) == 2:

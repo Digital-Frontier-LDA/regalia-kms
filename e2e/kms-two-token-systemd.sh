@@ -14,7 +14,7 @@
 #
 # The PINs come from the environment only; they are never put on a command line.
 #
-# It INSTALLS on this machine, and removes at the end: the binary at /usr/local/sbin/regalia-kms, a
+# It INSTALLS on this machine, and removes at the end: the binary at /usr/sbin/regalia-kms, a
 # regalia-kms system user, /etc/regalia-kms, /var/lib/regalia-kms, the unit and its drop-ins, and the
 # polkit rule that lets that user reach pcscd. It is refused unless REGALIA_BENCH_HOST_OK=1 says the
 # machine is a bench host that may carry that for a few minutes.
@@ -56,7 +56,7 @@ MODULE=""; for c in /usr/lib/x86_64-linux-gnu/opensc-pkcs11.so /usr/lib/opensc-p
 [ -n "$MODULE" ] || die "opensc-pkcs11.so not found"
 ETC=/etc/regalia-kms; STATE=/var/lib/regalia-kms; UNITDIR=/etc/systemd/system; SVC=regalia-kms.service
 RULE=/etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules
-for existing in "$UNITDIR/$SVC" "$UNITDIR/$SVC.d" "$ETC" "$STATE" /usr/local/sbin/regalia-kms "$RULE"; do
+for existing in "$UNITDIR/$SVC" "$UNITDIR/$SVC.d" "$ETC" "$STATE" /usr/sbin/regalia-kms "$RULE"; do
   # asked as root: /etc/polkit-1/rules.d is not readable by an ordinary user
   { ! sudo test -e "$existing" && ! sudo test -L "$existing"; } || die "this machine already has $existing: somebody's installation, and the cleanup would delete it"
 done
@@ -90,7 +90,7 @@ cleanup(){
   [ -n "$collector" ] && kill "$collector" 2>/dev/null
   sudo rm -f "$RULE"; sleep 2      # polkit rereads its rules; this user's own token calls below need pcscd again
   sudo sh -c 'for f in "$1"/*.pin; do [ -f "$f" ] && shred -u "$f"; done' sh "$ETC" 2>/dev/null
-  sudo rm -rf "$UNITDIR/$SVC" "$UNITDIR/$SVC.d" "$ETC" "$STATE" /usr/local/sbin/regalia-kms
+  sudo rm -rf "$UNITDIR/$SVC" "$UNITDIR/$SVC.d" "$ETC" "$STATE" /usr/sbin/regalia-kms
   sudo systemctl daemon-reload 2>/dev/null
   sudo systemctl reset-failed "$SVC" 2>/dev/null
   [ "$made_user" = 1 ] && sudo userdel regalia-kms 2>/dev/null
@@ -139,7 +139,7 @@ HSM_KEYPIN="sha256:$(sha256sum "$W/hsm.der" | cut -d' ' -f1)"; YK_KEYPIN="sha256
 # ---- build and install ----------------------------------------------------------------------------------
 go -C "$HERE" build -tags piv -o "$W/regalia-kms" ./cmd/regalia-kms || die "cannot build regalia-kms with -tags piv"
 go -C "$HERE" build -o "$W/regalia-audit-collector" ./cmd/regalia-audit-collector || die "cannot build the audit collector"
-sudo install -m 0755 "$W/regalia-kms" /usr/local/sbin/regalia-kms || die "cannot install the binary"
+sudo install -m 0755 "$W/regalia-kms" /usr/sbin/regalia-kms || die "cannot install the binary"
 if ! id regalia-kms >/dev/null 2>&1; then
   sudo useradd --system --no-create-home --shell /usr/sbin/nologin regalia-kms || die "cannot create the regalia-kms user"; made_user=1
 fi
@@ -297,7 +297,7 @@ code="$(wait_ready 60)"
 [ "$code" = 200 ] && P "the daemon is ready (GET /v1/health/ready: 200)" || { F "not ready (HTTP ${code:-none}; unit $(systemctl is-active "$SVC"))"; journal; }
 pid="$(systemctl show "$SVC" -p MainPID --value)"
 exe="$(sudo readlink "/proc/$pid/exe" 2>/dev/null)"; uid="$(awk '/^Uid:/{print $2}' "/proc/$pid/status" 2>/dev/null)"
-[ "$exe" = /usr/local/sbin/regalia-kms ] && [ "$uid" = "$(id -u regalia-kms)" ] && [ "$uid" != 0 ] \
+[ "$exe" = /usr/sbin/regalia-kms ] && [ "$uid" = "$(id -u regalia-kms)" ] && [ "$uid" != 0 ] \
   && P "the main process (pid $pid) is the installed binary, running as regalia-kms (uid $uid)" || F "pid $pid runs '$exe' as uid '$uid'"
 grep -q hardening.conf <<< "$(systemctl show "$SVC" -p DropInPaths --value)" && P "the shipped hardening drop-in is in effect" || F "the hardening drop-in is not in effect"
 conf="$(sudo cat "/proc/$pid/environ" 2>/dev/null | tr '\0' '\n' | sed -n 's/^OPENSC_CONF=//p')"

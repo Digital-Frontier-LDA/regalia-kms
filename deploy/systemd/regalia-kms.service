@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 User=regalia-kms
 Group=regalia-kms
-ExecStart=/usr/local/sbin/regalia-kms -config /etc/regalia-kms/config.json
+ExecStart=/usr/sbin/regalia-kms -config /etc/regalia-kms/config.json
 # The daemon's own OpenSC configuration. On a host that also serves YubiKey PIV keys it must tell
 # OpenSC to ignore the YubiKey's reader (deploy/opensc/ignore-yubikey.conf): the PIV backend needs
 # the card to itself, and the daemon refuses to start if its PKCS#11 module holds it.
@@ -32,6 +32,11 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 StateDirectory=regalia-kms
 StateDirectoryMode=0700
+# the operational state (ADR-0002 D32, #432): this instance's session key (its public half) in
+# /run/regalia-kms, the revision it has applied in /run/regalia-state, both read by regalia-admission and
+# regalia-sync. Not preserved: a stopped daemon leaves neither, which they read as "no lease request".
+RuntimeDirectory=regalia-kms regalia-state
+RuntimeDirectoryMode=0755
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 UMask=0077

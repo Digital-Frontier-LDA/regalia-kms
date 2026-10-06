@@ -90,6 +90,8 @@ func documentFieldRows() []documentFieldRow {
 	hardwareDocument := "{" + hardwareQuad + "," + registryAndSite + "," + policyPair +
 		`,"rbac_policy_path":"/etc/regalia/rbac.json"` + lab + `}`
 	yubikeyDocument := "{" + yubikeyTriple + "," + registryAndSite + "," + policyPair + `,"rbac_policy_path":"/etc/regalia/rbac.json"` + lab + `}`
+	stateDocument := `{"operational_state_endpoint":"/run/regalia-etcd/client.sock:0","operational_state_dir":"/run/regalia-state","session_key_dir":"/run/regalia-kms",` +
+		`"runtime_admission":"required","runtime_admission_path":"/run/regalia/admission/admission.json","runtime_admission_owner":"regalia-admission","node_id":"site-a","boot_session_path":"/run/regalia/boot-session"}`
 	admissionDocument := `{"runtime_admission":"required","runtime_admission_path":"/run/regalia/admission/admission.json","runtime_admission_owner":"regalia-admission","node_id":"site-a","boot_session_path":"/run/regalia/boot-session"}`
 	fencingDocument := "{" + fencingTriple + "," + registryAndSite + "}"
 
@@ -176,6 +178,14 @@ func documentFieldRows() []documentFieldRow {
 			func(c Config) string { return c.NodeID }, "site-a"},
 		{"boot_session_path", admissionDocument,
 			func(c Config) string { return c.BootSessionPath }, "/run/regalia/boot-session"},
+
+		// the operational state (D32) needs runtime admission "required"
+		{"operational_state_endpoint", stateDocument,
+			func(c Config) string { return c.OperationalStateEndpoint }, "/run/regalia-etcd/client.sock:0"},
+		{"operational_state_dir", stateDocument,
+			func(c Config) string { return c.OperationalStateDir }, "/run/regalia-state"},
+		{"session_key_dir", stateDocument,
+			func(c Config) string { return c.SessionKeyDir }, "/run/regalia-kms"},
 
 		{"metrics_reader_principals", `{"metrics_reader_principals":["spiffe://regalia/operator/monitoring"]}`,
 			func(c Config) string { return strings.Join(c.MetricsReaderPrincipals, ",") }, "spiffe://regalia/operator/monitoring"},

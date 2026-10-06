@@ -23,7 +23,8 @@ OTHER_K_A = ec.derive_private_key(0x0BAD, ec.SECP256R1())
 def signed_set(pem=SYSTEM_PUB, label="image-1", eleven=("a1", "b2")):
     return {"label": label, "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32},
             "phases": {"initrd": {"11": eleven[0] * 32}, "system": {"11": eleven[1] * 32}},
-            "signing": {"initrd": "11" * 32, "system": signkey.pcr_key_fingerprint(pem), "secure_boot_cert": "22" * 32}}
+            "signing": {"initrd": "11" * 32, "system": signkey.pcr_key_fingerprint(pem), "secure_boot_cert": "22" * 32},
+            "rootfs_sha256": "6e" * 32}                     # a signed image's root (#61, #478)
 
 
 def document(*sets):
@@ -186,21 +187,77 @@ class Signer(unittest.TestCase):
         man = manifest4(1, "", nodes4(), anchor_policy_key={"alg": "ecdsa-p256", "key": POINT}, policy_version=measurements.version(doc))
         return [sign(man, ROOT)]
 
-    def test_approve_increment_from_the_chain_s_k_a(self):
+    def documents(self):
+        """(current, new): CURRENT approves SYSTEM_PUB at GENERATIONS; NEW adds OTHER_PUB's image at G + 1 for every node."""
+        current = ap.fill(document(), SYSTEM_PUB, POINT, K_A, GENERATIONS)
+        new = copy.deepcopy(current)
+        for node in new["nodes"].values():
+            node["accepted"].append(signed_set(OTHER_PUB, "image-2", ("d4", "e5")))
+        return current, ap.fill(new, OTHER_PUB, POINT, K_A, {n: g + 1 for n, g in GENERATIONS.items()})
+
+    def increment_cli(self, node_id="a", key=K_A, current=None, new=None, relative=False):
         from tests.test_baremetal_membership import ROOT_PUB
-        chain = self.path("chain.json", self.chain(document()))
-        code, out, err = self.run_cli("approve-increment", "--root-key", ROOT_PUB, "--chain", chain, "--node-id", "a", "--from", "5")
+        cur, nxt = self.documents()
+        current, new = current or cur, new or nxt
+        chain = self.path("chain.json", self.chain(current))
+        args = ["approve-increment", "--root-key", ROOT_PUB, "--chain", os.path.relpath(chain) if relative else chain,
+                "--current", self.path("current.json", current), "--document", self.path("new.json", new), "--node-id", node_id]
+        return self.run_cli(*args, key=key)
+
+    def test_approve_increment_from_the_chain_s_k_a(self):
+        """C4a: the retire is appended to the new document's nodes.<id>.rotations, from G_pub (the current document's,
+        never typed), as K_A's single-use increment; recorded before it is printed."""
+        from tests.test_baremetal_membership import ROOT_PUB
+        code, out, err = self.increment_cli()
         self.assertEqual(code, 0, err)
-        self.assertEqual(json.loads(out), ap.increment_document(K_A, POINT, "a", 5) | {"signature": json.loads(out)["signature"]})
+        g = GENERATIONS["a"]
+        rotations = json.loads(out)["nodes"]["a"]["rotations"]
+        self.assertEqual([r["from"] for r in rotations], [g])
+        ap.verify_approval(POINT, ap.increment_from(ap.rotation_name(int(ap.ROTATION_INDEX, 16), POINT, "a"), g),
+                           ap.rotation_class("a"), rotations[0]["signature"], "the retire")
+        self.assertNotIn("rotations", json.loads(out)["nodes"]["b"], "a retire of a touched b")
         self.assertEqual([(l["kind"], l["node_id"], l["from"], l["provenance"]) for l in self.issued(ROOT_PUB)],
-                         [("anchor-increment", "a", 5, "offline-keys session " + "ab" * 16)])
-        code, out, err = self.run_cli("approve-increment", "--root-key", ROOT_PUB, "--chain", chain, "--node-id", "a", "--from", "5", key=OTHER_K_A)
+                         [("anchor-increment", "a", g, "offline-keys session " + "ab" * 16)])
+        code, out, err = self.increment_cli(key=OTHER_K_A)
         self.assertEqual((code, out), (2, ""))
         self.assertIn("--key-fd: this key is not the pinned K_A", err)
         self.assertEqual(len(self.issued(ROOT_PUB)), 1, "a refusal recorded an issuance")
-        code, out, err = self.run_cli("approve-increment", "--root-key", ROOT_PUB, "--chain", chain, "--node-id", "z", "--from", "5")
+        code, out, err = self.increment_cli(node_id="z")
         self.assertEqual((code, out), (2, ""))
         self.assertIn("z is not a node of the chain's tip", err)
+
+    def test_a_retire_never_strands_a_node_and_never_drops_one(self):
+        current, new = self.documents()
+        g = GENERATIONS["a"]
+        with self.assertRaisesRegex(m.Refused, "no set in the new document gives a approvals at generation %d: retiring G %d would leave "
+                                    "it no approval to write with" % (g + 1, g)):
+            ap.retire(current, current, K_A, POINT, "a")                    # the new key not approved yet
+        once = ap.retire(new, current, K_A, POINT, "a")
+        with self.assertRaisesRegex(m.Refused, "the new document's rotations for a are not the current ones: a retire appends one and "
+                                    "never drops any"):
+            ap.retire(new, once, K_A, POINT, "a")                          # the current one's retire dropped from the new document
+        self.assertEqual(ap.published_generation(once, "a"), g + 1)        # after the retire, G_pub is from + 1
+
+    def test_a_duplicated_retire_cannot_move_r_by_two(self):
+        """62 on #517: two approve-increment runs from the same --current give the same single-use increment (from = G_pub),
+        and the second cannot be appended to the first's output (the current rotations must be kept as they are)."""
+        current, new = self.documents()
+        once, twice = ap.retire(new, current, K_A, POINT, "a"), ap.retire(new, current, K_A, POINT, "a")
+        self.assertEqual([r["from"] for r in once["nodes"]["a"]["rotations"]], [r["from"] for r in twice["nodes"]["a"]["rotations"]])
+        with self.assertRaisesRegex(m.Refused, "the new document's rotations for a are not the current ones"):
+            ap.retire(once, current, K_A, POINT, "a")
+
+    def test_no_approval_two_retires_ahead(self):
+        """d9: approve refuses G > G_pub + 1. Node a's root-published G is G (its retire from G - 1 is recorded), yet the only
+        live approvals are at G + 1: a third key would land at G + 2, two ahead of what the root published."""
+        g = GENERATIONS["a"]
+        ahead = ap.fill(document(), SYSTEM_PUB, POINT, K_A, {"a": g + 1, "b": GENERATIONS["b"], "c": GENERATIONS["c"]})
+        ahead["nodes"]["a"]["rotations"] = [{"from": g - 1, "signature": ap.increment_document(K_A, POINT, "a", g - 1)["signature"]}]
+        measurements.validate(ahead)
+        self.assertEqual(ap.published_generation(ahead, "a"), g)
+        with self.assertRaisesRegex(m.Refused, "a would be approved at generation %d, more than one above its published %d: retire first"
+                                    % (g + 2, g)):
+            ap.rotation_generations(ahead, OTHER_PUB, POINT)
 
     def test_flags_exactly_and_paths_absolute(self):
         """regalia-kms-51: no abbreviation of a flag (offline-keys checks the exact ones), and every path absolute (it runs
@@ -209,10 +266,10 @@ class Signer(unittest.TestCase):
         chain = self.path("chain.json", self.chain(document()))
         err = io.StringIO()
         with unittest.mock.patch("sys.stderr", err), self.assertRaises(SystemExit):
-            ap.main(["approve-increment", "--root-key", ROOT_PUB, "--chain", chain, "--node-id", "a", "--from", "5", "--key-fd", "9",
-                     "--key-f", "0", "--offline-session", "ab" * 16, "--state-dir", self.state(ROOT_PUB)], out=io.StringIO())
+            ap.main(["approve-increment", "--root-key", ROOT_PUB, "--chain", chain, "--current", chain, "--document", chain, "--node-id", "a",
+                     "--key-fd", "9", "--key-f", "0", "--offline-session", "ab" * 16, "--state-dir", self.state(ROOT_PUB)], out=io.StringIO())
         self.assertIn("unrecognized arguments: --key-f", err.getvalue())
-        code, out, err = self.run_cli("approve-increment", "--root-key", ROOT_PUB, "--chain", os.path.relpath(chain), "--node-id", "a", "--from", "5")
+        code, out, err = self.increment_cli(relative=True)
         self.assertEqual((code, out), (2, ""))
         self.assertIn("--chain %s is not an absolute path" % os.path.relpath(chain), err)
 
@@ -223,7 +280,7 @@ class Signer(unittest.TestCase):
         chain = self.path("chain.json", self.chain(document()))
         err, out = io.StringIO(), io.StringIO()
         with unittest.mock.patch("sys.stderr", err):
-            code = ap.main(["approve-increment", "--root-key", ROOT_PUB, "--chain", chain, "--node-id", "a", "--from", "5", "--key-fd",
+            code = ap.main(["approve-increment", "--root-key", ROOT_PUB, "--chain", chain, "--current", chain, "--document", chain, "--node-id", "a", "--key-fd",
                             str(key_fd(K_A)), "--offline-session", "ab" * 16, "--state-dir", self.state("cd" * 32)], out=out)
         self.assertEqual((code, out.getvalue()), (2, ""))
         self.assertIn("is another root's signing state: nothing is signed", err.getvalue())

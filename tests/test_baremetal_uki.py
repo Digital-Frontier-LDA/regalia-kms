@@ -31,6 +31,7 @@ VECTOR = {True: {"initrd": "7b5976f87e32c892f7cae4109e05bd6208f55c2fa5b080ebbbb4
 # a "pol" that systemd-measure 257.13 wrote for this PCR 11 value
 POLICY = ("132ab7e17a991bf12b108008052ca9c0c876f8a8c542f2d22eac1590a72105f4", "755f8cc34513bda797481e72388e539a2e83746b27d8186844fcf544fe9d8c0d")
 TRAILER = b"\0SECURE-BOOT-SIGNATURE"
+ROOTFS = {"schema": "regalia.rootfs-build/v1", "rootfs_sha256": "6e" * 32}   # build-rootfs.sh's record, the fields set reads
 
 
 def pe(sections, virtual=None, addresses=None, size_of_image=None):
@@ -835,27 +836,34 @@ class Records(Case):
         record = self.sign(record=unsigned)
         pcrs = {"0": "11" * 32, "7": "77" * 32}
         creds = {"regalia.node-id.cred": b"node-a\n"}
-        entry = uki.measurement_set(record, "image-7", "2019102300163636", pcrs, creds)
+        entry = uki.measurement_set(record, "image-7", "2019102300163636", pcrs, creds, ROOTFS)
         # the keys the image is signed with, from its signed record: what enrol may seal to (#190, #265)
         signing = {"initrd": record["signed"]["pcr_signatures"]["initrd"]["pkfp"], "system": record["signed"]["pcr_signatures"]["system"]["pkfp"],
                    "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]}
         self.assertEqual(entry, {"label": "image-7", "tpm_firmware_version": "2019102300163636", "pcrs": dict(pcrs, **{"12": espcreds.pcr12(creds)}),
                                  "phases": {"initrd": {"11": record["pcr11"]["initrd"]}, "system": {"11": record["pcr11"]["system"]}},
-                                 "signing": signing})
-        self.refused("the record is of an unsigned image", uki.measurement_set, unsigned, "image-7", "2019102300163636", pcrs, creds)
+                                 "signing": signing, "rootfs_sha256": "6e" * 32})
+        # the root it is installed with, from build-rootfs.sh's record: by its form, the record being unsigned (#61)
+        for why, rootfs in (("is not a regalia.rootfs-build/v1 record", dict(ROOTFS, schema="regalia.rootfs-build/v2")),
+                            ("is not a regalia.rootfs-build/v1 record", None),
+                            ("rootfs_sha256 must be 64 lowercase hex", dict(ROOTFS, rootfs_sha256="6E" * 32)),
+                            ("rootfs_sha256 must be 64 lowercase hex", {"schema": "regalia.rootfs-build/v1"})):
+            with self.subTest(rootfs=rootfs):
+                self.refused(why, uki.measurement_set, record, "image-7", "2019102300163636", pcrs, creds, rootfs)
+        self.refused("the record is of an unsigned image", uki.measurement_set, unsigned, "image-7", "2019102300163636", pcrs, creds, ROOTFS)
         document = {"schema": measurements.SCHEMA, "name": "v1", "nodes": {n: {"accepted": [entry]} for n in "abc"}}
         self.assertTrue(measurements.version(document).startswith("m1-"))               # it is a set the document accepts
         self.assertEqual(attest.selection(entry), [0, 7, 11, 12])
-        self.refused("must not give PCR 11: it comes from the image's record, per phase", uki.measurement_set, record, "x", "0" * 16, dict(pcrs, **{"11": "00" * 32}), creds)
-        self.refused("tpm_firmware_version must be 16 hex", uki.measurement_set, record, "x", "nope", pcrs, creds)
-        self.refused("short plain name", uki.measurement_set, record, "an image", "0" * 16, pcrs, creds)
-        self.refused("the node's credential files are required", uki.measurement_set, record, "x", "0" * 16, pcrs, None)
+        self.refused("must not give PCR 11: it comes from the image's record, per phase", uki.measurement_set, record, "x", "0" * 16, dict(pcrs, **{"11": "00" * 32}), creds, ROOTFS)
+        self.refused("tpm_firmware_version must be 16 hex", uki.measurement_set, record, "x", "nope", pcrs, creds, ROOTFS)
+        self.refused("short plain name", uki.measurement_set, record, "an image", "0" * 16, pcrs, creds, ROOTFS)
+        self.refused("the node's credential files are required", uki.measurement_set, record, "x", "0" * 16, pcrs, None, ROOTFS)
 
     def test_pcr_12_comes_from_the_nodes_credential_files_and_never_by_hand(self):
         record = self.sign()
         pcrs = {"7": "77" * 32}
         files = {"regalia.node-id.cred": b"node-a\n", "regalia.boot-mesh.cred": b"mesh", "regalia.unlock-local.cred": b"sealed"}
-        entry = uki.measurement_set(record, "image-7", "0" * 16, pcrs, files)
+        entry = uki.measurement_set(record, "image-7", "0" * 16, pcrs, files, ROOTFS)
         self.assertEqual(entry["pcrs"], {"7": "77" * 32, "12": espcreds.pcr12(files)})
         self.assertNotIn("12", entry["phases"]["initrd"])                         # one value for both phases, beside PCR 7
         self.assertEqual(attest.selection(entry), [7, 11, 12])
@@ -864,10 +872,10 @@ class Records(Case):
                              ("one changed", dict(files, **{"regalia.boot-mesh.cred": b"mesh2"})),
                              ("one missing", {k: v for k, v in files.items() if k != "regalia.unlock-local.cred"})):
             with self.subTest(label):
-                self.assertNotEqual(uki.measurement_set(record, "image-7", "0" * 16, pcrs, other)["pcrs"]["12"], entry["pcrs"]["12"])
+                self.assertNotEqual(uki.measurement_set(record, "image-7", "0" * 16, pcrs, other, ROOTFS)["pcrs"]["12"], entry["pcrs"]["12"])
         self.refused("must not give PCR 12: it is computed from the node's credential files", uki.measurement_set, record, "x", "0" * 16,
-                     dict(pcrs, **{"12": "12" * 32}), files)
-        self.refused("holds no credential the stub measures", uki.measurement_set, record, "x", "0" * 16, pcrs, {".hidden.cred": b"x", "notes.txt": b"y"})
+                     dict(pcrs, **{"12": "12" * 32}), files, ROOTFS)
+        self.refused("holds no credential the stub measures", uki.measurement_set, record, "x", "0" * 16, pcrs, {".hidden.cred": b"x", "notes.txt": b"y"}, ROOTFS)
         # the directory as the stub reads it: files only, no link, bounded
         esp = os.path.join(self.d, "esp"); d = os.path.join(esp, "loader", "credentials"); os.makedirs(d)
         os.makedirs(os.path.join(esp, "EFI", "Linux"))
@@ -929,17 +937,25 @@ class Records(Case):
         # through the command, with the record of what it was computed from
         with open(os.path.join(self.d, "host-pcrs.json"), "w") as f:
             json.dump(pcrs, f)
+        rootfs = os.path.join(self.d, "rootfs-build.json")
+        with open(rootfs, "w") as f:
+            json.dump(ROOTFS, f)
         rec = os.path.join(self.out, "image-7.signed.json")
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(uki.main(["set", "--record", rec, "--label", "image-7", "--tpm-firmware-version", "0" * 16, "--pcrs",
-                                       os.path.join(self.d, "host-pcrs.json"), "--esp", esp, "--credentials-record", os.path.join(self.d, "creds.json")]), 0)
+                                       os.path.join(self.d, "host-pcrs.json"), "--esp", esp, "--credentials-record", os.path.join(self.d, "creds.json"),
+                                       "--rootfs-record", rootfs]), 0)
         self.assertEqual(json.loads(out.getvalue())["pcrs"]["12"], espcreds.pcr12(files))
+        self.assertEqual(json.loads(out.getvalue())["rootfs_sha256"], "6e" * 32)
         with open(os.path.join(self.d, "creds.json")) as f:
             self.assertEqual(json.load(f), espcreds.record(files))
-        # --esp is required: a set without PCR 12 is not made at all
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as usage:
-            uki.main(["set", "--record", rec, "--label", "image-7", "--tpm-firmware-version", "0" * 16, "--pcrs", os.path.join(self.d, "host-pcrs.json")])
-        self.assertEqual(usage.exception.code, 2)
+        # --esp and --rootfs-record are required: a set without PCR 12, or naming no root, is not made at all
+        for missing in ("--esp", "--rootfs-record"):
+            with self.subTest(missing=missing), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as usage:
+                argv = ["set", "--record", rec, "--label", "image-7", "--tpm-firmware-version", "0" * 16, "--pcrs", os.path.join(self.d, "host-pcrs.json"),
+                        "--esp", esp, "--rootfs-record", rootfs]
+                uki.main(argv[:argv.index(missing)] + argv[argv.index(missing) + 2:])
+            self.assertEqual(usage.exception.code, 2)
 
     def test_a_record_is_checked_when_it_is_read(self):
         record = self.build()

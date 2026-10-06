@@ -11,7 +11,8 @@ SIGNED MEMBERSHIP MANIFEST COMMITS TO, with one or two sets per node.
                 "nodes": {"<node_id>": {"accepted": [
                     {"label": "<image name>", "tpm_firmware_version": "<16 hex>", "pcrs": {"0": "<64 hex>", ...},
                      "phases": {"initrd": {"11": "<64 hex>"}, "system": {"11": "<64 hex>"}},     # optional
-                     "signing": {"initrd": "<pkfp>", "system": "<pkfp>", "secure_boot_cert": "<sha256>"}},  # optional
+                     "signing": {"initrd": "<pkfp>", "system": "<pkfp>", "secure_boot_cert": "<sha256>"},  # optional
+                     "rootfs_sha256": "<64 hex>"},                       # with "signing" only, and then required
                     ...]}}}                     # one set, or two while an update rolls through
 
 SIGNING KEYS. A signed image's set (`uki.py set`, from its SIGNED record) names the keys the image is signed with:
@@ -19,6 +20,13 @@ the two PCR-signing keys by fingerprint and the Secure Boot certificate by SHA-2
 never reads them. They are for whoever SEALS to a PCR-signing key (enrol, #190): PCR 11 does not cover an image's
 .pcrsig, so a re-signed copy of an approved image measures the same; taking only a key the root-approved set
 names is what keeps a node's secrets off a key nobody approved (#265).
+
+ROOT FILESYSTEM. A signed image's set also names the rootfs.tar it is installed with (`rootfs_sha256`, from
+build-rootfs.sh's record, #61): an image is its UKI and its root, approved together in one root-committed
+document, and the installer is to refuse a root no approved set names. No PCR covers the root, so a peer cannot
+tell two roots apart by a quote: two sets that differ only there are "the same measurements" to attest, and a
+root-only update needs a rebuilt UKI under a new label. Nothing checks the root once installed (LUKS keeps it
+confidential, not unaltered); dm-verity on /usr, its root hash on the UKI's command line, is #61's next design.
 
 PER BOOT PHASE. A host that boots a unified kernel image has two PCR 11 values for one image: in the
 initrd, where it asks a peer for its disk, and once booted, where it asks for a lease (attest.py, "PCR
@@ -130,13 +138,25 @@ def validate(document):
     for node_id, entry in nodes.items():
         require(isinstance(node_id, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node_id) is not None,
                 "nodes: %r is not a node ID" % (node_id,))
-        membership.exact(entry, ("accepted",), "nodes.%s" % node_id)
+        membership.exact(entry, ("accepted",) + (("rotations",) if isinstance(entry, dict) and "rotations" in entry else ()),
+                         "nodes.%s" % node_id)
         try:
             attest.validate_sets(entry["accepted"], "nodes.%s" % node_id)
+            if "rotations" in entry:                      # #361 C4: this node's retires, each K_A's single-use increment
+                attest.validate_rotations(entry["rotations"], "nodes.%s.rotations" % node_id)
         except attest.Refused as refusal:
             raise Refused(str(refusal))
         out[node_id] = entry["accepted"]
     return out
+
+
+def rotations(document, node_id):
+    """#361 C4: `node_id`'s retires in `document` (validated by form), [] when it has been through none: what its
+    catch-up applies (anchorpolicy.catch_up) and what a peer judges its rotation counter against (check_rotation)."""
+    validate(document)
+    entry = document["nodes"].get(node_id)
+    require(entry is not None, "the measurements have no entry for %r" % (node_id,))
+    return list(entry.get("rotations", []))
 
 
 def version(document):
@@ -253,10 +273,11 @@ def _key(entry):
     the initrd key is not measured) is ANOTHER set, never "unchanged": under the old label it is a changed image,
     and under a new one it can neither sit beside the old set (attest refuses two sets of the same measurements)
     nor replace it in an emergency (the dropped measurements would still be accepted). A key rotation therefore
-    comes with a rebuilt image, a new PCR 11 (#267, 51's read)."""
+    comes with a rebuilt image, a new PCR 11 (#267, 51's read). So is the root filesystem it is installed with
+    (#61): the same UKI with another root is another set, never a rename."""
     return (entry["tpm_firmware_version"], tuple(sorted(entry["pcrs"].items())),
             tuple((phase, tuple(sorted(pcrs.items()))) for phase, pcrs in sorted(entry.get("phases", {}).items())),
-            tuple(sorted(entry.get("signing", {}).items())))
+            tuple(sorted(entry.get("signing", {}).items())), entry.get("rootfs_sha256"))
 
 
 def _states(entry):

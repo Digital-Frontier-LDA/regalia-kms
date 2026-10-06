@@ -67,6 +67,7 @@ import argparse
 import binascii
 import contextlib
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -290,6 +291,67 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
     return epoch, hashlib.sha256(chain).hexdigest(), rewritten, unrenderable
 
 
+ESP_SETTLE_RUNS = 5          # runs of esp_advance at most, while the published chain keeps changing under it
+
+
+def esp_advance_settled(node, esp, lock_path=ESP_LOCK, advance=None):
+    """esp_advance, run again while the published chain changed DURING the run, at most ESP_SETTLE_RUNS times.
+
+    regalia-esp-advance.path's PathChanged= is edge-triggered: a publication that lands while a run is already active
+    is folded into that run by systemd and starts nothing afterwards. If that run had read the chain before it changed,
+    the ESP and the anchor would stay one epoch behind until the NEXT publication (regalia-kms-24 and 3e on main's
+    three-node-recovery; on a host, the unit's boot run beside sync's first publication). So the published file is read
+    before and after each run; a run that saw what is published now is the last one. Still changing after the bound (a
+    sync publishing faster than a run, not something sync does), it is refused, and the unit's Restart= tries again.
+    That cannot strand a node (24): every run that completes has written the ESP and moved the anchor to the chain it
+    read, so each run makes progress and the anchor is never more than one publication behind; and the refusal is
+    what guarantees ANOTHER run (Restart=on-failure, 15 s later, re-reading the newest), where a success after the
+    bound could leave a lost trigger behind it."""
+    advance = advance or esp_advance
+    path = node.path(PUBLISHED)
+    # the RUN holds `lock_path` (node.ESP_LOCK): the same file reanchor holds for its whole re-anchor (#391), so the unit,
+    # a hand-run esp-advance and a re-anchor all serialize on one lock (regalia-kms-24). The anchor's own HighWater lock
+    # inside each run is another file beside it: HighWater flocks its lock_path itself, and a second open of the held
+    # file in this process would block on itself (regalia-kms-95)
+    with _one_run(lock_path):
+        for _ in range(ESP_SETTLE_RUNS):
+            before = _read_regular(path, membership.MAX_CHAIN_BYTES + 1)
+            result = advance(node, esp, lock_path=lock_path + ".anchor")
+            if _read_regular(path, membership.MAX_CHAIN_BYTES + 1) == before:
+                return result
+    raise Refused("the published membership chain changed during each of %d runs: not settled; the unit tries again"
+                  % ESP_SETTLE_RUNS)
+
+
+@contextlib.contextmanager
+def _one_run(path):
+    """One ESP advance at a time, across the WHOLE run (every rerun: the ESP's write and the anchor's move), on
+    node.ESP_LOCK, which reanchor also holds for its whole re-anchor (#391). Without it a hand-run `esp-advance` beside the
+    unit could write an OLDER chain to the ESP after the other run anchored a newer one: an ESP below its anchor, a
+    ROLLBACK at the next boot (regalia-kms-95 on #471). Its directory is the unit's RuntimeDirectory; a hand-run while the
+    unit is stopped makes it (root's, 0700) rather than run unlocked. Opened as reanchor opens it: never through a link, a
+    regular file with one name. Held by another run or a re-anchor, it is a refusal, not a wait: the unit's Restart=
+    tries again, and an operator is told."""
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as failure:
+        if failure.errno == errno.ELOOP:
+            raise Refused("the ESP advance's lock %s is a symbolic link: it is not taken through one" % path) from None
+        raise
+    try:
+        held = os.fstat(fd)
+        require(stat.S_ISREG(held.st_mode) and held.st_nlink == 1, "the ESP advance's lock %s is not a regular file with one name" % path)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refused("another regalia-esp-advance run, or a re-anchor, holds %s: one at a time (try again when it has "
+                          "finished)" % path) from None
+        yield
+    finally:
+        os.close(fd)
+
+
 def esp_metrics(node, ok, renderable=None, publish=None):
     """regalia-esp-advance's own metrics (#66 B3), written at every run, success or not, by root: the anchor as IT reads
     it, so a sync that lies in membership.prom does not silence the alerts on these (regalia-kms-48), and whether the
@@ -462,7 +524,95 @@ def _image(cfg, pem_path=None, manifest=None):
     if manifest is None:
         manifest = _chain_tip(cfg)
     document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
+    switched = _switched(cfg, manifest, document, pem)
+    if switched is not None:
+        pem = switched["pem"]
     return measurements.approved_image_policy(manifest, document, cfg["node_id"], pem), pem
+
+
+def _booted_set(document, node_id, pem):
+    fingerprint = signkey.pcr_key_fingerprint(pem)
+    sets = [e for e in document["nodes"].get(node_id, {}).get("accepted", []) if e.get("signing", {}).get("system") == fingerprint]
+    require(sets, "no accepted set of %s is signed by the running image's key (%s...)" % (node_id, fingerprint[:16]))
+    return sets[0]
+
+
+def _resigned(cfg, document, pem, k_a, pcr11=None):
+    """#361 C4b (regalia-kms-05's conditions on #361): the new system-phase key's re-sign of the image this node is booted
+    on (its set's signing.resigned), checked here before it is used: refused by name unless
+      * the entry names the key of one of this node's accepted sets (05's addition), and its PEM is that key;
+      * its signature verifies under that key over its policy digest;
+      * the digest is PolicyPCR(11 = the booted set's system-phase value), and THIS TPM's PCR 11, read now, is that value;
+      * the new key's set carries K_A's approvals of the new key for THIS node, under the manifest's K_A (`k_a`), checked
+        (anchorpolicy.check_approvals, regalia-kms-05 on #517): their generation is returned, and the catch-up requires it
+        to be the published one, or R would move onto approvals the TPM refuses.
+    None when the booted set carries no re-sign. Returns {"pem", "entry", "generation"}."""
+    import base64
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from deploy.baremetal import uki
+    node_id = cfg["node_id"]
+    booted = _booted_set(document, node_id, pem)
+    resigned = booted["signing"].get("resigned")
+    if resigned is None:
+        return None
+    new = [e for e in document["nodes"][node_id]["accepted"] if e.get("signing", {}).get("system") == resigned["system"]]
+    require(new, "the re-sign of %s's booted image names a key (%s...) no accepted set of %s is signed by" % (node_id, resigned["system"][:16], node_id))
+    new_pem = resigned["pem"].encode()
+    require(signkey.pcr_key_fingerprint(new_pem) == resigned["system"], "the re-sign's public key is not the key it names (%s...)"
+            % resigned["system"][:16])
+    try:
+        serialization.load_pem_public_key(new_pem).verify(base64.b64decode(resigned["sig"]), bytes.fromhex(resigned["pol"]),
+                                                          padding.PKCS1v15(), hashes.SHA256())
+    except (InvalidSignature, ValueError):
+        raise Refused("the re-sign of %s's booted image does not verify under the key it names" % node_id) from None
+    want = booted["phases"]["system"]["11"]
+    require(resigned["pol"] == uki.policy_digest(want), "the re-sign of %s's booted image is over another policy than PolicyPCR(11 = %s...)"
+            % (node_id, want[:16]))
+    measured = pcr11 if pcr11 is not None else _pcr11(cfg)
+    require(measured == want, "this TPM's PCR 11 is %s..., not the %s... the re-sign is for: this boot is not that image's"
+            % (measured[:16], want[:16]))
+    require("anchor_approvals" in new[0]["signing"], "the new key's set for %s carries no K_A approvals" % node_id)
+    generation = anchorpolicy.check_approvals(new[0]["signing"]["anchor_approvals"], new_pem, k_a, node_id)
+    return {"pem": new_pem, "generation": generation,
+            "entry": {"pcrs": [11], "pkfp": resigned["system"], "pol": resigned["pol"], "sig": resigned["sig"]}}
+
+
+def _pcr11(cfg):
+    """PCR 11 (SHA-256 bank) as THIS node's TPM reads it now, 64 hex."""
+    with tempfile.TemporaryDirectory(prefix="regalia-pcr11-") as d:
+        done = _tpm_run(cfg)(["tpm2_pcrread", "sha256:11", "-o", os.path.join(d, "pcr11")], capture_output=True)
+        require(done.returncode == 0, "cannot read PCR 11: %s" % (done.stderr or b"").decode("utf-8", "replace").strip()[-200:])
+        with open(os.path.join(d, "pcr11"), "rb") as f:
+            return f.read(64).hex()
+
+
+def _switched(cfg, manifest, document, pem):
+    """After its bump (R above the booted set's own generation), a node booted on a re-signed image writes under the new
+    key: its PEM, and the re-signed entry beside the boot's PCR signatures (signkey.RESIGNED_PATH). None otherwise."""
+    if manifest.get("schema") != membership.SCHEMA_V4 or "anchor_policy_key" not in manifest:
+        return None
+    fingerprint = signkey.pcr_key_fingerprint(pem)
+    booted = [e for e in document["nodes"].get(cfg["node_id"], {}).get("accepted", []) if e.get("signing", {}).get("system") == fingerprint]
+    if not booted or "resigned" not in booted[0]["signing"] or "anchor_approvals" not in booted[0]["signing"]:
+        return None                                  # nothing re-signed (approved_image_policy judges the key itself)
+    booted = booted[0]
+    if anchorpolicy.read_rotation(anchorpolicy.ROTATION_INDEX, _tpm_run(cfg)) <= booted["signing"]["anchor_approvals"]["generation"]:
+        return None
+    resigned = _resigned(cfg, document, pem, manifest["anchor_policy_key"]["key"])
+    _keep_resigned(resigned["entry"])
+    return resigned
+
+
+def _keep_resigned(entry):
+    """The re-signed entry where signkey.boot_signatures merges it (tmpfs, this boot only)."""
+    os.makedirs(os.path.dirname(signkey.RESIGNED_PATH), mode=0o755, exist_ok=True)
+    data = json.dumps({"sha256": [entry]}, sort_keys=True).encode()
+    tmp = signkey.RESIGNED_PATH + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, signkey.RESIGNED_PATH)
 
 
 def anchor_approval(cfg, cls, pem_path=None, manifest=None):
@@ -473,7 +623,43 @@ def anchor_approval(cfg, cls, pem_path=None, manifest=None):
     if manifest is None:
         manifest = _chain_tip(cfg)
     document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
-    return measurements.anchor_approval(manifest, document, cfg["node_id"], pem, cls)
+    approval = measurements.anchor_approval(manifest, document, cfg["node_id"], pem, cls)
+    # #361 C4: every write and signature under K_A takes its approval here, so here a node behind on its rotation
+    # counter writes and signs nothing until it has caught up (an approval the retire revoked may still open its objects)
+    anchorpolicy.require_current(anchorpolicy.ROTATION_INDEX, cfg["node_id"], measurements.rotations(document, cfg["node_id"]), _tpm_run(cfg))
+    return approval
+
+
+def _tpm_run(cfg):
+    """subprocess.run for tpm2-tools against this node's TPM (its node.json tcti, else the default)."""
+    env = dict(os.environ, TPM2TOOLS_TCTI=cfg["tcti"]) if cfg.get("tcti") else None
+    return lambda argv, **kw: subprocess.run(argv, env=env, **kw)
+
+
+def catch_up_rotation(cfg, manifest=None, pem_path=None):
+    """#361 C4: this node's rotation counter brought up to the generation the root published for it (the measurements
+    document the tip commits to: its nodes.<id>.rotations), by K_A's single-use increments, in order. Refused, with R
+    as it was, when an entry is missing or when the image this node is booted on carries approvals below the published
+    generation and no checked re-sign (C4b): nothing is bumped, and the node is write-frozen under K_A until it boots an
+    image approved at the published generation (`update apply` onto it; regalia-kms-62 on #517). Returns R."""
+    _, pem = _image(cfg, pem_path, manifest)
+    if manifest is None:
+        manifest = _chain_tip(cfg)
+    document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
+    rotations = measurements.rotations(document, cfg["node_id"])
+    booted = measurements.anchor_approval(manifest, document, cfg["node_id"], pem, "anchor")["generation"]
+    target = anchorpolicy.published(rotations)
+    if target is not None and booted < target:
+        # #361 C4b: the booted image re-signed by the new key, its checks passed, moves this node to the new key's
+        # approvals on the boot it is in (written where the writes find it BEFORE the bump, so none is stranded)
+        resigned = _resigned(cfg, document, pem, manifest["anchor_policy_key"]["key"])
+        if resigned is not None:
+            require(resigned["generation"] == target, "the re-sign moves %s to approvals at generation %d, not the published %d: "
+                    "nothing is bumped" % (cfg["node_id"], resigned["generation"], target))
+            _keep_resigned(resigned["entry"])
+            booted = resigned["generation"]
+    return anchorpolicy.catch_up(anchorpolicy.ROTATION_INDEX, manifest["anchor_policy_key"]["key"], cfg["node_id"], rotations,
+                                 booted, _tpm_run(cfg))
 
 
 def _chain_tip(cfg):
@@ -554,7 +740,7 @@ class Node:
         """The membership epoch anchor: membership.HighWater on its own index (and the pair and slots after it),
         with this node's approved-image write policy (image_policy) for an index written by policy (#242), judged by the
         schema of the chain tip this node holds (_tip_schema, #242 B3).
-        `lock_path`: the writer's lock. The run-time writer is esp_advance, with its own (ESP_LOCK); the default, in
+        `lock_path`: the writer's lock. The run-time writer is esp_advance: its run holds ESP_LOCK, and this lock is ESP_LOCK + ".anchor"; the default, in
         the state directory, is for the hand tools that build an anchoring store (enrolment). sync only reads.
         `schema`: the schema of the chain this anchor is judged by, for a caller holding another chain than the node's
         (esp_advance: the published one it anchors); default, the chain tip this node holds."""
@@ -744,7 +930,7 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
 
     def renew(request):
         manifest = node.manifest()
-        sources = node.sources(manifest)
+        sources = node.sources(manifest, timeout=admission.RENEW_TIMEOUT)    # a silent peer costs seconds, not a lease
         peers = sorted(sources)
         require(peers, "no peer to ask for a lease")
         order[:] = order[1:] + order[:1] if order and set(order) == set(peers) else peers
@@ -771,6 +957,48 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
                              record=trail)                                                     # #340: serving and not, on its trail
 
 
+class RoundLog:
+    """#470: one journal line per source per pull round, saying what happened: an epoch applied, nothing newer, a DENY
+    with the reason the trail records, or a peer that did not answer. The trail (sync-audit.jsonl) stays the record;
+    this is what an operator reads in `journalctl -u regalia-sync`. Rate-bounded per source: a line when the outcome
+    changes, and the same outcome again at most once every REPEAT_S seconds. Nothing in it the trail does not hold
+    already (source names, epochs, the bounded reason), so no secrets."""
+
+    REPEAT_S = 900
+
+    def __init__(self, clock=time.monotonic, out=None):
+        self.clock = clock
+        self.out = out or (lambda line: print("sync: " + line, file=sys.stderr, flush=True))
+        self.last = {}                          # source -> (outcome key, when it was last said)
+
+    def _say(self, source, key, line):
+        now, prev = self.clock(), self.last.get(source)
+        if prev is not None and prev[0] == key and now - prev[1] < self.REPEAT_S:
+            return
+        try:
+            self.out(line)
+        except OSError:                         # the journal is best-effort: a closed stderr never stops a round
+            return
+        self.last[source] = (key, now)
+
+    def pulled(self, source, held, epoch):
+        if held is None or epoch > held:
+            self._say(source, ("applied", epoch), "applied epoch %d from %s (held %s before)" % (epoch, source, "none" if held is None else held))
+        else:
+            self._say(source, ("nothing", epoch), "nothing newer from %s: epoch %d held" % (source, epoch))
+
+    def refused(self, source, refusal, event):
+        text = convergence._printable(refusal, membership.REASON_LIMIT)
+        if text.startswith("%s did not answer (" % source):            # the error class is the whole key
+            self._say(source, ("silent", text), "peer " + text)
+            return
+        kind, reason = (event["event"], event["reason"]) if event is not None else ("pull", text)
+        # printable again, though audited() made them so: a sink event written raw later must not reach the journal
+        kind, reason = convergence._printable(kind, 64), convergence._printable(reason, membership.REASON_LIMIT)
+        # keyed with digit runs collapsed: a reason that carries a count, a time or a sequence is the same outcome
+        self._say(source, ("deny", kind, re.sub(r"[0-9]+", "#", reason)), "DENY %s from %s: %s" % (kind, source, reason))
+
+
 class Sync:
     """The `sync` process: the two listeners, the pull loop and the heartbeat watch, on one store."""
 
@@ -782,6 +1010,7 @@ class Sync:
         self.signer = lease.TpmSigner(node.tcti, node.run)
         self._beat_signer = None        # beat.Signer, made at the first heartbeat signed (beat_signer())
         self.published = None
+        self.rounds = RoundLog()                # #470: each pull round's outcome, in the journal
         # the unlock listener's refusals, by cause (#317), in regalia-sync's metrics directory
         self.refusals = metrics.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", metrics.UNLOCK_CAUSES)
 
@@ -861,11 +1090,25 @@ class Sync:
         chain is published after EACH source, not after all of them: a commit moves the TPM anchor, and
         the root services refuse the published chain until it catches up (Node.manifest)."""
         sources = self.node.sources(self.manifest())
-        client = sync.Client(self.node.node_id, self.store, self.freshness, sources, self.trail, documents=self.node.documents())
+        seen = []
+
+        def sink(event):
+            self.trail(event)                   # the trail first: it is the record, and a sink that fails still stops the round
+            seen.append(event)
+        client = sync.Client(self.node.node_id, self.store, self.freshness, sources, sink, documents=self.node.documents())
         changed = False
         for name in sorted(sources):
-            with contextlib.suppress(Refused):
-                client.pull(name)
+            del seen[:]
+            try:
+                now_at, _ = client.pull(name)
+            except Refused as refused:
+                denied = [e for e in seen if e.get("outcome") == "DENY"]
+                self.rounds.refused(name, refused, denied[-1] if denied else None)
+            else:
+                # the epoch held when this source's pull began: its first sync-apply event was filed under it (no
+                # second store load, and no TPM read, per round: 3e's read)
+                applies = [e["epoch"] for e in seen if e.get("event") == "sync-apply"]
+                self.rounds.pulled(name, applies[0] if applies and applies[0] else None, now_at["epoch"])
             changed = self.publish() or changed
         return changed
 
@@ -891,8 +1134,23 @@ class Sync:
         unable = None                           # the last refusal the proposer could not even start under
         self.refusals.flush()                   # its zeros from the start, then every round (refusals only count)
         try:
+            behind = None                       # the last refusal the rotation catch-up met (#361 C4), written once
             while not stop():
                 self.pull_round()
+                # #361 C4: after each round, this node's rotation counter is brought to the generation the root published,
+                # FIRST, before it proposes or signs: until it has, every write and signature under K_A is refused
+                try:
+                    if self.manifest()["schema"] == membership.SCHEMA_V4 and "anchor_policy_key" in self.manifest():
+                        before = anchorpolicy.read_rotation(anchorpolicy.ROTATION_INDEX, _tpm_run(self.node.cfg))
+                        after = catch_up_rotation(self.node.cfg)
+                        if after != before:
+                            self.trail({"event": "rotation-catch-up", "outcome": "ALLOW", "from": before, "to": after})
+                        behind = None
+                except (Refused, OSError) as refused:
+                    if str(refused) != behind:
+                        behind = str(refused)
+                        with contextlib.suppress(Exception):
+                            self.trail({"event": "rotation-catch-up", "outcome": "DENY", "reason": behind[:240]})
                 # #199: under v4 the nodes sign the heartbeats; this node proposes when it is its turn (beat.Proposer).
                 # A refusal before any proposal (no authenticated time, not a UKI boot: no PCR key to sign under) is
                 # written once per cause, so a node that can never sign is not silent (regalia-kms-1e's read)
@@ -975,7 +1233,7 @@ def main(argv=None):
             print("wg-svc and %s applied under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
         elif args.service == "esp-advance":
             try:
-                epoch, sha, rewritten, unrenderable = esp_advance(node, args.esp, lock_path=args.esp_lock)
+                epoch, sha, rewritten, unrenderable = esp_advance_settled(node, args.esp, lock_path=args.esp_lock)
             except BaseException:
                 esp_metrics(node, ok=False)
                 raise

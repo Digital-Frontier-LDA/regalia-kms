@@ -173,7 +173,8 @@ class Enrolment(ea.Anchor):
         sb.boot(image, env=dict(os.environ, TPM2TOOLS_TCTI=self.tcti))
         signed = {"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32},
                   "phases": {"initrd": {"11": "a1" * 32}, "system": {"11": "b1" * 32}},
-                  "signing": {"initrd": "11" * 32, "system": signkey.pcr_key_fingerprint(self.pem), "secure_boot_cert": "22" * 32}}
+                  "signing": {"initrd": "11" * 32, "system": signkey.pcr_key_fingerprint(self.pem), "secure_boot_cert": "22" * 32},
+                  "rootfs_sha256": "6e" * 32}
         self.document = {"schema": measurements.SCHEMA, "name": "signed-images", "nodes": {n: {"accepted": [signed]} for n in "abc"}}
         enrol.store_documents(self.cfg["state_dir"], self.document, chown=False)
         for name, value in (("PCR_PUBLIC_KEY_PATH", public), ("PCR_SIGNATURE_PATHS", (self.d + "/tpm2-pcr-signature.json",))):

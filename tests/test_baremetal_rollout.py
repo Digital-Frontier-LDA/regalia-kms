@@ -263,7 +263,8 @@ class Transition(Case):
         """#267: a set names the keys its image is signed with. The same PCRs re-signed with another initrd key (it is
         not measured) are never "unchanged": refused under its old label, and under a new one."""
         signed = lambda label, initrd: dict(uki(label, "a1", "a2"), signing={"initrd": initrd * 32, "system": "5b" * 32,   # noqa: E731
-                                                                              "secure_boot_cert": "5c" * 32})
+                                                                              "secure_boot_cert": "5c" * 32},
+                                                    rootfs_sha256="6e" * 32)
         before = document("v1", **{n: [signed("image-1", "1a")] for n in "abc"})
         self.assertEqual(measurements.transition(before, dict(copy.deepcopy(before), name="again")), "unchanged")
         # under its old label: a changed image, refused even in an emergency
@@ -546,7 +547,7 @@ class Reboot(Case):
         return out
 
     def test_the_first_node_reboots_when_both_peers_vouch_for_it(self):
-        self.assertEqual(self.ask("a"), {"target": "image-2", "authorizers": ["b", "c"], "seconds": 300})
+        self.assertEqual(self.ask("a"), {"target": "image-2", "authorizers": ["b", "c"], "seconds": lease.MAX_LIFETIME})
 
     def test_the_second_node_waits_until_it_has_itself_seen_the_first_back_on_next(self):
         self.refused("WAIT: it is not b's turn. a updates first", self.ask, "b")
@@ -607,7 +608,7 @@ class Reboot(Case):
         self.refused("a updates first", self.ask, "c", self.state(a="image-1", b="image-1"))
 
     def test_a_lease_from_before_a_fallback_is_for_another_boot_and_is_refused(self):
-        """a booted NEXT, both peers vouched, and within the five minutes a fell back to CURRENT. Its leases
+        """a booted NEXT, both peers vouched, and within the lease lifetime a fell back to CURRENT. Its leases
         are still valid signatures; b's record still says a is on NEXT, so b would pass. a must not."""
         from_the_other_boot = [self.lease_for("a", peer, session_id=lt.OTHER_SESSION) for peer in ("b", "c")]
         why = self.refused("WAIT: no valid lease from b (its lease is for another boot session of a: that peer has not seen this boot)",
@@ -637,7 +638,7 @@ class Reboot(Case):
     def test_a_peer_that_cannot_vouch_stops_the_reboot(self):
         self.refused("WAIT: no valid lease from c (none presented)", self.ask, "a", leases=[self.lease_for("a", "b")])
         self.refused("no valid lease from b (none presented); c (none presented)", self.ask, "a", leases=[])
-        expired = self.lease_for("a", "c", expires_at=hbt.stamp(self.now - 1), issued_at=hbt.stamp(self.now - 200))
+        expired = self.lease_for("a", "c", expires_at=hbt.stamp(self.now - 1), issued_at=hbt.stamp(self.now - 20))
         self.refused("no valid lease from c (EXPIRED", self.ask, "a", leases=[self.lease_for("a", "b"), expired])
         # a lease the peer gave ANOTHER node says nothing about this one
         self.refused("no valid lease from c (its lease is for b)", self.ask, "a", leases=[self.lease_for("a", "b"), self.lease_for("b", "c")])
@@ -1146,7 +1147,7 @@ class OnSwtpm(unittest.TestCase):
                      self.vouch, "a", "b", booted=False)
         self.assertGreater(self.unlock("a", "b"), 0)                      # ... and that refusal cost it nothing
         # b finishes booting, gets its leases, and now asks for a disk key: a booted system does not get one
-        self.assertGreater(lease.verify(self.vouch("a", "b"), m1, self.now), 280)
+        self.assertGreater(lease.verify(self.vouch("a", "b"), m1, self.now), lease.MAX_LIFETIME - 20)
         self.refused("the node is in the system phase of image-1; this request is accepted only from the initrd phase", self.unlock, "a", "b")
         self.refused("the node is in the system phase of image-1", self.unlock, "c", "b")
         self.assertEqual(self.seen("a", "b"), "image-1")
@@ -1184,9 +1185,9 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual([self.seen_in(peer, "a") for peer in ("b", "c")], ["system", "system"])
         # a is up on NEXT, and asks for a disk key: refused by name, with two sets accepted
         self.refused("the node is in the system phase of image-2; this request is accepted only from the initrd phase", self.unlock, "b", "a")
-        self.assertTrue(all(lease.verify(e, m2, self.now) > 280 for e in held))      # five minutes, less this run's seconds
+        self.assertTrue(all(lease.verify(e, m2, self.now) > lease.MAX_LIFETIME - 20 for e in held))   # a lease lifetime, less this run's seconds
         # a, on NEXT, still vouches for b and c on CURRENT: both sets work during the rollout
-        self.assertTrue(all(lease.verify(self.vouch("a", n), m2, self.now) > 280 for n in ("b", "c")))
+        self.assertTrue(all(lease.verify(self.vouch("a", n), m2, self.now) > lease.MAX_LIFETIME - 20 for n in ("b", "c")))
         why = self.refused("NOT YET: retiring now would lock out b", rollout.retire_ready, m2, v2, {n: self.state(n) for n in self.NODES})
         self.assertIn("c (a last saw it on 'image-1'; b last saw it on 'image-1', not on image-2)", why)
 
@@ -1230,7 +1231,7 @@ class OnSwtpm(unittest.TestCase):
         old_lease_for_c = self.vouch("a", "c")
         self.publish(m3, v3)
         for peer, node in (("b", "a"), ("c", "b"), ("a", "c")):
-            self.assertGreater(lease.verify(self.vouch(peer, node), m3, self.now), 280)   # NEXT keeps working
+            self.assertGreater(lease.verify(self.vouch(peer, node), m3, self.now), lease.MAX_LIFETIME - 20)   # NEXT keeps working
 
         # ---- 15.8: the old image is booted again. Its peers refuse it. ----
         for peer in ("a", "b"):
@@ -1238,7 +1239,7 @@ class OnSwtpm(unittest.TestCase):
             self.refused("the subject's attestation is refused: the quoted PCR digest is not the expected PCR values", self.unlock, peer, "c")
             self.refused("the quoted PCR digest is not the expected PCR values", self.vouch, peer, "c")
             self.assertEqual(self.seen(peer, "c"), "image-2")             # a refusal does not rewrite the record
-        # the lease c held from before the retirement was issued under epoch 2 and is still inside its five minutes:
+        # the lease c held from before the retirement was issued under epoch 2 and is still inside its lease lifetime:
         # the lease bound, as lease.py states it. It is not renewed.
         self.assertGreater(lease.verify(old_lease_for_c, m3, self.now), 0)
         self.offset += lease.MAX_LIFETIME

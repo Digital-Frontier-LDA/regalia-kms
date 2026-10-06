@@ -56,13 +56,17 @@ class CatchUp(unittest.TestCase):
             self.catch_up(self.rotations(self.g + 1), self.g + 2)
         self.assertEqual(self.R(), self.g)
 
-    def test_a_node_not_booted_on_the_new_approvals_keeps_its_old_one(self):
+    def test_a_node_not_booted_on_the_new_approvals_is_not_bumped_and_is_write_frozen(self):
         old = self.approval()
         with self.assertRaisesRegex(m.Refused, r"a is booted on an image whose approvals are at generation %d, below the published "
-                                    r"%d: bumping would leave it no approval to write with" % (self.g, self.g + 1)):
+                                    r"%d: bumping would leave it no approval to write with, so nothing is bumped" % (self.g, self.g + 1)):
             self.catch_up(self.rotations(self.g), self.g)
         self.assertEqual(self.R(), self.g)
-        self.assertEqual(self.increment(old).returncode, 0)  # still writes on the approval it has
+        # R is not moved, so the TPM itself would still take the old approval; the node's software is what freezes it
+        # (require_current, regalia-kms-62 on #517): nothing under K_A while R < G_pub, until it boots the new image
+        self.assertEqual(self.increment(old).returncode, 0)
+        with self.assertRaisesRegex(m.Refused, "a's rotation counter is %d, below the published %d: it bumps first" % (self.g, self.g + 1)):
+            ap.require_current(ap.ROTATION_INDEX, "a", self.rotations(self.g), self.run_)
 
     def test_another_node_s_increment_is_refused_before_the_tpm(self):
         with self.assertRaisesRegex(m.Refused, r"K_A's approval of a's rotation counter from %d does not verify under the K_A it names" % self.g):
@@ -70,9 +74,9 @@ class CatchUp(unittest.TestCase):
         self.assertEqual(self.R(), self.g)
 
     def test_the_rotations_form(self):
-        for name, rotations, reason in (("a gap", [{"from": 1, "signature": "00"}, {"from": 3, "signature": "00"}],
+        for name, rotations, reason in (("a gap", [{"from": 1, "signature": "00" * 64}, {"from": 3, "signature": "00" * 64}],
                                          r"rotations\[1\].from is 3, not 2: a retire moves R by exactly 1"),
-                                        ("an extra field", [{"from": 1, "signature": "00", "at": 1}], r"rotations\[0\] is not \{from, signature\}"),
+                                        ("an extra field", [{"from": 1, "signature": "00" * 64, "at": 1}], r"rotations\[0\] is not \{from, signature\}"),
                                         ("not a list", {}, "rotations is not a list")):
             with self.subTest(name), self.assertRaisesRegex(m.Refused, reason):
                 ap.published(rotations)
@@ -103,7 +107,8 @@ class CatchUp(unittest.TestCase):
         check = lambda rotation=got, qualifying=digest, node_id="a", rotations=(), name=ak_name, ek=ek_name: ap.check_rotation(  # noqa: E731
             rotation, qualifying, ak_public, ek, name, POINT, node_id, list(rotations))
         self.assertEqual(check(), self.g)
-        self.assertEqual(check(rotations=self.rotations(self.g - 1)), self.g)              # G_pub == R: current
+        if self.g > 1:                     # G_pub == R: current (R starts at the TPM's saved count + 1, so from >= 1)
+            self.assertEqual(check(rotations=self.rotations(self.g - 1)), self.g)
         for name, kw, reason in (
                 ("behind", dict(rotations=self.rotations(self.g)),
                  "a's rotation counter is %d, below the published %d: no lease is co-signed until it has caught up" % (self.g, self.g + 1)),
@@ -119,3 +124,44 @@ class CatchUp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Wiring(unittest.TestCase):
+    """#361 C4 in the node (deploy/baremetal/node.py): every write and signature under K_A takes its approval through
+    node.anchor_approval, which refuses while R < G_pub; and catch_up_rotation bumps from the node's own document with the
+    generation of the set it is booted on. The bump and the refusal themselves are CatchUp's, on swtpm."""
+
+    def setUp(self):
+        from unittest import mock
+        from deploy.baremetal import measurements, node
+        self.node, self.mock = node, mock
+        self.cfg = {"node_id": "a", "tcti": "swtpm:path=/x", "state_dir": "/nonexistent"}
+        self.rotations = [{"from": 4, "signature": "00" * 64}]
+        manifest = {"anchor_policy_key": {"key": POINT}}
+        patches = [mock.patch.object(node, "_image", lambda cfg, pem_path, manifest: (None, b"pem")),
+                   mock.patch.object(node, "_chain_tip", lambda cfg: manifest),
+                   mock.patch.object(measurements, "held", lambda directory, manifest: {"held": True}),
+                   mock.patch.object(measurements, "rotations", lambda document, node_id: self.rotations),
+                   mock.patch.object(measurements, "anchor_approval", lambda manifest, document, node_id, pem, cls:
+                                     {"class": cls, "generation": 6})]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_every_approval_under_k_a_requires_a_current_rotation_counter(self):
+        calls = []
+        with self.mock.patch.object(ap, "require_current", lambda index, node_id, rotations, run: calls.append((index, node_id, rotations))):
+            self.assertEqual(self.node.anchor_approval(self.cfg, "heartbeat")["class"], "heartbeat")
+        self.assertEqual(calls, [(ap.ROTATION_INDEX, "a", self.rotations)])
+
+        def behind(index, node_id, rotations, run):
+            raise m.Refused("a's rotation counter is 4, below the published 5: it bumps first")
+        with self.mock.patch.object(ap, "require_current", behind), self.assertRaisesRegex(m.Refused, "below the published 5: it bumps first"):
+            self.node.anchor_approval(self.cfg, "signing")
+
+    def test_the_catch_up_uses_the_node_s_rotations_and_its_booted_generation(self):
+        seen = []
+        with self.mock.patch.object(ap, "catch_up", lambda index, point, node_id, rotations, booted, run: seen.append(
+                (index, point, node_id, rotations, booted)) or 5):
+            self.assertEqual(self.node.catch_up_rotation(self.cfg), 5)
+        self.assertEqual(seen, [(ap.ROTATION_INDEX, POINT, "a", self.rotations, 6)])

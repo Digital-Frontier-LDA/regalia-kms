@@ -8,7 +8,7 @@ record of what it will measure, and signed in a separate step by keys that are o
                                             --secure-boot-key K --secure-boot-cert C [--key-source file|engine:pkcs11]
     python3 -Es -m deploy.baremetal.uki verify  --image IMAGE --record RECORD --initrd-pub P --system-pub P --secure-boot-cert C
     python3 -Es -m deploy.baremetal.uki set     --record RECORD --label LABEL --tpm-firmware-version HEX --pcrs FILE
-                                            --esp ROOT [--credentials-record OUT]
+                                            --esp ROOT --rootfs-record FILE [--credentials-record OUT]
     python3 -Es -m deploy.baremetal.uki initrd-review --initrd INITRD [--initrd-inventory FILE]   (the review build records, #198)
     python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd INITRD [--root /]                (its inventory, to read in a PR)
 
@@ -226,6 +226,45 @@ def policy_digest(pcr11_hex):
     """The TPM2 policy digest of PolicyPCR(SHA-256 bank, PCR 11 = value): what the PCR key signs ("pol")."""
     select = struct.pack(">IHB", 1, 0x000b, 3) + bytes([0x00, 0x08, 0x00])           # one bank, PCR 11
     return hashlib.sha256(bytes(32) + struct.pack(">I", 0x0000017f) + select + hashlib.sha256(bytes.fromhex(pcr11_hex)).digest()).hexdigest()
+
+
+def resign(document, new_pem, private_pem, k_a_point):
+    """#361 C4b, on the laptop at a retire (regalia-kms-05's conditions, agreed on #361): the NEW system-phase key signs
+    PolicyPCR(11) of each image a node may still run that K_new does not sign yet, so the node moves to K_new's approvals
+    on the boot it is in (node.catch_up_rotation) and bumps without rebooting. Per node, K_new's own set must carry K_A's
+    approvals for that node (checked: anchorpolicy.check_approvals), at generation G1; then each other signed set still
+    accepted for the node, without approvals at G1 of its own, gets signing.resigned. A set the document no longer
+    accepts (an image retired at G1) is not there, so it gets nothing. Returns a new document; refused by name."""
+    import copy
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from deploy.baremetal import anchorpolicy, measurements, signkey
+    measurements.validate(document)
+    new_fp = signkey.pcr_key_fingerprint(new_pem)
+    key = serialization.load_pem_private_key(private_pem, password=None)
+    require(signkey.pcr_key_fingerprint(key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+            == new_fp, "the private key on the descriptor is not the new system-phase key's (%s...)" % new_fp[:16])
+    pem_text = serialization.load_pem_public_key(new_pem).public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    out = copy.deepcopy(document)
+    signed = 0
+    for node_id, node in sorted(out["nodes"].items()):
+        mine = [e for e in node["accepted"] if e.get("signing", {}).get("system") == new_fp]
+        if not mine:
+            continue
+        require("anchor_approvals" in mine[0]["signing"], "%s's set signed by the new key carries no K_A approvals: approve it "
+                "(anchorpolicy approve) before re-signing" % node_id)
+        g1 = anchorpolicy.check_approvals(mine[0]["signing"]["anchor_approvals"], new_pem, k_a_point, node_id)
+        for entry in node["accepted"]:
+            signing = entry.get("signing")
+            if signing is None or signing["system"] == new_fp or signing.get("anchor_approvals", {}).get("generation") == g1:
+                continue
+            pol = policy_digest(entry["phases"]["system"]["11"])
+            sig = key.sign(bytes.fromhex(pol), padding.PKCS1v15(), hashes.SHA256())
+            signing["resigned"] = {"system": new_fp, "pem": pem_text, "pol": pol, "sig": base64.b64encode(sig).decode()}
+            signed += 1
+    require(signed, "no image needed re-signing: every accepted set is the new key's or already approved at its generation")
+    measurements.validate(out)
+    return out
 
 
 def _clean_env():
@@ -1679,14 +1718,27 @@ def credential_files(esp):
     return files
 
 
-def measurement_set(record, label, firmware, pcrs, credentials):
+ROOTFS_SCHEMA = "regalia.rootfs-build/v1"
+
+
+def rootfs_sha256(rootfs_record):
+    """The root filesystem a measurement set names (#61): build-rootfs.sh's record's rootfs_sha256. Only its form
+    is checked here: the record is unsigned, and the set is what the root approves (measurements.py)."""
+    require(isinstance(rootfs_record, dict) and rootfs_record.get("schema") == ROOTFS_SCHEMA,
+            "the rootfs record is not a %s record (build-rootfs.sh's rootfs-build.json)" % ROOTFS_SCHEMA)
+    require(attest.is_hex(rootfs_record.get("rootfs_sha256"), 64), "the rootfs record's rootfs_sha256 must be 64 lowercase hex")
+    return rootfs_record["rootfs_sha256"]
+
+
+def measurement_set(record, label, firmware, pcrs, credentials, rootfs_record):
     """The measurement set of this image on one host (KERNEL-UPDATE.md step 1.4): that host's TPM firmware
     version and its own PCR values, with PCR 11 per phase from the record, and with `credentials` (the
     node's ESP credential files, {file name: bytes}) PCR 12 as systemd-stub will measure them
     (espcreds.pcr12). PCR 12 has one value for both phases: nothing extends it after the initrd (measured
     in the unlock boot test, #215). It is never given by hand: a set that should hold it is made from the
     files. It is REQUIRED: a set without it would leave PCR 12 unattested, the gap #66 closed, and after
-    stage B2 a host with no credentials cannot be unlocked unattended anyway."""
+    stage B2 a host with no credentials cannot be unlocked unattended anyway. The set also names the root
+    filesystem the image is installed with (`rootfs_record`, build-rootfs.sh's record): an image is both."""
     load_record(membership.canonical(record), signed=True)
     require(isinstance(pcrs, dict) and "11" not in pcrs, "the host's PCR values must not give PCR 11: it comes from the image's record, per phase")
     require("12" not in pcrs, "the host's PCR values must not give PCR 12: it is computed from the node's credential files (--credentials)")
@@ -1699,7 +1751,8 @@ def measurement_set(record, label, firmware, pcrs, credentials):
              # the keys the image is signed with, from its SIGNED record: what enrol may seal to (#190, #265)
              "signing": {"initrd": record["signed"]["pcr_signatures"]["initrd"]["pkfp"],
                          "system": record["signed"]["pcr_signatures"]["system"]["pkfp"],
-                         "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]}}
+                         "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]},
+             attest.ROOTFS_KEY: rootfs_sha256(rootfs_record)}
     try:
         attest.validate_sets([entry], "set")
     except attest.Refused as refusal:
@@ -1755,6 +1808,7 @@ def main(argv=None):
     c.add_argument("--pcrs", required=True, help='a JSON file: {"0": "<64 hex>", "7": ...}, the host\'s own values, without PCR 11 or 12')
     c.add_argument("--esp", metavar="ROOT", required=True, help="the node's ESP as it will be: PCR 12 is computed from ROOT/loader/credentials")
     c.add_argument("--credentials-record", metavar="OUT", help="write what PCR 12 was computed from (espcreds.record)")
+    c.add_argument("--rootfs-record", required=True, help="build-rootfs.sh's rootfs-build.json: the root the image is installed with (#61)")
     c = sub.add_parser("initrd-review", help="review an initrd as build does, and print the findings")
     c.add_argument("--initrd", required=True)
     c.add_argument("--unlock-client", required=True, help="the unlock client the build compiled")
@@ -1814,7 +1868,8 @@ def main(argv=None):
         else:
             record = load_record(read(args.record, 1024 * 1024))
             files = credential_files(args.esp)
-            entry = measurement_set(record, args.label, args.tpm_firmware_version, membership.load(read(args.pcrs, 65536)), files)
+            entry = measurement_set(record, args.label, args.tpm_firmware_version, membership.load(read(args.pcrs, 65536)), files,
+                                    membership.load(read(args.rootfs_record, 1024 * 1024)))
             if args.credentials_record:
                 fd = os.open(args.credentials_record, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
                 with os.fdopen(fd, "w") as f:
