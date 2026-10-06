@@ -524,7 +524,92 @@ def _image(cfg, pem_path=None, manifest=None):
     if manifest is None:
         manifest = _chain_tip(cfg)
     document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
+    switched = _switched(cfg, manifest, document, pem)
+    if switched is not None:
+        pem = switched["pem"]
     return measurements.approved_image_policy(manifest, document, cfg["node_id"], pem), pem
+
+
+def _booted_set(document, node_id, pem):
+    fingerprint = signkey.pcr_key_fingerprint(pem)
+    sets = [e for e in document["nodes"].get(node_id, {}).get("accepted", []) if e.get("signing", {}).get("system") == fingerprint]
+    require(sets, "no accepted set of %s is signed by the running image's key (%s...)" % (node_id, fingerprint[:16]))
+    return sets[0]
+
+
+def _resigned(cfg, document, pem, pcr11=None):
+    """#361 C4b (regalia-kms-05's conditions on #361): the new system-phase key's re-sign of the image this node is booted
+    on (its set's signing.resigned), checked here before it is used: refused by name unless
+      * the entry names the key of one of this node's accepted sets (05's addition), and its PEM is that key;
+      * its signature verifies under that key over its policy digest;
+      * the digest is PolicyPCR(11 = the booted set's system-phase value), and THIS TPM's PCR 11, read now, is that value;
+      * the new key's set carries K_A's approvals for this node (their generation is returned).
+    None when the booted set carries no re-sign. Returns {"pem", "entry", "generation"}."""
+    import base64
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from deploy.baremetal import uki
+    node_id = cfg["node_id"]
+    booted = _booted_set(document, node_id, pem)
+    resigned = booted["signing"].get("resigned")
+    if resigned is None:
+        return None
+    new = [e for e in document["nodes"][node_id]["accepted"] if e.get("signing", {}).get("system") == resigned["system"]]
+    require(new, "the re-sign of %s's booted image names a key (%s...) no accepted set of %s is signed by" % (node_id, resigned["system"][:16], node_id))
+    new_pem = resigned["pem"].encode()
+    require(signkey.pcr_key_fingerprint(new_pem) == resigned["system"], "the re-sign's public key is not the key it names (%s...)"
+            % resigned["system"][:16])
+    try:
+        serialization.load_pem_public_key(new_pem).verify(base64.b64decode(resigned["sig"]), bytes.fromhex(resigned["pol"]),
+                                                          padding.PKCS1v15(), hashes.SHA256())
+    except (InvalidSignature, ValueError):
+        raise Refused("the re-sign of %s's booted image does not verify under the key it names" % node_id) from None
+    want = booted["phases"]["system"]["11"]
+    require(resigned["pol"] == uki.policy_digest(want), "the re-sign of %s's booted image is over another policy than PolicyPCR(11 = %s...)"
+            % (node_id, want[:16]))
+    measured = pcr11 if pcr11 is not None else _pcr11(cfg)
+    require(measured == want, "this TPM's PCR 11 is %s..., not the %s... the re-sign is for: this boot is not that image's"
+            % (measured[:16], want[:16]))
+    require("anchor_approvals" in new[0]["signing"], "the new key's set for %s carries no K_A approvals" % node_id)
+    return {"pem": new_pem, "generation": new[0]["signing"]["anchor_approvals"]["generation"],
+            "entry": {"pcrs": [11], "pkfp": resigned["system"], "pol": resigned["pol"], "sig": resigned["sig"]}}
+
+
+def _pcr11(cfg):
+    """PCR 11 (SHA-256 bank) as THIS node's TPM reads it now, 64 hex."""
+    with tempfile.TemporaryDirectory(prefix="regalia-pcr11-") as d:
+        done = _tpm_run(cfg)(["tpm2_pcrread", "sha256:11", "-o", os.path.join(d, "pcr11")], capture_output=True)
+        require(done.returncode == 0, "cannot read PCR 11: %s" % (done.stderr or b"").decode("utf-8", "replace").strip()[-200:])
+        with open(os.path.join(d, "pcr11"), "rb") as f:
+            return f.read(64).hex()
+
+
+def _switched(cfg, manifest, document, pem):
+    """After its bump (R above the booted set's own generation), a node booted on a re-signed image writes under the new
+    key: its PEM, and the re-signed entry beside the boot's PCR signatures (signkey.RESIGNED_PATH). None otherwise."""
+    if manifest.get("schema") != membership.SCHEMA_V4 or "anchor_policy_key" not in manifest:
+        return None
+    fingerprint = signkey.pcr_key_fingerprint(pem)
+    booted = [e for e in document["nodes"].get(cfg["node_id"], {}).get("accepted", []) if e.get("signing", {}).get("system") == fingerprint]
+    if not booted or "resigned" not in booted[0]["signing"] or "anchor_approvals" not in booted[0]["signing"]:
+        return None                                  # nothing re-signed (approved_image_policy judges the key itself)
+    booted = booted[0]
+    if anchorpolicy.read_rotation(anchorpolicy.ROTATION_INDEX, _tpm_run(cfg)) <= booted["signing"]["anchor_approvals"]["generation"]:
+        return None
+    resigned = _resigned(cfg, document, pem)
+    _keep_resigned(resigned["entry"])
+    return resigned
+
+
+def _keep_resigned(entry):
+    """The re-signed entry where signkey.boot_signatures merges it (tmpfs, this boot only)."""
+    os.makedirs(os.path.dirname(signkey.RESIGNED_PATH), mode=0o755, exist_ok=True)
+    data = json.dumps({"sha256": [entry]}, sort_keys=True).encode()
+    tmp = signkey.RESIGNED_PATH + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, signkey.RESIGNED_PATH)
 
 
 def anchor_approval(cfg, cls, pem_path=None, manifest=None):
@@ -559,6 +644,14 @@ def catch_up_rotation(cfg, manifest=None, pem_path=None):
     document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
     rotations = measurements.rotations(document, cfg["node_id"])
     booted = measurements.anchor_approval(manifest, document, cfg["node_id"], pem, "anchor")["generation"]
+    target = anchorpolicy.published(rotations)
+    if target is not None and booted < target:
+        # #361 C4b: the booted image re-signed by the new key, its checks passed, moves this node to the new key's
+        # approvals on the boot it is in (written where the writes find it BEFORE the bump, so none is stranded)
+        resigned = _resigned(cfg, document, pem)
+        if resigned is not None:
+            _keep_resigned(resigned["entry"])
+            booted = resigned["generation"]
     return anchorpolicy.catch_up(anchorpolicy.ROTATION_INDEX, manifest["anchor_policy_key"]["key"], cfg["node_id"], rotations,
                                  booted, _tpm_run(cfg))
 

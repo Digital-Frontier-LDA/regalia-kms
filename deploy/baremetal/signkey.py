@@ -75,6 +75,10 @@ PCR_KEY_ATTRIBUTES, PCR_KEY_TOOL_ATTRIBUTES = 0x00060040, "decrypt|sign|userwith
 # systemd-stub's copy of the running image's .pcrpkey: uki.py requires it to be the system-phase PCR key, and it is
 # measured into PCR 11. The one place the signing key, the anchor and the heartbeat counter (#242) take the key from.
 PCR_PUBLIC_KEY_PATH = "/run/systemd/tpm2-pcr-public-key.pem"
+# #361 C4b: a new system-phase key's signature over THIS boot's PolicyPCR(11), written by the node's catch-up only once it
+# has checked it (node._resigned) and before it bumps; merged into the boot's signatures, where pcr_signature picks an
+# entry by key and policy (and the TPM checks the signature itself), so a write after the bump opens under K_new
+RESIGNED_PATH = "/run/regalia/resigned-pcr-signature.json"
 PCR_SIGNATURE_PATHS = ("/run/systemd/tpm2-pcr-signature.json", "/etc/systemd/tpm2-pcr-signature.json", "/usr/lib/systemd/tpm2-pcr-signature.json")
 P256_ORDER = membership.P256_ORDER
 
@@ -286,7 +290,13 @@ def boot_signatures(signatures=None):
         return signatures
     found = [p for p in PCR_SIGNATURE_PATHS if os.path.exists(p)]
     require(found, "no tpm2-pcr-signature.json: this boot is not a UKI with signed PCR policies")
-    return membership.load(_read(found[0]), 65536)
+    document = membership.load(_read(found[0]), 65536)
+    if os.path.exists(RESIGNED_PATH):                   # #361 C4b: the re-signed entry, beside the boot's own
+        extra = membership.load(_read(RESIGNED_PATH), 65536)
+        require(isinstance(document, dict) and isinstance(document.get("sha256"), list) and isinstance(extra, dict)
+                and isinstance(extra.get("sha256"), list), "a PCR signature document has no SHA-256 bank")
+        document = dict(document, sha256=document["sha256"] + extra["sha256"])
+    return document
 
 
 @contextlib.contextmanager

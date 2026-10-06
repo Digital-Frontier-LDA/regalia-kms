@@ -82,3 +82,97 @@ class Resign(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NodeChecks(unittest.TestCase):
+    """The node's checks before it bumps on a re-sign (node._resigned; 05's condition 2 and addition (a)), each refused
+    with its own words; then the switch to the new key after the bump (node._switched) and the merged signatures."""
+
+    def setUp(self):
+        import os
+        import tempfile
+        from unittest import mock
+        from deploy.baremetal import node
+        self.node, self.mock = node, mock
+        _, new = documents()
+        self.doc = uki.resign(new, NEW_PUB, NEW_PRIVATE, POINT)
+        self.cfg = {"node_id": "a", "tcti": None, "state_dir": "/nonexistent"}
+        self.pcr11 = self.doc["nodes"]["a"]["accepted"][0]["phases"]["system"]["11"]
+        d = tempfile.mkdtemp(prefix="resign-")
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        p = mock.patch.object(signkey, "RESIGNED_PATH", os.path.join(d, "run", "resigned.json"))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def resigned(self, change=None, pcr11=None):
+        doc = copy.deepcopy(self.doc)
+        if change:
+            change(doc)
+        return self.node._resigned(self.cfg, doc, SYSTEM_PUB, pcr11=pcr11 or self.pcr11)
+
+    def test_a_good_re_sign_moves_the_node_to_the_new_key_s_generation(self):
+        got = self.resigned()
+        self.assertEqual((got["pem"], got["generation"]), (NEW_PUB, GENERATIONS["a"] + 1))
+        self.assertEqual(got["entry"]["pkfp"], signkey.pcr_key_fingerprint(NEW_PUB))
+        self.assertIsNone(self.node._resigned(self.cfg, documents()[1], SYSTEM_PUB, pcr11=self.pcr11), "nothing re-signed: None")
+
+    def test_each_check_refuses_with_its_own_words(self):
+        old = lambda d: d["nodes"]["a"]["accepted"][0]["signing"]                  # noqa: E731
+        other = rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+        for name, change, pcr11, reason in (
+                ("a key no set is signed by", lambda d: old(d)["resigned"].update(system="ab" * 32), None,
+                 "names a key (abababababababab...) no accepted set of a is signed by"),
+                ("another PEM than the key named", lambda d: old(d)["resigned"].update(pem=other), None,
+                 "the re-sign's public key is not the key it names"),
+                ("a signature that does not verify", lambda d: old(d)["resigned"].update(sig=base64.b64encode(b"\0" * 256).decode()), None,
+                 "the re-sign of a's booted image does not verify under the key it names"),
+                ("another policy", lambda d: old(d)["resigned"].update(
+                    pol=uki.policy_digest("00" * 32), sig=base64.b64encode(NEW.sign(bytes.fromhex(uki.policy_digest("00" * 32)),
+                                                                                   padding.PKCS1v15(), hashes.SHA256())).decode()), None,
+                 "is over another policy than PolicyPCR(11 = "),
+                ("another boot", None, "77" * 32, "this TPM's PCR 11 is 7777777777777777..., not the "),
+                ("no approvals on the new key's set", lambda d: d["nodes"]["a"]["accepted"][1]["signing"].pop("anchor_approvals"), None,
+                 "the new key's set for a carries no K_A approvals")):
+            with self.subTest(name), self.assertRaises(m.Refused) as caught:
+                self.resigned(change, pcr11)
+            self.assertIn(reason, str(caught.exception))
+
+    def test_after_the_bump_writes_go_under_the_new_key(self):
+        import json
+        import os
+        manifest = {"schema": m.SCHEMA_V4, "anchor_policy_key": {"key": POINT}}
+        g = GENERATIONS["a"]
+        with self.mock.patch.object(self.node, "_pcr11", lambda cfg: self.pcr11):
+            with self.mock.patch.object(ap, "read_rotation", lambda index, run: g):           # not bumped: the old key
+                self.assertIsNone(self.node._switched(self.cfg, manifest, self.doc, SYSTEM_PUB))
+            with self.mock.patch.object(ap, "read_rotation", lambda index, run: g + 1):       # bumped: the new key
+                self.assertEqual(self.node._switched(self.cfg, manifest, self.doc, SYSTEM_PUB)["pem"], NEW_PUB)
+        with open(signkey.RESIGNED_PATH) as f:
+            kept = json.load(f)
+        self.assertEqual(kept["sha256"][0]["pkfp"], signkey.pcr_key_fingerprint(NEW_PUB))
+        # merged into the boot's own signatures: pcr_signature picks it by key and policy
+        boot = os.path.join(os.path.dirname(signkey.RESIGNED_PATH), "boot.json")
+        with open(boot, "w") as f:
+            json.dump({"sha256": [{"pcrs": [11], "pkfp": "cd" * 32, "pol": "ef" * 32, "sig": "AA=="}]}, f)
+        with self.mock.patch.object(signkey, "PCR_SIGNATURE_PATHS", (boot,)):
+            merged = signkey.boot_signatures()
+        self.assertEqual([e["pkfp"] for e in merged["sha256"]], ["cd" * 32, signkey.pcr_key_fingerprint(NEW_PUB)])
+
+    def test_the_catch_up_bumps_on_the_re_sign_s_generation(self):
+        from deploy.baremetal import measurements as ms
+        manifest = {"schema": m.SCHEMA_V4, "anchor_policy_key": {"key": POINT}}
+        rotations = [{"from": GENERATIONS["a"], "signature": "00" * 64}]
+        seen = []
+        patches = [self.mock.patch.object(self.node, "_image", lambda cfg, pem_path, manifest: (None, SYSTEM_PUB)),
+                   self.mock.patch.object(self.node, "_chain_tip", lambda cfg: manifest),
+                   self.mock.patch.object(ms, "held", lambda d, man: self.doc),
+                   self.mock.patch.object(ms, "rotations", lambda doc, node_id: rotations),
+                   self.mock.patch.object(ms, "anchor_approval", lambda man, doc, node_id, pem, cls: {"generation": GENERATIONS["a"]}),
+                   self.mock.patch.object(self.node, "_pcr11", lambda cfg: self.pcr11),
+                   self.mock.patch.object(ap, "catch_up", lambda index, point, node_id, rot, booted, run: seen.append(booted) or booted)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.node.catch_up_rotation(self.cfg)
+        self.assertEqual(seen, [GENERATIONS["a"] + 1], "the catch-up did not take the re-sign's generation")

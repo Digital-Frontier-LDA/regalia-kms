@@ -327,17 +327,21 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   and presents the approval from THAT tip's document: a Store's commit, `enrol init` and esp_advance each judge
   by the chain they write, and an unjudged write is refused before any approval is looked up. The heartbeat
   and signing counters commit no epoch and take the held chain's approvals. The retire is below.
-- **A retire revokes K_old on a node only once that node is booted on K_new** (#361 C4). The laptop appends K_A's
-  single-use increment to the node's `rotations` in the measurements document (`anchorpolicy approve-increment`), only
-  once the new document already approves the node at G + 1, and never more than one generation ahead. Each node bumps
-  its rotation counter in sync's next round (`catch_up_rotation`), in order, and writes or signs nothing under K_A while
-  behind (`require_current`, in `node.anchor_approval`); a peer co-signs no lease for it (`check_rotation`, wired by the
-  lease co-signer, 48's lane). But a node booted on an image only K_old approved does NOT bump (it would strand
-  itself): until it reboots onto a K_new image, K_old's approval still opens that node's own objects, and its lease
-  refusal stops it serving within one lease. Agreed fix, not built: at a retire K_new re-signs the PCR 11 values of the
-  images still approved at G + 1, so a node bumps without rebooting (regalia-kms-05's conditions on #361); then the
-  window becomes "until the node's next sync round". systemd's own enrolments (cryptenroll, systemd-creds) name K_sys
-  directly and need C5's re-enrolment either way. Measured on swtpm only.
+- **A retire revokes K_old on a node at its next sync round** (#361 C4, C4b). The laptop appends K_A's single-use
+  increment to the node's `rotations` in the measurements document (`anchorpolicy approve-increment`), only once the
+  new document already approves the node at G + 1, and never more than one generation ahead; and K_new re-signs
+  PolicyPCR(11) of each image the node may still run (`uki.resign`, regalia-kms-05's conditions). Each node, in sync's
+  next round (`catch_up_rotation`), checks the re-sign (it names one of its sets' keys, verifies under that key, is
+  over its booted image's PCR 11, which its own TPM measures now, and the new key's set carries approvals for it), then
+  bumps its rotation counter and writes under K_new on the boot it is in. While behind it writes and signs nothing
+  under K_A (`require_current`, in `node.anchor_approval`), and a peer co-signs no lease for it (`check_rotation`, wired
+  by the lease co-signer, 48's lane). So K_old stays usable against a node until that node's next sync round after the
+  retire; a node whose booted image has no re-sign (a retire signed without `uki.resign`) keeps K_old's approval until
+  it reboots onto a K_new image (no stranding), and its lease refusal stops it serving within one lease.
+  **A re-signed image stays openable under K_new for as long as K_new is approved** (05): a later retire of that image
+  does not revoke the re-sign, since a TPM cannot forget a signature. That is the same as an image K_new signed at
+  build, so it is no new risk. systemd's own enrolments (cryptenroll, systemd-creds) name K_sys directly and need C5's
+  re-enrolment either way. Measured on swtpm only (the bump); the re-sign's checks are unit-tested.
 - **K_A is taken from the sealed set's generation record** (`--offline-keys-record`, regalia-kms-95 on
   #438). It is verified under the pinned root, and its published key must equal the entry. Its private
   half is shown only by the record's `operation_proof` ("verified": the generating tool's own check of a
