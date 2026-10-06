@@ -88,6 +88,19 @@ COLLECTOR_UNIT = UNIT_PREFIX + "audit-collector"
 COLLECTOR_PORT = 18443
 
 
+ACTIVE = None          # the Cluster this process runs, for report_sessions (#505)
+
+
+def report_sessions():
+    """#505: each node's TPM session count (loaded/saved) as one line, printed by the scenarios at every step. The
+    fixture's swtpms have no resource manager (a host's units use /dev/tpmrm0, which flushes a process's sessions when it
+    closes it): a session a tool leaves open stays until the swtpm restarts, and at about 3 the TPM answers
+    TPM_RC_SESSION_MEMORY (0x903). This line names the step where a count first rises."""
+    if ACTIVE is not None:
+        print("  TPM sessions (loaded/saved): %s" % ACTIVE.session_line())
+        sys.stdout.flush()
+
+
 def sh(*argv, check=True, **kw):
     done = subprocess.run(list(argv), capture_output=True, text=True, **kw)
     if check and done.returncode != 0:
@@ -188,6 +201,9 @@ class Cluster:
         self.time = {n: True for n in names}          # authenticated time, per node
         self.stop_threads = False
         self.threads = []
+        self.session_peak = {n: (0, 0) for n in names}  # #505: the most sessions each node's TPM held at a step
+        global ACTIVE
+        ACTIVE = self
         self.chain = []                               # the signed envelopes, epoch 1 first
         self.manifest = None
         self.keys = {}
@@ -1633,7 +1649,38 @@ class Cluster:
                 out.append(value)
         return out
 
+    def tpm_sessions(self, n):
+        """(loaded, saved) session handles in node `n`'s TPM, or None when it does not answer (stopped)."""
+        counts = []
+        for kind in ("handles-loaded-session", "handles-saved-session"):
+            done = sh("tpm2_getcap", "-T", n.tcti, kind, check=False, timeout=10)
+            if done.returncode != 0:
+                return None
+            counts.append(len(re.findall(r"^\s*-\s*0x[0-9a-fA-F]+", done.stdout, re.M)))
+        return tuple(counts)
+
+    def session_line(self):
+        """`a=0/0 b=1/0 c=3/0` for the nodes whose TPM runs; a count at its peak so far is recorded (session_peak)."""
+        parts = []
+        for name, n in self.nodes.items():
+            if not (n.dir / "tpm.pid").exists():
+                continue
+            try:
+                counts = self.tpm_sessions(n)
+            except subprocess.TimeoutExpired:
+                counts = None
+            if counts is None:
+                parts.append("%s=down" % name)
+                continue
+            self.session_peak[name] = tuple(max(a, b) for a, b in zip(self.session_peak.get(name, (0, 0)), counts))
+            parts.append("%s=%d/%d" % (name, counts[0], counts[1]))
+        return " ".join(parts) or "no TPM running"
+
     def close(self):
+        print("  TPM sessions, the most each node held at a step (loaded/saved): %s"
+              % " ".join("%s=%d/%d" % (k, v[0], v[1]) for k, v in sorted(self.session_peak.items())))
+        global ACTIVE
+        ACTIVE = None
         self.stop_threads = True
         for n in self.members():
             self.stop(n.name, power=None)

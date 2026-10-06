@@ -14,6 +14,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   no Shamir share set exists yet. The three production hosts (HPE DL360 Gen9 with TPM 2.0) have not run
   this software (#253). Whether their TPMs carry an EK certificate is not known (#190). Every
   three-node scenario so far runs on a software TPM (swtpm) in CI.
+- **The three-node fixture has no TPM resource manager** (#505). Its nodes talk to swtpm directly, while a host's
+  units use `/dev/tpmrm0`, whose kernel resource manager flushes a process's sessions when it closes the device.
+  In the fixture, a session left open by a tool that was killed or failed mid-call stays until that swtpm
+  restarts. At about 3 the TPM answers `TPM_RC_SESSION_MEMORY` (0x903), which failed three-node-recovery's step 7
+  once (d9, on #474's run). Every scenario now prints each node's loaded and saved session counts at every step,
+  and the peak at the end, to name the leaking call. The plan: fix that call, then give the fixture the kernel's
+  resource manager (swtpm `--vtpm-proxy`, `tpm2-abrmd` as fallback).
 - **Hardware qualification is open**: Nitrokey HSM 2 for production; the Pico HSM is supported but
   not qualified ([`CONFIGURATIONS.md`](CONFIGURATIONS.md)).
 

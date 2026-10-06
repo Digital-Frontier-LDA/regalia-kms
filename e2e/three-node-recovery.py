@@ -72,6 +72,7 @@ def ok(condition, text, detail=""):
 def header(text):
     print("\n\033[1m### %s\033[0m" % text)
     sys.stdout.flush()
+    threenode.report_sessions()                      # #505: each TPM's sessions at every step
 
 
 def leased_by(cluster, peer, subject, since):
