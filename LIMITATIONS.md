@@ -248,6 +248,30 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     node: a fresh cache, a fresh floor, then one lease of fail-closed. It belongs in the etcd recovery runbook
     when that is written.
 
+## Cosmos signing (the cosmos-account profile, #432)
+
+- **The chain is the arbiter of the sequence, across servers.** Two servers signing for one account at once both
+  produce a signature. The chain accepts one per sequence, so the other transaction fails with a sequence mismatch.
+  That costs availability, not safety. On one server, a key's requests are serialised.
+- **A cosmos-account request needs its chain's endpoint to answer** (2 s). An endpoint that's down or lying refuses
+  the request (`DEPENDENCY_UNAVAILABLE`, retryable). It can't make the KMS sign anything else, because the check is
+  equality, never substitution. One endpoint per chain is configured: there's no fallback endpoint yet.
+- **What the chain said can change between the answer and the signature.** A transaction from elsewhere could
+  consume the sequence. The signature is then for a sequence the chain refuses: availability again, not safety.
+- **The pinned `cosmos_public_key` is not checked against the token's own key** (d9's LOW on #499). A mistyped pin
+  fails closed: either the messages' signer doesn't match it and the request is refused, or the chain refuses the
+  signature. It isn't refused at load by name, though. The follow-up is to verify each signature against the pinned
+  key before it's returned (a secp256k1 verify, which the daemon doesn't have yet), or to read the token's public key
+  at load and compare.
+- **Not built yet:**
+  - validator vote signing (`cosmos-validator` is refused at load);
+  - the profile's immutability through the key's first committed key state (D32, with the operational-state
+    wiring);
+  - an e2e against the `simd` devnet that signs through the fetch path.
+
+  The daemon's AppArmor profile allows no DNS, so each endpoint host is an address or in `/etc/hosts`. The image's
+  egress rules for these hosts aren't written yet.
+
 ## Tokens and the HSM gate (#72)
 
 - **The physical pull-and-reinsert drill has not been run** (G3). The script is merged

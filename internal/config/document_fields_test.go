@@ -157,6 +157,10 @@ func documentFieldRows() []documentFieldRow {
 		{"fencing_public_key_path", fencingDocument,
 			func(c Config) string { return c.FencingPublicKeyPath }, "/etc/regalia/fencing.pub"},
 
+		// the chains' endpoints a cosmos-account key is checked against before it signs (#432)
+		{"cosmos_rpc", `{"cosmos_rpc":{"cosmoshub-4":"https://rpc.cosmoshub.example"}}`,
+			func(c Config) string { return c.CosmosRPC["cosmoshub-4"] }, "https://rpc.cosmoshub.example"},
+
 		// A SURVIVOR. Dropped, the provenance check at startup has no record to verify.
 		{"commissioning_record_path", `{"commissioning_record_path":"/etc/regalia/commissioning.json"}`,
 			func(c Config) string { return c.CommissioningRecordPath }, "/etc/regalia/commissioning.json"},

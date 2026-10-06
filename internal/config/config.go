@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -117,6 +118,12 @@ type Config struct {
 	// authenticated, because aggregate per-route rates still reveal the business
 	// rhythm of what is being signed. Empty refuses everyone.
 	MetricsReaderPrincipals []string
+
+	// CosmosRPC is each chain's endpoint (https base URL), asked before a cosmos-account key signs: the
+	// signer's account number and sequence, and the chain's ID (#432). The daemon resolves no names through
+	// DNS (its AppArmor profile has no datagram socket), so each host is an address or in /etc/hosts, and the
+	// host's egress names exactly these hosts.
+	CosmosRPC map[string]string
 }
 
 type document struct {
@@ -156,6 +163,7 @@ type document struct {
 	OperationalStateDir      *string            `json:"operational_state_dir"`
 	SessionKeyDir            *string            `json:"session_key_dir"`
 	MetricsReaderPrincipals  *[]string          `json:"metrics_reader_principals"`
+	CosmosRPC                *map[string]string `json:"cosmos_rpc"`
 }
 
 func Default() Config {
@@ -309,6 +317,12 @@ func Decode(reader io.Reader) (Config, error) {
 	}
 	if input.SessionKeyDir != nil {
 		result.SessionKeyDir = *input.SessionKeyDir
+	}
+	if input.CosmosRPC != nil {
+		result.CosmosRPC = make(map[string]string, len(*input.CosmosRPC))
+		for chain, endpoint := range *input.CosmosRPC {
+			result.CosmosRPC[chain] = endpoint
+		}
 	}
 	if input.MetricsReaderPrincipals != nil {
 		result.MetricsReaderPrincipals = append([]string(nil), (*input.MetricsReaderPrincipals)...)
@@ -543,6 +557,14 @@ func (cfg Config) Validate() error {
 	}
 	if stateFields == 3 && cfg.RuntimeAdmission != RuntimeAdmissionRequired {
 		return errors.New("the operational state needs runtime_admission \"required\": the serving lease that names its revision and the session key is admission's")
+	}
+	// Each chain endpoint is an https URL with no credentials, query or fragment (cosmosrpc.New says it again
+	// when the client is made; refused here so -check-config says it first).
+	for chain, endpoint := range cfg.CosmosRPC {
+		parsed, err := url.Parse(endpoint)
+		if chain == "" || err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("cosmos_rpc %q must be an https URL with no credentials, query or fragment", chain)
+		}
 	}
 	// Metrics readers are SPIFFE identities under the trust-domain prefix the
 	// authenticator enforces. Anything else can never authenticate — accepting it
