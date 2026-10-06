@@ -70,7 +70,8 @@ class Case(rt.Case):
     def unlock(self, peer, requester="a", session=lt.SESSION):
         """Peer `peer` decides, by ITS manifest, whether to unlock `requester`; audited."""
         manifest, p = self.stores[peer].load(), self.peers[peer]
-        evidence = self.evidence(p["attester"], manifest, session) if m.may(manifest, requester, "request") and requester == "a" else None
+        # an unlock's quote binds nothing (a lease request's binds its state: lease.request_binding)
+        evidence = self.evidence(p["attester"], manifest, session, binding=None) if m.may(manifest, requester, "request") and requester == "a" else None
         return convergence.audited(self.events.append, "unlock", manifest, requester, peer,
                                    lambda: replacement.may_unlock(manifest, peer, requester, session, evidence, p["attester"], p["freshness"]))
 
@@ -423,7 +424,7 @@ class Theft(Case):
         self.refused("a may not be unlocked under epoch 2", self.unlock, "b")                # a boots, hardware intact, and asks
         self.assertEqual(self.last(), {"event": "unlock", "epoch": 2, "subject": "a", "peer": "b", "outcome": "DENY"})
         p, manifest = self.peers["b"], self.stores["b"].load()
-        self.refused("a may not serve under epoch 2: no lease", lease.issue, manifest, "b", self.holder.request(), p["attester"], None, p["freshness"], p["signer"])
+        self.refused("a may not serve under epoch 2: no lease", lease.issue, manifest, "b", self.holder.request(), p["attester"], None, p["freshness"], p["signer"], p["floor"])
         self.assertGreater(hb.authorize(manifest, "b", "c", p["freshness"]), 0)             # the others are untouched
 
     def test_poc_9_2_a_stale_requester_cannot_bring_its_old_manifest_back(self):
@@ -493,7 +494,7 @@ class Theft(Case):
         self.refused("a may not be unlocked under epoch 3", self.unlock, "c")
         self.refused("a may not serve under epoch 3", self.holder.check, c.load())
         self.refused("a may not serve under epoch 3: no lease", lease.issue, c.load(), "c", self.holder.request(), self.peers["c"]["attester"], None,
-                     self.peers["c"]["freshness"], self.peers["c"]["signer"])
+                     self.peers["c"]["freshness"], self.peers["c"]["signer"], self.peers["c"]["floor"])
         # and c itself authorizes nobody until a heartbeat for epoch 3 arrives: it fails closed, then recovers
         self.refused("the heartbeat is for epoch 1, the current manifest is epoch 3", hb.authorize, c.load(), "c", "b", self.peers["c"]["freshness"])
         self.peers["c"]["freshness"].accept(late, c.load())

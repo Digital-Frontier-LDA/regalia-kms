@@ -45,6 +45,7 @@ CREDENTIALS = "/run/credentials/regalia-etcd.service"      # the keys, LoadCrede
 DATA_DIR = "/var/lib/regalia-etcd"
 PEER_PORT = 2380
 CLIENT_URL = "unix://client.sock:0"                # in the unit's WorkingDirectory, /run/regalia-etcd (ETCD.md)
+WORKING_DIR = "/run/regalia-etcd"                  # regalia-etcd.service's WorkingDirectory (#484): the socket's directory
 MIN_HEARTBEAT_MS = 100                             # etcd's default: never below it
 MAX_RTT_MS = 500                                   # above: a commissioning failure (election timeout would pass 5 s)
 MAX_ELECTION_MS = 50000                            # etcd refuses more
@@ -133,6 +134,13 @@ def timings(rtt_p99_ms):
     election = 10 * beat
     require(election <= MAX_ELECTION_MS, "an election timeout of %d ms is more than etcd takes" % election)
     return beat, election
+
+
+def client_endpoint(working_dir=WORKING_DIR):
+    """What a local client dials: CLIENT_URL's socket (its file is named "client.sock:0", the ":0" included) in the
+    unit's working directory. Derived, never retyped (05 on #513: a literal without ":0" dials a file that is not there)."""
+    require(CLIENT_URL.startswith("unix://") and "/" not in CLIENT_URL[len("unix://"):], "CLIENT_URL is a socket in the working directory")
+    return "unix://" + working_dir.rstrip("/") + "/" + CLIENT_URL[len("unix://"):]
 
 
 def peer_url(node):
