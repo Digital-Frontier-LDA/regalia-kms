@@ -40,11 +40,16 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   Not built yet:
   - the full scope's machinery:
     - the iLO/Redfish fence step that produces the power readback;
-    - the take-over command (graceful etcd stop, the revision check, force-new-cluster, then the state-epoch entry
-      as its first write). The entry's format and verification exist (`opstate.verify_state_epoch`, with
-      `state_epoch_checks` in tests/vectors/opstate-v1.json). Nothing writes the entry yet, and no Go reader
-      verifies it. A replaced signing key can still sign an entry dated before the replacement, inside the owner's
-      authorization window; unlike a session, there is no arrival-time freshness check for it yet;
+    - the take-over on a real host. `deploy/baremetal/takeover.py` exists: a graceful etcd stop, the revision
+      check, force-new-cluster through a /run drop-in, then the state-epoch entry (`opstate.verify_state_epoch`) as
+      its first write, and the drop-in read back gone. It is tested on a scripted host and, in CI, against a real
+      etcd 3.6.15 with systemctl played by the test. Not yet:
+      - regalia-etcd.service (#484), so it has never run under systemd;
+      - the take-over has never signed with a real TPM signing key;
+      - nothing reads the entry in Go (the cache's verify, regalia-kms-ed's), so `applied.json`'s `state_epoch` stays 0;
+      - the daemon's rule that a stateful operation in recovery needs the store at the authorization's own epoch;
+      - an arrival-time freshness check on the entry. A replaced signing key can still sign an entry dated before the
+        replacement, inside the owner's authorization window;
     - the rejoin (export the divergent tail, wipe, member add);
     - the daemon's halts (a peer heard below the quarantine epoch);
     - approvals naming their spending node (1e).
