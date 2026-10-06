@@ -396,11 +396,14 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   epoch. The fixture runs no KMS daemon, so the request-level predicates (no failed request, stateful commits, caught
   up before a served request) are listed as not judged in the run's report and are never entered as passes. S4 (the
   owner's recovery authorization) isn't in the dry run. None of it has run on the real servers.
-  S5 asks `rollout.may_reboot` before each restart, the check `update apply` makes, and a WAIT is asked again for
-  up to three leases (90 s). Under lease v2 (#489), a node back less than one lease ago issues no lease yet, so rolling
-  the next node at once leaves the third with no issuer. It did, on #504's first run after #489. On a host the check runs
-  over SSH as an inline `python3 -c` (`drill.MAY_REBOOT`, the same code as `e2e/rolling-threenode.py`'s): `update` has
-  no read-only `may-reboot` command yet.
+  S5 asks `rollout.may_reboot` before each restart, the check `update apply` makes. A WAIT is asked again after the
+  seconds it gives ("ask again in N s"), else after one lease, for up to three leases (90 s), and then the run stops
+  without restarting the node. Under lease v2 (#489), a node back less than one lease ago issues no lease yet, so
+  rolling the next node at once leaves the third with no issuer. It did, on #504's first run after #489. Each ask takes
+  real leases from both peers, out of the rate bucket the node's own renewals use, so it isn't polled. On a host the
+  check runs over SSH as an inline `python3 -c` (`drill.MAY_REBOOT`, tested equal to `e2e/rolling-threenode.py`'s
+  `DECIDE`): `update` has no read-only `may-reboot` command yet. A permanent issuer refusal also reads as a WAIT, so it
+  costs the full 90 s before the run stops.
 
 - `moved_by_sync` (the sync round that moved a node to an epoch) cannot see how many envelopes a round received:
   trail events don't carry it. A node moved other than by its sync, right after a no-op round from the same peer,

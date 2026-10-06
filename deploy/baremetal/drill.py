@@ -397,7 +397,15 @@ MAY_REBOOT = (
 HOST_CONFIG = "/etc/regalia/node.json"
 HOST_CODE = "/usr/lib/regalia-kms"          # the units' WorkingDirectory: where `deploy` is imported from on a host
 MAY_RESTART_PATIENCE_S = 3 * lease.MAX_LIFETIME    # as rolling-threenode's moved(): a WAIT is asked again until then
-MAY_RESTART_EVERY_S = 5
+
+
+def ask_again_after(reason):
+    """Seconds before may_reboot is asked again after a WAIT: the most "ask again in N s" among its refusals (an issuer's
+    warm-up, lease.py), else one lease; at least 1 s. Each ask takes a real lease from every peer, from the same rate
+    bucket as the node's own admission renewals (sync.RATE), so asking every few seconds could cost the node its lease
+    (62 on #504)."""
+    found = [int(n) for n in re.findall(r"ask again in (\d+) s", reason)]
+    return max(1, max(found) if found else lease.MAX_LIFETIME)
 
 
 def verdict_of(done, node):
@@ -496,7 +504,7 @@ def _all_ok(predicates):
     return bool(predicates) and all(bool(good) for good, _ in predicates.values())
 
 
-def scenarios(backend, plan, judge, patience=MAY_RESTART_PATIENCE_S, every=MAY_RESTART_EVERY_S, sleep=time.sleep):
+def scenarios(backend, plan, judge, patience=MAY_RESTART_PATIENCE_S, sleep=time.sleep, monotonic=time.monotonic):
     """S1, S2, S3 and S5 as run() takes them, over any backend with power_off/power_on/restart/restarted/partition/heal
     and may_restart (Hardware here; the tier-N fixture's in e2e/lib/drillfixture.py). `plan`: {"S1": node, "S2": node, "S3": node,
     "S5": [nodes in order]}; only the scenarios it names. `judge(name, context)` -> {predicate: (ok, evidence)}, where
@@ -542,17 +550,19 @@ def scenarios(backend, plan, judge, patience=MAY_RESTART_PATIENCE_S, every=MAY_R
 
         def asked(node):
             """may_reboot, as `update apply` asks it, until a yes; a WAIT (a peer back less than one lease ago issues no
-            lease yet, #489) is asked again until MAY_RESTART_PATIENCE_S; any other no stops the roll, nothing injected."""
-            deadline, asks = time.monotonic() + patience, 0
+            lease yet, #489) is asked again after the seconds it gives (ask_again_after) until MAY_RESTART_PATIENCE_S; any
+            other no, or a WAIT past it, stops the roll and the run (restore then runs), nothing injected on the node."""
+            deadline, asks = monotonic() + patience, 0
             while True:
                 verdict, asks = backend.may_restart(node), asks + 1
                 if verdict.get("ok") is True:
                     return {"ok": True, "asks": asks, "authorizers": verdict.get("authorizers")}
                 reason = str(verdict.get("reason", ""))
-                if not reason.startswith("WAIT") or time.monotonic() >= deadline:
+                left = deadline - monotonic()
+                if not reason.startswith("WAIT") or left <= 0:
                     raise Aborted("S5: may_reboot does not let %s restart (%s, after %d asks): the roll stops before it"
                                   % (node, reason, asks))
-                sleep(every)
+                sleep(max(1, min(ask_again_after(reason), math.ceil(left))))
 
         def roll():
             for node in order:              # one at a time; each must be BACK, by its predicates, before the next goes down
