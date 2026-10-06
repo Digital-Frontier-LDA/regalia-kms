@@ -562,7 +562,9 @@ def scenarios(backend, plan, judge, patience=MAY_RESTART_PATIENCE_S, sleep=time.
                 if not reason.startswith("WAIT") or left <= 0:
                     raise Aborted("S5: may_reboot does not let %s restart (%s, after %d asks): the roll stops before it"
                                   % (node, reason, asks))
-                sleep(max(1, min(ask_again_after(reason), math.ceil(left))))
+                # the issuer's hint is in `refused` (fresh_leases), not in may_reboot's reason (62 on #504)
+                hints = " ".join([reason] + [str(v) for v in (verdict.get("refused") or {}).values()])
+                sleep(max(1, min(ask_again_after(hints), math.ceil(left))))
 
         def roll():
             for node in order:              # one at a time; each must be BACK, by its predicates, before the next goes down

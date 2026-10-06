@@ -497,8 +497,11 @@ class HardwareBackend(unittest.TestCase):
         self.assertNotIn(("ssh", "c", "systemctl", ["restart"]), [x for x in self.log if x[0] == "ssh"])   # c never restarted
         self.assertEqual([(e["node"], e["undo"]["action"]) for e in self.journal.pending()], [("b", "power-cycle")])
 
-    WAIT = (0, json.dumps({"ok": False, "reason": "WAIT: no valid lease from b (b's regalia-sync started 12 s ago, under one "
-                                                 "lease of 30 s ago, not a fault: ask again in 18 s)"}))
+    # as MAY_REBOOT prints a warm-up: may_reboot's reason names no time, the issuer's refusal (in `refused`) does (62)
+    WAIT = (0, json.dumps({"ok": False, "reason": "WAIT: no valid lease from b (none presented)",
+                           "refused": {"b": "this issuer has watched etcd for 12 s, less than one lease (30 s): it issues no "
+                                            "lease until it knows what it held a lease ago. Expected for a peer that (re)started "
+                                            "less than one lease ago, not a fault: ask again in 18 s"}}))
 
     def test_s5_asks_may_reboot_before_each_restart_and_asks_again_on_a_wait(self):
         """#504's red under lease v2 (#489): a peer back less than one lease ago issues no lease, so S5 asks may_reboot as
