@@ -326,8 +326,18 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   ownerwrite). The membership anchor (its counter and slots) writes only when judged by a verified chain tip,
   and presents the approval from THAT tip's document: a Store's commit, `enrol init` and esp_advance each judge
   by the chain they write, and an unjudged write is refused before any approval is looked up. The heartbeat
-  and signing counters commit no epoch and take the held chain's approvals. The retire bump and catch-up are
-  C4 and not built: nothing yet moves R, so no approval is revoked outside a test.
+  and signing counters commit no epoch and take the held chain's approvals. The retire is below.
+- **A retire revokes K_old on a node only once that node is booted on K_new** (#361 C4). The laptop appends K_A's
+  single-use increment to the node's `rotations` in the measurements document (`anchorpolicy approve-increment`), only
+  once the new document already approves the node at G + 1, and never more than one generation ahead. Each node bumps
+  its rotation counter in sync's next round (`catch_up_rotation`), in order, and writes or signs nothing under K_A while
+  behind (`require_current`, in `node.anchor_approval`); a peer co-signs no lease for it (`check_rotation`, wired by the
+  lease co-signer, 48's lane). But a node booted on an image only K_old approved does NOT bump (it would strand
+  itself): until it reboots onto a K_new image, K_old's approval still opens that node's own objects, and its lease
+  refusal stops it serving within one lease. Agreed fix, not built: at a retire K_new re-signs the PCR 11 values of the
+  images still approved at G + 1, so a node bumps without rebooting (regalia-kms-05's conditions on #361); then the
+  window becomes "until the node's next sync round". systemd's own enrolments (cryptenroll, systemd-creds) name K_sys
+  directly and need C5's re-enrolment either way. Measured on swtpm only.
 - **K_A is taken from the sealed set's generation record** (`--offline-keys-record`, regalia-kms-95 on
   #438). It is verified under the pinned root, and its published key must equal the entry. Its private
   half is shown only by the record's `operation_proof` ("verified": the generating tool's own check of a

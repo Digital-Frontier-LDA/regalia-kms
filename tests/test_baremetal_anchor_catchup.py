@@ -120,3 +120,44 @@ class CatchUp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Wiring(unittest.TestCase):
+    """#361 C4 in the node (deploy/baremetal/node.py): every write and signature under K_A takes its approval through
+    node.anchor_approval, which refuses while R < G_pub; and catch_up_rotation bumps from the node's own document with the
+    generation of the set it is booted on. The bump and the refusal themselves are CatchUp's, on swtpm."""
+
+    def setUp(self):
+        from unittest import mock
+        from deploy.baremetal import measurements, node
+        self.node, self.mock = node, mock
+        self.cfg = {"node_id": "a", "tcti": "swtpm:path=/x", "state_dir": "/nonexistent"}
+        self.rotations = [{"from": 4, "signature": "00" * 64}]
+        manifest = {"anchor_policy_key": {"key": POINT}}
+        patches = [mock.patch.object(node, "_image", lambda cfg, pem_path, manifest: (None, b"pem")),
+                   mock.patch.object(node, "_chain_tip", lambda cfg: manifest),
+                   mock.patch.object(measurements, "held", lambda directory, manifest: {"held": True}),
+                   mock.patch.object(measurements, "rotations", lambda document, node_id: self.rotations),
+                   mock.patch.object(measurements, "anchor_approval", lambda manifest, document, node_id, pem, cls:
+                                     {"class": cls, "generation": 6})]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_every_approval_under_k_a_requires_a_current_rotation_counter(self):
+        calls = []
+        with self.mock.patch.object(ap, "require_current", lambda index, node_id, rotations, run: calls.append((index, node_id, rotations))):
+            self.assertEqual(self.node.anchor_approval(self.cfg, "heartbeat")["class"], "heartbeat")
+        self.assertEqual(calls, [(ap.ROTATION_INDEX, "a", self.rotations)])
+
+        def behind(index, node_id, rotations, run):
+            raise m.Refused("a's rotation counter is 4, below the published 5: it bumps first")
+        with self.mock.patch.object(ap, "require_current", behind), self.assertRaisesRegex(m.Refused, "below the published 5: it bumps first"):
+            self.node.anchor_approval(self.cfg, "signing")
+
+    def test_the_catch_up_uses_the_node_s_rotations_and_its_booted_generation(self):
+        seen = []
+        with self.mock.patch.object(ap, "catch_up", lambda index, point, node_id, rotations, booted, run: seen.append(
+                (index, point, node_id, rotations, booted)) or 5):
+            self.assertEqual(self.node.catch_up_rotation(self.cfg), 5)
+        self.assertEqual(seen, [(ap.ROTATION_INDEX, POINT, "a", self.rotations, 6)])

@@ -535,7 +535,32 @@ def anchor_approval(cfg, cls, pem_path=None, manifest=None):
     if manifest is None:
         manifest = _chain_tip(cfg)
     document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
-    return measurements.anchor_approval(manifest, document, cfg["node_id"], pem, cls)
+    approval = measurements.anchor_approval(manifest, document, cfg["node_id"], pem, cls)
+    # #361 C4: every write and signature under K_A takes its approval here, so here a node behind on its rotation
+    # counter writes and signs nothing until it has caught up (an approval the retire revoked may still open its objects)
+    anchorpolicy.require_current(anchorpolicy.ROTATION_INDEX, cfg["node_id"], measurements.rotations(document, cfg["node_id"]), _tpm_run(cfg))
+    return approval
+
+
+def _tpm_run(cfg):
+    """subprocess.run for tpm2-tools against this node's TPM (its node.json tcti, else the default)."""
+    env = dict(os.environ, TPM2TOOLS_TCTI=cfg["tcti"]) if cfg.get("tcti") else None
+    return lambda argv, **kw: subprocess.run(argv, env=env, **kw)
+
+
+def catch_up_rotation(cfg, manifest=None, pem_path=None):
+    """#361 C4: this node's rotation counter brought up to the generation the root published for it (the measurements
+    document the tip commits to: its nodes.<id>.rotations), by K_A's single-use increments, in order. Refused, with R
+    as it was, when an entry is missing or when the image this node is booted on carries approvals below the published
+    generation (it keeps its old approval, still valid, until it boots one: no stranding). Returns R."""
+    _, pem = _image(cfg, pem_path, manifest)
+    if manifest is None:
+        manifest = _chain_tip(cfg)
+    document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
+    rotations = measurements.rotations(document, cfg["node_id"])
+    booted = measurements.anchor_approval(manifest, document, cfg["node_id"], pem, "anchor")["generation"]
+    return anchorpolicy.catch_up(anchorpolicy.ROTATION_INDEX, manifest["anchor_policy_key"]["key"], cfg["node_id"], rotations,
+                                 booted, _tpm_run(cfg))
 
 
 def _chain_tip(cfg):
@@ -1010,8 +1035,23 @@ class Sync:
         unable = None                           # the last refusal the proposer could not even start under
         self.refusals.flush()                   # its zeros from the start, then every round (refusals only count)
         try:
+            behind = None                       # the last refusal the rotation catch-up met (#361 C4), written once
             while not stop():
                 self.pull_round()
+                # #361 C4: after each round, this node's rotation counter is brought to the generation the root published,
+                # FIRST, before it proposes or signs: until it has, every write and signature under K_A is refused
+                try:
+                    if self.manifest()["schema"] == membership.SCHEMA_V4 and "anchor_policy_key" in self.manifest():
+                        before = anchorpolicy.read_rotation(anchorpolicy.ROTATION_INDEX, _tpm_run(self.node.cfg))
+                        after = catch_up_rotation(self.node.cfg)
+                        if after != before:
+                            self.trail({"event": "rotation-catch-up", "outcome": "ALLOW", "from": before, "to": after})
+                        behind = None
+                except (Refused, OSError) as refused:
+                    if str(refused) != behind:
+                        behind = str(refused)
+                        with contextlib.suppress(Exception):
+                            self.trail({"event": "rotation-catch-up", "outcome": "DENY", "reason": behind[:240]})
                 # #199: under v4 the nodes sign the heartbeats; this node proposes when it is its turn (beat.Proposer).
                 # A refusal before any proposal (no authenticated time, not a UKI boot: no PCR key to sign under) is
                 # written once per cause, so a node that can never sign is not silent (regalia-kms-1e's read)
