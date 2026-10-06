@@ -45,9 +45,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     - the daemon's halts (a peer heard below the quarantine epoch);
     - approvals naming their spending node (1e).
     Until they land, `full` is a recorded intent the daemon does not act on;
-  - the survivor's admission mode: recovery only with no unexpired normal lease, left at the first normal lease;
   - the daemon serving stateless operations only in that mode, and refusing keys under a directive (ed);
-  - installing the authorization on the node;
   - the majority committing a directive as a key-state change on its return;
   - the cap coming from the manifest's `recovery_authorization_max_s` (#459, stacked on #438; it is a constant here).
   **Accepted** (D28.6 amendment 5, D32.6):
@@ -60,9 +58,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - Recovery is entered only while no normal lease holds, is left at the first one, and is bounded by one lease
     lifetime and by the authorization's end.
   - It is recorded on the admission trail and raises `RegaliaSurvivorRecoveryActive` for as long as it holds.
+  - The authorization is installed by root at the node's console (`survivor.py install`, verified against the node's
+    manifest on its authenticated clock), and read again by admission every round: only a root-owned file only root
+    may write. `survivor.py remove` takes it away, and `survivor.py directive` applies an owner's disable.
   **The daemon serves nothing in recovery yet:** it refuses `mode: recovery` until its stateless-only gate exists
-  (ed). Not built yet: the node's source of the authorization (installed at the console, survivor.py, #493) and its
-  wiring into the admission service.
+  (ed). The directives applied on the node are not yet read by the daemon either.
 - **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
   refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
   its verification under the current manifest's `activation_signers`, each node's grant record and

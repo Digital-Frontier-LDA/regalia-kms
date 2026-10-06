@@ -288,3 +288,109 @@ class Directives:
             f.flush()
             os.fsync(f.fileno())
         return {h["directive"]["object_id"] for h in held} | {directive["object_id"]}
+
+
+# ---- on the node: the installed authorization (#432 item (e), part 3) ----
+
+AUTH_FILE = "survivor-authorization.json"         # in the admission service's own directory (node.held)
+MAX_AUTH_BYTES = 16 * 1024
+
+
+def installed(path, owner_uid=0):
+    """The signed authorization root installed at `path`, or None when there is none. Refused (and so not taken) when
+    it is not a regular root-owned file that only root may write, opened without following a link, or oversized."""
+    import stat
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise Refused("the survivor authorization at %s cannot be opened (%s)" % (path, error.strerror)) from None
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        require(stat.S_ISREG(st.st_mode) and st.st_uid == owner_uid and not st.st_mode & 0o022,
+                "%s is not a regular file of root's that only root may write: the survivor authorization is not taken" % path)
+        raw = f.read(MAX_AUTH_BYTES + 1)
+    require(len(raw) <= MAX_AUTH_BYTES, "the survivor authorization at %s is oversized" % path)
+    return membership.load(raw)
+
+
+def seconds_left(path, manifest, node_id, clock, owner_uid=0):
+    """For admission.Service(survivor=...): None when no authorization is installed; else the seconds the installed
+    one has left for `node_id` under `manifest` on the node's authenticated clock, or Refused (it does not hold).
+    Read again at every call: a new epoch, a removal or an expiry is seen at the next round."""
+    signed = installed(path, owner_uid)
+    if signed is None:
+        return None
+    seconds, authenticated = clock()
+    require(authenticated is True, "time is not authenticated: the survivor authorization cannot be judged (fail closed)")
+    expires, _scope = in_force(signed, manifest, node_id, int(seconds))
+    return expires - int(seconds)
+
+
+def _write_root(path, value):
+    directory = os.path.dirname(os.path.abspath(path))
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".survivor-")
+    try:
+        os.fchmod(fd, 0o644)
+        with os.fdopen(fd, "wb") as f:
+            f.write(membership.canonical(value) + b"\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def main(argv=None):
+    """`install` (root, at the node's console): the owner's survivor authorization verified against this node's
+    manifest on its authenticated clock, then written where its admission reads it. `remove`: taken away (the node
+    then serves only under a peer's lease). `directive`: an owner's disable-only directive verified and applied."""
+    import argparse
+    import sys
+    from deploy.baremetal import node as node_module
+    parser = argparse.ArgumentParser(prog="survivor", description=__doc__.split("\n\n")[0])
+    parser.add_argument("--config", required=True)
+    sub = parser.add_subparsers(dest="op", required=True)
+    i = sub.add_parser("install", help="install the owner's survivor authorization on this node")
+    i.add_argument("--authorization", required=True)
+    sub.add_parser("remove", help="remove the installed survivor authorization")
+    d = sub.add_parser("directive", help="apply the owner's disable-only directive on this node")
+    d.add_argument("--file", required=True)
+    args = parser.parse_args(argv)
+    if os.geteuid() != 0:
+        print("REFUSED: run as root, at the node's console", file=sys.stderr)
+        return 2
+    try:
+        node = node_module.Node(node_module.load(args.config))
+        path = node.held(AUTH_FILE)
+        if args.op == "remove":
+            if os.path.lexists(path):
+                os.unlink(path)
+            print("REMOVED: %s; this node serves again only under a peer's lease" % path)
+            return 0
+        manifest = node.manifest()
+        with open(args.authorization if args.op == "install" else args.file, "rb") as f:
+            signed = membership.load(f.read(MAX_AUTH_BYTES + 1))
+        if args.op == "directive":
+            # judged against the manifest at its quarantine epoch: on a survivor that is the current one
+            state = Directives(node.held("survivor-directives.jsonl")).apply(signed, manifest)
+            print("APPLIED: %s is disabled on this node (%s)" % (signed["directive"]["object_id"], sorted(state)))
+            return 0
+        seconds, authenticated = node.clock()()
+        require(authenticated is True, "time is not authenticated: the authorization cannot be checked (fail closed)")
+        expires, scope = in_force(signed, manifest, node.node_id, int(seconds))
+        _write_root(path, signed)
+        print("INSTALLED: %s, scope %s now, until %s; this node serves alone once it holds no peer's lease"
+              % (path, scope, signed["authorization"]["expires_at"]))
+        return 0
+    except (Refused, OSError, ValueError, KeyError) as refusal:
+        print("REFUSED: %s" % refusal, file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
