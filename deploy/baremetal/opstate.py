@@ -255,7 +255,8 @@ def verify_session(key, value, chain):
 # at /regalia/v1/state-epoch, signed (STATE_EPOCH_DOMAIN) by the node's manifest-pinned signing_key in force at
 # issued_at, judged by chain as sessions are. It is self-authorizing (ed): N is the authorization's quarantine epoch,
 # the authorization verifies against the manifest AT N from the chain's history (not its tip), is "full" and names
-# this node, and the entry is dated inside its full scope. A transition only raises N. Once seen it is never absent:
+# this node, the entry is dated inside its full scope, and as read it is bound to its store: the cluster it names and a
+# revision after the one it names (62). A transition only raises N. Once seen it is never absent:
 # a reader that has seen one refuses its deletion (the cache's rule, as key state). Leases carry the state epoch the
 # issuer holds; a node whose store holds another is refused (internal/opstate/gate.go).
 STATE_EPOCH_SCHEMA = "regalia.opstate-state-epoch/v1"
@@ -277,9 +278,12 @@ def state_epoch_message(entry):
     return STATE_EPOCH_DOMAIN + membership.canonical(entry)
 
 
-def verify_state_epoch(key, value, chain, previous=None):
+def verify_state_epoch(key, value, chain, previous=None, store=None):
     """The state-epoch entry at `key`, if it holds (above), else Refused. `chain`: the verified membership chain, oldest
-    first. `previous`: the entry it replaces (verified), or None for the first."""
+    first. `previous`: the entry it replaces (verified), or None for the first. `store`: (cluster_id, mod_revision) of
+    the etcd the entry was read from, or None before it is written (regalia-kms-62): the entry must name that cluster
+    and sit after the revision it names, so one copied into another store, or put back below its own take-over,
+    does not verify."""
     from deploy.baremetal import survivor                   # survivor imports nothing of opstate; local, to keep it so
     membership.exact(value, ("entry", "signature"), "the state-epoch value")
     entry = value["entry"]
@@ -298,6 +302,12 @@ def verify_state_epoch(key, value, chain, previous=None):
     in_force = _signing_key(at[-1], entry["node_id"]) if at else None
     require(in_force is not None, "%s had no signing key when its state epoch is dated" % entry["node_id"])
     membership.verify_revocation(*in_force, raw, value["signature"], "%s's state-epoch entry" % entry["node_id"])
+    if store is not None:
+        cluster_id, mod_revision = store
+        require(entry["cluster_id"] == cluster_id, "the state-epoch entry names cluster %s; it is stored in cluster %s"
+                % (entry["cluster_id"], cluster_id))
+        require(isinstance(mod_revision, int) and mod_revision > entry["revision_before"], "the state-epoch entry is stored at revision %r, "
+                "not after the %d its take-over named" % (mod_revision, entry["revision_before"]))
     if previous is not None:
         require(entry["state_epoch"] > previous["state_epoch"], "the store holds state epoch %d; %d is not above it"
                 % (previous["state_epoch"], entry["state_epoch"]))

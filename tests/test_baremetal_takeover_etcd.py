@@ -35,7 +35,8 @@ class RealEtcd:
     """Three members on localhost; the host the take-over sees (run/read/write/remove), its systemctl played on a."""
 
     def __init__(self, root):
-        self.root, self.procs, self.files = root, {}, {etcdconf.CONFIG_PATH: config_text()}
+        self.root, self.procs, self.files = root, {}, {etcdconf.CONFIG_PATH: config_text(), tk.BOOT_ID: "x\n"}
+        self.daemon = True                                # regalia-kms.service: played, it writes nothing here
         p = ports(6)
         self.peer = {n: "http://127.0.0.1:%d" % p[i] for i, n in enumerate("abc")}
         self.client = {n: "http://127.0.0.1:%d" % p[3 + i] for i, n in enumerate("abc")}
@@ -65,13 +66,26 @@ class RealEtcd:
                 proc.kill()
                 proc.wait(10)
 
-    def wait(self, url, seconds=30):
+    def wait(self, url, seconds=30, write=True):
+        """Until etcd at `url` takes a write (a formed cluster), or only answers (write=False: alone without quorum)."""
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
-            if self.ctl(url, "put", "/probe", "x").returncode == 0:
+            if write and self.ctl(url, "put", "/probe", "x").returncode == 0:
+                return
+            if not write and self.listening(url):
                 return
             time.sleep(0.3)
         raise AssertionError("etcd at %s never answered" % url)
+
+    @staticmethod
+    def listening(url):
+        """etcd's client port takes a connection: a member alone without quorum answers no request, but it runs."""
+        host, port = url.rsplit("/", 1)[-1].split(":")
+        try:
+            with socket.create_connection((host, int(port)), timeout=1):
+                return True
+        except OSError:
+            return False
 
     def ctl(self, url, *args, input=None):
         return subprocess.run([BINS["ETCDCTL_BIN"], "--endpoints", url, "--command-timeout=5s"] + list(args), input=input,
@@ -92,6 +106,11 @@ class RealEtcd:
         self.files.pop(path, None)
 
     def run(self, argv, input=None):
+        if argv[0] == "systemctl" and argv[-1] == tk.DAEMON:
+            if argv[1] != "is-active":
+                self.daemon = argv[1] != "stop"
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            return subprocess.CompletedProcess(argv, 0 if self.daemon else 3, "active\n" if self.daemon else "inactive\n", "")
         if argv[0] == "systemctl":
             verb = argv[1]
             if verb == "stop":
@@ -99,7 +118,7 @@ class RealEtcd:
             elif verb in ("start", "restart"):
                 self.stop("a")
                 self.start("a", force=tk.DROPIN in self.files and json.loads(self.files[tk.TAKEOVER_CONFIG])["force-new-cluster"])
-                self.wait(self.client["a"], 90)
+                self.wait(self.client["a"], 90, write=False)
             elif verb == "is-active":
                 return subprocess.CompletedProcess(argv, 0 if "a" in self.procs else 3, "active\n" if "a" in self.procs else "inactive\n", "")
             elif verb == "show":
@@ -140,7 +159,10 @@ class TakeOverRealEtcd(unittest.TestCase):
         epoch, said = self.take_over()
         self.assertEqual(epoch, 2, said)
         got = json.loads(self.host.ctl(self.host.client["a"], "get", opstate.STATE_EPOCH_KEY, "--print-value-only").stdout)
-        entry = opstate.verify_state_epoch(opstate.STATE_EPOCH_KEY, got, self.chain)
+        kv = json.loads(self.host.ctl(self.host.client["a"], "get", opstate.STATE_EPOCH_KEY, "-w", "json").stdout)["kvs"][0]
+        entry = opstate.verify_state_epoch(opstate.STATE_EPOCH_KEY, got, self.chain, None, (self.cluster, kv["mod_revision"]))
+        self.assertEqual(kv["mod_revision"], entry["revision_before"] + 1)          # the first write: the daemon was stopped
+        self.assertTrue(self.host.daemon)
         self.assertEqual((entry["cluster_id"], entry["state_epoch"]), (self.cluster, 2))
         self.assertGreaterEqual(entry["revision_before"], self.applied)
         members = json.loads(self.host.ctl(self.host.client["a"], "member", "list", "-w", "json").stdout)["members"]
@@ -154,13 +176,14 @@ class TakeOverRealEtcd(unittest.TestCase):
         after = json.loads(self.host.ctl(self.host.client["a"], "get", opstate.STATE_EPOCH_KEY, "-w", "json").stdout)["kvs"][0]
         self.assertEqual(before["mod_revision"], after["mod_revision"])
 
-    def test_a_store_behind_what_was_applied_is_refused_and_etcd_left_stopped(self):
+    def test_a_store_behind_what_was_applied_is_refused_and_both_started_again(self):
         self.host.files[tk.APPLIED] = json.dumps({"boot_id": "x", "boottime_ns": 1, "cluster_id": self.cluster,
                                                   "revision": self.applied + 100, "state_epoch": 0})
         with self.assertRaises(tk.Refused) as caught, contextlib.redirect_stdout(io.StringIO()):
             tk.run(self.host, self.signed, self.chain, "a", NOW, sign)
         self.assertIn("below the %d this node applied" % (self.applied + 100), str(caught.exception))
-        self.assertNotIn("a", self.host.procs)
+        self.assertIn("a", self.host.procs)               # nothing forced: etcd and the daemon back as they were
+        self.assertTrue(self.host.daemon)
         self.assertNotIn(tk.DROPIN, self.host.files)
 
 

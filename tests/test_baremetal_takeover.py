@@ -49,12 +49,12 @@ class FakeHost:
 
     def __init__(self):
         self.files = {tk.APPLIED: json.dumps({"boot_id": "x", "boottime_ns": 1, "cluster_id": "%016x" % CLUSTER, "revision": 4700,
-                                              "state_epoch": 0}), etcdconf.CONFIG_PATH: config_text()}
+                                              "state_epoch": 0}), etcdconf.CONFIG_PATH: config_text(), tk.BOOT_ID: "x\n"}
         self.owners, self.calls = {}, []
         self.is_active = (3, "inactive")
         self.backend_revision, self.revision, self.cluster = 4711, 4711, CLUSTER
         self.members = ["a", "b", "c"]
-        self.kv = None                                   # (version, value text)
+        self.kv = None                                   # (version, value text, mod_revision)
         self.keep_dropin = False
         self.race = False
 
@@ -91,7 +91,7 @@ class FakeHost:
         if what[:2] == ["member", "list"]:
             return self.done(0, json.dumps({"members": [{"name": n} for n in self.members]}))
         if what[0] == "get":
-            kvs = [{"version": self.kv[0], "value": base64.b64encode(self.kv[1].encode()).decode()}] if self.kv else []
+            kvs = [{"version": self.kv[0], "mod_revision": self.kv[2], "value": base64.b64encode(self.kv[1].encode()).decode()}] if self.kv else []
             return self.done(0, json.dumps({"kvs": kvs} if kvs else {}))
         if what[0] == "txn":
             self.input = input
@@ -100,7 +100,7 @@ class FakeHost:
             if self.race or want != have:
                 return self.done(0, json.dumps({"header": {}}))
             value = json.loads(input.split("\n")[2].split(" ", 2)[2])
-            self.kv, self.revision = (have + 1, value), self.revision + 1
+            self.kv, self.revision = (have + 1, value, self.revision + 1), self.revision + 1
             return self.done(0, json.dumps({"succeeded": True}))
         raise AssertionError(argv)
 
@@ -129,6 +129,7 @@ class TakeOver(unittest.TestCase):
         self.assertEqual(epoch, 2)
         ctl = [tk.ETCDCTL, "--endpoints", tk.ENDPOINT]
         self.assertEqual(self.host.calls, [
+            ["systemctl", "stop", tk.DAEMON], ["systemctl", "is-active", tk.DAEMON],          # 62: the daemon first, nothing writes before step 7
             ["systemctl", "stop", tk.UNIT], ["systemctl", "is-active", tk.UNIT],
             [tk.ETCDUTL, "snapshot", "status", etcdconf.DATA_DIR + "/member/snap/db", "-w", "json"],
             ["systemctl", "daemon-reload"], ["systemctl", "start", tk.UNIT],
@@ -136,12 +137,15 @@ class TakeOver(unittest.TestCase):
             ctl + ["get", opstate.STATE_EPOCH_KEY, "-w", "json"], ctl + ["txn", "-w", "json"],
             ["systemctl", "daemon-reload"], ["systemctl", "restart", tk.UNIT],
             ["systemctl", "show", "--property=DropInPaths", "--value", tk.UNIT],
-            ctl + ["endpoint", "status", "-w", "json"], ctl + ["member", "list", "-w", "json"]])
+            ctl + ["endpoint", "status", "-w", "json"], ctl + ["member", "list", "-w", "json"],
+            ["systemctl", "daemon-reload"], ["systemctl", "start", tk.DAEMON]])
         self.assertIn("state epoch 2", said)
         self.assertNotIn(tk.DROPIN, self.host.files)
         self.assertNotIn(tk.TAKEOVER_CONFIG, self.host.files)
         # the entry etcd holds verifies on its own: what a wiped, rejoined node reads
-        entry = opstate.verify_state_epoch(opstate.STATE_EPOCH_KEY, json.loads(self.host.kv[1]), self.chain)
+        entry = opstate.verify_state_epoch(opstate.STATE_EPOCH_KEY, json.loads(self.host.kv[1]), self.chain, None,
+                                           ("%016x" % CLUSTER, self.host.kv[2]))
+        self.assertEqual(self.host.kv[2], 4712)                                         # the first write after the take-over
         self.assertEqual((entry["state_epoch"], entry["revision_before"], entry["cluster_id"]), (2, 4711, "%016x" % CLUSTER))
 
     def test_the_forced_configuration_is_etcd_s_own_file_and_the_drop_in_points_at_it(self):
@@ -175,6 +179,15 @@ class TakeOver(unittest.TestCase):
         self.host.backend_revision = 4699
         self.refused("the backend on disk is at revision 4699, below the 4700 this node applied")
         self.assertNotIn(tk.DROPIN, self.host.files)
+        # nothing forced yet: etcd and the daemon are started again as they were (no stranding)
+        self.assertEqual(self.host.calls[-3:], [["systemctl", "daemon-reload"], ["systemctl", "start", tk.UNIT],
+                                                ["systemctl", "start", tk.DAEMON]])
+
+    def test_a_refusal_after_the_force_leaves_both_stopped_for_the_next_run(self):
+        self.host.cluster = CLUSTER + 1
+        self.refused("etcd answers as cluster")
+        self.assertIn(tk.DROPIN, self.host.files)
+        self.assertNotIn(["systemctl", "start", tk.DAEMON], self.host.calls)
 
     def test_etcd_must_answer_alone_as_the_same_cluster_at_no_lower_revision(self):
         start = self.host.run
@@ -218,6 +231,28 @@ class TakeOver(unittest.TestCase):
         self.assertIn("a's state-epoch entry signature does not verify", str(caught.exception))
         self.assertIsNone(self.host.kv)
         self.assertNotIn([tk.ETCDCTL, "--endpoints", tk.ENDPOINT, "txn", "-w", "json"], self.host.calls)
+
+    def test_a_value_at_the_key_is_verified_before_it_is_believed(self):
+        """62: "already taken over" only for an entry that verifies, bound to this store; anything else is refused."""
+        self.host.kv = (1, "not json", 4712)
+        self.refused("holds something that is not JSON")
+        self.setUp()
+        self.go()
+        version, text, _ = self.host.kv
+        self.setUp()
+        self.host.kv = (version, text, 4711)             # at the very revision its take-over named: not this store's
+        self.refused("is stored at revision 4711, not after the 4711")
+        self.setUp()
+        forged = json.loads(text)
+        forged["signature"] = p256_sig(NODE_KEYS["b"], opstate.state_epoch_message(forged["entry"]))
+        self.host.kv = (1, json.dumps(forged), 4712)
+        self.refused("state-epoch entry signature does not verify")
+        self.assertNotIn([tk.ETCDCTL, "--endpoints", tk.ENDPOINT, "txn", "-w", "json"], self.host.calls)
+
+    def test_applied_json_must_be_this_boot_s(self):
+        self.host.files[tk.BOOT_ID] = "y\n"
+        self.refused("applied.json is from boot x, not this one")
+        self.assertEqual(self.host.calls, [])
 
     def test_applied_json_is_read_exactly(self):
         self.host.files[tk.APPLIED] = json.dumps({"cluster_id": "%016x" % CLUSTER, "revision": 1})

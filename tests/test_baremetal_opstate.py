@@ -80,7 +80,8 @@ class Vectors(unittest.TestCase):
         for c in doc["state_epoch_checks"]:
             with self.subTest(c["name"]):
                 try:
-                    entry = opstate.verify_state_epoch(c["key"], c["value"], doc["state_epoch_chain"], c["previous"])
+                    entry = opstate.verify_state_epoch(c["key"], c["value"], doc["state_epoch_chain"], c["previous"],
+                                                       tuple(c["store"]) if c["store"] else None)
                     got, why = True, ""
                     self.assertEqual(entry["state_epoch"], c["applied_state_epoch"])
                 except m.Refused as refused:

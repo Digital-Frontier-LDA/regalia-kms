@@ -308,8 +308,11 @@ def took_over(entry, signer=A_NEW, raw=None):
     return {"entry": entry, "signature": p256_sig(signer, raw if raw is not None else opstate.STATE_EPOCH_DOMAIN + m.canonical(entry))}
 
 
-def state_epoch_case(name, value, accept, previous=None, where=opstate.STATE_EPOCH_KEY):
-    STATE_EPOCH_CASES.append({"name": name, "key": where, "value": value, "previous": previous, "accept": accept,
+STORE = ["62ff5b5c1a2e3d4f", 4712]                  # (cluster_id, mod_revision) the entry is read from: right after its take-over
+
+
+def state_epoch_case(name, value, accept, previous=None, where=opstate.STATE_EPOCH_KEY, store=STORE):
+    STATE_EPOCH_CASES.append({"name": name, "key": where, "value": value, "previous": previous, "store": store, "accept": accept,
                               "applied_state_epoch": value["entry"]["state_epoch"] if accept else None})
 
 
@@ -331,6 +334,11 @@ state_epoch_case("b's authorization carried in a's entry", took_over(state_epoch
 state_epoch_case("under another key", took_over(state_epoch()), False, where=opstate.PREFIX + "state-epoch/2")
 state_epoch_case("a signature over the entry without its domain", took_over(state_epoch(), raw=m.canonical(state_epoch())), False)
 state_epoch_case("an entry with a field the format does not have", took_over(dict(state_epoch(), note="x")), False)
+state_epoch_case("read before it is stored (the writer's own check): no store to bind", took_over(state_epoch()), True, store=None)
+state_epoch_case("read long after its take-over, in the same store", took_over(state_epoch()), True, store=["62ff5b5c1a2e3d4f", 990000])
+state_epoch_case("copied into another cluster", took_over(state_epoch()), False, store=["0123456789abcdef", 4712])
+state_epoch_case("stored at the very revision its take-over named", took_over(state_epoch()), False, store=["62ff5b5c1a2e3d4f", 4711])
+state_epoch_case("the manifest at N has another counting member", took_over(state_epoch(3, authorization=survivor_authorization(3))), False)
 state_epoch_case("an authorization the owner did not sign", took_over(state_epoch(authorization=dict(
     survivor_authorization(), signature=dict(survivor_authorization()["signature"], sig="00" * 64)))), False)
 
@@ -395,7 +403,7 @@ def decide_session(c):
 
 def decide_state_epoch(c):
     try:
-        opstate.verify_state_epoch(c["key"], c["value"], SE_CHAIN, c["previous"])
+        opstate.verify_state_epoch(c["key"], c["value"], SE_CHAIN, c["previous"], tuple(c["store"]) if c["store"] else None)
         return True, ""
     except m.Refused as refused:
         return False, str(refused)
