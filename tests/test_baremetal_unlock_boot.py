@@ -25,7 +25,7 @@ import unittest
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from deploy.baremetal import attest, bootcreds, bootnet, espcreds, firewall, membership, sitecfg, uki, unlock
+from deploy.baremetal import attest, bootcreds, bootnet, espcreds, firewall, measurements, membership, sitecfg, uki, unlock
 import tests.test_baremetal_unlock as tub
 
 BOOT = os.environ.get("REGALIA_BOOT_DIR", "")
@@ -734,8 +734,8 @@ class OnQemu(tub.OnSwtpm):
         no_shell(self, said)
 
         # boots 10-12, A NEW MANIFEST (#66 B3, the ESP advance): regalia-sync never moves the TPM anchor;
-        # regalia-esp-advance writes the chain to the ESP, THEN anchors it. These boots come last: they leave the
-        # guest's anchor at epoch 2. The peers still hold epoch 1, so the unlock itself is not what is shown here
+        # regalia-esp-advance writes the chain to the ESP, THEN anchors it. They leave the
+        # guest's anchor at epoch 2 (boot 13 continues from there). The peers still hold epoch 1, so the unlock itself is not what is shown here
         # (the recovery key is typed if asked): only what the initrd renders from, or refuses.
         m2 = dict(self.m1, epoch=2, prev_digest=membership.digest(self.m1), issued_at="2026-10-04T00:00:00Z")
         two = [self.chain[0], self.signed(m2)]
@@ -762,6 +762,41 @@ class OnQemu(tub.OnSwtpm):
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
         no_shell(self, said)
         self.assertEqual([e for e in self.events[since:] if e.get("event") == "unlock"], [])
+
+        # boot 13, #75 TIER Q, Q2: NEXT BOOTS UNDER A NEW EPOCH THAT APPROVES IT, AND A PEER UNDER THAT EPOCH UNLOCKS IT.
+        # The root's epoch 3 commits to a measurement document approving CURRENT and NEXT (boot 2k's other kernel)
+        # for a (policy_version, #332). The peers take epochs 2 and 3 and a heartbeat for 3; THEIR POLICY IS READ OUT OF
+        # THAT DOCUMENT, never set by hand (regalia-kms-d9 on #439: a document that forgot NEXT must fail this boot).
+        # The guest's ESP and anchor move to epoch 3. NEXT then boots unattended: rendered under epoch 3 (high-water 3),
+        # its own initrd-phase PCR 11 on the console, the key given by a peer whose decision was made under epoch 3.
+        # (Q3, NEXT not approved, is boot 2k-unapproved.)
+        approving = {"schema": measurements.SCHEMA, "name": "e2e-next", "nodes": {"a": reference(expected["pcr12"], (("e2e", record), ("e2e-k2", other_kernel)))}}
+        m3 = dict(m2, epoch=3, prev_digest=membership.digest(m2), issued_at="2026-10-05T00:00:00Z", policy_version=measurements.version(approving))
+        three = two + [self.signed(m3)]
+        # the peers pin the base test's root (tub.rt), the guest the image's (self.signed): the same manifests, each
+        # signed for whom it reaches
+        for peer in ("b", "c"):
+            for manifest in (m2, m3):
+                self.stores[peer].commit(tub.rt.sign(manifest))
+            self.fresh[peer].accept(tub.hbt.beat(m3, 2, issued=self.now), m3)
+        self.assertTrue(all(self.stores[p].load()["epoch"] == 3 for p in ("b", "c")))
+        # the peers' policy for a: the document the epoch commits to, as validated, checked bound to that epoch
+        self.assertEqual(self.stores["b"].load()["policy_version"], measurements.version(approving))
+        self.reference = {"accepted": measurements.validate(approving)["a"]}
+        self.assertEqual([entry["label"] for entry in self.reference["accepted"]], ["e2e", "e2e-k2"])
+        self.chain = three
+        self.anchor_guest(three)
+        since = len(self.events)
+        said = self.boot("13-next-under-epoch-3", credentials, image="e2e-k2")
+        print("boot 13: the peers' decisions: %s" % [(e.get("event"), e.get("peer"), e.get("outcome"), (e.get("reason") or "")[:160])
+                                                     for e in self.events[since:]], file=sys.stderr)
+        # the render first: a stale ESP fails here, as a render, not later as a peer refusal (ed's read)
+        self.assertIn("regalia-unlock: rendered the boot configuration of a under manifest epoch 3 (TPM high-water 3)", said)
+        unattended(self, said)
+        self.assertEqual(initrd_pcr11(said), other_kernel["pcr11"]["initrd"])
+        allowed = [e for e in self.events[since:] if e.get("event") == "unlock" and e.get("outcome") == "ALLOW"]
+        self.assertTrue(allowed and all(e.get("epoch") == 3 for e in allowed), "no peer under epoch 3 gave the key: %s" % allowed)
+        no_shell(self, said)
 
     def anchor_guest(self, envelopes):
         """The guest's TPM anchor moved to the tip of `envelopes` while the guest is off (what regalia-esp-advance
