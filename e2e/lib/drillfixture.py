@@ -70,6 +70,27 @@ class Fixture:
     def undoers(self):
         return {"power-on": self.power_on, "power-cycle": self.power_cycle, "unpartition": self.heal}
 
+    # S4's owner acts, done for real here: the owner's key on the fixture's SoftHSM token, the shipped survivor command
+    def quarantine(self, survivor, others):
+        """An owner-signed epoch with `others` QUARANTINED, given to the survivor; alone, it takes the owner's hand
+        heartbeat for it (owner_recovery: #199's hand recovery)."""
+        manifest, _ = self.cluster.advance(survivor, signer="owner", owner_recovery=True, **{o: "QUARANTINED" for o in others})
+        return {"epoch": manifest["epoch"]}
+
+    def authorize(self, survivor):
+        signed = self.cluster.survivor_authorization(survivor)
+        done = self.cluster.install_survivor(survivor, signed)
+        if done.returncode != 0:
+            raise RuntimeError("survivor install on %s failed (%d): %s" % (survivor, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
+        return {"expires_at": signed["authorization"]["expires_at"], "scope": signed["authorization"]["scope"],
+                "said": (done.stdout or "").strip()[-200:]}
+
+    def lift(self, survivor, others):
+        """A root-signed epoch with `others` ACTIVE again, delivered to the survivor (deliver.py): any new epoch ends the
+        survivor authorization (survivor.py)."""
+        manifest, _ = self.cluster.advance(survivor, signer="root", **{o: "ACTIVE" for o in others})
+        return {"epoch": manifest["epoch"]}
+
 
 class LeaseJudge:
     """judge(name, context) for drill.scenarios, from the admission trails. Every predicate waits (bounded) for the
@@ -112,6 +133,37 @@ class LeaseJudge:
         return (took_ms is not None and took_ms <= bound * 1000), {"stopped after (ms)": took_ms, "bound (s)": bound,
                                                                    "line": denied[0] if denied else None}
 
+    RECOVERY = "RECOVERY: serving alone under the owner's survivor authorization"
+
+    def _s4(self, ctx):
+        node, t_off, t_auth = ctx["node"], ctx["t_inject_ms"], ctx["t_auth_ms"]
+        # alone, its peer's lease runs out: it stops serving in lease mode (before or after the quarantine epoch)
+        stopped = self._stops_within_a_lease(node, t_off)
+        # then the owner's authorization: serving in RECOVERY, and its admission file says so
+        got = until(lambda: [e for e in self.serving(node, t_auth) if e.get("outcome") == "ALLOW"
+                             and (e.get("reason") or "").startswith(self.RECOVERY)], 120, 2)
+        recovered = got if isinstance(got, list) else []
+        document = self.cluster.lease(node) or {}
+        return {"alone, it stops serving under a lease within one lease": stopped,
+                "it serves in RECOVERY under the owner's authorization, its admission file in mode recovery":
+                    (bool(recovered) and document.get("mode") == "recovery",
+                     {"recovery line": recovered[0] if recovered else None, "mode": document.get("mode")})}
+
+    def _s4_back(self, ctx):
+        node, t_off, t_lift = ctx["node"], ctx["t_inject_ms"], ctx["t_lift_ms"]
+        # never served under a lease while the others were down (from one lease after they went off, to the lift)
+        lease_mode = [e for e in self.serving(node, t_off + (lease.MAX_LIFETIME + admission.MARGIN + SLACK_S) * 1000)
+                      if e.get("outcome") == "ALLOW" and not (e.get("reason") or "").startswith(self.RECOVERY)
+                      and e.get("at", 0) < t_lift // 1000]
+        got = until(lambda: [e for e in self.serving(node, t_lift) if e.get("outcome") == "ALLOW"
+                             and not (e.get("reason") or "").startswith(self.RECOVERY)], 300, 3)
+        normal = got if isinstance(got, list) else []
+        document = self.cluster.lease(node) or {}
+        return {"never served under a lease while the others were down": (not lease_mode, {"lease-mode lines": lease_mode}),
+                "the others back, it leaves recovery at its first normal lease":
+                    (bool(normal) and document.get("mode") == "lease" and normal[0].get("epoch") == self.epoch(),
+                     {"first normal line": normal[0] if normal else None, "mode": document.get("mode"), "epoch now": self.epoch()})}
+
     def __call__(self, name, ctx):
         node, t = ctx.get("node"), ctx.get("t_inject_ms")
         lease_window = lease.MAX_LIFETIME + admission.MARGIN + SLACK_S
@@ -128,6 +180,10 @@ class LeaseJudge:
                       "the other two serve throughout": self._others_serve(node, t)}
         elif name == "S3-healed":
             judged = {"healed, it serves again, under the current epoch": self._serves_again(node, ctx["t_heal_ms"])}
+        elif name == "S4":
+            return self._s4(ctx)
+        elif name == "S4-back":
+            return self._s4_back(ctx)
         elif name == "S5-wait":                      # drill.scenarios stops the roll unless this holds
             return {"it serves again, under the current epoch": self._serves_again(node, ctx["restarts"][-1]["t_inject_ms"])}
         elif name == "S5":

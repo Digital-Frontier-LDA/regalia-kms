@@ -289,8 +289,16 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   runner's S1, S2, S3 and S5 on the three-node fixture, each fault journaled first. It judges them from the admission
   trails: the others keep serving, a cut node stops within one lease, a returning node serves again under the current
   epoch. The fixture runs no KMS daemon, so the request-level predicates (no failed request, stateful commits, caught
-  up before a served request) are listed as not judged in the run's report and are never entered as passes. S4 (the
-  owner's recovery authorization) isn't in the dry run. None of it has run on the real servers.
+  up before a served request) are listed as not judged in the run's report and are never entered as passes.
+  - **S4 is in the dry run at the lease level.** b and c are powered off and quarantined by an owner-signed epoch, and
+    a serves alone in RECOVERY under the owner's survivor authorization (signed on the fixture's SoftHSM token,
+    installed with the shipped `survivor install`). A root epoch then lifts the quarantine, b and c return, and a leaves
+    recovery at its first normal lease.
+  - **Not judged in S4:** stateless-only in recovery, because the daemon refuses to serve in recovery until its gate
+    exists. Also not built yet: the G1 fence evidence (the fixture uses the typed fallback), and the G5 export with the
+    readmitting epoch (#432 part 2).
+  - **On the real servers, S4's owner acts are by hand:** the hardware backend refuses them and says so.
+  - None of it has run on the real servers.
 
 - `moved_by_sync` (the sync round that moved a node to an epoch) cannot see how many envelopes a round received:
   trail events don't carry it. A node moved other than by its sync, right after a no-op round from the same peer,

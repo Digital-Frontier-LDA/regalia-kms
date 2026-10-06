@@ -381,13 +381,13 @@ jobs:
             python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
-      - name: The drill runner's S1, S2, S3, S5 on three nodes, judged at the lease level
+      - name: The drill runner's S1 to S5 on three nodes, judged at the lease level
         run: |
           set -o pipefail
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
             python3 -Es e2e/drill-dryrun.py | tee "$RUNNER_TEMP/drill.log"
-          grep -q '^drill-dryrun: 8 passed, 0 failed$' "$RUNNER_TEMP/drill.log" || {
-            echo "::error::the drill dry run did not pass all 8 checks" >&2; exit 1; }
+          grep -q '^drill-dryrun: 9 passed, 0 failed$' "$RUNNER_TEMP/drill.log" || {
+            echo "::error::the drill dry run did not pass all 9 checks" >&2; exit 1; }
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.
