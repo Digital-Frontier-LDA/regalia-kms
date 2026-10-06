@@ -26,6 +26,29 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **etcd's configuration from the manifest: the renderer only** (#432, ADR-0002 D32; `deploy/baremetal/etcdconf.py`).
+  Built:
+  - who is a member (the manifest's ACTIVE, MAINTENANCE and DRAINING nodes);
+  - each member's certificate bound once by the signing key the manifest pins for it (no CA). The latest binding that
+    verifies wins, and a rendered one is never gone back on;
+  - the timings from the measured p99 round trip (a commissioning failure above 500 ms);
+  - the configuration and a check of each of its settings:
+    - clients over the unix socket only, with no client TLS, which etcd ignores on a socket (d9, measured). The client
+      boundary is the socket's group;
+    - peers on the mesh over TLS 1.3, with certificates both ways, the key from the unit's credentials, and trust that is
+      the rendered bundle only;
+    - periodic compaction (1 h) and an explicit 2 GiB quota;
+    - the corruption checks (feature gates).
+  Not built yet:
+  - enrolment making the peer and server keys (into `systemd-creds`), the self-signed certificates and the binding;
+  - the bindings travelling by sync;
+  - defragmentation and the alerts on the backend's size and the corruption checks;
+  - a run of the rendered configuration under the image's etcd. The feature-gate names are v3.6's and are to be
+    confirmed there (d9's `e2e/etcd-unit-sandbox.sh`);
+  - writing the files, and the reconciler that adds or removes a running member after a root-signed epoch;
+  - where the measured round trip comes from (an input today).
+  **Accepted:** a member re-enrolled on the same TPM keeps its signing key, so an older binding still verifies. Renderers
+  that have seen the newer one refuse to go back, but a renderer starting fresh takes the newest binding it is shown.
 - **The shared operational state, `opstate/v1`: format only** (#432, ADR-0002 D32; `deploy/baremetal/opstate.py`,
   `tests/vectors/opstate-v1.json`). Built:
   - the entries (spend, sequence, quota, key-state), the etcd key each lives under, their verification, each kind's
