@@ -113,6 +113,31 @@ class FullScope(Case):
         self.refused("the fence evidence names ['b']", self.authorize, scope="full", fence=partial)
         self.refused("scope must be one of", self.authorize, scope="everything")
 
+    def test_the_fence_reaches_every_other_node_but_the_retired_and_stolen(self):
+        """05 on #516: no full scope while a node that may still run is not in the evidence; a RETIRED or REVOKED_STOLEN
+        node's hardware may be gone, so asking for its readback would make a redfish fence impossible forever."""
+        tip = manifest4(2, m.digest(self.m1), nodes4(b="QUARANTINED", c="RETIRED"))
+        signed = self.authorize(tip=tip, scope="full", fence=redfish_evidence(("b",)))
+        self.assertEqual(set(signed["authorization"]["fence"]["nodes"]), {"b"})
+        self.refused("the fence evidence names ['b', 'c']; the nodes to fence are ['b']", self.authorize, tip=tip, scope="full",
+                     fence=redfish_evidence(("b", "c")))
+        self.refused("the fence evidence names ['b']; the nodes to fence are ['b', 'c']", self.authorize, scope="full",
+                     fence=redfish_evidence(("b",)))
+        typed = self.authorize(tip=tip, scope="full")                  # the typed fallback names the same set
+        self.assertEqual(set(typed["authorization"]["fence"]["nodes"]), {"b"})
+
+    def test_the_evidence_is_this_outage_s(self):
+        """05 on #516: read after the quarantine was signed, and again within the hour before the owner signs; a drill's
+        or an earlier outage's evidence against the same inventory does not replay."""
+        early = manifest4(2, m.digest(self.m1), nodes4(b="QUARANTINED", c="QUARANTINED"), issued_at="2026-10-05T11:59:30Z")
+        self.refused("b was read Off at 2026-10-05T11:59:00Z, before epoch 2's quarantine was signed (2026-10-05T11:59:30Z)",
+                     self.authorize, tip=early, scope="full", fence=redfish_evidence())
+        stale = redfish_evidence(day="2026-10-04")
+        self.refused("b's second Off readback (2026-10-04T11:59:10Z) is not within 3600 s before the owner signed", self.authorize,
+                     scope="full", fence=stale)
+        ahead = redfish_evidence(day="2026-10-06")
+        self.refused("b's second Off readback (2026-10-06T11:59:10Z) is not within 3600 s", self.authorize, scope="full", fence=ahead)
+
     def test_a_redfish_fence_is_signed_only_against_the_inventory(self):
         """05 on #432: the box in the evidence is the box commissioned for that node, checked again where the owner signs."""
         self.refused("a redfish fence is checked against the fence inventory: give it", self.authorize, scope="full", fence=self.fence(),

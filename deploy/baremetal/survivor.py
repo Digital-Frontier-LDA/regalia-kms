@@ -51,6 +51,7 @@ FENCE_METHODS = ("redfish", "attested")     # G1: ForceOff then a PowerState rea
 REQUEST_LIFE_S = 900                        # opstate.MAX_REQUEST_LIFE_S (#492); a test holds the two equal once both land
 SKEW_S = 60
 FALLBACK_EXTRA_S = 600
+FENCE_MAX_AGE_S = 3600                       # the second Off readback, at most this long before the owner signs (05)
 MAX_AUTHORIZATION_S = 7 * 24 * 3600
 MAX_FENCED_BYTES = 512
 DIRECTIVE_SCHEMA = "regalia.survivor-directive/v1"
@@ -142,11 +143,31 @@ def verify_authorization(signed, current, node_id=None):
     loose = sorted(n for n, node in nodes.items() if n != survivor and node["state"] not in membership.NOT_COUNTING)
     require(not loose, "a lone survivor needs every other node quarantined, revoked or retired under epoch %d; %s %s not"
             % (current["epoch"], ", ".join(loose), "is" if len(loose) == 1 else "are"))
-    require(set(auth["fence"]["nodes"]) == set(nodes) - {survivor}, "the fence evidence names %s; the other nodes are %s"
-            % (sorted(auth["fence"]["nodes"]), sorted(set(nodes) - {survivor})))
+    must = fenceable(nodes, survivor)
+    require(set(auth["fence"]["nodes"]) == set(must), "the fence evidence names %s; the nodes to fence are %s (every other node but "
+            "the RETIRED and REVOKED_STOLEN ones, whose hardware may be gone)" % (sorted(auth["fence"]["nodes"]), must))
+    if auth["fence"]["method"] == "redfish":
+        # this outage's evidence, never a drill's or an earlier one's replayed against the same inventory (05 on #516):
+        # read after the quarantine was signed, and again shortly before the owner signed
+        quarantined = heartbeat.parse_time(current["issued_at"], "the quarantine manifest's issued_at")
+        signed_at = heartbeat.parse_time(auth["not_before"], "not_before")
+        for nid, seen in auth["fence"]["nodes"].items():
+            first = heartbeat.parse_time(seen["read_at"], "read_at")
+            again = heartbeat.parse_time(seen["read_again_at"], "read_again_at")
+            require(first >= quarantined, "%s was read Off at %s, before epoch %d's quarantine was signed (%s): fence it again"
+                    % (nid, seen["read_at"], current["epoch"], current["issued_at"]))
+            require(signed_at - FENCE_MAX_AGE_S <= again <= signed_at + heartbeat.FUTURE_SKEW,
+                    "%s's second Off readback (%s) is not within %d s before the owner signed (%s): fence it again"
+                    % (nid, seen["read_again_at"], FENCE_MAX_AGE_S, auth["not_before"]))
     if node_id is not None:
         require(survivor == node_id, "the survivor authorization is for %s, not %s" % (survivor, node_id))
     return auth
+
+
+def fenceable(nodes, survivor):
+    """The nodes a fence must reach: every other node but the RETIRED and REVOKED_STOLEN, whose hardware may be gone and
+    which can never count again (retirement is terminal); naming them would make a redfish fence impossible forever."""
+    return sorted(n for n, node in nodes.items() if n != survivor and node["state"] not in ("RETIRED", "REVOKED_STOLEN"))
 
 
 def full_from(auth):
@@ -182,13 +203,14 @@ def make_authorization(tip, survivor, how, now, confirm, open_signer, life_s=Non
     nodes = membership.validate(tip)
     others = sorted(n for n in nodes if n != survivor)
     _text(how, "how the other servers are fenced")
+    targets = fenceable(nodes, survivor)
     life = MAX_AUTHORIZATION_S if life_s is None else int(life_s)
     require(0 < life <= MAX_AUTHORIZATION_S, "a survivor authorization lives at most %d s" % MAX_AUTHORIZATION_S)
     auth = {"schema": AUTH_SCHEMA, "node_id": survivor, "quarantine_epoch": tip["epoch"], "quarantine_digest": membership.digest(tip),
             "not_before": _stamp(now), "expires_at": _stamp(now + life),
             "fenced": "%s: %s; they will not rejoin until they hold epoch %d" % (", ".join(others), how.strip(), tip["epoch"]),
             "scope": scope, "fence": fence or {"method": "attested", "nodes": {o: {"power_state": "unreachable", "read_at": _stamp(now)}
-                                                                                 for o in others}}}
+                                                                                 for o in targets}}}
     validate_authorization(auth)
     if auth["fence"]["method"] == "redfish":
         require(inventory, "a redfish fence is checked against the fence inventory: give it")
