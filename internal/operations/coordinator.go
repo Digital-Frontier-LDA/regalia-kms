@@ -269,9 +269,11 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 			return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
 		}
 		policyRequest.X509 = parsed
-		// This fingerprint is enforced by the Nitrokey backend against the token.
-		// Legacy advisory fingerprints and other backends are not a trusted pin.
-		if route.Binding.Backend == "nitrokey-pkcs11" {
+		// The selected registry object must also be development-only; the caller's
+		// context cannot authorize a production or staging object for this slice.
+		// Only Nitrokey enforces this fingerprint against the token. Legacy advisory
+		// fingerprints and other backends are not a trusted pin.
+		if route.Environment == "development" && route.Binding.Backend == "nitrokey-pkcs11" {
 			policyRequest.KeyFingerprint = route.Binding.PublicKeySHA256
 		}
 	}

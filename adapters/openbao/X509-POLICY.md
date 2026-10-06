@@ -30,6 +30,8 @@ Unknown nested fields are rejected. The owning policy must use environment
 `development`, operation `sign`, algorithm `p256`, a payload cap of at most
 32 KiB and only the TBS content type. Actual issuer certificates and deployment
 names belong in private configuration, not example issue comments.
+The selected registry object must also be marked `development`; the caller's
+environment declaration and policy setting alone cannot enable another object.
 
 ## Execution contract
 
