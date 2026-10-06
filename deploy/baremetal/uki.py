@@ -8,7 +8,7 @@ record of what it will measure, and signed in a separate step by keys that are o
                                             --secure-boot-key K --secure-boot-cert C [--key-source file|engine:pkcs11]
     python3 -Es -m deploy.baremetal.uki verify  --image IMAGE --record RECORD --initrd-pub P --system-pub P --secure-boot-cert C
     python3 -Es -m deploy.baremetal.uki set     --record RECORD --label LABEL --tpm-firmware-version HEX --pcrs FILE
-                                            --esp ROOT [--credentials-record OUT]
+                                            --esp ROOT --rootfs-record FILE [--credentials-record OUT]
     python3 -Es -m deploy.baremetal.uki initrd-review --initrd INITRD [--initrd-inventory FILE]   (the review build records, #198)
     python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd INITRD [--root /]                (its inventory, to read in a PR)
 
@@ -1679,14 +1679,27 @@ def credential_files(esp):
     return files
 
 
-def measurement_set(record, label, firmware, pcrs, credentials):
+ROOTFS_SCHEMA = "regalia.rootfs-build/v1"
+
+
+def rootfs_sha256(rootfs_record):
+    """The root filesystem a measurement set names (#61): build-rootfs.sh's record's rootfs_sha256. Only its form
+    is checked here: the record is unsigned, and the set is what the root approves (measurements.py)."""
+    require(isinstance(rootfs_record, dict) and rootfs_record.get("schema") == ROOTFS_SCHEMA,
+            "the rootfs record is not a %s record (build-rootfs.sh's rootfs-build.json)" % ROOTFS_SCHEMA)
+    require(attest.is_hex(rootfs_record.get("rootfs_sha256"), 64), "the rootfs record's rootfs_sha256 must be 64 lowercase hex")
+    return rootfs_record["rootfs_sha256"]
+
+
+def measurement_set(record, label, firmware, pcrs, credentials, rootfs_record):
     """The measurement set of this image on one host (KERNEL-UPDATE.md step 1.4): that host's TPM firmware
     version and its own PCR values, with PCR 11 per phase from the record, and with `credentials` (the
     node's ESP credential files, {file name: bytes}) PCR 12 as systemd-stub will measure them
     (espcreds.pcr12). PCR 12 has one value for both phases: nothing extends it after the initrd (measured
     in the unlock boot test, #215). It is never given by hand: a set that should hold it is made from the
     files. It is REQUIRED: a set without it would leave PCR 12 unattested, the gap #66 closed, and after
-    stage B2 a host with no credentials cannot be unlocked unattended anyway."""
+    stage B2 a host with no credentials cannot be unlocked unattended anyway. The set also names the root
+    filesystem the image is installed with (`rootfs_record`, build-rootfs.sh's record): an image is both."""
     load_record(membership.canonical(record), signed=True)
     require(isinstance(pcrs, dict) and "11" not in pcrs, "the host's PCR values must not give PCR 11: it comes from the image's record, per phase")
     require("12" not in pcrs, "the host's PCR values must not give PCR 12: it is computed from the node's credential files (--credentials)")
@@ -1699,7 +1712,8 @@ def measurement_set(record, label, firmware, pcrs, credentials):
              # the keys the image is signed with, from its SIGNED record: what enrol may seal to (#190, #265)
              "signing": {"initrd": record["signed"]["pcr_signatures"]["initrd"]["pkfp"],
                          "system": record["signed"]["pcr_signatures"]["system"]["pkfp"],
-                         "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]}}
+                         "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]},
+             attest.ROOTFS_KEY: rootfs_sha256(rootfs_record)}
     try:
         attest.validate_sets([entry], "set")
     except attest.Refused as refusal:
@@ -1755,6 +1769,7 @@ def main(argv=None):
     c.add_argument("--pcrs", required=True, help='a JSON file: {"0": "<64 hex>", "7": ...}, the host\'s own values, without PCR 11 or 12')
     c.add_argument("--esp", metavar="ROOT", required=True, help="the node's ESP as it will be: PCR 12 is computed from ROOT/loader/credentials")
     c.add_argument("--credentials-record", metavar="OUT", help="write what PCR 12 was computed from (espcreds.record)")
+    c.add_argument("--rootfs-record", required=True, help="build-rootfs.sh's rootfs-build.json: the root the image is installed with (#61)")
     c = sub.add_parser("initrd-review", help="review an initrd as build does, and print the findings")
     c.add_argument("--initrd", required=True)
     c.add_argument("--unlock-client", required=True, help="the unlock client the build compiled")
@@ -1814,7 +1829,8 @@ def main(argv=None):
         else:
             record = load_record(read(args.record, 1024 * 1024))
             files = credential_files(args.esp)
-            entry = measurement_set(record, args.label, args.tpm_firmware_version, membership.load(read(args.pcrs, 65536)), files)
+            entry = measurement_set(record, args.label, args.tpm_firmware_version, membership.load(read(args.pcrs, 65536)), files,
+                                    membership.load(read(args.rootfs_record, 1024 * 1024)))
             if args.credentials_record:
                 fd = os.open(args.credentials_record, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
                 with os.fdopen(fd, "w") as f:
