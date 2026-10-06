@@ -20,8 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
-from deploy.baremetal import membership as m, opstate  # noqa: E402
-from tests.test_baremetal_membership_v4 import NODE_KEYS, manifest4, nodes4, p256, p256_sig, typed  # noqa: E402
+from deploy.baremetal import membership as m, opstate, survivor  # noqa: E402
+from tests.test_baremetal_membership_v4 import NODE_KEYS, OWNER_KEYS, manifest4, nodes4, p256, p256_sig, typed  # noqa: E402
 
 
 def key(seed):
@@ -271,6 +271,77 @@ session_case("a node the manifest does not hold", vouched(session(node_id="z"), 
 session_case("a session key of 31 bytes", vouched(session(key="00" * 31)), False)
 session_case("a signature over the entry without its domain", {"entry": session(), "signature": p256_sig(A_NEW, m.canonical(session()))}, False)
 
+# the state epoch (opstate.verify_state_epoch): a take-over at epoch 2 by a (whose key rotates at that epoch), the
+# quarantine lifted at 3, a second take-over at 4 by b
+_SE2 = nodes4(b="QUARANTINED", c="QUARANTINED")
+_SE2[0]["signing_key"] = typed(A_NEW)
+_SE4 = nodes4(a="QUARANTINED", c="QUARANTINED")
+_SE4[0]["signing_key"] = typed(A_NEW)
+SE_CHAIN = [_M1]
+for _epoch, _nodes, _at in ((2, _SE2, "2026-10-05T11:00:00Z"), (3, copy.deepcopy(_NODES2), "2026-10-06T00:00:00Z"),
+                            (4, _SE4, "2026-10-07T00:00:00Z")):
+    SE_CHAIN.append(manifest4(_epoch, m.digest(SE_CHAIN[-1]), _nodes, issued_at=_at))
+STATE_EPOCH_CASES = []
+
+
+def survivor_authorization(epoch=2, who="a", scope="full", day="2026-10-05", **over):
+    tip = SE_CHAIN[epoch - 1]
+    others = sorted({"a", "b", "c"} - {who})
+    auth = {"schema": survivor.AUTH_SCHEMA, "node_id": who, "quarantine_epoch": epoch, "quarantine_digest": m.digest(tip),
+            "not_before": day + "T12:00:00Z", "expires_at": "%s-%02dT12:00:00Z" % (day[:7], int(day[8:]) + 1),
+            "fenced": "%s: off at the iLO" % ", ".join(others), "scope": scope,
+            "fence": {"method": "redfish", "nodes": {o: {"power_state": "Off", "read_at": day + "T11:59:00Z"} for o in others}}}
+    auth.update(over)
+    return {"authorization": auth, "signature": {"party": m.OWNER, "key": typed(OWNER_KEYS[0])["key"],
+                                                 "sig": OWNER_KEYS[0].sign(survivor.authorization_message(auth)).hex()}}
+
+
+def state_epoch(epoch=2, who="a", authorization=None, **over):
+    entry = {"schema": opstate.STATE_EPOCH_SCHEMA, "state_epoch": epoch, "node_id": who,
+             "authorization": authorization or survivor_authorization(epoch, who), "cluster_id": "62ff5b5c1a2e3d4f",
+             "revision_before": 4711, "issued_at": "2026-10-05T12:20:00Z"}
+    entry.update(over)
+    return entry
+
+
+def took_over(entry, signer=A_NEW, raw=None):
+    return {"entry": entry, "signature": p256_sig(signer, raw if raw is not None else opstate.STATE_EPOCH_DOMAIN + m.canonical(entry))}
+
+
+STORE = ["62ff5b5c1a2e3d4f", 4712]                  # (cluster_id, mod_revision) the entry is read from: right after its take-over
+
+
+def state_epoch_case(name, value, accept, previous=None, where=opstate.STATE_EPOCH_KEY, store=STORE):
+    STATE_EPOCH_CASES.append({"name": name, "key": where, "value": value, "previous": previous, "store": store, "accept": accept,
+                              "applied_state_epoch": value["entry"]["state_epoch"] if accept else None})
+
+
+SECOND = state_epoch(4, "b", survivor_authorization(4, "b", day="2026-10-07"), issued_at="2026-10-07T12:20:00Z")
+state_epoch_case("a's take-over at its quarantine epoch, signed by the key a holds since that epoch", took_over(state_epoch()), True)
+state_epoch_case("b's take-over at epoch 4 over a's at 2", took_over(SECOND, NODE_KEYS["b"]), True, previous=state_epoch())
+state_epoch_case("an epoch below the one the store holds", took_over(state_epoch()), False, previous=SECOND)
+state_epoch_case("the same epoch again", took_over(state_epoch()), False, previous=state_epoch())
+state_epoch_case("under a stateless authorization", took_over(state_epoch(authorization=survivor_authorization(scope="stateless"))), False)
+state_epoch_case("dated before the full scope begins", took_over(state_epoch(issued_at="2026-10-05T12:10:00Z")), False)
+state_epoch_case("dated after the authorization ended", took_over(state_epoch(issued_at="2026-10-06T12:00:00Z")), False)
+state_epoch_case("an epoch-2 authorization claimed for epoch 3 (judged at N, not at the tip)",
+                 took_over(state_epoch(3, authorization=survivor_authorization(2), issued_at="2026-10-06T00:20:00Z")), False)
+state_epoch_case("an epoch the chain does not hold", took_over(state_epoch(9, authorization=survivor_authorization(2))), False)
+state_epoch_case("signed by a's key replaced at the quarantine epoch", took_over(state_epoch(), NODE_KEYS["a"]), False)
+state_epoch_case("signed by b's key for a's take-over", took_over(state_epoch(), NODE_KEYS["b"]), False)
+state_epoch_case("b's authorization carried in a's entry", took_over(state_epoch(4, "a", survivor_authorization(4, "b", day="2026-10-07"),
+                                                                       issued_at="2026-10-07T12:20:00Z")), False)
+state_epoch_case("under another key", took_over(state_epoch()), False, where=opstate.PREFIX + "state-epoch/2")
+state_epoch_case("a signature over the entry without its domain", took_over(state_epoch(), raw=m.canonical(state_epoch())), False)
+state_epoch_case("an entry with a field the format does not have", took_over(dict(state_epoch(), note="x")), False)
+state_epoch_case("read before it is stored (the writer's own check): no store to bind", took_over(state_epoch()), True, store=None)
+state_epoch_case("read long after its take-over, in the same store", took_over(state_epoch()), True, store=["62ff5b5c1a2e3d4f", 990000])
+state_epoch_case("copied into another cluster", took_over(state_epoch()), False, store=["0123456789abcdef", 4712])
+state_epoch_case("stored at the very revision its take-over named", took_over(state_epoch()), False, store=["62ff5b5c1a2e3d4f", 4711])
+state_epoch_case("the manifest at N has another counting member", took_over(state_epoch(3, authorization=survivor_authorization(3))), False)
+state_epoch_case("an authorization the owner did not sign", took_over(state_epoch(authorization=dict(
+    survivor_authorization(), signature=dict(survivor_authorization()["signature"], sig="00" * 64)))), False)
+
 BATCHES = []
 
 
@@ -330,6 +401,14 @@ def decide_session(c):
         return False, str(refused)
 
 
+def decide_state_epoch(c):
+    try:
+        opstate.verify_state_epoch(c["key"], c["value"], SE_CHAIN, c["previous"], tuple(c["store"]) if c["store"] else None)
+        return True, ""
+    except m.Refused as refused:
+        return False, str(refused)
+
+
 def decide_check(c):
     try:
         opstate.check_approvals(c["spend"], c["approvals"], APPROVER_SETS)
@@ -371,7 +450,8 @@ def main():
         got, why = decide_case(c)
         assert got == c["accept"], (c["name"], why)
         c["python_reason"] = why
-    for group, decide in ((CHECKS, decide_check), (SIGNS, decide_sign), (SESSION_CASES, decide_session), (FRESH, decide_fresh)):
+    for group, decide in ((CHECKS, decide_check), (SIGNS, decide_sign), (SESSION_CASES, decide_session), (FRESH, decide_fresh),
+                          (STATE_EPOCH_CASES, decide_state_epoch)):
         for c in group:
             got, why = decide(c)
             assert got == c["accept"], (c["name"], why)
@@ -383,7 +463,8 @@ def main():
     doc = {"schema": "regalia.opstate-vectors/v1", "domain": opstate.DOMAIN.decode().rstrip("\0") + "\\0", "max_batch": opstate.MAX_BATCH,
            "sessions": SESSIONS, "approver_sets": APPROVER_SETS, "skew_s": opstate.SKEW_S, "payload_hex": PAYLOAD.hex(), "cases": CASES,
            "approval_checks": CHECKS, "sign_checks": SIGNS,
-           "chain": CHAIN, "session_checks": SESSION_CASES, "fresh_checks": FRESH, "batches": BATCHES}
+           "chain": CHAIN, "session_checks": SESSION_CASES, "fresh_checks": FRESH, "batches": BATCHES,
+           "state_epoch_chain": SE_CHAIN, "state_epoch_checks": STATE_EPOCH_CASES}
     json.dump(composed(copy.deepcopy(doc)), sys.stdout, indent=1, sort_keys=True)
     sys.stdout.write("\n")
 
