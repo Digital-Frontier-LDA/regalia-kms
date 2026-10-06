@@ -222,6 +222,13 @@ consumed even if the hardware result was indeterminate (`POLICY.md`); the same n
 then answered `CONFLICT`. A retry after `BACKEND_UNAVAILABLE` or `DEADLINE_EXCEEDED` is therefore a
 new request, and may repeat an operation the token already performed.
 
+**An approval-gated request is pinned to one node** (#432). Its approvals name the node that signs
+(`context.signer`, the binding's seventh record), so retrying it on another node after a failover
+cannot succeed: it is refused (`INVALID_ARGUMENT`, `approval-signer-other-node`) or, with no
+`context.signer`, its approvals simply do not count there. That is the design, not a fault: collect
+approvals for the new node and send the request there with a new nonce. Requests without
+`required_approvals` are not pinned and fail over freely.
+
 ## What a client must not build on
 
 - **Response ordering or timing.** Both vary with hardware and policy state.
