@@ -309,8 +309,16 @@ def scenario(cluster):
         cluster.stop(victim)                            # down when it is revoked: it takes the epoch as a stopped node
         seed = survivors[0]
         manifest, since = cluster.advance(seed, signer=signer, **{victim: state})
-        counting = [s for s in survivors if s in cluster.manifest["heartbeat_signers"]["parties"] and cluster.running(s)
-                    and may(manifest, s, "authorize")]
+        # who counts is the manifest's (a party that may authorize), never whether its sync is up at this instant: an
+        # owner-signed epoch restarts the seed's services, and a check of `running` here once found none, skipped the
+        # lone-node branch silently and left step 8 nothing to see (regalia-kms-48 on #440). A survivor that counts must
+        # be running; one that is not fails here, by name
+        counting = [s for s in survivors if s in cluster.manifest["heartbeat_signers"]["parties"] and may(manifest, s, "authorize")]
+        # `is not True`: until() returns the exception it last saw at its deadline (a systemctl that could not start),
+        # which is truthy and must not read as running (CodeRabbit on #446; the same trap as #434's)
+        down = [s for s in counting if until(lambda s=s: cluster.running(s), 60, 1) is not True]
+        ok(not down, "every survivor that counts at epoch %d (%s) is running" % (manifest["epoch"], ", ".join(counting)),
+           {s: cluster.journal(s, "sync")[-800:] for s in down})
         if len(counting) == 1:
             # #199: one node left that counts. Nobody can co-sign its heartbeat for the new epoch: it stays without one
             # (fail closed) until the operator's hand recovery, owner.py beat, which the scenario now plays explicitly
@@ -360,6 +368,8 @@ def scenario(cluster):
         ok(bool(reason) and not cluster.lease(victim) and not any(leased_by(cluster, s, victim, since) for s in survivors),
            "N: and no lease, because %s" % reason, cluster.journal(victim, "admission")[-400:])
         cluster.stop(victim)
+    # the last epoch (b REVOKED_STOLEN) leaves one node that counts: its hand recovery ran, or this step proved nothing of it
+    ok(len(alone_at) == 1, "one node was left alone in step 7 and recovered by hand: %s" % [(n, e) for n, e, _ in alone_at])
 
     header("8  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
     wrong = cluster.audit_complete()
