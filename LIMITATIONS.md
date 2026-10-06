@@ -26,6 +26,41 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **The shared operational state, `opstate/v1`: format only** (#432, ADR-0002 D32; `deploy/baremetal/opstate.py`,
+  `tests/vectors/opstate-v1.json`). Built:
+  - the entries (spend, sequence, quota, key-state), the etcd key each lives under, their verification, each kind's
+    transition rule, and one Reserve's transaction rule, as a library with a vector for the Go side.
+  Not built yet:
+  - nothing writes or reads etcd: the daemon's transactions and watch cache are regalia-kms-ed's;
+  - nothing yet writes the session entries (`sessions/<node>/<boot_id>/<key>`, signed by the node's signing key at each
+    daemon start), nor the spend's approvals into the signer's audit line, which the collector re-verifies against
+    `approvals_sha256` (`check_approvals`); the daemon calls `may_sign` at sign (ed);
+  - the D25 approver sets are the caller's, not yet read from the policy;
+  - garbage collection by hour-bucketed etcd leases.
+  - the etcd role that grants the daemons put, never delete, under `/regalia/v1/` (ed's daemon). Until it exists, a
+    client of the etcd socket could delete a key. A reader that has seen a key-state refuses its absence, but a reader
+    starting fresh cannot tell a deleted key from a new one.
+  **Accepted:**
+  - etcd isn't Byzantine-tolerant. A member with root can withhold entries or serve old ones. It cannot forge an
+    entry, because every entry carries its own signatures. A whole-cluster rollback is caught by the revision in the
+    signed heartbeats (planned, #432).
+  - A transaction that loses a race is retried at most three times, one round trip each, then refused.
+  - A request stays spendable at most 900 s after it is spent (`MAX_REQUEST_LIFE_S`, enforced on every spend). A lone
+    survivor's full scope waits that long, plus 60 s, from the owner's attestation that the others are fenced, so
+    nothing the far side spent before it was fenced can be spent again (regalia-kms-1e).
+  - A spend's key is collected by an etcd lease of `(expires_at - at) + 60 s`, on the etcd leader's clock. A leader whose
+    clock runs more than 60 s ahead of the signer's could collect it before the request expires, and the nonce could
+    then be spent again. Authenticated time (NTS) on every server bounds that, and `may_sign` refuses a request that
+    expires within 60 s.
+  - A node's session key vouches only until the node's signing key is replaced (its window ends at the replacing
+    manifest's issued_at). A node still running the old key between then and its adoption of the new epoch writes
+    nothing that verifies. That fails closed.
+  - An entry's `at` is judged on arrival (`fresh`, within 60 s of the reader's clock). A reader that only lists
+    entries later can't tell a backdated entry inside a session's window; the collector judges `at` against when it
+    saw the entry's create revision.
+  - Session entries are never deleted, so every old spend stays verifiable. They are about 300 bytes each, one per
+    daemon start.
+  - Quota days are UTC days.
 - **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
   refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
   its verification under the current manifest's `activation_signers`, each node's grant record and
@@ -96,6 +131,14 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.
+  - **Break-glass custody is decided, not yet produced** (owner, 2026-10-05; 24 on rc#111). One binary SOPS file per
+    node, `ownerauth-<node>.bg.sops`, replaces the ceremony's `.bg.age` envelope. It is encrypted to the post-quantum
+    "ownerauth-recovery" identity in offline-keys' D28 key map, under the same SLIP-39 shares. That is
+    regalia-ceremony#111's change; until it lands, the ceremony writes `.bg.age`. The record keeps `bg_sha256` as that
+    file's digest, so `ownerauth.verify` is unchanged. The drill's check (`python3 -Es -m deploy.baremetal.ownerauth check`)
+    is built. With sops 3.13.1, age 1.3.2 and the test vector it was run by hand without a TPM: the post-quantum
+    recipient (an mlkem768x25519 stanza) decrypts byte for byte, and another node's value is refused. That hand run
+    split the key with ssss as a stand-in for offline-keys' opening, which rc#111 is building.
 - **The total-outage re-anchor is rehearsed on software TPMs only** (#391, `e2e/three-node-reanchor.py`). It covers one
   kind of damage, uses cryptsetup and a pty rather than a console, and doesn't run the operator's source checks.
   The one-peer and both-peers-destroyed cases aren't rehearsed (MEMBERSHIP-RECOVERY.md, "What the rehearsal does
@@ -152,6 +195,35 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
+- **The operational state (ADR-0002 D32, #432): watched by the daemon, not yet enforced.** When
+  `operational_state_endpoint`, `operational_state_dir` and `session_key_dir` are configured, the daemon
+  (`internal/opstate`):
+  - watches the local etcd member through its unix socket;
+  - publishes the revision it has applied (`/run/regalia-state/applied.json`);
+  - makes a session key at each start and publishes its public half (`/run/regalia-kms/session-key.json`).
+
+  Not done yet:
+  - The state gate (`opstate.StateGate`: the lease names this daemon's session key and cluster, the cache has
+    applied the lease's `state_revision`, the last confirmation is within one lease) is built and tested but
+    **not wired into the fence**. It joins once the serving lease (runtime lease v2, regalia-kms-95) carries
+    those fields.
+  - The entries aren't verified in Go yet (`opstate-v1`), and spends, high-water marks and key state aren't
+    committed through etcd. The policy journal is still the per-node file (`policy.FileState`).
+  - The daemon's unit doesn't yet join `regalia-etcd-client`, the group that may open etcd's socket. That
+    group arrives with #484's sysusers, and naming it before then would stop the unit from starting.
+  - The lone survivor's stateless serving under the owner's authorization (D32 item 6) has no gate path yet.
+  - The session key's private half lives in the Go heap. It is never written, but it isn't locked against
+    swap: the hosts are expected to run without swap, and nothing checks that.
+  - **`applied.json`'s `state_epoch` is always 0 for now.** The signed `/regalia/v1/state-epoch` entry (#492's
+    format) isn't verified by the cache yet. Until it is, a survivor's history after `--force-new-cluster` can't
+    be told from the lost tail by this field.
+  - **Once the runtime lease v2 (#489) is in, production must set the three settings.** Without them the
+    daemon writes neither file, so its node requests no lease and stops serving.
+  - **Restoring etcd from a snapshot moves its revision back.** The cache refuses a store that went backwards
+    and publishes nothing, so the file goes stale. Every issuer's revision floor refuses too (#489). Both
+    fail closed. The recovery step after a restore is to restart `regalia-kms` and `regalia-sync` on every
+    node: a fresh cache, a fresh floor, then one lease of fail-closed. It belongs in the etcd recovery runbook
+    when that is written.
 
 ## Tokens and the HSM gate (#72)
 
