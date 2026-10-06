@@ -398,6 +398,19 @@ class HardwareBackend(unittest.TestCase):
         self.assertEqual([s["scenario"] for s in out["scenarios"]], ["S1", "S2", "S3", "S5"])
         self.assertIn("recovered", out["scenarios"][0])
 
+    def test_what_the_recovery_must_show_counts_and_can_fail_the_scenario(self):
+        def judge(name, ctx):
+            if name == "S1-back":
+                return {"caught up before serving": (False, "served at revision 7 below the lease's 9")}
+            return {"seen": (True, name)}
+        out = drill.run(drill.scenarios(self.hw, {"S1": "c", "S3": "a"}, judge), abort=lambda: None, restore=lambda: None)
+        s1, s3 = out["scenarios"]
+        self.assertFalse(s1["passed"])
+        self.assertFalse(s1["predicates"]["after recovery: caught up before serving"]["ok"])
+        self.assertTrue(s3["passed"])
+        self.assertIn("after recovery: seen", s3["predicates"])            # S3-healed judged too
+        self.assertFalse(out["passed"])
+
     def test_a_plan_with_no_scenario_is_refused(self):
         with self.assertRaises(m.Refused):
             drill.scenarios(self.hw, {}, lambda name, ctx: {})

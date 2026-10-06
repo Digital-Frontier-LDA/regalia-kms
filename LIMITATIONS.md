@@ -248,6 +248,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 
 ## Tests
 
+- **The production drills (#495) are dry-run in tier N at the lease level only.** `e2e/drill-dryrun.py` runs the drill
+  runner's S1, S2, S3 and S5 on the three-node fixture, each fault journaled first. It judges them from the admission
+  trails: the others keep serving, a cut node stops within one lease, a returning node serves again under the current
+  epoch. The fixture runs no KMS daemon, so the request-level predicates (no failed request, stateful commits, caught
+  up before a served request) are listed as not judged in the run's report and are never entered as passes. S4 (the
+  owner's recovery authorization) isn't in the dry run. None of it has run on the real servers.
+
 - `moved_by_sync` (the sync round that moved a node to an epoch) cannot see how many envelopes a round received:
   trail events don't carry it. A node moved other than by its sync, right after a no-op round from the same peer,
   would be credited to that peer. In the scenarios only the seed is moved otherwise, and it is never asked (#393).

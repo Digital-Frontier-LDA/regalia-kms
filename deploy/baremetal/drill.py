@@ -300,7 +300,13 @@ def run(scenarios, abort, restore, clock=time.time):
             entry["passed"] = bool(entry["predicates"]) and all(p["ok"] for p in entry["predicates"].values())
             check("after judging %s" % scenario["name"])
             if scenario.get("recover"):                # the fault undone (a server powered back on, a cut healed)
-                entry["recovered"] = scenario["recover"]()
+                recovered = scenario["recover"]()
+                # what the recovery itself must show (a returning server catching up before it serves) counts too
+                after = recovered.pop("predicates", {}) if isinstance(recovered, dict) else {}
+                entry["recovered"] = recovered
+                for name, (good, evidence) in after.items():
+                    entry["predicates"]["after recovery: " + name] = {"ok": bool(good), "evidence": evidence}
+                entry["passed"] = bool(entry["predicates"]) and all(p["ok"] for p in entry["predicates"].values())
                 check("after recovering %s" % scenario["name"])
             entry["ended_ms"] = _ms(clock)
     try:
@@ -408,8 +414,11 @@ def scenarios(backend, plan, judge):
     # each scenario in its own scope: its node is bound when it is built, never read later from a shared name
     def s1(node):
         ctx = {"node": node}
+        def back():                         # S1, then the server powered on: S2's predicates on its return
+            ctx.update(on=backend.power_on(node), t_on_ms=now())
+            return {"record": ctx["on"], "predicates": judge("S1-back", ctx)}
         return {"name": "S1", "inject": lambda: ctx.update(t_inject_ms=now(), off=backend.power_off(node)) or ctx,
-                "judge": lambda: judge("S1", ctx), "recover": lambda: backend.power_on(node)}
+                "judge": lambda: judge("S1", ctx), "recover": back}
 
     def s2(node):
         ctx = {"node": node}
@@ -418,8 +427,11 @@ def scenarios(backend, plan, judge):
 
     def s3(node):
         ctx = {"node": node}
+        def healed():                       # on heal it catches up before it serves
+            ctx.update(healed=backend.heal(node), t_heal_ms=now())
+            return {"record": ctx["healed"], "predicates": judge("S3-healed", ctx)}
         return {"name": "S3", "inject": lambda: ctx.update(t_inject_ms=now(), cut=backend.partition(node)) or ctx,
-                "judge": lambda: judge("S3", ctx), "recover": lambda: ctx.update(healed=backend.heal(node), t_heal_ms=now())}
+                "judge": lambda: judge("S3", ctx), "recover": healed}
 
     def s5(order):
         ctx = {"restarts": []}
