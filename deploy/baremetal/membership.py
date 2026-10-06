@@ -179,6 +179,38 @@ class Unusable(Refused):
     Distinct from a TPM that did not answer (a plain Refused): only this is what re-anchoring repairs."""
 
 
+SESSION_MEMORY = "out of memory for session contexts"     # TPM_RC_SESSION_MEMORY (0x903): no slot to load a session in
+
+
+def simulator_tcti(tcti=None):
+    """A private software TPM reached with no resource manager (swtpm, mssim): only there does a call's TPM state outlive
+    its process. Production's /dev/tpmrm0 cleans up after every connection (attest.node_init)."""
+    return (tcti or os.environ.get("TPM2TOOLS_TCTI", "")).startswith(("swtpm", "mssim"))
+
+
+def run_tpm2(run, argv, env, tcti=None, **kw):
+    """`run(argv)`, and once more after `tpm2_flushcontext -l` when a simulator had no session slot left (#512).
+
+    A session stays LOADED only while a tpm2-tools call holds it: every call saves its sessions' contexts when it ends
+    (measured on swtpm 2026-10-06: a live -S flow between calls holds 0 loaded, 1 saved). swtpm serves one connection at a
+    time, so while this process is connected no other call is, and every session loaded then belongs to a call that died
+    connected (killed between ContextLoad and ContextSave). The three-node fixture lost all three slots that way
+    (three-node-recovery, 0x903 on #493). The slot error comes from StartAuthSession or ContextLoad, before the command
+    itself runs, so the retry never repeats a command the TPM carried out. On /dev/tpmrm0 nothing is flushed or retried:
+    there an orphan cannot outlive its connection, and other processes' loaded sessions are not ours to flush."""
+    done = run(argv, capture_output=True, env=env, **kw)
+    if done.returncode == 0 or not simulator_tcti(tcti):
+        return done
+    err = done.stderr or b""
+    if SESSION_MEMORY not in (err if isinstance(err, str) else err.decode("utf-8", "replace")):
+        return done
+    import sys
+    print("regalia: %s: no session slot on a software TPM; its orphaned loaded sessions flushed, asked once more (#512)"
+          % (argv[0] if argv else "tpm2"), file=sys.stderr)
+    run(["tpm2_flushcontext", "-l"], capture_output=True, env=env)
+    return run(argv, capture_output=True, env=env, **kw)
+
+
 def _said(tool, index, done):
     """What tpm2_<tool> said when it failed on `index`, on this process's stderr (the unit's journal): the TPM's own reason
     for an anchor read that is then refused. The refusal's text does not change (the shared vectors pin it, #450); this
@@ -850,7 +882,7 @@ class HighWater:
     def _tpm(self, *args, **kw):
         import os
         env = dict(os.environ, **self.env) if self.env else None
-        return self.run(["tpm2_" + args[0], *args[1:]], capture_output=True, env=env, **kw)
+        return run_tpm2(self.run, ["tpm2_" + args[0], *args[1:]], env, (self.env or {}).get("TPM2TOOLS_TCTI"), **kw)
 
     def _owner(self, tool, index, *args, input=None):
         """An OWNER-authorized call: `-C o` and the owner authorization through ownerauth's one channel (#242 C)."""
