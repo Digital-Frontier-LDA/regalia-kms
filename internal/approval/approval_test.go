@@ -350,17 +350,19 @@ func TestTheCanonicalBindingIsTheBytesAPIMdPublishes(t *testing.T) {
 		Nonce:       "nonce-aaaa-bbbb-cccc",
 		ExpiresAt:   time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC),
 		Payload:     []byte("the bytes being signed"),
+		Signer:      "site-a",
 	}
 
 	// Literal, not recomputed. A test that rebuilt this from the same loop CanonicalBytes
 	// uses would agree with any change to that loop, which is the one thing it must not do.
-	const published = "regalia-approval-v2\n" +
+	const published = "regalia-approval-v3\n" +
 		"13:signing-key-1\n" +
 		"15:release-signing\n" +
 		"10:production\n" +
 		"20:nonce-aaaa-bbbb-cccc\n" +
 		"20:2026-01-02T15:04:05Z\n" +
-		"64:850578896d7e7f0c6b2d8c93a22f456a12545aec94b1cbbd3770e39f7582c59c\n"
+		"64:850578896d7e7f0c6b2d8c93a22f456a12545aec94b1cbbd3770e39f7582c59c\n" +
+		"6:site-a\n"
 
 	if got := string(binding.CanonicalBytes()); got != published {
 		t.Fatalf("DEFECT: the canonical binding no longer matches the vector API.md publishes.\n"+
@@ -376,7 +378,7 @@ func TestTheCanonicalBindingIsTheBytesAPIMdPublishes(t *testing.T) {
 	// vector, never an operator key, and gitleaks' generic-api-key rule fires on the shape
 	// `...Key = "<high entropy>"` regardless of which half of the pair it is.
 	const vectorPublicHalf = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="
-	const vectorSignature = "wO20bUHZh99VG+VzFp2M/+fz+8a7tYcynVUKzi4dAas6B2+mnzeI8jI0pHIZxSLyywcWo/zbOGoOCpidSo2CAg=="
+	const vectorSignature = "+8B8npyNKQegWZugMkXeTKnZdVf7BnmaooTrTWsD1aoCcPPyqO7UwB1l+ReBTkyywZnLLe++T1wBbMMi3nJyCg=="
 	publicKey, err := base64.StdEncoding.DecodeString(vectorPublicHalf)
 	if err != nil || len(publicKey) != ed25519.PublicKeySize {
 		t.Fatalf("API.md publishes an unusable public key %q: %v", vectorPublicHalf, err)
@@ -415,5 +417,26 @@ func TestTheCanonicalBindingIsTheBytesAPIMdPublishes(t *testing.T) {
 		t.Fatalf("DEFECT: the length prefix is not a byte count -- %q contains no \"5:café\", so "+
 			"an external signer counting bytes, as API.md specifies, disagrees with this daemon",
 			multibyte.CanonicalBytes())
+	}
+}
+
+// AN APPROVAL IS FOR ONE NODE (#432 G3): the signer is the seventh record, so an approval an approver gave for
+// node b does not verify over node a's binding, and a binding with no signer is another binding again.
+func TestAnApprovalForAnotherNodeDoesNotVerifyHere(t *testing.T) {
+	seed := make([]byte, ed25519.SeedSize)
+	key := ed25519.NewKeyFromSeed(seed)
+	forB := Binding{ObjectID: "k", Purpose: "p", Environment: "production", Nonce: "nonce-aaaa-bbbb-cccc",
+		ExpiresAt: time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC), Payload: []byte("x"), Signer: "b"}
+	signature := ed25519.Sign(key, forB.CanonicalBytes())
+	public := key.Public().(ed25519.PublicKey)
+	if !ed25519.Verify(public, forB.CanonicalBytes(), signature) {
+		t.Fatal("control: the approval does not verify for the node it names")
+	}
+	for _, signer := range []string{"a", ""} {
+		onOther := forB
+		onOther.Signer = signer
+		if ed25519.Verify(public, onOther.CanonicalBytes(), signature) {
+			t.Fatalf("DEFECT: node b's approval verifies over a binding whose signer is %q", signer)
+		}
 	}
 }

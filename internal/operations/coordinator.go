@@ -73,6 +73,9 @@ type Coordinator struct {
 	now              func() time.Time
 	// admission is nil unless the configuration requires a runtime lease (RequireAdmission).
 	admission Admission
+	// nodeID is this node as the membership manifest spells it (SetNodeID): the only signer an
+	// approval is verified for here (#432 G3).
+	nodeID string
 
 	// droppedMu guards droppedRecords, which Execute writes from concurrent request
 	// goroutines and the metrics handler reads.
@@ -118,6 +121,13 @@ type Admission interface {
 // lapsed while it ran.
 func (coordinator *Coordinator) RequireAdmission(gate Admission) {
 	coordinator.admission = gate
+}
+
+// SetNodeID names this node, the one signer this coordinator verifies approvals for (#432 G3):
+// an approval naming another node does not count here, and a request whose context names
+// another signer is refused by name.
+func (coordinator *Coordinator) SetNodeID(nodeID string) {
+	coordinator.nodeID = nodeID
 }
 
 // RecordAdmission writes the audit event for a change in this node's admission: it began to hold a
@@ -258,10 +268,18 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 	// RequiredApprovals: 1 and never 2. Evidence that fails any check is not an error; it
 	// is simply not an approver, because rejecting the request on bad evidence would let
 	// anyone who can reach the endpoint deny a valid request by appending garbage.
+	//
+	// AN APPROVAL IS FOR ONE NODE (#432 G3). The binding's signer is this node, never what the
+	// caller says, so another node's approvals simply do not verify here. A request whose context
+	// names another signer is refused by name first: sent to the wrong node, not under-approved.
+	if request.Context.Signer != "" && request.Context.Signer != coordinator.nodeID {
+		coordinator.recordOrCount(ctx, request, route, "deny", "approval-signer-other-node", started, false, nil)
+		return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
+	}
 	policyRequest.VerifiedApprovers = coordinator.approvers.Verify(request.Approvals, approval.Binding{
 		ObjectID: request.ObjectID, Purpose: request.Context.Purpose,
 		Environment: request.Context.Environment, Nonce: request.Context.Nonce,
-		ExpiresAt: request.Context.ExpiresAt, Payload: approvalPayload(request),
+		ExpiresAt: request.Context.ExpiresAt, Payload: approvalPayload(request), Signer: coordinator.nodeID,
 	})
 	if contentType == "application/vnd.cosmos.tx+protobuf" {
 		parsed, err := policy.ParseCosmosSignDoc(request.Data)

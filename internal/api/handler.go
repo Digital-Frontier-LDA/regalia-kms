@@ -22,6 +22,7 @@ const maxRequestBytes = 1_500_000
 
 var (
 	identifierPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{2,62}$`)
+	nodeIDPattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 	requestIDPattern   = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 	idempotencyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
 )
@@ -32,6 +33,9 @@ type OperationContext struct {
 	ExpiresAt   time.Time
 	Nonce       string
 	Subject     string
+	// Signer, when given, is the node the caller's approvals name (#432 G3): a request sent to
+	// another node is refused by name instead of failing as "not enough approvals".
+	Signer string
 }
 
 type Request struct {
@@ -93,6 +97,7 @@ type contextDocument struct {
 	ExpiresAt   string `json:"expires_at"`
 	Nonce       string `json:"nonce"`
 	Subject     string `json:"subject,omitempty"`
+	Signer      string `json:"signer,omitempty"`
 }
 
 type requestDocument struct {
@@ -292,7 +297,8 @@ func validateRequest(operation, principal, requestID, idempotencyKey string, doc
 	expiresAt, err := time.Parse(time.RFC3339Nano, document.Context.ExpiresAt)
 	if err != nil || !identifierPattern.MatchString(document.ObjectID) || !identifierPattern.MatchString(document.Context.Purpose) ||
 		(document.Context.Environment != "production" && document.Context.Environment != "staging" && document.Context.Environment != "development") ||
-		!idempotencyPattern.MatchString(document.Context.Nonce) || document.Context.Nonce != idempotencyKey || len(document.Context.Subject) > 256 {
+		!idempotencyPattern.MatchString(document.Context.Nonce) || document.Context.Nonce != idempotencyKey || len(document.Context.Subject) > 256 ||
+		(document.Context.Signer != "" && !nodeIDPattern.MatchString(document.Context.Signer)) {
 		return Request{}, errors.New("invalid operation context")
 	}
 	encoded, maximum := "", 0
@@ -368,6 +374,7 @@ func validateRequest(operation, principal, requestID, idempotencyKey string, doc
 		ObjectID: document.ObjectID, Operation: operation, Context: OperationContext{
 			Environment: document.Context.Environment, Purpose: document.Context.Purpose,
 			ExpiresAt: expiresAt, Nonce: document.Context.Nonce, Subject: document.Context.Subject,
+			Signer: document.Context.Signer,
 		}, Format: document.Format, ContentType: document.ContentType, Data: data, EnvelopeAAD: aad,
 	}
 	if operation == "seal-envelope" {

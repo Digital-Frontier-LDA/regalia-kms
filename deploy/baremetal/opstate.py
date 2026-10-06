@@ -251,8 +251,11 @@ def approvals_digest(approvals):
 def binding_bytes(spend, nonce):
     """What every approver signed: internal/approval.Binding.CanonicalBytes for the request this spend consumed (its
     nonce in clear, from the approvals; its expiry whole seconds, as RFC 3339 writes them)."""
-    lines = ["regalia-approval-v2\n"]
-    for field in (spend["object_id"], spend["purpose"], spend["environment"], nonce, spend["expires_at"], spend["payload_sha256"]):
+    lines = ["regalia-approval-v3\n"]
+    # the seventh record is the ONE node that may spend it (#432 G3): the spend's own node, so an approval given for
+    # another node does not verify for this spend
+    for field in (spend["object_id"], spend["purpose"], spend["environment"], nonce, spend["expires_at"], spend["payload_sha256"],
+                  spend["node_id"]):
         raw = field.encode()
         lines.append("%d:" % len(raw) + field + "\n")
     return "".join(lines).encode()

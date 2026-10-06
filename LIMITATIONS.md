@@ -41,6 +41,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     client of the etcd socket could delete a key. A reader that has seen a key-state refuses its absence, but a reader
     starting fresh cannot tell a deleted key from a new one.
   **Accepted:**
+  - **An approval is for one node** (#432 G3, `regalia-approval-v3`): the binding names the signer, and each node
+    verifies approvals for itself only. If that node is lost before it signs, the request must be approved again for
+    another node: a lost node costs a re-approval, never a double spend (even under a full-scope survivor whose
+    fencing attestation is wrong). Approvers and their tools must sign v3 bindings; a v2 approval no longer counts.
+    So an approval-gated request is node-pinned: its client must choose the signing node BEFORE collecting approvals,
+    and a client's failover to another node needs fresh approvals for that node (API.md; regalia-kms-48).
   - etcd isn't Byzantine-tolerant. A member with root can withhold entries or serve old ones. It cannot forge an
     entry, because every entry carries its own signatures. A whole-cluster rollback is caught by the revision in the
     signed heartbeats (planned, #432).
