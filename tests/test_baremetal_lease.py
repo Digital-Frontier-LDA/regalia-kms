@@ -716,6 +716,13 @@ class StateAndSessionKey(Case):
         self.peers["b"]["floor"] = self.floor(watched=lease.MAX_LIFETIME - 1)
         self.refused("less than one lease", self.issue)
         self.refused("not a fault: ask again in", self.issue)        # what the operator reads through update apply's WAIT
+        # and ONLY there (05 on #489): a real refusal never tells the operator to ignore it
+        self.peers["b"]["floor"] = self.floor(held=REVISION + 1)
+        with self.assertRaises(m.Refused) as caught:
+            self.issue()
+        self.assertIn("STALE STATE", str(caught.exception))
+        self.assertNotIn("not a fault", str(caught.exception))
+        self.assertEqual(open(lease.__file__).read().count("not a fault"), 1, "the expected-WAIT line is on the warm-up refusal alone")
 
     def test_another_cluster_is_refused(self):
         b = self.peers["b"]
