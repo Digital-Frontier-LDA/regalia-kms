@@ -138,11 +138,11 @@ jobs:
             echo "ETCDUTL_BIN=$RUNNER_TEMP/etcdutl"
           } >> "$GITHUB_ENV"
 
-      - name: the lone survivor's etcd take-over against the real etcd (#432)
+      - name: the lone survivor's etcd take-over and the fenced servers' rejoin, against the real etcd (#432)
         env:
           # with this set, missing etcd binaries fail the test instead of skipping it
           REGALIA_EXPECT_ETCD: "1"
-        run: python3 -Es -m unittest -v tests.test_baremetal_takeover_etcd
+        run: python3 -Es -m unittest -v tests.test_baremetal_takeover_etcd tests.test_baremetal_rejoin_etcd
 
       - name: test (both modules, race + vet)
         env:

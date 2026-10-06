@@ -48,13 +48,17 @@ class RealEtcd:
             self.close()                                 # never leave a member running behind a failed start
             raise
 
-    def start(self, n, force=False):
-        argv = [BINS["ETCD_BIN"], "--name", n, "--data-dir", os.path.join(self.root, n), "--listen-peer-urls", self.peer[n],
+    def start(self, n, force=False, initial=None, state="new"):
+        argv = [BINS["ETCD_BIN"], "--name", n, "--data-dir", self.data_dir(n), "--listen-peer-urls", self.peer[n],
                 "--initial-advertise-peer-urls", self.peer[n], "--listen-client-urls", self.client[n], "--advertise-client-urls",
-                self.client[n], "--initial-cluster", ",".join("%s=%s" % (m, self.peer[m]) for m in "abc"),
-                "--initial-cluster-token", "takeover-test", "--initial-cluster-state", "new"] + (["--force-new-cluster"] if force else [])
+                self.client[n], "--initial-cluster", initial or ",".join("%s=%s" % (m, self.peer[m]) for m in "abc"),
+                "--initial-cluster-token", "takeover-test", "--initial-cluster-state", state] + (["--force-new-cluster"] if force else [])
+        os.makedirs(os.path.dirname(self.data_dir(n)), exist_ok=True)
         with open(os.path.join(self.root, n + ".log"), "ab") as log:     # the child keeps its own descriptor
             self.procs[n] = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=log)
+
+    def data_dir(self, n):
+        return os.path.join(self.root, n)
 
     def stop(self, n):
         proc = self.procs.pop(n, None)
@@ -125,7 +129,7 @@ class RealEtcd:
                 return subprocess.CompletedProcess(argv, 0, (tk.DROPIN if tk.DROPIN in self.files else "") + "\n", "")
             return subprocess.CompletedProcess(argv, 0, "", "")
         real = {tk.ETCDCTL: BINS["ETCDCTL_BIN"], tk.ETCDUTL: BINS["ETCDUTL_BIN"]}[argv[0]]
-        argv = [real] + [self.client["a"] if a == tk.ENDPOINT else os.path.join(self.root, "a", "member", "snap", "db")
+        argv = [real] + [self.client["a"] if a == tk.ENDPOINT else os.path.join(self.data_dir("a"), "member", "snap", "db")
                          if a == tk.BACKEND else a for a in argv[1:]]
         return subprocess.run(argv, input=input, capture_output=True, text=True, timeout=60)
 

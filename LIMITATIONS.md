@@ -50,7 +50,15 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       - the daemon's rule that a stateful operation in recovery needs the store at the authorization's own epoch;
       - an arrival-time freshness check on the entry. A replaced signing key can still sign an entry dated before the
         replacement, inside the owner's authorization window;
-    - the rejoin (export the divergent tail, wipe, member add);
+    - the rejoin on a real host. `deploy/baremetal/rejoin.py` exists. A returning node comes back one at a time as an
+      etcd learner (admit, join, promote, finish), and its old data directory is kept, renamed, with its revision and
+      db SHA-256. It is tested on a scripted host and, in CI, against a real etcd 3.6.15. That test plays systemctl,
+      and localhost URLs stand in for the mesh URLs. Not yet:
+      - the divergent tail is kept but nothing reads it: the reconciliation of its spends (RECOVERY-RECONCILIATION.md)
+        and its shipment to the external audit collector are not built;
+      - regalia-etcd.service (#484): never run under systemd;
+      - etcd promotes a learner at 90% of the leader's index, so the survivor's commits can wait briefly after a
+        promotion while the newcomer catches up;
     - the daemon's halts (a peer heard below the quarantine epoch);
     - approvals naming their spending node (1e).
     Until they land, `full` is a recorded intent the daemon does not act on;
