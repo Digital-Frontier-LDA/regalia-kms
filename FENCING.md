@@ -37,6 +37,11 @@
    - A co-signer refuses a value below the revision it had itself applied one lease ago.
    - A co-signer signs nothing until it has one lease of history since its own start, so it fails closed.
    - The Gate serves under the lease only once its own cache has applied at least `state_revision`.
+   - The lease also names the etcd `cluster_id` and the `state_epoch` (`/regalia/v1/state-epoch`, signed, strictly
+     increasing; 0 while absent). The Gate refuses a lease whose `state_epoch` isn't the one its own watch holds.
+     After a survivor's `--force-new-cluster`, the cluster ID and revisions continue, so only the epoch tells the
+     survivor's history from the lost tail. Deleting the key reads as 0, which the issuers' floor refuses as going
+     back: it fails closed.
 5. **The store orders and replicates; it never decides.**
    - The store is etcd: Raft, crash-fault tolerant, not Byzantine-tolerant.
    - Every entry carries its own authorization (the approvers' signatures, the policy authority's, or the
