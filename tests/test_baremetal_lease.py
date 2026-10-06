@@ -160,11 +160,11 @@ class Case(unittest.TestCase):
 class Verify(Case):
     """What every verifier requires, whoever it is."""
 
-    def test_a_lease_from_an_active_peer_is_good_for_five_minutes(self):
+    def test_a_lease_from_an_active_peer_is_good_for_its_thirty_seconds(self):
         envelope = self.issue()
-        self.assertEqual(lease.verify(envelope, self.m1, self.now), 300)
+        self.assertEqual(lease.verify(envelope, self.m1, self.now), lease.MAX_LIFETIME)
         self.assertEqual(sorted(envelope["lease"]), sorted(lease.LEASE_KEYS))
-        self.later(299)
+        self.later(lease.MAX_LIFETIME - 1)
         self.assertEqual(lease.verify(envelope, self.m1, self.now), 1)
         self.later(1)
         self.refused("EXPIRED", lease.verify, envelope, self.m1, self.now)
@@ -192,14 +192,15 @@ class Verify(Case):
                 ("b's AK under another EK", "not signed by b's AK under the EK the manifest names", sign(self.body(), b, ek_name=c.ek_name)),
                 ("another manifest at this epoch", "another manifest at epoch 1 (digest mismatch)", sign(self.body(manifest_digest="00" * 32), b)),
                 ("a newer epoch than the verifier's", "newer than this verifier's 1: fetch the chain", sign(self.body(epoch=2), b)),
-                ("too long a life", "lives at most 300 seconds", sign(self.body(expires_at=hbt.stamp(self.now + 301)), b)),
+                ("too long a life", "lives at most %d seconds" % lease.MAX_LIFETIME, sign(self.body(expires_at=hbt.stamp(self.now + lease.MAX_LIFETIME + 1)), b)),
                 ("no life", "expires_at must be after issued_at", sign(self.body(expires_at=hbt.stamp(self.now)), b)),
-                ("issued in the future", "issued in the future", sign(self.body(issued_at=hbt.stamp(self.now + 31), expires_at=hbt.stamp(self.now + 300)), b)),
-                ("expired", "EXPIRED", sign(self.body(issued_at=hbt.stamp(self.now - 400), expires_at=hbt.stamp(self.now - 100)), b))):
+                ("issued in the future", "issued in the future", sign(self.body(issued_at=hbt.stamp(self.now + lease.FUTURE_SKEW + 1), expires_at=hbt.stamp(self.now + lease.FUTURE_SKEW + 1 + lease.MAX_LIFETIME)), b)),
+                ("expired", "EXPIRED", sign(self.body(issued_at=hbt.stamp(self.now - lease.MAX_LIFETIME - 10), expires_at=hbt.stamp(self.now - 10)), b))):
             with self.subTest(label):
                 self.refused(reason, lease.verify, envelope, self.m1, self.now)
-        ahead = sign(self.body(issued_at=hbt.stamp(self.now + 30), expires_at=hbt.stamp(self.now + 330)), b)
-        self.assertEqual(lease.verify(ahead, self.m1, self.now), 330)   # 30 s of skew between two authenticated clocks
+        skew = lease.FUTURE_SKEW
+        ahead = sign(self.body(issued_at=hbt.stamp(self.now + skew), expires_at=hbt.stamp(self.now + skew + lease.MAX_LIFETIME)), b)
+        self.assertEqual(lease.verify(ahead, self.m1, self.now), skew + lease.MAX_LIFETIME)   # the skew allowed between two authenticated clocks
 
     def test_the_quote_must_be_a_tpm_quote_over_this_lease_under_the_lease_domain(self):
         body, b = self.body(), self.keys["b"]
@@ -221,7 +222,7 @@ class Verify(Case):
                 change(envelope["signature"])
                 self.refused(reason, lease.verify, envelope, self.m1, self.now)
         self.refused("envelope fields mismatch", lease.verify, dict(good, extra=1), self.m1, self.now)
-        self.assertEqual(lease.verify(good, self.m1, self.now), 300)
+        self.assertEqual(lease.verify(good, self.m1, self.now), lease.MAX_LIFETIME)
 
     def test_poc_14_3_a_manifest_that_revokes_the_subject_or_the_issuer_kills_the_lease_at_once(self):
         envelope = self.issue()
@@ -233,10 +234,10 @@ class Verify(Case):
             with self.subTest(issuer=state):
                 self.refused("b may not authorize under epoch 2", lease.verify, envelope, self.manifest(2, m.digest(self.m1), b=state), self.now)
         # an unrelated change (c drained) does not: the verifier's own manifest still lets a serve and b authorize
-        self.assertEqual(lease.verify(envelope, self.manifest(2, m.digest(self.m1), c="DRAINING"), self.now), 300)
+        self.assertEqual(lease.verify(envelope, self.manifest(2, m.digest(self.m1), c="DRAINING"), self.now), lease.MAX_LIFETIME)
         draining = self.manifest(a="DRAINING")           # a DRAINING node still serves, so it is still vouched for
         self.beat(draining)
-        self.assertEqual(lease.verify(self.issue(manifest=draining), draining, self.now), 300)
+        self.assertEqual(lease.verify(self.issue(manifest=draining), draining, self.now), lease.MAX_LIFETIME)
 
     def test_malformed_leases_are_refused(self):
         for label, reason, change in (
@@ -263,14 +264,14 @@ class Issue(Case):
         request = self.holder.request()
         envelope = self.issue(request=request)
         self.assertEqual(envelope["lease"], self.body(nonce=request["nonce"]))
-        self.assertEqual(self.holder.install(envelope, self.m1), 300)
-        self.assertEqual(self.holder.check(self.m1), 300)
+        self.assertEqual(self.holder.install(envelope, self.m1), lease.MAX_LIFETIME)
+        self.assertEqual(self.holder.check(self.m1), lease.MAX_LIFETIME)
 
     def test_a_lease_never_outlives_the_issuer_s_heartbeat(self):
-        self.later(hb.MAX_LIFETIME - 60 - 100)          # the heartbeat has 100 s left
+        self.later(hb.MAX_LIFETIME - 60 - 15)           # the heartbeat has 15 s left, less than a lease
         envelope = self.issue()
-        self.assertEqual(lease.verify(envelope, self.m1, self.now), 100)
-        self.later(100)
+        self.assertEqual(lease.verify(envelope, self.m1, self.now), 15)
+        self.later(15)
         self.refused("EXPIRED: the heartbeat expired", self.issue)
 
     def test_who_may_issue_and_to_whom(self):
@@ -292,7 +293,7 @@ class Issue(Case):
         self.later(hb.MAX_LIFETIME)                      # no quorum signs for a day
         self.refused("EXPIRED: the heartbeat expired", self.issue)
         self.beat(self.m1, issued=self.now)
-        self.assertEqual(lease.verify(self.issue(), self.m1, self.now), 300)
+        self.assertEqual(lease.verify(self.issue(), self.m1, self.now), lease.MAX_LIFETIME)
 
     def test_time_must_be_authenticated_and_not_run_backwards(self):
         self.authenticated = False
@@ -377,18 +378,18 @@ class Issue(Case):
         self.refused("does not pin the manifest's EK for a", self.issue, evidence=good)
 
     def test_a_slow_attestation_cannot_carry_the_lease_past_the_heartbeat(self):
-        self.later(hb.MAX_LIFETIME - 60 - 100)           # the heartbeat has 100 s left
-        heartbeat_expiry = self.now + 100
+        self.later(hb.MAX_LIFETIME - 60 - 20)            # the heartbeat has 20 s left
+        heartbeat_expiry = self.now + 20
         b = self.peers["b"]
         real = b["attester"].verify
 
         def slow(*args, **kw):
-            self.later(50)                               # the attestation takes 50 s
+            self.later(10)                               # the attestation takes 10 s
             return real(*args, **kw)
         b["attester"].verify = slow
         envelope = self.issue()
         self.assertEqual(envelope["lease"]["expires_at"], hbt.stamp(heartbeat_expiry))
-        self.assertEqual(envelope["lease"]["issued_at"], hbt.stamp(heartbeat_expiry - 100))
+        self.assertEqual(envelope["lease"]["issued_at"], hbt.stamp(heartbeat_expiry - 20))   # 30 s from then would pass it
 
     def test_a_malformed_request_is_refused(self):
         for label, reason, request in (("extra field", "lease request fields mismatch", {"node_id": "a", "session_id": SESSION, "nonce": "11" * 32, "ttl": 9}),
@@ -411,11 +412,11 @@ class Hold(Case):
     def test_only_a_lease_that_answers_this_node_s_own_request_is_installed_and_only_once(self):
         self.refused("no runtime lease is held", self.holder.check, self.m1)
         envelope = self.issue()
-        self.assertEqual(self.holder.install(envelope, self.m1), 300)
+        self.assertEqual(self.holder.install(envelope, self.m1), lease.MAX_LIFETIME)
         self.refused("answers no request this node has outstanding", self.holder.install, envelope, self.m1)          # replayed
         foreign = self.issue(request={"node_id": "a", "session_id": SESSION, "nonce": "ab" * 32})                       # asked for by someone else
         self.refused("answers no request this node has outstanding", self.holder.install, foreign, self.m1)
-        self.assertEqual(self.holder.check(self.m1), 300)
+        self.assertEqual(self.holder.check(self.m1), lease.MAX_LIFETIME)
 
     def test_a_lease_does_not_survive_the_subject_s_reboot(self):
         envelope = self.issue()
@@ -428,7 +429,7 @@ class Hold(Case):
         self.refused("no runtime lease is held", fresh.check, self.m1)
         new = fresh.request()
         self.assertEqual(new["session_id"], OTHER_SESSION)
-        self.assertEqual(fresh.install(self.issue(request=new, reset=2), self.m1), 300)
+        self.assertEqual(fresh.install(self.issue(request=new, reset=2), self.m1), lease.MAX_LIFETIME)
 
     def test_a_lease_for_another_node_is_not_installed(self):
         other = lease.Holder("c", SESSION, self.clock, lambda: self.ticks, os.path.join(self.d, "c.json"))
@@ -438,12 +439,12 @@ class Hold(Case):
     def test_poc_14_2_when_one_peer_stops_the_other_renews_and_nothing_else_changes(self):
         before = copy.deepcopy(self.m1)
         self.holder.install(self.issue("b"), self.m1)
-        self.later(100)
+        self.later(lease.MAX_LIFETIME // 3)
         self.assertTrue(self.holder.due(self.m1))        # a third used: renew
         request = self.holder.request()
         self.refused("no heartbeat is held", self.issue, "b", request=request, freshness=self.peer("b", "-gone")["freshness"])   # b is gone
         renewed = self.issue("c", request=request)
-        self.assertEqual(self.holder.install(renewed, self.m1), 300)
+        self.assertEqual(self.holder.install(renewed, self.m1), lease.MAX_LIFETIME)
         self.assertFalse(self.holder.due(self.m1))
         with open(self.holder.state_path) as f:
             self.assertEqual(json.load(f)["envelope"]["lease"]["issuer"], "c")
@@ -456,13 +457,13 @@ class Hold(Case):
         from_b = self.issue("b", request=to_b)
         self.later(10)
         from_c = self.issue("c", request=to_c)
-        self.assertEqual(self.holder.install(from_c, self.m1), 300)
+        self.assertEqual(self.holder.install(from_c, self.m1), lease.MAX_LIFETIME)
         # the answer to the EARLIER request arrives late: c's answer retired that request, so it is refused
         self.refused("answers no request this node has outstanding", self.holder.install, from_b, self.m1)
         with open(self.holder.state_path) as f:
             state = json.load(f)
         self.assertEqual((state["envelope"]["lease"]["issuer"], state["nonces"]), ("c", []))
-        self.later(291)
+        self.later(lease.MAX_LIFETIME - 9)
         self.refused("EXPIRED", lease.verify, from_b, self.m1, self.now)
         self.assertEqual(self.holder.check(self.m1), 9)
 
@@ -471,10 +472,10 @@ class Hold(Case):
         only under a lease asked for after its own start, so a renewal asked for that reason must not be
         dropped for an older lease of the same length. Winning a tie is no way around the nonce."""
         first = self.issue("b")
-        self.assertEqual(self.holder.install(first, self.m1), 300)
+        self.assertEqual(self.holder.install(first, self.m1), lease.MAX_LIFETIME)
         second = self.issue("c")                                         # the same second: the same expiry
         self.assertEqual(second["lease"]["expires_at"], first["lease"]["expires_at"])
-        self.assertEqual(self.holder.install(second, self.m1), 300)
+        self.assertEqual(self.holder.install(second, self.m1), lease.MAX_LIFETIME)
         self.assertEqual(self.holder.held()["lease"]["nonce"], second["lease"]["nonce"])
         self.refused("answers no request this node has outstanding", self.holder.install, first, self.m1)    # the first one again: a replay
         self.refused("answers no request this node has outstanding", self.holder.install, second, self.m1)
@@ -483,16 +484,16 @@ class Hold(Case):
         # peer whose own heartbeat runs out sooner)
         self.later(10)
         self.holder.install(self.issue("c"), self.m1)
-        body = dict(self.issue("b")["lease"], expires_at=hbt.stamp(self.now + 100))
+        body = dict(self.issue("b")["lease"], expires_at=hbt.stamp(self.now + lease.MAX_LIFETIME // 2))
         short = {"lease": body, "signature": self.keys["b"].signer()(lease.signed_digest(body))}
-        self.assertEqual(self.holder.install(short, self.m1), 300)
+        self.assertEqual(self.holder.install(short, self.m1), lease.MAX_LIFETIME)
         self.assertEqual(self.holder.held()["lease"]["issuer"], "c")
 
     def test_a_preferred_lease_is_held_whatever_its_life_and_is_verified_like_any_other(self):
         self.holder.install(self.issue("c"), self.m1)
-        body = dict(self.issue("b")["lease"], expires_at=hbt.stamp(self.now + 100))
+        body = dict(self.issue("b")["lease"], expires_at=hbt.stamp(self.now + lease.MAX_LIFETIME // 2))
         short = sign(body, self.keys["b"])
-        self.assertEqual(self.holder.install(short, self.m1, prefer=True), 100)
+        self.assertEqual(self.holder.install(short, self.m1, prefer=True), lease.MAX_LIFETIME // 2)
         self.assertEqual(self.holder.held()["lease"]["issuer"], "b")
         self.refused("answers no request this node has outstanding", self.holder.install, short, self.m1, prefer=True)   # a replay, preferred or not
         forged = sign(dict(self.issue("b")["lease"], node_id="c"), self.keys["b"])
@@ -510,7 +511,7 @@ class Hold(Case):
                 newer = self.issue("b", request=r2)
                 self.later(wait)
                 older = self.issue("c", request=r1)
-                self.assertEqual(self.holder.install(newer, self.m1), 300 - wait)
+                self.assertEqual(self.holder.install(newer, self.m1), lease.MAX_LIFETIME - wait)
                 self.refused("answers no request this node has outstanding", self.holder.install, older, self.m1)
                 self.assertEqual(self.holder.held()["lease"]["nonce"], r2["nonce"])
                 r1, r2 = self.holder.request(), self.holder.request()
@@ -563,8 +564,8 @@ class Hold(Case):
         forged = copy.deepcopy(stale)
         forged["lease"].update(issued_at=hbt.stamp(T0 + 60 + lease.MAX_LIFETIME), expires_at=hbt.stamp(T0 + 60 + 2 * lease.MAX_LIFETIME))
         self.refused("the quote is not over this lease", lease.verify, forged, self.m1, T0 + 60 + lease.MAX_LIFETIME + 5)
-        self_signed = sign(self.body(issuer="a", issued_at=hbt.stamp(T0 + 400), expires_at=hbt.stamp(T0 + 700)), self.keys["a"])
-        self.refused("a node does not vouch for itself", lease.verify, self_signed, self.m1, T0 + 500)
+        self_signed = sign(self.body(issuer="a", issued_at=hbt.stamp(T0 + 400), expires_at=hbt.stamp(T0 + 400 + lease.MAX_LIFETIME)), self.keys["a"])
+        self.refused("a node does not vouch for itself", lease.verify, self_signed, self.m1, T0 + 410)
 
     def test_every_method_waits_for_the_state_lock(self):
         """A renewal thread's install() and the daemon's check() each read, decide and rewrite the state.
@@ -614,7 +615,7 @@ class Hold(Case):
     def test_renewal_is_due_at_a_third_of_the_lifetime(self):
         self.assertTrue(self.holder.due(self.m1))        # nothing held
         self.holder.install(self.issue(), self.m1)
-        self.later(99)
+        self.later(lease.MAX_LIFETIME // 3 - 1)
         self.assertFalse(self.holder.due(self.m1))
         self.later(1)
         self.assertTrue(self.holder.due(self.m1))
@@ -734,19 +735,19 @@ class OnSwtpm(unittest.TestCase):
         holder = lease.Holder("a", SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/lease.json")
         # 14.1: b's TPM signs a lease for the re-attested a; a holds it
         envelope = self.issue(holder, self.m1, SESSION)
-        self.assertEqual(holder.install(envelope, self.m1), 300)
-        self.assertEqual(lease.verify(envelope, self.m1, self.now), 300)
+        self.assertEqual(holder.install(envelope, self.m1), lease.MAX_LIFETIME)
+        self.assertEqual(lease.verify(envelope, self.m1, self.now), lease.MAX_LIFETIME)
         self.refused("answers no request this node has outstanding", holder.install, envelope, self.m1)
         altered = copy.deepcopy(envelope)
-        altered["lease"]["expires_at"] = hbt.stamp(self.now + 299)
+        altered["lease"]["expires_at"] = hbt.stamp(self.now + lease.MAX_LIFETIME - 1)
         self.refused("the quote is not over this lease", lease.verify, altered, self.m1, self.now)
         # a's own TPM signing for itself, as issuer b: not the AK the manifest names for b
         forged = {"lease": envelope["lease"], "signature": lease.TpmSigner(tcti=self.tcti["a"])(lease.signed_digest(envelope["lease"]))}
         self.refused("not signed by the AK the manifest names for b", lease.verify, forged, self.m1, self.now)
         # renewal
-        self.now += 100
+        self.now += lease.MAX_LIFETIME // 3
         self.assertTrue(holder.due(self.m1))
-        self.assertEqual(holder.install(self.issue(holder, self.m1, SESSION), self.m1), 300)
+        self.assertEqual(holder.install(self.issue(holder, self.m1, SESSION), self.m1), lease.MAX_LIFETIME)
         # 14.3: a is revoked; b has the manifest and a heartbeat for it; no renewal, and the held lease is dead under it
         revoked = self.manifest(2, m.digest(self.m1), a="REVOKED_STOLEN")
         self.freshness.accept(hbt.beat(revoked, 2, issued=self.now), revoked)
@@ -768,7 +769,7 @@ class OnSwtpm(unittest.TestCase):
         # nor does the new boot's attestation answer the old boot's request: the sessions differ
         self.refused("attestation is refused: the quote is not bound to this transcript", lease.issue, self.m1, "b",
                      old_request, self.attester, self.evidence(OTHER_SESSION, self.m1), self.freshness, self.signer)
-        self.assertEqual(rebooted.install(self.issue(rebooted, self.m1, OTHER_SESSION), self.m1), 300)
+        self.assertEqual(rebooted.install(self.issue(rebooted, self.m1, OTHER_SESSION), self.m1), lease.MAX_LIFETIME)
 
 
 if __name__ == "__main__":
