@@ -389,8 +389,18 @@ class Service:
                 try:
                     self.step()
                 except Exception as failure:
+                    reason = "the lease service failed: %s" % (str(failure) or type(failure).__name__)
                     with self.lock:
-                        write(self.path, self._document(None, None, 0, "the lease service failed: %s" % failure))
+                        write(self.path, self._document(None, None, 0, reason))
+                        # a crash is never silent on the trail (3e's S4 on #507): the change to not serving is recorded,
+                        # best effort, before the error is raised and the unit restarts
+                        if self.recorded is not False and self.record is not None:
+                            try:
+                                self.record(self._transition(None, None, False, reason))
+                                self.recorded, self.recorded_mode = False, None
+                            except Exception as unrecorded:      # noqa: BLE001 - the original error is what is raised
+                                self.warn("regalia-admission: AUDIT: the lease service failed (%s) and the trail did not take it: %s"
+                                          % (reason, str(unrecorded) or type(unrecorded).__name__))
                     raise
                 sleep(interval)
         finally:
