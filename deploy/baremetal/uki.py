@@ -228,6 +228,45 @@ def policy_digest(pcr11_hex):
     return hashlib.sha256(bytes(32) + struct.pack(">I", 0x0000017f) + select + hashlib.sha256(bytes.fromhex(pcr11_hex)).digest()).hexdigest()
 
 
+def resign(document, new_pem, private_pem, k_a_point):
+    """#361 C4b, on the laptop at a retire (regalia-kms-05's conditions, agreed on #361): the NEW system-phase key signs
+    PolicyPCR(11) of each image a node may still run that K_new does not sign yet, so the node moves to K_new's approvals
+    on the boot it is in (node.catch_up_rotation) and bumps without rebooting. Per node, K_new's own set must carry K_A's
+    approvals for that node (checked: anchorpolicy.check_approvals), at generation G1; then each other signed set still
+    accepted for the node, without approvals at G1 of its own, gets signing.resigned. A set the document no longer
+    accepts (an image retired at G1) is not there, so it gets nothing. Returns a new document; refused by name."""
+    import copy
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from deploy.baremetal import anchorpolicy, measurements, signkey
+    measurements.validate(document)
+    new_fp = signkey.pcr_key_fingerprint(new_pem)
+    key = serialization.load_pem_private_key(private_pem, password=None)
+    require(signkey.pcr_key_fingerprint(key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+            == new_fp, "the private key on the descriptor is not the new system-phase key's (%s...)" % new_fp[:16])
+    pem_text = serialization.load_pem_public_key(new_pem).public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    out = copy.deepcopy(document)
+    signed = 0
+    for node_id, node in sorted(out["nodes"].items()):
+        mine = [e for e in node["accepted"] if e.get("signing", {}).get("system") == new_fp]
+        if not mine:
+            continue
+        require("anchor_approvals" in mine[0]["signing"], "%s's set signed by the new key carries no K_A approvals: approve it "
+                "(anchorpolicy approve) before re-signing" % node_id)
+        g1 = anchorpolicy.check_approvals(mine[0]["signing"]["anchor_approvals"], new_pem, k_a_point, node_id)
+        for entry in node["accepted"]:
+            signing = entry.get("signing")
+            if signing is None or signing["system"] == new_fp or signing.get("anchor_approvals", {}).get("generation") == g1:
+                continue
+            pol = policy_digest(entry["phases"]["system"]["11"])
+            sig = key.sign(bytes.fromhex(pol), padding.PKCS1v15(), hashes.SHA256())
+            signing["resigned"] = {"system": new_fp, "pem": pem_text, "pol": pol, "sig": base64.b64encode(sig).decode()}
+            signed += 1
+    require(signed, "no image needed re-signing: every accepted set is the new key's or already approved at its generation")
+    measurements.validate(out)
+    return out
+
+
 def _clean_env():
     """The environment systemd-measure runs in: no inherited $CREDENTIALS_DIRECTORY, through which its
     password prompt would take a PIN nobody typed."""

@@ -58,6 +58,7 @@ NOT covered here: the EK certificate chain to the TPM manufacturer (the swtpm EK
 is checked at intake, #65 PoC 5.2), and which PCRs to expect (PoC 5.2/5.3 on the real hardware).
 """
 import argparse
+import base64
 import contextlib
 import fcntl
 import hashlib
@@ -290,19 +291,43 @@ def validate_set(entry, label):
         # the keys a signed image's PCR 11 policy and Secure Boot signature are made with (uki.py's signed record):
         # a peer judges PCR values and never reads them; whoever SEALS to a PCR-signing key (enrol, #190) takes
         # only a key the approved set names, so a re-signed copy of an approved image is no approved image
-        signing = exact_keys(entry["signing"], SIGNING_KEYS + (("anchor_approvals",) if "anchor_approvals" in entry["signing"] else ()),
+        signing = exact_keys(entry["signing"], SIGNING_KEYS + tuple(k for k in ("anchor_approvals", "resigned") if k in entry["signing"]),
                              "%s.signing" % label)
         for name in SIGNING_KEYS:
             require(is_hex(signing[name], 64), "%s.signing.%s must be 64 lowercase hex" % (label, name))
         require(len({signing["initrd"], signing["system"]}) == 2, "%s.signing: the two phases' PCR keys must be two keys" % label)
         if "anchor_approvals" in signing:
             validate_approvals(signing["anchor_approvals"], "%s.signing.anchor_approvals" % label)
+        if "resigned" in signing:
+            validate_resigned(signing["resigned"], signing["system"], "%s.signing.resigned" % label)
 
         # an image is its UKI AND the root it is installed with: one root-approved set names both (#61). The root
         # is not measured, so this binds what is installed, not what runs (no dm-verity yet)
         require(ROOTFS_KEY in entry, "%s: a signed image's set must name its root filesystem (%s, from build-rootfs.sh's "
                 "record)" % (label, ROOTFS_KEY))
         require(is_hex(entry[ROOTFS_KEY], 64), "%s.%s must be 64 lowercase hex" % (label, ROOTFS_KEY))
+
+
+RESIGNED_KEYS = ("system", "pem", "pol", "sig")
+
+
+def validate_resigned(resigned, own_system, label):
+    """#361 C4b, by form only: a new system-phase key's signature over THIS image's system-phase PolicyPCR(11), made at a
+    retire so a node booted on this image can move to the new key's approvals without rebooting (uki.resign):
+    {system: the new key's pkfp, pem: its public key, pol: the policy digest, sig: base64 PKCS#1 v1.5 SHA-256}. Whether
+    the signature verifies, the policy is this set's PCR 11 and the TPM measured it is the node's to check
+    (node.catch_up_rotation), with the new key's own set."""
+    exact_keys(resigned, RESIGNED_KEYS, label)
+    require(is_hex(resigned["system"], 64) and resigned["system"] != own_system,
+            "%s.system must be 64 lowercase hex, another key than the set's own" % label)
+    require(isinstance(resigned["pem"], str) and resigned["pem"].startswith("-----BEGIN PUBLIC KEY-----") and len(resigned["pem"]) <= 2048,
+            "%s.pem must be a PEM public key" % label)
+    require(is_hex(resigned["pol"], 64), "%s.pol must be 64 lowercase hex" % label)
+    try:
+        raw = base64.b64decode(resigned["sig"], validate=True)
+    except (TypeError, ValueError):
+        raw = b""
+    require(len(raw) == 256, "%s.sig must be base64 of an RSA-2048 signature" % label)
 
 
 def validate_rotations(rotations, label):
