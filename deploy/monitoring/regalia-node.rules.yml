@@ -6,7 +6,7 @@
 # regalia-kms.rules.yml.
 #
 # Severity reads as: critical pages, warning investigates in hours. Thresholds, and why:
-#   * authenticated time: the node stops serving within the 300 s lease bound when it is lost, so one
+#   * authenticated time: the node stops serving within the 30 s lease bound when it is lost, so one
 #     minute (four authtime checks) pages;
 #   * heartbeat: RELATIVE to the lifetime of the heartbeat held (a manifest sets it, from an hour to seven
 #     days): under half left warns, under a quarter pages (the heartbeat watch's own 50 and 25 % warnings);
@@ -31,7 +31,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "Time is not authenticated on this node ({{ $labels.cause }}): it stops serving within the 300 s lease bound."
+          summary: "Time is not authenticated on this node ({{ $labels.cause }}): it stops serving within the 30 s lease bound."
       - alert: RegaliaChronyLatched
         expr: regalia_chrony_latch_set == 1
         labels:
@@ -72,6 +72,12 @@ groups:
           severity: critical
         annotations:
           summary: This node holds no runtime lease; the KMS daemon does not serve.
+      - alert: RegaliaSurvivorRecoveryActive
+        expr: regalia_admission_recovery == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "This node serves ALONE under the owner's survivor authorization (ADR-0002 D32.6): stateless operations only, the other servers fenced. It holds for as long as the authorization is in force."
       - alert: RegaliaAuditTrailBehind
         expr: regalia_audit_trail_backlog > 0 and (time() - regalia_audit_trail_last_success_seconds) > 900
         labels:

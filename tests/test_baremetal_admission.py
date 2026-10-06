@@ -49,18 +49,150 @@ class Metrics(Case):
         service = admission.Service(self.holder, lambda: self.manifest_now, self.renew, self.path,
                                     boottime=lambda: self.ticks, boot=lambda: BOOT, metrics=published.append)
         service.step()
-        self.assertEqual(published[-1], [("regalia_admission_serving", {}, 1), ("regalia_admission_lease_seconds_left", {}, lease.MAX_LIFETIME)])
+        self.assertEqual(published[-1], [("regalia_admission_serving", {}, 1), ("regalia_admission_lease_seconds_left", {}, lease.MAX_LIFETIME),
+                                         ("regalia_admission_recovery", {}, 0)])
         self.manifest_now = None                                          # no manifest: not admitted
         service.step()
-        self.assertEqual(published[-1], [("regalia_admission_serving", {}, 0), ("regalia_admission_lease_seconds_left", {}, 0)])
+        self.assertEqual(published[-1], [("regalia_admission_serving", {}, 0), ("regalia_admission_lease_seconds_left", {}, 0),
+                                         ("regalia_admission_recovery", {}, 0)])
         for samples in published:
             metrics.render("admission", samples)
 
 
-class Backoff(Case):
-    """48 on #347: while renewals fail they back off, 5 s doubling to 60 s, and a success ends it."""
+class OneLeaseBound(unittest.TestCase):
+    """ADR-0002 D32 (#432): the serving lease lives 30 s, renewed every 10 s, and the Go daemon refuses an admission
+    reaching further ahead than one lease: the same number on both sides, and the margin and back-off fit inside it."""
 
-    def test_a_cut_off_node_asks_less_and_less_then_once_a_minute(self):
+    def test_the_lease_bound_is_one_number_in_python_and_go(self):
+        import pathlib
+        import re
+        source = (pathlib.Path(__file__).resolve().parents[1] / "internal" / "admission" / "admission.go").read_text()
+        go = int(re.search(r"MaxAheadMilliseconds = ([0-9_]+)", source).group(1).replace("_", ""))
+        self.assertEqual((lease.MAX_LIFETIME, go), (30, lease.MAX_LIFETIME * 1000))
+
+    def test_a_round_with_both_peers_silent_ends_before_the_margin(self):
+        # due at a third used; two peers, two asks each (nonce, lease), each connection at most RENEW_TIMEOUT
+        self.assertLess(2 * 2 * admission.RENEW_TIMEOUT, lease.MAX_LIFETIME * 2 // 3 - admission.MARGIN)
+
+    def test_the_margin_and_the_back_off_fit_inside_one_lease(self):
+        # renewal is due at a third used; the margin and the longest wait between attempts leave room for retries
+        self.assertLess(admission.MARGIN + admission.RETRY_MAX, lease.MAX_LIFETIME * 2 // 3)
+        self.assertLessEqual(lease.FUTURE_SKEW, admission.MARGIN)
+
+    def test_a_lease_issued_at_the_skew_edge_is_still_inside_the_go_bound(self):
+        """3e on #485: a lease issued FUTURE_SKEW ahead lives MAX_LIFETIME from then; less the margin, the admission
+        reaches exactly MaxAheadMilliseconds ahead, which Go accepts (it refuses only beyond). A one-sided change
+        to any of the four fails here, not on the fleet."""
+        import pathlib
+        import re
+        source = (pathlib.Path(__file__).resolve().parents[1] / "internal" / "admission" / "admission.go").read_text()
+        go = int(re.search(r"MaxAheadMilliseconds = ([0-9_]+)", source).group(1).replace("_", ""))
+        self.assertIn("if document.ServeUntilBoottimeMs-now > MaxAheadMilliseconds {", source)
+        self.assertLessEqual((lease.FUTURE_SKEW + lease.MAX_LIFETIME - admission.MARGIN) * 1000, go)
+
+
+class StalledPeer(Case):
+    def test_a_stalled_peer_and_a_healthy_one_leave_no_gap_in_serving(self):
+        """3e on #485: b takes the nonce and stalls on the lease, each ask cut at RENEW_TIMEOUT; c answers. Two
+        minutes at the service's 5 s step, b stalling on every renewal: the node serves at every step."""
+        gaps = []
+
+        def renew(request):
+            self.later(2 * admission.RENEW_TIMEOUT)                     # b: the nonce, then the lease ask, both cut
+            if os.path.exists(self.path) and self.on_disk()["serve_until_boottime_ms"] <= self.ticks:   # it ran out during the stall
+                gaps.append((self.ticks, "lapsed while b stalled"))
+            return self.issue("c", manifest=self.manifest_now, request=request)
+        self.service.renew = renew
+        for _ in range(120 // 5):
+            document = self.service.step()
+            if not document["serve_until_boottime_ms"] > self.ticks:
+                gaps.append((self.ticks, document["reason"]))
+            self.later(5)
+        self.assertEqual(gaps, [])
+        self.assertEqual(self.holder.held()["lease"]["issuer"], "c")
+
+
+class Recovery(Case):
+    """ADR-0002 D32.6 (#432 item (e)): a lone survivor serves under the owner's authorization, mode "recovery"; only while no
+    normal lease holds, and back to "lease" at the first normal lease (regalia-kms-d9's both directions)."""
+
+    def surviving(self, answer):
+        self.trail, self.asked = [], []
+
+        def survivor(manifest):
+            self.asked.append(manifest["epoch"])
+            if isinstance(answer[0], Exception):
+                raise answer[0]
+            return answer[0]
+        self.answer = answer
+        return admission.Service(self.holder, lambda: self.manifest_now, self.renew, self.path, boottime=lambda: self.ticks,
+                                 boot=lambda: BOOT, record=self.trail.append, survivor=survivor,
+                                 metrics=lambda samples: setattr(self, "samples", dict((n, v) for n, _, v in samples)))
+
+    def test_with_no_lease_the_authorization_admits_in_recovery_mode_and_the_first_lease_ends_it(self):
+        answer = [3600]
+        service = self.surviving(answer)
+        self.peer_up = False                                                   # no peer: no lease, ever, here
+        document = service.step()
+        self.assertEqual((document["mode"], document["serve_until_boottime_ms"]), ("recovery", self.ticks + (lease.MAX_LIFETIME - admission.MARGIN) * 1000))
+        self.assertEqual(document["requested_boottime_ms"], 0)        # no peer vouched: never satisfies #72's re-authorization
+        self.assertTrue(document["reason"].startswith("RECOVERY: serving alone under the owner's survivor authorization"))
+        self.assertEqual([(e["outcome"], e["reason"][:9]) for e in self.trail], [("ALLOW", "RECOVERY:")])
+        self.assertEqual(self.samples["regalia_admission_recovery"], 1)
+        self.peer_up = True                                                    # a peer back: the first normal lease
+        self.later(admission.RETRY_MAX)
+        document = service.step()
+        self.assertEqual((document["mode"], document["reason"]), ("lease", ""))
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "ALLOW"])    # the change of mode is on the trail
+        self.assertEqual(self.samples["regalia_admission_recovery"], 0)
+
+    def test_the_authorization_is_never_consulted_while_a_lease_holds(self):
+        service = self.surviving([3600])
+        self.assertEqual(service.step()["mode"], "lease")
+        self.later(5)
+        self.assertEqual(service.step()["mode"], "lease")
+        self.assertEqual(self.asked, [])
+
+    def test_an_authorization_that_does_not_hold_or_runs_out_admits_nothing(self):
+        self.peer_up = False
+        for label, answer, said in (("none installed", None, "no runtime lease is held"),
+                                    ("refused", m.Refused("a new epoch ends it"), "the survivor authorization does not hold: a new epoch ends it"),
+                                    ("inside the margin", admission.MARGIN, "inside the %d s margin" % admission.MARGIN)):
+            with self.subTest(label):
+                document = self.surviving([answer]).step()
+                self.assertEqual((document["serve_until_boottime_ms"], document["mode"]), (0, "lease"))
+                self.assertIn(said, document["reason"])
+
+    def test_a_lease_still_alive_inside_its_margin_is_not_replaced_by_recovery(self):
+        """ed on #494: recovery only with NO unexpired normal lease."""
+        service = self.surviving([3600])
+        self.assertEqual(service.step()["mode"], "lease")
+        self.peer_up = False
+        self.later(lease.MAX_LIFETIME - admission.MARGIN)                   # into the margin: the lease is alive, not served on
+        document = service.step()
+        self.assertEqual((document["serve_until_boottime_ms"], document["mode"], self.asked), (0, "lease", []))
+        self.later(admission.MARGIN)                                         # it has run out: now recovery may begin
+        self.assertEqual(service.step()["mode"], "recovery")
+
+    def test_a_node_the_manifest_does_not_let_serve_is_never_admitted_in_recovery(self):
+        for state in ("QUARANTINED", "REVOKED_STOLEN", "MAINTENANCE"):
+            with self.subTest(state):
+                self.manifest_now = self.manifest(2, m.digest(self.m1), a=state)
+                self.peer_up = False
+                document = self.surviving([3600]).step()
+                self.assertEqual((document["serve_until_boottime_ms"], self.asked), (0, []))
+
+    def test_recovery_is_bounded_by_the_authorization_s_own_end(self):
+        self.peer_up = False
+        document = self.surviving([admission.MARGIN + 7]).step()
+        self.assertEqual(document["serve_until_boottime_ms"], self.ticks + 7000)
+
+
+class Backoff(Case):
+    """48 on #347: while renewals fail they back off, RETRY_FIRST doubling to RETRY_MAX (2 s to 10 s within a 30 s lease,
+    D32), and a success ends it."""
+
+    def test_a_cut_off_node_asks_less_and_less_then_every_retry_max(self):
         asked = []
         real = self.renew
 
@@ -77,9 +209,10 @@ class Backoff(Case):
             service.step()
             self.later(5)
         gaps = [b - a for a, b in zip(asked, asked[1:])]
-        self.assertEqual(gaps[:5], [5, 10, 20, 40, 60])
-        self.assertTrue(all(g == 60 for g in gaps[4:]), gaps)
-        self.assertLessEqual(len(asked), 15)                               # not 120
+        self.assertEqual((admission.RETRY_FIRST, admission.RETRY_MAX), (2, 10))
+        self.assertEqual(gaps[:3], [5, 5, 10])                             # 2, 4, 8 s waits, met at the 5 s step
+        self.assertTrue(all(g == 10 for g in gaps[2:]), gaps)
+        self.assertLessEqual(len(asked), 10 * 60 // 10 + 3)                # not 120
         self.peer_up = True
         self.later(admission.RETRY_MAX)
         self.assertGreater(service.step()["serve_until_boottime_ms"], 0)
@@ -158,9 +291,9 @@ class Admission(Case):
         self.assertEqual(document, self.on_disk())
         self.assertEqual(list(document), list(admission.FIELDS))
         self.assertEqual(document, {
-            "schema": "regalia.admission/v2", "node_id": "a", "session_id": lt.SESSION, "boot_id": BOOT, "epoch": 1,
+            "schema": "regalia.admission/v3", "node_id": "a", "session_id": lt.SESSION, "boot_id": BOOT, "epoch": 1,
             "manifest_digest": m.digest(self.m1), "hsm_serials": " ".join(self.m1["nodes"][0]["hsm_serials"]), "lease_issued_at": hbt.stamp(self.now), "requested_boottime_ms": asked_at,
-            "serve_until_boottime_ms": self.ticks + (lease.MAX_LIFETIME - admission.MARGIN) * 1000, "reason": ""})
+            "serve_until_boottime_ms": self.ticks + (lease.MAX_LIFETIME - admission.MARGIN) * 1000, "mode": "lease", "reason": ""})
         self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o644)       # the daemon, another user, reads it
         self.assertEqual([n for n in os.listdir(self.d) if n.startswith(".admission-")], [])
 
@@ -186,9 +319,9 @@ class Admission(Case):
 
     def test_the_bound_is_in_boottime_and_does_not_move_between_renewals(self):
         first = self.service.step()["serve_until_boottime_ms"]
-        self.later(50)
-        self.assertEqual(self.service.step()["serve_until_boottime_ms"], first)          # same lease, 50 s later: the same instant
-        self.later(50)                                                                    # a third of the lifetime used: renewed
+        self.later(lease.MAX_LIFETIME // 6)
+        self.assertEqual(self.service.step()["serve_until_boottime_ms"], first)          # same lease, 5 s later: the same instant
+        self.later(lease.MAX_LIFETIME // 6)                                               # a third of the lifetime used: renewed
         renewed = self.service.step()
         self.assertEqual(renewed["serve_until_boottime_ms"], self.ticks + (lease.MAX_LIFETIME - admission.MARGIN) * 1000)
         self.assertEqual(renewed["requested_boottime_ms"], self.ticks)
@@ -197,16 +330,16 @@ class Admission(Case):
     def test_a_failed_renewal_keeps_what_the_lease_still_gives_and_no_more(self):
         first = self.service.step()
         self.peer_up = False
-        self.later(150)
+        self.later(lease.MAX_LIFETIME // 2)
         kept = self.service.step()
         self.assertEqual(kept["serve_until_boottime_ms"], first["serve_until_boottime_ms"])
         self.assertEqual(kept["requested_boottime_ms"], first["requested_boottime_ms"])   # still the lease it holds, not the failed request
         self.assertEqual(kept["reason"], "")
-        self.later(lease.MAX_LIFETIME - 150 - admission.MARGIN)                           # into the margin
+        self.later(lease.MAX_LIFETIME - lease.MAX_LIFETIME // 2 - admission.MARGIN)       # into the margin
         inside = self.service.step()
         self.assertEqual(inside["serve_until_boottime_ms"], 0)
         self.assertIn("renewal failed: peer b is unreachable", inside["reason"])
-        self.assertIn("the lease has 10 s left, inside the 10 s margin", inside["reason"])
+        self.assertIn("the lease has %d s left, inside the %d s margin" % (admission.MARGIN, admission.MARGIN), inside["reason"])
         self.later(admission.MARGIN)
         gone = self.service.step()
         self.assertEqual((gone["serve_until_boottime_ms"], gone["lease_issued_at"], gone["requested_boottime_ms"]), (0, admission.NEVER, 0))
@@ -261,7 +394,7 @@ class Admission(Case):
         widest = {"schema": admission.SCHEMA, "node_id": "n" * 32, "session_id": "f" * 64, "boot_id": "b" * 36,
                   "epoch": 2 ** 63 - 1, "manifest_digest": "d" * 64, "hsm_serials": " ".join(["S" * 32] * admission.MAX_SERIALS),
                   "lease_issued_at": "9999-12-31T23:59:59Z",
-                  "requested_boottime_ms": 2 ** 63 - 1, "serve_until_boottime_ms": 2 ** 63 - 1,
+                  "requested_boottime_ms": 2 ** 63 - 1, "serve_until_boottime_ms": 2 ** 63 - 1, "mode": "recovery",
                   "reason": "\\" * admission.ADMISSION_REASON_LIMIT}            # every character escaped: the worst case
         self.assertEqual(set(widest), set(self.service.step()))                     # the same fields the service writes
         self.assertLessEqual(len(json.dumps(widest).encode()) + 1, 4096)
@@ -275,16 +408,15 @@ class Admission(Case):
 
     def test_a_restarted_service_still_knows_when_the_held_lease_was_asked_for(self):
         first = self.service.step()
-        self.later(20)
+        self.later(lease.MAX_LIFETIME // 6)                # before a renewal is due
         again = self.new_service().step()
         self.assertEqual(again["requested_boottime_ms"], first["requested_boottime_ms"])
-        for _ in range(admission.MAX_REQUESTS + 5):       # the record of requests is bounded: the newest are kept
-            self.service._remember(os.urandom(32).hex(), self.ticks)
-            self.later(1)
+        for i in range(admission.MAX_REQUESTS + 5):       # the record of requests is bounded: the newest are kept
+            self.service._remember(os.urandom(32).hex(), self.ticks + i * 1000)   # dated ahead: no renewal falls due meanwhile
         with open(self.path + ".requests") as f:
             kept = json.load(f)
         self.assertEqual(len(kept), admission.MAX_REQUESTS)
-        self.assertEqual(max(kept.values()), self.ticks - 1000)
+        self.assertEqual(max(kept.values()), self.ticks + (admission.MAX_REQUESTS + 4) * 1000)
         os.unlink(self.path + ".requests")                # lost: it says so with 0, and does not invent a time
         self.assertEqual(self.new_service().step()["requested_boottime_ms"], 0)
         with open(self.path + ".requests", "w") as f:
@@ -326,7 +458,7 @@ class Admission(Case):
         self.service.step()
         with unittest.mock.patch.object(admission, "boottime_ms", return_value=self.ticks), unittest.mock.patch("builtins.print") as shown:
             self.assertEqual(admission.main([self.path]), 0)
-            self.assertIn("admitted for 290 more seconds", shown.call_args[0][0])
+            self.assertIn("admitted for %d more seconds" % (lease.MAX_LIFETIME - admission.MARGIN), shown.call_args[0][0])
         with unittest.mock.patch.object(admission, "boottime_ms", return_value=self.ticks + 10 ** 9), unittest.mock.patch("builtins.print") as shown:
             self.assertEqual(admission.main([self.path]), 1)
             self.assertIn("NOT ADMITTED: the lease ran out", shown.call_args[0][0])
@@ -397,10 +529,10 @@ class DaemonStart(Case):
         self.later(5)
         self.assertEqual(self.service.step()["requested_boottime_ms"], renewed["requested_boottime_ms"])   # and it is not asked for again
         # on the schedule, with no daemon waiting, the longer lease is still the one kept
-        self.later(lease.MAX_LIFETIME // 3 + 5)
+        self.later(lease.MAX_LIFETIME // 3)
 
         def much_shorter(request):
-            body = dict(self.issue("b", manifest=self.manifest_now, request=request)["lease"], expires_at=hbt.stamp(self.now + 20))
+            body = dict(self.issue("b", manifest=self.manifest_now, request=request)["lease"], expires_at=hbt.stamp(self.now + admission.MARGIN + 1))
             return lt.sign(body, self.keys["b"])
         self.service.renew = much_shorter
         kept = self.service.step()
@@ -417,7 +549,7 @@ class DaemonStart(Case):
         self.started = self.ticks - 500
         inside = self.service.step()
         self.assertEqual(inside["serve_until_boottime_ms"], 0)
-        self.assertIn("inside the 10 s margin", inside["reason"])
+        self.assertIn("inside the %d s margin" % admission.MARGIN, inside["reason"])
         self.service.renew = good
         self.later(5)
         healed = self.service.step()                                    # the schedule asks again: the held lease is nearly over
@@ -499,6 +631,65 @@ class DaemonStart(Case):
             self.assertIsNone(admission.unit_started(run=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, b"%d\n" % os.getpid(), b""))())
 
 
+class RunsAtTheLapse(Case):
+    """#486 (3e, from #473's trails): "not serving" is written and recorded at the admission's bound, by lapse(), which
+    the lapse watcher calls every half second, even while a renewal round waits on a silent peer."""
+    recording = Recorded.recording
+
+    def test_at_the_bound_lapse_writes_and_records_not_serving_and_before_it_nothing(self):
+        service = self.recording()
+        first = service.step()
+        self.assertGreater(first["serve_until_boottime_ms"], 0)
+        self.peer_up = False
+        self.later(lease.MAX_LIFETIME - admission.MARGIN - 1)
+        self.assertIsNone(service.lapse())                              # a second before the bound: nothing
+        self.assertEqual(self.on_disk(), first)
+        self.later(1)
+        written = service.lapse()
+        self.assertEqual((written["serve_until_boottime_ms"], self.on_disk()), (0, written))
+        self.assertIn("the admission ran out at its bound", written["reason"])
+        self.assertEqual([(e["outcome"]) for e in self.trail], ["ALLOW", "DENY"])
+        self.assertIsNone(service.lapse())                              # the bound of a zero admission: nothing more
+
+    def test_a_round_held_by_a_silent_peer_does_not_hold_the_lapse(self):
+        """The round's renewal runs outside the lock: the watcher, on its own thread, writes at the bound meanwhile."""
+        import threading
+        service = self.recording()
+        service.step()
+        self.later(lease.MAX_LIFETIME // 3)                              # due
+        seen = {}
+
+        def stalled(request):
+            self.later(lease.MAX_LIFETIME)                               # the peer holds the round past the bound
+            watcher = threading.Thread(target=lambda: seen.update(written=service.lapse()))
+            watcher.start()
+            watcher.join(timeout=5)
+            seen["alive"] = watcher.is_alive()
+            raise ConnectionError("peer b did not answer")
+        service.renew = stalled
+        service.step()
+        self.assertFalse(seen["alive"], "lapse() waited for the round")
+        self.assertEqual(seen["written"]["serve_until_boottime_ms"], 0)
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY"])   # recorded at the bound, once
+
+    def test_run_s_watcher_writes_at_the_bound_between_rounds_and_stops_with_run(self):
+        import threading
+        import time as real_time
+        service = self.recording()
+        service.step()                                                     # serving
+        self.peer_up = False                                               # no renewal from here
+        once = iter([False, True])                                         # one round, then stop
+
+        def interval(seconds):                                             # between rounds: past the bound, and a moment
+            self.later(lease.MAX_LIFETIME)                                 # for the watcher (every 10 ms here)
+            real_time.sleep(0.3)
+        service.run(lambda: next(once), interval=5, sleep=interval, watch=0.01)
+        self.assertEqual(self.on_disk()["serve_until_boottime_ms"], 0)    # written by the watcher: no round ran after
+        self.assertIn("the admission ran out at its bound", self.on_disk()["reason"])
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY"])
+        self.assertFalse([t for t in threading.enumerate() if t.name == "admission-lapse"])
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -534,6 +725,7 @@ class Renewals(unittest.TestCase):
         fake = unittest.mock.Mock(node_id="a", runtime="/run/regalia", run=None)
         fake.manifest.return_value = manifest
         fake.sources.return_value = {"b": None, "c": None}
+        self.fake = fake
         for patcher in (mock.patch.object(node, "boot_session", return_value=("ab" * 32, b"pub")), mock.patch.object(node, "Trail", Trail),
                         mock.patch.object(sync, "Client", Client), mock.patch.object(node.membership, "digest", return_value="d" * 64),
                         mock.patch.object(node.lease, "Holder")):
@@ -548,6 +740,13 @@ class Renewals(unittest.TestCase):
         self.assertIn("REVOKED_STOLEN", self.trail[0]["reason"])
         self.assertEqual((self.trail[1]["subject"], self.trail[1]["epoch"]), ("a", 3))
 
+    def test_each_connection_of_a_renewal_is_bounded_by_renew_timeout(self):
+        """3e on #473: a renewal to a peer that does not answer held a round for about 110 s. With a 30 s lease the
+        transports a renewal uses carry RENEW_TIMEOUT, not sync's DEADLINE."""
+        service = self.service({"b": m.Refused("b did not answer (TimeoutError)"), "c": {"lease": "envelope"}})
+        service.renew({"nonce": "n"})
+        self.fake.sources.assert_called_with({"epoch": 3, "nodes": []}, timeout=admission.RENEW_TIMEOUT)
+
     def test_no_peer_gave_a_lease(self):
         service = self.service({"b": m.Refused("b refused"), "c": m.Refused("c did not answer")})
         with self.assertRaises(m.Refused):
@@ -557,14 +756,15 @@ class Renewals(unittest.TestCase):
 
     def test_a_cut_off_node_writes_tens_of_lines_not_hundreds_and_says_how_often(self):
         """48 on #347: ten minutes cut off at the 5 s step, with the service's back-off: the first refusal of each kind
-        whole, then one count line at most a minute; a peer back writes what is still counted, then its ALLOW."""
+        whole, then one count line at most a minute; a peer back writes what is still counted, then its ALLOW. With
+        D32's 30 s lease the back-off tops out at RETRY_MAX (10 s), so up to a minute of attempts is still counted."""
         from deploy.baremetal import node
         clock = [0.0]
         service = self.service({"b": m.Refused("b did not answer (TimeoutError)"), "c": m.Refused("c did not answer (TimeoutError)")})
         quiet = [c.cell_contents for c in service.renew.__closure__ if isinstance(c.cell_contents, node.QuietRefusals)][0]
         quiet.clock = lambda: clock[0]
         attempts, wait, at = 0, 0, 0.0
-        while clock[0] < 600:                                  # the service's cadence: 5 s, doubling to 60 s while failing
+        while clock[0] < 600:                                  # the service's cadence: RETRY_FIRST doubling to RETRY_MAX while failing
             if clock[0] >= at:
                 attempts += 1
                 with self.assertRaises(m.Refused):
@@ -577,8 +777,9 @@ class Renewals(unittest.TestCase):
         counts = [e for e in self.trail if "repeated" in e]
         self.assertEqual([(e["peer"], e["outcome"]) for e in firsts], [("b", "DENY"), ("c", "DENY"), ("", "DENY")])
         self.assertTrue(counts and all(e["outcome"] == "DENY" for e in counts))
-        # every refusal is on the trail, whole or counted: 3 lines an attempt, less what is still counted (at most 3 * 1 attempt)
-        self.assertGreaterEqual(sum(e["repeated"] for e in counts) + 3, 3 * attempts - 3)
+        # every refusal is on the trail, whole or counted: 3 lines an attempt, less what is still counted (at most a minute)
+        pending = -(-60 // admission.RETRY_MAX)
+        self.assertGreaterEqual(sum(e["repeated"] for e in counts) + 3, 3 * attempts - 3 * pending)
         self.assertLessEqual(sum(e["repeated"] for e in counts) + 3, 3 * attempts)
         self.assertIn("b x", counts[0]["reason"])
         self.assertIn("no peer gave a lease x", counts[0]["reason"])

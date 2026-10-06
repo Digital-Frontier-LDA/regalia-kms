@@ -775,7 +775,7 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
 
     def renew(request):
         manifest = node.manifest()
-        sources = node.sources(manifest)
+        sources = node.sources(manifest, timeout=admission.RENEW_TIMEOUT)    # a silent peer costs seconds, not a lease
         peers = sorted(sources)
         require(peers, "no peer to ask for a lease")
         order[:] = order[1:] + order[:1] if order and set(order) == set(peers) else peers
@@ -796,10 +796,16 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
         reason = "no peer gave a lease (%d asked: %s)" % (len(failures), "; ".join(sorted(failures)))     # by peer: one kind, whatever the rotation
         quiet.deny(dict(event, peer="", outcome="DENY", reason=convergence._printable(reason, membership.REASON_LIMIT)))
         raise Refused(reason)
+    from deploy.baremetal import survivor
+    clock = node.clock()
     return admission.Service(holder, node.manifest, renew, admission_file(node.runtime),
                              daemon_started=daemon_started or admission.unit_started(),
                              metrics=lambda samples: metrics.publish("admission", samples),      # #305
-                             record=trail)                                                     # #340: serving and not, on its trail
+                             record=trail,                                                     # #340: serving and not, on its trail
+                             # D32.6: the owner's survivor authorization root installed (survivor.py install), read every
+                             # round; consulted by the service only with no unexpired normal lease (#494)
+                             survivor=lambda manifest: survivor.seconds_left(node.held(survivor.AUTH_FILE), manifest,
+                                                                             node.node_id, clock))
 
 
 class Sync:

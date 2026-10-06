@@ -275,7 +275,7 @@ Commissioning has two halves:
   `regalia-audit-ship@time`) before it is published, as `time-authenticated` or `time-unauthenticated`
   with the reason; a transition that cannot be recorded is published as not authenticated.
   **If time is not authenticated, nothing is served:** peers authorize no unlock and issue no lease, a
-  node's own lease is not renewed, and within the lease bound (300 s) the KMS daemon stops. That is
+  node's own lease is not renewed, and within the lease bound (30 s, ADR-0002 D32) the KMS daemon stops. That is
   intended. So NTS must get out of each site: TCP 4460 to each server for the key exchange and UDP 123
   for the time itself; an outage of the NTS servers, or of that path, longer than those bounds stops the
   nodes. Proven against live chrony daemons in `e2e/authtime-chrony-nts.py`.
@@ -462,7 +462,7 @@ An update is three documents:
    a time: the first, in order, that is not on NEXT. **The limit:** a node judges "the one before me is
    back" from its own last re-attestation of that node, which it repeats only at the next lease
    renewal. If the earlier node falls back or goes down just after, the next node may still pass for up
-   to the lease lifetime (five minutes), and two nodes can then be down together. Three cannot. So
+   to the lease lifetime (30 s), and two nodes can then be down together. Three cannot. So
    wait for a node to be back and serving before starting the next, and do not treat `may_reboot` alone
    as the interlock. A node that is down
    and must not hold the others up is taken out by a signed manifest (QUARANTINED); there is no
@@ -1085,7 +1085,7 @@ the reason itself goes to the time trail.
 |---|---|---|
 | `regalia-authtime` | `/run/regalia-metrics/authtime/authtime.prom` | `regalia_time_authenticated{cause}`, `regalia_chrony_latch_set` |
 | `regalia-sync` | `/run/regalia-metrics/sync/heartbeat.prom`, `unlock.prom` | the heartbeat watch's `regalia_heartbeat_*`; the unlock listener's `regalia_unlock_refused_total{cause=rate\|connections}`, each refusal counted (the trail records the first of a window) |
-| `regalia-admission` | `/run/regalia-metrics/admission/lease.prom` | `regalia_admission_serving`, `regalia_admission_lease_seconds_left` |
+| `regalia-admission` | `/run/regalia-metrics/admission/lease.prom` | `regalia_admission_serving`, `regalia_admission_lease_seconds_left`, `regalia_admission_recovery` |
 | `regalia-audit-ship@<trail>` | `/run/regalia-metrics/audit-ship/<trail>.prom` | `regalia_audit_trail_*{trail}` |
 
 - **Who can read the files.** Each directory is its writer's, group `regalia-metrics`, setgid, 2750
