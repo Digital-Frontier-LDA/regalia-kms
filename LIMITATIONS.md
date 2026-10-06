@@ -69,8 +69,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       - etcd promotes a learner at 90% of the leader's index, so the survivor's commits can wait briefly after a
         promotion while the newcomer catches up;
       - from the first returner's promotion until the second's, the cluster is two voting members. Losing either stops
-        every commit until the other returner is promoted, or another take-over. Admitting both as learners before
-        either promotion (etcd's --max-learners 2) would shorten that window; it is not done;
+        every commit until the other returner is promoted, or another take-over. Both returners are admitted as
+        learners before either promotion (etcd's max-learners 2, #519, #528), but the two promotions are separate
+        commands run by hand, so the window lasts until the second one;
     - the daemon's halts (a peer heard below the quarantine epoch);
     - approvals naming their spending node (1e).
     Until they land, `full` is a recorded intent the daemon does not act on;
