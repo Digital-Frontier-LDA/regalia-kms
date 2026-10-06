@@ -49,7 +49,16 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   Not built yet:
   - the full scope's machinery:
     - the iLO/Redfish fence step that produces the power readback;
-    - the take-over (an owner-gated etcd force-new-cluster, and the state-epoch key 95 proposes);
+    - the take-over on a real host. `deploy/baremetal/takeover.py` exists: a graceful etcd stop, the revision
+      check, force-new-cluster through a /run drop-in, then the state-epoch entry (`opstate.verify_state_epoch`) as
+      its first write, and the drop-in read back gone. It is tested on a scripted host and, in CI, against a real
+      etcd 3.6.15 with systemctl played by the test. Not yet:
+      - regalia-etcd.service (#484), so it has never run under systemd;
+      - the take-over has never signed with a real TPM signing key;
+      - nothing reads the entry in Go (the cache's verify, regalia-kms-ed's), so `applied.json`'s `state_epoch` stays 0;
+      - the daemon's rule that a stateful operation in recovery needs the store at the authorization's own epoch;
+      - an arrival-time freshness check on the entry. A replaced signing key can still sign an entry dated before the
+        replacement, inside the owner's authorization window;
     - the rejoin (export the divergent tail, wipe, member add);
     - the daemon's halts (a peer heard below the quarantine epoch);
     - approvals naming their spending node (1e).
@@ -280,8 +289,8 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - The lone survivor's stateless serving under the owner's authorization (D32 item 6) has no gate path yet.
   - The session key's private half lives in the Go heap. It is never written, but it isn't locked against
     swap: the hosts are expected to run without swap, and nothing checks that.
-  - **`applied.json`'s `state_epoch` is always 0 for now.** The signed `/regalia/v1/state-epoch` entry (#492's
-    format) isn't verified by the cache yet. Until it is, a survivor's history after `--force-new-cluster` can't
+  - **`applied.json`'s `state_epoch` is always 0 for now.** The signed `/regalia/v1/state-epoch` entry
+    (`opstate.verify_state_epoch`) isn't verified by the cache yet. Until it is, a survivor's history after `--force-new-cluster` can't
     be told from the lost tail by this field.
   - **Once the runtime lease v2 (#489) is in, production must set the three settings.** Without them the
     daemon writes neither file, so its node requests no lease and stops serving.
