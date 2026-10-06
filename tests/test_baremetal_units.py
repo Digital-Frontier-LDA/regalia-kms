@@ -53,7 +53,8 @@ class TrailsReachTheirShipper(unittest.TestCase):
         self.addCleanup(shutil.rmtree, d, True)
         old = os.umask(0)
         try:
-            holder = lease.Holder("a", "ab" * 32, lambda: (0, True), lambda: 0, os.path.join(d, "lease.json"))
+            import tests.test_baremetal_lease as lt                   # lease v2: the stand-in state and session key
+            holder = lease.Holder("a", "ab" * 32, lambda: (0, True), lambda: 0, os.path.join(d, "lease.json"), **lt.SOURCES)
             holder.request()                                      # the nonce, written to lease.json under its lock
             trails.append(os.path.join(d, "audit.jsonl"), {"event": "admission", "outcome": "ALLOW"})
         finally:

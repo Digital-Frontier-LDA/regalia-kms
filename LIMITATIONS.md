@@ -31,6 +31,35 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **The lone survivor (ADR-0002 D32 item 6): the owner's authorization and directive only** (#432 item (e);
+  `deploy/baremetal/survivor.py`, `owner.py sign-survivor` and `sign-directive`). Built:
+  - one owner authorization, held only at the quarantine epoch (any new epoch ends it), with every other server stopped
+    and the owner's typed fencing attestation, for at most 7 days;
+  - the owner's directive, which only disables a key: never enables one and never destroys one (d9: one stolen owner
+    token must not destroy keys irreversibly with no approver able to intervene);
+  - the survivor's append-only store of the signed directives it applied. Each is verified before it is written, and
+    a corrupt file refuses every key.
+  - **the owner's one-server decision (2026-10-05): scope `full`.** Stateful operations continue on the lone survivor from
+    the owner's attestation plus 900 s plus 60 s (every request the fenced far side could have spent has expired), plus
+    600 s more when the fence is only typed rather than an iLO power readback.
+  Not built yet:
+  - the full scope's machinery:
+    - the iLO/Redfish fence step that produces the power readback;
+    - the take-over (an owner-gated etcd force-new-cluster, and the state-epoch key 95 proposes);
+    - the rejoin (export the divergent tail, wipe, member add);
+    - the daemon's halts (a peer heard below the quarantine epoch);
+    - approvals naming their spending node (1e).
+    Until they land, `full` is a recorded intent the daemon does not act on;
+  - the survivor's admission mode: recovery only with no unexpired normal lease, left at the first normal lease;
+  - the daemon serving stateless operations only in that mode, and refusing keys under a directive (ed);
+  - installing the authorization on the node;
+  - the majority committing a directive as a key-state change on its return;
+  - the cap coming from the manifest's `recovery_authorization_max_s` (#459, stacked on #438; it is a constant here).
+  **Accepted** (D28.6 amendment 5, D32.6):
+  - A false fencing attestation holds for the authorization's life. While it holds, the survivor uses key state that
+    may be up to that old, except what a directive disabled.
+  - The directives live on the survivor alone until the majority returns. If its disk is lost, they are lost there, so
+    the owner keeps every directive file the tool wrote and gives them again to a rebuilt survivor and to the majority.
 - **etcd's configuration from the manifest: the renderer only** (#432, ADR-0002 D32; `deploy/baremetal/etcdconf.py`).
   Built:
   - who is a member (the manifest's ACTIVE, MAINTENANCE and DRAINING nodes);
@@ -97,7 +126,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   enrolment, sync has no activation ops, there is no `owner.py sign-activation`, and the Go Gate still
   takes `regalia-fence`'s single key. By the rule, a new cluster's first activation waits about 11 minutes
   (`RECOVERY_WAIT_S`): every node starts with no grant record, so each is busy for that long after it
-  starts. Expected at first bring-up, not a fault. **The runtime lease (`lease.py`) is the one serving lease under D32: 30 s, renewed at a third (every 10 s)**, issued by **one** peer over the subject's re-attested TPM. A node cut off from both peers stops within 30 s, less the 5 s admission margin. Each renewal is a re-attestation and a quote on two TPMs (no NV write), so a node's TPM does one or two quotes every 10 s. While renewals fail they back off 2 s doubling to 10 s, so a healed node is serving again within about 10 s. Each connection of a renewal may take `admission.RENEW_TIMEOUT` (3 s), so a round with both peers silent ends within 12 s, before the margin (3e's #473 finding: about 110 s at sync's 10 s deadline). Serving stops at `serve_until` on the daemon's own clock whatever the lease service is doing. A lapse watcher beside the rounds writes "not serving" to the file and the trail within half a second of the bound, even while a round waits on a peer (#486). A peer that needs more than 3 s per ask (a slow TPM, a congested link) is treated as silent. A peer whose authenticated time is more than 5 s fast issues leases the others refuse (`FUTURE_SKEW`). It does not yet carry `state_revision` or the session key (95's v2, #432). Runtime leases are issued by **one** active peer, and `regalia-fence` is still
+  starts. Expected at first bring-up, not a fault. **The runtime lease (`lease.py`) is the one serving lease under D32: 30 s, renewed at a third (every 10 s)**, issued by **one** peer over the subject's re-attested TPM. A node cut off from both peers stops within 30 s, less the 5 s admission margin. Each renewal is a re-attestation and a quote on two TPMs (no NV write), so a node's TPM does one or two quotes every 10 s. While renewals fail they back off 2 s doubling to 10 s, so a healed node is serving again within about 10 s. Each connection of a renewal may take `admission.RENEW_TIMEOUT` (3 s), so a round with both peers silent ends within 12 s, before the margin (3e's #473 finding: about 110 s at sync's 10 s deadline). Serving stops at `serve_until` on the daemon's own clock whatever the lease service is doing. A lapse watcher beside the rounds writes "not serving" to the file and the trail within half a second of the bound, even while a round waits on a peer (#486). A peer that needs more than 3 s per ask (a slow TPM, a congested link) is treated as silent. A peer whose authenticated time is more than 5 s fast issues leases the others refuse (`FUTURE_SKEW`). **Runtime-lease v2 carries the subject's etcd state and session key** (95's part of D32, with 48, d9 and ed): the request states `{cluster_id, state_epoch, state_revision, session_key}`, the subject's re-attestation quote binds them (`lease.request_binding`), the issuer refuses a revision below what it had applied one lease ago (`lease.RevisionFloor`, failing closed for one lease after the issuer starts), and the lease names all four. Revisions are compared only within one **state epoch** (`/regalia/v1/state-epoch`, #432 item (e)): etcd's `--force-new-cluster` keeps the cluster ID and the revision (measured on v3.6.15), so the epoch, not `cluster_id`, tells a survivor's new history from a lost tail. A subject of another epoch is refused, an epoch never goes back, and a rise of the issuer's own epoch drops its floor's history and fails closed for one lease. Limits of v2: (a) **The two inputs come from the daemon**, so a node whose daemon doesn't run asks for no lease. regalia-kms's etcd watch writes `/run/regalia-state/applied.json` and its session key `/run/regalia-kms/session-key.json`, as user `regalia-kms`, mode 0644 (ed's #490, `internal/opstate`). The e2e fixture runs no daemon and writes both as that user would, so a real daemon writing them is shown by ed's Go tests, not by an e2e run yet. (b) The Gate's checks (the lease's `state_epoch` its own watch's, its watch at least `state_revision`, the lease's `session_key` its own) are the Go side's: ed's state gate in #490, stated in FENCING.md (#482). (c) The issuer pins the first `cluster_id` it reads (trust on first use) until the manifest or the enrolment record names the cluster (d9). (d) A node whose daemon is down has no floor and issues no lease to its peers, which then renew through the third node (48, accepted). (e) The floor is in memory: an issuer restart refuses leases for one lease (30 s). (f) An etcd restored from a snapshot goes back in revision: every issuer's floor then refuses ("went back") until its `regalia-sync` restarts, so a restore must restart `regalia-sync` on every node (fail closed by design). (g) The daemon writes both files only with `operational_state_endpoint` set (#490): a node without it requests no lease. (h) A cold cluster's first leases come at least one lease (30 s) after `regalia-sync` starts on the issuers, by the floor's fail-closed start. (i) No host issues a lease until etcd is formed from the manifest and the daemon writes both files (#484, #490; regalia-kms-48). (j) **Nothing writes a non-zero state epoch yet.** ed's #490 reports `state_epoch` in `applied.json`, 0 until its cache verifies the signed `/regalia/v1/state-epoch` entry (a signed opstate entry that only rises). 48's survivor take-over is to write it as its first write after `--force-new-cluster`, and genesis writes 0. Until the take-over exists, every node is at epoch 0. Refusing a lower or deleted epoch as a fault (d9) is the watch's; checking that a non-zero epoch matches a full-scope survivor authorization (d9) is survivor.py's and the daemon's. The lease layer trusts the epoch the subject's TPM binds and the issuer's own watch reports. Runtime leases are issued by **one** active peer, and `regalia-fence` is still
   the authority for which site signs ([`FENCING.md`](FENCING.md)).
   **Accepted in the design:**
   - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
@@ -219,7 +248,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   three-node fixture showed it intermittently on its shared software TPMs (#448). Since this change the tool's own
   error text goes to the journal; if it names a transient TPM code (`TPM_RC_RETRY`, `TPM_RC_YIELDED`,
   `TPM_RC_TESTING`, a busy socket), a small bounded retry on those codes alone is the next step. The refusal's own
-  text still carries no TPM reason (#450).
+  text still carries no TPM reason (#450). One code is retried, on a software TPM only: `TPM_RC_SESSION_MEMORY`
+  (0x903). A bare swtpm has no resource manager, so a call that dies connected leaves its sessions loaded, and three
+  of them fill every slot (three-node-recovery, #512). `membership.run_tpm2` then flushes the loaded sessions and
+  asks once more; it logs `regalia: … (#512)` each time. Only the anchor's reads and writes and `signkey`'s policy
+  sessions take it: ownerauth, enrol and attest don't. Which fixture call dies connected is not established. A host's
+  `/dev/tpmrm0` is never flushed or retried.
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
