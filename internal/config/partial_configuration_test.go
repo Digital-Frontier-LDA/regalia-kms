@@ -317,3 +317,42 @@ func TestTheOperationalStateIsAllOrNothingAndNeedsAdmission(t *testing.T) {
 		}
 	}
 }
+
+// The chain an admission is judged against (#432): its path and writer together, absolute and clean, a real user
+// name, and only with runtime admission "required".
+func TestTheMembershipChainSettings(t *testing.T) {
+	admitted := func() Config {
+		cfg := baseConfig()
+		cfg.RuntimeAdmission = RuntimeAdmissionRequired
+		cfg.RuntimeAdmissionPath, cfg.RuntimeAdmissionOwner = "/run/regalia/admission/admission.json", "regalia-admission"
+		cfg.NodeID, cfg.BootSessionPath = "site-a", "/run/regalia/boot-session"
+		cfg.MembershipChainPath, cfg.MembershipChainOwner = "/var/lib/regalia-sync/chain.json", "regalia-sync"
+		return cfg
+	}
+	if err := admitted().Validate(); err != nil {
+		t.Fatalf("a complete chain setting was refused: %v", err)
+	}
+	for _, c := range []struct {
+		name   string
+		change func(*Config)
+		want   string
+	}{
+		{"no owner", func(c *Config) { c.MembershipChainOwner = "" }, "configured together"},
+		{"no path", func(c *Config) { c.MembershipChainPath = "" }, "configured together"},
+		{"a root with no chain", func(c *Config) {
+			c.MembershipChainPath, c.MembershipChainOwner, c.MembershipRootKeyPath = "", "", "/usr/lib/regalia/root-key.json"
+		}, "is for membership_chain_path"},
+		{"lab admission", func(c *Config) {
+			c.RuntimeAdmission, c.RuntimeAdmissionPath, c.RuntimeAdmissionOwner, c.NodeID, c.BootSessionPath = RuntimeAdmissionDisabledForLab, "", "", "", ""
+		}, "needs runtime_admission"},
+		{"an owner that is not a name", func(c *Config) { c.MembershipChainOwner = "Regalia Sync" }, "must be the name of the user"},
+		{"a relative chain", func(c *Config) { c.MembershipChainPath = "chain.json" }, "absolute, clean paths"},
+		{"an unclean root", func(c *Config) { c.MembershipRootKeyPath = "/usr/lib/../lib/regalia/root-key.json" }, "absolute, clean paths"},
+	} {
+		cfg := admitted()
+		c.change(&cfg)
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, not %q", c.name, err, c.want)
+		}
+	}
+}
