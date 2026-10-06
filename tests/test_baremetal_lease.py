@@ -715,6 +715,7 @@ class StateAndSessionKey(Case):
     def test_the_issuer_fails_closed_until_it_has_watched_for_one_lease(self):
         self.peers["b"]["floor"] = self.floor(watched=lease.MAX_LIFETIME - 1)
         self.refused("less than one lease", self.issue)
+        self.refused("not a fault: ask again in", self.issue)        # what the operator reads through update apply's WAIT
 
     def test_another_cluster_is_refused(self):
         b = self.peers["b"]

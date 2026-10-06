@@ -253,8 +253,12 @@ class RevisionFloor:
         ago, in the same history."""
         now = self.clock()
         with self._lock:
+            # EXPECTED AFTER A RESTART, NOT A FAULT (05 on #489): an operator reads this through `update apply`'s WAIT, so it
+            # says when to ask again
             require(now - self.started >= self.lifetime, "this issuer has watched etcd for %.0f s, less than one lease (%d s): it issues "
-                    "no lease until it knows what it held a lease ago" % (now - self.started, self.lifetime))
+                    "no lease until it knows what it held a lease ago. Expected for a peer that (re)started less than one lease "
+                    "ago, not a fault: ask again in %d s" % (now - self.started, self.lifetime,
+                                                             max(1, int(self.lifetime - (now - self.started)) + 1)))
             require(cluster_id == self.cluster_id, "the subject is in etcd cluster %s, not this issuer's %s" % (cluster_id, self.cluster_id))
             require(state_epoch == self.epoch, "ANOTHER HISTORY: the subject's etcd state is of state epoch %d, this issuer's of %d: "
                     "revisions of two histories are not compared, no lease" % (state_epoch, self.epoch))
