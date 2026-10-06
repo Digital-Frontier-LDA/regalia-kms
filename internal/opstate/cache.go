@@ -27,6 +27,7 @@ type Change struct {
 	Key         string
 	Value       []byte
 	Deleted     bool
+	Created     bool // the key's creation (etcd: its create revision is this one)
 	ModRevision int64
 }
 
@@ -56,9 +57,20 @@ type Source interface {
 type Options struct {
 	Source Source
 	Prefix string // "/regalia/v1/"
-	// Verify judges an entry before it is used: nil means it holds. A refused entry is kept as refused, so
-	// a key whose state does not verify is unavailable (fail closed), never its previous state.
-	Verify func(key string, value []byte) error
+	// Verify judges an entry before it is used, against `previous`: the last entry under that key that
+	// verified (nil when there is none). It returns the parsed entry, kept as the next one's previous. A
+	// refused entry is kept as refused, so a key whose state does not verify is unavailable (fail closed),
+	// never its previous state; and a later entry is still judged against the last good one, so a refused
+	// entry cannot reset what a replay is judged against. Nil: every value holds, as raw bytes.
+	Verify func(key string, value []byte, previous any) (any, error)
+	// Tombstone says which keys, once seen, may never become absent: a delete of one (or its absence from a
+	// later list) is kept as a refusal, never "no state" (a key's state deleted, then its first state put
+	// back, is a rollback). Nil: none.
+	Tombstone func(key string) bool
+	// Fresh judges an entry whose CREATION this cache observes (a watch event, never the initial list) against
+	// the moment it arrived: opstate.fresh, so a key that may sign a backdated entry cannot place it in real
+	// time it never had (1e on #492). Nil: none.
+	Fresh func(key string, parsed any) error
 	// Boottime is CLOCK_BOOTTIME; confirmations are stamped with it.
 	Boottime func() (time.Duration, error)
 	// ProgressEvery is how often the cache asks for a progress notification: a fraction of the lease.
@@ -85,12 +97,18 @@ type Snapshot struct {
 
 type entry struct {
 	value   []byte
+	parsed  any
 	refusal error
 }
 
 // Cache is the operational state as of the last revision applied.
 type Cache struct {
 	options Options
+
+	// good is the last entry under each key that verified: what the next one is judged against. Only the
+	// Run goroutine reads or writes it, so it needs no lock; it outlives a relist (a store listed again is
+	// still judged against what this process saw).
+	good map[string]any
 
 	mu          sync.Mutex
 	entries     map[string]entry
@@ -109,7 +127,7 @@ func New(options Options) (*Cache, error) {
 	if options.ProgressEvery <= 0 || options.Retry <= 0 {
 		return nil, errors.New("opstate: ProgressEvery and Retry must be positive")
 	}
-	return &Cache{options: options, entries: map[string]entry{}, reason: "the state has not been read yet"}, nil
+	return &Cache{options: options, entries: map[string]entry{}, good: map[string]any{}, reason: "the state has not been read yet"}, nil
 }
 
 // Applied is the revision the cache has applied, when that was last confirmed (CLOCK_BOOTTIME), and
@@ -212,13 +230,45 @@ func (c *Cache) cycle(ctx context.Context) error {
 	}
 }
 
-func (c *Cache) verify(key string, value []byte) entry {
-	if c.options.Verify != nil {
-		if err := c.options.Verify(key, value); err != nil {
-			return entry{refusal: fmt.Errorf("the entry at %s does not verify: %w", key, err)}
-		}
+// verify judges value against good[key] and, when it verifies, records it there. A created entry is also
+// judged fresh.
+func (c *Cache) verify(good map[string]any, key string, value []byte, created bool) entry {
+	kept := append([]byte(nil), value...)
+	if c.options.Verify == nil {
+		return entry{value: kept}
 	}
-	return entry{value: append([]byte(nil), value...)}
+	parsed, err := c.options.Verify(key, kept, good[key])
+	if err == nil && created && c.options.Fresh != nil {
+		err = c.options.Fresh(key, parsed)
+	}
+	if err != nil {
+		return entry{refusal: fmt.Errorf("the entry at %s does not verify: %w", key, err)}
+	}
+	good[key] = parsed
+	return entry{value: kept, parsed: parsed}
+}
+
+func (c *Cache) tombstoned(key string, good map[string]any) bool {
+	_, seen := good[key]
+	return seen && c.options.Tombstone != nil && c.options.Tombstone(key)
+}
+
+func deletedAfterSeen(key string) entry {
+	return entry{refusal: fmt.Errorf("the entry at %s was deleted after it was seen: a deleted state is refused, never taken for no state", key)}
+}
+
+// Entry is a key's verified entry as Verify parsed it, like Value.
+func (c *Cache) Entry(key string) (parsed any, ok bool, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	found, ok := c.entries[key]
+	if !ok {
+		return nil, false, nil
+	}
+	if found.refusal != nil {
+		return nil, true, found.refusal
+	}
+	return found.parsed, true, nil
 }
 
 func (c *Cache) replace(values map[string][]byte, cluster uint64, revision int64) error {
@@ -226,12 +276,21 @@ func (c *Cache) replace(values map[string][]byte, cluster uint64, revision int64
 	if err != nil {
 		return errors.New("CLOCK_BOOTTIME cannot be read")
 	}
+	good := make(map[string]any, len(c.good))
+	for k, v := range c.good {
+		good[k] = v
+	}
 	entries := make(map[string]entry, len(values))
 	for key, value := range values {
 		if !strings.HasPrefix(key, c.options.Prefix) {
 			return fmt.Errorf("the store listed %q, outside %s", key, c.options.Prefix)
 		}
-		entries[key] = c.verify(key, value)
+		entries[key] = c.verify(good, key, value, false)
+	}
+	for key := range c.good {
+		if _, listed := values[key]; !listed && c.tombstoned(key, c.good) {
+			entries[key] = deletedAfterSeen(key)
+		}
 	}
 	c.mu.Lock()
 	if c.clusterID != 0 && cluster != c.clusterID {
@@ -243,6 +302,7 @@ func (c *Cache) replace(values map[string][]byte, cluster uint64, revision int64
 		return fmt.Errorf("the store listed revision %d, below the %d already applied: a store rolled back is not read", revision, c.revision)
 	}
 	c.entries, c.clusterID, c.revision, c.confirmedAt = entries, cluster, revision, now
+	c.good = good
 	c.setLive(true, "")
 	c.mu.Unlock()
 	return nil
@@ -261,6 +321,16 @@ func (c *Cache) apply(update Update) error {
 		return fmt.Errorf("the watch answered from cluster %016x, not %016x", update.ClusterID, c.clusterID)
 	}
 	revision := c.revision
+	// staged, so a response refused part-way changes nothing (the cache then lists again)
+	good, staged := map[string]any{}, map[string]*entry{}
+	lookup := func(key string) map[string]any {
+		if _, has := good[key]; !has {
+			if v, ok := c.good[key]; ok {
+				good[key] = v
+			}
+		}
+		return good
+	}
 	for _, change := range update.Changes {
 		if !strings.HasPrefix(change.Key, c.options.Prefix) {
 			return fmt.Errorf("the watch delivered %q, outside %s", change.Key, c.options.Prefix)
@@ -269,12 +339,31 @@ func (c *Cache) apply(update Update) error {
 			return fmt.Errorf("the watch delivered revision %d, not after the %d already applied", change.ModRevision, c.revision)
 		}
 		if change.Deleted {
-			delete(c.entries, change.Key)
+			if c.tombstoned(change.Key, lookup(change.Key)) {
+				refused := deletedAfterSeen(change.Key)
+				staged[change.Key] = &refused
+			} else {
+				staged[change.Key] = nil
+			}
 		} else {
-			c.entries[change.Key] = c.verify(change.Key, change.Value)
+			judged := c.verify(lookup(change.Key), change.Key, change.Value, change.Created)
+			staged[change.Key] = &judged
 		}
 		if change.ModRevision > revision {
 			revision = change.ModRevision
+		}
+	}
+	for key, parsed := range good {
+		c.good[key] = parsed
+	}
+	for key, judged := range staged {
+		if judged == nil {
+			// a key that may be deleted (a nonce or a day's quota collected after it expired) leaves no trace,
+			// so the memory of what was seen stays bounded by what the store holds
+			delete(c.entries, key)
+			delete(c.good, key)
+		} else {
+			c.entries[key] = *judged
 		}
 	}
 	if update.Progress && update.Revision > revision {

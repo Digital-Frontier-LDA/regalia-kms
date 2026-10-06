@@ -98,6 +98,9 @@ type Request struct {
 	Nonce             string
 	VerifiedApprovers []string
 	Cosmos            *CosmosTransaction
+	// PayloadSHA256 is the SHA-256 of what the approvers signed (approval.Binding's payload), hex: the
+	// operational state's spend binds it (ADR-0002 D32, #432), so one approval spends for one payload.
+	PayloadSHA256 string
 }
 
 type Reservation struct {
@@ -108,14 +111,25 @@ type Reservation struct {
 	// bytes, so epoch-0 (unfenced) reservations must marshal exactly as pre-epoch
 	// journals did or every existing journal stops verifying at the next open — the
 	// RBACDigest lesson, applied at the field's birth rather than after the breakage.
-	Epoch       uint64            `json:"epoch,omitempty"`
-	Principal   string            `json:"principal"`
-	Nonce       string            `json:"nonce"`
-	UTCDate     string            `json:"utc_date"`
-	Amounts     map[string]uint64 `json:"amounts"`
-	DailyCaps   map[string]uint64 `json:"daily_caps"`
-	Sequence    *uint64           `json:"sequence,omitempty"`
-	SequenceKey string            `json:"sequence_key,omitempty"`
+	Epoch     uint64            `json:"epoch,omitempty"`
+	Principal string            `json:"principal"`
+	Nonce     string            `json:"nonce"`
+	UTCDate   string            `json:"utc_date"`
+	Amounts   map[string]uint64 `json:"amounts"`
+	DailyCaps map[string]uint64 `json:"daily_caps"`
+	Sequence  *uint64           `json:"sequence,omitempty"`
+	// D25's facts the operational state's spend binds (D32, #432). omitempty: a FileState journal's events
+	// marshal as they did before (the RBACDigest lesson, as Epoch's).
+	Purpose       string   `json:"purpose,omitempty"`
+	Environment   string   `json:"environment,omitempty"`
+	PayloadSHA256 string   `json:"payload_sha256,omitempty"`
+	Approvers     []string `json:"approvers,omitempty"`
+	// ApproverSet and ApprovalsSHA256 name the set the approvals were judged under and the approvals counted
+	// (opstate's approver_set_digest and approvals_digest), so a collector can re-verify them (1e, #492).
+	ApproverSet     string    `json:"approver_set,omitempty"`
+	ApprovalsSHA256 string    `json:"approvals_sha256,omitempty"`
+	ExpiresAt       time.Time `json:"expires_at,omitzero"`
+	SequenceKey     string    `json:"sequence_key,omitempty"`
 }
 
 type State interface {
@@ -310,6 +324,8 @@ func (engine *Engine) Evaluate(ctx context.Context, request Request) Decision {
 		Sequence:    sequence,
 		SequenceKey: sequenceKey,
 		DailyCaps:   cloneAmounts(policy.dailyCaps()),
+		Purpose:     request.Purpose, Environment: request.Environment, PayloadSHA256: request.PayloadSHA256,
+		Approvers: request.VerifiedApprovers, ExpiresAt: request.ExpiresAt,
 	})
 	if err != nil {
 		switch {

@@ -207,8 +207,18 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     applied the lease's `state_revision`, the last confirmation is within one lease) is built and tested but
     **not wired into the fence**. It joins once the serving lease (runtime lease v2, regalia-kms-95) carries
     those fields.
-  - The entries aren't verified in Go yet (`opstate-v1`), and spends, high-water marks and key state aren't
-    committed through etcd. The policy journal is still the per-node file (`policy.FileState`).
+  - **Entries are verified in Go, and `EtcdState` exists, but neither is wired into the daemon.**
+    - `VerifyValue`, `Transition`, `Batch`, `VerifySession`, `CheckApprovals`, `MaySign` and `Fresh` match
+      `opstate.py` decision for decision on `tests/vectors/opstate-v1.json`.
+    - The cache's `Judge` refuses a regression against the last good entry, and a key state deleted after it was
+      seen.
+    - `EtcdState` (one Reserve, one majority transaction before the HSM) is tested against a real etcd.
+    - Still missing: the daemon doesn't hand `Judge` to its cache, doesn't use `EtcdState` as its `policy.State`
+      (the journal is still `policy.FileState`), and doesn't check `MaySign` before the HSM.
+    - Those need the lease's digest and expiry from the admission file (#489), a sessions resolver that reads the
+      verified `sessions/` entries from the cache, and the coordinator handing the Reservation the approver set's
+      digest and the counted approvals' digest (`internal/approval` returns IDs only today).
+    - `Reservation.Epoch` (#428) is still stamped. It goes with that wiring.
   - The daemon's unit doesn't yet join `regalia-etcd-client`, the group that may open etcd's socket. That
     group arrives with #484's sysusers, and naming it before then would stop the unit from starting.
   - The lone survivor's stateless serving under the owner's authorization (D32 item 6) has no gate path yet.
