@@ -7,7 +7,7 @@ once, and the survivor would commit nothing until the newcomer caught up. A lear
 promoted only once etcd says it is in sync (measured on etcd 3.6.15, regalia-kms-2f).
 
     on the survivor:   python3 -Es -m deploy.baremetal.rejoin --config node.json admit   --node R
-    on R:              python3 -Es -m deploy.baremetal.rejoin --config node.json join    --initial-cluster S=...,R=...
+    on R:              python3 -Es -m deploy.baremetal.rejoin --config node.json join    --initial-cluster S=...,R=... --member-id ID
     on the survivor:   python3 -Es -m deploy.baremetal.rejoin --config node.json promote --node R
     on R:              python3 -Es -m deploy.baremetal.rejoin --config node.json finish
     (on the survivor, a learner that never syncs: ... abandon --node R)
@@ -15,22 +15,31 @@ promoted only once etcd says it is in sync (measured on etcd 3.6.15, regalia-kms
 ADMIT (survivor). Refused while the take-over's drop-in is in force (takeover.forcing, regalia-kms-d9: its next restart
 would force a new cluster again and drop R), while any other learner or unstarted member exists (one at a time), if R
 does not count under the current manifest, or if R is already a voting member. `etcdctl member add R --learner` at
-R's mesh URL; it says the initial-cluster R starts with: the members NOW, from etcd's answer, never the manifest's.
-Run again, it finds R's learner and says the same.
+R's mesh URL; it says the initial-cluster R starts with (the members NOW, from etcd's answer, never the manifest's)
+and the learner's member ID. Run again, it finds R's learner and says the same.
 
-JOIN (R). Stops regalia-kms, then etcd. THE EXPORT (G5): the old backend's revision (etcdutl, offline) and the SHA-256
-of its db are recorded, and the data directory is renamed to regalia-etcd.divergent-e<epoch>-r<revision>: kept, never
-deleted, never replayed. It is the evidence the reconciliation reads (RECOVERY-RECONCILIATION.md). The configuration is
+JOIN (R), with what admit said. Stops regalia-kms, then etcd. THE EXPORT (G5): the old backend's revision (etcdutl,
+offline) and the SHA-256 of its db are recorded FIRST (regalia-kms-05: a crash after the rename must not lose the digest),
+then the data directory is renamed to regalia-etcd.divergent-e<epoch>-r<revision>: kept, never deleted, never replayed.
+It is the evidence the reconciliation reads (RECOVERY-RECONCILIATION.md). A record without its directory is a crash
+between the two: the rename completes. The configuration is
 the node's checked one (etcdconf.check) with that initial-cluster, every name a member under the current manifest at
 its own mesh URL, and initial-cluster-state "existing"; etcd ignores both once its data directory exists, so it stays.
 etcd starts and must answer as a learner of the cluster, holding the store's state-epoch entry, verified and bound to
-it (opstate.verify_state_epoch). Run again with the directory already a learner's, it exports nothing (a data
-directory beside an export of this epoch is the joined one) and checks again.
+it (opstate.verify_state_epoch), and as the member ID admit said. Then a marker beside the data directory names that
+learner and epoch. Run again, the directory is kept only if its marker names this learner (05): one from after the
+export that does not (a learner abandoned and admitted again, a crash before the marker) is set aside as
+regalia-etcd.abandoned-e<epoch>-<n>, kept, and etcd starts afresh. The divergent tail is exported once.
 
 PROMOTE (survivor). `etcdctl member promote`, retried while etcd answers that the learner is not yet in sync, bounded.
 etcd itself decides "in sync": it promotes a learner whose match index is at least 90% of the leader's
 (readyPercentThreshold, server/etcdserver/server.go in v3.6.15), never forced. Raft keeps that safe; the cost is that
 the survivor's commits, now needing two of two, wait while R catches up the rest.
+
+THE TWO-OF-TWO WINDOW (05). From R's promotion until the third node is promoted, the cluster is two voting members:
+losing either stops every commit until the third is promoted, or another take-over. One learner at a time is
+etcd's default (--max-learners 1, which etcdconf renders by leaving it out); admitting the third as a learner before
+promoting R would shorten the window and is not done.
 FINISH (R). R answers as a voting member of the cluster, holding the state-epoch entry: the daemon starts, and its
 leases name the same (cluster, state epoch) as the survivor's.
 """
@@ -47,6 +56,8 @@ Refused, require = membership.Refused, membership.require
 say = tk.say
 
 DIVERGENT = etcdconf.DATA_DIR + ".divergent-e%d-r%d"
+JOINED = etcdconf.DATA_DIR + ".joined.json"          # beside the data directory: which learner it is, for which epoch
+MEMBER_ID = __import__("re").compile(r"[0-9a-f]{1,16}")
 NOT_IN_SYNC = "can only promote a learner member which is in sync with leader"
 PROMOTE_TRIES, PROMOTE_PAUSE_S = 60, 5           # five minutes for a learner to catch up
 JOIN_TRIES, JOIN_PAUSE_S = 60, 2
@@ -84,13 +95,16 @@ def admit(host, chain, me, node):
     require(not pending, "%s is still joining: one node at a time" % ", ".join(pending))
     if mine:
         require(mine[0].get("isLearner"), "%s is already a voting member" % node)
+        member_id = "%x" % mine[0]["ID"]
         say("%s is already admitted as a learner" % node)
     else:
-        members = _ctl(host, "member", "add", node, "--learner", "--peer-urls=" + url)["members"]
+        added = _ctl(host, "member", "add", node, "--learner", "--peer-urls=" + url)
+        members, member_id = added["members"], "%x" % added["member"]["ID"]
         say("%s admitted as a learner at %s" % (node, url))
     line = _initial_cluster(members, node)
     say("INITIAL-CLUSTER: %s" % line)
-    return line
+    say("MEMBER-ID: %s" % member_id)
+    return line, member_id
 
 
 def _parse_initial(line, manifest, me):
@@ -118,27 +132,61 @@ def _state(host, chain):
     return header, bool(status[0]["Status"].get("isLearner")), entry
 
 
-def join(host, chain, me, line):
+def _beside(host, infix):
+    """The names beside the data directory that begin with its own name plus `infix`."""
+    base = os.path.basename(etcdconf.DATA_DIR) + infix
+    return sorted(p for p in host.listdir(os.path.dirname(etcdconf.DATA_DIR)) if p.startswith(base))
+
+
+def _dir_of(name):
+    return os.path.join(os.path.dirname(etcdconf.DATA_DIR), name)
+
+
+def _prepare(host, me, epoch, member_id):
+    """The data directory etcd is to start on: the joined one (its marker names this learner, regalia-kms-05), or none
+    (the old one exported, or a stale one set aside). Returns the export's path when this run made it."""
+    if not host.exists(etcdconf.DATA_DIR):
+        return None
+    if host.exists(JOINED):
+        try:
+            marker = json.loads(host.read(JOINED))
+        except ValueError:
+            marker = {}
+        if marker == {"epoch": epoch, "member_id": member_id}:
+            say("the data directory is learner %s's, joined at epoch %d: kept" % (member_id, epoch))
+            return None
+    exported = [p for p in _beside(host, ".divergent-e%d-" % epoch) if not p.endswith(".json")]
+    if exported:
+        # the old data is already exported: this directory came after it (a learner abandoned, a crash before its
+        # marker), never the divergent tail. Set aside, kept, and etcd starts afresh as this learner
+        aside = _dir_of("%s.abandoned-e%d-%d" % (os.path.basename(etcdconf.DATA_DIR), epoch, len(_beside(host, ".abandoned-e%d-" % epoch)) + 1))
+        host.rename(etcdconf.DATA_DIR, aside)          # its marker, if any, names another learner: replaced once this one answers
+        say("a data directory from after the export, not learner %s's, set aside at %s (kept)" % (member_id, aside))
+        return None
+    records = _beside(host, ".divergent-e%d-" % epoch)
+    if records:
+        # the record written, the rename not (a crash between the two): the rename completes, by the record's path
+        record = json.loads(host.read(_dir_of(records[0])))
+        export = record["kept_at"]
+    else:
+        backend = tk._json(host.run([tk.ETCDUTL, "snapshot", "status", tk.BACKEND, "-w", "json"]), "etcdutl snapshot status")
+        revision = backend.get("revision")
+        require(isinstance(revision, int) and revision >= 0, "the old backend's revision is unreadable: refused, nothing moved")
+        export = DIVERGENT % (epoch, revision)
+        record = {"node_id": me, "epoch": epoch, "revision": revision, "db_sha256": host.sha256(tk.BACKEND), "kept_at": export}
+        host.write(export + ".json", json.dumps(record, sort_keys=True) + "\n", mode=0o600)     # first: a crash keeps the digest
+    host.rename(etcdconf.DATA_DIR, export)
+    say("EXPORTED: the divergent tail, revision %d, db sha256 %s, kept at %s" % (record["revision"], record["db_sha256"], export))
+    return export
+
+
+def join(host, chain, me, line, member_id):
     current = chain[-1]
     _parse_initial(line, current, me)
+    require(isinstance(member_id, str) and MEMBER_ID.fullmatch(member_id) is not None, "the member ID is the hex admit said")
     for unit in (tk.DAEMON, tk.UNIT):
         say("%s stopped (%s)" % (unit, tk._stop(host, unit)))
-    export = None
-    if host.exists(etcdconf.DATA_DIR):
-        earlier = [p for p in host.listdir(os.path.dirname(etcdconf.DATA_DIR)) if p.startswith(os.path.basename(etcdconf.DATA_DIR)
-                                                                                                + ".divergent-e%d-" % current["epoch"])]
-        if earlier:
-            say("the data directory beside %s is the joined one: nothing exported again" % earlier[0])
-        else:
-            backend = tk._json(host.run([tk.ETCDUTL, "snapshot", "status", tk.BACKEND, "-w", "json"]), "etcdutl snapshot status")
-            revision = backend.get("revision")
-            require(isinstance(revision, int) and revision >= 0, "the old backend's revision is unreadable: refused, nothing moved")
-            export = DIVERGENT % (current["epoch"], revision)
-            record = {"node_id": me, "epoch": current["epoch"], "revision": revision, "db_sha256": host.sha256(tk.BACKEND),
-                      "kept_at": export}
-            host.rename(etcdconf.DATA_DIR, export)
-            host.write(export + ".json", json.dumps(record, sort_keys=True) + "\n", mode=0o600)
-            say("EXPORTED: the divergent tail, revision %d, db sha256 %s, kept at %s" % (revision, record["db_sha256"], export))
+    export = _prepare(host, me, current["epoch"], member_id)
     config = etcdconf.check(host.read(etcdconf.CONFIG_PATH))
     require(config["name"] == me, "etcd's configuration is %s's, not %s's" % (config["name"], me))
     config["initial-cluster"], config["initial-cluster-state"] = line, "existing"
@@ -154,8 +202,12 @@ def join(host, chain, me, line):
             if attempt == JOIN_TRIES - 1:
                 raise
             host.sleep(JOIN_PAUSE_S)
+    require("%x" % header["member_id"] == member_id, "this node's etcd answers as member %x, not the learner %s admit made"
+            % (header["member_id"], member_id))
     require(learner, "this node's etcd answers as a voting member before any promotion: not the learner admit made")
-    say("%s is a learner of cluster %016x at state epoch %d: now, on the survivor, promote it" % (me, header["cluster_id"], entry["state_epoch"]))
+    host.write(JOINED, json.dumps({"epoch": current["epoch"], "member_id": member_id}, sort_keys=True) + "\n", mode=0o600)
+    say("%s is learner %s of cluster %016x at state epoch %d: now, on the survivor, promote it" % (me, member_id, header["cluster_id"],
+                                                                                                 entry["state_epoch"]))
     return export
 
 
@@ -231,7 +283,9 @@ def main(argv=None, host=None):
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("admit", "promote", "abandon"):
         sub.add_parser(name).add_argument("--node", required=True, help="the returning node")
-    sub.add_parser("join").add_argument("--initial-cluster", required=True, help="what admit said, on the survivor")
+    j = sub.add_parser("join")
+    j.add_argument("--initial-cluster", required=True, help="what admit said, on the survivor")
+    j.add_argument("--member-id", required=True, help="the learner's member ID, as admit said it")
     sub.add_parser("finish")
     args = parser.parse_args(argv)
     from deploy.baremetal import node as nodemod
@@ -242,7 +296,7 @@ def main(argv=None, host=None):
         require(chain[-1]["epoch"] == node.manifest()["epoch"], "the published chain's tip is not the anchored manifest")
         me = node.node_id
         if args.command == "join":
-            join(host, chain, me, args.initial_cluster)
+            join(host, chain, me, args.initial_cluster, args.member_id)
         elif args.command == "finish":
             finish(host, chain, me)
         else:

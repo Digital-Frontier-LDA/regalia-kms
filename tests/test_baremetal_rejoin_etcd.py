@@ -120,13 +120,14 @@ class RejoinRealEtcd(unittest.TestCase):
         with mock.patch.object(rj, "_url", lambda manifest, n: urls[n]), \
                 mock.patch.object(rj.etcdconf, "check", json.loads), mock.patch.object(rj, "JOIN_PAUSE_S", 1), \
                 contextlib.redirect_stdout(io.StringIO()) as said:
-            line = rj.admit(a, self.chain, "a", "b")
+            line, member_id = rj.admit(a, self.chain, "a", "b")
             self.assertEqual(line, "a=%s,b=%s" % (urls["a"], urls["b"]))
             self.assertEqual(h.ctl(h.client["a"], "put", "/while-learner", "v").returncode, 0)   # quorum 1 still: a commits
-            export = rj.join(b, self.chain, "b", line)
+            export = rj.join(b, self.chain, "b", line, member_id)
             rj.promote(a, self.chain, "a", "b")
             rj.finish(b, self.chain, "b")
         self.assertTrue(os.path.isdir(b.path(export)), said.getvalue())
+        self.assertEqual(json.loads(open(b.path(rj.JOINED)).read()), {"epoch": 3, "member_id": member_id})
         record = json.loads(open(b.path(export) + ".json").read())
         self.assertEqual((record["node_id"], record["epoch"]), ("b", 3))
         members = json.loads(h.ctl(h.client["a"], "member", "list", "-w", "json").stdout)["members"]

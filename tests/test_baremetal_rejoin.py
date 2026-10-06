@@ -48,6 +48,7 @@ class FakeEtcd:
         self.learner = False                             # how this node's etcd answers its own endpoint status
         self.holds_epoch = True                          # whether its etcd has the state-epoch entry yet
         self.cluster_id = CLUSTER                        # the cluster its etcd answers as
+        self.member_id = 0                               # the member its etcd answers as
 
     def done(self, rc=0, out="", err=""):
         return subprocess.CompletedProcess([], rc, out, err)
@@ -64,10 +65,10 @@ class FakeEtcd:
         self.files.pop(path, None)
 
     def exists(self, path):
-        return path in self.dirs
+        return path in self.dirs or path in self.files
 
     def listdir(self, path):
-        return sorted(d.rsplit("/", 1)[1] for d in self.dirs if d.rsplit("/", 1)[0] == path)
+        return sorted(d.rsplit("/", 1)[1] for d in list(self.dirs) + list(self.files) if d.rsplit("/", 1)[0] == path)
 
     def rename(self, src, dst):
         self.dirs.remove(src)
@@ -96,8 +97,10 @@ class FakeEtcd:
         if what[:2] == ["member", "list"]:
             return self.done(0, json.dumps({"members": c.members}))
         if what[:2] == ["member", "add"]:
-            c.members.append({"ID": 0x3d4f5dd237552cf1, "peerURLs": [what[4].split("=", 1)[1]], "isLearner": True})
-            return self.done(0, json.dumps({"members": c.members}))
+            c.next_id += 1
+            added = {"ID": c.next_id, "peerURLs": [what[4].split("=", 1)[1]], "isLearner": True}
+            c.members.append(added)
+            return self.done(0, json.dumps({"member": added, "members": c.members}))
         if what[:2] == ["member", "promote"]:
             if c.sync_after > 0:
                 c.sync_after -= 1
@@ -110,7 +113,7 @@ class FakeEtcd:
             c.members = [x for x in c.members if "%x" % x["ID"] != what[2]]
             return self.done(0, "removed")
         if what[:2] == ["endpoint", "status"]:
-            status = {"header": {"cluster_id": self.cluster_id, "revision": 4800}}
+            status = {"header": {"cluster_id": self.cluster_id, "member_id": self.member_id, "revision": 4800}}
             if self.learner:
                 status["isLearner"] = True
             return self.done(0, json.dumps([{"Endpoint": "x", "Status": status}]))
@@ -124,6 +127,7 @@ class Cluster:
     def __init__(self, manifest):
         self.members = [{"ID": 0x6965d0c8a2e3b4d, "name": "a", "peerURLs": [url(manifest, "a")], "clientURLs": ["unix://x"]}]
         self.forcing, self.sync_after, self.value = False, 0, state_epoch_value()
+        self.next_id = 0x3d4f5dd237552cf0
 
 
 class Case(unittest.TestCase):
@@ -146,14 +150,16 @@ class Case(unittest.TestCase):
 
 class Admit(Case):
     def test_b_admitted_as_a_learner_with_the_members_now(self):
-        line, said = self.quiet(rj.admit, self.a, self.chain, "a", "b")
+        (line, member_id), said = self.quiet(rj.admit, self.a, self.chain, "a", "b")
+        self.assertEqual(member_id, "3d4f5dd237552cf1")
+        self.assertIn("MEMBER-ID: 3d4f5dd237552cf1", said)
         b_url = url(self.chain[-1], "b")
         self.assertIn([tk.ETCDCTL, "--endpoints", tk.ENDPOINT, "member", "add", "b", "--learner", "--peer-urls=" + b_url, "-w", "json"],
                       self.a.calls)
         self.assertEqual(line, "a=%s,b=%s" % (url(self.chain[-1], "a"), b_url))   # a and b: never the manifest's three
         self.assertIn("INITIAL-CLUSTER: " + line, said)
         again, said = self.quiet(rj.admit, self.a, self.chain, "a", "b")            # run again: the same, nothing added
-        self.assertEqual(again, line)
+        self.assertEqual(again, (line, member_id))
         self.assertEqual(len(self.cluster.members), 2)
         self.assertIn("already admitted as a learner", said)
 
@@ -177,13 +183,13 @@ class Admit(Case):
 
 class Join(Case):
     def admitted(self):
-        line, _ = self.quiet(rj.admit, self.a, self.chain, "a", "b")
-        self.b.learner = True
+        (line, member_id), _ = self.quiet(rj.admit, self.a, self.chain, "a", "b")
+        self.b.learner, self.b.member_id, self.member_id = True, int(member_id, 16), member_id
         return line
 
     def test_the_old_data_kept_the_config_existing_and_a_learner_with_the_state_epoch(self):
         line = self.admitted()
-        export, said = self.quiet(rj.join, self.b, self.chain, "b", line)
+        export, said = self.quiet(rj.join, self.b, self.chain, "b", line, self.member_id)
         self.assertEqual(export, etcdconf.DATA_DIR + ".divergent-e3-r4689")
         self.assertIn(export, self.b.dirs)
         self.assertNotIn(etcdconf.DATA_DIR, self.b.dirs)                            # the divergent tail moved aside, kept
@@ -200,41 +206,100 @@ class Join(Case):
 
     def test_run_again_exports_nothing_twice(self):
         line = self.admitted()
-        self.quiet(rj.join, self.b, self.chain, "b", line)
+        self.quiet(rj.join, self.b, self.chain, "b", line, self.member_id)
+        self.assertEqual(json.loads(self.b.files[rj.JOINED]), {"epoch": 3, "member_id": self.member_id})
         self.b.dirs.add(etcdconf.DATA_DIR)                                          # the joined store's directory
         self.b.calls = []
-        export, said = self.quiet(rj.join, self.b, self.chain, "b", line)
+        export, said = self.quiet(rj.join, self.b, self.chain, "b", line, self.member_id)
         self.assertIsNone(export)
-        self.assertIn("is the joined one: nothing exported again", said)
+        self.assertIn("is learner %s's, joined at epoch 3: kept" % self.member_id, said)
         self.assertFalse(any(c[0] == tk.ETCDUTL for c in self.b.calls))
+        self.assertIn(etcdconf.DATA_DIR, self.b.dirs)
+
+    def test_abandoned_then_admitted_again_the_old_learner_s_directory_is_set_aside(self):
+        """05: a removed learner's directory is never started as the new one; it is kept aside, and the export stays."""
+        line = self.admitted()
+        self.quiet(rj.join, self.b, self.chain, "b", line, self.member_id)
+        self.b.dirs.add(etcdconf.DATA_DIR)
+        first = self.member_id
+        self.quiet(rj.abandon, self.a, self.chain, "a", "b")
+        line = self.admitted()
+        self.assertNotEqual(self.member_id, first)
+        self.b.calls = []
+        export, said = self.quiet(rj.join, self.b, self.chain, "b", line, self.member_id)
+        self.assertIsNone(export)
+        aside = etcdconf.DATA_DIR + ".abandoned-e3-1"
+        self.assertIn(aside, self.b.dirs)
+        self.assertNotIn(etcdconf.DATA_DIR, self.b.dirs)
+        self.assertIn(etcdconf.DATA_DIR + ".divergent-e3-r4689", self.b.dirs)        # the divergent tail, untouched
+        self.assertFalse(any(c[0] == tk.ETCDUTL for c in self.b.calls))
+        self.assertEqual(json.loads(self.b.files[rj.JOINED])["member_id"], self.member_id)
+        self.assertIn("set aside at %s (kept)" % aside, said)
+
+    def test_a_crash_before_the_marker_sets_the_directory_aside_too(self):
+        line = self.admitted()
+        self.quiet(rj.join, self.b, self.chain, "b", line, self.member_id)
+        self.b.dirs.add(etcdconf.DATA_DIR)
+        del self.b.files[rj.JOINED]
+        _, said = self.quiet(rj.join, self.b, self.chain, "b", line, self.member_id)
+        self.assertIn(etcdconf.DATA_DIR + ".abandoned-e3-1", self.b.dirs)
+
+    def test_the_record_comes_first_and_a_crash_before_the_rename_completes_it(self):
+        """05: the digest is never lost: the record is written before the rename, and a record alone finishes it."""
+        line = self.admitted()
+        order = []
+        write, rename = self.b.write, self.b.rename
+        self.b.write = lambda path, text, owner=None, mode=0o644: (order.append(("write", path)), write(path, text, owner, mode))
+        self.b.rename = lambda src, dst: (order.append(("rename", dst)), rename(src, dst))
+        self.quiet(rj.join, self.b, self.chain, "b", line, self.member_id)
+        export = etcdconf.DATA_DIR + ".divergent-e3-r4689"
+        self.assertLess(order.index(("write", export + ".json")), order.index(("rename", export)))
+        self.setUp()
+        line = self.admitted()
+        record = {"node_id": "b", "epoch": 3, "revision": 4689, "db_sha256": "cd" * 32, "kept_at": export}
+        self.b.files[export + ".json"] = json.dumps(record)                          # written, then the crash: no rename
+        self.b.calls = []
+        got, said = self.quiet(rj.join, self.b, self.chain, "b", line, self.member_id)
+        self.assertEqual(got, export)
+        self.assertIn(export, self.b.dirs)
+        self.assertEqual(json.loads(self.b.files[export + ".json"])["db_sha256"], "cd" * 32)     # the first digest, kept
+        self.assertFalse(any(c[0] == tk.ETCDUTL for c in self.b.calls))
+
+    def test_it_must_answer_as_the_learner_admit_made(self):
+        line = self.admitted()
+        self.b.member_id = 0x1234
+        self.refused("answers as member 1234, not the learner %s admit made" % self.member_id, rj.join, self.b, self.chain, "b", line,
+                     self.member_id)
+        self.assertNotIn(rj.JOINED, self.b.files)
 
     def test_the_initial_cluster_is_the_manifest_s_members_at_their_mesh_urls(self):
         line = self.admitted()
         a_url, b_url = url(self.chain[-1], "a"), url(self.chain[-1], "b")
         self.refused("initial-cluster gives a at https://[fd72:6567:6c61::9]:2380", rj.join, self.b, self.chain, "b",
-                     "a=https://[fd72:6567:6c61::9]:2380,b=" + b_url)
-        self.refused("this node included", rj.join, self.b, self.chain, "b", "a=" + a_url)
-        self.refused("z is not an etcd member", rj.join, self.b, self.chain, "b", line + ",z=" + b_url)
+                     "a=https://[fd72:6567:6c61::9]:2380,b=" + b_url, self.member_id)
+        self.refused("this node included", rj.join, self.b, self.chain, "b", "a=" + a_url, self.member_id)
+        self.refused("z is not an etcd member", rj.join, self.b, self.chain, "b", line + ",z=" + b_url, self.member_id)
+        self.refused("the member ID is the hex admit said", rj.join, self.b, self.chain, "b", line, "3D4F")
         self.assertEqual(self.b.calls, [])                                          # nothing stopped, nothing moved
 
     def test_it_must_answer_as_a_learner_holding_the_survivor_s_state_epoch(self):
         line = self.admitted()
         self.b.learner = False
-        self.refused("answers as a voting member before any promotion", rj.join, self.b, self.chain, "b", line)
+        self.refused("answers as a voting member before any promotion", rj.join, self.b, self.chain, "b", line, self.member_id)
         self.setUp()
         line = self.admitted()
         self.b.holds_epoch = False
-        self.refused("holds no state-epoch entry", rj.join, self.b, self.chain, "b", line)
+        self.refused("holds no state-epoch entry", rj.join, self.b, self.chain, "b", line, self.member_id)
         self.assertEqual(len(self.b.sleeps), rj.JOIN_TRIES - 1)                     # waited, bounded, then refused
         self.setUp()
         line = self.admitted()
         forged = self.cluster.value                                                  # a well-formed signature by b's key
         self.cluster.value = dict(forged, signature=p256_sig(NODE_KEYS["b"], opstate.state_epoch_message(forged["entry"])))
-        self.refused("state-epoch entry signature does not verify", rj.join, self.b, self.chain, "b", line)
+        self.refused("state-epoch entry signature does not verify", rj.join, self.b, self.chain, "b", line, self.member_id)
         self.setUp()
         line = self.admitted()
         self.b.cluster_id = CLUSTER + 1                                              # joined some other store
-        self.refused("names cluster %016x; it is stored in cluster %016x" % (CLUSTER, CLUSTER + 1), rj.join, self.b, self.chain, "b", line)
+        self.refused("names cluster %016x; it is stored in cluster %016x" % (CLUSTER, CLUSTER + 1), rj.join, self.b, self.chain, "b", line, self.member_id)
 
 
 class Promote(Case):
