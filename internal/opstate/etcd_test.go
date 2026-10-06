@@ -28,7 +28,8 @@ func realEtcd(t *testing.T) *clientv3.Client {
 	dir := t.TempDir()
 	// etcd takes a unix URL's host as the socket's file name, relative to its working directory
 	client, peer := "unix://client.sock:0", "unix://peer.sock:0"
-	process := exec.Command(binary, "--name", "a", "--data-dir", filepath.Join(dir, "data"),
+	etcdInDir(t, binary, dir)
+	process := exec.Command("./etcd", "--name", "a", "--data-dir", filepath.Join(dir, "data"),
 		"--listen-client-urls", client, "--advertise-client-urls", client,
 		"--listen-peer-urls", peer, "--initial-advertise-peer-urls", peer, "--initial-cluster", "a="+peer,
 		"--log-level", "error")
@@ -131,5 +132,19 @@ func TestTheCacheOverARealEtcd(t *testing.T) {
 	wait("after the compaction", func(rev int64, _ time.Duration, live bool) bool { return live && rev >= last.Header.Revision })
 	if v, ok, _ := cache.Value("/regalia/v1/keys/b/state"); !ok || string(v) != "enabled" {
 		t.Fatalf("after the compaction %q %v", v, ok)
+	}
+}
+
+// etcdInDir links the etcd binary ETCD_BIN names into dir as "etcd", so the test runs a constant command
+// ("./etcd", resolved against Dir) and never a path taken from the environment. ETCD_BIN must be an absolute
+// path to an executable regular file: CI sets it to the checksum-pinned release it installed.
+func etcdInDir(t *testing.T, binary, dir string) {
+	t.Helper()
+	info, err := os.Stat(binary)
+	if !filepath.IsAbs(binary) || err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("ETCD_BIN %q is not an absolute path to an executable file", binary)
+	}
+	if err := os.Symlink(binary, filepath.Join(dir, "etcd")); err != nil {
+		t.Fatal(err)
 	}
 }

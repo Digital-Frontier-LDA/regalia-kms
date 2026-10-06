@@ -35,7 +35,8 @@ func TestTheDaemonWatchesTheOperationalStateAndPublishesWhatItApplied(t *testing
 		t.Skip("ETCD_BIN is not set")
 	}
 	dir := t.TempDir()
-	etcd := exec.Command(binary, "--name", "a", "--data-dir", filepath.Join(dir, "data"),
+	etcdInDir(t, binary, dir)
+	etcd := exec.Command("./etcd", "--name", "a", "--data-dir", filepath.Join(dir, "data"),
 		"--listen-client-urls", "unix://client.sock:0", "--advertise-client-urls", "unix://client.sock:0",
 		"--listen-peer-urls", "unix://peer.sock:0", "--initial-advertise-peer-urls", "unix://peer.sock:0",
 		"--initial-cluster", "a=unix://peer.sock:0", "--log-level", "error")
@@ -96,5 +97,19 @@ func TestTheDaemonWatchesTheOperationalStateAndPublishesWhatItApplied(t *testing
 			t.Fatalf("applied.json never reached revision %d: %s (%s)", put.Header.Revision, raw, cache.Reason())
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// etcdInDir links the etcd binary ETCD_BIN names into dir as "etcd", so the test runs a constant command
+// ("./etcd", resolved against Dir) and never a path taken from the environment. ETCD_BIN must be an absolute
+// path to an executable regular file: CI sets it to the checksum-pinned release it installed.
+func etcdInDir(t *testing.T, binary, dir string) {
+	t.Helper()
+	info, err := os.Stat(binary)
+	if !filepath.IsAbs(binary) || err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("ETCD_BIN %q is not an absolute path to an executable file", binary)
+	}
+	if err := os.Symlink(binary, filepath.Join(dir, "etcd")); err != nil {
+		t.Fatal(err)
 	}
 }
