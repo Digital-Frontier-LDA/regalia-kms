@@ -243,7 +243,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   three-node fixture showed it intermittently on its shared software TPMs (#448). Since this change the tool's own
   error text goes to the journal; if it names a transient TPM code (`TPM_RC_RETRY`, `TPM_RC_YIELDED`,
   `TPM_RC_TESTING`, a busy socket), a small bounded retry on those codes alone is the next step. The refusal's own
-  text still carries no TPM reason (#450).
+  text still carries no TPM reason (#450). One code is retried, on a software TPM only: `TPM_RC_SESSION_MEMORY`
+  (0x903). A bare swtpm has no resource manager, so a call that dies connected leaves its sessions loaded, and three
+  of them fill every slot (three-node-recovery, #512). `membership.run_tpm2` then flushes the loaded sessions and
+  asks once more; it logs `regalia: … (#512)` each time. Only the anchor's reads and writes and `signkey`'s policy
+  sessions take it: ownerauth, enrol and attest don't. Which fixture call dies connected is not established. A host's
+  `/dev/tpmrm0` is never flushed or retried.
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
