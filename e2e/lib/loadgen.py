@@ -73,6 +73,7 @@ def load_config(path, manifest_path):
 
 def tls_context(tls):
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=tls["ca"])
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(tls["cert"], tls["key"])
     return context
 

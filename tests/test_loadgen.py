@@ -79,6 +79,7 @@ class Servers(unittest.TestCase):
 
         server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
         context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH, cafile=self.ca)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(certfile, keyfile)
         context.verify_mode = ssl.CERT_REQUIRED
         server.socket = context.wrap_socket(server.socket, server_side=True)
