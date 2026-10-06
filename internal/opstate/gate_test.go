@@ -56,7 +56,9 @@ func TestTheStateGateServesOnlyOnStateAsNewAsItsLease(t *testing.T) {
 	refused("not being watched")
 	cache.s.Live, lease.ClusterID = true, 0xbad
 	refused("names etcd cluster 0000000000000bad, this server reads 00000000000000c1")
-	lease.ClusterID, lease.StateRevision = 0xc1, 41
+	lease.ClusterID, lease.StateEpoch = 0xc1, 1
+	refused("names state epoch 1, this server holds 0")
+	lease.StateEpoch, lease.StateRevision = 0, 41
 	refused("at revision 40, behind the lease's 41: catching up")
 	lease.StateRevision = 39 // a cache ahead of its lease serves
 	ready()

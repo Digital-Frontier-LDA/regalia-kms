@@ -13,7 +13,8 @@ import (
 // adds is the state the lease was granted at:
 //
 //   - the lease names THIS daemon's session key (a lease follows the daemon instance it was made for);
-//   - it names the etcd cluster this cache reads;
+//   - it names the etcd cluster this cache reads, and the state epoch it holds (a survivor's history after a
+//     --force-new-cluster is another epoch than the lost tail's, which cluster and revision cannot tell apart);
 //   - the cache has applied at least the lease's state_revision (no server acts on state older than its lease);
 //   - the cache's last confirmation is younger than MaxStale (a stalled watch is stale state, not quiet state).
 //
@@ -24,6 +25,7 @@ type LeaseFacts struct {
 	Admitted      bool
 	StateRevision int64
 	ClusterID     uint64
+	StateEpoch    int64
 	SessionKey    string // 64 hex
 }
 
@@ -95,6 +97,9 @@ func (g *StateGate) evaluate(ctx context.Context) (bool, string) {
 	}
 	if lease.ClusterID != state.ClusterID {
 		return false, fmt.Sprintf("the lease names etcd cluster %016x, this server reads %016x", lease.ClusterID, state.ClusterID)
+	}
+	if lease.StateEpoch != state.StateEpoch {
+		return false, fmt.Sprintf("the lease names state epoch %d, this server holds %d", lease.StateEpoch, state.StateEpoch)
 	}
 	if state.Revision < lease.StateRevision {
 		return false, fmt.Sprintf("the operational state is at revision %d, behind the lease's %d: catching up", state.Revision, lease.StateRevision)
