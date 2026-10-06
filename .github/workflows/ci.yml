@@ -129,9 +129,20 @@ jobs:
             https://github.com/etcd-io/etcd/releases/download/v3.6.15/etcd-v3.6.15-linux-amd64.tar.gz
           echo "$ETCD_SHA256  $RUNNER_TEMP/etcd.tar.gz" | sha256sum --check --strict
           tar --extract --gzip --file "$RUNNER_TEMP/etcd.tar.gz" \
-            --directory "$RUNNER_TEMP" --strip-components=1 etcd-v3.6.15-linux-amd64/etcd
-          chmod 0755 "$RUNNER_TEMP/etcd"
-          echo "ETCD_BIN=$RUNNER_TEMP/etcd" >> "$GITHUB_ENV"
+            --directory "$RUNNER_TEMP" --strip-components=1 etcd-v3.6.15-linux-amd64/etcd \
+            etcd-v3.6.15-linux-amd64/etcdctl etcd-v3.6.15-linux-amd64/etcdutl
+          chmod 0755 "$RUNNER_TEMP/etcd" "$RUNNER_TEMP/etcdctl" "$RUNNER_TEMP/etcdutl"
+          {
+            echo "ETCD_BIN=$RUNNER_TEMP/etcd"
+            echo "ETCDCTL_BIN=$RUNNER_TEMP/etcdctl"
+            echo "ETCDUTL_BIN=$RUNNER_TEMP/etcdutl"
+          } >> "$GITHUB_ENV"
+
+      - name: the lone survivor's etcd take-over against the real etcd (#432)
+        env:
+          # with this set, missing etcd binaries fail the test instead of skipping it
+          REGALIA_EXPECT_ETCD: "1"
+        run: python3 -Es -m unittest -v tests.test_baremetal_takeover_etcd
 
       - name: test (both modules, race + vet)
         env:
@@ -621,6 +632,22 @@ jobs:
             ${{ runner.temp }}/rootfs/build-*/rootfs-listing.txt
             ${{ runner.temp }}/rootfs/build-*/rootfs-build.json
           retention-days: 14
+
+  # regalia-kms#61, second slice: install-host.sh on a loop device (GPT, LUKS2 made on the host, the rootfs, the ESP),
+  # read back from the disk, and its refusals before anything is written
+  install-host-loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the disk tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends cryptsetup-bin dosfstools
+      - name: Install onto a loop device and read it back
+        run: sudo bash e2e/install-host-loop.sh | tee "$RUNNER_TEMP/install.log"; grep -q ' 0 failed$' "$RUNNER_TEMP/install.log"
 
   initrd-reproducible-debian:
     runs-on: ubuntu-latest

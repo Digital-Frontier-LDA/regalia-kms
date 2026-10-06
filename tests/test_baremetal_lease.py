@@ -23,6 +23,28 @@ import tests.test_baremetal_heartbeat as hbt   # FakeTpm, beat, pub, REVOKE: the
 
 T0 = hbt.T0
 SESSION, OTHER_SESSION = "5e" * 32, "0b" * 32
+# D32 (#432): the subject's stated etcd cluster and revision, and its daemon's session key
+CLUSTER, OTHER_CLUSTER, REVISION, STATE_EPOCH = "c1" * 8, "c2" * 8, 7, 1
+
+
+def _session_key(seed):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    return Ed25519PrivateKey.from_private_bytes(bytes([seed]) * 32).public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+
+
+SESSION_KEY, OTHER_SESSION_KEY = _session_key(7), _session_key(8)
+STATE = {"cluster_id": CLUSTER, "state_epoch": STATE_EPOCH, "state_revision": REVISION, "session_key": SESSION_KEY}       # a request's v2 fields
+SOURCES = dict(state=lambda: (CLUSTER, STATE_EPOCH, REVISION), session_key=lambda: SESSION_KEY)          # a Holder's
+
+
+def primed_floor(held=0):
+    """An issuer's RevisionFloor that has watched etcd for just over one lease and had applied `held` a lease ago."""
+    floor = lease.RevisionFloor(clock=lambda: 100000.0)
+    floor.started, floor.cluster_id, floor.epoch = 100000.0 - lease.MAX_LIFETIME - 1, CLUSTER, STATE_EPOCH
+    floor.seen = [(100000.0 - lease.MAX_LIFETIME - 1, held)]
+    return floor
 NAMES = ("a", "b", "c")
 
 
@@ -89,13 +111,14 @@ class Case(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
         self.now, self.authenticated, self.ticks = T0 + 60, True, 5000
+        self.boottime, self.revision = 100000.0, REVISION               # CLOCK_BOOTTIME (s), and the subject's applied revision
         self.clock = lambda: (self.now, self.authenticated)
         self.m1 = self.manifest()
         self.sequence = 0
         self.peers = {name: self.peer(name) for name in ("b", "c")}
         self.beat(self.m1)
         self.holder = lease.Holder("a", SESSION, self.clock, lambda: self.ticks, os.path.join(self.d, "lease.json"),
-                                   rand=lambda n: os.urandom(n))
+                                   rand=lambda n: os.urandom(n), state=lambda: (CLUSTER, STATE_EPOCH, self.revision), session_key=lambda: SESSION_KEY)
 
     def peer(self, name, tag=""):
         """A peer's own state: its heartbeat counter and freshness, and its attestation verifier for node a."""
@@ -107,7 +130,17 @@ class Case(unittest.TestCase):
                                                                   "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32}}}}
         attester = attest.Verifier(policy, os.path.join(self.d, name + tag + "-attest.json"), now=lambda: self.now)
         self.enroll(attester, self.keys["a"].ak_public)
-        return {"freshness": freshness, "attester": attester, "signer": self.keys[name].signer()}
+        return {"freshness": freshness, "attester": attester, "signer": self.keys[name].signer(), "floor": self.floor()}
+
+    def floor(self, held=0, watched=None):
+        """An issuer's RevisionFloor that has watched etcd for `watched` seconds (default: just over one lease) and had
+        applied revision `held` one lease ago."""
+        watched = lease.MAX_LIFETIME + 1 if watched is None else watched
+        floor = lease.RevisionFloor(clock=lambda: self.boottime)
+        floor.started = self.boottime - watched
+        if watched > lease.MAX_LIFETIME:
+            floor.cluster_id, floor.epoch, floor.seen = CLUSTER, STATE_EPOCH, [(self.boottime - lease.MAX_LIFETIME - 1, held)]
+        return floor
 
     @staticmethod
     def enroll(attester, ak_public):
@@ -123,25 +156,32 @@ class Case(unittest.TestCase):
         self.now += seconds
         self.ticks += seconds * 1000
 
-    def evidence(self, attester, manifest, session=SESSION, reset=1, signed_by="a", **quoted):
-        """Node a's fresh quote for `attester`: over a nonce it issues now, this epoch and that boot session
-        (`quoted` overrides what the quote is really over)."""
+    def evidence(self, attester, manifest, session=SESSION, reset=1, signed_by="a", binding="state", **quoted):
+        """Node a's fresh quote for `attester`: over a nonce it issues now, this epoch and that boot session, binding
+        `binding` (D32: the request's lease.request_binding) (`quoted` overrides what the quote is really over)."""
         nonce = attester.nonce("a")
+        if binding == "state":
+            binding = lease.request_binding(dict(STATE, state_revision=self.revision))
         key = b"ephemeral key of boot " + bytes.fromhex(session)
         fields = dict(node_id="a", epoch=manifest["epoch"], session_id=bytes.fromhex(session), ephemeral_public=key, nonce=nonce)
         fields.update(quoted)
-        signed = self.keys[signed_by].signer(ek_name=self.keys["a"].ek_name, reset=reset)(attest.qualifying_data(*fields.values()))
+        signed = self.keys[signed_by].signer(ek_name=self.keys["a"].ek_name, reset=reset)(
+            attest.qualifying_data(*fields.values(), binding=binding))
         return {"ephemeral_public": key.hex(), "nonce": nonce.hex(), "quote": signed["quote"], "signature": signed["sig"]}
 
     def issue(self, issuer="b", manifest=None, request=None, evidence="default", reset=1, **kw):
         manifest = manifest or self.m1
         peer = self.peers.get(issuer, self.peers["b"])
-        args = dict(attester=peer["attester"], freshness=peer["freshness"], signer=peer["signer"])
+        args = dict(attester=peer["attester"], freshness=peer["freshness"], signer=peer["signer"], floor=peer["floor"])
         args.update(kw)
         request = request or self.holder.request()
         if evidence == "default":
             session = request["session_id"] if m.re.fullmatch("[0-9a-f]{64}", str(request.get("session_id"))) else SESSION
-            evidence = self.evidence(args["attester"], manifest, session, reset)
+            try:
+                binding = lease.request_binding(request)
+            except (KeyError, TypeError, ValueError):
+                binding = None                               # a malformed request: refused before any quote is judged
+            evidence = self.evidence(args["attester"], manifest, session, reset, binding=binding)
         return lease.issue(manifest, issuer, request, evidence=evidence, **args)
 
     def body(self, manifest=None, **override):
@@ -149,6 +189,7 @@ class Case(unittest.TestCase):
         manifest = manifest or self.m1
         return dict({"schema": lease.SCHEMA, "node_id": "a", "ak_name": self.keys["a"].ak_name, "issuer": "b",
                      "epoch": manifest["epoch"], "manifest_digest": m.digest(manifest), "session_id": SESSION, "nonce": "11" * 32,
+                     "cluster_id": CLUSTER, "state_epoch": STATE_EPOCH, "state_revision": REVISION, "session_key": SESSION_KEY,
                      "issued_at": hbt.stamp(self.now), "expires_at": hbt.stamp(self.now + lease.MAX_LIFETIME)}, **override)
 
     def refused(self, reason, fn, *args, **kw):
@@ -173,7 +214,8 @@ class Verify(Case):
         envelope = self.issue()
         for field, other in (("node_id", "c"), ("ak_name", self.keys["c"].ak_name), ("issuer", "c"), ("epoch", 2),
                              ("manifest_digest", "00" * 32), ("session_id", OTHER_SESSION), ("nonce", "22" * 32),
-                             ("issued_at", hbt.stamp(self.now + 1)), ("expires_at", hbt.stamp(self.now + 299)), ("schema", "x")):
+                             ("issued_at", hbt.stamp(self.now + 1)), ("expires_at", hbt.stamp(self.now + 299)), ("schema", "x"),
+                             ("cluster_id", OTHER_CLUSTER), ("state_revision", REVISION + 1), ("session_key", OTHER_SESSION_KEY)):
             with self.subTest(field=field):
                 altered = copy.deepcopy(envelope)
                 altered["lease"][field] = other
@@ -283,7 +325,7 @@ class Issue(Case):
                 self.refused("a may not serve under epoch 1: no lease", self.issue, manifest=self.manifest(a=state))
         self.refused("z may not authorize", self.issue, issuer="z")
         self.refused("a node does not vouch for itself", self.issue, issuer="a")
-        self.refused("z may not serve", self.issue, request={"node_id": "z", "session_id": SESSION, "nonce": "11" * 32})
+        self.refused("z may not serve", self.issue, request={"node_id": "z", "session_id": SESSION, "nonce": "11" * 32, **STATE})
 
     def test_partition_and_signer_outage_a_peer_without_a_live_heartbeat_issues_nothing(self):
         cut_off = self.peer("b", "-cut-off")             # a peer that never received a heartbeat
@@ -343,7 +385,8 @@ class Issue(Case):
             state["nodes"]["a"]["ak_public"] = self.keys["c"].ak_public.hex()
             with open(b["attester"].state_path, "w") as f:
                 json.dump(state, f)
-            self.assertEqual(kw, {"phase": "system"})   # a lease is asked for by a booted node
+            # a lease is asked for by a booted node, and its quote binds the request's state and session key (D32)
+            self.assertEqual(kw, {"phase": "system", "binding": lease.request_binding(dict(STATE, state_revision=self.revision))})
             return real(*args, **kw)
         b["attester"].verify = enroll_then_verify
         self.refused("the attested AK is not the AK the manifest names for a", self.issue, evidence=swapped)
@@ -392,10 +435,10 @@ class Issue(Case):
         self.assertEqual(envelope["lease"]["issued_at"], hbt.stamp(heartbeat_expiry - 20))   # 30 s from then would pass it
 
     def test_a_malformed_request_is_refused(self):
-        for label, reason, request in (("extra field", "lease request fields mismatch", {"node_id": "a", "session_id": SESSION, "nonce": "11" * 32, "ttl": 9}),
-                                       ("node id", "node_id must be a node ID", {"node_id": "A!", "session_id": SESSION, "nonce": "11" * 32}),
-                                       ("session", "session_id must be 64 lowercase hex", {"node_id": "a", "session_id": "x", "nonce": "11" * 32}),
-                                       ("nonce", "nonce must be 64 lowercase hex", {"node_id": "a", "session_id": SESSION, "nonce": "11"})):
+        for label, reason, request in (("extra field", "lease request fields mismatch", {"node_id": "a", "session_id": SESSION, "nonce": "11" * 32, "ttl": 9, **STATE}),
+                                       ("node id", "node_id must be a node ID", {"node_id": "A!", "session_id": SESSION, "nonce": "11" * 32, **STATE}),
+                                       ("session", "session_id must be 64 lowercase hex", {"node_id": "a", "session_id": "x", "nonce": "11" * 32, **STATE}),
+                                       ("nonce", "nonce must be 64 lowercase hex", {"node_id": "a", "session_id": SESSION, "nonce": "11", **STATE})):
             with self.subTest(label):
                 self.refused(reason, self.issue, request=request)
 
@@ -414,16 +457,16 @@ class Hold(Case):
         envelope = self.issue()
         self.assertEqual(self.holder.install(envelope, self.m1), lease.MAX_LIFETIME)
         self.refused("answers no request this node has outstanding", self.holder.install, envelope, self.m1)          # replayed
-        foreign = self.issue(request={"node_id": "a", "session_id": SESSION, "nonce": "ab" * 32})                       # asked for by someone else
+        foreign = self.issue(request={"node_id": "a", "session_id": SESSION, "nonce": "ab" * 32, **STATE})                       # asked for by someone else
         self.refused("answers no request this node has outstanding", self.holder.install, foreign, self.m1)
         self.assertEqual(self.holder.check(self.m1), lease.MAX_LIFETIME)
 
     def test_a_lease_does_not_survive_the_subject_s_reboot(self):
         envelope = self.issue()
         self.holder.install(envelope, self.m1)
-        rebooted = lease.Holder("a", OTHER_SESSION, self.clock, lambda: self.ticks, self.holder.state_path)
+        rebooted = lease.Holder("a", OTHER_SESSION, self.clock, lambda: self.ticks, self.holder.state_path, **SOURCES)
         self.refused("another boot session of this node", rebooted.check, self.m1)      # even if /run had survived
-        fresh = lease.Holder("a", OTHER_SESSION, self.clock, lambda: self.ticks, os.path.join(self.d, "after-reboot.json"))
+        fresh = lease.Holder("a", OTHER_SESSION, self.clock, lambda: self.ticks, os.path.join(self.d, "after-reboot.json"), **SOURCES)
         request = self.holder.request()                  # a request made before the reboot, answered after it
         self.refused("another boot session of this node", fresh.install, self.issue(request=request), self.m1)
         self.refused("no runtime lease is held", fresh.check, self.m1)
@@ -432,7 +475,7 @@ class Hold(Case):
         self.assertEqual(fresh.install(self.issue(request=new, reset=2), self.m1), lease.MAX_LIFETIME)
 
     def test_a_lease_for_another_node_is_not_installed(self):
-        other = lease.Holder("c", SESSION, self.clock, lambda: self.ticks, os.path.join(self.d, "c.json"))
+        other = lease.Holder("c", SESSION, self.clock, lambda: self.ticks, os.path.join(self.d, "c.json"), **SOURCES)
         request = other.request()
         self.refused("the lease is for a, not for this node", other.install, self.issue(request=dict(request, node_id="a")), self.m1)
 
@@ -643,6 +686,170 @@ class Hold(Case):
         self.refused("session_id must be 64 lowercase hex", lease.Holder, "a", "x", self.clock, lambda: 0, "x")
 
 
+class StateAndSessionKey(Case):
+    """D32 (#432, regalia-kms-95 with 48 and d9; 24's decision): the request states the subject's etcd cluster and applied
+    revision and its daemon's session key, its re-attestation binds them, the issuer refuses state older than what it
+    held a lease ago, and the lease names all three."""
+
+    def test_the_lease_names_what_the_request_stated(self):
+        lease_ = self.issue()["lease"]
+        self.assertEqual({k: lease_[k] for k in lease.STATE_KEYS}, STATE)
+
+    def test_a_quote_that_binds_another_state_or_key_is_refused(self):
+        """The three are the subject TPM's statement: a request whose fields differ from what its quote binds is refused."""
+        b = self.peers["b"]
+        # (another cluster or state epoch is refused earlier, by the floor: test_another_cluster_is_refused,
+        # test_another_state_epoch_is_another_history)
+        for label, change in (("revision", dict(state_revision=REVISION + 1)), ("session key", dict(session_key=OTHER_SESSION_KEY))):
+            with self.subTest(label):
+                request = dict(self.holder.request(), **change)
+                bound = self.evidence(b["attester"], self.m1)             # binds the subject's real state
+                self.refused("the quote is not bound to this transcript", self.issue, request=request, evidence=bound)
+
+    def test_the_issuer_refuses_state_older_than_it_held_a_lease_ago(self):
+        self.peers["b"]["floor"] = self.floor(held=REVISION + 1)
+        self.refused("STALE STATE: the subject has applied etcd revision 7, below the 8 this issuer had applied one lease", self.issue)
+        self.peers["b"]["floor"] = self.floor(held=REVISION)
+        self.issue()                                                       # equal is enough: it is at least that recent
+
+    def test_the_issuer_fails_closed_until_it_has_watched_for_one_lease(self):
+        self.peers["b"]["floor"] = self.floor(watched=lease.MAX_LIFETIME - 1)
+        self.refused("less than one lease", self.issue)
+        self.refused("not a fault: ask again in", self.issue)        # what the operator reads through update apply's WAIT
+        # and ONLY there (05 on #489): a real refusal never tells the operator to ignore it
+        self.peers["b"]["floor"] = self.floor(held=REVISION + 1)
+        with self.assertRaises(m.Refused) as caught:
+            self.issue()
+        self.assertIn("STALE STATE", str(caught.exception))
+        self.assertNotIn("not a fault", str(caught.exception))
+        self.assertEqual(open(lease.__file__).read().count("not a fault"), 1, "the expected-WAIT line is on the warm-up refusal alone")
+
+    def test_another_cluster_is_refused(self):
+        b = self.peers["b"]
+        request = dict(self.holder.request(), cluster_id=OTHER_CLUSTER)
+        evidence = self.evidence(b["attester"], self.m1, binding=lease.request_binding(dict(STATE, cluster_id=OTHER_CLUSTER)))
+        self.refused("the subject is in etcd cluster %s, not this issuer's %s" % (OTHER_CLUSTER, CLUSTER), self.issue, request=request,
+                     evidence=evidence)
+
+    def test_the_floor_is_what_was_applied_a_lease_ago(self):
+        """applied() keeps the newest revision at or before the cutoff and everything after; revisions only rise; one
+        cluster; a revision applied only recently does not count until a lease has passed."""
+        floor = lease.RevisionFloor(clock=lambda: self.boottime)
+        floor.started = self.boottime - 1000
+        for t, rev in ((self.boottime - 400, 3), (self.boottime - 350, 5), (self.boottime - 10, 9)):
+            self.boottime, saved = t, self.boottime
+            floor.applied(CLUSTER, STATE_EPOCH, rev)
+            self.boottime = saved
+        floor.require(CLUSTER, STATE_EPOCH, 5)                                          # held 5 a lease ago (at -350 <= -300)
+        self.refused("below the 5 this issuer had applied", floor.require, CLUSTER, STATE_EPOCH, 4)
+        self.refused("the applied etcd revision went back (8 after 9)", floor.applied, CLUSTER, STATE_EPOCH, 8)
+        self.refused("names cluster %s, not %s" % (OTHER_CLUSTER, CLUSTER), floor.applied, OTHER_CLUSTER, STATE_EPOCH, 10)
+
+    def test_another_state_epoch_is_another_history(self):
+        """#432 item (e): etcd's --force-new-cluster keeps the cluster ID and the revision, so the epoch names the
+        history: a subject of another epoch than the issuer's is refused, whichever is ahead (the quote binds it)."""
+        b = self.peers["b"]
+        for epoch in (STATE_EPOCH - 1, STATE_EPOCH + 1):
+            with self.subTest(epoch):
+                request = dict(self.holder.request(), state_epoch=epoch)
+                evidence = self.evidence(b["attester"], self.m1, binding=lease.request_binding(dict(STATE, state_epoch=epoch)))
+                self.refused("ANOTHER HISTORY: the subject's etcd state is of state epoch %d, this issuer's of %d" % (epoch, STATE_EPOCH),
+                             self.issue, request=request, evidence=evidence)
+
+    def test_a_rise_of_the_issuers_epoch_starts_its_floor_again(self):
+        """A force-new-cluster's history may lack a tail the old one had: the old revisions say nothing about it, so the
+        floor forgets them and fails closed for one lease; the epoch never goes back, nor does a revision within it."""
+        floor = lease.RevisionFloor(clock=lambda: self.boottime)
+        floor.started = self.boottime - 1000
+        self.boottime, saved = self.boottime - 400, self.boottime
+        floor.applied(CLUSTER, STATE_EPOCH, 50)
+        self.boottime = saved
+        floor.require(CLUSTER, STATE_EPOCH, 50)
+        floor.applied(CLUSTER, STATE_EPOCH + 1, 40)                        # below 50: the new history's own numbers
+        self.assertEqual((floor.epoch, floor.seen, floor.started), (STATE_EPOCH + 1, [(self.boottime, 40)], self.boottime))
+        self.refused("less than one lease", floor.require, CLUSTER, STATE_EPOCH + 1, 40)
+        self.boottime += lease.MAX_LIFETIME
+        floor.applied(CLUSTER, STATE_EPOCH + 1, 41)
+        floor.require(CLUSTER, STATE_EPOCH + 1, 40)                        # a lease on: the new history's floor, 40
+        self.refused("ANOTHER HISTORY", floor.require, CLUSTER, STATE_EPOCH, 99)
+        self.refused("the applied state epoch went back (%d after %d)" % (STATE_EPOCH, STATE_EPOCH + 1), floor.applied, CLUSTER, STATE_EPOCH, 99)
+        self.refused("the applied etcd revision went back", floor.applied, CLUSTER, STATE_EPOCH + 1, 40)
+
+    def test_a_node_that_cannot_state_its_revision_or_key_asks_for_nothing(self):
+        def missing():
+            raise m.Refused("no file")
+        for label, kw in (("state", dict(state=missing, session_key=lambda: SESSION_KEY)),
+                          ("session key", dict(state=lambda: (CLUSTER, STATE_EPOCH, REVISION), session_key=missing))):
+            with self.subTest(label):
+                holder = lease.Holder("a", SESSION, self.clock, lambda: self.ticks, os.path.join(self.d, label + ".json"), **kw)
+                self.refused("no file", holder.request)
+                self.assertFalse(os.path.exists(os.path.join(self.d, label + ".json")))      # no nonce was spent either
+
+    def test_a_malformed_state_in_the_request_is_refused(self):
+        for label, change, reason in (("cluster", dict(cluster_id="xx"), "cluster_id must be 16 lowercase hex"),
+                                      ("revision", dict(state_revision=-1), "state_revision must be an integer from 0"),
+                                      ("revision type", dict(state_revision=True), "state_revision must be an integer from 0"),
+                                      ("epoch", dict(state_epoch=-1), "state_epoch must be an integer from 0"),
+                                      ("epoch type", dict(state_epoch="1"), "state_epoch must be an integer from 0"),
+                                      ("key", dict(session_key="ab" * 31), "session_key must be 64 lowercase hex")):
+            with self.subTest(label):
+                self.refused(reason, lease.validate_request, dict(self.holder.request(), **change))
+
+
+class RunFiles(unittest.TestCase):
+    """The two /run inputs (D32): the etcd watcher's applied revision and the daemon's session key, each refused when
+    absent, malformed, from another boot or stale."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def write(self, name, doc):
+        path = os.path.join(self.d, name)
+        with open(path, "w") as f:
+            json.dump(doc, f)
+        os.chmod(path, 0o644)                     # as the daemon writes it: only its user may write
+        return path
+
+    def applied(self, **change):
+        return self.write("applied.json", dict({"cluster_id": CLUSTER, "state_epoch": 3, "revision": 12, "boot_id": "boot-1", "boottime_ns": 1000 * 10 ** 9}, **change))
+
+    def test_a_fresh_file_of_this_boot_reads(self):
+        self.assertEqual(lease.read_applied(self.applied(), now=1005, boot_id="boot-1", owner=os.getuid()), (CLUSTER, 3, 12))
+
+    def test_absent_another_boot_stale_or_ahead_is_refused(self):
+        self.assertRaisesRegex(m.Refused, "does not exist, so there is no lease without it", lease.read_applied,
+                               os.path.join(self.d, "none.json"), now=1005, boot_id="boot-1", owner=os.getuid())
+        self.assertRaisesRegex(m.Refused, "from another boot", lease.read_applied, self.applied(), now=1005, boot_id="boot-2", owner=os.getuid())
+        self.assertRaisesRegex(m.Refused, "STALE: the etcd watcher last wrote .* 11 s ago \\(more than 10 s\\)", lease.read_applied,
+                               self.applied(), max_age=10, now=1011, boot_id="boot-1", owner=os.getuid())
+        self.assertRaisesRegex(m.Refused, "dated 5 s ahead", lease.read_applied, self.applied(), now=995, boot_id="boot-1", owner=os.getuid())
+        self.assertRaisesRegex(m.Refused, "fields mismatch", lease.read_applied, self.applied(extra=1), now=1005, boot_id="boot-1", owner=os.getuid())
+        for bad in (-1, "3", True, None):                                  # the state epoch (#432 item (e)) is an integer from 0
+            self.assertRaisesRegex(m.Refused, "applied.state_epoch must be an integer from 0", lease.read_applied, self.applied(state_epoch=bad),
+                                   now=1005, boot_id="boot-1", owner=os.getuid())
+
+    def test_only_the_daemon_s_own_unwritable_file_is_read(self):
+        """ed: the file must be the daemon's user's, regular, and writable by no one else; a link is not followed."""
+        path = self.applied()
+        self.assertRaisesRegex(m.Refused, "is not a regular file of 0's", lease.read_applied, path, now=1005, boot_id="boot-1", owner=0)
+        os.chmod(path, 0o666)
+        self.assertRaisesRegex(m.Refused, "that only it may write", lease.read_applied, path, now=1005, boot_id="boot-1", owner=os.getuid())
+        os.chmod(path, 0o644)
+        link = os.path.join(self.d, "link.json")
+        os.symlink(path, link)
+        self.assertRaisesRegex(m.Refused, "cannot be opened", lease.read_applied, link, now=1005, boot_id="boot-1", owner=os.getuid())
+        self.assertRaisesRegex(m.Refused, "there is no user no-such-user", lease.read_applied, path, now=1005, boot_id="boot-1",
+                               owner="no-such-user")
+
+    def test_the_session_key_file(self):
+        path = self.write("key.json", {"boot_id": "boot-1", "daemon_started": 5, "session_key": SESSION_KEY})
+        self.assertEqual(lease.read_session_key(path, boot_id="boot-1", owner=os.getuid()), SESSION_KEY)
+        self.assertRaisesRegex(m.Refused, "from another boot", lease.read_session_key, path, boot_id="boot-2", owner=os.getuid())
+        bad = self.write("bad.json", {"boot_id": "boot-1", "daemon_started": 5, "session_key": "ab" * 31})
+        self.assertRaisesRegex(m.Refused, "session_key must be 64 lowercase hex", lease.read_session_key, bad, boot_id="boot-1", owner=os.getuid())
+
+
 class OnSwtpm(unittest.TestCase):
     """Two software TPMs: node a re-attests to peer b (attest.py), b signs the lease with its own TPM, a
     holds it; a is revoked; a reboots. Where the tools are provisioned (REGALIA_EXPECT_SWTPM=1) a missing
@@ -706,25 +913,27 @@ class OnSwtpm(unittest.TestCase):
             self.pids[name] = int(f.read())
         return "swtpm:path=" + sock
 
-    def on(self, name, fn, *args):
+    def on(self, name, fn, *args, **kw):
         """attest.py's node-side calls talk to the TPM named by TPM2TOOLS_TCTI."""
         with unittest.mock.patch.dict(os.environ, TPM2TOOLS_TCTI=self.tcti[name]):
-            return fn(*args)
+            return fn(*args, **kw)
 
-    def quote(self, name, session, nonce, epoch=1):
+    def quote(self, name, session, nonce, epoch=1, binding=None):
         paths = (self.d + "/q.msg", self.d + "/q.sig")
-        self.on(name, attest.node_quote, name, epoch, bytes.fromhex(session), b"ephemeral key of boot " + bytes.fromhex(session), bytes.fromhex(nonce), [7], *paths)
+        self.on(name, attest.node_quote, name, epoch, bytes.fromhex(session), b"ephemeral key of boot " + bytes.fromhex(session), bytes.fromhex(nonce), [7], *paths,
+                binding=binding)
         return tuple(slurp(p) for p in paths)
 
     def evidence(self, session, manifest):
         """Node a answers peer b's fresh nonce with a quote from its TPM over its boot session."""
         nonce = self.attester.nonce("a")
-        quote, signature = self.quote("a", session, nonce.hex(), manifest["epoch"])
+        quote, signature = self.quote("a", session, nonce.hex(), manifest["epoch"], binding=lease.request_binding(STATE))
         return {"ephemeral_public": (b"ephemeral key of boot " + bytes.fromhex(session)).hex(), "nonce": nonce.hex(),
                 "quote": quote.hex(), "signature": signature.hex()}
 
     def issue(self, holder, manifest, session):
-        return lease.issue(manifest, "b", holder.request(), self.attester, self.evidence(session, manifest), self.freshness, self.signer)
+        return lease.issue(manifest, "b", holder.request(), self.attester, self.evidence(session, manifest), self.freshness, self.signer,
+                           primed_floor())
 
     def refused(self, reason, fn, *args):
         with self.assertRaises(m.Refused) as caught:
@@ -732,7 +941,7 @@ class OnSwtpm(unittest.TestCase):
         self.assertIn(reason, str(caught.exception))
 
     def test_issue_hold_revoke_and_reboot_on_real_tpm_quotes(self):
-        holder = lease.Holder("a", SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/lease.json")
+        holder = lease.Holder("a", SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/lease.json", **SOURCES)
         # 14.1: b's TPM signs a lease for the re-attested a; a holds it
         envelope = self.issue(holder, self.m1, SESSION)
         self.assertEqual(holder.install(envelope, self.m1), lease.MAX_LIFETIME)
@@ -757,18 +966,18 @@ class OnSwtpm(unittest.TestCase):
         self.refused("EXPIRED: the runtime lease expired", holder.check, self.m1)
 
     def test_a_reboot_of_the_subject_needs_a_new_attested_session(self):
-        holder = lease.Holder("a", SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/lease.json")
+        holder = lease.Holder("a", SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/lease.json", **SOURCES)
         old_request = holder.request()
         holder.install(self.issue(holder, self.m1, SESSION), self.m1)
         self.tcti["a"] = self.boot("a")                  # a reboots: /run is gone, the TPM's resetCount moves on
-        rebooted = lease.Holder("a", OTHER_SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/lease-after-reboot.json")
+        rebooted = lease.Holder("a", OTHER_SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/lease-after-reboot.json", **SOURCES)
         self.refused("no runtime lease is held", rebooted.check, self.m1)
         # the old boot session cannot be re-attested after the reboot, so a request from the old boot gets nothing
         self.refused("attestation is refused: a boot session or ephemeral key from an earlier boot", lease.issue, self.m1, "b",
-                     old_request, self.attester, self.evidence(SESSION, self.m1), self.freshness, self.signer)
+                     old_request, self.attester, self.evidence(SESSION, self.m1), self.freshness, self.signer, primed_floor())
         # nor does the new boot's attestation answer the old boot's request: the sessions differ
         self.refused("attestation is refused: the quote is not bound to this transcript", lease.issue, self.m1, "b",
-                     old_request, self.attester, self.evidence(OTHER_SESSION, self.m1), self.freshness, self.signer)
+                     old_request, self.attester, self.evidence(OTHER_SESSION, self.m1), self.freshness, self.signer, primed_floor())
         self.assertEqual(rebooted.install(self.issue(rebooted, self.m1, OTHER_SESSION), self.m1), lease.MAX_LIFETIME)
 
 
