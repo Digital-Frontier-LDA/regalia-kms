@@ -40,7 +40,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   Not built yet:
   - the full scope's machinery:
     - the iLO/Redfish fence step that produces the power readback;
-    - the take-over (an owner-gated etcd force-new-cluster, and the state-epoch key 95 proposes);
+    - the take-over command (graceful etcd stop, the revision check, force-new-cluster, then the state-epoch entry
+      as its first write). The entry's format and verification exist (`opstate.verify_state_epoch`, with
+      `state_epoch_checks` in tests/vectors/opstate-v1.json). Nothing writes the entry yet, and no Go reader
+      verifies it. A replaced signing key can still sign an entry dated before the replacement, inside the owner's
+      authorization window; unlike a session, there is no arrival-time freshness check for it yet;
     - the rejoin (export the divergent tail, wipe, member add);
     - the daemon's halts (a peer heard below the quarantine epoch);
     - approvals naming their spending node (1e).
@@ -266,8 +270,8 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - The lone survivor's stateless serving under the owner's authorization (D32 item 6) has no gate path yet.
   - The session key's private half lives in the Go heap. It is never written, but it isn't locked against
     swap: the hosts are expected to run without swap, and nothing checks that.
-  - **`applied.json`'s `state_epoch` is always 0 for now.** The signed `/regalia/v1/state-epoch` entry (#492's
-    format) isn't verified by the cache yet. Until it is, a survivor's history after `--force-new-cluster` can't
+  - **`applied.json`'s `state_epoch` is always 0 for now.** The signed `/regalia/v1/state-epoch` entry
+    (`opstate.verify_state_epoch`) isn't verified by the cache yet. Until it is, a survivor's history after `--force-new-cluster` can't
     be told from the lost tail by this field.
   - **Once the runtime lease v2 (#489) is in, production must set the three settings.** Without them the
     daemon writes neither file, so its node requests no lease and stops serving.

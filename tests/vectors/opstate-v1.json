@@ -5351,7 +5351,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "e1ad844c6cff4d028e3c797cdd90bfafa8b657f4fe7c69c210d481cfe50f7a6e6766b7a16f4757ecf2df2ba7035adc42c6ff11516f5e436011b2d8a3f91e014d"
+    "signature": "55437ef12fde07638b8ab49f225e28f06df589cdf7dc9f8ef934490734ead152309292b78e8d276952a771d09928e9f231179eb68681a7e44bb7392224157371"
    }
   },
   {
@@ -5367,7 +5367,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618"
     },
-    "signature": "2ee7a861f5aeb09f24265ca634aecab99380e4e216aa04941756f6018e5bc85b71a58ba5e182c5ec53e348f5afbee5dc9a49573ff05d4383667d7f00fd7ac551"
+    "signature": "2cb35e7c1882f81fb666edc5a09320c3d66c80f748bd165b5064ff168351c39963361f374d7693fe88a27dc737f11b080725fb88071a07e4aff8e23db3863110"
    }
   },
   {
@@ -5383,7 +5383,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
     },
-    "signature": "e8cad70f196fe3fce9009aeda60a315ebd3b0f2587b84cfb011e6f21e13f84fe50e19042676e473ccdb7d70de7e965b7f26af44969c484a30e8cb784a7eebb31"
+    "signature": "de00d9026f3204e12394e0de19747042be46ca9c31b67e68b87f334d81ae49514d02c342720588fe1befdb93d9eb24e0c344dfa5a98adfffb6229d7e731808d6"
    }
   },
   {
@@ -5399,7 +5399,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "08e6c55ea6897fc2840d5398e9c2fc09ba8904bcacf32cf846098b7ba2d2d01c7294774d8324e06962d5294f4a3b54ee1b58246b7ed16cfb9075f1bac3a3af17"
+    "signature": "b8236b8c9cf693545251904f12892354b30755bff6d78f7b7f88e7abf0e04cc61492c8d0777981878be485d621e0e6ef7418b06f9d6401f5038372c4635c3681"
    }
   },
   {
@@ -5415,7 +5415,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "19242c1b4a9e9c0f1f35b94c965a334e8327cc359a9a70107d110f10328723b40026f82118ff04d401b0b7519e4b7cbb7870e8f3f88e95baea5fe55d93336b60"
+    "signature": "c37825c008198736d755c3e8554291348b859de8593bc7af93357f907b6de1a331f242ff7962a828a7960e7772945d285e5bdee8ef297ddc9ddc1a790cbe96f9"
    }
   },
   {
@@ -5431,7 +5431,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "e20040c5995a7a261ce8a6692fde4af518087c9d38e2dc875ef4989512b7a43d3ee31db4aae92c0a4684a62abc8b01b90925dcea2685d1fcd1ba9dd0fe589f1c"
+    "signature": "6c4da823f24379d7a9ee87d698efb458e7f7b2ecf29bd8ac181bab2249ce35db74964a45a4ae88ebe884d31c6713a655294762d634bbb0fece0a9377b0cad57a"
    }
   },
   {
@@ -5447,7 +5447,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "4dad7f80d30b14563878ddab5c915f805d921b488de99fec0fe68fd53fd906b15702b2bca57f3b7afcf5aaf31365166a895832147465ca35b4a9664eff5486b7"
+    "signature": "c59b3c56593840d61a2d529dc1d67f25b7ef11da3a45ee15e04383757305a1ed17d742dc36ba0bb9f87313d3a7043895b85d36185e99fb424a09df675cc816d3"
    }
   },
   {
@@ -5463,7 +5463,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "b6a905b1f3633922fd0eb8d2137c33566da28c9916a2e2fa50e443185728864e7c7a401cc8f442adfdce7b4c5516424638fe7f99dc38e1212883a4dcbe28b54b"
+    "signature": "96b72a83c031f24345058670cc9b2a64e05429bf6c872629a33203954615f2537b8fceaf57a32c59166ac080c4f748cb44c0bcb50d7ca14f413312cad5e6fbdd"
    }
   },
   {
@@ -5479,7 +5479,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "00000000000000000000000000000000000000000000000000000000000000"
     },
-    "signature": "be24a77a5fd76152d25ab34d5922776924a5e30fc34080c28815629aa61ba34210c4b354ce48d3359bc457fbbc8fea4f4f9acb37d954c0024296b968cdf274ff"
+    "signature": "2c0d8ced750543b8b8879423489668a4b7038cac75450b4aa15d5cbd37e2ec2a65d75dd5c0ba9342e88e49208777060e802e61b737a0215c5136d10892d75eb5"
    }
   },
   {
@@ -5495,7 +5495,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "3636e8f4158b742c8fc8a389bf1f5fafada554299f4ac4be42e7ad92f41fcd7c735eb749251c9e74dc38a8014866ad5ea5397990d726267ba00c3d91fdc23e69"
+    "signature": "3830592f613a1b61f45f188d0e215c1555306903a7543cb0514e6c1753226a3e02603c16758866a4f661379900602379422fd955fe42341927d5b25d7c658442"
    }
   }
  ],
@@ -5635,5 +5635,1329 @@
    }
   }
  ],
- "skew_s": 60
+ "skew_s": 60,
+ "state_epoch_chain": [
+  {
+   "activation_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c"
+    ],
+    "threshold": 2
+   },
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c",
+     "owner"
+    ],
+    "threshold": 2
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    },
+    {
+     "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
+     "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+     "hsm_serials": [
+      "DENK0404101"
+     ],
+     "node_id": "b",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2"
+     },
+     "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
+     "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+     "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
+     "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
+     "hsm_serials": [
+      "DENK0404102"
+     ],
+     "node_id": "c",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee"
+     },
+     "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
+     "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "a",
+      "b",
+      "c"
+     ],
+     "threshold": 2
+    },
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v4"
+  },
+  {
+   "activation_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c"
+    ],
+    "threshold": 2
+   },
+   "epoch": 2,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c",
+     "owner"
+    ],
+    "threshold": 2
+   },
+   "issued_at": "2026-10-05T11:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "044225b303dcd056cc74990f6e70bc522da8140650803607f709d6e7826aca2b803cf17536986eb98b9918f41fe9a44a7bd34eccd2cc3cd5c709c1b20f28a3dce2"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    },
+    {
+     "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
+     "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+     "hsm_serials": [
+      "DENK0404101"
+     ],
+     "node_id": "b",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2"
+     },
+     "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+     "state": "QUARANTINED",
+     "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
+     "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+     "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
+     "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
+     "hsm_serials": [
+      "DENK0404102"
+     ],
+     "node_id": "c",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee"
+     },
+     "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+     "state": "QUARANTINED",
+     "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
+     "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "policy_version": "p1",
+   "prev_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+   "revocation_signers": [
+    {
+     "parties": [
+      "a",
+      "b",
+      "c"
+     ],
+     "threshold": 2
+    },
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v4"
+  },
+  {
+   "activation_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c"
+    ],
+    "threshold": 2
+   },
+   "epoch": 3,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c",
+     "owner"
+    ],
+    "threshold": 2
+   },
+   "issued_at": "2026-10-06T00:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "044225b303dcd056cc74990f6e70bc522da8140650803607f709d6e7826aca2b803cf17536986eb98b9918f41fe9a44a7bd34eccd2cc3cd5c709c1b20f28a3dce2"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    },
+    {
+     "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
+     "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+     "hsm_serials": [
+      "DENK0404101"
+     ],
+     "node_id": "b",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2"
+     },
+     "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
+     "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+     "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
+     "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
+     "hsm_serials": [
+      "DENK0404102"
+     ],
+     "node_id": "c",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee"
+     },
+     "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
+     "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "policy_version": "p1",
+   "prev_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+   "revocation_signers": [
+    {
+     "parties": [
+      "a",
+      "b",
+      "c"
+     ],
+     "threshold": 2
+    },
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v4"
+  },
+  {
+   "activation_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c"
+    ],
+    "threshold": 2
+   },
+   "epoch": 4,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c",
+     "owner"
+    ],
+    "threshold": 2
+   },
+   "issued_at": "2026-10-07T00:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "044225b303dcd056cc74990f6e70bc522da8140650803607f709d6e7826aca2b803cf17536986eb98b9918f41fe9a44a7bd34eccd2cc3cd5c709c1b20f28a3dce2"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "QUARANTINED",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    },
+    {
+     "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
+     "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+     "hsm_serials": [
+      "DENK0404101"
+     ],
+     "node_id": "b",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2"
+     },
+     "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
+     "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+     "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
+     "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
+     "hsm_serials": [
+      "DENK0404102"
+     ],
+     "node_id": "c",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee"
+     },
+     "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+     "state": "QUARANTINED",
+     "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
+     "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "policy_version": "p1",
+   "prev_digest": "bcc82b4bdd58b05c937ff5cb910c059da0f9703290ad6792a5dcaf513bb1fe50",
+   "revocation_signers": [
+    {
+     "parties": [
+      "a",
+      "b",
+      "c"
+     ],
+     "threshold": 2
+    },
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v4"
+  }
+ ],
+ "state_epoch_checks": [
+  {
+   "accept": true,
+   "applied_state_epoch": 2,
+   "name": "a's take-over at its quarantine epoch, signed by the key a holds since that epoch",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "42a0329966e77f1692819527a7f494b86df73e9b697bb6cd2fae1b417163ea2641aef28c38ad58f00ed68fc19bcbb40aed41cd7445078849865e797203e2a352"
+   }
+  },
+  {
+   "accept": true,
+   "applied_state_epoch": 4,
+   "name": "b's take-over at epoch 4 over a's at 2",
+   "previous": {
+    "authorization": {
+     "authorization": {
+      "expires_at": "2026-10-06T12:00:00Z",
+      "fence": {
+       "method": "redfish",
+       "nodes": {
+        "b": {
+         "power_state": "Off",
+         "read_at": "2026-10-05T11:59:00Z"
+        },
+        "c": {
+         "power_state": "Off",
+         "read_at": "2026-10-05T11:59:00Z"
+        }
+       }
+      },
+      "fenced": "b, c: off at the iLO",
+      "node_id": "a",
+      "not_before": "2026-10-05T12:00:00Z",
+      "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+      "quarantine_epoch": 2,
+      "schema": "regalia.survivor-authorization/v1",
+      "scope": "full"
+     },
+     "signature": {
+      "party": "owner",
+      "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+      "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+     }
+    },
+    "cluster_id": "62ff5b5c1a2e3d4f",
+    "issued_at": "2026-10-05T12:20:00Z",
+    "node_id": "a",
+    "revision_before": 4711,
+    "schema": "regalia.opstate-state-epoch/v1",
+    "state_epoch": 2
+   },
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-08T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "a": {
+          "power_state": "Off",
+          "read_at": "2026-10-07T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-07T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "a, c: off at the iLO",
+       "node_id": "b",
+       "not_before": "2026-10-07T12:00:00Z",
+       "quarantine_digest": "3a14f9eda8b463e5d217ad70706c9552e2b11faba005050f254e17b0563c8fe7",
+       "quarantine_epoch": 4,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "70c6ebe7e924d517afb882ce649b6a60d763b9642a9ac7be838236983e6ea50a6ff5850eec7b47bb2368b47628f5183480f277c9b3e8a0ec25f095357a55940a"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-07T12:20:00Z",
+     "node_id": "b",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 4
+    },
+    "signature": "7584cea5bbef1425a868e7a8055e206c552bf163fad08d7a663fb79141588ee108e19886ce4cfbd99e46c979ce9e6ae2682cffd4848d089b0c8a6d20a9f10fe4"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "an epoch below the one the store holds",
+   "previous": {
+    "authorization": {
+     "authorization": {
+      "expires_at": "2026-10-08T12:00:00Z",
+      "fence": {
+       "method": "redfish",
+       "nodes": {
+        "a": {
+         "power_state": "Off",
+         "read_at": "2026-10-07T11:59:00Z"
+        },
+        "c": {
+         "power_state": "Off",
+         "read_at": "2026-10-07T11:59:00Z"
+        }
+       }
+      },
+      "fenced": "a, c: off at the iLO",
+      "node_id": "b",
+      "not_before": "2026-10-07T12:00:00Z",
+      "quarantine_digest": "3a14f9eda8b463e5d217ad70706c9552e2b11faba005050f254e17b0563c8fe7",
+      "quarantine_epoch": 4,
+      "schema": "regalia.survivor-authorization/v1",
+      "scope": "full"
+     },
+     "signature": {
+      "party": "owner",
+      "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+      "sig": "70c6ebe7e924d517afb882ce649b6a60d763b9642a9ac7be838236983e6ea50a6ff5850eec7b47bb2368b47628f5183480f277c9b3e8a0ec25f095357a55940a"
+     }
+    },
+    "cluster_id": "62ff5b5c1a2e3d4f",
+    "issued_at": "2026-10-07T12:20:00Z",
+    "node_id": "b",
+    "revision_before": 4711,
+    "schema": "regalia.opstate-state-epoch/v1",
+    "state_epoch": 4
+   },
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the store holds state epoch 4; 2 is not above it",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "328c31cb24c600dc3e43e4e12cf93be756315371f7927ac343f81e0e9e04f90239dbc274755a3b54b0bfbc8f5ac11d9a4f30f09254a3a2201ab7baff71467470"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "the same epoch again",
+   "previous": {
+    "authorization": {
+     "authorization": {
+      "expires_at": "2026-10-06T12:00:00Z",
+      "fence": {
+       "method": "redfish",
+       "nodes": {
+        "b": {
+         "power_state": "Off",
+         "read_at": "2026-10-05T11:59:00Z"
+        },
+        "c": {
+         "power_state": "Off",
+         "read_at": "2026-10-05T11:59:00Z"
+        }
+       }
+      },
+      "fenced": "b, c: off at the iLO",
+      "node_id": "a",
+      "not_before": "2026-10-05T12:00:00Z",
+      "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+      "quarantine_epoch": 2,
+      "schema": "regalia.survivor-authorization/v1",
+      "scope": "full"
+     },
+     "signature": {
+      "party": "owner",
+      "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+      "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+     }
+    },
+    "cluster_id": "62ff5b5c1a2e3d4f",
+    "issued_at": "2026-10-05T12:20:00Z",
+    "node_id": "a",
+    "revision_before": 4711,
+    "schema": "regalia.opstate-state-epoch/v1",
+    "state_epoch": 2
+   },
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the store holds state epoch 2; 2 is not above it",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "5b69857cc1b16d7fad01ecfe44338f1c9e47370a800c66156b87023b590b33b054b7ae9927a09fe98e834a693e83b8005dc6eb98e5dce127d1cd0cdf0c1255f3"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "under a stateless authorization",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "a take-over needs the owner's \"full\" authorization; this one is stateless",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "stateless"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "85a05c8bf7d131e723ddff7f5cd451702aef96ab1b89932346829c554adeea647971fff7c797a76e4eb211d472b8be56677d96251ec255ac009a890bef751004"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "00ed5ce1ee21368bdcf1f5edd4f35f49268433934d55de14577744ee66443e88248dc701eb66d043550b85194f3fe9d5421441eb14b1fa1d3e5bd1905c696e56"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "dated before the full scope begins",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the state epoch is dated 2026-10-05T12:10:00Z, outside the authorization's full scope",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:10:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "dd4534075620eef48e80c3dcfe6696781896e6297b94518ff32f242b665ef2373ac7d09ee58f684243147bc129f3e70eb9cc02aeff4b95e8ac95e292bc47ae5e"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "dated after the authorization ended",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the state epoch is dated 2026-10-06T12:00:00Z, outside the authorization's full scope",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-06T12:00:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "8ff579b2b03008af8911aa5a820bbfb06566a360ccebea980a082fa64157dbb30051bfe111ece23ccd03d4810c21c06e499444f9dfdeac9503698dd777696640"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "an epoch-2 authorization claimed for epoch 3 (judged at N, not at the tip)",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the survivor authorization is for epoch 2's manifest; this node's is epoch 3: a new epoch ends it",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-06T00:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 3
+    },
+    "signature": "d51d371e5ff83dc3c94f37c610aa08cc8effa32a3ecbfeac443b12621da9589c683a4858c7658aa61c0cdf6bf0e3dd372c1d39891a0584fc71d5b5bc21956048"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "an epoch the chain does not hold",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the chain holds no manifest at epoch 9",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 9
+    },
+    "signature": "9e4026303de3a178ef579ff62985009e803ad6988d0fd6cb41192268da85788f3cec717da4304cbc927b54240e26aab4d1acfff81d17248f5b62f718cff35f9d"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "signed by a's key replaced at the quarantine epoch",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the a's state-epoch entry signature does not verify",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "652efcfb7b1cc9238e6b9e978f6132417ae00da80a752f3271219a04b4500098266169cf1cdaf0c85b5b3483072ea396a0eb4a41e5532ddf46595e34b09b060c"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "signed by b's key for a's take-over",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the a's state-epoch entry signature does not verify",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "95f85aa68cd15dffaac367d372b1766ccf69afcb700d764d52d1c962c39fff8f41ff8aa81b3fd19c0ecaf99474999a9a38786297d6701b705bf6bedfe618b4d7"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "b's authorization carried in a's entry",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the survivor authorization is for b, not a",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-08T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "a": {
+          "power_state": "Off",
+          "read_at": "2026-10-07T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-07T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "a, c: off at the iLO",
+       "node_id": "b",
+       "not_before": "2026-10-07T12:00:00Z",
+       "quarantine_digest": "3a14f9eda8b463e5d217ad70706c9552e2b11faba005050f254e17b0563c8fe7",
+       "quarantine_epoch": 4,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "70c6ebe7e924d517afb882ce649b6a60d763b9642a9ac7be838236983e6ea50a6ff5850eec7b47bb2368b47628f5183480f277c9b3e8a0ec25f095357a55940a"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-07T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 4
+    },
+    "signature": "667ba92721c54d8b53d406897530f7ca4918090e8b09e21bc1097d2ec2b4774005c665e07a56e1d3c14f00ca50a7c27c260ccf7f422b56d87daa5aac7803e081"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "under another key",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch/2",
+   "python_reason": "the state-epoch entry belongs under /regalia/v1/state-epoch, not /regalia/v1/state-epoch/2",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "61a4a4936e8587c269995398200f2bc0d516683db4b106c0c602e53e0a41ccf3467a83af881112c1a40594a50f428305c6033c45a68ee939cd3a1fa3b3691393"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "a signature over the entry without its domain",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the a's state-epoch entry signature does not verify",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "bc474eaddd15c1b8ae35ab5b98bcf754a55e9608ada0daa17c7f4964bc1d03850f32d880f6841803335d4a739ba41d94bc99fc747da10ecf7c66853e7836ff65"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "an entry with a field the format does not have",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the state-epoch entry fields mismatch: missing=[] unknown=['note']",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "8ab4cc1dd01e016f4c16cafb526deb77209ea85aacfdd45d601c812384702e916344790ed3e81f084d1e437c3db8a52015350181060ae9a2bbf4b88107532101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "note": "x",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "bcb65e3831d6749e361a9a4299111e4a06ebedc6f4a4ed357544e821ea1803ef078f5eabbaba9d2c2a0e9666994e4581369f9fdcfa0387ed8134b3ff2fcbbf24"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "an authorization the owner did not sign",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the survivor authorization (signatures[0], owner) signature does not verify",
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         },
+         "c": {
+          "power_state": "Off",
+          "read_at": "2026-10-05T11:59:00Z"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "8b483737ab619a346fe5d4fe69885435090321aad6e72980b739a2a5a7208a543d78f8014446ecd4dcf417f3a6fac4e19dae9fbe8395def4fe74cbc7677fd626"
+   }
+  }
+ ]
 }
