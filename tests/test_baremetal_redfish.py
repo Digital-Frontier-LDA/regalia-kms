@@ -225,6 +225,7 @@ class Pin(unittest.TestCase):
         with open(key_path, "wb") as f:
             f.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2                # as the client requires (CodeQL on #516)
         context.load_cert_chain(cert_path, key_path)
         self.listener = socket.socket()
         self.listener.bind(("127.0.0.1", 0))
