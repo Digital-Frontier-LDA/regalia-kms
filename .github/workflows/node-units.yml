@@ -53,6 +53,13 @@ on:
 permissions:
   contents: read
 
+# One run per pull request: a new push cancels its own superseded run (seven sessions' pushes starved the hosted
+# runners, 2026-10-05). Anything else (main, a schedule) is a group of its own run: GitHub cancels an older PENDING
+# run of a group even without cancel-in-progress, and every main run must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   node-units-systemd:
     runs-on: ubuntu-24.04     # pinned: the chrony and systemd behaviour observed is 24.04's
@@ -174,8 +181,8 @@ jobs:
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
             sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-recovery.py | tee "$RUNNER_TEMP/recovery.log"
-          grep -q '^three-node-recovery: 65 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
-            echo "::error::the three-node recovery test did not pass all 65 checks" >&2; exit 1; }
+          grep -q '^three-node-recovery: 69 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
+            echo "::error::the three-node recovery test did not pass all 69 checks" >&2; exit 1; }
 
   # #75 (Phase 15), tier N: a new image rolled through the three nodes while CURRENT and NEXT are both accepted
   # (an image is PCR 11, extended after a power cycle); may_reboot on live leases as update.py asks it; the retire
