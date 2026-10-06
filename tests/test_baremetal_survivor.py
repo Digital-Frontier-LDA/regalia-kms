@@ -1,11 +1,13 @@
 """deploy/baremetal/survivor.py (ADR-0002 D32 item 6, #432 item (e)): the owner's one authorization for a lone survivor,
 held only at the quarantine epoch with every other server stopped; and the owner's directive, which only disables."""
+import json
 import os
 import shutil
 import tempfile
 import unittest
 
 from deploy.baremetal import membership as m, survivor as sv
+from tests.test_baremetal_fence import BOXES, redfish_evidence
 from tests.test_baremetal_membership_v4 import NODE_KEYS, OWNER_KEYS, ed25519, manifest4, nodes4, p256_sig, pub
 
 T0 = 1791201600                                              # 2026-10-05T12:00:00Z
@@ -34,7 +36,7 @@ class Case(unittest.TestCase):
         self.assertIn(reason, str(caught.exception))
         return str(caught.exception)
 
-    def authorize(self, tip=None, who="a", typed=None, key=None, life_s=None, scope="stateless", fence=None):
+    def authorize(self, tip=None, who="a", typed=None, key=None, life_s=None, scope="stateless", fence=None, inventory=BOXES):
         tip = tip or self.m2
         want = {}
 
@@ -42,7 +44,7 @@ class Case(unittest.TestCase):
             want["text"] = text
             return typed if typed is not None else text.split("Type exactly: ")[1].split("\n")[0]
         return sv.make_authorization(tip, who, "powered off at their PDUs", T0, confirm, lambda: OwnerKey(key or OWNER_KEYS[0]), life_s=life_s,
-                                     scope=scope, fence=fence)
+                                     scope=scope, fence=fence, inventory=inventory)
 
 
 class Authorization(Case):
@@ -93,7 +95,7 @@ class FullScope(Case):
     on: the attestation plus a request's longest life plus the skew (1e, A1), plus more for a fence only typed (d9, G1)."""
 
     def fence(self, state="Off"):
-        return {"method": "redfish", "nodes": {n: {"power_state": state, "read_at": "2026-10-05T11:59:00Z"} for n in ("b", "c")}}
+        return redfish_evidence(state=state)
 
     def test_full_begins_after_the_wait_and_sooner_with_a_power_readback(self):
         read = self.authorize(scope="full", fence=self.fence())
@@ -107,9 +109,20 @@ class FullScope(Case):
 
     def test_the_fence_evidence_names_every_other_node_powered_off(self):
         self.refused("reads Off for every fenced node", self.authorize, scope="full", fence=self.fence("On"))
-        partial = {"method": "redfish", "nodes": {"b": {"power_state": "Off", "read_at": "2026-10-05T11:59:00Z"}}}
+        partial = redfish_evidence(("b",))
         self.refused("the fence evidence names ['b']", self.authorize, scope="full", fence=partial)
         self.refused("scope must be one of", self.authorize, scope="everything")
+
+    def test_a_redfish_fence_is_signed_only_against_the_inventory(self):
+        """05 on #432: the box in the evidence is the box commissioned for that node, checked again where the owner signs."""
+        self.refused("a redfish fence is checked against the fence inventory: give it", self.authorize, scope="full", fence=self.fence(),
+                     inventory=None)
+        moved = self.fence()
+        moved["nodes"]["b"]["serial"] = "CZJ59999Q"
+        self.refused("b's box reports serial 'CZJ59999Q'; the inventory's is 'CZJ50001Q'", self.authorize, scope="full", fence=moved)
+        swapped = self.fence()
+        swapped["nodes"]["c"]["ilo_cert_sha256"] = BOXES["b"]["ilo_cert_sha256"]
+        self.refused("c's iLO certificate is not the one pinned for it", self.authorize, scope="full", fence=swapped)
 
     def test_the_typed_line_names_the_scope(self):
         self.refused("the line typed is not this authorization's", self.authorize, scope="full",
@@ -246,6 +259,23 @@ class OwnerTool(Case):
         with self.assertRaises(SystemExit):                            # the tool has no --state: it only disables
             self.run_tool(["sign-directive", "--chain", self.chain, "--root-key", self.root, "--object-id", "x", "--state", "destroyed",
                            "--reason", "r", "--out", os.path.join(self.d, "no.json")], "destroyed x")
+
+    def test_sign_survivor_with_the_fence_evidence_checks_it_against_the_inventory(self):
+        from tests.test_baremetal_fence import INVENTORY
+        evidence, inventory = os.path.join(self.d, "fence.json"), os.path.join(self.d, "inventory.json")
+        with open(evidence, "w") as f:
+            json.dump(redfish_evidence(), f)
+        with open(inventory, "w") as f:
+            json.dump(INVENTORY, f)
+        line = "authorize a alone full 2 until 2026-10-06T12:00:00Z"
+        argv = ["sign-survivor", "--chain", self.chain, "--root-key", self.root, "--node-id", "a", "--how", "ForceOff at the iLOs",
+                "--life-s", "86400", "--scope", "full", "--fence-evidence", evidence]
+        code, signed = self.run_tool(argv + ["--out", os.path.join(self.d, "no.json")], line)
+        self.assertEqual((code, signed), (1, None))                    # no inventory: nothing signed
+        code, signed = self.run_tool(argv + ["--inventory", inventory, "--out", os.path.join(self.d, "auth.json")], line)
+        self.assertEqual(code, 0)
+        self.assertEqual(signed["authorization"]["fence"], redfish_evidence())
+        self.assertEqual(sv.in_force(signed, self.m2, "a", T0 + sv.REQUEST_LIFE_S + sv.SKEW_S), (T0 + 86400, "full"))
 
     def test_a_wrong_line_writes_nothing(self):
         out = os.path.join(self.d, "auth.json")

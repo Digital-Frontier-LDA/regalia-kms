@@ -287,7 +287,13 @@ def main(argv=None):
     w.add_argument("--life-s", type=int, help="at most, and by default, %d s" % 604800)
     w.add_argument("--scope", choices=("stateless", "full"), default="stateless",
                    help="full: stateful operations too, after the wait (the owner's one-server decision, #432)")
-    w.add_argument("--fence-evidence", help="the fence step's power readback (JSON); without it the fence is the typed fallback")
+    w.add_argument("--fence-evidence", help="the fence step's power readback (JSON, owner.py fence); without it the fence is the typed fallback")
+    w.add_argument("--inventory", help="the fence inventory the evidence is checked against (with --fence-evidence)")
+    f = sub.add_parser("fence", help="(off the nodes, on the management network) power the fenced servers off through their iLOs (G1, fence.py)")
+    f.add_argument("--inventory", required=True, help="the fence inventory: each node's iLO, pinned certificate, serial and UUID")
+    f.add_argument("--node", action="append", required=True, help="a node to fence (repeat)")
+    f.add_argument("--credentials-fd", type=int, required=True, help="the decrypted fence-only credentials, on a pipe (gpg --decrypt)")
+    f.add_argument("--out", required=True)
     w.add_argument("--out", required=True)
     d = sub.add_parser("sign-directive", help="(off the nodes) the owner's disable-only directive during a survivor recovery")
     d.add_argument("--chain", required=True, help="the survivor's signed chain; its tip is the quarantine epoch")
@@ -312,6 +318,25 @@ def main(argv=None):
             else:
                 envelope = membership.load(sys.stdin.read(heartbeat.MAX_BYTES + 1).encode(), heartbeat.MAX_BYTES)
                 print(json.dumps({"left": int(accept(node, envelope, trail))}))
+            return 0
+        if args.op == "fence":
+            off_the_nodes()
+            from deploy.baremetal import fence as fence_tool, manifest as manifest_tool
+            boxes = fence_tool.inventory(manifest_tool.read_json(args.inventory, 65536), args.node)
+            raw = keyfd.read(args.credentials_fd, "the fence credentials")
+            try:
+                credentials = json.loads(bytes(raw))
+            finally:
+                keyfd.zero(raw)
+            evidence = fence_tool.fence(boxes, args.node, credentials)
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            with os.fdopen(fd, "w") as out:
+                json.dump(evidence, out, sort_keys=True)
+            for nid, seen in sorted(evidence["nodes"].items()):
+                print("FENCED: %s Off at %s and again at %s (serial %s, power restore %s)" % (nid, seen["read_at"], seen["read_again_at"],
+                                                                                        seen["serial"], seen["power_restore_policy"]))
+            print("WRITTEN: %s; carry it to the offline laptop: sign-survivor --fence-evidence %s --inventory <the same inventory>"
+                  % (args.out, args.out))
             return 0
         if args.op == "beat" and os.geteuid() != 0:
             print("REFUSED: run as root, at the node's console", file=sys.stderr)
@@ -383,8 +408,12 @@ def main(argv=None):
             tip = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), manifest_tool.root_key(args.root_key))
             if args.op == "sign-survivor":
                 fence = manifest_tool.read_json(args.fence_evidence, 65536) if args.fence_evidence else None
+                boxes = None
+                if args.inventory:
+                    from deploy.baremetal import fence as fence_tool
+                    boxes = fence_tool.inventory(manifest_tool.read_json(args.inventory, 65536))
                 signed = survivor.make_authorization(tip, args.node_id, args.how, int(time.time()), confirm_line, open_signer, life_s=args.life_s,
-                                                     scope=args.scope, fence=fence)
+                                                     scope=args.scope, fence=fence, inventory=boxes)
                 note = "valid until %s or any new epoch; install it on %s" % (signed["authorization"]["expires_at"], args.node_id)
             else:
                 signed = survivor.make_directive(tip, args.object_id, args.reason, int(time.time()), confirm_line, open_signer)

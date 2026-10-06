@@ -33,7 +33,7 @@ and the directive's commit on the majority's return. LIMITATIONS.md says so.
 import os
 import re
 
-from deploy.baremetal import heartbeat, membership
+from deploy.baremetal import fence as fence_tool, heartbeat, membership
 
 Refused, require = membership.Refused, membership.require
 
@@ -99,8 +99,20 @@ def validate_authorization(auth):
     require(isinstance(fence["nodes"], dict) and fence["nodes"], "the fence evidence names the fenced nodes")
     for nid, seen in fence["nodes"].items():
         require(isinstance(nid, str) and NODE_ID.fullmatch(nid) is not None, "the fence evidence names node IDs")
-        membership.exact(seen, ("power_state", "read_at"), "the fence evidence for %s" % nid)
-        heartbeat.parse_time(seen["read_at"], "the fence evidence's read_at")
+        if fence["method"] == "redfish":
+            # the box bound and read Off twice (regalia-kms-05 on #432; fence.py makes it)
+            membership.exact(seen, fence_tool.EVIDENCE_KEYS, "the fence evidence for %s" % nid)
+            membership.hex_field(seen["ilo_cert_sha256"], 64, "the fence evidence's ilo_cert_sha256")
+            require(isinstance(seen["serial"], str) and fence_tool.SERIAL.fullmatch(seen["serial"]) is not None
+                    and isinstance(seen["uuid"], str) and fence_tool.UUID.fullmatch(seen["uuid"]) is not None,
+                    "the fence evidence for %s names its box's serial and UUID" % nid)
+            _text(seen["power_restore_policy"], "the fence evidence's power_restore_policy", 128)
+            first = heartbeat.parse_time(seen["read_at"], "the fence evidence's read_at")
+            require(heartbeat.parse_time(seen["read_again_at"], "the fence evidence's read_again_at") - first >= fence_tool.REREAD_S,
+                    "the fence evidence for %s reads Off twice at least %d s apart" % (nid, fence_tool.REREAD_S))
+        else:
+            membership.exact(seen, ("power_state", "read_at"), "the fence evidence for %s" % nid)
+            heartbeat.parse_time(seen["read_at"], "the fence evidence's read_at")
         require(seen["power_state"] == ("Off" if fence["method"] == "redfish" else "unreachable"),
                 "a %s fence reads %s for every fenced node; %s's is %r" % (fence["method"], "Off" if fence["method"] == "redfish"
                                                                          else "unreachable", nid, seen["power_state"]))
@@ -159,12 +171,13 @@ def _stamp(seconds):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(seconds)))
 
 
-def make_authorization(tip, survivor, how, now, confirm, open_signer, life_s=None, scope="stateless", fence=None):
+def make_authorization(tip, survivor, how, now, confirm, open_signer, life_s=None, scope="stateless", fence=None, inventory=None):
     """The owner's survivor authorization (owner.py sign-survivor, off the nodes). `tip`: the survivor's newest manifest,
     verified from the pinned root by the caller: the quarantine manifest. `how`: what was done to the other servers.
     Refused unless every other node has stopped counting in `tip` and the line naming survivor, scope, epoch and expiry
     is typed. `fence`: the fence step's evidence ({"method": "redfish", "nodes": {id: {"power_state": "Off", "read_at"}}}),
-    or None for the typed fallback (every other node "unreachable", FALLBACK_EXTRA_S more before full).
+    or None for the typed fallback (every other node "unreachable", FALLBACK_EXTRA_S more before full). A redfish
+    fence is checked against `inventory` (fence.inventory()): each node's box, as commissioned (05).
     Returns {"authorization", "signature"}."""
     nodes = membership.validate(tip)
     others = sorted(n for n in nodes if n != survivor)
@@ -177,6 +190,11 @@ def make_authorization(tip, survivor, how, now, confirm, open_signer, life_s=Non
             "scope": scope, "fence": fence or {"method": "attested", "nodes": {o: {"power_state": "unreachable", "read_at": _stamp(now)}
                                                                                  for o in others}}}
     validate_authorization(auth)
+    if auth["fence"]["method"] == "redfish":
+        require(inventory, "a redfish fence is checked against the fence inventory: give it")
+        for nid, seen in auth["fence"]["nodes"].items():
+            require(nid in inventory, "the fence inventory has no box for %s" % nid)
+            fence_tool.same_box(inventory[nid], seen, nid)
     loose = sorted(n for n in others if nodes[n]["state"] not in membership.NOT_COUNTING)
     require(not loose, "quarantine %s first (a root- or owner-signed epoch): a survivor is authorized only once every other server "
             "has stopped counting" % ", ".join(loose))
