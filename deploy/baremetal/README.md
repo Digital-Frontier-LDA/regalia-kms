@@ -957,7 +957,23 @@ removing only what it can prove it made.
   - `seal-hsm-pin.sh` passes the value to tpm2-tools as a file in a root-only directory on /run (tmpfs), removed on
     exit. A run killed outright leaves it until reboot. The script doesn't check it against the record: a wrong
     value is refused by the TPM.
-  - Rotating a set value is not built.
+  - **Rotation**, as regalia-ceremony#137 prints it for each node:
+    `cd /usr/lib/regalia-kms && (gpg --decrypt <current set>/ownerauth-X.yk.gpg; gpg --decrypt ownerauth-X.yk.gpg) | sudo python3 -Es -m deploy.baremetal.enrol ownerauth --rotate-from <current set>/ownerauth.record.json --record ownerauth.record.json --node-id X --root-key ROOT`.
+    Standard input carries the CURRENT value, then the NEW one (the `cd` is the units' WorkingDirectory, which `-m`
+    needs to find the package). A node set before the node held its record runs `--check --adopt --record <current
+    set>/ownerauth.record.json` once first, with the current value on standard input. Both are checked
+    against their records under the pinned root before the TPM is touched. The new record must be strictly later
+    (`at`; both are root-signed): a rotation never goes back to an older record, whose envelopes retired or lost cards
+    may open (regalia-kms-51). The change is one `tpm2_changeauth` in a session salted to the enrolled EK, where the
+    current value authorizes (never sent) and the new one is the encrypted parameter; then the new value is proven.
+    A rerun after a stop is idempotent. The ceremony's rotation run, with fresh values and envelopes to the current
+    owner cards only, is regalia-ceremony#135 (rc#137, its step t, in review). Measured on swtpm.
+    The node remembers which record it is on (`/var/lib/regalia-enrol/ownerauth.json`, root's 0600: the record's
+    SHA-256, written by set and rotate once the TPM answers). A rotation from another record is refused before the TPM.
+    A node set up before this records its current one with `enrol ownerauth --check --adopt`, one way and only after
+    the TPM answered to it. The rotation's one call that a wrong value would make a dictionary-attack strike (the
+    changeauth in the EK-salted session) is made only after the current value is proven, and only with `min(3, max)`
+    tries left: at the maximum the node's DA-protected keys lock out until `LOCKOUT_RECOVERY`.
   - On the TPM bus (measured on swtpm, #414): owner calls are authorized in HMAC sessions that tpm2-tools opens
     itself, so the value is never sent. Setting it (changeauth's new value is a parameter) goes in a session salted
     to the EK `enrol init` recorded, with parameter encryption. The EK's Name is checked first (`--enrol-dir`), so a

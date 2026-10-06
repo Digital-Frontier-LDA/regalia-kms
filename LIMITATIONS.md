@@ -153,7 +153,20 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     counter is defined one below the highest heartbeat the root parent verified.
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
-  - Rotating a set owner authorization is not built.
+  - **Rotating a set owner authorization: built, with these limits** (`enrol ownerauth --rotate-from`).
+    - The ceremony's rotation run, which makes the fresh values and the new record, is regalia-ceremony#135 (51; built as regalia-ceremony#137, in review), not
+      yet built. Until then no new record exists to rotate to.
+    - Dictionary attack, measured on swtpm: a wrong owner value through the proof (`holds`, tpm2-tools' unsalted HMAC
+      session) is TPM_RC_BAD_AUTH and raises nothing; the same value as the auth of the EK-salted changeauth is
+      TPM_RC_AUTH_FAIL and raises `TPM_PT_LOCKOUT_COUNTER`. So the rotation proves the current value first, and makes
+      the changeauth only with `min(3, max)` tries left (at the max, the node's DA-protected keys lock out). Until the
+      DL360's TPM is measured, each failed owner check is treated as a possible strike.
+    - The node holds which record it is on (`ownerauth.json`) and refuses a rotation from another. The other
+      owner-authorized tools (`enrol commit`, `reanchor`, `recount`, `seal-hsm-pin.sh`) do not check it yet: a stale
+      `--ownerauth` record there is refused by the TPM, not before it (#460, agreed with regalia-kms-d9).
+    - The rollback guard orders records by their root-signed `at`, the laptop's clock. Ordering by the card record the
+      owner-authorization record encrypted to (a ceremony schema change, after #438) is #461.
+    - Measured on swtpm with tpm2-tools 5.7, not on the DL360's TPM.
   - **Break-glass custody is decided, not yet produced** (owner, 2026-10-05; 24 on rc#111). One binary SOPS file per
     node, `ownerauth-<node>.bg.sops`, replaces the ceremony's `.bg.age` envelope. It is encrypted to the post-quantum
     "ownerauth-recovery" identity in offline-keys' D28 key map, under the same SLIP-39 shares. That is
