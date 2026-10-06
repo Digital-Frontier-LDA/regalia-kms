@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
 from deploy.baremetal import membership as m, opstate, survivor  # noqa: E402
+from tests.test_baremetal_fence import redfish_evidence  # noqa: E402
 from tests.test_baremetal_membership_v4 import NODE_KEYS, OWNER_KEYS, manifest4, nodes4, p256, p256_sig, typed  # noqa: E402
 
 
@@ -290,7 +291,7 @@ def survivor_authorization(epoch=2, who="a", scope="full", day="2026-10-05", **o
     auth = {"schema": survivor.AUTH_SCHEMA, "node_id": who, "quarantine_epoch": epoch, "quarantine_digest": m.digest(tip),
             "not_before": day + "T12:00:00Z", "expires_at": "%s-%02dT12:00:00Z" % (day[:7], int(day[8:]) + 1),
             "fenced": "%s: off at the iLO" % ", ".join(others), "scope": scope,
-            "fence": {"method": "redfish", "nodes": {o: {"power_state": "Off", "read_at": day + "T11:59:00Z"} for o in others}}}
+            "fence": redfish_evidence(others, day)}
     auth.update(over)
     return {"authorization": auth, "signature": {"party": m.OWNER, "key": typed(OWNER_KEYS[0])["key"],
                                                  "sig": OWNER_KEYS[0].sign(survivor.authorization_message(auth)).hex()}}

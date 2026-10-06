@@ -48,7 +48,33 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     600 s more when the fence is only typed rather than an iLO power readback.
   Not built yet:
   - the full scope's machinery:
-    - the iLO/Redfish fence step that produces the power readback;
+    - the iLO Redfish client (`deploy/baremetal/redfish.py`, regalia-kms-d9's, from #501) has not run against a
+      DL360's iLO 4. It is shared by the drills' power faults and the fence. It is tested against a stand-in Redfish
+      service, and its certificate pin against a loopback TLS server, on every path the drills and the fence use. The
+      ResetTypes it expects (no GracefulRestart on iLO 4), the firmware string's form and the power timings are to be
+      measured at commissioning, from the discovery it records. It uses Basic authentication over the pinned TLS, with no
+      Redfish session tokens. Its firmware floor (2.30, where Redfish begins) is not the security minimum: commissioning
+      pins the current iLO 4 release;
+    - the fence on real iLOs. `deploy/baremetal/fence.py` (`owner.py fence`) exists. It runs from the owner's machine
+      on the management network, never a node, and does, in order:
+      1. TLS pinned to each iLO's certificate before any credential is sent;
+      2. refuses an account with more than login and power/reset;
+      3. matches the box's serial and UUID to the commissioning inventory;
+      4. ForceOff;
+      5. reads Off twice, at least 10 s apart.
+
+      It records the power-restore policy, and `sign-survivor` checks the evidence against the same inventory. It is
+      tested against a local Redfish stand-in over real TLS, never an iLO 4. Not yet:
+      - the commissioning step that records each iLO's certificate, serial and UUID in the inventory;
+      - the fence-only iLO accounts. Whether iLO 4 lets such an account read its own Accounts record, which the
+        fence's privilege check reads, is unmeasured. If it does not, every correct account is refused and the fence is
+        the typed fallback;
+      - the credentials encrypted to the owner cards' decryption keys (the tool reads them decrypted, from a pipe);
+      - whether a management VPN reaches all three sites' iLOs is the owner's to say. Without it, the fence is the owner
+        at each iLO in turn, or the typed fallback;
+      - anyone with an iLO's power right, or a power-restore policy of "always on" after a power cut, can turn a fenced
+        server back on. It then holds an older epoch and its peers halt it (G4, not built yet). The evidence records
+        the policy; nothing enforces it;
     - the take-over on a real host. `deploy/baremetal/takeover.py` exists: a graceful etcd stop, the revision
       check, force-new-cluster through a /run drop-in, then the state-epoch entry (`opstate.verify_state_epoch`) as
       its first write, and the drop-in read back gone. It is tested on a scripted host and, in CI, against a real
