@@ -1043,13 +1043,14 @@
           "content_type": {
             "enum": [
               "application/vnd.regalia.digest",
+              "application/vnd.regalia.x509-tbs",
               "application/vnd.cosmos.tx+protobuf",
               "application/vnd.regalia.release-manifest+json",
               "application/ssh-signature-input",
               "application/pkix-certification-request",
               "application/octet-stream"
             ],
-            "description": "What the payload is. It must be one of the content types the object's purpose policy lists; application/vnd.regalia.digest is a digest (for RSA, the DigestInfo that carries one)."
+            "description": "What the payload is. It must be one of the content types the object's purpose policy lists; application/vnd.regalia.digest is a digest (for RSA, the DigestInfo that carries one). application/vnd.regalia.x509-tbs is complete unhashed certificate or CRL TBS DER, at most 32 KiB, accepted only by an opt-in development P-256/SHA-256 issuing profile; no format, AAD or digest fallback is accepted."
           },
           "payload_base64": {
             "type": "string",

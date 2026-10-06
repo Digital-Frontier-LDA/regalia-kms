@@ -29,6 +29,15 @@ The version is in the path: `/v1/operations/...`. Within `v1`:
 | `POST /v1/operations/certificate-sign` | `payload_base64`, PKCS#10 CSR in DER, ≤ 8 KiB | certificate (`application/pkix-cert`) |
 | `POST /v1/operations/key-agreement` | `payload_base64`, peer public key in PKIX DER, ≤ 4 KiB | derived key, 32 bytes |
 | `POST /v1/operations/release-secret` | `payload_base64`, envelope, ≤ 64 KiB, `format: regalia-envelope-v2` | secret plaintext |
+
+An opt-in development issuing profile accepts `sign` with
+`application/vnd.regalia.x509-tbs`: complete unhashed certificate or CRL TBS DER,
+at most 32 KiB, with no `format` or AAD. The daemon independently checks its
+frozen P-256/SHA-256 profile, reserves a durable leaf/CRL count and acknowledges
+signing intent before sending the digest to the backend. Malformed input returns
+nonretryable 400; profile refusals return nonretryable 403. See the
+[development issuing policy](adapters/openbao/X509-POLICY.md) for the configuration
+and qualification boundary.
 | `POST /v1/operations/seal-envelope` | `ciphertext_base64` ≤ 1 MiB+tag, `nonce_base64` (12 B), `data_key_base64` (32 B), `format: regalia-envelope-v2` | the envelope document |
 
 `GET /v1/health/live` and `GET /v1/health/ready` are the only unauthenticated routes, and disclose
@@ -183,6 +192,10 @@ the caller knows what it chose.
 ```json
 {"request_id": "...", "code": "DENIED", "message": "...", "retryable": false}
 ```
+
+The table lists the usual retry flags. X.509 daily count exhaustion is the
+exception: `RESOURCE_EXHAUSTED` (429) has `retryable: false`; generic quota and
+concurrency limits retain `retryable: true`. Clients must honor the actual flag.
 
 | code | status | retryable | meaning |
 |---|---|---|---|

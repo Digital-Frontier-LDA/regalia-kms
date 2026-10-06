@@ -322,6 +322,16 @@ class OpenAPIContractTests(unittest.TestCase):
         self.assertTrue(used, "the example policy has no sign entry")
         self.assertLessEqual(used, declared, f"SignRequest.content_type omits {sorted(used - declared)}")
 
+    def test_sign_declares_the_daemon_development_x509_boundary(self):
+        source = (ROOT / "internal" / "operations" / "coordinator.go").read_text(encoding="utf-8")
+        content_type = re.search(r'const x509TBSContentType = "([^"]+)"', source)
+        self.assertIsNotNone(content_type, "the coordinator X.509 boundary constant moved")
+        declaration = self.spec["components"]["schemas"]["SignRequest"]["properties"]["content_type"]
+        self.assertIn(content_type.group(1), declaration["enum"])
+        self.assertIn("development", declaration["description"])
+        self.assertIn("32 KiB", declaration["description"])
+        self.assertIn("unhashed", declaration["description"])
+
 
 if __name__ == "__main__":
     unittest.main()
