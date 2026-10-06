@@ -198,7 +198,7 @@ def _env(tcti):
 
 
 def _tpm(run, tcti, *args, **kw):
-    done = run(["tpm2_" + args[0], *args[1:]], capture_output=True, env=_env(tcti), **kw)
+    done = membership.run_tpm2(run, ["tpm2_" + args[0], *args[1:]], _env(tcti), tcti, **kw)
     _flush_transients(run, tcti)            # each call's objects are in its saved context files; the next call loads them
     require(done.returncode == 0, "tpm2_%s failed: %s" % (args[0], (done.stderr or b"").decode("utf-8", "replace").strip()[-300:]))
     return done.stdout
