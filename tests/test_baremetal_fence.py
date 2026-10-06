@@ -6,7 +6,7 @@ import json
 from deploy.baremetal import fence as fe, heartbeat
 
 INVENTORY = {"schema": fe.INVENTORY_SCHEMA, "nodes": {
-    n: {"ilo": "ilo-%s.mgmt.example:443" % n, "ilo_cert_sha256": hashlib.sha256(b"ilo cert " + n.encode()).hexdigest(),
+    n: {"ilo": "ilo-%s.mgmt.example" % n, "ilo_cert_sha256": hashlib.sha256(b"ilo cert " + n.encode()).hexdigest(),
         "serial": "CZJ5%04dQ" % i, "uuid": "30373737-3632-435a-4a35-3%011d" % i} for i, n in enumerate("abc")}}
 BOXES = fe.inventory(INVENTORY)
 
@@ -37,7 +37,7 @@ from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from cryptography.x509.oid import NameOID  # noqa: E402
 
-from deploy.baremetal import membership as m, survivor as sv  # noqa: E402
+from deploy.baremetal import membership as m, redfish, survivor as sv  # noqa: E402
 
 
 def self_signed(directory):
@@ -64,10 +64,13 @@ class Ilo:
         self.privileges = {"LoginPriv": True, "VirtualPowerAndResetPriv": True, "RemoteConsolePriv": False, "UserConfigPriv": False,
                            "iLOConfigPriv": False, "VirtualMediaPriv": False}
         self.username, self.off_after = "fence", 0
-        self.back_on_after_reads = None
+        self.back_on_after_reads, self.reads_after_post = None, 0
 
     def answer(self, method, path, body, auth):
         self.requests.append((method, path, auth))
+        path = path.rstrip("/") + "/"                                  # redfish.py asks without the slash, the links have it
+        if path == "/redfish/v1/Managers/1/":
+            return {"FirmwareVersion": "2.82 Feb 06 2023"}
         if path == "/redfish/v1/AccountService/Accounts/":
             return {"Members": [{"@odata.id": "/redfish/v1/AccountService/Accounts/1/"}, {"@odata.id": "/redfish/v1/AccountService/Accounts/2/"}]}
         if path == "/redfish/v1/AccountService/Accounts/1/":
@@ -79,10 +82,15 @@ class Ilo:
                 self.off_after -= 1
                 if self.off_after < 0:
                     self.power = "Off"
-            reads = sum(1 for r in self.requests if r[1] == path)
-            if self.back_on_after_reads is not None and reads > self.back_on_after_reads:
-                self.power = "On"
-            return {"SerialNumber": self.serial, "UUID": self.uuid, "PowerState": "On" if self.power == "PoweringOff" else self.power}
+            if self.posts and self.back_on_after_reads is not None:
+                self.reads_after_post += 1
+                if self.reads_after_post > self.back_on_after_reads:
+                    self.power = "On"
+            return {"SerialNumber": self.serial, "UUID": self.uuid, "Model": "ProLiant DL360 Gen9", "Manufacturer": "HP",
+                    "PowerState": "On" if self.power == "PoweringOff" else self.power,
+                    "Actions": {"#ComputerSystem.Reset": {"target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset/",
+                                                          "ResetType@Redfish.AllowableValues": ["On", "ForceOff", "ForceRestart", "Nmi",
+                                                                                                "PushPowerButton"]}}}
         if path == "/redfish/v1/Systems/1/Bios/":
             return {"AutoPowerOn": "RestoreLastState"}
         if path == "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset/" and method == "POST":
@@ -101,7 +109,9 @@ class Stand(unittest.TestCase):
         self.servers = {}
         for n, ilo in self.ilos.items():
             self.servers[n] = self.serve(ilo, cert, key)
-        self.boxes = {n: dict(BOXES[n], ilo="127.0.0.1:%d" % self.servers[n].server_address[1], ilo_cert_sha256=self.pin) for n in ("b", "c")}
+        hosts = {"b": "localhost", "c": "127.0.0.1"}                   # the client speaks to port 443: each stand-in by its name
+        self.ports = {hosts[n]: self.servers[n].server_address[1] for n in ("b", "c")}
+        self.boxes = {n: dict(BOXES[n], ilo=hosts[n], ilo_cert_sha256=self.pin) for n in ("b", "c")}
         self.creds = {n: {"username": "fence", "password": "s3cret-" + n} for n in ("b", "c")}
         self.t = [1791201540.0]                      # 2026-10-05T11:59:00Z
 
@@ -143,7 +153,10 @@ class Stand(unittest.TestCase):
         self.t[0] += seconds
 
     def fence(self, nodes=("b", "c"), boxes=None):
-        return fe.fence(boxes or self.boxes, list(nodes), self.creds, now=self.now, sleep=self.sleep)
+        return fe.fence(boxes or self.boxes, list(nodes), self.creds, now=self.now, sleep=self.sleep, transport=self.transport)
+
+    def transport(self, box, user, password):
+        return redfish.PinnedHTTPS(box["ilo"], box["ilo_cert_sha256"], user, password, timeout=5, port=self.ports[box["ilo"]])
 
     def refused(self, reason, **kw):
         with self.assertRaises(m.Refused) as caught:
@@ -168,7 +181,7 @@ class Fence(Stand):
 
     def test_nothing_is_sent_to_an_iLO_whose_certificate_is_not_the_pinned_one(self):
         boxes = dict(self.boxes, b=dict(self.boxes["b"], ilo_cert_sha256="ab" * 32))
-        self.refused("presents a certificate that is not the one pinned for it: nothing sent", boxes=boxes)
+        self.refused("not the pinned %s: nothing was sent" % ("ab" * 32), boxes=boxes)
         self.assertEqual(self.ilos["b"].requests, [])                  # not one request, so no password
 
     def test_only_a_fence_only_account(self):
@@ -185,16 +198,18 @@ class Fence(Stand):
 
     def test_the_right_box_or_nothing(self):
         self.ilos["b"].serial = "CZJ59999Q"
-        self.refused("reports serial 'CZJ59999Q'; the inventory's is 'CZJ50001Q'")
+        self.refused("manages server 'CZJ59999Q', not CZJ50001Q: nothing is done to it")
         self.ilos["b"].serial, self.ilos["b"].uuid = BOXES["b"]["serial"], "30373737-3632-435a-4a35-399999999999"
         self.refused("reports UUID 30373737-3632-435a-4a35-399999999999")
+        self.ilos["b"].uuid = ""                                       # an iLO that shows no UUID at all
+        self.refused("b's iLO shows no system UUID")
         self.assertEqual(self.ilos["b"].posts, [])
 
     def test_a_server_that_never_reads_off_or_comes_back_is_not_fenced(self):
         self.ilos["b"].off_after = 10 ** 6
-        self.refused("still reads 'On' 60 s after ForceOff: not fenced")
+        self.refused("did not read Off within 60 s after ForceOff")
         self.setUp()
-        self.ilos["b"].back_on_after_reads = 2                         # Off at the first readback, On at the second
+        self.ilos["b"].back_on_after_reads = 1                         # Off at the client's readback, On at the fence's second
         self.refused("read Off, then 'On' 10 s later: something turned it back on")
 
     def test_two_readbacks_closer_than_the_wait_are_refused(self):
@@ -213,10 +228,10 @@ class Fence(Stand):
         with self.assertRaises(m.Refused):
             fe.inventory(bad)
         bad = json.loads(json.dumps(INVENTORY))
-        bad["nodes"]["b"]["ilo"] = "http://x"
+        bad["nodes"]["b"]["ilo"] = "ilo-b:8443"
         with self.assertRaises(m.Refused) as caught:
             fe.inventory(bad)
-        self.assertIn("b's ilo is a host or host:port", str(caught.exception))
+        self.assertIn("b's ilo is a host name or IPv4 address", str(caught.exception))
         with self.assertRaises(m.Refused) as caught:
             fe.inventory(INVENTORY, ["d"])
         self.assertIn("no box for d", str(caught.exception))
@@ -258,7 +273,10 @@ class OwnerFence(Stand):
         def sleep(seconds):
             sleeps.append(seconds)
             clock[0] += seconds
+        real = redfish.PinnedHTTPS
+        on_port = lambda host, pin, user, password: real(host, pin, user, password, timeout=5, port=self.ports[host])  # noqa: E731
         with unittest.mock.patch.object(fe.time, "sleep", sleep), unittest.mock.patch.object(fe.time, "time", lambda: clock[0]), \
+                unittest.mock.patch.object(fe.redfish, "PinnedHTTPS", on_port), \
                 contextlib.redirect_stdout(io.StringIO()) as said, \
                 contextlib.redirect_stderr(io.StringIO()) as complained:
             got = owner.main(["fence", "--inventory", inventory, "--node", "b", "--node", "c", "--credentials-fd", str(fd), "--out", out])
