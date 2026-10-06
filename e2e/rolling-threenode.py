@@ -302,8 +302,10 @@ def scenario(cluster):
     # CURRENT. A lease issued any time after step 5 would not show one issued from NEXT (regalia-kms-1e on #393)
     window = (int(on_next["since"]), int(rolled_back["since"]))
     from_next = {s: [e for e in cluster.audit_has(a, "sync", since=on_next["since"], event="sync-lease", subject=s, outcome="ALLOW")
-                     if window[0] < e.get("at", 0) < window[1]] for s in (b, c)}   # whole seconds: the second step 5 began in
-    # may hold a lease from CURRENT (audit_has takes it), and no lease from NEXT
+                     if window[0] < e.get("at", 0) <= window[1]] for s in (b, c)}   # whole seconds: the second step 5
+    # began in may hold a lease from CURRENT (audit_has takes it), and no lease from NEXT; the second step 6 began in may
+    # still hold one from NEXT (a stops in it, and its CURRENT boot is many seconds away). Under lease v2 a's first leases
+    # come a lease after its reboot, so they can fall in that very second (#489's final run: b's at the window's end)
     ok(all(from_next.values()),
        "the leases a issued to b and c while it was on %s (step 5, before its roll back in step 6) are in a's stream" % NEXT_IMAGE,
        {"window": window, "in_stream": {s: len(v) for s, v in from_next.items()},
