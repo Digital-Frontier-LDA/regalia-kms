@@ -151,7 +151,9 @@ class LeaseJudge:
         # and the authorization's install, plus a round. Serving on under its old lease would make the switch late
         bound_s = max(t_off // 1000 + lease.MAX_LIFETIME + admission.MARGIN, t_auth // 1000) + SLACK_S
         evidence = {"serving lines since the others went off": lines, "admission.json": {"mode": document.get("mode"),
-                    "serve_until_boottime_ms": document.get("serve_until_boottime_ms")}, "switch bound": bound_s}
+                    "serve_until_boottime_ms": document.get("serve_until_boottime_ms")}, "switch bound": bound_s,
+                    # and its journal: a round that raised before recording (48 on #507) would show there
+                    "admission journal": self.cluster.journal(node, "admission", lines=60)[-2500:]}
         return {"a not-serving round precedes the RECOVERY line (no lease-to-recovery without a gap)": (bool(denied_before), evidence),
                 "it switched to recovery no later than its lease's end or the install, whichever was later":
                     (first_recovery is not None and first_recovery <= bound_s, {"switched at": first_recovery, "bound": bound_s}),
