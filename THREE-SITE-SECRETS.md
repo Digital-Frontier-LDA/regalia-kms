@@ -6,8 +6,8 @@ role; "n/a" always carries its reason. Companion to [THREE-SITE-THREAT-MODEL.md]
 
 Custody roles: **Owner** (the principal, sole shareholder); **Technical director** (reaches the
 datacenter tokens, never the PINs); **Shareholders** (k-of-n case holders); **Node** (the machine,
-no human); **Fencing authority** (today `regalia-fence`, FENCING.md; decided to become two of {a, b, c, the
-owner}, #351, not built).
+no human); **Fencing authority** (today `regalia-fence`, FENCING.md; under ADR-0002 D32 there is none: each
+server's lease is co-signed by 2 of the 3 servers' TPM keys, not built).
 
 **The machines, decided (ADR-0002 D28 and #351, 2026-10-04):** the three KMS servers and one offline signing laptop, and nothing else
 of ours. Offline keys are Shamir-held software keys reconstructed only in that laptop's RAM for a signing
