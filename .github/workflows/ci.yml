@@ -129,9 +129,20 @@ jobs:
             https://github.com/etcd-io/etcd/releases/download/v3.6.15/etcd-v3.6.15-linux-amd64.tar.gz
           echo "$ETCD_SHA256  $RUNNER_TEMP/etcd.tar.gz" | sha256sum --check --strict
           tar --extract --gzip --file "$RUNNER_TEMP/etcd.tar.gz" \
-            --directory "$RUNNER_TEMP" --strip-components=1 etcd-v3.6.15-linux-amd64/etcd
-          chmod 0755 "$RUNNER_TEMP/etcd"
-          echo "ETCD_BIN=$RUNNER_TEMP/etcd" >> "$GITHUB_ENV"
+            --directory "$RUNNER_TEMP" --strip-components=1 etcd-v3.6.15-linux-amd64/etcd \
+            etcd-v3.6.15-linux-amd64/etcdctl etcd-v3.6.15-linux-amd64/etcdutl
+          chmod 0755 "$RUNNER_TEMP/etcd" "$RUNNER_TEMP/etcdctl" "$RUNNER_TEMP/etcdutl"
+          {
+            echo "ETCD_BIN=$RUNNER_TEMP/etcd"
+            echo "ETCDCTL_BIN=$RUNNER_TEMP/etcdctl"
+            echo "ETCDUTL_BIN=$RUNNER_TEMP/etcdutl"
+          } >> "$GITHUB_ENV"
+
+      - name: the lone survivor's etcd take-over against the real etcd (#432)
+        env:
+          # with this set, missing etcd binaries fail the test instead of skipping it
+          REGALIA_EXPECT_ETCD: "1"
+        run: python3 -Es -m unittest -v tests.test_baremetal_takeover_etcd
 
       - name: test (both modules, race + vet)
         env:
