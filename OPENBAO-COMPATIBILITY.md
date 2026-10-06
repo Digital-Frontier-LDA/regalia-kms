@@ -4,7 +4,9 @@ Contract version **2 (draft)**, for #120. It says what `openbao-plugin-kms-regal
 against which upstream versions, and through which KMS operations. Version 2 changes one thing: a
 CA key signs only what the KMS has inspected (see "A CA key signs only what the KMS has read").
 The development adapter in [`adapters/openbao`](adapters/openbao) exercises auto-unseal and
-Transit signing against the pinned real server with software tokens. It admits development only,
+Transit signing against the pinned real server with software tokens. Its separate PKI experiment
+also exercises leaf issuance, CRLs and internal ACME through a server-owned development profile
+([issuing policy](adapters/openbao/X509-POLICY.md)). It admits development only,
 not production. #121 implements auto-unseal, #122 External Keys, and #123 gates every production
 claim on software and witnessed hardware evidence. Until #123 passes for a row, that row is a design target and
 not a support claim.
@@ -43,7 +45,7 @@ The SDK lets one binary serve two interfaces (`ServeOpts.WrapperFactoryFunc` and
 |---|---|---|
 | `wrapping.Wrapper` | Auto-unseal (`seal` stanza) | Supported, #121 |
 | `kms.KMS` / `kms.Key`: `Sign`, `Verify`, `ExportPublic` with a signing key | External Keys for Transit signing | Supported with the limits below, #122 |
-| `kms.KMS` / `kms.Key`: `Sign`, `Verify`, `ExportPublic` with a CA key | External Keys for a PKI issuer | Supported **only with inspection by the KMS**, which the KMS does not serve yet (#122). Until it does, a PKI issuer is not supported. |
+| `kms.KMS` / `kms.Key`: `Sign`, `Verify`, `ExportPublic` with a CA key | External Keys for a PKI issuer | Separate development experiment with daemon inspection, frozen profile and durable counts (#122). The normal adapter still refuses CA mappings; production support is gated by #123. |
 | `kms.Key`: `Encrypt`, `Decrypt` | Transit encryption with an external key | **Not supported**: returns `kms.ErrNotImplemented` |
 | `wrapping.KeyExporter` | Exporting the seal key | **Never**: the KMS has no export |
 | SSH engine with external keys | | **Not claimed**: no upstream support to test against |
@@ -181,10 +183,12 @@ accepted in place of the thing being signed:
   a digest by `golang.org/x/crypto/ocsp` (to confirm in #122), so OCSP with a mapped CA key is not
   supported; revocation is by CRL, or by a delegated responder key decided in #122.
 
-The KMS does not serve this yet. The content type, the parser and the profile are a new reviewed
-slice of #122, and **until they exist a PKI issuer is not supported**: there is no weaker mode to
-fall back to. #122 also has to show, on a real 2.7.1 server, that the full bytes reach the plugin for
-leaf issuance, for signing an intermediate, and for CRLs.
+The opt-in development slice of #122 now provides the strict parser and frozen daemon profile,
+with real 2.7.1 leaf/CRL and internal ACME evidence. Its profile accepts only P-256/SHA-256,
+DNS server leaves and bounded CRLs; CA certificate issuance and other identity forms are refused.
+The signer receives only the validated payload's digest. The normal adapter continues to refuse
+CA mappings. Broader issuing profiles, hardware qualification and recovery remain separate gates;
+see [the implementation boundary](adapters/openbao/X509-POLICY.md).
 
 Inspection bounds what OpenBao can make the CA sign. Three things bound the rest, and they hold
 even where inspection has a gap:
@@ -406,12 +410,14 @@ the server today, for a decision on #120 rather than a silent change:
    explicit refusal above. Serving any of them is a new reviewed operation, not a plugin option.
 7. **Policy shape for the seal object.** It needs `seal-envelope` and `release-secret` on one object.
    #121 confirms the policy and manifest loaders accept that as two exact entries.
-8. **Inspected X.509 signing is not served.** A PKI issuer needs a `sign` content type for a
-   to-be-signed certificate or CRL, a parser at the trust boundary, an issuing profile in the purpose
-   policy, and the negative tests for each profile rule. Without it this contract supports no PKI
-   issuer. This is the largest item and belongs to #122.
-9. **The audit event carries no digest of what was signed.** The reconciliation above needs the
-   SHA-256 of the inspected payload for CA objects. The schema excludes payload fields on purpose,
-   so this is a reviewed addition for one class of object, not a general payload field.
-10. **Daily caps exist for Cosmos amounts only.** A plain count cap per object for `sign` is needed
-    to bound a CA key's daily output.
+8. **Development X.509 enforcement implemented; production qualification open.** The daemon
+   parses bounded TBS input, enforces its frozen profile and checks the backend-enforced key pin.
+   The separate PKI experiment tests refusals before signing. The normal adapter's CA factory
+   remains disabled; #122/#123 acceptance stays open.
+9. **Optional signing intent implemented; reconciliation remains open.** X.509 audit events and
+   reservations bind the payload digest, profile, artifact kind and intended key fingerprint.
+   They record no raw payload or certificate. Collectors must support the fields before enabling
+   profiles; older binaries cannot reopen new intent-bearing journals.
+10. **Development CA counts implemented.** Independent durable leaf/CRL counts remain spent
+    after ambiguous outcomes and survive policy/profile revisions. Trusted time, off-host rollback
+    evidence and distributed/hardware fencing still require qualification.
