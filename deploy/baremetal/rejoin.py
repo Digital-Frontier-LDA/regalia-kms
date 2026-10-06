@@ -277,9 +277,35 @@ class Host(tk.Host):
         time.sleep(seconds)
 
 
-def main(argv=None, host=None):
+def audited_command(host, chain, me, command, node=None, line=None, member_id=None, record=None):
+    """One rejoin command between its REQUEST and its outcome on the survivor trail (G6, takeover.audited)."""
+    fields = {"node_id": me, "subject": node or me, "epoch": chain[-1]["epoch"]}
+
+    def act():
+        if command == "admit":
+            got_line, got_id = admit(host, chain, me, node)
+            return {"initial_cluster": got_line, "member_id": got_id}
+        if command == "join":
+            export = join(host, chain, me, line, member_id)
+            done = {"member_id": member_id, "exported": export or ""}
+            if export:
+                record_ = json.loads(host.read(export + ".json"))
+                done.update(divergent_revision=record_["revision"], divergent_db_sha256=record_["db_sha256"])
+            return done
+        if command == "finish":
+            finish(host, chain, me)
+            return {}
+        {"promote": promote, "abandon": abandon}[command](host, chain, me, node)
+        return {}
+    return tk.audited(record, "rejoin-" + command, fields, act)
+
+
+def main(argv=None, host=None, record=None):
+    from deploy.baremetal import trails
     parser = argparse.ArgumentParser(prog="rejoin", description=__doc__.split("\n\n")[0])
     parser.add_argument("--config", required=True, help="the node's configuration (node.json)")
+    parser.add_argument("--audit-log", default=trails.where("survivor"),
+                        help="the survivor trail (default %(default)s, its place in trails.py's registry)")
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("admit", "promote", "abandon"):
         sub.add_parser(name).add_argument("--node", required=True, help="the returning node")
@@ -294,13 +320,9 @@ def main(argv=None, host=None):
         host = host or Host()
         chain = tk.chain_of(nodemod.read_published(node.path(nodemod.PUBLISHED)), node.cfg["root_key"])
         require(chain[-1]["epoch"] == node.manifest()["epoch"], "the published chain's tip is not the anchored manifest")
-        me = node.node_id
-        if args.command == "join":
-            join(host, chain, me, args.initial_cluster, args.member_id)
-        elif args.command == "finish":
-            finish(host, chain, me)
-        else:
-            {"admit": admit, "promote": promote, "abandon": abandon}[args.command](host, chain, me, args.node)
+        audited_command(host, chain, node.node_id, args.command, node=getattr(args, "node", None),
+                        line=getattr(args, "initial_cluster", None), member_id=getattr(args, "member_id", None),
+                        record=record or tk.trail_writer(args.audit_log))
     except (Refused, OSError, ValueError, KeyError) as refused:
         say("REFUSED: %s" % refused)
         return 1

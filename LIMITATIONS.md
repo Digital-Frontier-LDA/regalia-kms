@@ -81,6 +81,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       - from the first returner's promotion until the second's, the cluster is two voting members. Losing either stops
         every commit until the other returner is promoted, or another take-over. Admitting both as learners before
         either promotion (etcd's --max-learners 2) would shorten that window; it is not done;
+    - the survivor trail (G6). takeover.py and rejoin.py write each step to /var/log/regalia/survivor.jsonl, shipped by
+      regalia-audit-ship@survivor. Each step writes a REQUEST before it acts, then ALLOW (the cluster, the revisions, the
+      state epoch, the divergent tail's digest) or DENY. Not yet:
+      - the collector does not compare a take-over's state epoch with the leases the nodes ask for afterwards;
+      - the fence runs off the nodes and writes no trail. Its evidence lives only in the signed authorization;
     - the daemon's halts (a peer heard below the quarantine epoch);
     - approvals naming their spending node (1e).
     Until they land, `full` is a recorded intent the daemon does not act on;

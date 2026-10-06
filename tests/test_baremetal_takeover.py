@@ -272,3 +272,60 @@ class Main(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Trail(unittest.TestCase):
+    """G6 (#432): every take-over on the survivor trail, its REQUEST before it acts."""
+
+    def setUp(self):
+        self.chain, self.host, self.lines = chain(), FakeHost(), []
+        self.signed = authorization(self.chain[-1])
+
+    def take(self, record=None, signed=None):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return tk.take_over(self.host, signed or self.signed, self.chain, "a", NOW, sign, record or self.lines.append)
+
+    def test_a_take_over_is_requested_then_allowed_with_the_store_it_left(self):
+        self.take()
+        self.assertEqual([(e["event"], e["outcome"]) for e in self.lines], [("takeover", "REQUEST"), ("takeover", "ALLOW")])
+        allowed = self.lines[-1]
+        self.assertEqual((allowed["node_id"], allowed["quarantine_epoch"], allowed["state_epoch"], allowed["cluster_id"],
+                          allowed["revision_before"], allowed["applied_revision"]), ("a", 2, 2, "%016x" % CLUSTER, 4711, 4700))
+        self.assertEqual(len(allowed["authorization_sha256"]), 64)
+        self.assertNotIn("authorization", allowed)                   # by its digest, never the whole
+
+    def test_a_refusal_is_a_deny_with_its_reason(self):
+        with self.assertRaises(m.Refused):
+            self.take(signed=authorization(self.chain[-1], scope="stateless"))
+        self.assertEqual([e["outcome"] for e in self.lines], ["REQUEST", "DENY"])
+        self.assertIn("a take-over needs", self.lines[-1]["reason"])
+
+    def test_nothing_is_done_unrecorded(self):
+        def broken(event):
+            raise OSError("the trail cannot be written")
+        with self.assertRaises(OSError):
+            self.take(record=broken)
+        self.assertEqual(self.host.calls, [])                          # not one command before the REQUEST was written
+
+    def test_a_stop_part_way_is_incomplete(self):
+        real = self.host.run
+        self.host.run = lambda argv, input=None: (_ for _ in ()).throw(RuntimeError("killed")) if argv[1:2] == ["start"] else real(argv, input)
+        with self.assertRaises(RuntimeError):
+            self.take()
+        self.assertEqual(self.lines[-1]["outcome"], "INCOMPLETE")
+        self.assertIn("RuntimeError: killed", self.lines[-1]["reason"])
+
+    def test_the_trail_written_is_a_chain_the_shipper_takes(self):
+        from deploy.baremetal import trails
+        import os
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        path = os.path.join(d, "survivor.jsonl")
+        self.take(record=tk.trail_writer(path))
+        result = trails.verify(path)                                  # raises at a break
+        self.assertEqual((result["lines"], result["chained"], result["legacy"], result["torn"]), (2, 2, 0, 0))
+        with open(path) as f:
+            events = [json.loads(line) for line in f]
+        self.assertEqual([(e["seq"], e["outcome"]) for e in events], [(1, "REQUEST"), (2, "ALLOW")])
+        self.assertTrue(all(e["time"].endswith("Z") for e in events))

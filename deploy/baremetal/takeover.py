@@ -49,6 +49,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 from deploy.baremetal import etcdconf, membership, opstate, survivor
 
@@ -164,10 +165,52 @@ def _start(host, *units, verb="start"):
         require(done.returncode == 0, "%s failed (%d)" % (" ".join(argv), done.returncode))
 
 
-def run(host, signed, chain, node_id, now, sign):
+def audited(record, event, fields, act):
+    """`act()` between its REQUEST and its outcome on the survivor trail (G6; trails.py's rule: an operation is never
+    done unrecorded, so a REQUEST that cannot be written stops it before it acts). ALLOW carries what act() returns
+    (a dict of facts), DENY the refusal, INCOMPLETE anything else that stopped it part way (run it again)."""
+    from deploy.baremetal import convergence
+    record(dict({"event": event, "outcome": "REQUEST", "reason": ""}, **fields))
+    try:
+        done = act() or {}
+    except Refused as refused:
+        record(dict({"event": event, "outcome": "DENY", "reason": convergence._printable(str(refused))}, **fields))
+        raise
+    except Exception as error:
+        record(dict({"event": event, "outcome": "INCOMPLETE", "reason": convergence._printable("%s: %s" % (type(error).__name__, error))},
+                    **fields))
+        raise
+    record(dict({"event": event, "outcome": "ALLOW", "reason": ""}, **dict(fields, **done)))
+    return done
+
+
+def authorization_fields(signed, node_id):
+    """What a take-over's trail lines name: the node, the epoch and the authorization by its digest (never the whole)."""
+    import hashlib
+    try:
+        digest = hashlib.sha256(membership.canonical(signed)).hexdigest()
+        epoch = signed["authorization"]["quarantine_epoch"]
+    except (TypeError, KeyError, ValueError):
+        digest, epoch = "", 0
+    return {"node_id": node_id, "quarantine_epoch": epoch if isinstance(epoch, int) else 0, "authorization_sha256": digest}
+
+
+def take_over(host, signed, chain, node_id, now, sign, record):
+    """run(), on the survivor trail: its REQUEST first, then ALLOW with the store it left, or DENY."""
+    facts = {}
+
+    def act():
+        run(host, signed, chain, node_id, now, sign, facts)
+        return facts
+    return audited(record, "takeover", authorization_fields(signed, node_id), act)
+
+
+def run(host, signed, chain, node_id, now, sign, facts=None):
     """The take-over (module docstring), on `host` (run(argv, input=None) -> CompletedProcess; read, write, remove a
     path). `chain`: the verified membership chain, oldest first, its last the current manifest. `sign(raw)`: r || s hex
-    by this node's signing key. Returns the state epoch the store holds."""
+    by this node's signing key. Returns the state epoch the store holds; `facts`, if given, gets what the trail says of
+    it (the cluster, the revisions, the state epoch)."""
+    facts = {} if facts is None else facts
     current = chain[-1]
     # 1. the scope
     _, scope = survivor.in_force(signed, current, node_id, now)
@@ -181,6 +224,7 @@ def run(host, signed, chain, node_id, now, sign):
     cluster_id, applied_revision, _, boot = applied(host.read(APPLIED))
     require(boot == host.read(BOOT_ID).strip(), "applied.json is from boot %s, not this one" % boot)
     say("this node applied revision %d of cluster %s" % (applied_revision, cluster_id))
+    facts.update(cluster_id=cluster_id, applied_revision=applied_revision)
     # 3. the daemon, then etcd, stopped (62: the daemon would write its session entry the moment etcd took writes
     # again, and the state epoch is to be the first write)
     say("%s stopped (%s)" % (DAEMON, _stop(host, DAEMON)))
@@ -204,6 +248,7 @@ def run(host, signed, chain, node_id, now, sign):
     _start(host, UNIT)
     # 6. alone and whole
     revision = alone(host, node_id, cluster_id, held)
+    facts.update(backend_revision=held, revision_before=revision)
     say("etcd is a cluster of %s alone (cluster %s, revision %d)" % (node_id, cluster_id, revision))
     # 7. the first write
     version, previous = current_state_epoch(host, chain, cluster_id)
@@ -223,6 +268,7 @@ def run(host, signed, chain, node_id, now, sign):
     require(not forcing(host), "%s still carries the take-over drop-in after its removal: the take-over has not finished" % UNIT)
     alone(host, node_id, cluster_id, revision)
     _start(host, DAEMON)
+    facts.update(state_epoch=auth["quarantine_epoch"])
     say("etcd runs on its normal configuration, %s alone, at state epoch %d; %s started" % (node_id, auth["quarantine_epoch"], DAEMON))
     return auth["quarantine_epoch"]
 
@@ -271,9 +317,25 @@ def chain_of(envelopes, root_key):
     return out
 
 
-def main(argv=None, host=None, now=None, signer=None):
+def trail_writer(path):
+    """record(event) for the survivor trail at `path`: hash-chained, whole or not at all (trails.py, #278); a trail that
+    cannot be written is an OSError, so the step it would record is not done."""
+    from deploy.baremetal import trails
+
+    def record(event):
+        try:
+            trails.append(path, dict(event, time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+        except trails.Refused as refused:
+            raise OSError(str(refused)) from refused
+    return record
+
+
+def main(argv=None, host=None, now=None, signer=None, record=None):
+    from deploy.baremetal import trails
     parser = argparse.ArgumentParser(prog="takeover", description=__doc__.split("\n\n")[0])
     parser.add_argument("--config", required=True, help="the node's configuration (node.json)")
+    parser.add_argument("--audit-log", default=trails.where("survivor"),
+                        help="the survivor trail (default %(default)s, its place in trails.py's registry)")
     sub = parser.add_subparsers(dest="command", required=True)
     go = sub.add_parser("run", help="take etcd over as the lone survivor")
     go.add_argument("--authorization", required=True, help="the owner's signed survivor authorization (JSON)")
@@ -290,7 +352,7 @@ def main(argv=None, host=None, now=None, signer=None):
             pem = host.read(signkey.PCR_PUBLIC_KEY_PATH).encode()
             signer = lambda raw: signkey.sign(raw, pem, node.tcti, node.run)  # noqa: E731
         clock = now if now is not None else node.clock()()
-        run(host, signed, chain, node.node_id, clock, signer)
+        take_over(host, signed, chain, node.node_id, clock, signer, record or trail_writer(args.audit_log))
     except (Refused, OSError, ValueError, KeyError) as refused:
         say("REFUSED: %s" % refused)
         return 1
