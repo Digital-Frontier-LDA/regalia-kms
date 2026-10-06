@@ -77,6 +77,37 @@ class RealCard(unittest.TestCase):
             oa.verify(load("attest-sig.pem"), self.card, "SIG", anchors=hierarchy.anchors)
 
 
+class ProducerRun(unittest.TestCase):
+    """The producer's REAL output (regalia-ceremony#140, owner-cards.py, run by regalia-kms-24 on YubiKey 35718625, fw 5.7.4,
+    2026-10-06): the disc's owner-card-<serial>/ as written, its attestations read by certificates() and each verified
+    under the real, pinned Yubico trust, and everything the producer's facts file states about the card checked against
+    what the card signed. The card is a bench card, so cardrecord refuses it at genesis; this is the consumer's half of
+    the cross-repo check, not a ceremony."""
+
+    def setUp(self):
+        import json
+        self.dir = os.path.join(FIXTURES, "owner-card-run")
+        with open(os.path.join(self.dir, "owner-card-35718625", "owner-card-35718625.json")) as f:
+            self.facts = json.load(f)
+        self.certs = oa.certificates(self.dir)
+        self.cards = oa.devices(self.certs)
+
+    def test_each_slot_is_what_the_producer_recorded(self):
+        from deploy.baremetal import cardrecord
+        self.assertEqual(len(self.cards), 1)
+        for slot in ("sig", "dec", "aut"):
+            with self.subTest(slot):
+                digest = self.facts["attestation_sha256"][slot]
+                self.assertIn(digest, self.certs, "the facts' %s digest is not one of the disc's certificates" % slot)
+                got = oa.verify(self.certs[digest], self.cards, slot.upper())
+                self.assertEqual((got["serial"], got["source"], got["touch"], got["firmware"]),
+                                 (self.facts["serial"], oa.GENERATED, cardrecord.TOUCH_FIXED, self.facts["firmware"]))
+                self.assertEqual(got["key"].hex(), self.facts["keys"][slot]["key"])
+                self.assertEqual(got["fingerprint"], self.facts["keys"][slot]["fingerprint"])
+        self.assertEqual(self.facts["keys"]["sig"]["fingerprint"], self.facts["primary"])
+        self.assertEqual(cardrecord._ssh_ed25519(self.facts["ssh"], "ssh"), self.facts["keys"]["aut"]["key"])
+
+
 class Hierarchy:
     """A stand-in for Yubico's: a root, "Yubico Attestation Intermediate B 1", "Yubico OPGP Attestation B 1" and one card
     certificate "YubiKey OPGP Attestation" (shared by the cards, as Yubico's batch key is), signing leaves with Yubico's
