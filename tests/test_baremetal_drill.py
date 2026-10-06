@@ -330,5 +330,78 @@ class Integers(unittest.TestCase):
                 drill.report("r1", "a", "b", {"passed": True, "rtt": [1, {"x": bad}]}, {})
 
 
+class FakeIlo:
+    def __init__(self, node, log):
+        self.node, self.log = node, log
+
+    def force_off(self):
+        self.log.append(("off", self.node))
+        return {"outcome": "Off", "node": self.node}
+
+    def power_on(self):
+        self.log.append(("on", self.node))
+        return {"outcome": "On", "node": self.node}
+
+
+class HardwareBackend(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d)
+        self.journal = drill.Journal(os.path.join(self.d, "faults.jsonl"))
+        self.log, self.server = [], FakeServer()
+
+        def ssh(node, argv, input=None):
+            self.log.append(("ssh", node, argv[0], [e["action"] for e in self.journal.pending()]))
+            if argv == ["systemctl", "reboot"]:
+                return subprocess.CompletedProcess(argv, 255, "", "Connection closed by remote host")
+            return self.server(node, argv, input)
+
+        def ilo(node):
+            pending = [e["action"] for e in self.journal.pending()]
+            self.log.append(("journal at iLO call", node, pending))
+            return FakeIlo(node, self.log)
+        self.hw = drill.Hardware(self.journal, ssh, ilo)
+
+    def test_every_fault_is_journaled_before_it_is_injected_and_undone_after(self):
+        self.hw.power_off("c")
+        self.assertEqual(self.log[:2], [("journal at iLO call", "c", ["power-off"]), ("off", "c")])
+        self.hw.power_on("c")
+        self.assertEqual(self.journal.pending(), [])
+        self.hw.restart("b")                                             # 255: the connection dropping with the reboot
+        self.assertEqual(self.log[-1], ("ssh", "b", "systemctl", ["restart"]))
+        self.hw.restarted("b")
+        self.hw.partition("a")
+        self.assertEqual([e["action"] for e in self.journal.pending()], ["partition"])
+        self.hw.heal("a")
+        self.assertEqual((self.journal.pending(), self.server.table), ([], False))
+
+    def test_restore_powers_on_through_the_ilo_and_heals(self):
+        self.hw.power_off("c")
+        self.hw.partition("a")
+        restored, failed = self.journal.restore(self.hw.undoers())
+        self.assertEqual(failed, [])
+        self.assertIn(("on", "c"), self.log)
+        self.assertFalse(self.server.table)
+
+    def test_scenarios_bind_each_their_own_node(self):
+        # a regression: lambdas read a shared name, and every scenario hit the last planned node
+        judged = []
+        built = drill.scenarios(self.hw, {"S1": "c", "S2": "b", "S3": "a", "S5": ["a", "b"]},
+                                lambda name, ctx: judged.append((name, ctx.get("node"))) or {"seen": (True, name)})
+        out = drill.run(built, abort=lambda: None, restore=lambda: None)
+        self.assertTrue(out["passed"], out)
+        self.assertIn(("off", "c"), self.log)
+        self.assertIn(("on", "c"), self.log)
+        self.assertEqual([n for name, n in judged if name in ("S1", "S2", "S3")], ["c", "b", "a"])
+        self.assertEqual([n for name, n in judged if name == "S5-wait"], ["a", "b"])
+        self.assertEqual(self.journal.pending(), [])                     # every fault the run made, undone by it
+        self.assertEqual([s["scenario"] for s in out["scenarios"]], ["S1", "S2", "S3", "S5"])
+        self.assertIn("recovered", out["scenarios"][0])
+
+    def test_a_plan_with_no_scenario_is_refused(self):
+        with self.assertRaises(m.Refused):
+            drill.scenarios(self.hw, {}, lambda name, ctx: {})
+
+
 if __name__ == "__main__":
     unittest.main()

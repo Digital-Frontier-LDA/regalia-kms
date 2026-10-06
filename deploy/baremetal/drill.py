@@ -34,6 +34,11 @@ THIS SLICE (3e): the runner's frame, every seam a callable:
     the owner's card (kept for owner acts; it signs only S4's recovery authorization). Signing and shipping come with
     ed's mTLS client.
 
+  * Hardware: the real servers' faults over a backend interface (power_off/power_on through d9's redfish.Client, restart
+    in-band over SSH, partition/heal), every fault journaled before it is injected and its undo marked after; and
+    scenarios(backend, plan, judge): S1, S2, S3 and S5 as run() takes them, each with its own node and a recover step,
+    judged by the caller's predicates. The tier-N fixture's backend (e2e/lib/drillfixture.py) runs the same scenarios.
+
 NOT IN THIS SLICE (each its own PR, by its owner): the Redfish client (d9, redfish.py, shared with D32's G1 fence),
 the load generator (ed, e2e/lib/loadgen.py), the predicates (48, e2e/lib/drills.py), the Gate's gate-serving line
 (ed), signing (the KMS's drill-report key) and shipping the report. Until they land, `run` has nothing to inject or judge with.
@@ -184,6 +189,12 @@ class Journal:
         done = {e["id"] for e in self.entries() if e.get("kind") == "undone"}
         return [e for e in reversed(self.entries()) if e.get("kind") == "fault" and e["id"] not in done]
 
+    def undone_matching(self, undo):
+        """Every pending fault whose undo is `undo`, marked undone (a power-on or a heal done by the run itself)."""
+        for entry in self.pending():
+            if entry["undo"] == undo:
+                self.undone(entry["id"])
+
     def restore(self, undoers, torn_checked=False):
         """Each pending fault's undo, newest first, through undoers[undo["action"]](node); each marked undone once it
         succeeds. Returns (done, failed): a failed undo stays pending, said, and is tried again next time. `torn_checked`:
@@ -287,8 +298,11 @@ def run(scenarios, abort, restore, clock=time.time):
             entry["predicates"] = {name: {"ok": bool(good), "evidence": evidence}
                                    for name, (good, evidence) in scenario["judge"]().items()}
             entry["passed"] = bool(entry["predicates"]) and all(p["ok"] for p in entry["predicates"].values())
-            entry["ended_ms"] = _ms(clock)
             check("after judging %s" % scenario["name"])
+            if scenario.get("recover"):                # the fault undone (a server powered back on, a cut healed)
+                entry["recovered"] = scenario["recover"]()
+                check("after recovering %s" % scenario["name"])
+            entry["ended_ms"] = _ms(clock)
     try:
         with signals_stop_the_run():
             scenarios_in_turn()
@@ -334,6 +348,94 @@ def ssh_runner(host_of, user="root"):
         return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "%s@%s" % (user, host_of(node)),
                                " ".join(shlex.quote(a) for a in argv)], input=input, capture_output=True, text=True, timeout=60)
     return ssh
+
+
+class Hardware:
+    """The real servers' faults, each JOURNALED before it is injected (Journal.fault, fsynced), its undo marked when the
+    run itself undoes it:
+      power_off / power_on   redfish.Client (d9, #501): ForceOff or On, PowerState read back; the record returned
+      restart                in-band `systemctl reboot` over SSH (iLO 4 has no GracefulRestart); its undo, should the
+                             server not come back, is a power-on
+      partition / heal       S3's Partition (the dead-man timer first)
+    `redfish_for(node)` -> a redfish.Client for that server; `ssh(node, argv, input=None)`."""
+
+    def __init__(self, journal, ssh, redfish_for, ttl=600):
+        self.journal, self.ssh, self.redfish_for, self.ttl = journal, ssh, redfish_for, ttl
+        self.cut = Partition(ssh)
+
+    def power_off(self, node):
+        self.journal.fault("power-off", node, {"action": "power-on", "node": node})
+        return self.redfish_for(node).force_off()
+
+    def power_on(self, node):
+        record = self.redfish_for(node).power_on()
+        self.journal.undone_matching({"action": "power-on", "node": node})
+        return record
+
+    def restart(self, node):
+        self.journal.fault("restart", node, {"action": "power-on", "node": node})
+        done = self.ssh(node, ["systemctl", "reboot"])
+        # the connection drops as the server goes down (OpenSSH exits 255): that is the reboot taking, not a failure
+        require(done.returncode in (0, 255), "systemctl reboot on %s failed (exit %s): %s" % (node, done.returncode, (done.stderr or "").strip()[:200]))
+        return {"node": node, "reboot_asked_ms": int(time.time() * 1000)}
+
+    def restarted(self, node):
+        """The restart's server is back (the caller has seen it serve): its fault is undone."""
+        self.journal.undone_matching({"action": "power-on", "node": node})
+
+    def partition(self, node):
+        self.journal.fault("partition", node, {"action": "unpartition", "node": node})
+        return self.cut.install(node, self.ttl)
+
+    def heal(self, node):
+        record = self.cut.remove(node)
+        self.journal.undone_matching({"action": "unpartition", "node": node})
+        return record
+
+    def undoers(self):
+        return {"power-on": self.power_on, "unpartition": self.heal}
+
+
+def scenarios(backend, plan, judge):
+    """S1, S2, S3 and S5 as run() takes them, over any backend with power_off/power_on/restart/restarted/partition/heal
+    (Hardware here; the tier-N fixture's in e2e/lib/drillfixture.py). `plan`: {"S1": node, "S2": node, "S3": node,
+    "S5": [nodes in order]}; only the scenarios it names. `judge(name, context)` -> {predicate: (ok, evidence)}, where
+    context holds the injection's times (ms) and records; the predicates are the shared ones (e2e/lib/drills.py). S4
+    needs the owner's recovery authorization: not here yet."""
+    def now():
+        return int(time.time() * 1000)
+
+    # each scenario in its own scope: its node is bound when it is built, never read later from a shared name
+    def s1(node):
+        ctx = {"node": node}
+        return {"name": "S1", "inject": lambda: ctx.update(t_inject_ms=now(), off=backend.power_off(node)) or ctx,
+                "judge": lambda: judge("S1", ctx), "recover": lambda: backend.power_on(node)}
+
+    def s2(node):
+        ctx = {"node": node}
+        return {"name": "S2", "inject": lambda: ctx.update(t_inject_ms=now(), restart=backend.restart(node)) or ctx,
+                "judge": lambda: judge("S2", ctx), "recover": lambda: backend.restarted(node)}
+
+    def s3(node):
+        ctx = {"node": node}
+        return {"name": "S3", "inject": lambda: ctx.update(t_inject_ms=now(), cut=backend.partition(node)) or ctx,
+                "judge": lambda: judge("S3", ctx), "recover": lambda: ctx.update(healed=backend.heal(node), t_heal_ms=now())}
+
+    def s5(order):
+        ctx = {"restarts": []}
+
+        def roll():
+            for node in order:              # one at a time; the judge waits for each to serve again before the next
+                ctx["restarts"].append({"node": node, "t_inject_ms": now(), "restart": backend.restart(node)})
+                judge("S5-wait", dict(ctx, node=node))
+                backend.restarted(node)
+            return ctx
+        return {"name": "S5", "inject": roll, "judge": lambda: judge("S5", ctx)}
+
+    built = [make(plan[name]) for name, make in (("S1", s1), ("S2", s2), ("S3", s3), ("S5", lambda order: s5(list(order))))
+             if name in plan]
+    require(built, "the plan names no scenario")
+    return built
 
 
 def power_on_by_hand(node):
