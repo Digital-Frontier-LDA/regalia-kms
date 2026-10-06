@@ -30,7 +30,7 @@ func newTwoServers(t *testing.T) *twoServers {
 		return bootID == boot && ((node == "a" && key == keyA.Hex()) || (node == "b" && key == keyB.Hex()))
 	}
 	verify := func(key string, value []byte) (map[string]any, error) {
-		entry, err := Judge(sessions, func() map[string]ApproverSet { return nil })(key, value, nil)
+		entry, err := Judge(sessions, func() map[string]ApproverSet { return nil }, nil)(key, value, nil, Origin{})
 		if err != nil {
 			return nil, err
 		}

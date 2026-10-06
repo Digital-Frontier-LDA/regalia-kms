@@ -98,6 +98,9 @@ func (g *StateGate) evaluate(ctx context.Context) (bool, string) {
 	if lease.ClusterID != state.ClusterID {
 		return false, fmt.Sprintf("the lease names etcd cluster %016x, this server reads %016x", lease.ClusterID, state.ClusterID)
 	}
+	if state.StateEpoch < 0 {
+		return false, "the store's state-epoch entry does not verify, or was deleted after it was seen: no history to serve on"
+	}
 	if lease.StateEpoch != state.StateEpoch {
 		return false, fmt.Sprintf("the lease names state epoch %d, this server holds %d", lease.StateEpoch, state.StateEpoch)
 	}

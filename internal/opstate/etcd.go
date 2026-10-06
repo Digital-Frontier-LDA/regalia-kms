@@ -23,7 +23,7 @@ func NewEtcdSource(client *clientv3.Client) (*EtcdSource, error) {
 
 // List is a linearizable read of the prefix: the revision it returns is the store's, as of a moment the
 // majority agreed on.
-func (s *EtcdSource) List(ctx context.Context, prefix string) (map[string][]byte, uint64, int64, error) {
+func (s *EtcdSource) List(ctx context.Context, prefix string) (map[string]Stored, uint64, int64, error) {
 	response, err := s.client.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
 		return nil, 0, 0, err
@@ -31,9 +31,9 @@ func (s *EtcdSource) List(ctx context.Context, prefix string) (map[string][]byte
 	if response.More {
 		return nil, 0, 0, errors.New("the store answered with a partial list")
 	}
-	values := make(map[string][]byte, len(response.Kvs))
+	values := make(map[string]Stored, len(response.Kvs))
 	for _, kv := range response.Kvs {
-		values[string(kv.Key)] = kv.Value
+		values[string(kv.Key)] = Stored{Value: kv.Value, ModRevision: kv.ModRevision}
 	}
 	return values, response.Header.ClusterId, response.Header.Revision, nil
 }

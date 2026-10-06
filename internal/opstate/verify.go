@@ -39,7 +39,7 @@ var (
 	datePattern = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 	timePattern = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`)
 	nodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
-	hexPattern  = map[int]*regexp.Regexp{64: regexp.MustCompile(`^[0-9a-f]{64}$`), 128: regexp.MustCompile(`^[0-9a-f]{128}$`)}
+	hexPattern  = map[int]*regexp.Regexp{16: regexp.MustCompile(`^[0-9a-f]{16}$`), 64: regexp.MustCompile(`^[0-9a-f]{64}$`), 128: regexp.MustCompile(`^[0-9a-f]{128}$`)}
 	countLimit  = new(big.Int).Lsh(big.NewInt(1), 63)
 	// a key's signing profile: cosmos-account, cosmos-validator, ... fixed at the key's creation
 	profilePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
