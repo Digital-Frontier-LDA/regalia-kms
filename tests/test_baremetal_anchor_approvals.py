@@ -238,6 +238,15 @@ class Signer(unittest.TestCase):
             ap.retire(new, once, K_A, POINT, "a")                          # the current one's retire dropped from the new document
         self.assertEqual(ap.published_generation(once, "a"), g + 1)        # after the retire, G_pub is from + 1
 
+    def test_a_duplicated_retire_cannot_move_r_by_two(self):
+        """62 on #517: two approve-increment runs from the same --current give the same single-use increment (from = G_pub),
+        and the second cannot be appended to the first's output (the current rotations must be kept as they are)."""
+        current, new = self.documents()
+        once, twice = ap.retire(new, current, K_A, POINT, "a"), ap.retire(new, current, K_A, POINT, "a")
+        self.assertEqual([r["from"] for r in once["nodes"]["a"]["rotations"]], [r["from"] for r in twice["nodes"]["a"]["rotations"]])
+        with self.assertRaisesRegex(m.Refused, "the new document's rotations for a are not the current ones"):
+            ap.retire(once, current, K_A, POINT, "a")
+
     def test_no_approval_two_retires_ahead(self):
         """d9: approve refuses G > G_pub + 1. Node a's root-published G is G (its retire from G - 1 is recorded), yet the only
         live approvals are at G + 1: a third key would land at G + 2, two ahead of what the root published."""

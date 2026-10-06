@@ -56,13 +56,17 @@ class CatchUp(unittest.TestCase):
             self.catch_up(self.rotations(self.g + 1), self.g + 2)
         self.assertEqual(self.R(), self.g)
 
-    def test_a_node_not_booted_on_the_new_approvals_keeps_its_old_one(self):
+    def test_a_node_not_booted_on_the_new_approvals_is_not_bumped_and_is_write_frozen(self):
         old = self.approval()
         with self.assertRaisesRegex(m.Refused, r"a is booted on an image whose approvals are at generation %d, below the published "
-                                    r"%d: bumping would leave it no approval to write with" % (self.g, self.g + 1)):
+                                    r"%d: bumping would leave it no approval to write with, so nothing is bumped" % (self.g, self.g + 1)):
             self.catch_up(self.rotations(self.g), self.g)
         self.assertEqual(self.R(), self.g)
-        self.assertEqual(self.increment(old).returncode, 0)  # still writes on the approval it has
+        # R is not moved, so the TPM itself would still take the old approval; the node's software is what freezes it
+        # (require_current, regalia-kms-62 on #517): nothing under K_A while R < G_pub, until it boots the new image
+        self.assertEqual(self.increment(old).returncode, 0)
+        with self.assertRaisesRegex(m.Refused, "a's rotation counter is %d, below the published %d: it bumps first" % (self.g, self.g + 1)):
+            ap.require_current(ap.ROTATION_INDEX, "a", self.rotations(self.g), self.run_)
 
     def test_another_node_s_increment_is_refused_before_the_tpm(self):
         with self.assertRaisesRegex(m.Refused, r"K_A's approval of a's rotation counter from %d does not verify under the K_A it names" % self.g):

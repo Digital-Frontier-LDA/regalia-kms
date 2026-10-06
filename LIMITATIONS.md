@@ -336,8 +336,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   bumps its rotation counter and writes under K_new on the boot it is in. While behind it writes and signs nothing
   under K_A (`require_current`, in `node.anchor_approval`), and a peer co-signs no lease for it (`check_rotation`, wired
   by the lease co-signer, 48's lane). So K_old stays usable against a node until that node's next sync round after the
-  retire; a node whose booted image has no re-sign (a retire signed without `uki.resign`) keeps K_old's approval until
-  it reboots onto a K_new image (no stranding), and its lease refusal stops it serving within one lease.
+  retire. A node whose booted image has no re-sign (a retire signed without `uki.resign`; in practice only after a
+  rollback, since the image retire already requires every node seen on NEXT) is not bumped and is WRITE-FROZEN under K_A:
+  it writes and signs nothing (no heartbeat co-signature, no signing-counter move) until `update apply` puts it on an
+  image approved at G_pub, which needs no K_A write; then it bumps (regalia-kms-62 on #517). Its peers stop leasing it
+  within one lease. The freeze covers what goes under K_A (heartbeats, counters, the anchor); a behind node still
+  co-signs others' D32 leases, a TPM2_Quote by its AK, since a lease request is judged by the REQUESTER's R
+  (`check_rotation`), not the issuer's (62).
   **A re-signed image stays openable under K_new for as long as K_new is approved** (05): a later retire of that image
   does not revoke the re-sign, since a TPM cannot forget a signature. That is the same as an image K_new signed at
   build, so it is no new risk. systemd's own enrolments (cryptenroll, systemd-creds) name K_sys directly and need C5's

@@ -640,7 +640,8 @@ def catch_up_rotation(cfg, manifest=None, pem_path=None):
     """#361 C4: this node's rotation counter brought up to the generation the root published for it (the measurements
     document the tip commits to: its nodes.<id>.rotations), by K_A's single-use increments, in order. Refused, with R
     as it was, when an entry is missing or when the image this node is booted on carries approvals below the published
-    generation (it keeps its old approval, still valid, until it boots one: no stranding). Returns R."""
+    generation and no checked re-sign (C4b): nothing is bumped, and the node is write-frozen under K_A until it boots an
+    image approved at the published generation (`update apply` onto it; regalia-kms-62 on #517). Returns R."""
     _, pem = _image(cfg, pem_path, manifest)
     if manifest is None:
         manifest = _chain_tip(cfg)

@@ -604,8 +604,10 @@ def bump(index, point, node_id, n, signature, run=None):
 def catch_up(index, point, node_id, rotations, booted_generation, run=None):
     """Bring this node's R up to G_pub (published(rotations)) by applying, in order, each entry from R on. Refused, with R
     as it was, when an entry at R is missing, or when the set the node is BOOTED on carries approvals below G_pub
-    (`booted_generation`, its anchor_approvals.generation): a bump would leave it no approval to write with, so it keeps
-    the old one, still valid, until it boots an image approved at G_pub (local no-stranding). Returns R."""
+    (`booted_generation`, its anchor_approvals.generation): a bump would leave it no approval to write with, so it is not
+    made. The node is then WRITE-FROZEN, not stranded (regalia-kms-62 on #517): require_current refuses every write and
+    signature under K_A while R < G_pub, which is the retire's purpose, and its way out is `update apply` onto an image
+    approved at G_pub (no K_A write needed), after which this bumps. Returns R."""
     target, r = published(rotations), read_rotation(index, run)
     if target is None or r >= target:
         return r
@@ -614,8 +616,8 @@ def catch_up(index, point, node_id, rotations, booted_generation, run=None):
             "is bumped" % (node_id, r, rotations[0]["from"]))
     require(isinstance(booted_generation, int) and booted_generation >= target,
             "%s is booted on an image whose approvals are at generation %s, below the published %d: bumping would leave it no "
-            "approval to write with, so it keeps its current one until it boots an image approved at %d"
-            % (node_id, booted_generation, target, target))
+            "approval to write with, so nothing is bumped; it writes and signs nothing under the anchor-policy authority until "
+            "it boots an image approved at %d (update apply onto it)" % (node_id, booted_generation, target, target))
     while r < target:
         r = bump(index, point, node_id, r, by_from[r]["signature"], run)
     return r
