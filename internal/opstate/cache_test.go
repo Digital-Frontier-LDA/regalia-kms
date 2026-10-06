@@ -371,3 +371,24 @@ func TestThePublisherWritesTheAppliedRevisionWhileLive(t *testing.T) {
 		}
 	}
 }
+
+// Keys collected while the watch was down (neither listed again nor tombstoned) leave the judged baseline at the
+// relist, as a watched delete does: memory stays bounded by the store (48 on #508).
+func TestARelistForgetsWhatWasCollected(t *testing.T) {
+	r := start(t, func(string, []byte) error { return nil }, map[string][]byte{"/regalia/v1/nonces/a": []byte("x"), "/regalia/v1/keys/k/state": []byte("y")}, 3)
+	s := r.stream(t)
+	r.waitFor(t, func(_ int64, _ time.Duration, live bool) bool { return live })
+	r.source.mu.Lock()
+	r.source.values = map[string][]byte{}
+	r.source.revision = 9
+	r.source.mu.Unlock()
+	s <- Update{Err: errors.New("member restarted")}
+	r.stream(t)
+	r.waitFor(t, func(rev int64, _ time.Duration, live bool) bool { return live && rev == 9 })
+	if _, seen := r.cache.good["/regalia/v1/nonces/a"]; seen {
+		t.Fatal("a collected nonce stayed in the baseline")
+	}
+	if _, ok, _ := r.cache.Value("/regalia/v1/nonces/a"); ok {
+		t.Fatal("a collected nonce is still served")
+	}
+}

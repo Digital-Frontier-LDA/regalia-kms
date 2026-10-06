@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/cmd/regalia-unlock/membership"
@@ -206,7 +207,18 @@ func (s *EtcdState) try(ctx context.Context, r policy.Reservation) (bool, error)
 		puts = append(puts, clientv3.OpPut(p.key, string(value), options...))
 	}
 	committed, err := s.client.Txn(clientv3.WithRequireLeader(ctx)).If(compares...).Then(puts...).Commit()
+	if errors.Is(err, rpctypes.ErrLeaseNotFound) {
+		// a collection lease gone early (revoked, or lost across an owner-gated force-new-cluster or a restore): the
+		// transaction failed whole, so forget the cached leases and let Reserve try again with fresh ones (48)
+		s.mu.Lock()
+		s.buckets = map[int64]clientv3.LeaseID{}
+		s.mu.Unlock()
+		return false, nil
+	}
 	if err != nil {
+		// AN AMBIGUOUS COMMIT BURNS THE APPROVAL: a transaction that answered an error may still have committed. It
+		// is not retried (a retry would find its own spend and refuse it as a replay); the HSM never signs, and the
+		// request is approved again. Fail closed.
 		return false, fmt.Errorf("the reservation was not committed: %w", err)
 	}
 	return committed.Succeeded, nil

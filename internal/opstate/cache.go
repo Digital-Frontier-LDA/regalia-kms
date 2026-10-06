@@ -288,8 +288,14 @@ func (c *Cache) replace(values map[string][]byte, cluster uint64, revision int64
 		entries[key] = c.verify(good, key, value, false)
 	}
 	for key := range c.good {
-		if _, listed := values[key]; !listed && c.tombstoned(key, c.good) {
-			entries[key] = deletedAfterSeen(key)
+		if _, listed := values[key]; !listed {
+			if c.tombstoned(key, c.good) {
+				entries[key] = deletedAfterSeen(key)
+			} else {
+				// collected while the watch was down (a nonce, a day's quota): no trace, as a watched delete leaves
+				// none, so the memory of what was seen stays bounded by what the store holds (48)
+				delete(good, key)
+			}
 		}
 	}
 	c.mu.Lock()
