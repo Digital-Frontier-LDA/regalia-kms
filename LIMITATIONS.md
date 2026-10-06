@@ -63,6 +63,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - the etcd role that grants the daemons put, never delete, under `/regalia/v1/` (ed's daemon). Until it exists, a
     client of the etcd socket could delete a key. A reader that has seen a key-state refuses its absence, but a reader
     starting fresh cannot tell a deleted key from a new one.
+  - **The collector's D25 check is a library, not yet a running collector** (`deploy/baremetal/spendaudit.py`,
+    `tests/vectors/spendaudit-v1.json` for the Go side). It pairs every approval-gated signature with exactly one
+    spend, verified from the audit line alone (the line carries the spend and its session entry, since etcd collects
+    both), and cross-checks etcd's commit only where the collector watched it. Nothing writes those audit lines yet (the
+    daemon's side is regalia-kms-ed's lane), and the external collector that would run it isn't chosen. It is
+    detection, not prevention: a root on a server can still sign outside the gate, and this is how that is found.
   **Accepted:**
   - etcd isn't Byzantine-tolerant. A member with root can withhold entries or serve old ones. It cannot forge an
     entry, because every entry carries its own signatures. A whole-cluster rollback is caught by the revision in the
