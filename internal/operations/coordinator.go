@@ -311,8 +311,9 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 				return api.Result{}, failure("DENIED", http.StatusForbidden, false)
 			}
 			if coordinator.chain == nil {
+				// retryable, as API.md says of every DEPENDENCY_UNAVAILABLE: another server may have the chain configured
 				coordinator.recordOrCount(ctx, request, route, "deny", "cosmos-chain-unconfigured", started, false, policyRequest.VerifiedApprovers)
-				return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, false)
+				return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 			}
 			account, err := coordinator.chain.Account(ctx, parsed.ChainID, source)
 			if err != nil {
