@@ -12,6 +12,9 @@
 #   --snapshot TIME   one snapshot.debian.org time: Debian 13's main, updates and security suites as they were
 #   the keyring       the pinned Debian archive keyring (debverify.py KEYRING_SHA256), fetched by hash if not given
 #   the Go toolchain  the exact release go.mod names, fetched and checksum-verified by Go (GOTOOLCHAIN)
+#   etcd              etcd.pin: upstream's tag, the commit it must be, and upstream's Go release for it (ADR-0002 D32;
+#                     why not Debian's etcd-server: deploy/baremetal/ETCD.md). Built from source in the BUILD tree as
+#                     upstream's build_lib.sh does, its modules verified by its go.sum and the checksum database
 #   PACKAGES          deploy/baremetal/image/packages.txt's [packages], each with its reason, derived from what the
 #                     host runs and checked in CI (tests/test_baremetal_rootfs_packages.py)
 #
@@ -60,7 +63,8 @@ LIST="deploy/baremetal/image/packages.txt"
 SCHEMA="regalia.rootfs-build/v1"
 SUITE=trixie
 BUILD_PACKAGES="gcc,libc6-dev,libpcsclite-dev,pkg-config"
-REPO_FILES=("$SCRIPT" "$LIST" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh go.mod go.sum)
+PIN="deploy/baremetal/image/etcd.pin"
+REPO_FILES=("$SCRIPT" "$LIST" "$PIN" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh go.mod go.sum)
 die(){ echo "build-rootfs: $*" >&2; exit 2; }
 SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO" KEYRING=""
 while [ $# -gt 0 ]; do
@@ -98,7 +102,7 @@ GO_VERSION="$(sed -n 's/^toolchain \(go[0-9][0-9.]*\)$/\1/p' go.mod)"
 # packages.txt, read by the same rules the CI test holds it to: [packages] (Debian's) and [built] (ours)
 SPEC="$(python3 -I - "$LIST" <<'PY'
 import re, sys
-sections, section = {"packages": [], "built": []}, None
+sections, section = {"packages": [], "built": [], "upstream": []}, None
 for number, raw in enumerate(open(sys.argv[1]), 1):
     line = raw.strip()
     if not line or line.startswith("#"):
@@ -120,6 +124,11 @@ for f in sections["packages"]:
     for w in f[1].split():
         if w != "-":
             print("PROVIDES " + w)
+for f in sections["upstream"]:
+    if f[0] != "etcd" or not all(re.fullmatch(r"/usr/bin/[a-z0-9-]+", w) for w in f[1].split()):
+        raise SystemExit("packages.txt: [upstream] %r is not 'etcd | /usr/bin/<name> ... | why' (etcd.pin is the one upstream)" % f[0])
+    for w in f[1].split():
+        print("PROVIDES " + w)
 for f in sections["built"]:
     if not re.fullmatch(r"cmd/[a-z0-9-]+", f[0]) or not re.fullmatch(r"/usr/s?bin/[a-z0-9-]+", f[1]):
         raise SystemExit("packages.txt: [built] %r is not 'cmd/<name> | /usr/(s)bin/<name> | why'" % f[0])
@@ -174,14 +183,45 @@ TOOLCHAIN="$("${goenv[@]}" "$GO" env GOROOT)" || die "the toolchain's GOROOT can
 [ -x "$TOOLCHAIN/bin/go" ] || die "the toolchain $GO_VERSION has no bin/go ($TOOLCHAIN)"
 [ "$("${goenv[@]}" "$TOOLCHAIN/bin/go" env GOVERSION)" = "$GO_VERSION" ] || die "the toolchain at $TOOLCHAIN is not $GO_VERSION"
 
+# ---- etcd (ADR-0002 D32): upstream's source at the pinned commit, its modules and its own Go release, all fetched
+# and verified OUTSIDE the build tree, as the daemon's are (why upstream and not Debian's package: ETCD.md)
+pin(){ sed -n "s/^$1=\(.*\)$/\1/p" "$PIN"; }
+ETCD_REPO="$(pin ETCD_REPO)" ETCD_TAG="$(pin ETCD_TAG)" ETCD_COMMIT="$(pin ETCD_COMMIT)" ETCD_GO="$(pin ETCD_GO)"
+[ "$ETCD_REPO" = https://github.com/etcd-io/etcd ] && [[ "$ETCD_TAG" =~ ^v3\.[0-9]+\.[0-9]+$ ]] && [[ "$ETCD_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+  && [[ "$ETCD_GO" =~ ^go1\.[0-9]+\.[0-9]+$ ]] || die "$PIN must name upstream's repository, a v3 tag, its 40-hex commit and a Go release"
+echo "### etcd $ETCD_TAG ($ETCD_COMMIT), its modules and $ETCD_GO, verified by git and Go"
+mkdir -p "$W/etcd/home" "$W/etcd/path" "$W/etcd/cache" "$W/etcd/mod" "$W/etcd/src"
+env -i PATH="$PATH" HOME="$W/etcd/home" GIT_TERMINAL_PROMPT=0 ${CALLER_HTTPS_PROXY:+HTTPS_PROXY="$CALLER_HTTPS_PROXY"} \
+  git -c advice.detachedHead=false clone -q --depth 1 --branch "$ETCD_TAG" "$ETCD_REPO" "$W/etcd/git" >"$W/etcd-git.log" 2>&1 \
+  || { tail -5 "$W/etcd-git.log"; die "etcd $ETCD_TAG could not be fetched"; }
+# the tag is a name; the commit is what was reviewed. A tag moved upstream is refused, never followed
+got="$(git -C "$W/etcd/git" rev-parse --verify 'HEAD^{commit}')"
+[ "$got" = "$ETCD_COMMIT" ] || die "etcd's $ETCD_TAG is commit $got, not the pinned $ETCD_COMMIT: refused"
+git -C "$W/etcd/git" archive --format=tar HEAD | tar -x -C "$W/etcd/src" || die "etcd's source could not be exported"
+[ "go$(cat "$W/etcd/src/.go-version")" = "$ETCD_GO" ] && grep -qx "toolchain $ETCD_GO" "$W/etcd/src/server/go.mod" \
+  || die "etcd $ETCD_TAG is not built with $ETCD_GO upstream (.go-version, server/go.mod): update $PIN"
+etcdenv=(env -i PATH="$(dirname "$GO"):$PATH" LC_ALL=C TZ=UTC HOME="$W/etcd/home" GOPATH="$W/etcd/path" GOCACHE="$W/etcd/cache"
+         GOMODCACHE="$W/etcd/mod" GOTOOLCHAIN="$ETCD_GO" GOFLAGS=-mod=readonly GOTELEMETRY=off
+         ${CALLER_GOPROXY:+GOPROXY="$CALLER_GOPROXY"} ${CALLER_HTTPS_PROXY:+HTTPS_PROXY="$CALLER_HTTPS_PROXY"})
+ETCD_PROGRAMS=(server:etcd etcdctl:etcdctl etcdutl:etcdutl)       # module directory : program, as upstream's build_lib.sh
+for p in "${ETCD_PROGRAMS[@]}"; do
+  (cd "$W/etcd/src/${p%%:*}" && "${etcdenv[@]}" "$GO" mod download) >>"$W/etcd-download.log" 2>&1 \
+    || { tail -20 "$W/etcd-download.log"; die "etcd's ${p%%:*} modules could not be fetched"; }
+done
+ETCD_TOOLCHAIN="$(cd "$W/etcd/src/server" && "${etcdenv[@]}" "$GO" env GOROOT)" || die "etcd's toolchain's GOROOT cannot be read"
+[ "$("${etcdenv[@]}" "$ETCD_TOOLCHAIN/bin/go" env GOVERSION)" = "$ETCD_GO" ] || die "the toolchain at $ETCD_TOOLCHAIN is not $ETCD_GO"
+
 # ---- the BUILD tree: [built] compiled in it, against the snapshot's libraries
 BUILD="$W/build"
 echo "### the build tree: Debian $SUITE as of $SNAPSHOT, with $BUILD_PACKAGES"
 tree "$BUILD" "$BUILD_PACKAGES"
-mkdir -p "$BUILD/build/src" "$BUILD/build/gomod" "$BUILD/build/goroot" "$BUILD/build/cache" "$BUILD/build/home" "$BUILD/build/out"
+mkdir -p "$BUILD/build/src" "$BUILD/build/gomod" "$BUILD/build/goroot" "$BUILD/build/cache" "$BUILD/build/home" "$BUILD/build/out" \
+         "$BUILD/build/etcd-mod" "$BUILD/build/etcd-goroot" "$BUILD/build/etcd-cache"
+cp -a "$W/etcd/src" "$BUILD/build/etcd"
 repo_git archive --format=tar "$COMMIT" | tar -x -C "$BUILD/build/src" || die "the commit could not be exported"
 # the module cache and the toolchain, read-only: nothing inside the tree can change what was verified outside it
-for pair in "$W/go/mod:$BUILD/build/gomod" "$TOOLCHAIN:$BUILD/build/goroot"; do
+for pair in "$W/go/mod:$BUILD/build/gomod" "$TOOLCHAIN:$BUILD/build/goroot" "$W/etcd/mod:$BUILD/build/etcd-mod" \
+            "$ETCD_TOOLCHAIN:$BUILD/build/etcd-goroot"; do
   mount --bind "${pair%%:*}" "${pair#*:}"; MOUNTED+=("${pair#*:}")
   mount -o remount,bind,ro "${pair#*:}"
 done
@@ -200,6 +240,20 @@ for entry in "${BUILT[@]}"; do
     >"$W/go-$name.log" 2>&1 || { tail -20 "$W/go-$name.log"; die "$name did not build"; }
   built_by="$(inbuild go version "/build/out/$name" | sed 's/^.*: //')"
   [ "$built_by" = "$GO_VERSION" ] || die "$name was built by $built_by, not $GO_VERSION (go.mod's)"
+done
+# GOAMD64 named, not defaulted: the instruction-set level is part of what was built (v1: any x86-64, the DL360s' too)
+ETCD_GOAMD64=v1
+# etcd, as upstream's scripts/build_lib.sh builds it (static, -trimpath, GitSHA stamped), by its own Go release
+inetcd(){ chroot "$BUILD" env -i PATH="/build/etcd-goroot/bin:/usr/bin:/bin" GOROOT=/build/etcd-goroot LC_ALL=C TZ=UTC \
+            HOME=/build/home GOCACHE=/build/etcd-cache GOMODCACHE=/build/etcd-mod GOTOOLCHAIN=local GOPROXY=off GOFLAGS=-mod=readonly \
+            GOTELEMETRY=off GOAMD64="$ETCD_GOAMD64" SOURCE_DATE_EPOCH="$EPOCH" "$@"; }
+for p in "${ETCD_PROGRAMS[@]}"; do
+  echo "### ${p#*:} (etcd $ETCD_TAG, CGO_ENABLED=0), by $ETCD_GO"
+  inetcd sh -c "cd /build/etcd/${p%%:*} && CGO_ENABLED=0 go build -trimpath -buildvcs=false \
+                -ldflags=-X=go.etcd.io/etcd/api/v3/version.GitSHA=${ETCD_COMMIT:0:7} -o /build/out/${p#*:} ." \
+    >"$W/go-${p#*:}.log" 2>&1 || { tail -20 "$W/go-${p#*:}.log"; die "${p#*:} did not build"; }
+  built_by="$(inetcd go version "/build/out/${p#*:}" | sed 's/^.*: //')"
+  [ "$built_by" = "$ETCD_GO" ] || die "${p#*:} was built by $built_by, not $ETCD_GO ($PIN)"
 done
 # (GOTELEMETRY=off: go's telemetry can leave a child running from the toolchain, which keeps its mount busy; CI's
 # first run. A mount still busy after a few seconds is a refusal, said by name, never a lazy unmount)
@@ -231,6 +285,7 @@ for entry in "${BUILT[@]}"; do
   read -r source path <<< "$entry"
   install -D -m 0755 "$BUILD/build/out/$(basename "$source")" "$ROOT$path"
 done
+for p in "${ETCD_PROGRAMS[@]}"; do install -D -m 0755 "$BUILD/build/out/${p#*:}" "$ROOT/usr/bin/${p#*:}"; done
 # the system users the units run as, in the image (systemd-sysusers allocates in a fixed order: reproducible)
 # (SOURCE_DATE_EPOCH: /etc/shadow's last-change day is the epoch's, not the build's)
 chroot "$ROOT" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C SOURCE_DATE_EPOCH="$EPOCH" systemd-sysusers >"$W/sysusers.log" 2>&1 \
@@ -286,6 +341,8 @@ PY
   # the tree builder is the BUILDER's, not pinned: its version is named, so a later rebuild elsewhere can be compared
   echo "mmdebstrap=$(mmdebstrap --version 2>/dev/null | head -1)"
   for entry in "${BUILT[@]}"; do read -r source path <<< "$entry"; echo "built=$path $(sha256sum < "$ROOT$path" | cut -d' ' -f1) $source"; done
+  echo "etcd=$ETCD_TAG $ETCD_COMMIT $ETCD_GO $ETCD_GOAMD64"
+  for p in "${ETCD_PROGRAMS[@]}"; do echo "etcd_program=/usr/bin/${p#*:} $(sha256sum < "$ROOT/usr/bin/${p#*:}" | cut -d' ' -f1)"; done
   for f in "${REPO_FILES[@]}"; do echo "file=$f $(sha256sum < "$f" | cut -d' ' -f1)"; done
   echo "packages_sha256=$(sha256sum < "$W/packages.txt" | cut -d' ' -f1)"
   echo "rootfs_sha256=$(sha256sum < "$W/stage/rootfs.tar" | cut -d' ' -f1)"
@@ -294,12 +351,17 @@ PY
 } > "$W/record.txt"
 python3 -I - "$W/record.txt" "$W/packages.txt" "$W/stage/rootfs-build.json" <<'PY'
 import json, sys
-record, files, built = {}, {}, {}
+record, files, built, etcd = {}, {}, {}, {"programs": {}}
 for line in open(sys.argv[1]):
     key, _, value = line.rstrip("\n").partition("=")
     if key == "file":
         path, digest = value.split(" ")
         files[path] = digest
+    elif key == "etcd":
+        etcd["tag"], etcd["commit"], etcd["go"], etcd["goamd64"] = value.split(" ")
+    elif key == "etcd_program":
+        path, digest = value.split(" ")
+        etcd["programs"][path] = digest
     elif key == "built":
         path, digest, source = value.split(" ")
         built[path] = {"sha256": digest, "source": source}
@@ -308,6 +370,7 @@ for line in open(sys.argv[1]):
 record["packages_requested"] = record["packages_requested"].split(",")
 record["build_packages"] = record["build_packages"].split(",")
 record["built"] = built
+record["etcd"] = etcd
 record["repository_files"] = files
 record["packages"] = [l.strip() for l in open(sys.argv[2]) if l.strip()]
 with open(sys.argv[3], "w") as f:
