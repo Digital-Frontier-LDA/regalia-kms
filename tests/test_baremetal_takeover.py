@@ -37,7 +37,7 @@ def config_text():
               "listen-client-urls": etcdconf.CLIENT_URL, "advertise-client-urls": etcdconf.CLIENT_URL,
               "initial-cluster": "a=%s,b=%s,c=%s" % tuple(etcdconf.peer_url(nodes[n]) for n in "abc"), "initial-cluster-state": "new",
               "initial-cluster-token": "regalia-" + "0" * 32, "heartbeat-interval": 100, "election-timeout": 1000,
-              "strict-reconfig-check": True, "enable-pprof": False, "tls-min-version": "TLS1.3",
+              "strict-reconfig-check": True, "max-learners": etcdconf.MAX_LEARNERS, "enable-pprof": False, "tls-min-version": "TLS1.3",
               "peer-transport-security": {"cert-file": etcdconf.CERT_DIR + "/peer.crt", "key-file": etcdconf.CREDENTIALS + "/etcd-peer.key",
                                           "client-cert-auth": True, "trusted-ca-file": etcdconf.CERT_DIR + "/peers.pem", "auto-tls": False},
               "auto-compaction-mode": "periodic", "auto-compaction-retention": etcdconf.COMPACTION_RETENTION,
