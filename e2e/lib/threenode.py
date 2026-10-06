@@ -188,6 +188,7 @@ class Cluster:
         self.time = {n: True for n in names}          # authenticated time, per node
         self.stop_threads = False
         self.threads = []
+        self._state_lock = threading.Lock()           # _write_as_daemon: the state writer thread and the main thread
         self.state_revision = 1                       # D32: the etcd revision every node's stand-in watch has applied
         self.chain = []                               # the signed envelopes, epoch 1 first
         self.manifest = None
@@ -541,11 +542,14 @@ class Cluster:
         """`doc` at `path` as the daemon writes it: a temporary file renamed over, the daemon's user's, mode 0644."""
         import pwd
         user = pwd.getpwnam(lease.DAEMON_USER)
-        tmp = path.with_name("." + path.name + ".tmp")
-        tmp.write_text(json.dumps(doc))
-        os.chown(tmp, user.pw_uid, user.pw_gid)
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, path)
+        # serialized, each write its own temporary file: _state_writer's thread and the main thread (build, replace)
+        # both write applied.json, and one's replace must never pull the other's file away (CodeRabbit on #489)
+        with self._state_lock:
+            tmp = path.with_name(".%s.%d.tmp" % (path.name, threading.get_ident()))
+            tmp.write_text(json.dumps(doc))
+            os.chown(tmp, user.pw_uid, user.pw_gid)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, path)
 
     def _state_files(self, n):
         """The node's stand-ins for /run/regalia-state and /run/regalia-kms (bound in its units: properties, as_root),
