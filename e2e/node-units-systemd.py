@@ -131,6 +131,44 @@ def sh(*argv, check=True, **kw):
     return done
 
 
+STATE_STAND_IN = ("e2e1e2e1e2e1e2e1", 0, 1)        # (cluster_id, state_epoch, revision): no etcd runs in this test
+
+
+def daemon_state_files():
+    """Lease v2 (D32, #489): what regalia-kms writes on a host whose daemon runs etcd (#490: operational_state_*), written
+    here because this test's daemon runs none: /run/regalia-kms/session-key.json once and /run/regalia-state/applied.json
+    every 3 s (a reader refuses one older than 10 s), as the daemon's user regalia-kms, 0644, temp and rename. Section 4
+    ran before these existed and checked that admission then asks for no lease at all."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    shutil.copy(ROOT / "deploy" / "systemd" / "regalia-kms.sysusers.conf", "/etc/sysusers.d/regalia-kms.conf")
+    sh("systemd-sysusers")
+    user = pwd.getpwnam(lease.DAEMON_USER)
+    for directory in (os.path.dirname(lease.APPLIED_PATH), os.path.dirname(lease.SESSION_KEY_PATH)):
+        os.makedirs(directory, exist_ok=True)
+        os.chown(directory, user.pw_uid, user.pw_gid)
+        os.chmod(directory, 0o755)
+
+    def write(path, doc):
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(doc, f)
+        os.chown(tmp, user.pw_uid, user.pw_gid)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    public = Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    write(lease.SESSION_KEY_PATH, {"boot_id": lease.this_boot(), "daemon_started": 0, "session_key": public.hex()})
+
+    def applied():
+        while True:
+            cluster_id, state_epoch, revision = STATE_STAND_IN
+            write(lease.APPLIED_PATH, {"cluster_id": cluster_id, "state_epoch": state_epoch, "revision": revision,
+                                       "boot_id": lease.this_boot(), "boottime_ns": time.clock_gettime_ns(time.CLOCK_BOOTTIME)})
+            time.sleep(3)
+    threading.Thread(target=applied, daemon=True).start()
+    until(lambda: os.path.exists(lease.APPLIED_PATH), 10, 0.2)
+
+
 def until(what, seconds, interval=1.0):
     deadline, last = time.monotonic() + seconds, None
     while time.monotonic() < deadline:
@@ -816,7 +854,13 @@ def part2(work, binaries, user, ctx, servers, status):
         state["nodes"].setdefault("a", {})["ak_public"] = ctx["ids"]["a"][2]
         save()
     events = []
-    server = sync.Server("b", store, freshness, verifier, lease.TpmSigner(b_tcti), wgsvc.key_at, events.append)
+    # lease v2 (D32, #489): b judges a's etcd state by its own (RevisionFloor). No etcd runs here: b's applied state is a
+    # stand-in, the same cluster, epoch and revision as a's (STATE_STAND_IN); its floor is fed now, so it has watched
+    # for one lease by the time a asks in section 8
+    b_floor = lease.RevisionFloor()
+    b_floor.applied(*STATE_STAND_IN)
+    server = sync.Server("b", store, freshness, verifier, lease.TpmSigner(b_tcti), wgsvc.key_at, events.append,
+                         floor=b_floor, applied=lambda: STATE_STAND_IN)
     # b's trail names a refused caller before it parses the request ("event": "sync"), so the test also
     # notes each request's operation and b's answer, to tell a's renewals from its pulls
     requests, b_handle = [], server.handle          # (not "answer": section 8 reuses that name for the daemon's reply)
@@ -904,6 +948,7 @@ def part2(work, binaries, user, ctx, servers, status):
     header("8  the KMS daemon, and a lease from b over the tunnel")
     daemon.start()
     ok(daemon.wait_for(503, 90) == 503, "regalia-kms.service is up and NOT ready (503): no admission yet", daemon.log()[-900:])
+    daemon_state_files()
     sh("systemctl", "start", "regalia-admission.service")
     admitted_doc = until(lambda: (lambda d: d["serve_until_boottime_ms"] > admission.boottime_ms() and d)(
         json.loads(pathlib.Path(ADMISSION_FILE).read_text())), 120, 2)
