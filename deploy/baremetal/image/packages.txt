@@ -74,6 +74,7 @@ pkcheck | os_probe only looks for polkit, which the image does not ship (absence
 # Deploy modules the host neither runs nor imports.
 activation | the activation lease (#440): no unit imports it yet; issuance over sync follows (#432, rewritten by D32)
 cardrecord | the card-ceremony record, verified on the laptop (manifest propose --genesis)
+redfish | the servers' iLOs over Redfish (power off/on, readback), from the operator workstation: drills (#495), D32's G1 fence
 fence | the owner's iLO fence (#432, G1): run by owner.py from the management network, never on a node
 etcdconf | the etcd configuration renderer (#432, D32): nothing renders it on a host yet; enrolment does, next
 firewall | renders a host's nftables ruleset from its site config, from the operator's checkout
