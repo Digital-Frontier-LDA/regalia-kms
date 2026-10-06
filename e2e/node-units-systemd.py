@@ -695,7 +695,13 @@ class Daemon:
                 "audit_journal_path": str(state / "audit.jsonl"), "audit_sink_url": "https://127.0.0.1:%d" % sink,
                 # what this test is about: the files regalia-admission writes, as the daemon finds them on a host
                 "runtime_admission": "required", "runtime_admission_path": ADMISSION_FILE, "runtime_admission_owner": "regalia-admission",
-                "node_id": "a", "boot_session_path": "/run/regalia/boot-session"}}
+                "node_id": "a", "boot_session_path": "/run/regalia/boot-session",
+                # #432 (48 on #509): an admission is judged against the chain the real regalia-sync publishes, from the
+                # pinned root, as on a host (os_probe requires it there)
+                "membership_chain_path": "/var/lib/regalia-sync/chain.json", "membership_chain_owner": "regalia-sync",
+                "membership_root_key_path": str(etc / "root-key.json")}}
+        # the membership root the daemon pins, canonical as the image builder writes /usr/lib/regalia/root-key.json
+        (etc / "root-key.json").write_bytes(membership.canonical(hbt.pub(hbt.ROOT)))
         for name, document in documents.items():
             (etc / name).write_text(json.dumps(document, indent=1) + "\n")
         for path in etc.iterdir():
@@ -911,7 +917,8 @@ def part2(work, binaries, user, ctx, servers, status):
        admitted_doc or json.loads(pathlib.Path(ADMISSION_FILE).read_text()))
     issued = [e for e in events if e.get("event") == "sync-lease" and e.get("subject") == "a"]
     ok(issued and issued[-1].get("outcome") == "ALLOW", "b's trail: a lease for a", issued[-1:] or events[-3:])
-    ok(daemon.wait_for(200, 30) == 200, "the daemon is ready (200)", daemon.log()[-900:])
+    ok(daemon.wait_for(200, 30) == 200, "the daemon is ready (200): admitted, with the published chain at the admission's epoch (#432)",
+       daemon.log()[-900:])
     message = b"regalia-kms node units e2e " + daemon.stamp.encode()
     code, answer = daemon.sign(message)
     ok(code == 200 and daemon.verifies(message, answer), "it signs, and openssl verifies the signature against the token's key", (code, answer))
