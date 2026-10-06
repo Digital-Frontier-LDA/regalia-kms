@@ -486,6 +486,22 @@ def scenarios(backend, plan, judge):
     return built
 
 
+def restore_summary(restored, failed):
+    """What restore says to the operator, who is often about to leave (d9 on #504): every server it powered on or
+    power-cycled is ON BY READBACK ONLY, its serving not confirmed; every undo that failed is still pending."""
+    lines = []
+    for entry in restored:
+        undo = entry["undo"]
+        if undo["action"] in ("power-on", "power-cycle"):
+            lines.append("%s: powered On by readback; SERVING NOT CONFIRMED. Check that %s serves (or that RegaliaNodeDown has "
+                         "cleared) before you leave" % (undo["node"], undo["node"]))
+        else:
+            lines.append("%s: %s done" % (undo["node"], undo["action"]))
+    for entry in failed:
+        lines.append("STILL PENDING: %s" % entry["error"])
+    return lines
+
+
 def power_on_by_hand(node):
     """The power undo until the Redfish client lands (d9, redfish.py): said, never pretended."""
     raise Refused("the Redfish client is not built yet: power %s on through its iLO by hand, then run restore again" % node)
@@ -524,7 +540,9 @@ def main(argv=None, ssh=None):
                     journal.undone(entry["id"])
         else:
             restored, failed = journal.restore({"unpartition": cut.remove, "power-on": power_on_by_hand}, torn_checked=args.torn_checked)
-            done = {"restored": restored, "still_pending": failed}
+            done = {"restored": restored, "still_pending": failed, "summary": restore_summary(restored, failed)}
+            for line in done["summary"]:
+                print("drill: restore: " + line, file=sys.stderr)
             print(json.dumps(done, sort_keys=True))
             return 0 if not failed else 3
     except Refused as refusal:

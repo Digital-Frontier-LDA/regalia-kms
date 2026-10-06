@@ -447,6 +447,16 @@ class HardwareBackend(unittest.TestCase):
             hw.power_on("c")
         self.assertEqual(len(self.journal.pending()), 1)
 
+    def test_restore_says_serving_is_not_confirmed_for_every_power_undo(self):
+        self.hw.power_off("c")
+        self.hw.partition("a")
+        restored, failed = self.journal.restore(self.hw.undoers())
+        lines = drill.restore_summary(restored, failed + [{"error": "b: power-cycle by hand"}])
+        self.assertIn("c: powered On by readback; SERVING NOT CONFIRMED. Check that c serves (or that RegaliaNodeDown has "
+                      "cleared) before you leave", lines)
+        self.assertIn("a: unpartition done", lines)
+        self.assertIn("STILL PENDING: b: power-cycle by hand", lines)
+
     def test_a_plan_with_no_scenario_is_refused(self):
         with self.assertRaises(m.Refused):
             drill.scenarios(self.hw, {}, lambda name, ctx: {})
