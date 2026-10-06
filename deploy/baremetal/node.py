@@ -884,8 +884,10 @@ class Sync:
                            floor=self.floor, applied=lease.read_applied)
 
     def observe_state(self):
-        """D32 (#432): this issuer's RevisionFloor fed from its etcd watch's file, each round. A stale or absent file
-        records nothing (and the floor then refuses leases, failing closed)."""
+        """D32 (#432): this issuer's RevisionFloor fed from its etcd watch's file, each round. A refusal here (a stale,
+        absent or regressed file: a revision or state epoch gone back) records nothing; it is not lost, because each
+        lease request reads the file again (sync.Server.observe_state) and that read refuses the lease (fail closed;
+        regalia-kms-48)."""
         try:
             self.floor.applied(*lease.read_applied())
         except Refused:
