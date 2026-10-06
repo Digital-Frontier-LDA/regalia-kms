@@ -14,6 +14,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
+	"github.com/Digital-Frontier-LDA/regalia-kms/cmd/regalia-unlock/membership"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/admission"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend"
@@ -920,10 +921,27 @@ func admitRunner(settings config.Config, base operations.Runner, onTransition fu
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime admission: %w", err)
 	}
-	gate, err := admission.Open(admission.Options{
+	options := admission.Options{
 		Path: settings.RuntimeAdmissionPath, NodeID: settings.NodeID, SessionPath: settings.BootSessionPath,
 		OwnerUID: owner, OnTransition: onTransition,
-	})
+	}
+	// AN ADMISSION IS GOOD ONLY FOR THE EPOCH IT WAS JUDGED UNDER (#432): judged against the published chain
+	if settings.MembershipChainPath != "" {
+		chainOwner, err := lookupAdmissionOwner(settings.MembershipChainOwner)
+		if err != nil {
+			return nil, nil, fmt.Errorf("membership chain: %w", err)
+		}
+		rootPath := settings.MembershipRootKeyPath
+		if rootPath == "" {
+			rootPath = membership.RootKeyPath
+		}
+		root, _, err := membership.LoadRoot(os.ReadFile, rootPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("membership chain: %w", err)
+		}
+		options.ChainPath, options.ChainOwnerUID, options.Root = settings.MembershipChainPath, chainOwner, root
+	}
+	gate, err := admission.Open(options)
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime admission: %w", err)
 	}

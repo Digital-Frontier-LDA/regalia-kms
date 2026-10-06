@@ -30,7 +30,8 @@ and the KMS unit's sandbox (#61):
 and that the daemon needs a runtime lease to serve (#74):
 
   kms_runtime_admission_required  the configuration the unit starts the daemon with (the file after
-                              -config in ExecStart) states "runtime_admission": "required" with its
+                              -config in ExecStart) judges admissions against regalia-sync's chain
+                              (membership_chain_path, #432) and states "runtime_admission": "required" with its
                               admission file, the lease service's user, this node's ID and the boot
                               session file. "disabled-for-lab" is a lab setting: a host carrying it is not
                               commissioned. And the lease service is not root (#191): regalia-admission.service
@@ -324,6 +325,10 @@ def daemon_config(host):
     return config, paths[0], ""
 
 
+MEMBERSHIP_CHAIN = "/var/lib/regalia-sync/chain.json"     # node.PUBLISHED in regalia-sync's state directory
+SYNC_USER = "regalia-sync"
+
+
 def runtime_admission(host):
     """The daemon is started with a configuration that REQUIRES a runtime lease."""
     config, path, why = daemon_config(host)
@@ -339,6 +344,12 @@ def runtime_admission(host):
                if not (isinstance(config.get(k), str) and config[k])]
     if missing:
         return False, f"{paths[0]} requires runtime admission but lacks {', '.join(missing)}"
+    # AN ADMISSION IS GOOD ONLY FOR THE EPOCH IT WAS JUDGED UNDER (#432): on a host, the daemon judges it against
+    # regalia-sync's published chain. The setting is optional in the configuration (e2e and lab configs have no
+    # chain), so a host states it, never assumes it (48 on #509)
+    if config.get("membership_chain_path") != MEMBERSHIP_CHAIN or config.get("membership_chain_owner") != SYNC_USER:
+        return False, (f"{paths[0]} does not judge admissions against the membership chain: membership_chain_path must be "
+                       f"{MEMBERSHIP_CHAIN} and membership_chain_owner {SYNC_USER}")
     ok, why = lease_service_unprivileged(host, config["runtime_admission_owner"])
     if not ok:
         return False, why
