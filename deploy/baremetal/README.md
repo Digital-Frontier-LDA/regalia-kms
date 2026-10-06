@@ -275,7 +275,7 @@ Commissioning has two halves:
   `regalia-audit-ship@time`) before it is published, as `time-authenticated` or `time-unauthenticated`
   with the reason; a transition that cannot be recorded is published as not authenticated.
   **If time is not authenticated, nothing is served:** peers authorize no unlock and issue no lease, a
-  node's own lease is not renewed, and within the lease bound (300 s) the KMS daemon stops. That is
+  node's own lease is not renewed, and within the lease bound (30 s, ADR-0002 D32) the KMS daemon stops. That is
   intended. So NTS must get out of each site: TCP 4460 to each server for the key exchange and UDP 123
   for the time itself; an outage of the NTS servers, or of that path, longer than those bounds stops the
   nodes. Proven against live chrony daemons in `e2e/authtime-chrony-nts.py`.
@@ -462,7 +462,7 @@ An update is three documents:
    a time: the first, in order, that is not on NEXT. **The limit:** a node judges "the one before me is
    back" from its own last re-attestation of that node, which it repeats only at the next lease
    renewal. If the earlier node falls back or goes down just after, the next node may still pass for up
-   to the lease lifetime (five minutes), and two nodes can then be down together. Three cannot. So
+   to the lease lifetime (30 s), and two nodes can then be down together. Three cannot. So
    wait for a node to be back and serving before starting the next, and do not treat `may_reboot` alone
    as the interlock. A node that is down
    and must not hold the others up is taken out by a signed manifest (QUARANTINED); there is no
@@ -913,8 +913,23 @@ removing only what it can prove it made.
     list, a bench image included, is therefore refused at the genesis: enrol on the reviewed production image.
 - `ownerauth` (#242 step C), after `init` and before `commit`: `gpg --decrypt ownerauth-X.yk.gpg | enrol ownerauth
   --node-id X --root-key ROOT --record ownerauth.record.json` sets the TPM's owner authorization to this node's
-  value from the ceremony's envelope (regalia-ceremony#111; the break-glass `.bg.age` gives the same value through
-  `age --decrypt`). The value comes on standard input only. It is checked against the record verified under the
+  value from the ceremony's envelope (regalia-ceremony#111). **Custody** (owner, 2026-10-05, #242): two independent
+  paths. Day to day, `.yk.gpg`, to the owner pair's decryption keys (ADR-0002 D30.7, regalia#568). Break-glass, one binary SOPS file per node
+  (`ownerauth-X.bg.sops`), encrypted to the post-quantum "ownerauth-recovery" age identity that offline-keys keeps
+  in its D28 key map under the platform SLIP-39 shares (no server holds the value or that key). On the signing
+  laptop (regalia-ceremony#111):
+  `python3 -Es offline-keys.py open-recovery-identity --sealed offline-keys.sealed.json --out /dev/shm/ownerauth-recovery.key`
+  (k offline shares on standard input, then Ctrl-D; it writes a NEW mode-0600 file on a RAM filesystem), then
+  `SOPS_AGE_KEY_FILE=/dev/shm/ownerauth-recovery.key sops decrypt --input-type binary --output-type binary ownerauth-X.bg.sops | sudo ...`,
+  then `shred -u -- /dev/shm/ownerauth-recovery.key`. On a disk, removing a file does not destroy it. On the laptop
+  offline-keys can also check a decrypted value without regalia-kms:
+  `... | python3 -Es offline-keys.py ownerauth-check --record ownerauth.record.json --node X --sealed offline-keys.sealed.json`.
+  It refuses a record that is not signed by the sealed set's own root (regalia-ceremony#133). The ceremony's drill
+  checks every node. It must be a binary SOPS file, not a YAML map: `sops decrypt --extract` drops the newline
+  that the value's form requires (measured with sops 3.13.1). The drill, at the ceremony rehearsal, checks a
+  decrypted value with no TPM: `... | python3 -Es -m deploy.baremetal.ownerauth check --node-id X --root-key ROOT
+  --record ownerauth.record.json`. ROOT is the network's pinned root, from a node's node.json or the root card's
+  printed fingerprint, never from the record or the folder it came in. The value comes on standard input only. It is checked against the record verified under the
   pinned root BEFORE the TPM is touched (`deploy/baremetal/ownerauth.py`), and it is never written to disk. Every
   owner-authorized TPM call then gets it through one channel: a sealed in-memory file descriptor, never the command
   line (readable through /proc by root while the call runs). It sets the authorization from EMPTY only: a TPM whose owner authorization is already set is refused, never

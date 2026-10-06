@@ -45,7 +45,7 @@ servers' certificates against the clock. chrony's `nocerttimecheck` would accept
 not-yet-valid certificate for the first updates; it is NOT set. Such a host needs its RTC set by hand.
 
 UNAUTHENTICATED MEANS NOTHING IS SERVED. With this answer False a peer authorizes no unlock and issues no
-lease, and a node's own lease is not renewed: within the lease bound (300 s) the KMS daemon stops serving,
+lease, and a node's own lease is not renewed: within the lease bound (30 s) the KMS daemon stops serving,
 and within the heartbeat bound peers stop authorizing. THAT IS INTENDED: a node that cannot tell the time
 cannot tell an expired proof from a live one. So if the NTS servers are unreachable for longer than those
 bounds (their outage, or the site's firewall: NTS needs TCP 4460 for the key exchange and UDP 123), the
