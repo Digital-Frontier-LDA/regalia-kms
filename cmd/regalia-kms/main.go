@@ -11,6 +11,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
+
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/admission"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend"
@@ -23,6 +26,7 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/executor"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/fencing"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/operations"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/opstate"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/pin"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/secrets"
 	"io"
@@ -351,6 +355,13 @@ func run() error {
 	if admissionErr != nil {
 		return admissionErr
 	}
+	// THE OPERATIONAL STATE (D32): watched from here on; its gate joins the fence once the serving lease
+	// names its revision and the session key (#432, the runtime lease v2).
+	_, _, stopState, stateErr := watchOperationalState(ctx, settings)
+	if stateErr != nil {
+		return stateErr
+	}
+	defer stopState()
 	var admissionProbe server.ReadinessProbe
 	if admissionGate != nil {
 		admissionProbe = admissionGate
@@ -823,6 +834,75 @@ func fenceRunner(settings config.Config, registryDigest string, base operations.
 
 // cosmosRPCTimeout bounds one question to a chain's endpoint: a cosmos-account request holds its key for it.
 const cosmosRPCTimeout = 2 * time.Second
+
+// OPERATIONAL STATE (ADR-0002 D32, #432). Timing derived from the 30 s serving lease: the cache asks for a
+// progress notification every stateProgressEvery, so a quiet store still confirms itself well inside a lease.
+const (
+	stateProgressEvery = 5 * time.Second
+	stateRetry         = time.Second
+	stateDialTimeout   = 5 * time.Second
+)
+
+// watchOperationalState starts the watch of the operational state through the local etcd member's unix
+// socket, publishes the revision it applies (applied.json) for admission's lease request and sync's revision
+// floor, and makes and publishes this daemon instance's session key. Nothing when it is not configured.
+// It returns the cache, the key and a function that stops the watch and closes the client.
+//
+// Callable for the reason fenceRunner is: a wiring step nothing can call is one nothing notices missing.
+func watchOperationalState(ctx context.Context, settings config.Config) (*opstate.Cache, *opstate.SessionKey, func(), error) {
+	if settings.OperationalStateEndpoint == "" {
+		return nil, nil, func() {}, nil
+	}
+	bootID, err := admission.KernelBootID()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("operational state: the kernel's boot ID: %w", err)
+	}
+	started, err := admission.ProcessStart()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("operational state: this process's start time: %w", err)
+	}
+	key, err := opstate.NewSessionKey(bootID, started)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := key.Publish(settings.SessionKeyDir); err != nil {
+		return nil, nil, nil, fmt.Errorf("operational state: %w", err)
+	}
+	publisher, err := opstate.NewPublisher(settings.OperationalStateDir, bootID, stateProgressEvery)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	publisher.Err = func(err error) {
+		slog.Warn("KMS operational state: the applied revision could not be published", "error", err)
+	}
+	client, err := clientv3.New(clientv3.Config{Endpoints: []string{"unix://" + settings.OperationalStateEndpoint},
+		DialTimeout: stateDialTimeout, Logger: zap.NewNop()})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("operational state: the etcd client: %w", err)
+	}
+	source, err := opstate.NewEtcdSource(client)
+	if err != nil {
+		client.Close()
+		return nil, nil, nil, err
+	}
+	cache, err := opstate.New(opstate.Options{Source: source, Prefix: opstate.Prefix, Boottime: opstate.KernelBoottime,
+		ProgressEvery: stateProgressEvery, Retry: stateRetry, OnApplied: publisher.Applied,
+		OnState: func(live bool, reason string) {
+			if live {
+				slog.Info("KMS operational state watched", "endpoint", settings.OperationalStateEndpoint)
+			} else {
+				slog.Warn("KMS operational state not watched: this server serves on no state newer than its last confirmation", "reason", reason)
+			}
+		}})
+	if err != nil {
+		client.Close()
+		return nil, nil, nil, err
+	}
+	watch, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { cache.Run(watch); close(done) }()
+	return cache, key, func() { cancel(); <-done; client.Close() }, nil
+}
 
 // tokenConfigured reports whether the daemon gets a cryptographic backend, and with it a
 // coordinator. Without one there is nothing to route a key operation to and every one of them is

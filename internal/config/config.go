@@ -96,6 +96,16 @@ type Config struct {
 	NodeID                string
 	BootSessionPath       string
 
+	// The operational state (ADR-0002 D32, #432): key state, spent approvals and high-water marks, which
+	// etcd replicates across the three servers. The daemon watches it through the local member's unix
+	// socket (OperationalStateEndpoint, etcd's own name for it, e.g. /run/regalia-etcd/client.sock:0),
+	// publishes the revision it has applied (OperationalStateDir/applied.json) and its per-start session
+	// key (SessionKeyDir/session-key.json), for the lease request. The three go together, and only with
+	// runtime admission "required": the serving lease that names the revision and the key is admission's.
+	OperationalStateEndpoint string
+	OperationalStateDir      string
+	SessionKeyDir            string
+
 	// Revocation list. One serial per line; the file is cached behind a
 	// stat+ModTime guard, so an entry added at runtime is observed on the next
 	// Check call without a restart. Empty / unset returns a no-op list whose
@@ -117,40 +127,43 @@ type Config struct {
 }
 
 type document struct {
-	ListenAddress           *string            `json:"listen_address"`
-	RegistryPath            *string            `json:"registry_path"`
-	RBACPolicyPath          *string            `json:"rbac_policy_path"`
-	PolicyPath              *string            `json:"policy_path"`
-	ApproverKeysPath        *string            `json:"approver_keys_path"`
-	PolicyStatePath         *string            `json:"policy_state_path"`
-	Site                    *string            `json:"site"`
-	OperationTimeout        *string            `json:"operation_timeout"`
-	ShutdownTimeout         *string            `json:"shutdown_timeout"`
-	MaxConcurrentOperations *int               `json:"max_concurrent_operations"`
-	TLSCertificatePath      *string            `json:"tls_certificate_path"`
-	TLSPrivateKeyPath       *string            `json:"tls_private_key_path"`
-	TLSClientCAPath         *string            `json:"tls_client_ca_path"`
-	IssuerCertificatePath   *string            `json:"issuer_certificate_path"`
-	IssuerDNSSuffixes       *[]string          `json:"issuer_dns_suffixes"`
-	IssuerValidity          *string            `json:"issuer_validity"`
-	PKCS11ModulePath        *string            `json:"pkcs11_module_path"`
-	YubiKeyDevices          *map[string]string `json:"yubikey_devices"`
-	SecureChannelEvidence   *string            `json:"secure_channel_evidence_path"`
-	PINPaths                *map[string]string `json:"pin_paths"`
-	AuditJournalPath        *string            `json:"audit_journal_path"`
-	AuditSinkURL            *string            `json:"audit_sink_url"`
-	FencingLeasePath        *string            `json:"fencing_lease_path"`
-	FencingStatePath        *string            `json:"fencing_state_path"`
-	CommissioningRecordPath *string            `json:"commissioning_record_path"`
-	FencingPublicKeyPath    *string            `json:"fencing_public_key_path"`
-	RevokedSerialsPath      *string            `json:"revoked_serials_path"`
-	RuntimeAdmission        *string            `json:"runtime_admission"`
-	RuntimeAdmissionPath    *string            `json:"runtime_admission_path"`
-	RuntimeAdmissionOwner   *string            `json:"runtime_admission_owner"`
-	NodeID                  *string            `json:"node_id"`
-	BootSessionPath         *string            `json:"boot_session_path"`
-	MetricsReaderPrincipals *[]string          `json:"metrics_reader_principals"`
-	CosmosRPC               *map[string]string `json:"cosmos_rpc"`
+	ListenAddress            *string            `json:"listen_address"`
+	RegistryPath             *string            `json:"registry_path"`
+	RBACPolicyPath           *string            `json:"rbac_policy_path"`
+	PolicyPath               *string            `json:"policy_path"`
+	ApproverKeysPath         *string            `json:"approver_keys_path"`
+	PolicyStatePath          *string            `json:"policy_state_path"`
+	Site                     *string            `json:"site"`
+	OperationTimeout         *string            `json:"operation_timeout"`
+	ShutdownTimeout          *string            `json:"shutdown_timeout"`
+	MaxConcurrentOperations  *int               `json:"max_concurrent_operations"`
+	TLSCertificatePath       *string            `json:"tls_certificate_path"`
+	TLSPrivateKeyPath        *string            `json:"tls_private_key_path"`
+	TLSClientCAPath          *string            `json:"tls_client_ca_path"`
+	IssuerCertificatePath    *string            `json:"issuer_certificate_path"`
+	IssuerDNSSuffixes        *[]string          `json:"issuer_dns_suffixes"`
+	IssuerValidity           *string            `json:"issuer_validity"`
+	PKCS11ModulePath         *string            `json:"pkcs11_module_path"`
+	YubiKeyDevices           *map[string]string `json:"yubikey_devices"`
+	SecureChannelEvidence    *string            `json:"secure_channel_evidence_path"`
+	PINPaths                 *map[string]string `json:"pin_paths"`
+	AuditJournalPath         *string            `json:"audit_journal_path"`
+	AuditSinkURL             *string            `json:"audit_sink_url"`
+	FencingLeasePath         *string            `json:"fencing_lease_path"`
+	FencingStatePath         *string            `json:"fencing_state_path"`
+	CommissioningRecordPath  *string            `json:"commissioning_record_path"`
+	FencingPublicKeyPath     *string            `json:"fencing_public_key_path"`
+	RevokedSerialsPath       *string            `json:"revoked_serials_path"`
+	RuntimeAdmission         *string            `json:"runtime_admission"`
+	RuntimeAdmissionPath     *string            `json:"runtime_admission_path"`
+	RuntimeAdmissionOwner    *string            `json:"runtime_admission_owner"`
+	NodeID                   *string            `json:"node_id"`
+	BootSessionPath          *string            `json:"boot_session_path"`
+	OperationalStateEndpoint *string            `json:"operational_state_endpoint"`
+	OperationalStateDir      *string            `json:"operational_state_dir"`
+	SessionKeyDir            *string            `json:"session_key_dir"`
+	MetricsReaderPrincipals  *[]string          `json:"metrics_reader_principals"`
+	CosmosRPC                *map[string]string `json:"cosmos_rpc"`
 }
 
 func Default() Config {
@@ -295,6 +308,15 @@ func Decode(reader io.Reader) (Config, error) {
 	}
 	if input.BootSessionPath != nil {
 		result.BootSessionPath = *input.BootSessionPath
+	}
+	if input.OperationalStateEndpoint != nil {
+		result.OperationalStateEndpoint = *input.OperationalStateEndpoint
+	}
+	if input.OperationalStateDir != nil {
+		result.OperationalStateDir = *input.OperationalStateDir
+	}
+	if input.SessionKeyDir != nil {
+		result.SessionKeyDir = *input.SessionKeyDir
 	}
 	if input.CosmosRPC != nil {
 		result.CosmosRPC = make(map[string]string, len(*input.CosmosRPC))
@@ -518,6 +540,23 @@ func (cfg Config) Validate() error {
 	// fencing without either would have nothing to check the lease's claims against.
 	if fencingFields == 3 && (cfg.Site == "" || cfg.RegistryPath == "") {
 		return errors.New("fencing requires site and registry_path: a lease is granted to a named site for a known key set")
+	}
+	// THE OPERATIONAL STATE IS ALL OR NOTHING (D32): a watch with nowhere to publish what it applied, or a
+	// session key nobody can read, leaves the lease request without its revision or its key.
+	stateFields := 0
+	for _, path := range []string{cfg.OperationalStateEndpoint, cfg.OperationalStateDir, cfg.SessionKeyDir} {
+		if path != "" {
+			stateFields++
+			if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+				return errors.New("operational_state_endpoint, operational_state_dir and session_key_dir must be absolute, clean paths")
+			}
+		}
+	}
+	if stateFields != 0 && stateFields != 3 {
+		return errors.New("operational_state_endpoint, operational_state_dir and session_key_dir must be configured together")
+	}
+	if stateFields == 3 && cfg.RuntimeAdmission != RuntimeAdmissionRequired {
+		return errors.New("the operational state needs runtime_admission \"required\": the serving lease that names its revision and the session key is admission's")
 	}
 	// Each chain endpoint is an https URL with no credentials, query or fragment (cosmosrpc.New says it again
 	// when the client is made; refused here so -check-config says it first).

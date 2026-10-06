@@ -293,3 +293,43 @@ func TestCosmosRPCEndpointsAreHTTPSOnly(t *testing.T) {
 		t.Fatalf("a valid endpoint was refused: %v", err)
 	}
 }
+
+// The operational state (D32) is all or nothing, absolute clean paths, and needs runtime admission "required".
+func TestTheOperationalStateIsAllOrNothingAndNeedsAdmission(t *testing.T) {
+	admitted := func() Config {
+		cfg := baseConfig()
+		cfg.RuntimeAdmission = RuntimeAdmissionRequired
+		cfg.RuntimeAdmissionPath, cfg.RuntimeAdmissionOwner = "/run/regalia/admission/admission.json", "regalia-admission"
+		cfg.NodeID, cfg.BootSessionPath = "site-a", "/run/regalia/boot-session"
+		return cfg
+	}
+	complete := func(cfg *Config) {
+		cfg.OperationalStateEndpoint, cfg.OperationalStateDir, cfg.SessionKeyDir = "/run/regalia-etcd/client.sock:0", "/run/regalia-state", "/run/regalia-kms"
+	}
+	cfg := admitted()
+	complete(&cfg)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a complete operational state was refused: %v", err)
+	}
+	for _, c := range []struct {
+		name   string
+		change func(*Config)
+		want   string
+	}{
+		{"no endpoint", func(c *Config) { c.OperationalStateEndpoint = "" }, "must be configured together"},
+		{"no state dir", func(c *Config) { c.OperationalStateDir = "" }, "must be configured together"},
+		{"no session key dir", func(c *Config) { c.SessionKeyDir = "" }, "must be configured together"},
+		{"relative", func(c *Config) { c.OperationalStateDir = "run/regalia-state" }, "absolute, clean paths"},
+		{"unclean", func(c *Config) { c.SessionKeyDir = "/run/../run/regalia-kms" }, "absolute, clean paths"},
+		{"lab admission", func(c *Config) {
+			c.RuntimeAdmission, c.RuntimeAdmissionPath, c.RuntimeAdmissionOwner, c.NodeID, c.BootSessionPath = RuntimeAdmissionDisabledForLab, "", "", "", ""
+		}, "needs runtime_admission"},
+	} {
+		cfg := admitted()
+		complete(&cfg)
+		c.change(&cfg)
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, not %q", c.name, err, c.want)
+		}
+	}
+}

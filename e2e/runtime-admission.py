@@ -308,7 +308,9 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     header("2  the lease service's first round: admitted, ready, serving")
     document = round_()
     left = (document["serve_until_boottime_ms"] - admission.boottime_ms()) / 1000
-    ok(document["serve_until_boottime_ms"] > 0 and 280 <= left <= 290, "a lease from b's TPM became an admission of %.0f s (300 s less the margin)" % left, document)
+    full = lease.MAX_LIFETIME - admission.MARGIN
+    ok(document["serve_until_boottime_ms"] > 0 and full - 10 <= left <= full,
+       "a lease from b's TPM became an admission of %.0f s (%d s less the margin)" % (left, lease.MAX_LIFETIME), document)
     status = wait_for(200, 20)
     ok(status == 200, "the daemon is ready (200)", "%s\n%s" % (status, log()[-600:]))
     message = b"regalia-kms runtime admission e2e " + stamp.encode()
@@ -322,7 +324,7 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     # ---- 3 ------------------------------------------------------------------------------------------------
     header("3  renewal stops near the lease's end: the daemon stops by itself at serve_until")
     world["peer_up"] = False
-    fixture.now += lease.MAX_LIFETIME - 22               # authenticated time: the lease has 22 s left, 12 s after the margin
+    fixture.now += lease.MAX_LIFETIME - (admission.MARGIN + 12)   # authenticated time: the lease has 12 s left after the margin
     document = round_()
     left = (document["serve_until_boottime_ms"] - admission.boottime_ms()) / 1000
     ok(0 < left <= 12, "the peer is unreachable; the admission now ends in %.0f s and nobody will rewrite it" % left, document)

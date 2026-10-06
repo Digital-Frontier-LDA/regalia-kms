@@ -120,8 +120,24 @@ jobs:
           sudo locale-gen en_US.UTF-8 >/dev/null
           python3 -Es -m unittest discover -s tests -p 'test_*.py'
 
+      - name: Install checksum-pinned etcd v3.6.15 for the operational-state cache's real-store test (ADR-0002 D32)
+        env:
+          ETCD_SHA256: b51d86e6bff2168de5ba8cd631c0fe6c785c7a1b32b083079f5677d6b7e2772c
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/etcd.tar.gz" \
+            https://github.com/etcd-io/etcd/releases/download/v3.6.15/etcd-v3.6.15-linux-amd64.tar.gz
+          echo "$ETCD_SHA256  $RUNNER_TEMP/etcd.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/etcd.tar.gz" \
+            --directory "$RUNNER_TEMP" --strip-components=1 etcd-v3.6.15-linux-amd64/etcd
+          chmod 0755 "$RUNNER_TEMP/etcd"
+          echo "ETCD_BIN=$RUNNER_TEMP/etcd" >> "$GITHUB_ENV"
+
       - name: test (both modules, race + vet)
         env:
+          # internal/opstate's real-store test runs against the etcd installed above; with this set, a
+          # missing one fails instead of skipping.
+          REGALIA_EXPECT_ETCD: "1"
           # internal/pin's mlock refusal can only be exercised where mlock can be made to fail, and
           # on linux it can. With this set the test fails rather than skips if that stops being true.
           REGALIA_EXPECT_MLOCK_ENFORCED: "1"
@@ -573,6 +589,37 @@ jobs:
         with:
           name: initrd-${{ matrix.builder }}-every-build
           path: ${{ runner.temp }}/repro
+          retention-days: 14
+
+  # regalia-kms#61, first slice: the KMS host's root filesystem, built twice from nothing (the second in a hostile
+  # environment) at the pinned snapshot; the two archives must be identical. The cgo daemon (-tags piv) is linked in a
+  # build tree from the same snapshot, so its reproducibility is measured here.
+  rootfs-reproducible:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the tree builder
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mmdebstrap debian-archive-keyring
+      - name: Build the root filesystem twice from nothing (the second in a hostile environment); both must be identical
+        run: sudo REGALIA_GO="$(command -v go)" bash e2e/rootfs-reproducible.sh "$RUNNER_TEMP/rootfs" 2
+      - name: Make the builds readable
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/rootfs" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: rootfs-listing-and-record
+          path: |
+            ${{ runner.temp }}/rootfs/build-*/rootfs-listing.txt
+            ${{ runner.temp }}/rootfs/build-*/rootfs-build.json
           retention-days: 14
 
   initrd-reproducible-debian:
