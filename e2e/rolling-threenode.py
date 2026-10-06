@@ -55,7 +55,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
 import threenode                                     # noqa: E402
 from threenode import sh, until                      # noqa: E402
-from deploy.baremetal import measurements, membership, rollout  # noqa: E402
+from deploy.baremetal import lease, measurements, membership, rollout  # noqa: E402
 
 passed, failed = 0, 0
 SERVICES = ("sync", "wg-apply", "admission")
@@ -164,8 +164,17 @@ def reboot(cluster, name, image):
 
 
 def moved(cluster, name, image, what):
-    """An update step: may_reboot first (as `update apply` asks it), then the reboot. Three checks."""
-    verdict = decide(cluster, name)
+    """An update step: may_reboot first (as `update apply` asks it), then the reboot. Three checks.
+
+    A WAIT is asked again, as the operator re-runs `update apply` after one: under lease v2 (#489) a peer that has just
+    rebooted issues no lease until it has watched etcd for one lease (lease.RevisionFloor), so the node about to move
+    may have no fresh lease from it for up to MAX_LIFETIME after that peer came back. Anything but a WAIT is final."""
+    deadline = time.monotonic() + 3 * lease.MAX_LIFETIME
+    while True:
+        verdict = decide(cluster, name)
+        if verdict["ok"] or not str(verdict.get("reason", "")).startswith("WAIT") or time.monotonic() > deadline:
+            break
+        time.sleep(5)
     ok(verdict["ok"], "%s: may_reboot says %s may reboot now" % (what, name), verdict)
     r = reboot(cluster, name, image)
     ok(opened(r["got"]) and r["leased"], "%s: %s on %s is unlocked through %s and leased" % (what, name, image or "CURRENT", r["got"].get("peer")), r["got"])
@@ -291,10 +300,18 @@ def scenario(cluster):
        "a's and b's refusals of c on the retired CURRENT, for its PCR 11 (step 8), are in their streams")
     # while a was on NEXT: from its reboot onto it (step 5) until its roll back (step 6); before that it was down, after it on
     # CURRENT. A lease issued any time after step 5 would not show one issued from NEXT (regalia-kms-1e on #393)
-    ok(all([e for e in cluster.audit_has(a, "sync", since=on_next["since"], event="sync-lease", subject=s, outcome="ALLOW")
-            if int(on_next["since"]) < e.get("at", 0) < int(rolled_back["since"])] for s in (b, c)),   # whole seconds: the
-            # second step 5 began in may hold a lease from CURRENT (audit_has takes it), and no lease from NEXT
-       "the leases a issued to b and c while it was on %s (step 5, before its roll back in step 6) are in a's stream" % NEXT_IMAGE)
+    window = (int(on_next["since"]), int(rolled_back["since"]))
+    from_next = {s: [e for e in cluster.audit_has(a, "sync", since=on_next["since"], event="sync-lease", subject=s, outcome="ALLOW")
+                     if window[0] < e.get("at", 0) <= window[1]] for s in (b, c)}   # whole seconds: the second step 5
+    # began in may hold a lease from CURRENT (audit_has takes it), and no lease from NEXT; the second step 6 began in may
+    # still hold one from NEXT (a stops in it, and its CURRENT boot is many seconds away). Under lease v2 a's first leases
+    # come a lease after its reboot, so they can fall in that very second (#489's final run: b's at the window's end)
+    ok(all(from_next.values()),
+       "the leases a issued to b and c while it was on %s (step 5, before its roll back in step 6) are in a's stream" % NEXT_IMAGE,
+       {"window": window, "in_stream": {s: len(v) for s, v in from_next.items()},
+        "in_trail": {s: [e.get("at") for e in cluster.trail(a) if e.get("event") == "sync-lease" and e.get("subject") == s
+                         and e.get("outcome") == "ALLOW" and window[0] <= e.get("at", 0) <= window[1]] for s in (b, c)},
+        "stream_events": len(cluster.audit_stream(a, "sync")), "trail_lines": len(cluster.trail(a))})
     took = {n: cluster.moved_by_sync(n, retired, 3) for n in (b, c)}
     ok(all(took.values()), "the sync round that moved b and c to epoch 3, the retire, is in each one's stream (from %s)" % took,
        {n: [{k: e.get(k) for k in ("event", "epoch", "outcome", "peer", "at", "reason")} for e in cluster.audit_has(n, "sync", since=retired - 5)][:16]
