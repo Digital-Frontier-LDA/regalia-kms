@@ -395,9 +395,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   would be credited to that peer. In the scenarios only the seed is moved otherwise, and it is never asked (#393).
 - `audit_complete` judges each trail at a snapshot taken when it is called. Lines written after it are checked only
   if the collector already holds them, so a scenario must call it after the events it names (#393, #409).
-- The initrd builds verify every package against snapshot.debian.org, and one dropped connection fails the whole
-  build: `debverify` doesn't retry a fetch. That fails closed, but it turned main red once (8eb35a6) with no code
-  at fault. Retrying fetch errors only, never a verification failure, is #425.
+- The image builds fetch every package from snapshot.debian.org, and both fetchers retry a network failure only, never a
+  verification failure: `debverify`'s own downloads (#425, #436), and the mmdebstrap tree builds of `build-initrd.sh`
+  and `build-rootfs.sh` (#503, `initrd/fetch-retry.sh`: at most 3 attempts, 30 s then 90 s apart, each into a fresh
+  tree; a hash or size mismatch, a bad signature, a 404 or any other error is final). What counts as a network cause is
+  a list of apt's messages (`FETCH_RETRY_NETWORK`). A cause apt words differently isn't retried, and fails the
+  build as before: fail closed, at the cost of an occasional red run.
 - three-node-outage's step 5 (a node without authenticated time signs nothing) allows **one** signature in flight
   across the switch: a's Proposer reads the authenticated time once per step, so a signature it began before the
   read saw the switch is legitimate. The check is by position in a's trail: after a's first refusal for want of time,

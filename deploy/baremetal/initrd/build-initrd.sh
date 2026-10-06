@@ -80,7 +80,7 @@ SCRIPT="deploy/baremetal/initrd/build-initrd.sh"
 SCHEMA="regalia.initrd-build/v1"
 SUITE=trixie
 PACKAGES="systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,libtss2-tcti-device0t64"
-REPO_FILES=("$SCRIPT" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh deploy/baremetal/uki.py go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
+REPO_FILES=("$SCRIPT" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/fetch-retry.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh deploy/baremetal/uki.py go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
             deploy/baremetal/initrd/regalia-boot-render.service
             deploy/baremetal/initrd/regalia-wg-boot.service deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh
             deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab)
@@ -117,6 +117,8 @@ python3 -I -c 'import cryptography' 2>/dev/null || die "python3-cryptography is 
 # from the same clone is still clean
 # shellcheck source=deploy/baremetal/initrd/repo-git.sh
 . "$REPO/deploy/baremetal/initrd/repo-git.sh"
+# shellcheck source=deploy/baremetal/initrd/fetch-retry.sh
+. "$REPO/deploy/baremetal/initrd/fetch-retry.sh"
 repo_git_check || die "the checkout is refused (above)"
 echo "build-initrd: the checkout is read as uid $(repo_git_uid) (top $(stat -c %u "$REPO"), .git $(stat -c %u "$REPO/.git"))"
 COMMIT="$(repo_git rev-parse --verify HEAD)" || die "$REPO is not a git checkout"
@@ -173,9 +175,11 @@ SOURCES=("deb [signed-by=$KEYRING] $MAIN $SUITE main" "deb [signed-by=$KEYRING] 
          "deb [signed-by=$KEYRING] $SECURITY $SUITE-security main")
 echo "### the root tree: Debian $SUITE (main, updates, security) as of $SNAPSHOT"
 # a snapshot's Release file is past its Valid-Until, which only a snapshot may be
-env -i PATH="$PATH" LC_ALL=C TZ=UTC SOURCE_DATE_EPOCH="$EPOCH" mmdebstrap --variant=minbase \
-  --aptopt='Acquire::Check-Valid-Until "false"' --aptopt='Acquire::Retries "5"' --include="$PACKAGES" \
-  "$SUITE" "$ROOT" "${SOURCES[@]}" >"$W/mmdebstrap.log" 2>&1 || { tail -40 "$W/mmdebstrap.log"; die "mmdebstrap failed"; }
+# a download that failed on the network is retried into a fresh tree (fetch-retry.sh, #503); any other failure is final
+fetch_retry_tree "build-initrd" "$W/mmdebstrap.log" "$ROOT" -- \
+  env -i PATH="$PATH" LC_ALL=C TZ=UTC SOURCE_DATE_EPOCH="$EPOCH" mmdebstrap --variant=minbase \
+  --aptopt='Acquire::Check-Valid-Until "false"' --aptopt='Acquire::Retries "5"' --aptopt='Acquire::Retries::Delay "true"' \
+  --include="$PACKAGES" "$SUITE" "$ROOT" "${SOURCES[@]}" || { tail -40 "$W/mmdebstrap.log"; die "mmdebstrap failed"; }
 
 install -D -m 0755 "$W/regalia-unlock" "$ROOT/usr/bin/regalia-unlock"
 install -D -m 0755 deploy/baremetal/initrd/wg-boot "$ROOT/usr/lib/regalia/wg-boot"
