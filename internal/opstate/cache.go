@@ -31,6 +31,19 @@ type Change struct {
 	ModRevision int64
 }
 
+// Stored is a key's value as listed, with the revision it was last written at.
+type Stored struct {
+	Value       []byte
+	ModRevision int64
+}
+
+// Origin is where an entry was read: the store's cluster and the entry's mod_revision. The state-epoch entry is
+// bound to it (VerifyStateEpoch): one copied into another cluster, or put back below its take-over, is refused.
+type Origin struct {
+	ClusterID   uint64
+	ModRevision int64
+}
+
 // Update is one watch response: changes, or a progress notification (no changes) confirming that every
 // change up to Revision has been delivered.
 type Update struct {
@@ -44,8 +57,9 @@ type Update struct {
 
 // Source is the store, as this package uses it (etcd in production, etcdSource; a fake in tests).
 type Source interface {
-	// List reads every key under prefix, and the store's cluster ID and revision for that read.
-	List(ctx context.Context, prefix string) (map[string][]byte, uint64, int64, error)
+	// List reads every key under prefix (each with its mod_revision), and the store's cluster ID and revision for
+	// that read.
+	List(ctx context.Context, prefix string) (map[string]Stored, uint64, int64, error)
 	// Watch streams the changes under prefix from fromRevision on, with progress notifications. The channel
 	// is closed when ctx ends or the stream fails.
 	Watch(ctx context.Context, prefix string, fromRevision int64) <-chan Update
@@ -62,7 +76,8 @@ type Options struct {
 	// refused entry is kept as refused, so a key whose state does not verify is unavailable (fail closed),
 	// never its previous state; and a later entry is still judged against the last good one, so a refused
 	// entry cannot reset what a replay is judged against. Nil: every value holds, as raw bytes.
-	Verify func(key string, value []byte, previous any) (any, error)
+	// `at` is where the entry was read: the store's cluster and its mod_revision.
+	Verify func(key string, value []byte, previous any, at Origin) (any, error)
 	// Tombstone says which keys, once seen, may never become absent: a delete of one (or its absence from a
 	// later list) is kept as a refusal, never "no state" (a key's state deleted, then its first state put
 	// back, is a rollback). Nil: none.
@@ -90,8 +105,9 @@ type Snapshot struct {
 	Revision    int64
 	ConfirmedAt time.Duration // CLOCK_BOOTTIME
 	Live        bool
-	// StateEpoch is the state epoch the cache holds: 0 until the signed /regalia/v1/state-epoch entry is verified
-	// here (its format is #492's; until then the key is not read and 0 is published, as at genesis).
+	// StateEpoch is the state epoch the store holds: the verified /regalia/v1/state-epoch entry's (VerifyStateEpoch,
+	// through Verify), 0 while the key has never been seen (genesis writes none), and -1 when it is present but does
+	// not verify, or was deleted after it was seen: unusable, so nothing is published and the gate refuses.
 	StateEpoch int64
 }
 
@@ -142,7 +158,24 @@ func (c *Cache) Applied() (revision int64, confirmedAt time.Duration, ok bool) {
 func (c *Cache) Snapshot() Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return Snapshot{ClusterID: c.clusterID, Revision: c.revision, ConfirmedAt: c.confirmedAt, Live: c.live}
+	return Snapshot{ClusterID: c.clusterID, Revision: c.revision, ConfirmedAt: c.confirmedAt, Live: c.live, StateEpoch: c.stateEpoch()}
+}
+
+// stateEpoch is the state epoch the entries hold (Snapshot.StateEpoch); the caller holds mu.
+func (c *Cache) stateEpoch() int64 {
+	found, ok := c.entries[StateEpochKey]
+	if !ok {
+		return 0
+	}
+	if found.refusal != nil {
+		return -1
+	}
+	if parsed, ok := found.parsed.(map[string]any); ok {
+		if epoch, err := countOf(parsed["state_epoch"], "state_epoch"); err == nil {
+			return epoch
+		}
+	}
+	return -1
 }
 
 func (c *Cache) confirmed() {
@@ -232,12 +265,12 @@ func (c *Cache) cycle(ctx context.Context) error {
 
 // verify judges value against good[key] and, when it verifies, records it there. A created entry is also
 // judged fresh.
-func (c *Cache) verify(good map[string]any, key string, value []byte, created bool) entry {
+func (c *Cache) verify(good map[string]any, key string, value []byte, created bool, at Origin) entry {
 	kept := append([]byte(nil), value...)
 	if c.options.Verify == nil {
 		return entry{value: kept}
 	}
-	parsed, err := c.options.Verify(key, kept, good[key])
+	parsed, err := c.options.Verify(key, kept, good[key], at)
 	if err == nil && created && c.options.Fresh != nil {
 		err = c.options.Fresh(key, parsed)
 	}
@@ -271,7 +304,7 @@ func (c *Cache) Entry(key string) (parsed any, ok bool, err error) {
 	return found.parsed, true, nil
 }
 
-func (c *Cache) replace(values map[string][]byte, cluster uint64, revision int64) error {
+func (c *Cache) replace(values map[string]Stored, cluster uint64, revision int64) error {
 	now, err := c.options.Boottime()
 	if err != nil {
 		return errors.New("CLOCK_BOOTTIME cannot be read")
@@ -285,7 +318,7 @@ func (c *Cache) replace(values map[string][]byte, cluster uint64, revision int64
 		if !strings.HasPrefix(key, c.options.Prefix) {
 			return fmt.Errorf("the store listed %q, outside %s", key, c.options.Prefix)
 		}
-		entries[key] = c.verify(good, key, value, false)
+		entries[key] = c.verify(good, key, value.Value, false, Origin{ClusterID: cluster, ModRevision: value.ModRevision})
 	}
 	for key := range c.good {
 		if _, listed := values[key]; !listed {
@@ -352,7 +385,7 @@ func (c *Cache) apply(update Update) error {
 				staged[change.Key] = nil
 			}
 		} else {
-			judged := c.verify(lookup(change.Key), change.Key, change.Value, change.Created)
+			judged := c.verify(lookup(change.Key), change.Key, change.Value, change.Created, Origin{ClusterID: c.clusterID, ModRevision: change.ModRevision})
 			staged[change.Key] = &judged
 		}
 		if change.ModRevision > revision {

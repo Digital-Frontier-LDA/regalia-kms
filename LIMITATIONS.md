@@ -46,7 +46,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       etcd 3.6.15 with systemctl played by the test. Not yet:
       - regalia-etcd.service (#484), so it has never run under systemd;
       - the take-over has never signed with a real TPM signing key;
-      - nothing reads the entry in Go (the cache's verify, regalia-kms-ed's), so `applied.json`'s `state_epoch` stays 0;
+      - the Go verifier exists (`opstate.VerifyStateEpoch`, the vector's 21 cases alike) but the daemon's cache isn't given
+        it yet (the wiring PR), so on a running daemon `applied.json`'s `state_epoch` stays 0 (no entry) or the file
+        stops being written (an entry it cannot judge: fail closed);
       - the daemon's rule that a stateful operation in recovery needs the store at the authorization's own epoch;
       - an arrival-time freshness check on the entry. A replaced signing key can still sign an entry dated before the
         replacement, inside the owner's authorization window;
@@ -292,9 +294,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - The lone survivor's stateless serving under the owner's authorization (D32 item 6) has no gate path yet.
   - The session key's private half lives in the Go heap. It is never written, but it isn't locked against
     swap: the hosts are expected to run without swap, and nothing checks that.
-  - **`applied.json`'s `state_epoch` is always 0 for now.** The signed `/regalia/v1/state-epoch` entry
-    (`opstate.verify_state_epoch`) isn't verified by the cache yet. Until it is, a survivor's history after `--force-new-cluster` can't
-    be told from the lost tail by this field.
+  - **The cache judges the state epoch, but the daemon doesn't give it its judge yet.** `opstate.Judge` verifies
+    `/regalia/v1/state-epoch` with `VerifyStateEpoch`, against the membership chain and bound to where it was read (the
+    cluster and its mod_revision). It is never absent once seen, a rise only. The cache reports the verified epoch, 0
+    while the key has never been seen, and -1 (unusable) for an entry that does not verify, goes back or is deleted.
+    The publisher then writes nothing (readers refuse the stale file) and the state gate refuses by name. The daemon's
+    `watchOperationalState` doesn't pass `Judge` (nor the chain) yet: until the wiring PR, it reports 0 while no entry
+    exists and stops publishing if one appears. That fails closed, but a survivor's history isn't served on yet.
   - **Once the runtime lease v2 (#489) is in, production must set the three settings.** Without them the
     daemon writes neither file, so its node requests no lease and stops serving.
   - **Restoring etcd from a snapshot moves its revision back.** The cache refuses a store that went backwards

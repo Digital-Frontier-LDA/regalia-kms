@@ -340,6 +340,18 @@ func NodeSigningKey(manifest map[string]any, nodeID string) (alg, key string, ok
 	return alg, key, err == nil, err
 }
 
+// CountingParties is membership.counting_parties: the parties whose signatures over `message` count under the
+// CURRENT v4 manifest (each must verify; a RETIRED, REVOKED_STOLEN or QUARANTINED node's does not count).
+func CountingParties(current map[string]any, message []byte, signatures any, what string) (map[string]bool, error) {
+	return countingParties(current, message, signatures, what)
+}
+
+// NotCounting is membership.NOT_COUNTING: a node in this state counts toward nothing.
+func NotCounting(state string) bool { return notCounting[state] }
+
+// OwnerParty is membership.OWNER: the owner's party name in a signature.
+const OwnerParty = ownerParty
+
 // VerifyTypedSignature is membership.verify_revocation: `message` signed by (alg, key), `sig` the hex signature
 // (Ed25519, or P-256 r||s low-S). `what` names it in the refusal ("the <what> signature does not verify").
 func VerifyTypedSignature(alg, key string, message []byte, sig any, what string) error {

@@ -58,6 +58,11 @@ func TestTheStateGateServesOnlyOnStateAsNewAsItsLease(t *testing.T) {
 	refused("names etcd cluster 0000000000000bad, this server reads 00000000000000c1")
 	lease.ClusterID, lease.StateEpoch = 0xc1, 1
 	refused("names state epoch 1, this server holds 0")
+	cache.s.StateEpoch = -1 // the store's state-epoch entry does not verify: refused by name, whatever the lease says
+	refused("the store's state-epoch entry does not verify")
+	lease.StateEpoch = -1
+	refused("the store's state-epoch entry does not verify")
+	cache.s.StateEpoch, lease.StateEpoch = 0, 1
 	lease.StateEpoch, lease.StateRevision = 0, 41
 	refused("at revision 40, behind the lease's 41: catching up")
 	lease.StateRevision = 39 // a cache ahead of its lease serves

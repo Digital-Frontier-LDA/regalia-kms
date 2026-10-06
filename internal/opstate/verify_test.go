@@ -259,7 +259,7 @@ func TestTheCacheRefusesAReplayedOrDeletedKeyState(t *testing.T) {
 	r.values[key], r.revision = raw(6), 10
 	clk := &clock{now: time.Hour}
 	cache, err := New(Options{Source: r, Prefix: Prefix, Boottime: clk.read, ProgressEvery: time.Hour, Retry: 10 * time.Millisecond,
-		Verify: Judge(sessions, func() map[string]ApproverSet { return sets }), Tombstone: KeyStateTombstone})
+		Verify: Judge(sessions, func() map[string]ApproverSet { return sets }, nil), Tombstone: KeyStateTombstone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestTheCacheJudgesACreatedEntryFreshOnArrival(t *testing.T) {
 	wall := time.Date(2026, 10, 5, 12, 5, 0, 0, time.UTC)                      // five minutes after the entry's `at`
 	clk := &clock{now: time.Hour}
 	cache, err := New(Options{Source: r, Prefix: Prefix, Boottime: clk.read, ProgressEvery: time.Hour, Retry: 10 * time.Millisecond,
-		Verify: Judge(sessions, func() map[string]ApproverSet { return sets }), Fresh: FreshAt(func() time.Time { return wall })})
+		Verify: Judge(sessions, func() map[string]ApproverSet { return sets }, nil), Fresh: FreshAt(func() time.Time { return wall })})
 	if err != nil {
 		t.Fatal(err)
 	}
