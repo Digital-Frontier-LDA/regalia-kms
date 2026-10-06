@@ -13,13 +13,14 @@ so it can replace this file and nothing else there. The daemon accepts the file 
 from that user (runtime_admission_owner) or root, with no group or other write, and nothing above it that
 anyone else could swap; and it accepts the boot session beside it only from root.
 
-    {"schema": "regalia.admission/v2",
+    {"schema": "regalia.admission/v3",
      "node_id": ..., "session_id": "<64 hex: this boot's attested session>",
      "boot_id": "<the kernel's boot ID>",
      "epoch": <the manifest epoch the check was made under>, "manifest_digest": "<64 hex>",
      "hsm_serials": "<this node's hsm_serials in that manifest, space-separated; "" when none>",
      "lease_issued_at": "YYYY-MM-DDTHH:MM:SSZ",
      "requested_boottime_ms": <when this node asked for the lease it holds>,
+     "cluster_id": "<16 hex>", "state_epoch": <n>, "state_revision": <n>, "session_key": "<64 hex>",
      "serve_until_boottime_ms": <the daemon may serve while its CLOCK_BOOTTIME is below this; 0 = no>,
      "reason": "<why not, when serve_until is 0>"}
 
@@ -42,6 +43,12 @@ under: the serial of every hardware token it holds (its HSM and its YubiKey alik
 token only if that token's serial is listed, checked before the PIN: the root replacing a stolen or retired token
 in the manifest takes the old one out of service at the next step, with no change to the daemon's configuration.
 One string, not a list, so the daemon's reader stays one flat object (a serial is [A-Za-z0-9]{1,32}: no space).
+
+THE LEASE'S OPERATIONAL STATE (v3; ADR-0002 D32, #432). cluster_id, state_epoch, state_revision and session_key
+are the held lease's own (lease.py v2): the etcd history and revision the issuer vouched this node had applied, and
+the session key of the daemon start it was asked for. The daemon's state gate serves only while its own watch is of
+that cluster and state epoch, has reached that revision, and the session key is its own (internal/opstate.StateGate).
+When nothing is served they are zeros ("00" * 8, 0, 0, "00" * 32), as manifest_digest is.
 
 requested_boottime_ms is when the node made the request that the held lease answers. A lease is issued
 after it was asked for, so "asked for after the HSM returned" shows a peer vouched after the HSM
@@ -76,9 +83,10 @@ from deploy.baremetal import lease, membership
 
 Refused, require = membership.Refused, membership.require
 
-SCHEMA = "regalia.admission/v2"
+SCHEMA = "regalia.admission/v3"
 FIELDS = ("schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "hsm_serials", "lease_issued_at",
-          "requested_boottime_ms", "serve_until_boottime_ms", "reason")
+          "requested_boottime_ms", "cluster_id", "state_epoch", "state_revision", "session_key", "serve_until_boottime_ms", "reason")
+NO_STATE = {"cluster_id": "00" * 8, "state_epoch": 0, "state_revision": 0, "session_key": "00" * 32}
 MARGIN = 5                 # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
 NEVER = "1970-01-01T00:00:00Z"
 # The daemon reads this file with a limit of 4096 bytes (internal/admission/admission.go, maxFileBytes) and
@@ -211,6 +219,7 @@ class Service:
                 "hsm_serials": self._serials(manifest),
                 "lease_issued_at": held["issued_at"] if held and serve_until else NEVER,
                 "requested_boottime_ms": self._requests().get(held["nonce"], 0) if held and serve_until else 0,
+                **({k: held[k] for k in lease.STATE_KEYS} if held and serve_until else NO_STATE),
                 "serve_until_boottime_ms": serve_until, "reason": _printable(reason, ADMISSION_REASON_LIMIT)}
 
     def _node(self, manifest):

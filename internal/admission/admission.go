@@ -6,9 +6,15 @@
 // fact, the admission file; this package reads it. That is the kubelet shape: the agent renews,
 // the server reads the outcome.
 //
-//	{"schema": "regalia.admission/v2", "node_id": ..., "session_id": ..., "boot_id": ...,
+//	{"schema": "regalia.admission/v3", "node_id": ..., "session_id": ..., "boot_id": ...,
 //	 "epoch": ..., "manifest_digest": ..., "hsm_serials": ..., "lease_issued_at": ...,
-//	 "requested_boottime_ms": ..., "serve_until_boottime_ms": ..., "reason": ...}
+//	 "requested_boottime_ms": ..., "cluster_id": ..., "state_epoch": ..., "state_revision": ...,
+//	 "session_key": ..., "serve_until_boottime_ms": ..., "reason": ...}
+//
+// THE LEASE'S OPERATIONAL STATE (v3; ADR-0002 D32). cluster_id, state_epoch, state_revision and
+// session_key are the held lease's own (lease.py v2): what the issuer vouched this node's etcd watch
+// had applied, and the session key of the daemon start the lease was asked for. They reach the
+// daemon's state gate (internal/opstate.StateGate) as its LeaseFacts; this package only carries them.
 //
 // NO WALL CLOCK. serve_until_boottime_ms is in this host's CLOCK_BOOTTIME, which runs through
 // suspend and cannot be set. The node is admitted while the daemon's own CLOCK_BOOTTIME is below
@@ -49,7 +55,10 @@ import (
 )
 
 const (
-	Schema = "regalia.admission/v2"
+	Schema = "regalia.admission/v3"
+	// MaxReasonBytes is admission.ADMISSION_REASON_LIMIT: the writer cuts its reason there, so a longer
+	// limit here would never be used and a shorter one would hide the reason behind "too long".
+	MaxReasonBytes = 1024
 	// MaxSerials is admission.MAX_SERIALS: the hardware tokens one node may list.
 	MaxSerials = 16
 	// MaxAheadMilliseconds is one lease lifetime (lease.MAX_LIFETIME, 30 s; ADR-0002 D32). The writer
@@ -66,10 +75,11 @@ var ErrNotAdmitted = errors.New("KMS node is not admitted: it holds no runtime l
 var (
 	nodeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 	hex64Pattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	hex16Pattern  = regexp.MustCompile(`^[0-9a-f]{16}$`)
 	bootIDPattern = regexp.MustCompile(`^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$`)
 	serialPattern = regexp.MustCompile(`^[A-Za-z0-9]{1,32}$`)
 	fields        = []string{"schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "hsm_serials", "lease_issued_at",
-		"requested_boottime_ms", "serve_until_boottime_ms", "reason"}
+		"requested_boottime_ms", "cluster_id", "state_epoch", "state_revision", "session_key", "serve_until_boottime_ms", "reason"}
 )
 
 // Document is the admission file, validated.
@@ -82,8 +92,19 @@ type Document struct {
 	HSMSerials           []string
 	LeaseIssuedAt        time.Time
 	RequestedBoottimeMs  int64
+	State                LeaseState
 	ServeUntilBoottimeMs int64
 	Reason               string
+}
+
+// LeaseState is the held lease's operational state (v3): zeros when nothing is served.
+type LeaseState struct {
+	// ClusterID is the etcd cluster's ID, 16 lowercase hex.
+	ClusterID     string
+	StateEpoch    uint64
+	StateRevision int64
+	// SessionKey is the daemon's session key the lease was asked for, 64 lowercase hex.
+	SessionKey string
 }
 
 // Status is what the gate last decided.
@@ -97,6 +118,8 @@ type Status struct {
 	RequestedBoottimeMs int64
 	// HSMSerials are this node's hardware tokens in the manifest, empty when not admitted.
 	HSMSerials []string
+	// State is the held lease's operational state, zero when not admitted.
+	State LeaseState
 }
 
 // Options configure a Gate. Boottime, BootID and OwnerUID have production defaults; tests set them.
@@ -308,7 +331,8 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 	if document.RequestedBoottimeMs > now {
 		return refuse("the admission names a request made in the future")
 	}
-	return Status{Admitted: true, Epoch: document.Epoch, RequestedBoottimeMs: document.RequestedBoottimeMs, HSMSerials: document.HSMSerials}
+	return Status{Admitted: true, Epoch: document.Epoch, RequestedBoottimeMs: document.RequestedBoottimeMs, HSMSerials: document.HSMSerials,
+		State: document.State}
 }
 
 func (gate *Gate) read() (Document, error) {
@@ -481,13 +505,33 @@ func Parse(contents []byte) (Document, error) {
 	if document.RequestedBoottimeMs, err = count("requested_boottime_ms"); err != nil {
 		return Document{}, err
 	}
+	if document.State.ClusterID, err = text("cluster_id"); err != nil {
+		return Document{}, err
+	}
+	if !hex16Pattern.MatchString(document.State.ClusterID) {
+		return Document{}, errors.New("the admission file's cluster_id is not 16 lowercase hex")
+	}
+	stateEpoch, err := count("state_epoch")
+	if err != nil {
+		return Document{}, err
+	}
+	document.State.StateEpoch = uint64(stateEpoch)
+	if document.State.StateRevision, err = count("state_revision"); err != nil {
+		return Document{}, err
+	}
+	if document.State.SessionKey, err = text("session_key"); err != nil {
+		return Document{}, err
+	}
+	if !hex64Pattern.MatchString(document.State.SessionKey) {
+		return Document{}, errors.New("the admission file's session_key is not 64 lowercase hex")
+	}
 	if document.ServeUntilBoottimeMs, err = count("serve_until_boottime_ms"); err != nil {
 		return Document{}, err
 	}
 	if document.Reason, err = text("reason"); err != nil {
 		return Document{}, err
 	}
-	if len(document.Reason) > 240 {
+	if len(document.Reason) > MaxReasonBytes {
 		return Document{}, errors.New("the admission file's reason is too long")
 	}
 	for _, character := range document.Reason {
