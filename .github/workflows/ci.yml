@@ -591,6 +591,37 @@ jobs:
           path: ${{ runner.temp }}/repro
           retention-days: 14
 
+  # regalia-kms#61, first slice: the KMS host's root filesystem, built twice from nothing (the second in a hostile
+  # environment) at the pinned snapshot; the two archives must be identical. The cgo daemon (-tags piv) is linked in a
+  # build tree from the same snapshot, so its reproducibility is measured here.
+  rootfs-reproducible:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the tree builder
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mmdebstrap debian-archive-keyring
+      - name: Build the root filesystem twice from nothing (the second in a hostile environment); both must be identical
+        run: sudo REGALIA_GO="$(command -v go)" bash e2e/rootfs-reproducible.sh "$RUNNER_TEMP/rootfs" 2
+      - name: Make the builds readable
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/rootfs" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: rootfs-listing-and-record
+          path: |
+            ${{ runner.temp }}/rootfs/build-*/rootfs-listing.txt
+            ${{ runner.temp }}/rootfs/build-*/rootfs-build.json
+          retention-days: 14
+
   initrd-reproducible-debian:
     runs-on: ubuntu-latest
     timeout-minutes: 60
