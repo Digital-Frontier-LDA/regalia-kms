@@ -516,17 +516,12 @@ def increment_document(key, k_a_point, node_id, n):
 
 
 def published(rotations, label="rotations"):
-    """G_pub from `rotations` (their form: each {"from", "signature"}, `from` a count rising by exactly 1), or None when
-    the node has been through no retire."""
-    require(isinstance(rotations, list), "%s is not a list" % label)
-    previous = None
-    for i, entry in enumerate(rotations):
-        require(isinstance(entry, dict) and sorted(entry) == ["from", "signature"], "%s[%d] is not {from, signature}" % (label, i))
-        _count(entry["from"], "%s[%d].from" % (label, i))
-        require(previous is None or entry["from"] == previous + 1, "%s[%d].from is %d, not %d: a retire moves R by exactly 1"
-                % (label, i, entry["from"], (previous or 0) + 1))
-        previous = entry["from"]
-    return None if previous is None else previous + 1
+    """G_pub from `rotations` (their form, attest.validate_rotations: each {"from", "signature"}, `from` a count rising by
+    exactly 1), or None when the node has been through no retire."""
+    try:
+        return attest.validate_rotations(rotations, label)
+    except attest.Refused as refused:
+        raise Refused(str(refused)) from None
 
 
 def bump(index, point, node_id, n, signature, run=None):

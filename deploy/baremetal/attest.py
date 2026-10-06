@@ -305,6 +305,24 @@ def validate_set(entry, label):
         require(is_hex(entry[ROOTFS_KEY], 64), "%s.%s must be 64 lowercase hex" % (label, ROOTFS_KEY))
 
 
+def validate_rotations(rotations, label):
+    """#361 C4, by form only: a node's retires, [{"from": n, "signature": r||s}, ...], each K_A's single-use approval of
+    its rotation counter's increment from n (anchorpolicy.increment_document), `from` a count from 1 rising by exactly 1
+    (a retire moves R by one). Whose signature it is, over THIS node's R, is checked where K_A is known: by the node
+    before it bumps (anchorpolicy.bump). Returns G_pub, the generation the root published (the last from + 1), or None."""
+    require(isinstance(rotations, list), "%s is not a list" % label)
+    previous = None
+    for i, entry in enumerate(rotations):
+        require(isinstance(entry, dict) and sorted(entry) == ["from", "signature"], "%s[%d] is not {from, signature}" % (label, i))
+        n = entry["from"]
+        require(type(n) is int and 1 <= n < 2 ** 63, "%s[%d].from must be a count from 1" % (label, i))
+        require(previous is None or n == previous + 1, "%s[%d].from is %d, not %d: a retire moves R by exactly 1"
+                % (label, i, n, (previous or 0) + 1))
+        require(is_hex(entry["signature"], 128), "%s[%d].signature must be 128 lowercase hex (K_A's r||s)" % (label, i))
+        previous = n
+    return None if previous is None else previous + 1
+
+
 def validate_approvals(approvals, label):
     """#361 C2, by form only: {generation, classes}, G a count from 1, one K_A signature (r||s, 128 hex) per class of
     APPROVAL_CLASSES. Whether each is K_A's, over THIS key and THIS node's rotation counter at G, is checked where K_A

@@ -138,13 +138,25 @@ def validate(document):
     for node_id, entry in nodes.items():
         require(isinstance(node_id, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node_id) is not None,
                 "nodes: %r is not a node ID" % (node_id,))
-        membership.exact(entry, ("accepted",), "nodes.%s" % node_id)
+        membership.exact(entry, ("accepted",) + (("rotations",) if isinstance(entry, dict) and "rotations" in entry else ()),
+                         "nodes.%s" % node_id)
         try:
             attest.validate_sets(entry["accepted"], "nodes.%s" % node_id)
+            if "rotations" in entry:                      # #361 C4: this node's retires, each K_A's single-use increment
+                attest.validate_rotations(entry["rotations"], "nodes.%s.rotations" % node_id)
         except attest.Refused as refusal:
             raise Refused(str(refusal))
         out[node_id] = entry["accepted"]
     return out
+
+
+def rotations(document, node_id):
+    """#361 C4: `node_id`'s retires in `document` (validated by form), [] when it has been through none: what its
+    catch-up applies (anchorpolicy.catch_up) and what a peer judges its rotation counter against (check_rotation)."""
+    validate(document)
+    entry = document["nodes"].get(node_id)
+    require(entry is not None, "the measurements have no entry for %r" % (node_id,))
+    return list(entry.get("rotations", []))
 
 
 def version(document):

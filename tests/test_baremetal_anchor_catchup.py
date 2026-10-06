@@ -70,9 +70,9 @@ class CatchUp(unittest.TestCase):
         self.assertEqual(self.R(), self.g)
 
     def test_the_rotations_form(self):
-        for name, rotations, reason in (("a gap", [{"from": 1, "signature": "00"}, {"from": 3, "signature": "00"}],
+        for name, rotations, reason in (("a gap", [{"from": 1, "signature": "00" * 64}, {"from": 3, "signature": "00" * 64}],
                                          r"rotations\[1\].from is 3, not 2: a retire moves R by exactly 1"),
-                                        ("an extra field", [{"from": 1, "signature": "00", "at": 1}], r"rotations\[0\] is not \{from, signature\}"),
+                                        ("an extra field", [{"from": 1, "signature": "00" * 64, "at": 1}], r"rotations\[0\] is not \{from, signature\}"),
                                         ("not a list", {}, "rotations is not a list")):
             with self.subTest(name), self.assertRaisesRegex(m.Refused, reason):
                 ap.published(rotations)
@@ -103,7 +103,8 @@ class CatchUp(unittest.TestCase):
         check = lambda rotation=got, qualifying=digest, node_id="a", rotations=(), name=ak_name, ek=ek_name: ap.check_rotation(  # noqa: E731
             rotation, qualifying, ak_public, ek, name, POINT, node_id, list(rotations))
         self.assertEqual(check(), self.g)
-        self.assertEqual(check(rotations=self.rotations(self.g - 1)), self.g)              # G_pub == R: current
+        if self.g > 1:                     # G_pub == R: current (R starts at the TPM's saved count + 1, so from >= 1)
+            self.assertEqual(check(rotations=self.rotations(self.g - 1)), self.g)
         for name, kw, reason in (
                 ("behind", dict(rotations=self.rotations(self.g)),
                  "a's rotation counter is %d, below the published %d: no lease is co-signed until it has caught up" % (self.g, self.g + 1)),
