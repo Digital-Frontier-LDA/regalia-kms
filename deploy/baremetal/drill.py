@@ -403,10 +403,16 @@ class Hardware:
         return record
 
     def power_cycle(self, node):
+        """restore's undo of a restart (or a hung server): ForceRestart, power read back On. Marked undone on that
+        readback, because otherwise every later restore would power-cycle the server again. Whether it SERVES is the
+        next run's mandatory preflight ("three-serving" refuses until it does). Inside a run, S2 and S5 mark a restart
+        undone only after their serving predicates hold."""
         client = self.redfish_for(node)
         require(hasattr(client, "force_restart"), "the Redfish client has no force_restart yet (d9, #501): power-cycle %s through "
                 "its iLO by hand, then run restore again" % node)
         record = client.force_restart()
+        readbacks = record.get("readbacks") or []
+        require(readbacks and readbacks[-1].get("power") == "On", "%s did not read back On after its power cycle: %s" % (node, record))
         self.journal.undone_matching({"action": "power-cycle", "node": node})
         return record
 
