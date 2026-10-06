@@ -374,55 +374,6 @@ def report(run_id, operator, witness, outcome, context):
     return data, hashlib.sha256(data).hexdigest()
 
 
-# rollout.may_reboot as `update apply` asks it, read-only: as root on the node, on fresh leases from its peers, its running
-# set from its TPM (the same check as e2e/rolling-threenode.py's DECIDE). Prints {"ok": true, ...} or {"ok": false,
-# "reason": ...}. S5 asks it before each restart (#504's red under lease v2, #489: a peer restarted less than one lease ago
-# issues no lease yet, so restarting the next node then leaves the third with no issuer).
-MAY_REBOOT = (
-    "import json, sys\n"
-    "from deploy.baremetal import measurements, membership, node, rollout, update\n"
-    "d = json.load(sys.stdin)\n"
-    "h = update.Host(node.load(d['cfg']))\n"
-    "m = h.manifest()\n"
-    "doc = h.document(m)\n"
-    "measurements.bind(m, doc)\n"
-    "running = update.running_set(doc, h.node_id, h.pcrs)['label']\n"
-    "s = h.session()\n"
-    "got, refused = update.fresh_leases(h, m, update.authorizers(m, h.node_id), s)\n"
-    "try:\n"
-    "    out = dict(rollout.may_reboot(m, doc, h.node_id, running, s, h.own_state(), list(got.values()), h.now(), run=h.run), ok=True)\n"
-    "except membership.Refused as r:\n"
-    "    out = {'ok': False, 'reason': str(r)}\n"
-    "print(json.dumps(dict(out, running=running, epoch=m['epoch'], refused=refused)))\n")
-HOST_CONFIG = "/etc/regalia/node.json"
-HOST_CODE = "/usr/lib/regalia-kms"          # the units' WorkingDirectory: where `deploy` is imported from on a host
-MAY_RESTART_PATIENCE_S = 3 * lease.MAX_LIFETIME    # as rolling-threenode's moved(): a WAIT is asked again until then
-
-
-def ask_again_after(reason):
-    """Seconds before may_reboot is asked again after a WAIT: the most "ask again in N s" among its refusals (an issuer's
-    warm-up, lease.py), else one lease; at least 1 s. Each ask takes a real lease from every peer, from the same rate
-    bucket as the node's own admission renewals (sync.RATE), so asking every few seconds could cost the node its lease
-    (62 on #504)."""
-    found = [int(n) for n in re.findall(r"ask again in (\d+) s", reason)]
-    return max(1, max(found) if found else lease.MAX_LIFETIME)
-
-
-def verdict_of(done, node):
-    """may_reboot's printed verdict from a finished process; a failure to ask is a refusal, never a yes."""
-    if done.returncode != 0:
-        return {"ok": False, "reason": "may_reboot could not be asked on %s (exit %s): %s"
-                % (node, done.returncode, ((done.stderr or "") + (done.stdout or "")).strip()[-300:])}
-    try:
-        verdict = json.loads((done.stdout or "").strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        return {"ok": False, "reason": "may_reboot on %s printed no verdict: %r" % (node, (done.stdout or "")[-200:])}
-    if not isinstance(verdict, dict) or verdict.get("ok") is not True:
-        return dict(verdict if isinstance(verdict, dict) else {}, ok=False,
-                    reason=str((verdict.get("reason") if isinstance(verdict, dict) else None) or "no yes from may_reboot"))
-    return verdict
-
-
 def ssh_runner(host_of, user="root"):
     """ssh(node, argv, input) over OpenSSH, as `user` on host_of(node), the command quoted, batch mode (no prompt)."""
     def ssh(node, argv, input=None):
@@ -438,7 +389,6 @@ class Hardware:
       restart                in-band `systemctl reboot` over SSH (iLO 4 has no GracefulRestart); its undo, should the
                              server not come back, is a power-on
       partition / heal       S3's Partition (the dead-man timer first)
-      may_restart            rollout.may_reboot on the node over SSH (MAY_REBOOT), read-only: S5 asks it before each restart
     `redfish_for(node)` -> a redfish.Client for that server; `ssh(node, argv, input=None)`."""
 
     def __init__(self, journal, ssh, redfish_for, ttl=600):
@@ -468,10 +418,6 @@ class Hardware:
     def restarted(self, node):
         """The restart's server is back (its scenario's predicates held): its fault is undone."""
         self.journal.undone_matching({"action": "power-cycle", "node": node})
-
-    def may_restart(self, node):
-        return verdict_of(self.ssh(node, ["env", "-C", HOST_CODE, "python3", "-Es", "-c", MAY_REBOOT],
-                                   input=json.dumps({"cfg": HOST_CONFIG})), node)
 
     def partition(self, node):
         self.journal.fault("partition", node, {"action": "unpartition", "node": node})
@@ -504,9 +450,16 @@ def _all_ok(predicates):
     return bool(predicates) and all(bool(good) for good, _ in predicates.values())
 
 
-def scenarios(backend, plan, judge, patience=MAY_RESTART_PATIENCE_S, sleep=time.sleep, monotonic=time.monotonic):
+# KERNEL-UPDATE step 3.5 (#522): a host back and serving, then one lease more, before the next is touched. Under lease
+# v2 (#489) a host restarted less than one lease ago issues no lease; restarting the next sooner leaves the third with no
+# issuer (#504's first red after #489). rollout.may_reboot is not this interlock: it answers only inside an approved
+# update, and the runbook says it alone does not hold.
+S5_SETTLE_S = lease.MAX_LIFETIME
+
+
+def scenarios(backend, plan, judge, settle=S5_SETTLE_S, sleep=time.sleep):
     """S1, S2, S3 and S5 as run() takes them, over any backend with power_off/power_on/restart/restarted/partition/heal
-    and may_restart (Hardware here; the tier-N fixture's in e2e/lib/drillfixture.py). `plan`: {"S1": node, "S2": node, "S3": node,
+    (Hardware here; the tier-N fixture's in e2e/lib/drillfixture.py). `plan`: {"S1": node, "S2": node, "S3": node,
     "S5": [nodes in order]}; only the scenarios it names. `judge(name, context)` -> {predicate: (ok, evidence)}, where
     context holds the injection's times (ms) and records; the predicates are the shared ones (e2e/lib/drills.py). S4
     needs the owner's recovery authorization: not here yet."""
@@ -548,28 +501,11 @@ def scenarios(backend, plan, judge, patience=MAY_RESTART_PATIENCE_S, sleep=time.
     def s5(order):
         ctx = {"restarts": []}
 
-        def asked(node):
-            """may_reboot, as `update apply` asks it, until a yes; a WAIT (a peer back less than one lease ago issues no
-            lease yet, #489) is asked again after the seconds it gives (ask_again_after) until MAY_RESTART_PATIENCE_S; any
-            other no, or a WAIT past it, stops the roll and the run (restore then runs), nothing injected on the node."""
-            deadline, asks = monotonic() + patience, 0
-            while True:
-                verdict, asks = backend.may_restart(node), asks + 1
-                if verdict.get("ok") is True:
-                    return {"ok": True, "asks": asks, "authorizers": verdict.get("authorizers")}
-                reason = str(verdict.get("reason", ""))
-                left = deadline - monotonic()
-                if not reason.startswith("WAIT") or left <= 0:
-                    raise Aborted("S5: may_reboot does not let %s restart (%s, after %d asks): the roll stops before it"
-                                  % (node, reason, asks))
-                # the issuer's hint is in `refused` (fresh_leases), not in may_reboot's reason (62 on #504)
-                hints = " ".join([reason] + [str(v) for v in (verdict.get("refused") or {}).values()])
-                sleep(max(1, min(ask_again_after(hints), math.ceil(left))))
-
         def roll():
             for node in order:              # one at a time; each must be BACK, by its predicates, before the next goes down
-                may = asked(node)           # and the cluster must let it go: may_reboot says yes first (#504's red, #489)
-                ctx["restarts"].append({"node": node, "may_reboot": may, "t_inject_ms": now(), "restart": backend.restart(node)})
+                # and one lease more (step 3.5), before the first too: S2 restarted a node just before
+                sleep(settle)
+                ctx["restarts"].append({"node": node, "settled_s": settle, "t_inject_ms": now(), "restart": backend.restart(node)})
                 back = judge("S5-wait", dict(ctx, node=node))
                 ctx["restarts"][-1]["back"] = {name: {"ok": bool(good), "evidence": evidence} for name, (good, evidence) in back.items()}
                 if not _all_ok(back):       # two of three down otherwise (d9 on #504): stop, the fault left pending

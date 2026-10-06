@@ -4,7 +4,6 @@ nodes' own admission trails.
 
     power_off / power_on   cluster.stop(power="cut") / cluster.start: power lost, then the node booted again
     restart                cluster.stop(power="cycle") then start: an orderly reboot
-    may_restart            drill.MAY_REBOOT as root in the node's namespace (rolling-threenode's decide())
     partition / heal       cluster.partition (wg-svc's port, in the node's namespace only) / cluster.heal
 
 Every fault is journaled first, as the hardware backend does, so the dry run exercises restore --journal's path too.
@@ -20,7 +19,7 @@ import json
 import time
 
 from threenode import until
-from deploy.baremetal import admission, drill, lease
+from deploy.baremetal import admission, lease
 
 NOT_JUDGED = ("zero_failures", "failures_only_in_flight", "stateful_continues", "caught_up_before_serving")
 SLACK_S = 5                       # the admission's round (5 s) and the lapse watcher's 0.5 s, with room
@@ -51,13 +50,6 @@ class Fixture:
 
     def restarted(self, node):
         self.journal.undone_matching({"action": "power-cycle", "node": node})
-
-    def may_restart(self, node):
-        """drill.MAY_REBOOT as root in the node's namespace, as e2e/rolling-threenode.py's decide() runs it."""
-        n = self.cluster.nodes[node]
-        return drill.verdict_of(self.cluster.as_root(node, "may-restart-%d" % time.monotonic_ns(),
-                                                     ["/usr/bin/python3", "-Es", "-c", drill.MAY_REBOOT],
-                                                     input=json.dumps({"cfg": str(n.cfg_path)}), in_ns=True), node)
 
     def power_cycle(self, node):
         self.cluster.stop(node, power="cut")

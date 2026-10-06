@@ -415,15 +415,10 @@ class HardwareBackend(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d)
         self.journal = drill.Journal(os.path.join(self.d, "faults.jsonl"))
-        self.log, self.server, self.verdicts, self.asked = [], FakeServer(), {}, []
+        self.log, self.server = [], FakeServer()
 
         def ssh(node, argv, input=None):
             self.log.append(("ssh", node, argv[0], [e["action"] for e in self.journal.pending()]))
-            if argv[:2] == ["env", "-C"]:                                   # may_reboot, asked before an S5 restart
-                self.asked.append((node, argv, input))
-                queue = self.verdicts.get(node) or [(0, json.dumps({"ok": True, "authorizers": ["x"]}))]
-                rc, out = queue.pop(0) if len(queue) > 1 else queue[0]
-                return subprocess.CompletedProcess(argv, rc, out, "")
             if argv == ["systemctl", "reboot"]:
                 return subprocess.CompletedProcess(argv, 255, "", "Connection closed by remote host")
             return self.server(node, argv, input)
@@ -460,7 +455,8 @@ class HardwareBackend(unittest.TestCase):
         # a regression: lambdas read a shared name, and every scenario hit the last planned node
         judged = []
         built = drill.scenarios(self.hw, {"S1": "c", "S2": "b", "S3": "a", "S5": ["a", "b"]},
-                                lambda name, ctx: judged.append((name, ctx.get("node"))) or {"seen": (True, name)})
+                                lambda name, ctx: judged.append((name, ctx.get("node"))) or {"seen": (True, name)},
+                                sleep=lambda s: None)
         out = drill.run(built, abort=lambda: None, restore=lambda: None)
         self.assertTrue(out["passed"], out)
         self.assertIn(("off", "c"), self.log)
@@ -491,91 +487,27 @@ class HardwareBackend(unittest.TestCase):
                 return {"it serves again": (False, "no serving line in 240 s")}
             return {"seen": (True, name)}
         restarted = []
-        out = drill.run(drill.scenarios(self.hw, {"S5": ["a", "b", "c"]}, judge), abort=lambda: None, restore=lambda: None)
+        out = drill.run(drill.scenarios(self.hw, {"S5": ["a", "b", "c"]}, judge, sleep=lambda s: None), abort=lambda: None,
+                        restore=lambda: None)
         self.assertIn("ABORTED: S5: b did not come back", out["stopped"])
         self.assertFalse(out["passed"])
         self.assertNotIn(("ssh", "c", "systemctl", ["restart"]), [x for x in self.log if x[0] == "ssh"])   # c never restarted
         self.assertEqual([(e["node"], e["undo"]["action"]) for e in self.journal.pending()], [("b", "power-cycle")])
 
-    # as MAY_REBOOT prints a warm-up: may_reboot's reason names no time, the issuer's refusal (in `refused`) does (62)
-    WAIT = (0, json.dumps({"ok": False, "reason": "WAIT: no valid lease from b (none presented)",
-                           "refused": {"b": "this issuer has watched etcd for 12 s, less than one lease (30 s): it issues no "
-                                            "lease until it knows what it held a lease ago. Expected for a peer that (re)started "
-                                            "less than one lease ago, not a fault: ask again in 18 s"}}))
-
-    def test_s5_asks_may_reboot_before_each_restart_and_asks_again_on_a_wait(self):
-        """#504's red under lease v2 (#489): a peer back less than one lease ago issues no lease, so S5 asks may_reboot as
-        `update apply` does, and a WAIT is asked again."""
-        self.verdicts["b"] = [self.WAIT, self.WAIT, (0, json.dumps({"ok": True, "authorizers": ["a", "c"]}))]
-        slept = []
-        out = drill.run(drill.scenarios(self.hw, {"S5": ["a", "b", "c"]}, lambda name, ctx: {"seen": (True, name)},
-                                        sleep=slept.append), abort=lambda: None, restore=lambda: None)
+    def test_s5_waits_one_lease_before_each_restart(self):
+        """KERNEL-UPDATE step 3.5 (#522): back and serving, then one lease more, before the next host is touched (#504's
+        red under lease v2, #489: a host back less than one lease ago issues no lease yet)."""
+        def judge(name, ctx):
+            self.log.append(("judged", name, ctx.get("node")))
+            return {"seen": (True, name)}
+        out = drill.run(drill.scenarios(self.hw, {"S5": ["a", "b", "c"]}, judge,
+                                        sleep=lambda s: self.log.append(("slept", s))), abort=lambda: None, restore=lambda: None)
         self.assertTrue(out["passed"], out)
-        self.assertEqual(slept, [18, 18])                                 # the seconds the warm-up gives, not a poll
-        self.assertEqual([n for n, _, _ in self.asked], ["a", "b", "b", "b", "c"])
-        node, argv, given = self.asked[0]
-        self.assertEqual(argv, ["env", "-C", "/usr/lib/regalia-kms", "python3", "-Es", "-c", drill.MAY_REBOOT])
-        self.assertEqual(json.loads(given), {"cfg": "/etc/regalia/node.json"})
-        ssh = [(n, what) for kind, n, what, _ in (x for x in self.log if x[0] == "ssh")]
-        for name in "abc":                                                 # each asked before its own reboot
-            self.assertLess(ssh.index((name, "env")), ssh.index((name, "systemctl")))
-        restarts = out["scenarios"][0]["injection"]["restarts"]
-        self.assertEqual([r["may_reboot"]["asks"] for r in restarts], [1, 3, 1])
-
-    def test_s5_stops_before_a_restart_may_reboot_refuses(self):
-        self.verdicts["b"] = [(0, json.dumps({"ok": False, "reason": "c has no fresh lease: two of three would be down"}))]
-        out = drill.run(drill.scenarios(self.hw, {"S5": ["a", "b", "c"]}, lambda name, ctx: {"seen": (True, name)},
-                                        sleep=lambda s: None), abort=lambda: None, restore=lambda: None)
-        self.assertIn("ABORTED: S5: may_reboot does not let b restart (c has no fresh lease", out["stopped"])
-        self.assertEqual([n for kind, n, what, _ in self.log if kind == "ssh" and what == "systemctl"], ["a"])
-        self.assertEqual(self.journal.pending(), [])                      # nothing injected on b; a's restart undone
-
-    def test_the_asks_keep_within_the_peers_rate(self):
-        """62 on #504: each ask takes real leases from every peer, out of the bucket the node's admission renews from.
-        A WAIT without a time is asked again after one lease, so a full patience is at most patience/30 + 1 asks."""
-        clock = [0.0]
-        self.verdicts["a"] = [(0, json.dumps({"ok": False, "reason": "WAIT: no valid lease from b (refused)"}))]
-        out = drill.run(drill.scenarios(self.hw, {"S5": ["a"]}, lambda name, ctx: {"seen": (True, name)},
-                                        sleep=lambda s: clock.__setitem__(0, clock[0] + s), monotonic=lambda: clock[0]),
-                        abort=lambda: None, restore=lambda: None)
-        self.assertIn("ABORTED: S5: may_reboot does not let a restart (WAIT: no valid lease from b", out["stopped"])
-        asks = len(self.asked)
-        self.assertLessEqual(asks, drill.MAY_RESTART_PATIENCE_S // drill.lease.MAX_LIFETIME + 1)
-        self.assertGreaterEqual(asks, 3)                                   # and it did keep asking for the whole patience
-        self.assertEqual([x for x in self.log if x[0] == "ssh" and x[2] == "systemctl"], [])   # never restarted anyway
-
-    def test_ask_again_after(self):
-        self.assertEqual(drill.ask_again_after("WAIT: x (… ask again in 18 s); WAIT: y (… ask again in 25 s)"), 25)
-        self.assertEqual(drill.ask_again_after("WAIT: no valid lease from b (refused)"), drill.lease.MAX_LIFETIME)
-        self.assertEqual(drill.ask_again_after("WAIT: b (… ask again in 0 s)"), 1)      # never a tight loop (05, 62)
-
-    def test_may_reboot_is_rolling_threenodes_decide(self):
-        """62 on #504: one check, not two copies that drift: the drill's MAY_REBOOT is rolling-threenode's DECIDE."""
-        import ast
-        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "e2e", "rolling-threenode.py")
-        with open(path) as f:
-            tree = ast.parse(f.read())
-        found = [ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
-                 and any(isinstance(t, ast.Name) and t.id == "DECIDE" for t in n.targets)]
-        self.assertEqual(found, [drill.MAY_REBOOT])
-
-    def test_s5_stops_when_a_wait_outlasts_its_patience(self):
-        self.verdicts["a"] = [self.WAIT]
-        out = drill.run(drill.scenarios(self.hw, {"S5": ["a"]}, lambda name, ctx: {"seen": (True, name)}, patience=0,
-                                        sleep=lambda s: None), abort=lambda: None, restore=lambda: None)
-        self.assertIn("ABORTED: S5: may_reboot does not let a restart (WAIT: no valid lease from b", out["stopped"])
-        self.assertIn("after 1 asks", out["stopped"])
-        self.assertEqual([x for x in self.log if x[0] == "ssh" and x[2] == "systemctl"], [])
-
-    def test_a_failure_to_ask_may_reboot_is_a_no(self):
-        done = subprocess.CompletedProcess
-        self.assertFalse(drill.verdict_of(done([], 1, "", "Traceback: no TPM"), "a")["ok"])
-        self.assertIn("could not be asked on a (exit 1)", drill.verdict_of(done([], 1, "", "Traceback: no TPM"), "a")["reason"])
-        self.assertIn("printed no verdict", drill.verdict_of(done([], 0, "", ""), "a")["reason"])
-        self.assertIn("printed no verdict", drill.verdict_of(done([], 0, "not json\n", ""), "a")["reason"])
-        self.assertFalse(drill.verdict_of(done([], 0, json.dumps({"ok": "yes"}), ""), "a")["ok"])   # only a JSON true is a yes
-        self.assertFalse(drill.verdict_of(done([], 0, json.dumps([True]), ""), "a")["ok"])
-        self.assertTrue(drill.verdict_of(done([], 0, "noise\n" + json.dumps({"ok": True}), ""), "a")["ok"])
+        steps = [x[:3] if x[0] == "ssh" else x for x in self.log if x[0] in ("slept", "judged") or (x[0] == "ssh" and x[2] == "systemctl")]
+        self.assertEqual(steps, [("slept", lease_s := drill.lease.MAX_LIFETIME), ("ssh", "a", "systemctl"), ("judged", "S5-wait", "a"),
+                                 ("slept", lease_s), ("ssh", "b", "systemctl"), ("judged", "S5-wait", "b"),
+                                 ("slept", lease_s), ("ssh", "c", "systemctl"), ("judged", "S5-wait", "c"), ("judged", "S5", None)])
+        self.assertEqual(drill.S5_SETTLE_S, 30)
 
     def test_s2_leaves_its_restart_pending_when_its_predicates_fail(self):
         out = drill.run(drill.scenarios(self.hw, {"S2": "b"}, lambda name, ctx: {"back": (False, "not serving")}),
