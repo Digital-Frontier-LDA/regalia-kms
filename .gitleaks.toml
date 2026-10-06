@@ -42,9 +42,19 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "Ed25519 PUBLIC keys of the throwaway Shamir lab roots regalia-ceremony#128's writer was run under, in tests/vectors/card-ceremony-record/writer-run/ (root.hex; their shares were not kept), pinned by value: the 2026-10-04 run (in history) and the 2026-10-05 D30.7 run (d74a7aa)"
+description = "Ed25519 PUBLIC keys of the throwaway Shamir lab roots regalia-ceremony#128's writer was run under, in tests/vectors/card-ceremony-record/writer-run/ (root.hex; their shares were not kept), pinned by value: the 2026-10-04 run (in history), the 2026-10-05 D30.7 run (d74a7aa) and the 2026-10-05 {sig, dec, aut} run (bd61e02, #400)"
 regexTarget = "secret"
 regexes = [
     '''^76584946437bf4e61a99805663321c864da655197a406063af5e7da0840817da$''',
     '''^e80564ba6fbe0c65fe472ca921ba0b914332c0f4f01d152b66a6c2406c175c65$''',
+    '''^751cc01b66da5f7b45ec23878e31a295a9251901aa64776f73dc4131171a95d8$''',
+]
+
+[[allowlists]]
+description = "PUBLIC keys (Ed25519 SIG/AUT, X25519 DEC) of bench YubiKey 35718625's OpenPGP slots, as regalia-ceremony#140's owner-cards.py recorded them in tests/vectors/opgp-attestation-35718625/owner-card-run/ (#400; the same keys its attestation certificates carry), pinned by value"
+regexTarget = "secret"
+regexes = [
+    '''^c400e8b341d7227ec338ca98f318ed27052615e5afaf5378d8ce97e6bdf0b058$''',
+    '''^0d185d2f7e0e167fad0ca4f4e1eab42ee5585fdd7bfb745d8ceabb806f01061c$''',
+    '''^6242ce66913318c40260a3a51030ab26735993e00f7337a6dbf0c3b814ceca9c$''',
 ]

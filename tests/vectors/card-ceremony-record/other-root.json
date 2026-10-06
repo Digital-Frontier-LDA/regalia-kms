@@ -6,8 +6,9 @@
    {
     "alg": "ed25519",
     "attestation_sha256": {
-     "dec": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
-     "sig": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+     "aut": "d9a599e259e44bb0bee2269b4f0d62600d1d9de2469bf313ebd75e9f1f53ec0c",
+     "dec": "ae3eedc6bedd6e1e6aa84938fb3853cb2cf67695e8919e500e1ee743cfe31976",
+     "sig": "2aec64330b18bda906d208f2cc0987dfd7ee91722f424947f539aaebba0a53d2"
     },
     "attested": true,
     "key": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
@@ -17,8 +18,9 @@
    {
     "alg": "ed25519",
     "attestation_sha256": {
-     "dec": "e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",
-     "sig": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+     "aut": "b46f21794de5eca5596cee8c0df7fd19cc21df6363ed70c0c4a0070885fd660c",
+     "dec": "f38693861594dfeb0c90b36a6df1e80567b56518e4c1613afd9fe5b24edda780",
+     "sig": "c1918378cd79e994544145f0fb7139da3fc91fa5423c0a6b7b2021e7eb4a9acf"
     },
     "attested": true,
     "key": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d",
@@ -70,5 +72,5 @@
   "supersedes": "",
   "tool": "card-ceremony-vectors/1"
  },
- "signature": "09cee9fe0df37db400d72fc807360970b95eb00faad02530455fc1e08ff5c5fe5ef0e160cc564d7ce115f2566acd09debab54c606461e3f2f02c5fc8cd39bd09"
+ "signature": "653e1c8db5f58e2a947149e53cda75b1d6ab06ee5399afc1e20df556c592be7a2db3e3af85d7bdb0c0f1171e66c9f07a46b70d133e16a0774363ce508b564d0a"
 }

@@ -1,2 +1,2 @@
-{"at": "2026-10-06T12:00:00Z", "digest": "9c8f6679dc4977127367e5b981438aa16cddbf47720364d70b15f65662b56ee7", "key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c", "kind": "card-record-baseline", "sequence": 2, "source": "chain"}
-{"at": "2026-10-06T12:00:01Z", "digest": "12b6acdeb07ab653253d2a63705a38e2aa4d9946cf64e1e7e43ba0b9e073d0ce", "key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c", "kind": "card-record", "sequence": 3}
+{"at": "2026-10-06T12:00:00Z", "digest": "2db6e8aee83b3ea0772c0864524109275fa195afd7721ee1662c40c756351065", "key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c", "kind": "card-record-baseline", "sequence": 2, "source": "chain"}
+{"at": "2026-10-06T12:00:01Z", "digest": "be6c37f11501ee6d4b4e53cdb3ddf37b5d7defed425a50a39de962be2be8261d", "key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c", "kind": "card-record", "sequence": 3}

@@ -14,8 +14,9 @@ Refused, by name, unless:
   * the record's root_entry is the PINNED root (Ed25519) and root_fingerprint is the SHA-256 of its raw key, and the
     signature verifies under that pinned key over RECORD_DOMAIN + canonical(record);
   * every field is as the producer writes it, none missing and none unknown, at every level (FIELDS);
-  * owner_keys are exactly two, the roles owner-main and owner-backup (D30.7), with distinct serials and keys, Ed25519, and each
-    attested on its card (D5), naming the SHA-256 of its SIG and DEC keys' attestation certificates, all four distinct;
+  * owner_keys are exactly two, the roles owner-main and owner-backup (D30.7), with distinct serials and keys, Ed25519,
+    and each attested on its card (D5), naming the SHA-256 of its SIG, DEC and AUT keys' attestation certificates (their
+    DER), all six distinct; given the certificates (`attestations`, #400), each is verified as made on that card (attested());
   * the release key is Ed25519, imported, not attested, on two distinct cards, its key no owner key and its cards no
     owner card (D30.3);
   * no card is a bench YubiKey (membership.BENCH_YUBIKEYS; D28.5, D30);
@@ -31,9 +32,9 @@ Returns {"owners": {serial: key}, "roles": {role: serial}, "release_key": key, "
 No node ever reads a card record: a node has no laptop signing record to judge it by.
 
 CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
-  * "attested" has no certificate behind it yet: no producer captures the OpenPGP attestation certificates (the
-    digests exist only in the test vectors), and this side checks them by digest form and distinctness only, not
-    chained to Yubico's root nor matched to the owner keys (#400, waiting on a real attestation from the bench).
+  * "attested" is verified only when the certificates are given (`attestations`; `propose --genesis` requires them):
+    without them, verify() checks the digests' form and distinctness only, and says so ("attestations": "not given").
+    The trust and its limits are opgpattest's (one card measured, no revocation, vendored intermediates).
   * "Newest" is by THIS laptop's signing record, not by every use of the root: the root is a Shamir software key
     (D28), and one reconstructed elsewhere with a fresh state directory signs a valid "sequence 1" (the card
     ceremony's --first-card-record makes that visible, regalia-ceremony#111).
@@ -42,8 +43,9 @@ CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.m
     (`card record N of M, digest ...`, printed by propose --genesis); #405 would anchor the newest digest in the
     root-signed manifest. A lost state directory is rebuilt (#406) from ONE baseline line standing for 1..N, which
     is only as true as its source: the ceremony sheet before genesis, the chain's card_record pin after it.
-  * The release key's OpenPGP fingerprint and the SSH signers' keys are checked for form and distinctness, not tied to
-    the cards (the producer reads them from the cards).
+  * The release key's OpenPGP fingerprint is checked for form and distinctness, not tied to its cards (the producer
+    reads it from them; the release key is imported, so there is no attestation to tie it to). The SSH signers' keys
+    are tied to their owner cards only through the AUT attestations, so only when they are given.
   * The bench YubiKeys refused are a hand-kept list (membership.BENCH_YUBIKEYS).
   * Verified against the producer's signed vectors and records made in tests; no ceremony has produced a real one yet.
 """
@@ -63,6 +65,8 @@ RECORD_DOMAIN = b"regalia-ceremony-record/v1\x00"
 SCHEMA = "regalia.card-ceremony-record/v1"
 EVENT = "card-ceremony"
 ROLES = ("owner-main", "owner-backup")      # the OWNER pair (D30.7): the developer cards are in no KMS record
+ATTESTED_SLOTS = ("sig", "dec", "aut")      # each owner card's three OpenPGP keys, each attested (D5, D30.7; regalia-kms-51)
+TOUCH_FIXED = 2                             # the attested touch policy (5.8) every owner key must have: on, and fixed (D30.7)
 FIELDS = {
     "record": ("schema", "event", "owner_keys", "ownerauth_recipients", "ssh_signers", "release_key", "session", "root_entry",
                "root_fingerprint", "tool", "at", "sequence", "supersedes"),
@@ -73,7 +77,7 @@ FIELDS = {
     "rebuild_rebuilt": ("sequence", "digest"),
     "signing_state": ("schema", "root"),
     "owner_key": ("role", "serial", "alg", "key", "attested", "attestation_sha256"),
-    "attestation_sha256": ("sig", "dec"),
+    "attestation_sha256": ("sig", "dec", "aut"),
     "release_key": ("alg", "key", "fingerprint", "cards", "imported", "attested"),
     "ownerauth_recipient": ("serial", "primary", "subkey"),
     "ssh_signer": ("serial", "key"),
@@ -318,12 +322,54 @@ def _newest(record, root, signing_lines, pin=None):
     return newest["sequence"], None, True
 
 
-def verify(envelope, root, signing_lines, pin=None):
+def attested(record, directory, anchors=None):
+    """#400: each owner key's three attestation certificates (attestation_sha256.{sig, dec, aut}), found in `directory` by
+    the SHA-256 of their DER (the producer writes DER files, regalia-kms-51), verified as made ON THAT CARD:
+      * each chains, through a card's "YubiKey OPGP Attestation" certificate in `directory`, to the pinned Yubico root
+        (opgpattest.verify), and is the attestation of its own slot (SIG, DEC, AUT);
+      * each names the card's serial (5.7), says the key was generated on the card (5.2, D5) and that its touch policy is
+        fixed (5.8, D30.7);
+      * SIG's key is the recorded owner key; SIG's and DEC's OpenPGP fingerprints (5.4) are the card's ownerauth
+        recipient's primary and subkey; AUT's key is the card's SSH signing key (ssh_signers).
+    `record` is verify()'s, already checked; the first failure refuses, by name."""
+    from deploy.baremetal import opgpattest
+    try:
+        certs = opgpattest.certificates(directory)
+    except OSError as error:
+        raise Refused("the attestation certificates cannot be read from %s: %s" % (directory, error.strerror or error)) from None
+    cards = opgpattest.devices(certs)
+    recipients = {e["serial"]: e for e in record["ownerauth_recipients"]}
+    ssh = {e["serial"]: _ssh_ed25519(e["key"], "ssh_signers") for e in record["ssh_signers"]}
+    for entry in record["owner_keys"]:
+        serial, where = entry["serial"], "owner card %s (%s)" % (entry["serial"], entry["role"])
+        for f in ATTESTED_SLOTS:
+            digest_ = entry["attestation_sha256"][f]
+            cert = certs.get(digest_)
+            require(cert is not None, "%s: no certificate in %s has the %s attestation's SHA-256 %s…" % (where, directory, f.upper(), digest_[:16]))
+            got = opgpattest.verify(cert, cards, f.upper(), anchors=anchors)
+            what = "%s: its %s attestation" % (where, f.upper())
+            require(got["serial"] == serial, "%s names the card %s, not %s" % (what, got["serial"], serial))
+            require(got["source"] == opgpattest.GENERATED, "%s says the key was imported, not generated on the card (D5)" % what)
+            require(got["touch"] == TOUCH_FIXED, "%s gives the touch policy %d, not fixed (%d, D30.7)" % (what, got["touch"], TOUCH_FIXED))
+            if f == "sig":
+                require(got["key_type"] == "ed25519" and got["key"].hex() == entry["key"], "%s is of another key than the recorded owner key" % what)
+                require(got["fingerprint"] == recipients[serial]["primary"], "%s's fingerprint %s is not the card's ownerauth recipient's primary %s"
+                        % (what, got["fingerprint"], recipients[serial]["primary"]))
+            elif f == "dec":
+                require(got["fingerprint"] == recipients[serial]["subkey"], "%s's fingerprint %s is not the card's ownerauth recipient's subkey %s"
+                        % (what, got["fingerprint"], recipients[serial]["subkey"]))
+            else:
+                require(got["key_type"] == "ed25519" and got["key"].hex() == ssh[serial], "%s is of another key than the card's SSH signing key" % what)
+
+
+def verify(envelope, root, signing_lines, pin=None, attestations=None, anchors=None):
     """The card-ceremony record in `envelope`, checked against the pinned `root` (64 hex, the raw Ed25519 root key) and
     the laptop's root signing record (`signing_lines`, from read_signing_state: REQUIRED, there is no unjudged path):
     see the module text. Returns its owner and release keys, and where it stands among the root's card records. `pin`,
     (sequence, digest) from the verified chain's card_record (#405, `manifest verify`'s CARD-RECORD-PIN), is given after
-    genesis: then only the pinned record counts, whatever the laptop's record says is newest (#406)."""
+    genesis: then only the pinned record counts, whatever the laptop's record says is newest (#406).
+    `attestations`: the directory of the owner cards' attestation certificates (the ceremony disc's cards/, #400),
+    each owner key's three then verified (attested()); `anchors` the Yubico trust for a test (opgpattest.verify)."""
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     require(isinstance(envelope, dict), "the card record is not an object")
@@ -362,7 +408,7 @@ def verify(envelope, root, signing_lines, pin=None):
         require(entry["alg"] == "ed25519", "%s is not an Ed25519 key" % where)
         require(entry["attested"] is True, "%s: the key is not attested as made on its card (D5)" % where)
         _exact(entry["attestation_sha256"], "attestation_sha256", where + ".attestation_sha256")
-        for f in ("sig", "dec"):
+        for f in ATTESTED_SLOTS:
             certificates.append(_key(entry["attestation_sha256"][f], "%s.attestation_sha256.%s (a certificate's SHA-256, 64 hex)" % (where, f)))
         owners[serial], roles[entry["role"]] = _key(entry["key"], where + ".key"), serial
     require(sorted(roles) == sorted(ROLES), "owner_keys lacks a role: %s" % ", ".join(sorted(set(ROLES) - set(roles))))
@@ -400,7 +446,10 @@ def verify(envelope, root, signing_lines, pin=None):
     every = list(owners.values()) + [key] + ssh + [root]
     require(len(set(every)) == len(every), "a key appears twice among the owner, release, SSH and root keys")
     of, base, checked = _newest(record, root, signing_lines, pin)   # #403: the newest the root signed, by the laptop's record
-    return {"owners": owners, "roles": roles, "release_key": key, "session": record["session"], "at": record["at"],
+    if attestations is not None:
+        attested(record, attestations, anchors)
+    return {"attestations": "verified" if attestations is not None else "not given",
+            "owners": owners, "roles": roles, "release_key": key, "session": record["session"], "at": record["at"],
             "sequence": record["sequence"], "of": of, "digest": digest(record), "supersedes": record["supersedes"],
             "baseline": None if base is None else {k: base[k] for k in ("sequence", "digest", "source")}, "supersedes_checked": checked,
             "pinned": pin is not None}

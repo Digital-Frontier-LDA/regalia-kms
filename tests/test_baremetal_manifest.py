@@ -904,6 +904,15 @@ class ProposeGenesis(unittest.TestCase):
         self.enrolled = {e["node_id"]: {"7": "07" * 32, "11": "bb" * 32} for e in self.entries}
         self.owner_a, self.owner_b = typed(OWNER_KEYS[0])["key"], typed(OWNER_KEYS[1])["key"]
         self.release = typed(OWNER_KEYS[2])["key"]
+        # #400: the owner cards' attestations, under a stand-in Yubico hierarchy that the CLI trusts here (opgpattest.trust);
+        # what each check refuses is test_baremetal_opgpattest's
+        from deploy.baremetal import opgpattest
+        from tests.test_baremetal_opgpattest import Hierarchy
+        self.hierarchy = Hierarchy()
+        patch = unittest.mock.patch.object(opgpattest, "trust", lambda: self.hierarchy.anchors)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.attestations = os.path.join(self.d, "cards")
 
     def owners(self):
         return {self.MAIN: self.owner_a, self.BACKUP: self.owner_b}
@@ -913,6 +922,28 @@ class ProposeGenesis(unittest.TestCase):
                                     self.owners() if owners is None else owners, release or self.release, self.root,
                                     "2026-10-04T12:00:00Z", policy)
 
+    def attest(self, serial, sig, primary, subkey):
+        """Card `serial`'s three attestation certificates (SIG of the owner key `sig`), written as DER into
+        self.attestations as the ceremony disc holds them; their SHA-256s, as the record names them."""
+        import hashlib
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
+        os.makedirs(self.attestations, exist_ok=True)
+        if not hasattr(self, "aut"):
+            self.aut = {}
+            with open(os.path.join(self.attestations, "att.der"), "wb") as f:
+                f.write(self.hierarchy.card.public_bytes(serialization.Encoding.DER))
+        aut = ed25519.Ed25519PrivateKey.generate().public_key()
+        self.aut[serial] = aut.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        out = {}
+        for slot, public, fingerprint in (("sig", ed25519.Ed25519PublicKey.from_public_bytes(bytes.fromhex(sig)), primary),
+                                          ("dec", x25519.X25519PrivateKey.generate().public_key(), subkey), ("aut", aut, "E" * 39 + serial[-1])):
+            data = self.hierarchy.leaf(slot.upper(), public, serial, fingerprint).public_bytes(serialization.Encoding.DER)
+            with open(os.path.join(self.attestations, "%s.%s.attest.der" % (serial, slot)), "wb") as f:
+                f.write(data)
+            out[slot] = hashlib.sha256(data).hexdigest()
+        return out
+
     def card_record(self, signer=None, change=None):
         """The card ceremony's record of the owner's two cards and the release card, as regalia-ceremony writes it
         (tests/vectors/card-ceremony-record/), signed by `signer` (default: the pinned root)."""
@@ -920,19 +951,20 @@ class ProposeGenesis(unittest.TestCase):
         import hashlib
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         from deploy.baremetal import cardrecord
-        from tests.test_baremetal_cardrecord import raw, ssh
+        from tests.test_baremetal_cardrecord import raw
+        from tests.test_baremetal_opgpattest import ssh_key
         signer = signer or self.root_key
         record = {
             "schema": cardrecord.SCHEMA, "event": cardrecord.EVENT, "session": "cd" * 16, "tool": "offline-keys.py test",
             "at": "2026-10-04T11:00:00Z", "root_entry": {"alg": "ed25519", "key": raw(signer)},
             "root_fingerprint": hashlib.sha256(bytes.fromhex(raw(signer))).hexdigest(),
             "owner_keys": [{"role": "owner-main", "serial": self.MAIN, "alg": "ed25519", "key": self.owner_a, "attested": True,
-                            "attestation_sha256": {"sig": "a1" * 32, "dec": "a2" * 32}},
+                            "attestation_sha256": self.attest(self.MAIN, self.owner_a, "A" * 40, "B" * 40)},
                            {"role": "owner-backup", "serial": self.BACKUP, "alg": "ed25519", "key": self.owner_b, "attested": True,
-                            "attestation_sha256": {"sig": "b1" * 32, "dec": "b2" * 32}}],
+                            "attestation_sha256": self.attest(self.BACKUP, self.owner_b, "C" * 40, "D" * 40)}],
             "ownerauth_recipients": [{"serial": self.MAIN, "primary": "A" * 40, "subkey": "B" * 40},
                                      {"serial": self.BACKUP, "primary": "C" * 40, "subkey": "D" * 40}],
-            "ssh_signers": [{"serial": s, "key": ssh(Ed25519PrivateKey.generate())} for s in (self.MAIN, self.BACKUP)],
+            "ssh_signers": [{"serial": s, "key": ssh_key(self.aut[s])} for s in (self.MAIN, self.BACKUP)],
             "release_key": {"alg": "ed25519", "key": self.release, "fingerprint": "E" * 40, "cards": ["40000003", "40000004"],
                             "imported": True, "attested": False},
             "sequence": 1, "supersedes": ""}
@@ -1045,7 +1077,7 @@ class ProposeGenesis(unittest.TestCase):
             json.dump(record, f)
         out = os.path.join(self.d, "e1.json")
         args = ["propose", "--genesis", "--root-key", root or self.root, "--measurements", doc, "--out", out,
-                "--issued-at", "2026-10-04T12:00:00Z"] + (["--card-record", cards] if with_record else []) \
+                "--issued-at", "2026-10-04T12:00:00Z"] + (["--card-record", cards, "--attestations", self.attestations] if with_record else []) \
             + (["--state-dir", self.state(*(logged or [record]))] if with_state else [])
         args += ["--system-pub", pub]
         for files in nodes:
@@ -1082,7 +1114,7 @@ class ProposeGenesis(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         code, _, err, path = self.run_cli(with_record=False)
         self.assertEqual(code, 2)
-        self.assertIn("--genesis needs --measurements, --card-record and --state-dir", err)
+        self.assertIn("--genesis needs --measurements, --card-record, --attestations (the owner cards' attestation certificates, #400) and --state-dir", err)
         code, _, err, path = self.run_cli(record=self.card_record(signer=Ed25519PrivateKey.generate()))
         self.assertIn("the card record names another root than the pinned one", err)
         self.assertFalse(os.path.exists(path))
@@ -1107,7 +1139,8 @@ class ProposeGenesis(unittest.TestCase):
             self.assertEqual(tool.main(["propose", "--root-key", self.root, "--chain", os.path.join(self.d, "none.json"),
                                         "--card-record", os.path.join(self.d, "x.json"), "--set-state", "c=MAINTENANCE",
                                         "--out", os.path.join(self.d, "x")]), 2)
-        self.assertIn("--node, --system-pub, --measurements, --card-record, --state-dir and the lifetimes are for --genesis only", stderr.getvalue())
+        self.assertIn("--node, --system-pub, --measurements, --card-record, --attestations, --state-dir and the lifetimes are for --genesis only",
+                      stderr.getvalue())
 
     def test_each_node_was_enrolled_on_the_reviewed_image(self):
         """#399 (regalia-kms-d9): the PCR 11 each node's AK quoted at activation is the SYSTEM-phase value the genesis
@@ -1156,7 +1189,7 @@ class ProposeGenesis(unittest.TestCase):
         err = io.StringIO()
         with unittest.mock.patch("sys.stderr", err):
             self.assertEqual(tool.main(["propose", "--genesis", "--root-key", self.root, "--measurements", "m", "--card-record", "c",
-                                        "--state-dir", "s", "--out", path, "--node", "b", "k", "a"]), 2)
+                                        "--attestations", "d", "--state-dir", "s", "--out", path, "--node", "b", "k", "a"]), 2)
         self.assertIn("--genesis needs --node BUNDLE KEEP ACTIVATION for each node, and --system-pub", err.getvalue())
 
     def test_only_the_newest_card_record_on_the_laptop_s_signing_record(self):
@@ -1175,7 +1208,7 @@ class ProposeGenesis(unittest.TestCase):
         self.assertIn("supersedes %s" % tool.cardrecord.digest(first["record"]), out)
         os.unlink(path)
         code, _, err, path = self.run_cli(with_state=False)
-        self.assertIn("--genesis needs --measurements, --card-record and --state-dir", err)
+        self.assertIn("--genesis needs --measurements, --card-record, --attestations (the owner cards' attestation certificates, #400) and --state-dir", err)
         self.assertFalse(os.path.exists(path))
 
     def test_genesis_takes_no_chain_and_the_other_proposals_still_need_one(self):

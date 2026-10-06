@@ -26,9 +26,15 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
-- **Activation by quorum: not built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
-  refined by #432; see the ADR. On `main` only the format carries `activation_signers`, and nothing
-  reads it. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
+- **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
+  refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
+  its verification under the current manifest's `activation_signers`, each node's grant record and
+  signer, and the co-signer's and proposer's checks, as a library with unit tests. **Nothing issues or
+  enforces an activation in the running system yet:** no `nv_activation` index is defined at
+  enrolment, sync has no activation ops, there is no `owner.py sign-activation`, and the Go Gate still
+  takes `regalia-fence`'s single key. By the rule, a new cluster's first activation waits about 11 minutes
+  (`RECOVERY_WAIT_S`): every node starts with no grant record, so each is busy for that long after it
+  starts. Expected at first bring-up, not a fault. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
   the authority for which site signs ([`FENCING.md`](FENCING.md)).
   **Accepted in the design:**
   - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
@@ -50,12 +56,20 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Accepted, once #387 lands:** a one-peer recovery cannot see a revocation that was made after the
   signing laptop last synced, if the surviving peer withholds it and the audit collector has no
   receipt for it. The owner is asked before signing ([`deploy/baremetal/MEMBERSHIP-RECOVERY.md`](deploy/baremetal/MEMBERSHIP-RECOVERY.md)).
-- **Under a v4 chain an owner-written anchor is still accepted** (#242 B3, waiting on #410). A definer never lays down
-  the owner-written layout under v4 (B2b), but a node whose anchor is already owner-written still reads it under v4.
-  Its writes take the owner authorization, not the approved image. On a host whose owner authorization is set, the
-  node's own services hold none (`Node.anchor()` has no `owner_auth`), so a sync that must advance or repair it fails
-  closed until the node is re-anchored. Anyone holding the owner authorization can write it from any image. B3 makes
-  that layout Unusable under a v4 tip (a re-anchor repairs it) and refuses the v3 → v4 step over it.
+- **Under a v4 chain the anchor is written by policy only (#242 B3), with these limits.** An owner-written counter
+  or slot is Unusable under a v4 tip. load, commit, restore and the ESP advance all judge it by the tip of the chain
+  they hold, fetch or anchor, and refuse it before the disk or the ESP is written. The Go initrd reader
+  (`membership.Anchored`) judges alike, by the tip of the chain it reads, held to the same vectors.
+  - **A node whose anchor is owner-written stops advancing under v4 until it is re-anchored by policy.** Such an
+    anchor is a lab node's, or one laid down before B2b. sync refuses the next chain, and the ESP advance reports
+    `regalia_esp_advance_ok 0`. The repair is `reanchor` (MEMBERSHIP-RECOVERY.md), which needs two peer chains
+    (see the one-peer limit above).
+  - **The v3 → v4 step is refused on such a node, with nothing moved.** Every node must be re-anchored by policy
+    before the root signs the first v4 manifest. No tool checks the whole fleet's layout first; each node's refusal is
+    what tells.
+  - Under a v1–v3 (lab) chain both layouts still read, by design: lab images write with the owner authorization.
+  - Anyone holding the owner authorization can still undefine the indices. That is a denial (Unusable), which a
+    re-anchor repairs; it cannot write them under v4.
 - **TPM owner authorization: built (#242 step C), with these limits.**
   - On the TPM bus (#414, measured): the owner authorization itself is never sent. Owner calls use tpm2-tools'
     own HMAC sessions. Setting it uses a session salted to the enrolled EK (its Name checked) with parameter
@@ -77,17 +91,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.
-- **Re-anchoring on a real host has three known faults, fixed in #391 (not merged):**
-  - Run as root, `reanchor` writes `membership.json` as root with mode 0600, so the node's `regalia-sync`
-    cannot read its own chain afterwards and the node cannot serve.
-  - **Security:** `membership._exclusive` opens its lock with `O_CREAT` and no `O_NOFOLLOW`. Root
-    running `reanchor`, or any Store or HighWater, in `regalia-sync`'s state directory can be made to
-    open or create any file read-write through a planted symlink.
-  - `reanchor`'s anchor lock (`/run/lock/regalia-highwater-<idx>.lock`) is not the services'
-    (`<state>/highwater.lock`), so the two do not serialize.
-- **No total-outage re-anchor rehearsal** (#391 adds it). The procedure in MEMBERSHIP-RECOVERY.md is not
-  yet the total-outage one, and its example names `/var/lib/regalia/membership.json`, while the store
-  is under `/var/lib/regalia-sync`.
+- **The total-outage re-anchor is rehearsed on software TPMs only** (#391, `e2e/three-node-reanchor.py`). It covers one
+  kind of damage, uses cryptsetup and a pty rather than a console, and doesn't run the operator's source checks.
+  The one-peer and both-peers-destroyed cases aren't rehearsed (MEMBERSHIP-RECOVERY.md, "What the rehearsal does
+  not show").
 - **The ESP advance (#410, #66): what it does not cover.** `regalia-sync` no longer moves the TPM anchor;
   the root oneshot `regalia-esp-advance` writes the published chain to the ESP, then anchors it.
   - **Not measured** on a host: shown by unit tests, a real-systemd e2e on a plain `/efi` directory, the
@@ -100,8 +107,19 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     advance never runs). That is the withholding a compromised sync could always do. A fleet-level rule
     comparing the three nodes' epochs is **not built**.
   - Its run is in the journal and its metrics, not in a hash-chained trail (#278).
-  - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's and reanchor's
-    (see #391): run those by hand only with the node's units stopped.
+  - An anchor read the TPM refuses says only "cannot read 8 bytes from NV index …": `HighWater._read8` drops
+    `tpm2_nvread`'s error text, so an operator diagnosing it gets no TPM reason (#450; the text is pinned by
+    `highwater-v1.json` in both languages, so its fix regenerates that vector).
+  - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's. `reanchor` (#391) refuses
+    while `regalia-esp-advance` (or its path unit, sync or admission) runs, by `systemctl is-active`, and holds the
+    advance's lock for its whole run. On a machine with no `systemctl` it skips the unit check, and the three-node
+    rehearsal can't show it (its units have other names): unit tests only. When the advance's RuntimeDirectory is not
+    there, no lock is taken: a `regalia-esp-advance.service` an operator starts by hand during the re-anchor would run
+    unserialized (the unit check refuses one that already runs). Enrolment takes neither: run it only with the node's
+    units stopped.
+  - `reanchor` writes the ESP before the anchor (#391), as the advance does, but does not try the initrd's render first
+    as the advance does (`boot_renderable`): a chain this node could not boot under is written and anchored without
+    that warning.
   - **Accepted:** enrolment (`enrol commit`) still anchors epoch 1 before it writes the ESP: its render
     verifies the chain against the anchor, so the order is not cheap to swap. A crash in between leaves no
     chain on the ESP. The next boot's render then fails and the console asks for the recovery key, as it
@@ -109,6 +127,19 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     out: re-run `enrol commit`, which resumes from its journal (the anchor step is a no-op on a chain
     already held, and the rendered files are replaced); or let `regalia-esp-advance` run at boot, which
     writes the published chain to the ESP.
+- **The ESP advance's trigger is edge-triggered.** `regalia-esp-advance.path` uses `PathChanged=`, and systemd folds
+  a publication that lands during a run into that run, starting nothing afterwards. `esp_advance_settled` (#471)
+  therefore re-reads the published chain after each run and runs again while it changed (at most 5 runs, then a
+  refusal that the unit's `Restart=` retries). A publication that lands between a run's last read and its exit is the
+  remaining window: the next publication, or the unit's next start, catches it up. `RegaliaMembershipAnchorBehind`
+  warns if that window ever holds for 15 minutes.
+- **One transient TPM error fails an anchor read.** `HighWater` reads the anchor's NV indices with one
+  `tpm2_nvread` each and refuses on any failure, with no retry inside the tool. The services' units restart
+  (the ESP advance every 15 s; sync and admission on their own schedules) and the next run reads again. CI's
+  three-node fixture showed it intermittently on its shared software TPMs (#448). Since this change the tool's own
+  error text goes to the journal; if it names a transient TPM code (`TPM_RC_RETRY`, `TPM_RC_YIELDED`,
+  `TPM_RC_TESTING`, a busy socket), a small bounded retry on those codes alone is the next step. The refusal's own
+  text still carries no TPM reason (#450).
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
@@ -166,11 +197,18 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   judgement assumes the host had finished booting (systemd-pcrphase "ready" extended) when `activate`
   ran, which a software TPM cannot show: a bench item (#297), and the refusal says to re-run once
   `systemctl is-system-running` reports running. Run only on software TPMs so far.
-- **Card attestation: not built** (#400). Nothing yet produces the YubiKeys' OpenPGP attestation
-  certificates (`ykman openpgp keys attest`). The card record's `attestation_sha256` values are
-  placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is
-  built, the attestation will show the touch policy ("fixed"), the key source, the serial and the
-  fingerprint. OpenPGP has **no PIN-policy attestation**, so "PIN always" stays a recorded setting.
+- **Card attestation: verified at genesis, the producer not merged yet** (#400). `propose --genesis
+  --attestations DIR` (required) checks each owner card's SIG, DEC and AUT attestation, found by the SHA-256
+  of its DER. Each must chain through the card's "YubiKey OPGP Attestation" certificate to Yubico
+  Attestation Root 1 (pinned by hash; the intermediates are vendored, so a new Yubico intermediate needs
+  the bundle updated). Each must name the card's serial, say "generated on the card" and "touch fixed".
+  SIG's key must be the owner key; SIG's and DEC's OpenPGP fingerprints must be the ownerauth recipient's
+  primary and subkey; AUT's key must be the card's SSH signing key. Measured on one real card (YubiKey
+  35718625, firmware 5.7.4); the record's own cases use a stand-in Yubico hierarchy, since only a bench
+  card has been attested. Revocation is not checked (Yubico publishes no CRL for these). The producer
+  that writes the certificates to the disc (regalia-ceremony's owner-cards.py) is not merged yet.
+  OpenPGP has **no PIN-policy attestation**, so "PIN always" stays a recorded setting. The release key is
+  imported, never attested (D30.3).
 - **Card-record freshness is per laptop** (#403, #408). A record is accepted only if it is the newest
   card record on the ceremony laptop's root signing record (`signing-record.jsonl`, in the state
   directory marked `regalia-signing-state.json`). That is newest on THIS laptop, not newest of the
@@ -213,6 +251,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   recovery scenarios (#402). Outage, leases and replace are not covered. The time trail and the update trail
   are never checked end to end in a three-node scenario. In recovery, "each node's change to serving" is not
   tied to a step, and the victims' not-serving lines are not checked.
+- **`regalia-sync` says nothing in the journal about its rounds** (#470). Its decisions (pulls, applies,
+  refusals and their reasons) are only in its hash-chained trail. `journalctl -u regalia-sync` shows systemd's
+  start and stop lines, so an operator asking why a node is behind its peers must read the trail. In the
+  three-node fixture, `advance()` now prints the puller's trail when a node doesn't take an epoch (#469).
 - **Collector receipts carry no signed time** (#398), so a stale receipt still verifies. This matters
   for the one-peer recovery witness (#387).
 
@@ -229,6 +271,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   would be credited to that peer. In the scenarios only the seed is moved otherwise, and it is never asked (#393).
 - `audit_complete` judges each trail at a snapshot taken when it is called. Lines written after it are checked only
   if the collector already holds them, so a scenario must call it after the events it names (#393, #409).
+- The initrd builds verify every package against snapshot.debian.org, and one dropped connection fails the whole
+  build: `debverify` doesn't retry a fetch. That fails closed, but it turned main red once (8eb35a6) with no code
+  at fault. Retrying fetch errors only, never a verification failure, is #425.
 - three-node-outage's step 5 (a node without authenticated time signs nothing) allows **one** signature in flight
   across the switch: a's Proposer reads the authenticated time once per step, so a signature it began before the
   read saw the switch is legitimate. The check is by position in a's trail: after a's first refusal for want of time,
