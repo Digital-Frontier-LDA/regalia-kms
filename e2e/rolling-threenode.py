@@ -48,6 +48,7 @@ LIMITS (tier N; tier Q is #75's PR 4):
 import json
 import os
 import pathlib
+import re
 import sys
 import tempfile
 import time
@@ -163,18 +164,31 @@ def reboot(cluster, name, image):
     return {"got": got, "leased": leased, "served": served, "since": since}
 
 
+def ask_again_after(verdict):
+    """Seconds before may_reboot is asked again after a WAIT: the most any refusal in it asks for ("ask again in N s",
+    lease.RevisionFloor's warm-up), else one lease."""
+    texts = [str(verdict.get("reason", ""))] + [str(v) for v in (verdict.get("refused") or {}).values()]
+    asked = [int(n) for t in texts for n in re.findall(r"ask again in (\d+) s", t)]
+    return max(asked) if asked else lease.MAX_LIFETIME
+
+
 def moved(cluster, name, image, what):
     """An update step: may_reboot first (as `update apply` asks it), then the reboot. Three checks.
 
     A WAIT is asked again, as the operator re-runs `update apply` after one: under lease v2 (#489) a peer that has just
     rebooted issues no lease until it has watched etcd for one lease (lease.RevisionFloor), so the node about to move
-    may have no fresh lease from it for up to MAX_LIFETIME after that peer came back. Anything but a WAIT is final."""
+    may have no fresh lease from it for up to MAX_LIFETIME after that peer came back. Anything but a WAIT is final.
+
+    ASKED AGAIN AFTER THE SECONDS THE REFUSAL GIVES ("ask again in N s"), else after one lease, never every few seconds:
+    each ask is a real lease request to each peer, from this node's own budget (sync.RATE "lease", 18 a minute, which
+    its admission's renewals already spend about 12 of), so a tight loop would get the node RATE-refused, its own
+    renewals with it (regalia-kms-62's read of #504)."""
     deadline = time.monotonic() + 3 * lease.MAX_LIFETIME
     while True:
         verdict = decide(cluster, name)
         if verdict["ok"] or not str(verdict.get("reason", "")).startswith("WAIT") or time.monotonic() > deadline:
             break
-        time.sleep(5)
+        time.sleep(min(ask_again_after(verdict), max(1.0, deadline - time.monotonic())))
     ok(verdict["ok"], "%s: may_reboot says %s may reboot now" % (what, name), verdict)
     r = reboot(cluster, name, image)
     ok(opened(r["got"]) and r["leased"], "%s: %s on %s is unlocked through %s and leased" % (what, name, image or "CURRENT", r["got"].get("peer")), r["got"])
