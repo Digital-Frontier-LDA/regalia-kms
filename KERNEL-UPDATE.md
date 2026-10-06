@@ -157,6 +157,7 @@ ceremony (a ceremony prerequisite).
 
 | Situation | What to do | Status |
 |---|---|---|
+| `update apply` says WAIT and a peer "gave no lease: this issuer has watched etcd for N s, less than one lease (30 s)" | **Expected, not a fault**: that peer (re)started less than one lease ago (usually the host updated just before), and under D32 it issues no lease until it knows what it held a lease ago (`lease.RevisionFloor`, #489). Re-run `update apply` after the seconds the message gives (at most 30) | **exists** (#489) |
 | A host does not come back, before step 5 | reset it through the iLO: BootNext was used once, so it boots the current image (first in BootOrder), still accepted (step 3.6) | **manual** |
 | A host does not come back and no peer will unlock it | open its disk with its recovery key at the console (PIN-CUSTODY.md, "The disk recovery key") | **exists** (`recovery-key.sh`) |
 | A host is down and must not hold the others up | a manifest that sets it QUARANTINED; the revocation key may sign it. The others then update without it | rule **exists**; signed with `deploy.baremetal.manifest sign --signer revocation` on the revocation key's token |
