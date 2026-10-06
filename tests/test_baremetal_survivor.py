@@ -275,8 +275,10 @@ class OnTheNode(Case):
         fake.manifest.return_value = self.m2
         fake.clock.return_value = lambda: (now, authenticated)
         with mock.patch.object(node_module, "Node", lambda cfg: fake), mock.patch.object(node_module, "load", lambda path: {}), \
-                mock.patch.object(sv.os, "geteuid", lambda: 0), mock.patch("builtins.print"):
-            return sv.main(["--config", "/etc/regalia/node.json"] + argv)
+                mock.patch.object(sv.os, "geteuid", lambda: 0), mock.patch("builtins.print") as said:
+            code = sv.main(["--config", "/etc/regalia/node.json"] + argv)
+        self.said = " ".join(str(c.args[0]) for c in said.call_args_list if c.args)
+        return code
 
     def test_install_through_main_writes_what_the_admission_reads(self):
         self.assertEqual(self.run_main(["install", "--authorization", self.auth]), 0)
@@ -306,6 +308,31 @@ class OnTheNode(Case):
         os.unlink(path)
         os.symlink(self.auth, path)
         self.refused("cannot be opened", sv.installed, path, owner_uid=os.getuid())
+        os.unlink(path)
+        sv._write_root(self.auth + ".kept", self.signed)
+        os.link(self.auth + ".kept", path)                                 # a hard link to another such file
+        self.refused("has 2 links", sv.installed, path, owner_uid=os.getuid())
+
+    def test_a_malformed_document_is_a_refusal_never_a_crash_of_the_round(self):
+        path = os.path.join(self.d, sv.AUTH_FILE)
+        for label, doc in (("not an object", [1, 2]), ("no authorization", {"signature": {}}),
+                           ("wrong types", {"authorization": "x", "signature": 3})):
+            with self.subTest(label):
+                sv._write_root(path, doc)
+                with self.assertRaises(m.Refused):
+                    sv.seconds_left(path, self.m2, "a", lambda: (T0 + 100, True), owner_uid=os.getuid())
+
+    def test_a_clock_that_cannot_be_read_is_a_refusal_with_its_reason(self):
+        path = os.path.join(self.d, sv.AUTH_FILE)
+        sv._write_root(path, self.signed)
+
+        def clock():
+            raise OSError(5, "Input/output error", "/run/regalia/authtime.json")
+        self.refused("cannot be read as one: [Errno 5]", sv.seconds_left, path, self.m2, "a", clock, owner_uid=os.getuid())
+
+    def test_remove_says_when_nothing_was_installed(self):
+        self.assertEqual(self.run_main(["remove"]), 0)
+        self.assertIn("NOTHING INSTALLED", self.said)
 
     def test_directive_through_main_applies_a_disable(self):
         import json
