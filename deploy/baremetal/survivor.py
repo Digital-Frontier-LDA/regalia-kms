@@ -310,6 +310,9 @@ def installed(path, owner_uid=0):
         st = os.fstat(f.fileno())
         require(stat.S_ISREG(st.st_mode) and st.st_uid == owner_uid and not st.st_mode & 0o022,
                 "%s is not a regular file of root's that only root may write: the survivor authorization is not taken" % path)
+        # the admission directory is regalia-admission's: its user can link entries there, so a hard link to another
+        # root-owned file is refused (as #391 did for the anchor's locks; 3e on #506)
+        require(st.st_nlink == 1, "%s has %d links: the survivor authorization is not taken" % (path, st.st_nlink))
         raw = f.read(MAX_AUTH_BYTES + 1)
     require(len(raw) <= MAX_AUTH_BYTES, "the survivor authorization at %s is oversized" % path)
     return membership.load(raw)
@@ -319,13 +322,20 @@ def seconds_left(path, manifest, node_id, clock, owner_uid=0):
     """For admission.Service(survivor=...): None when no authorization is installed; else the seconds the installed
     one has left for `node_id` under `manifest` on the node's authenticated clock, or Refused (it does not hold).
     Read again at every call: a new epoch, a removal or an expiry is seen at the next round."""
-    signed = installed(path, owner_uid)
-    if signed is None:
-        return None
-    seconds, authenticated = clock()
-    require(authenticated is True, "time is not authenticated: the survivor authorization cannot be judged (fail closed)")
-    expires, _scope = in_force(signed, manifest, node_id, int(seconds))
-    return expires - int(seconds)
+    try:
+        signed = installed(path, owner_uid)
+        if signed is None:
+            return None
+        seconds, authenticated = clock()
+        require(authenticated is True, "time is not authenticated: the survivor authorization cannot be judged (fail closed)")
+        expires, _scope = in_force(signed, manifest, node_id, int(seconds))
+        return expires - int(seconds)
+    except Refused:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as failure:
+        # a read that fails, or a parseable but malformed document: a refusal with its reason on the trail, never a
+        # crash of the admission round (3e on #506)
+        raise Refused("the survivor authorization at %s cannot be read as one: %s" % (path, str(failure) or type(failure).__name__)) from None
 
 
 def _write_root(path, value):
@@ -368,8 +378,10 @@ def main(argv=None):
         node = node_module.Node(node_module.load(args.config))
         path = node.held(AUTH_FILE)
         if args.op == "remove":
-            if os.path.lexists(path):
-                os.unlink(path)
+            if not os.path.lexists(path):
+                print("NOTHING INSTALLED at %s: nothing removed (is --config this node's?)" % path)
+                return 0
+            os.unlink(path)
             print("REMOVED: %s; this node serves again only under a peer's lease" % path)
             return 0
         manifest = node.manifest()
