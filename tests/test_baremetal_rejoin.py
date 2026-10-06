@@ -171,8 +171,12 @@ class Admit(Case):
         """etcdconf's max-learners 2 (#519): c is admitted while b is still a learner, unstarted or started, so both catch
         up together; a third learner is refused, and so is any learner beside a voting member that has not started."""
         self.quiet(rj.admit, self.a, self.chain, "a", "b")
-        self.quiet(rj.admit, self.a, self.chain, "a", "c")                          # b unstarted, still a learner: c too
+        (line, _), _ = self.quiet(rj.admit, self.a, self.chain, "a", "c")           # b unstarted, still a learner: c too
         self.assertEqual([m.get("isLearner") for m in self.cluster.members[1:]], [True, True])
+        # b's unstarted learner is named b by its URL, never after the caller (2f on #528): c's join takes the line
+        tip = self.chain[-1]
+        self.assertEqual(line, ",".join("%s=%s" % (n, url(tip, n)) for n in ("a", "b", "c")))
+        self.assertEqual(rj._parse_initial(line, tip, "c"), line)
         self.cluster.members[1]["name"] = "b"
         self.quiet(rj.admit, self.a, self.chain, "a", "c")                          # run again: the same, nothing added
         self.assertEqual(len(self.cluster.members), 3)

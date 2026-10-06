@@ -79,9 +79,18 @@ def _url(manifest, node_id):
     return etcdconf.peer_url(nodes[node_id])
 
 
-def _initial_cluster(members, joining):
-    """name=url for each member etcd holds; the unstarted learner has no name yet, and is `joining`."""
-    return ",".join("%s=%s" % (m.get("name") or joining, m["peerURLs"][0]) for m in members)
+def _initial_cluster(members, manifest):
+    """name=url for each member etcd holds. An unstarted member has no name yet: it is named by its URL, from the
+    manifest, never taken to be the node being admitted (2f on #528: with two learners at once, two unstarted ones
+    would both be named after the caller). A member at a URL the manifest does not name is refused."""
+    by_url = {_url(manifest, nid): nid for nid in etcdconf.members(manifest)}      # as admit names R's URL
+    pairs = []
+    for m in members:
+        url = m["peerURLs"][0]
+        name = m.get("name") or by_url.get(url)
+        require(name, "etcd holds a member at %s that the manifest does not name" % url)
+        pairs.append("%s=%s" % (name, url))
+    return ",".join(pairs)
 
 
 def admit(host, chain, me, node):
@@ -106,7 +115,7 @@ def admit(host, chain, me, node):
         added = _ctl(host, "member", "add", node, "--learner", "--peer-urls=" + url)
         members, member_id = added["members"], "%x" % added["member"]["ID"]
         say("%s admitted as a learner at %s" % (node, url))
-    line = _initial_cluster(members, node)
+    line = _initial_cluster(members, current)
     say("INITIAL-CLUSTER: %s" % line)
     say("MEMBER-ID: %s" % member_id)
     return line, member_id
