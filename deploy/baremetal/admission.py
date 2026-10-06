@@ -302,6 +302,19 @@ class Service:
             manifest = None
         return self._publish(manifest, "the admission ran out at its bound")
 
+    def publish_now(self):
+        """What this process knows, published at once, before its first renewal (which may wait on silent peers): a
+        restarted lease service replaces the previous process's file and puts its own state on the trail at its start,
+        so a restart is never silent and a file written under an older epoch does not stand while the first round
+        renews (3e's S4 on #507). Errors are the first round's to report."""
+        try:
+            manifest = self.manifest()
+        except Exception:                         # noqa: BLE001 - the first step() reports it, with its reason
+            return None
+        if manifest is None:
+            return self._publish(None, "this node holds no manifest", refused=True)
+        return self._publish(manifest, "")
+
     def _publish(self, manifest, reason, refused=False):
         """Check the lease held, write the document and record a change, under the lock. `refused`: the round already
         refused (no manifest, too many tokens): nothing is checked, and the node does not serve."""
@@ -385,6 +398,7 @@ class Service:
         thread = threading.Thread(target=watcher, name="admission-lapse", daemon=True)
         thread.start()
         try:
+            self.publish_now()
             while not stop():
                 try:
                     self.step()
