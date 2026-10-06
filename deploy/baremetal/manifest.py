@@ -645,6 +645,10 @@ def _pin_reader(name):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="regalia-manifest", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
+    # regalia-kms-51, 95: offline-keys allow-lists the exact flags; an abbreviation (--sig, --key-f) or a second occurrence
+    # of a flag after the allowed one would otherwise be taken (argparse: the last one wins). keyfd.exact refuses both,
+    # for the parser and every subcommand.
+    keyfd.exact(parser, sub)
 
     def chain(c):
         c.add_argument("--chain", required=True, metavar="CHAIN.json", help="the signed chain (a JSON list of envelopes)")

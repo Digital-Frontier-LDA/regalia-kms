@@ -601,9 +601,9 @@ class OfflineRoot(unittest.TestCase):
         from deploy.baremetal import keyfd
         return keyfd.sealed_memfd(self.pem(key or self.key))
 
-    def run_sign(self, *extra, fd=None, typed=None, signer="root"):
+    def run_sign(self, *extra, fd=None, typed=None, signer="root", expected="1"):
         fd = self.memfd() if fd is None else fd
-        args = ["sign", "--chain", self.paths["chain.json"], "--root-key", self.root, "--expected-epoch", "1",
+        args = ["sign", "--chain", self.paths["chain.json"], "--root-key", self.root, "--expected-epoch", expected,
                 "--proposal", self.paths["p.json"], "--signer", signer, "--state-dir", self.state, "--out", self.paths["e2.json"],
                 "--key-fd", str(fd), "--offline-session", self.SESSION] + list(extra)
         out, err = io.StringIO(), io.StringIO()
@@ -693,7 +693,7 @@ class OfflineRoot(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("the confirmation does not match: nothing was signed", err)
         self.assertEqual(self.record(), [])
-        code, err = self.run_sign("--expected-epoch", "2")[0], None
+        code, err = self.run_sign(expected="2")[0], None
         self.assertEqual(code, 2)                                    # the chain ends at 1, not the epoch the operator said
 
     def test_the_offline_path_takes_nothing_of_a_token_and_only_the_root(self):
