@@ -115,6 +115,11 @@ class Profile(unittest.TestCase):
         self.assertTrue(allowed(config["policy_state_path"], "k"))   # the exclusive flock
         self.assertTrue(allowed("/etc/regalia-kms/config.json", "r"))
         self.assertTrue(allowed("/run/pcscd/pcscd.comm", "rw"))
+        # the operational state (D32, #432): the socket, and the two files this daemon writes, by temp+rename
+        self.assertTrue(allowed("/run/regalia-etcd/client.sock:0", "rw"))
+        for written in ("/run/regalia-state/applied.json", "/run/regalia-state/.applied.json.12345",
+                        "/run/regalia-kms/session-key.json", "/run/regalia-kms/.session-key.json.12345"):
+            self.assertTrue(allowed(written, "rw"), written)
         for name in ("hsm-site-a.pin", "yubi-site-a.pin"):   # regalia-kms-credentials.conf.example
             self.assertTrue(allowed("/run/credentials/regalia-kms.service/" + name, "r"))
 
@@ -137,6 +142,9 @@ class Profile(unittest.TestCase):
                 ("/run/credentials/regalia-sops-kms.service/workload-key.pem", "r"),
                 ("/run/credentials/regalia-kms.service/hsm-site-a.pin", "w"),
                 ("/run/regalia-kms/site-lease.json", "w"), ("/run/pcscd/pcscd.pid", "r"),
+                ("/run/regalia-etcd/member.db", "r"), ("/var/lib/regalia-etcd/member/snap/db", "r"),
+                ("/run/regalia-state/other.json", "w"), ("/run/regalia-kms/other.json", "w"),
+                ("/run/credentials/regalia-etcd.service/etcd-peer.key", "r"),
                 ("/run/regalia/admission/admission.json", "w"), ("/run/regalia/boot-session", "w"),
                 ("/run/regalia/admission/admission.json.requests", "r"), ("/run/regalia/admission/.admission-x", "w"),
                 ("/run/regalia/admission.json", "r"), ("/run/regalia/authtime.json", "r"),
@@ -151,7 +159,10 @@ class Profile(unittest.TestCase):
                     continue
                 self.assertFalse(perms & set("xil"), "an allow rule executes or links")
                 if "w" in perms or "a" in perms:
-                    self.assertRegex(line, r"^(owner /var/lib/regalia-kms/\*\.jsonl|/run/pcscd/pcscd\.comm)")
+                    # the journals, pcscd's socket, and D32's: etcd's client socket, what this daemon applied,
+                    # its session key's public half (#432)
+                    self.assertRegex(line, r"^(owner /var/lib/regalia-kms/\*\.jsonl|/run/pcscd/pcscd\.comm|/run/regalia-etcd/client\.sock:0 "
+                                     r"|owner /run/regalia-state/\.?applied\.json|owner /run/regalia-kms/\.?session-key\.json)")
                 self.assertNotRegex(line, r"^(owner )?/\*\* |^(owner )?/\*\*$| /\*\* ")
 
     def test_every_rule_is_of_a_kind_this_test_understands(self):
