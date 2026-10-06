@@ -279,6 +279,26 @@ def main(argv=None):
     for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
                      ("--opensc-conf", {}), ("--pin-env", {})):
         v.add_argument(flag, **kw)
+    w = sub.add_parser("sign-survivor", help="(off the nodes) the owner's ONE authorization for a lone survivor (D32.6, survivor.py)")
+    w.add_argument("--chain", required=True, help="the survivor's signed chain; its tip is the quarantine epoch")
+    w.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
+    w.add_argument("--node-id", required=True, help="the survivor")
+    w.add_argument("--how", required=True, help="how the other servers are fenced (powered off, cut off), as the attestation says it")
+    w.add_argument("--life-s", type=int, help="at most, and by default, %d s" % 604800)
+    w.add_argument("--scope", choices=("stateless", "full"), default="stateless",
+                   help="full: stateful operations too, after the wait (the owner's one-server decision, #432)")
+    w.add_argument("--fence-evidence", help="the fence step's power readback (JSON); without it the fence is the typed fallback")
+    w.add_argument("--out", required=True)
+    d = sub.add_parser("sign-directive", help="(off the nodes) the owner's disable-only directive during a survivor recovery")
+    d.add_argument("--chain", required=True, help="the survivor's signed chain; its tip is the quarantine epoch")
+    d.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
+    d.add_argument("--object-id", required=True)
+    d.add_argument("--reason", required=True)
+    d.add_argument("--out", required=True)
+    for parser_ in (w, d):
+        for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
+                         ("--opensc-conf", {}), ("--pin-env", {})):
+            parser_.add_argument(flag, **kw)
     for name in ("_propose", "_accept"):
         s = sub.add_parser(name)
         s.add_argument("--config", required=True)
@@ -352,6 +372,27 @@ def main(argv=None):
                 json.dump(signed, f, sort_keys=True)
             print("WRITTEN: %s, valid until %d; give it to the node (recover apply --one-source --owner-statement)"
                   % (args.out, signed["statement"]["expires"]))
+            return 0
+        if args.op in ("sign-survivor", "sign-directive"):
+            off_the_nodes()
+            from deploy.baremetal import manifest as manifest_tool, survivor
+
+            def confirm_line(text):
+                print(text)
+                return keyfd.tty_line("> ")                 # the console's terminal, never standard input
+            tip = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), manifest_tool.root_key(args.root_key))
+            if args.op == "sign-survivor":
+                fence = manifest_tool.read_json(args.fence_evidence, 65536) if args.fence_evidence else None
+                signed = survivor.make_authorization(tip, args.node_id, args.how, int(time.time()), confirm_line, open_signer, life_s=args.life_s,
+                                                     scope=args.scope, fence=fence)
+                note = "valid until %s or any new epoch; install it on %s" % (signed["authorization"]["expires_at"], args.node_id)
+            else:
+                signed = survivor.make_directive(tip, args.object_id, args.reason, int(time.time()), confirm_line, open_signer)
+                note = "disabled %s; keep it, give it to the survivor, and to the majority when it returns" % args.object_id
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            with os.fdopen(fd, "w") as f:
+                json.dump(signed, f, sort_keys=True)
+            print("WRITTEN: %s, %s" % (args.out, note))
             return 0
         beat_by_hand(args.config, open_signer, confirm)
     except (Refused, OSError, ValueError, KeyError) as refusal:

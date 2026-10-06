@@ -83,3 +83,4 @@ opstate | the operational-state entries (#432, D32): the format and its vector; 
 owner | the owner's co-signatures, off the nodes
 p11sign | a key on a PKCS#11 token for the laptop's signing paths
 ssh_trust | an administrator's known_hosts, generated from the membership, on the operator's side
+survivor | the lone survivor's authorization and directives (#432, D32.6): the owner's tool imports it; the node's install follows
