@@ -13,15 +13,21 @@ garbage-collected from etcd, so a line must verify against the membership chain 
                "payload_sha256": "<64 hex>", "approvals": [<internal/approval.Approval as received>, ...]}
 
 At most MAX_DETAIL bytes (internal/audit's maxDetail, 48 KiB): a spend entry is at most 4096 bytes and a spend counts at
-most 64 approvals, which fits.
+most 64 approvals, which fits. Measured as Go's
+json.Marshal writes it (raw UTF-8, <, > and & escaped), so this check is never stricter than the writer (62).
+
+The streams are the collector's hash-chained ones, where a line is held once; a raw trail that repeats a line would
+read here as two signatures naming one spend.
 
 check() refuses a signature, by name, unless:
   * its line carries a spend whose entry hashes to entry_sha256 and lives at that key, signed by a session key that the
     carried session entry vouches for under the chain (opstate.verify_session, its window), the entry inside it;
   * the spend's node is the server whose stream recorded the signature, and its principal, object, purpose and
     payload are the signature's own;
-  * the signature's time lies in [the spend's at, at + MAX_REQUEST_LIFE_S]: two signed times, not the collector's clock
-    (regalia-kms-ed's lane). Where the collector watched the spend's create live, it also checks `at` against its own
+  * the signature's time lies in [the spend's at - SKEW_S, at + MAX_REQUEST_LIFE_S]: two signed times, not the
+    collector's clock (regalia-kms-ed's lane). Both are the same node's wall clock at two moments, so an NTP step
+    backwards between reserve and record may put the signature up to SKEW_S before its spend (regalia-kms-62); a step
+    larger than that refuses an honest signature, by name, naming the node. Where the collector watched the spend's create live, it also checks `at` against its own
     clock on arrival (opstate.fresh) and that the line's revision and entry are what etcd committed;
   * the approvals the line carries are the ones the spend counted (opstate.check_approvals: each signed by its
     approver over the request's v3 binding, for THAT node, the threshold met), and exactly the approvers the daemon
@@ -60,13 +66,23 @@ def _when(text, what):
         raise Refused("%s is not an RFC 3339 UTC time" % what) from None
 
 
+def _go_json_len(value):
+    """The bytes Go's json.Marshal writes for `value` (internal/audit measures Detail so): UTF-8, no added spaces, and
+    <, >, &, U+2028 and U+2029 escaped as \\u00XX/\\u20XX."""
+    import json
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    for ch, esc in (("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026"), ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
+        text = text.replace(ch, esc)
+    return len(text.encode("utf-8"))
+
+
 def _carried(event, chain, approver_sets):
     """The spend an approval-gated event's line carries, verified against the chain alone, with the line's detail."""
     rid = event.get("request_id")
     detail = event.get("detail")
     require(isinstance(detail, dict) and isinstance(detail.get("spend"), dict),
             "request %s: an approval-gated signature whose audit line names no spend" % rid)
-    require(len(membership.canonical(detail)) <= MAX_DETAIL, "request %s's detail is over %d bytes" % (rid, MAX_DETAIL))
+    require(_go_json_len(detail) <= MAX_DETAIL, "request %s's detail is over %d bytes" % (rid, MAX_DETAIL))
     ref = detail["spend"]
     membership.exact(ref, SPEND_REF, "request %s's spend" % rid)
     require(isinstance(ref["key"], str) and ref["key"].startswith(opstate.PREFIX + "nonces/"), "request %s names a spend outside nonces/" % rid)
@@ -110,8 +126,9 @@ def check(streams, chain, gated, approver_sets, watched=None):
                                 ("purpose", event.get("purpose")), ("payload_sha256", detail["payload_sha256"])):
                 require(entry[field] == mine, "request %s's %s is %r; its spend's is %r" % (rid, field, mine, entry[field]))
             signed, spent = _when(event.get("timestamp"), "request %s's timestamp" % rid), _when(entry["at"], "the spend's at")
-            require(spent <= signed <= spent + opstate.MAX_REQUEST_LIFE_S, "request %s was signed at %s, outside [%s, %s + %d s] of its spend"
-                    % (rid, event.get("timestamp"), entry["at"], entry["at"], opstate.MAX_REQUEST_LIFE_S))
+            require(spent - opstate.SKEW_S <= signed <= spent + opstate.MAX_REQUEST_LIFE_S,
+                    "request %s was signed on %s at %s, outside [%s - %d s, %s + %d s] of its spend"
+                    % (rid, node_id, event.get("timestamp"), entry["at"], opstate.SKEW_S, entry["at"], opstate.MAX_REQUEST_LIFE_S))
             if watched is not None:
                 held = watched.get(ref["key"])
                 require(held is not None, "request %s on %s carries the spend %s, which the collector never saw committed"
