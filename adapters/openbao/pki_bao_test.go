@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
 )
 
 func pocData(t *testing.T, response []byte) map[string]json.RawMessage {
@@ -85,6 +87,7 @@ func pocLeaf(t *testing.T, encoded string, root, issuer *x509.Certificate, f *si
 		t.Fatal("synthetic leaf chain failed", err)
 	}
 	pocEvidence(t, f, backend, "certificate", leaf.RawTBSCertificate)
+	f.artifacts = append(f.artifacts, append([]byte(nil), leaf.Raw...))
 	return leaf
 }
 
@@ -101,7 +104,8 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 	caKey := testSigner(t, "p256").(*ecdsa.PrivateKey)
 	issuer, root := pocIssuerChain(t, caKey)
 	backend := &pocDaemonCA{key: caKey, issuer: issuer, leafCap: 3, crlCap: 16}
-	f := newSigningFixtureWith(t, "p256", "sha256", caKey, backend, true)
+	collector := newPOCAuditCollector(t)
+	f := newSigningFixtureWithSink(t, "p256", "sha256", caKey, backend, true, collector.sink)
 	provider := externalProviderConfig(f.pki.caConfig)
 	provider["plugin"] = "regalia"
 	providerPath := "/v1/sys/external-keys/configs/pki"
@@ -150,10 +154,9 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 	if err != nil || status < 400 || len(backend.snapshot()) != beforeExhaustion || f.audit.successful("sign") != signs {
 		t.Fatal("leaf budget not exhausted before token execution")
 	}
-	denied := false
-	for _, event := range f.audit.snapshotEvents()[auditBefore:] {
-		denied = denied || event.Decision == "deny" && event.ArtifactKind == "certificate" && event.X509ProfileID == f.profile.ID && strings.HasSuffix(event.Outcome, ":quota")
-	}
+	denied := pocWaitCollectorAudit(t, f, auditBefore, func(event audit.Event) bool {
+		return event.Decision == "deny" && event.ArtifactKind == "certificate" && event.X509ProfileID == f.profile.ID && strings.HasSuffix(event.Outcome, ":quota")
+	})
 	if !denied {
 		t.Fatal("exhausted issuance missing durable-policy quota denial")
 	}
@@ -166,6 +169,7 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 		t.Fatal("invalid KMS-signed CRL", status)
 	}
 	pocEvidence(t, f, backend, "crl", crl.RawTBSRevocationList)
+	f.artifacts = append(f.artifacts, append([]byte(nil), crl.Raw...))
 	found := false
 	for _, entry := range crl.RevokedCertificateEntries {
 		found = found || entry.SerialNumber.Cmp(leaf.SerialNumber) == 0
@@ -181,6 +185,7 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 		t.Fatal("revoked PKI mount grant still reached token")
 	}
 	b.assertValue(t)
+	pocReconcileBaoArtifacts(t, f, collector)
 	p.stop(t)
 	assertBaoArtifactsClean(t, dir, filepath.Join(dir, "openbao-plugin-kms-regalia-poc"), b.token, share)
 	t.Log("Real OpenBao PKI: read-only CA mapping, exact mount grant and revocation, externally held intermediate, server-owned full-byte inspected leaf and CRL signatures, durable quotas and audited intent, verified chain/revoked serial after leaf budget exhaustion, EAB-gated DNS-01 ACME issuance and renewal, HTTPS certificate rotation and unsafe issuance refusals; software fixture only.")
@@ -204,10 +209,9 @@ func pocBaoRefusals(t *testing.T, b baoAPI, f *signingFixture, backend *pocDaemo
 		if err != nil || status < 400 || len(backend.snapshot()) != before || f.audit.successful("sign") != signs {
 			t.Fatal("permissive OpenBao role bypassed server-owned KMS profile", status)
 		}
-		denied := false
-		for _, event := range f.audit.snapshotEvents()[auditBefore:] {
-			denied = denied || event.Decision == "deny" && strings.Contains(event.Outcome, "x509-")
-		}
+		denied := pocWaitCollectorAudit(t, f, auditBefore, func(event audit.Event) bool {
+			return event.Decision == "deny" && strings.Contains(event.Outcome, "x509-")
+		})
 		if !denied {
 			t.Fatal("unsafe OpenBao issuance did not reach server-owned profile denial")
 		}

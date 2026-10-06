@@ -7,7 +7,10 @@ The development adapter in [`adapters/openbao`](adapters/openbao) exercises auto
 Transit signing against the pinned real server with software tokens. Its separate PKI experiment
 also exercises leaf issuance, CRLs and internal ACME through a server-owned development profile
 ([issuing policy](adapters/openbao/X509-POLICY.md)). It admits development only,
-not production. #121 implements auto-unseal, #122 External Keys, and #123 gates every production
+not production. The [process recovery drill](adapters/openbao/PKI-RECOVERY.md)
+exercises shipping daemon/collector processes with SoftHSM; the
+[offline reconciliation tool](OPENBAO-PKI-RECONCILIATION.md) compares artifacts
+with an independently authenticated collector head. #121 implements auto-unseal, #122 External Keys, and #123 gates every production
 claim on software and witnessed hardware evidence. Until #123 passes for a row, that row is a design target and
 not a support claim.
 

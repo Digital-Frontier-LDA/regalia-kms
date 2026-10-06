@@ -86,6 +86,7 @@ type signingFixture struct {
 	profile         *policy.X509Policy
 	policyStatePath string
 	auditPath       string
+	artifacts       [][]byte
 }
 
 func newSigningFixture(t *testing.T, algorithm, hashName string, key crypto.Signer) *signingFixture {
@@ -93,6 +94,10 @@ func newSigningFixture(t *testing.T, algorithm, hashName string, key crypto.Sign
 }
 
 func newSigningFixtureWith(t *testing.T, algorithm, hashName string, key crypto.Signer, provider backend.Provider, ca bool) *signingFixture {
+	return newSigningFixtureWithSink(t, algorithm, hashName, key, provider, ca, nil)
+}
+
+func newSigningFixtureWithSink(t *testing.T, algorithm, hashName string, key crypto.Signer, provider backend.Provider, ca bool, externalSink audit.Sink) *signingFixture {
 	t.Helper()
 	pki := newFixturePKI(t)
 	objectID, purpose, content, principal, usage := "poc-signing-key", "openbao-transit", "application/vnd.regalia.digest", "spiffe://regalia/workload/openbao-keys-poc", "signing"
@@ -156,8 +161,12 @@ func newSigningFixtureWith(t *testing.T, algorithm, hashName string, key crypto.
 		t.Fatal(err)
 	}
 	sink := &fixtureAudit{}
+	var shippingSink audit.Sink = sink
+	if externalSink != nil {
+		shippingSink = &pocCollectorObserver{sink: externalSink, observer: sink}
+	}
 	auditPath := filepath.Join(t.TempDir(), "sign-audit.jsonl")
-	recorder, err := audit.Open(auditPath, sink)
+	recorder, err := audit.Open(auditPath, shippingSink)
 	if err != nil {
 		t.Fatal(err)
 	}
