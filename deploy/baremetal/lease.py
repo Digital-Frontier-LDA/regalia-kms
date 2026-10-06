@@ -33,7 +33,7 @@ A PEER ISSUES (issue) only if, in its current manifest, it is ACTIVE and the sub
 or DRAINING), it is not the subject, it holds a live heartbeat for that manifest (authenticated time, no
 rollback: heartbeat.py), and the subject re-attests in that very call as the node the manifest names
 (attest.py: the same EK and AK, this epoch, the boot session in the request, a quote over a nonce the
-peer issued within its last two minutes and accepts once). The lease lives at most 5 minutes and never
+peer issued within its last two minutes and accepts once). The lease lives at most 30 s and never
 past the issuer's heartbeat's own expiry.
 
 ANYONE VERIFIES (verify: the node itself, a peer, a gateway) against ITS OWN current manifest: the
@@ -76,8 +76,8 @@ SCHEMA = "regalia.runtime-lease/v1"
 DOMAIN = b"regalia-runtime-lease/v1\0"
 LEASE_KEYS = ("schema", "node_id", "ak_name", "issuer", "epoch", "manifest_digest", "session_id", "nonce", "issued_at", "expires_at")
 REQUEST_KEYS = ("node_id", "session_id", "nonce")
-MAX_LIFETIME = 300         # the runtime bound: a node no peer will renew stops within this
-FUTURE_SKEW = 30
+MAX_LIFETIME = 30          # the runtime bound: a node no peer will renew stops within this (ADR-0002 D32: 30 s, renewed every 10 s)
+FUTURE_SKEW = 5            # authtime holds the clock within MAX_OFFSET (1 s) of NTS; a lease cannot start later than this
 MAX_OUTSTANDING = 4        # renewal requests in flight (one per peer, and a retry each)
 MAX_BYTES = 16 * 1024
 QUOTE_PCRS = "sha256:7"    # a quote must select something; its PCR values are not judged here

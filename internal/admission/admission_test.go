@@ -52,7 +52,7 @@ func good(now int64) map[string]any {
 	return map[string]any{
 		"schema": Schema, "node_id": "a", "session_id": testSession, "boot_id": testBoot, "epoch": 7,
 		"manifest_digest": testDigest, "hsm_serials": "DENK0404144 36345471", "lease_issued_at": "2026-10-02T09:00:00Z",
-		"requested_boottime_ms": now - 5_000, "serve_until_boottime_ms": now + 290_000, "reason": "",
+		"requested_boottime_ms": now - 5_000, "serve_until_boottime_ms": now + 25_000, "reason": "",
 	}
 }
 
@@ -133,7 +133,7 @@ func TestANodeWithACurrentAdmissionIsAdmitted(t *testing.T) {
 		t.Fatal("Ready is false for a current admission")
 	}
 	// up to the last millisecond, and not at it
-	w.now += 289_999
+	w.now += 24_999
 	if !w.gate.Ready(context.Background()) {
 		t.Fatal("refused one millisecond before serve_until")
 	}
@@ -239,7 +239,7 @@ func TestEveryDefectOfTheFileIsNotAdmitted(t *testing.T) {
 		{"an exponent bound", "serve_until_boottime_ms is not a whole number", raw(`{"schema":"regalia.admission/v2","node_id":"a","session_id":"` + testSession +
 			`","boot_id":"` + testBoot + `","epoch":7,"manifest_digest":"` + testDigest + `","hsm_serials":"DENK0404144` +
 			`","lease_issued_at":"2026-10-02T09:00:00Z","requested_boottime_ms":1,"serve_until_boottime_ms":1e9,"reason":""}`)},
-		{"a bound as text", "serve_until_boottime_ms is not a whole number", change("serve_until_boottime_ms", "1290000")},
+		{"a bound as text", "serve_until_boottime_ms is not a whole number", change("serve_until_boottime_ms", "1025000")},
 		{"a negative request time", "requested_boottime_ms is not a whole number", change("requested_boottime_ms", -1)},
 		{"a reason that is not a string", "reason is not a string", change("reason", 0)},
 		{"a reason with a control character", "reason is not printable ASCII", change("reason", "bad\x1b[31m")},
@@ -519,7 +519,7 @@ func TestEveryChangeOfAnswerIsReportedOnceWithItsReasonAndEpoch(t *testing.T) {
 	// admitted again, then the file is simply not rewritten: time alone ends it
 	w.put(good(w.now))
 	w.gate.Check(ctx)
-	w.now += 290_000
+	w.now += 25_000
 	w.gate.Check(ctx)
 	if len(w.events) != 4 || !w.events[2].Admitted || w.events[3].Admitted || w.events[3].Reason != "the admission ran out" {
 		t.Fatalf("after expiry: %+v", w.events)
@@ -543,7 +543,7 @@ func TestRequestedAfterNeedsAnAdmissionAskedForLater(t *testing.T) {
 	if w.gate.RequestedAfter(ctx, requested) || w.gate.RequestedAfter(ctx, requested+1) {
 		t.Fatal("a lease asked for at or before the moment is accepted")
 	}
-	w.now += 290_000
+	w.now += 25_000
 	if w.gate.RequestedAfter(ctx, 0) {
 		t.Fatal("an admission that ran out vouches for a request time")
 	}

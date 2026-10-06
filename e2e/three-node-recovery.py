@@ -52,6 +52,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
 import threenode                                     # noqa: E402
 from threenode import sh, until                      # noqa: E402
+from deploy.baremetal import sync                     # noqa: E402
 
 passed, failed = 0, 0
 SERVICES = ("sync", "wg-apply", "admission")
@@ -274,12 +275,16 @@ def scenario(cluster):
     # b's own admission stopped (its asks would spend the same bucket), and a minute for the bucket to fill
     sh("systemctl", "stop", cluster.unit("b", "admission"), check=False)
     time.sleep(61)
-    count, per = 6, 60                                   # deploy/baremetal/sync.py RATE["lease"]
+    count, per = sync.RATE["lease"]                      # deploy/baremetal/sync.py
     since = rated = time.time()
-    answers = cluster.ask("b", "a", "lease-nonce", times=count + 1, node_id="b")
-    ok([a.get("ok") for a in answers] == [True] * count + [False]
-       and "RATE: more than %d lease requests in %d s from b" % (count, per) in answers[-1].get("refused", ""),
-       "a answered b's first %d lease requests in a minute and refused the next: %s" % (count, answers[-1].get("refused")), answers[-2:])
+    # a few past the bucket: at 18 a minute it refills one every 3.3 s while the asks run (#485's CI), so the refusal comes
+    # within the next few, never before the bucket's size
+    answers = cluster.ask("b", "a", "lease-nonce", times=count + 5, node_id="b")
+    refused = [a for a in answers[count:] if a.get("ok") is False]
+    ok([a.get("ok") for a in answers[:count]] == [True] * count and refused
+       and "RATE: more than %d lease requests in %d s from b" % (count, per) in refused[0].get("refused", ""),
+       "a answered b's first %d lease requests in a minute and refused one of the next five: %s" % (count, refused and refused[0].get("refused")),
+       answers[count - 1:])
     ok(any(e.get("event") == "sync-lease-nonce" and e.get("subject") == "b" and e.get("outcome") == "DENY" and "RATE" in e.get("reason", "")
            and e.get("at", 0) >= since - 1 for e in cluster.trail("a")), "a's trail records the refusal")
     answers = cluster.ask("c", "a", "lease-nonce", node_id="c")
@@ -304,8 +309,16 @@ def scenario(cluster):
         cluster.stop(victim)                            # down when it is revoked: it takes the epoch as a stopped node
         seed = survivors[0]
         manifest, since = cluster.advance(seed, signer=signer, **{victim: state})
-        counting = [s for s in survivors if s in cluster.manifest["heartbeat_signers"]["parties"] and cluster.running(s)
-                    and may(manifest, s, "authorize")]
+        # who counts is the manifest's (a party that may authorize), never whether its sync is up at this instant: an
+        # owner-signed epoch restarts the seed's services, and a check of `running` here once found none, skipped the
+        # lone-node branch silently and left step 8 nothing to see (regalia-kms-48 on #440). A survivor that counts must
+        # be running; one that is not fails here, by name
+        counting = [s for s in survivors if s in cluster.manifest["heartbeat_signers"]["parties"] and may(manifest, s, "authorize")]
+        # `is not True`: until() returns the exception it last saw at its deadline (a systemctl that could not start),
+        # which is truthy and must not read as running (CodeRabbit on #446; the same trap as #434's)
+        down = [s for s in counting if until(lambda s=s: cluster.running(s), 60, 1) is not True]
+        ok(not down, "every survivor that counts at epoch %d (%s) is running" % (manifest["epoch"], ", ".join(counting)),
+           {s: cluster.journal(s, "sync")[-800:] for s in down})
         if len(counting) == 1:
             # #199: one node left that counts. Nobody can co-sign its heartbeat for the new epoch: it stays without one
             # (fail closed) until the operator's hand recovery, owner.py beat, which the scenario now plays explicitly
@@ -355,6 +368,8 @@ def scenario(cluster):
         ok(bool(reason) and not cluster.lease(victim) and not any(leased_by(cluster, s, victim, since) for s in survivors),
            "N: and no lease, because %s" % reason, cluster.journal(victim, "admission")[-400:])
         cluster.stop(victim)
+    # the last epoch (b REVOKED_STOLEN) leaves one node that counts: its hand recovery ran, or this step proved nothing of it
+    ok(len(alone_at) == 1, "one node was left alone in step 7 and recovered by hand: %s" % [(n, e) for n, e, _ in alone_at])
 
     header("8  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
     wrong = cluster.audit_complete()
@@ -372,7 +387,7 @@ def scenario(cluster):
                                reason=lambda r: bool(r) and "a second boot session in the same boot" in r)
     ok(bool(second), "%s's refusal of %s's second session in one boot (step 5) is in %s's stream" % (survivor_5, crashed_5, survivor_5))
     limited = cluster.audit_has("a", "sync", since=rated - 1, event="sync-lease-nonce", subject="b", outcome="DENY",
-                                reason=lambda r: bool(r) and "RATE: more than 6 lease requests in 60 s from b" in r)
+                                reason=lambda r: bool(r) and "RATE: more than %d lease requests in 60 s from b" % sync.RATE["lease"][0] in r)
     ok(bool(limited), "a's refusal of b's seventh lease request in a minute (step 6) is in a's stream")
     hand = {"%s@%d" % (n, e): (bool(cluster.audit_has(n, "sync", since=t, event="beat-propose", epoch=e, outcome="DENY",
                                                       reason=lambda r: bool(r) and "no other node counts" in r)),
