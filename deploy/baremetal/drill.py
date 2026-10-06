@@ -250,11 +250,20 @@ class Stopped(BaseException):
 
 @contextlib.contextmanager
 def signals_stop_the_run():
+    """Installed for the whole run, restore included (CodeRabbit on #498: a SIGTERM during restore must not kill it).
+    The first signal while `state["raise"]` raises Stopped, once; any later one, or one after the scenarios ended, is
+    only recorded in `state["late"]`."""
+    state = {"raise": True, "late": []}
+
     def stop(number, _frame):
+        if not state["raise"]:
+            state["late"].append(number)
+            return
+        state["raise"] = False
         raise Stopped("signal %d" % number)
     previous = {n: signal.signal(n, stop) for n in (signal.SIGTERM, signal.SIGHUP)}
     try:
-        yield
+        yield state
     finally:
         for number, handler in previous.items():
             signal.signal(number, handler)
@@ -289,18 +298,24 @@ def run(scenarios, abort, restore, clock=time.time):
             entry["passed"] = bool(entry["predicates"]) and all(p["ok"] for p in entry["predicates"].values())
             entry["ended_ms"] = _ms(clock)
             check("after judging %s" % scenario["name"])
-    try:
-        with signals_stop_the_run():
-            scenarios_in_turn()
-    except (Exception, Stopped) as failure:           # noqa: BLE001 - recorded, then restore, then the run is failed
-        stopped = "%s: %s" % ("ABORTED" if isinstance(failure, (Aborted, Stopped)) else type(failure).__name__, failure)
-    finally:
+    with signals_stop_the_run() as signals:
         try:
-            restored = restore()
-        except Exception as failure:                  # noqa: BLE001 - a restore that fails is an incident, said
-            restored = {"failed": "%s: %s" % (type(failure).__name__, failure)}
-    return {"scenarios": results, "stopped": stopped, "restored": restored,
-            "passed": stopped is None and bool(results) and all(r.get("passed") for r in results)}
+            scenarios_in_turn()
+            signals["raise"] = False                  # from here a signal is recorded, never raised: restore runs whole
+        except (Exception, Stopped) as failure:       # noqa: BLE001 - recorded, then restore, then the run is failed
+            signals["raise"] = False
+            stopped = "%s: %s" % ("ABORTED" if isinstance(failure, (Aborted, Stopped)) else type(failure).__name__, failure)
+        finally:
+            try:
+                restored = restore()
+            except Exception as failure:              # noqa: BLE001 - a restore that fails is an incident, said
+                restored = {"failed": "%s: %s" % (type(failure).__name__, failure)}
+    out = {"scenarios": results, "stopped": stopped, "restored": restored}
+    if signals["late"]:
+        out["late_signals"] = signals["late"]
+        out["stopped"] = stopped or "ABORTED: signal %d after the scenarios" % signals["late"][0]
+    out["passed"] = out["stopped"] is None and bool(results) and all(r.get("passed") for r in results)
+    return out
 
 
 def _no_floats(value, where):

@@ -318,6 +318,35 @@ class Signals(unittest.TestCase):
         self.assertIn("ABORTED: signal %d" % signal.SIGTERM, out["stopped"])
         self.assertIs(signal.getsignal(signal.SIGTERM), before)              # the handler put back
 
+    def test_a_signal_during_restore_does_not_cut_it_and_fails_the_run(self):
+        """CodeRabbit on #498: the handlers stay while restore runs; a signal there is recorded, restore finishes."""
+        log = []
+
+        def restore():
+            os.kill(os.getpid(), signal.SIGTERM)
+            os.kill(os.getpid(), signal.SIGHUP)
+            log.append("restore finished")
+        before = signal.getsignal(signal.SIGTERM)
+        out = drill.run([{"name": "S1", "inject": lambda: {}, "judge": lambda: {"x": (True, "y")}}], abort=lambda: None,
+                        restore=restore)
+        self.assertEqual(log, ["restore finished"])
+        self.assertEqual(out["late_signals"], [signal.SIGTERM, signal.SIGHUP])
+        self.assertEqual(out["stopped"], "ABORTED: signal %d after the scenarios" % signal.SIGTERM)
+        self.assertFalse(out["passed"])
+        self.assertIs(signal.getsignal(signal.SIGTERM), before)
+
+    def test_a_second_signal_while_restoring_after_a_stop_is_recorded(self):
+        log = []
+
+        def restore():
+            os.kill(os.getpid(), signal.SIGTERM)
+            log.append("restore finished")
+        out = drill.run([{"name": "S1", "inject": lambda: os.kill(os.getpid(), signal.SIGHUP), "judge": lambda: {}}],
+                        abort=lambda: None, restore=restore)
+        self.assertEqual(log, ["restore finished"])
+        self.assertEqual(out["stopped"], "ABORTED: signal %d" % signal.SIGHUP)   # the first signal names the stop
+        self.assertEqual(out["late_signals"], [signal.SIGTERM])
+
 
 class Integers(unittest.TestCase):
     def test_times_are_integer_ms_and_a_float_or_nan_is_refused(self):
