@@ -906,7 +906,7 @@ class Sync:
         regalia-kms-48)."""
         try:
             self.floor.applied(*lease.read_applied())
-        except Refused:
+        except (Refused, OSError):          # an I/O error too (an EIO, /proc): a missed sample, never the end of Sync.run (c4)
             pass
 
     # ---- heartbeats signed by the nodes (#199, beat.py) ----

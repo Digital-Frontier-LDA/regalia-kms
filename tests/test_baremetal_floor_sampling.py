@@ -68,5 +68,18 @@ class BetweenRounds(unittest.TestCase):
             once_a_round.require(CLUSTER, EPOCH, REVISION)
 
 
+class ObserveState(unittest.TestCase):
+    def test_an_unreadable_watch_file_is_a_missed_sample_never_the_end_of_the_loop(self):
+        """c4's read of #525: an I/O error reading applied.json (EIO, /proc) is caught like a refusal, so a sample every
+        5 s cannot end Sync.run; the floor records nothing for it."""
+        from unittest import mock
+        stub = type("S", (), {"observe_state": node.Sync.observe_state})()
+        stub.floor = lease.RevisionFloor(clock=Clock())
+        for failure in (OSError(5, "Input/output error"), m.Refused("stale")):
+            with self.subTest(type(failure).__name__), mock.patch.object(lease, "read_applied", side_effect=failure):
+                stub.observe_state()
+        self.assertEqual(stub.floor.seen, [])
+
+
 if __name__ == "__main__":
     unittest.main()
