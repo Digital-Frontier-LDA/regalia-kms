@@ -1,0 +1,10 @@
+# etcd, the cluster's operational-state store (ADR-0002 D32, regalia-kms#432), built from upstream source by
+# build-rootfs.sh. Why upstream, not Debian 13's etcd-server 3.5.16: deploy/baremetal/ETCD.md.
+# Read by build-rootfs.sh as KEY=VALUE; every value is checked against what is fetched.
+#   ETCD_TAG     the release tag fetched
+#   ETCD_COMMIT  the commit that tag must point to (git's object name: a moved tag is refused)
+#   ETCD_GO      the Go release upstream builds it with (its .go-version and server/go.mod's toolchain line)
+ETCD_REPO=https://github.com/etcd-io/etcd
+ETCD_TAG=v3.6.15
+ETCD_COMMIT=a3346427fbe6e456e9b6d6e429346481c6be7c71
+ETCD_GO=go1.26.8

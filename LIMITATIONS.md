@@ -19,6 +19,15 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 
 ## Membership, heartbeats and recovery (deploy/baremetal)
 
+- **etcd (ADR-0002 D32) is in the image, but no cluster has run** (`deploy/baremetal/ETCD.md`).
+  Upstream v3.6.15 is built from a pinned commit, and `regalia-etcd.service` is hardened and skipped
+  until enrolment renders its configuration. Not built yet: that renderer, the enrolment-issued
+  certificates, member changes driven by the manifest, and the netem scenario (#432). The DL360s' WAL
+  fdatasync p99 (< 10 ms) and the inter-site round trips are unmeasured; the plan is in ETCD.md.
+  The unit has run only in CI's sandbox (`e2e/etcd-unit-sandbox.sh`): the image's binary and unit, one member, its peer
+  on an http loopback URL and its own small configuration, not etcdconf's. So the unit's hardening, its socket and its
+  data directory are shown, but **peer TLS on the mesh, `IPAddressAllow` on the mesh prefix and a multi-member cluster
+  have not run under the unit** (05's read of #484).
 - **The root's permissive epochs reach the cluster by hand** (#386 retired the authority host).
   An image approval, or a replacement, signed by the root on the offline laptop, is given to ONE
   running node with `deliver` (root, at its console), and the others pull it. Nothing carries them
@@ -40,8 +49,29 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   Not built yet:
   - the full scope's machinery:
     - the iLO/Redfish fence step that produces the power readback;
-    - the take-over (an owner-gated etcd force-new-cluster, and the state-epoch key 95 proposes);
-    - the rejoin (export the divergent tail, wipe, member add);
+    - the take-over on a real host. `deploy/baremetal/takeover.py` exists: a graceful etcd stop, the revision
+      check, force-new-cluster through a /run drop-in, then the state-epoch entry (`opstate.verify_state_epoch`) as
+      its first write, and the drop-in read back gone. It is tested on a scripted host and, in CI, against a real
+      etcd 3.6.15 with systemctl played by the test. Not yet:
+      - regalia-etcd.service (#484), so it has never run under systemd;
+      - the take-over has never signed with a real TPM signing key;
+      - nothing reads the entry in Go (the cache's verify, regalia-kms-ed's), so `applied.json`'s `state_epoch` stays 0;
+      - the daemon's rule that a stateful operation in recovery needs the store at the authorization's own epoch;
+      - an arrival-time freshness check on the entry. A replaced signing key can still sign an entry dated before the
+        replacement, inside the owner's authorization window;
+    - the rejoin on a real host. `deploy/baremetal/rejoin.py` exists. Both returning nodes come back as etcd learners at
+      once, never a third (admit, join, promote, finish), and its old data directory is kept, renamed, with its revision and
+      db SHA-256. It is tested on a scripted host and, in CI, against a real etcd 3.6.15. That test plays systemctl,
+      and localhost URLs stand in for the mesh URLs. Not yet:
+      - the divergent tail is kept but nothing reads it: the reconciliation of its spends (RECOVERY-RECONCILIATION.md)
+        and its shipment to the external audit collector are not built;
+      - regalia-etcd.service (#484): never run under systemd;
+      - etcd promotes a learner at 90% of the leader's index, so the survivor's commits can wait briefly after a
+        promotion while the newcomer catches up;
+      - from the first returner's promotion until the second's, the cluster is two voting members. Losing either stops
+        every commit until the other returner is promoted, or another take-over. Both returners are admitted as
+        learners before either promotion (etcd's max-learners 2, #519, #528), but the two promotions are separate
+        commands run by hand, so the window lasts until the second one;
     - the daemon's halts (a peer heard below the quarantine epoch);
     - approvals naming their spending node (1e).
     Until they land, `full` is a recorded intent the daemon does not act on;
@@ -67,7 +97,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     - peers on the mesh over TLS 1.3, with certificates both ways, the key from the unit's credentials, and trust that is
       the rendered bundle only;
     - periodic compaction (1 h) and an explicit 2 GiB quota;
-    - the corruption checks (feature gates).
+    - the corruption checks (feature gates);
+    - `max-learners: 2`, so after a survivor's take-over both fenced servers rejoin as learners at once and are promoted
+      back to back. This shrinks the two-of-two window to about the time between the two promotions. Measured on v3.6.15:
+      etcd reads the key from the config file, and admits a second learner only with it. The rejoin admits
+      the two returners as learners together, never a third (rejoin.admit). Their promotions are still two commands
+      run by hand, so the window is as short as the operator makes the gap between them.
   Not built yet:
   - enrolment making the peer and server keys (into `systemd-creds`), the self-signed certificates and the binding;
   - the bindings travelling by sync;
@@ -271,8 +306,8 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - The lone survivor's stateless serving under the owner's authorization (D32 item 6) has no gate path yet.
   - The session key's private half lives in the Go heap. It is never written, but it isn't locked against
     swap: the hosts are expected to run without swap, and nothing checks that.
-  - **`applied.json`'s `state_epoch` is always 0 for now.** The signed `/regalia/v1/state-epoch` entry (#492's
-    format) isn't verified by the cache yet. Until it is, a survivor's history after `--force-new-cluster` can't
+  - **`applied.json`'s `state_epoch` is always 0 for now.** The signed `/regalia/v1/state-epoch` entry
+    (`opstate.verify_state_epoch`) isn't verified by the cache yet. Until it is, a survivor's history after `--force-new-cluster` can't
     be told from the lost tail by this field.
   - **Once the runtime lease v2 (#489) is in, production must set the three settings.** Without them the
     daemon writes neither file, so its node requests no lease and stops serving.
