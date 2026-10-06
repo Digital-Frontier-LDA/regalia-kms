@@ -70,6 +70,7 @@ def ok(condition, text, detail=""):
     else:
         failed += 1
         print("  \033[31mFAIL\033[0m %s%s" % (text, (": %s" % (detail,)) if detail != "" else ""))
+        threenode.report_sessions()                  # #505: the count within the step that failed
     sys.stdout.flush()
 
 

@@ -95,7 +95,10 @@ def report_sessions():
     """#505: each node's TPM session count (loaded/saved) as one line, printed by the scenarios at every step. The
     fixture's swtpms have no resource manager (a host's units use /dev/tpmrm0, which flushes a process's sessions when it
     closes it): a session a tool leaves open stays until the swtpm restarts, and at about 3 the TPM answers
-    TPM_RC_SESSION_MEMORY (0x903). This line names the step where a count first rises."""
+    TPM_RC_SESSION_MEMORY (0x903). This line names the step where a count first rises. A probe holds each TPM for two
+    short tpm2_getcap connections; swtpm serves one client at a time and queues the next (measured: 300 probe pairs
+    against two 300-run tpm2_nvread loops on one swtpm, none failed; regalia-kms-d9 asked), so it delays a node's tool
+    by a few milliseconds and does not refuse it."""
     if ACTIVE is not None:
         print("  TPM sessions (loaded/saved): %s" % ACTIVE.session_line())
         sys.stdout.flush()
@@ -1650,7 +1653,7 @@ class Cluster:
         return out
 
     def tpm_sessions(self, n):
-        """(loaded, saved) session handles in node `n`'s TPM, or None when it does not answer (stopped)."""
+        """(loaded, saved) session handles in node `n`'s TPM, or None when the probe failed (busy, timed out)."""
         counts = []
         for kind in ("handles-loaded-session", "handles-saved-session"):
             done = sh("tpm2_getcap", "-T", n.tcti, kind, check=False, timeout=10)
@@ -1660,17 +1663,20 @@ class Cluster:
         return tuple(counts)
 
     def session_line(self):
-        """`a=0/0 b=1/0 c=3/0` for the nodes whose TPM runs; a count at its peak so far is recorded (session_peak)."""
+        """`a=0/0 b=1/0 c=3/0` for the nodes whose TPM runs (`c=?` when its probe failed: not proof it is down; a node
+        without a running swtpm is left out); a count at its peak so far is recorded (session_peak)."""
         parts = []
         for name, n in self.nodes.items():
-            if not (n.dir / "tpm.pid").exists():
+            try:
+                os.kill(int((n.dir / "tpm.pid").read_text()), 0)          # its swtpm runs
+            except (OSError, ValueError):
                 continue
             try:
                 counts = self.tpm_sessions(n)
             except subprocess.TimeoutExpired:
                 counts = None
             if counts is None:
-                parts.append("%s=down" % name)
+                parts.append("%s=?" % name)
                 continue
             self.session_peak[name] = tuple(max(a, b) for a, b in zip(self.session_peak.get(name, (0, 0)), counts))
             parts.append("%s=%d/%d" % (name, counts[0], counts[1]))
