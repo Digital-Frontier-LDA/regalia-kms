@@ -184,14 +184,15 @@ def join(host, chain, me, line, member_id):
     current = chain[-1]
     _parse_initial(line, current, me)
     require(isinstance(member_id, str) and MEMBER_ID.fullmatch(member_id) is not None, "the member ID is the hex admit said")
-    for unit in (tk.DAEMON, tk.UNIT):
-        say("%s stopped (%s)" % (unit, tk._stop(host, unit)))
-    export = _prepare(host, me, current["epoch"], member_id)
+    # the configuration is judged BEFORE anything is stopped or moved: a wrong one refuses with the node as it was
     config = etcdconf.check(host.read(etcdconf.CONFIG_PATH))
     require(config["name"] == me, "etcd's configuration is %s's, not %s's" % (config["name"], me))
     config["initial-cluster"], config["initial-cluster-state"] = line, "existing"
     text = json.dumps(config, indent=1, sort_keys=True) + "\n"
     etcdconf.check(text)
+    for unit in (tk.DAEMON, tk.UNIT):
+        say("%s stopped (%s)" % (unit, tk._stop(host, unit)))
+    export = _prepare(host, me, current["epoch"], member_id)
     host.write(etcdconf.CONFIG_PATH, text)          # root's, 0644, as rendered: no secret in it, and etcd may not rewrite it
     tk._start(host, tk.UNIT)
     for attempt in range(JOIN_TRIES):

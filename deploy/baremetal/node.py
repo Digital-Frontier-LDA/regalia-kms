@@ -654,7 +654,7 @@ class Node:
     def quote(self, session_id, ephemeral_public):
         """A `quote(nonce hex, manifest)` for sync.Client.renewer: this node's TPM quote over its boot
         session, the manifest's epoch and the peer's nonce."""
-        def evidence(nonce, manifest):
+        def evidence(nonce, manifest, binding=None):
             with tempfile.TemporaryDirectory(prefix="regalia-quote-") as d:
                 paths = (os.path.join(d, "quote"), os.path.join(d, "signature"))
                 old = os.environ.get("TPM2TOOLS_TCTI")
@@ -662,7 +662,7 @@ class Node:
                     os.environ["TPM2TOOLS_TCTI"] = self.tcti
                 try:
                     attest.node_quote(self.node_id, manifest["epoch"], bytes.fromhex(session_id), ephemeral_public, bytes.fromhex(nonce),
-                                      self.cfg["pcrs"], *paths, run=self.run)
+                                      self.cfg["pcrs"], *paths, run=self.run, binding=binding)
                 finally:
                     if self.tcti:
                         os.environ.pop("TPM2TOOLS_TCTI") if old is None else os.environ.__setitem__("TPM2TOOLS_TCTI", old)
@@ -853,6 +853,7 @@ class Sync:
         self.node, self.store, self.freshness = node, node.store(), node.freshness()
         self.trail = Trail(node.path("sync-audit.jsonl"), "sync")
         self.signer = lease.TpmSigner(node.tcti, node.run)
+        self.floor = lease.RevisionFloor()  # D32 (#432): fed each round (observe_state); fails closed for one lease after start
         self._beat_signer = None        # beat.Signer, made at the first heartbeat signed (beat_signer())
         self.published = None
         self.rounds = RoundLog()                # #470: each pull round's outcome, in the journal
@@ -879,7 +880,18 @@ class Sync:
                                enrolpeer.tpm_identity(self.node.tcti, self.node.run), enrolpeer.tpm_activate(self.node.tcti, self.node.run))
         # attester_for itself: each request is judged under the manifest held then, by that manifest's document (#332)
         return sync.Server(self.node.node_id, self.store, self.freshness, self.node.attester_for, self.signer,
-                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents(), cosigner=self.cosign)
+                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents(), cosigner=self.cosign,
+                           floor=self.floor, applied=lease.read_applied)
+
+    def observe_state(self):
+        """D32 (#432): this issuer's RevisionFloor fed from its etcd watch's file, each round. A refusal here (a stale,
+        absent or regressed file: a revision or state epoch gone back) records nothing; it is not lost, because each
+        lease request reads the file again (sync.Server.observe_state) and that read refuses the lease (fail closed;
+        regalia-kms-48)."""
+        try:
+            self.floor.applied(*lease.read_applied())
+        except Refused:
+            pass
 
     # ---- heartbeats signed by the nodes (#199, beat.py) ----
 
@@ -980,6 +992,7 @@ class Sync:
         self.refusals.flush()                   # its zeros from the start, then every round (refusals only count)
         try:
             while not stop():
+                self.observe_state()
                 self.pull_round()
                 # #199: under v4 the nodes sign the heartbeats; this node proposes when it is its turn (beat.Proposer).
                 # A refusal before any proposal (no authenticated time, not a UKI boot: no PCR key to sign under) is

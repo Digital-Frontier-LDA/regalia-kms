@@ -60,6 +60,10 @@ prometheus-node-exporter | - | node metrics (units/prometheus-node-exporter.serv
 cmd/regalia-kms | /usr/sbin/regalia-kms | the KMS daemon, -tags piv (cgo, PC/SC: #72 G2)
 cmd/regalia-audit-ship | /usr/bin/regalia-audit-ship | ships the audit trails to the external collector (regalia-audit-ship@.service)
 
+[upstream]
+# Built from upstream source at a pinned commit (image/etcd.pin), not a Debian package | the paths | why
+etcd | /usr/bin/etcd /usr/bin/etcdctl /usr/bin/etcdutl | the operational-state store (ADR-0002 D32, regalia-etcd.service); etcdutl restores a snapshot (ETCD.md)
+
 [imported-not-run]
 # Commands found in modules the host imports, which those modules run only on the signing laptop or the builder.
 git | uki.Checkout: the build's provenance, read at signing on the laptop (uki.py sign)
@@ -74,6 +78,7 @@ pkcheck | os_probe only looks for polkit, which the image does not ship (absence
 # Deploy modules the host neither runs nor imports.
 activation | the activation lease (#440): no unit imports it yet; issuance over sync follows (#432, rewritten by D32)
 cardrecord | the card-ceremony record, verified on the laptop (manifest propose --genesis)
+drill | the fault-injection drill runner (#495): the operator runs it from the laptop against the three hosts (SSH, BMC)
 redfish | the servers' iLOs over Redfish (power off/on, readback), from the operator workstation: drills (#495), D32's G1 fence
 fence | the owner's iLO fence (#432, G1): run by owner.py from the management network, never on a node
 etcdconf | the etcd configuration renderer (#432, D32): nothing renders it on a host yet; enrolment does, next

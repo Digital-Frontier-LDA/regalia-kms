@@ -87,7 +87,8 @@ class NodeView:
                 return subprocess.CompletedProcess(argv, 0, "\n", "")
             return subprocess.CompletedProcess(argv, 0, "", "")
         real = {tk.ETCDCTL: BINS["ETCDCTL_BIN"], tk.ETCDUTL: BINS["ETCDUTL_BIN"]}[argv[0]]
-        argv = [real] + [h.client[me] if a == tk.ENDPOINT else os.path.join(h.data_dir(me), "member", "snap", "db") if a == tk.BACKEND
+        # only the derived endpoint maps to this node's working directory (05 on #513): a rejoin dialling anything else fails
+        argv = [real] + [h.client[me] if a == etcdconf.client_endpoint() else os.path.join(h.data_dir(me), "member", "snap", "db") if a == tk.BACKEND
                          else a for a in argv[1:]]
         return subprocess.run(argv, input=input, capture_output=True, text=True, timeout=60)
 

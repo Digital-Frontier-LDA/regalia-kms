@@ -37,9 +37,14 @@ class RealEtcd:
     def __init__(self, root):
         self.root, self.procs, self.files = root, {}, {etcdconf.CONFIG_PATH: config_text(), tk.BOOT_ID: "x\n"}
         self.daemon = True                                # regalia-kms.service: played, it writes nothing here
-        p = ports(6)
+        p = ports(3)
         self.peer = {n: "http://127.0.0.1:%d" % p[i] for i, n in enumerate("abc")}
-        self.client = {n: "http://127.0.0.1:%d" % p[3 + i] for i, n in enumerate("abc")}
+        # each member serves its clients as the unit does: etcdconf.CLIENT_URL in its working directory, dialled at
+        # etcdconf.client_endpoint() of that directory, the derivation takeover.ENDPOINT is (05 on #513)
+        self.client = {}
+        for n in "abc":
+            os.makedirs(self.run_dir(n), exist_ok=True)
+            self.client[n] = etcdconf.client_endpoint(self.run_dir(n))
         try:
             for n in "abc":
                 self.start(n)
@@ -48,14 +53,18 @@ class RealEtcd:
             self.close()                                 # never leave a member running behind a failed start
             raise
 
+    def run_dir(self, n):
+        """The member's working directory, as /run/regalia-etcd is the unit's: its client socket is made there."""
+        return os.path.join(self.root, n + "-run")
+
     def start(self, n, force=False, initial=None, state="new"):
         argv = [BINS["ETCD_BIN"], "--name", n, "--data-dir", self.data_dir(n), "--listen-peer-urls", self.peer[n],
-                "--initial-advertise-peer-urls", self.peer[n], "--listen-client-urls", self.client[n], "--advertise-client-urls",
-                self.client[n], "--initial-cluster", initial or ",".join("%s=%s" % (m, self.peer[m]) for m in "abc"),
+                "--initial-advertise-peer-urls", self.peer[n], "--listen-client-urls", etcdconf.CLIENT_URL, "--advertise-client-urls",
+                etcdconf.CLIENT_URL, "--initial-cluster", initial or ",".join("%s=%s" % (m, self.peer[m]) for m in "abc"),
                 "--initial-cluster-token", "takeover-test", "--initial-cluster-state", state] + (["--force-new-cluster"] if force else [])
         os.makedirs(os.path.dirname(self.data_dir(n)), exist_ok=True)
         with open(os.path.join(self.root, n + ".log"), "ab") as log:     # the child keeps its own descriptor
-            self.procs[n] = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=log)
+            self.procs[n] = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=log, cwd=self.run_dir(n))
 
     def data_dir(self, n):
         return os.path.join(self.root, n)
@@ -83,10 +92,11 @@ class RealEtcd:
 
     @staticmethod
     def listening(url):
-        """etcd's client port takes a connection: a member alone without quorum answers no request, but it runs."""
-        host, port = url.rsplit("/", 1)[-1].split(":")
+        """etcd's client socket takes a connection: a member alone without quorum answers no request, but it runs."""
         try:
-            with socket.create_connection((host, int(port)), timeout=1):
+            with socket.socket(socket.AF_UNIX) as s:
+                s.settimeout(1)
+                s.connect(url[len("unix://"):])
                 return True
         except OSError:
             return False
@@ -129,7 +139,9 @@ class RealEtcd:
                 return subprocess.CompletedProcess(argv, 0, (tk.DROPIN if tk.DROPIN in self.files else "") + "\n", "")
             return subprocess.CompletedProcess(argv, 0, "", "")
         real = {tk.ETCDCTL: BINS["ETCDCTL_BIN"], tk.ETCDUTL: BINS["ETCDUTL_BIN"]}[argv[0]]
-        argv = [real] + [self.client["a"] if a == tk.ENDPOINT else os.path.join(self.data_dir("a"), "member", "snap", "db")
+        # only the derived endpoint is mapped to this test's working directory: a take-over that dials anything else
+        # (the ":0"-less literal 05 found on #513) dials a socket that does not exist, here as on a host
+        argv = [real] + [self.client["a"] if a == etcdconf.client_endpoint() else os.path.join(self.data_dir("a"), "member", "snap", "db")
                          if a == tk.BACKEND else a for a in argv[1:]]
         return subprocess.run(argv, input=input, capture_output=True, text=True, timeout=60)
 
