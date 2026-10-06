@@ -25,7 +25,7 @@ THIS SLICE (3e): the runner's frame, every seam a callable:
   * preflight(checks): every check run, the drill refused if any fails, each named with what it saw. canary_only()
     is one of them: every key the load uses is canary-* in the KMS's KEY-STATE STORE, not by its name.
   * run(scenarios, abort): each scenario's inject, then its judge, with `abort()` asked between every step; restore
-    ALWAYS runs (finally), also on SIGTERM or SIGHUP (they stop the run as an abort), and an abort ends the run as
+    ALWAYS runs (finally), also on SIGTERM, SIGHUP or SIGINT (they stop the run as an abort), and an abort ends the run as
     failed with its reason. Run it under systemd-run or tmux, so a closed terminal is not a SIGKILL.
   * The report (regalia.drill-report/v1): its canonical bytes and SHA-256, every time integer ms, a float or NaN
     refused. It is SIGNED BY THE KMS ITSELF with the
@@ -256,16 +256,29 @@ class Aborted(Refused):
 
 
 class Stopped(BaseException):
-    """SIGTERM or SIGHUP: the run stops, and restore still runs (24 on #498: a signal must not skip `finally`)."""
+    """SIGTERM, SIGHUP or SIGINT (Ctrl-C at the console): the run stops, and restore still runs (24 on #498: a signal must not skip `finally`)."""
+
+
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)    # SIGINT too (cc on #498): Ctrl-C during restore
 
 
 @contextlib.contextmanager
-def signals_stop_the_run():
+def signals_stop_the_run(state=None):
+    """Installed for the whole run, restore included (CodeRabbit on #498: a SIGTERM during restore must not kill it).
+    The first signal while `state["raise"]` raises Stopped, once; any later one, or one after the scenarios ended, is
+    only recorded in `state["late"]`."""
+    state = {} if state is None else state
+    state.update({"raise": True, "late": []})
+
     def stop(number, _frame):
+        if not state["raise"]:
+            state["late"].append(number)
+            return
+        state["raise"] = False
         raise Stopped("signal %d" % number)
-    previous = {n: signal.signal(n, stop) for n in (signal.SIGTERM, signal.SIGHUP)}
+    previous = {n: signal.signal(n, stop) for n in STOP_SIGNALS}
     try:
-        yield
+        yield state
     finally:
         for number, handler in previous.items():
             signal.signal(number, handler)
@@ -278,7 +291,7 @@ def _ms(clock):
 def run(scenarios, abort, restore, clock=time.time):
     """Each scenario: {"name", "inject": callable, "judge": callable -> {predicate: (ok, evidence)}}. `abort()` returns
     a reason to stop, or None; it is asked before each inject, after it and after the judge. `restore()` ALWAYS runs at
-    the end, also on SIGTERM or SIGHUP. Returns the per-scenario results; an abort, a signal or an exception ends the
+    the end, also on SIGTERM, SIGHUP or SIGINT. Returns the per-scenario results; an abort, a signal or an exception ends the
     run, recorded as failed. Times are integer milliseconds."""
     results, stopped = [], None
 
@@ -309,18 +322,31 @@ def run(scenarios, abort, restore, clock=time.time):
                 entry["passed"] = bool(entry["predicates"]) and all(p["ok"] for p in entry["predicates"].values())
                 check("after recovering %s" % scenario["name"])
             entry["ended_ms"] = _ms(clock)
-    try:
-        with signals_stop_the_run():
-            scenarios_in_turn()
-    except (Exception, Stopped) as failure:           # noqa: BLE001 - recorded, then restore, then the run is failed
-        stopped = "%s: %s" % ("ABORTED" if isinstance(failure, (Aborted, Stopped)) else type(failure).__name__, failure)
-    finally:
+
+    def said(failure):
+        return "%s: %s" % ("ABORTED" if isinstance(failure, (Aborted, Stopped)) else type(failure).__name__, failure)
+    with signals_stop_the_run() as signals:
         try:
-            restored = restore()
-        except Exception as failure:                  # noqa: BLE001 - a restore that fails is an incident, said
-            restored = {"failed": "%s: %s" % (type(failure).__name__, failure)}
-    return {"scenarios": results, "stopped": stopped, "restored": restored,
-            "passed": stopped is None and bool(results) and all(r.get("passed") for r in results)}
+            try:
+                scenarios_in_turn()
+                signals["raise"] = False              # from here a signal is recorded, never raised: restore runs whole
+            except (Exception, Stopped) as failure:   # noqa: BLE001 - recorded, then restore, then the run is failed
+                signals["raise"] = False
+                stopped = said(failure)
+        except Stopped as late:                       # a signal while an earlier failure was handled (cc on #498): both said
+            first = late.__context__
+            stopped = "%s; then %s" % (said(first), said(late)) if first is not None else said(late)
+        finally:
+            try:
+                restored = restore()
+            except Exception as failure:              # noqa: BLE001 - a restore that fails is an incident, said
+                restored = {"failed": "%s: %s" % (type(failure).__name__, failure)}
+    out = {"scenarios": results, "stopped": stopped, "restored": restored}
+    if signals["late"]:
+        out["late_signals"] = signals["late"]
+        out["stopped"] = stopped or "ABORTED: signal %d after the scenarios" % signals["late"][0]
+    out["passed"] = out["stopped"] is None and bool(results) and all(r.get("passed") for r in results)
+    return out
 
 
 def _no_floats(value, where):

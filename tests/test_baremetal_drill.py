@@ -318,6 +318,73 @@ class Signals(unittest.TestCase):
         self.assertIn("ABORTED: signal %d" % signal.SIGTERM, out["stopped"])
         self.assertIs(signal.getsignal(signal.SIGTERM), before)              # the handler put back
 
+    def test_a_signal_during_restore_does_not_cut_it_and_fails_the_run(self):
+        """CodeRabbit on #498: the handlers stay while restore runs; a signal there is recorded, restore finishes."""
+        log = []
+
+        def restore():
+            os.kill(os.getpid(), signal.SIGTERM)
+            os.kill(os.getpid(), signal.SIGHUP)
+            log.append("restore finished")
+        before = signal.getsignal(signal.SIGTERM)
+        out = drill.run([{"name": "S1", "inject": lambda: {}, "judge": lambda: {"x": (True, "y")}}], abort=lambda: None,
+                        restore=restore)
+        self.assertEqual(log, ["restore finished"])
+        self.assertEqual(out["late_signals"], [signal.SIGTERM, signal.SIGHUP])
+        self.assertEqual(out["stopped"], "ABORTED: signal %d after the scenarios" % signal.SIGTERM)
+        self.assertFalse(out["passed"])
+        self.assertIs(signal.getsignal(signal.SIGTERM), before)
+
+    def test_a_second_signal_while_restoring_after_a_stop_is_recorded(self):
+        log = []
+
+        def restore():
+            os.kill(os.getpid(), signal.SIGTERM)
+            log.append("restore finished")
+        out = drill.run([{"name": "S1", "inject": lambda: os.kill(os.getpid(), signal.SIGHUP), "judge": lambda: {}}],
+                        abort=lambda: None, restore=restore)
+        self.assertEqual(log, ["restore finished"])
+        self.assertEqual(out["stopped"], "ABORTED: signal %d" % signal.SIGHUP)   # the first signal names the stop
+        self.assertEqual(out["late_signals"], [signal.SIGTERM])
+
+
+    def test_ctrl_c_during_restore_is_recorded_and_restore_completes(self):
+        log = []
+
+        def restore():
+            os.kill(os.getpid(), signal.SIGINT)
+            log.append("restore finished")
+        before = signal.getsignal(signal.SIGINT)
+        out = drill.run([{"name": "S1", "inject": lambda: os.kill(os.getpid(), signal.SIGINT), "judge": lambda: {}}],
+                        abort=lambda: None, restore=restore)
+        self.assertEqual(log, ["restore finished"])
+        self.assertEqual(out["stopped"], "ABORTED: signal %d" % signal.SIGINT)
+        self.assertEqual(out["late_signals"], [signal.SIGINT])
+        self.assertIs(signal.getsignal(signal.SIGINT), before)
+
+    def test_a_signal_while_a_failure_is_handled_keeps_the_record(self):
+        """cc on #498: a scenario raised, and a signal lands before the handler is disarmed: run() still returns, naming
+        both, and restore runs. The signal is sent from the disarming write itself."""
+        class Tripwire(dict):
+            def __setitem__(self, key, value):
+                if key == "raise" and value is False and not self.get("tripped"):
+                    dict.__setitem__(self, "tripped", True)
+                    os.kill(os.getpid(), signal.SIGTERM)
+                dict.__setitem__(self, key, value)
+        real, log = drill.signals_stop_the_run, []
+
+        def boom():
+            raise RuntimeError("boom")
+        drill.signals_stop_the_run = lambda: real(state=Tripwire())
+        try:
+            out = drill.run([{"name": "S1", "inject": boom, "judge": lambda: {}}], abort=lambda: None,
+                            restore=lambda: log.append("restore"))
+        finally:
+            drill.signals_stop_the_run = real
+        self.assertEqual(log, ["restore"])
+        self.assertEqual(out["stopped"], "RuntimeError: boom; then ABORTED: signal %d" % signal.SIGTERM)
+        self.assertFalse(out["passed"])
+
 
 class Integers(unittest.TestCase):
     def test_times_are_integer_ms_and_a_float_or_nan_is_refused(self):
