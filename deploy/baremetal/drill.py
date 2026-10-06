@@ -375,19 +375,23 @@ class Hardware:
 
     def power_on(self, node):
         record = self.redfish_for(node).power_on()
+        # undone only on the final readback of On (d9 on #504): anything else leaves the fault pending for restore
+        readbacks = record.get("readbacks") or []
+        require(readbacks and readbacks[-1].get("power") == "On", "%s did not read back On after power-on: %s" % (node, record))
         self.journal.undone_matching({"action": "power-on", "node": node})
         return record
 
     def restart(self, node):
-        self.journal.fault("restart", node, {"action": "power-on", "node": node})
+        # its undo is a power CYCLE, not a power-on: a server hung while still powered reads "already On" (d9 on #504)
+        self.journal.fault("restart", node, {"action": "power-cycle", "node": node})
         done = self.ssh(node, ["systemctl", "reboot"])
         # the connection drops as the server goes down (OpenSSH exits 255): that is the reboot taking, not a failure
         require(done.returncode in (0, 255), "systemctl reboot on %s failed (exit %s): %s" % (node, done.returncode, (done.stderr or "").strip()[:200]))
         return {"node": node, "reboot_asked_ms": int(time.time() * 1000)}
 
     def restarted(self, node):
-        """The restart's server is back (the caller has seen it serve): its fault is undone."""
-        self.journal.undone_matching({"action": "power-on", "node": node})
+        """The restart's server is back (its scenario's predicates held): its fault is undone."""
+        self.journal.undone_matching({"action": "power-cycle", "node": node})
 
     def partition(self, node):
         self.journal.fault("partition", node, {"action": "unpartition", "node": node})
@@ -398,8 +402,20 @@ class Hardware:
         self.journal.undone_matching({"action": "unpartition", "node": node})
         return record
 
+    def power_cycle(self, node):
+        client = self.redfish_for(node)
+        require(hasattr(client, "force_restart"), "the Redfish client has no force_restart yet (d9, #501): power-cycle %s through "
+                "its iLO by hand, then run restore again" % node)
+        record = client.force_restart()
+        self.journal.undone_matching({"action": "power-cycle", "node": node})
+        return record
+
     def undoers(self):
-        return {"power-on": self.power_on, "unpartition": self.heal}
+        return {"power-on": self.power_on, "power-cycle": self.power_cycle, "unpartition": self.heal}
+
+
+def _all_ok(predicates):
+    return bool(predicates) and all(bool(good) for good, _ in predicates.values())
 
 
 def scenarios(backend, plan, judge):
@@ -422,8 +438,18 @@ def scenarios(backend, plan, judge):
 
     def s2(node):
         ctx = {"node": node}
+
+        def judged():
+            ctx["judged"] = judge("S2", ctx)
+            return ctx["judged"]
+
+        def back():                         # undone only if it came back as its predicates say (d9 on #504)
+            if not _all_ok(ctx.get("judged", {})):
+                return {"left pending": "%s's restart: its predicates did not hold; restore power-cycles it" % node}
+            backend.restarted(node)
+            return {"restarted": node}
         return {"name": "S2", "inject": lambda: ctx.update(t_inject_ms=now(), restart=backend.restart(node)) or ctx,
-                "judge": lambda: judge("S2", ctx), "recover": lambda: backend.restarted(node)}
+                "judge": judged, "recover": back}
 
     def s3(node):
         ctx = {"node": node}
@@ -437,9 +463,13 @@ def scenarios(backend, plan, judge):
         ctx = {"restarts": []}
 
         def roll():
-            for node in order:              # one at a time; the judge waits for each to serve again before the next
+            for node in order:              # one at a time; each must be BACK, by its predicates, before the next goes down
                 ctx["restarts"].append({"node": node, "t_inject_ms": now(), "restart": backend.restart(node)})
-                judge("S5-wait", dict(ctx, node=node))
+                back = judge("S5-wait", dict(ctx, node=node))
+                ctx["restarts"][-1]["back"] = {name: {"ok": bool(good), "evidence": evidence} for name, (good, evidence) in back.items()}
+                if not _all_ok(back):       # two of three down otherwise (d9 on #504): stop, the fault left pending
+                    raise Aborted("S5: %s did not come back (%s): the roll stops, its restart left pending for restore"
+                                  % (node, {n: e for n, (g, e) in back.items() if not g}))
                 backend.restarted(node)
             return ctx
         return {"name": "S5", "inject": roll, "judge": lambda: judge("S5", ctx)}

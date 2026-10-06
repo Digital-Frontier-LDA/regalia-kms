@@ -340,7 +340,7 @@ class FakeIlo:
 
     def power_on(self):
         self.log.append(("on", self.node))
-        return {"outcome": "On", "node": self.node}
+        return {"outcome": "On", "node": self.node, "readbacks": [{"power": "Off"}, {"power": "PoweringOn"}, {"power": "On"}]}
 
 
 class HardwareBackend(unittest.TestCase):
@@ -369,6 +369,7 @@ class HardwareBackend(unittest.TestCase):
         self.assertEqual(self.journal.pending(), [])
         self.hw.restart("b")                                             # 255: the connection dropping with the reboot
         self.assertEqual(self.log[-1], ("ssh", "b", "systemctl", ["restart"]))
+        self.assertEqual(self.journal.pending()[0]["undo"], {"action": "power-cycle", "node": "b"})
         self.hw.restarted("b")
         self.hw.partition("a")
         self.assertEqual([e["action"] for e in self.journal.pending()], ["partition"])
@@ -410,6 +411,41 @@ class HardwareBackend(unittest.TestCase):
         self.assertTrue(s3["passed"])
         self.assertIn("after recovery: seen", s3["predicates"])            # S3-healed judged too
         self.assertFalse(out["passed"])
+
+    def test_s5_stops_when_a_server_does_not_come_back_and_leaves_its_restart_pending(self):
+        # d9 on #504: rolling on would have two of three down
+        def judge(name, ctx):
+            if name == "S5-wait" and ctx["node"] == "b":
+                return {"it serves again": (False, "no serving line in 240 s")}
+            return {"seen": (True, name)}
+        restarted = []
+        out = drill.run(drill.scenarios(self.hw, {"S5": ["a", "b", "c"]}, judge), abort=lambda: None, restore=lambda: None)
+        self.assertIn("ABORTED: S5: b did not come back", out["stopped"])
+        self.assertFalse(out["passed"])
+        self.assertNotIn(("ssh", "c", "systemctl", ["restart"]), [x for x in self.log if x[0] == "ssh"])   # c never restarted
+        self.assertEqual([(e["node"], e["undo"]["action"]) for e in self.journal.pending()], [("b", "power-cycle")])
+
+    def test_s2_leaves_its_restart_pending_when_its_predicates_fail(self):
+        out = drill.run(drill.scenarios(self.hw, {"S2": "b"}, lambda name, ctx: {"back": (False, "not serving")}),
+                        abort=lambda: None, restore=lambda: None)
+        self.assertFalse(out["passed"])
+        self.assertIn("left pending", out["scenarios"][0]["recovered"])
+        self.assertEqual([e["undo"] for e in self.journal.pending()], [{"action": "power-cycle", "node": "b"}])
+
+    def test_a_power_cycle_undo_is_by_hand_until_the_client_can(self):
+        self.hw.restart("b")
+        restored, failed = self.journal.restore(self.hw.undoers())
+        self.assertIn("power-cycle b through its iLO by hand", failed[0]["error"])
+
+    def test_a_power_on_without_a_final_on_readback_leaves_the_fault_pending(self):
+        class Stuck(FakeIlo):
+            def power_on(self):
+                return {"outcome": "timeout", "readbacks": [{"power": "Off"}, {"power": "Off"}]}
+        hw = drill.Hardware(self.journal, lambda *a, **k: None, lambda node: Stuck(node, []))
+        hw.power_off("c")
+        with self.assertRaisesRegex(m.Refused, "did not read back On"):
+            hw.power_on("c")
+        self.assertEqual(len(self.journal.pending()), 1)
 
     def test_a_plan_with_no_scenario_is_refused(self):
         with self.assertRaises(m.Refused):

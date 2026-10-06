@@ -43,13 +43,19 @@ class Fixture:
         return {"node": node, "power": "on"}
 
     def restart(self, node):
-        self.journal.fault("restart", node, {"action": "power-on", "node": node})
+        self.journal.fault("restart", node, {"action": "power-cycle", "node": node})
         self.cluster.stop(node, power="cycle")
         self.cluster.start(node, self.services)
         return {"node": node, "reboot": "orderly"}
 
     def restarted(self, node):
-        self.journal.undone_matching({"action": "power-on", "node": node})
+        self.journal.undone_matching({"action": "power-cycle", "node": node})
+
+    def power_cycle(self, node):
+        self.cluster.stop(node, power="cut")
+        self.cluster.start(node, self.services)
+        self.journal.undone_matching({"action": "power-cycle", "node": node})
+        return {"node": node, "power": "cycled"}
 
     def partition(self, node):
         self.journal.fault("partition", node, {"action": "unpartition", "node": node})
@@ -62,7 +68,7 @@ class Fixture:
         return {"node": node, "healed": True}
 
     def undoers(self):
-        return {"power-on": self.power_on, "unpartition": self.heal}
+        return {"power-on": self.power_on, "power-cycle": self.power_cycle, "unpartition": self.heal}
 
 
 class LeaseJudge:
@@ -122,11 +128,8 @@ class LeaseJudge:
                       "the other two serve throughout": self._others_serve(node, t)}
         elif name == "S3-healed":
             judged = {"healed, it serves again, under the current epoch": self._serves_again(node, ctx["t_heal_ms"])}
-        elif name == "S5-wait":
-            good, evidence = self._serves_again(node, ctx["restarts"][-1]["t_inject_ms"])
-            if not good:
-                raise RuntimeError("S5: %s did not serve again after its restart: %s" % (node, evidence))
-            return {}
+        elif name == "S5-wait":                      # drill.scenarios stops the roll unless this holds
+            return {"it serves again, under the current epoch": self._serves_again(node, ctx["restarts"][-1]["t_inject_ms"])}
         elif name == "S5":
             restarts = ctx["restarts"]
             ends = [r["t_inject_ms"] for r in restarts[1:]] + [int(time.time() * 1000)]
