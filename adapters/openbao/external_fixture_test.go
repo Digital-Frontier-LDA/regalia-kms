@@ -81,8 +81,11 @@ func (softwareSigning) Ready(context.Context) bool                     { return 
 
 type signingFixture struct {
 	*kmsFixture
-	key       crypto.Signer
-	keyConfig kms.ConfigMap
+	key             crypto.Signer
+	keyConfig       kms.ConfigMap
+	profile         *policy.X509Policy
+	policyStatePath string
+	auditPath       string
 }
 
 func newSigningFixture(t *testing.T, algorithm, hashName string, key crypto.Signer) *signingFixture {
@@ -115,6 +118,9 @@ func newSigningFixtureWith(t *testing.T, algorithm, hashName string, key crypto.
 		entry := manifest["objects"].([]any)[0].(map[string]any)["bindings"].([]any)[0].(map[string]any)
 		delete(entry, "pin_policy")
 		delete(entry, "touch_policy")
+		if ca {
+			entry["public_key_sha256"] = "sha256:" + hex.EncodeToString(digest[:])
+		}
 	}
 	encoded, _ := json.Marshal(manifest)
 	reg, err := registry.Load(bytes.NewReader(encoded), "poc-site", hardware)
@@ -127,7 +133,8 @@ func newSigningFixtureWith(t *testing.T, algorithm, hashName string, key crypto.
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := policy.OpenFileState(filepath.Join(t.TempDir(), "sign-state.jsonl"))
+	statePath := filepath.Join(t.TempDir(), "sign-state.jsonl")
+	state, err := policy.OpenFileState(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,12 +143,21 @@ func newSigningFixtureWith(t *testing.T, algorithm, hashName string, key crypto.
 	if ca {
 		maxPayload = 32 << 10
 	}
-	semantic, err := policy.New([]policy.Policy{{ID: "poc-transit", ObjectID: objectID, Purpose: purpose, Environment: "development", Operation: "sign", Algorithm: algorithm, ContentTypes: []string{content}, MaxPayloadBytes: maxPayload, MaxFuture: 2 * time.Minute}}, state, time.Now)
+	var profile *policy.X509Policy
+	if ca {
+		definition, ok := provider.(interface{ PKIProfile() *policy.X509Policy })
+		if !ok {
+			t.Fatal("CA fixture requires an explicit server-owned profile")
+		}
+		profile = definition.PKIProfile()
+	}
+	semantic, err := policy.New([]policy.Policy{{ID: "poc-transit", ObjectID: objectID, Purpose: purpose, Environment: "development", Operation: "sign", Algorithm: algorithm, ContentTypes: []string{content}, MaxPayloadBytes: maxPayload, MaxFuture: 2 * time.Minute, X509: profile}}, state, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sink := &fixtureAudit{}
-	recorder, err := audit.Open(filepath.Join(t.TempDir(), "sign-audit.jsonl"), sink)
+	auditPath := filepath.Join(t.TempDir(), "sign-audit.jsonl")
+	recorder, err := audit.Open(auditPath, sink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +180,7 @@ func newSigningFixtureWith(t *testing.T, algorithm, hashName string, key crypto.
 		c["kms_url"] = f.server.URL
 	}
 	t.Cleanup(func() { f.server.Close() })
-	return &signingFixture{f, key, kms.ConfigMap{"object_id": objectID, "purpose": purpose, "usage": usage, "algorithm": algorithm, "hash_algorithm": hashName, "public_key_sha256": "sha256:" + hex.EncodeToString(digest[:]), "public_key": string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: spki}))}}
+	return &signingFixture{kmsFixture: f, key: key, keyConfig: kms.ConfigMap{"object_id": objectID, "purpose": purpose, "usage": usage, "algorithm": algorithm, "hash_algorithm": hashName, "public_key_sha256": "sha256:" + hex.EncodeToString(digest[:]), "public_key": string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: spki}))}, profile: profile, policyStatePath: statePath, auditPath: auditPath}
 }
 
 func externalProviderConfig(c map[string]string) kms.ConfigMap {

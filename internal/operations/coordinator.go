@@ -3,6 +3,7 @@
 package operations
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -23,6 +24,8 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/secrets"
 )
+
+const x509TBSContentType = "application/vnd.regalia.x509-tbs"
 
 type Authorizer interface {
 	Allowed(principal, object, operation, environment string) bool
@@ -159,6 +162,16 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "not-admitted", started, false, nil)
 		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 	}
+	if request.ContentType == x509TBSContentType {
+		if request.Operation != "sign" || request.Format != "" || len(request.EnvelopeAAD) != 0 || len(request.Data) == 0 || len(request.Data) > 32<<10 {
+			coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "policy-x509-malformed", started, false, nil)
+			return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
+		}
+		// Approval, inspection and execution must refer to the same owned bytes.
+		// The worker takes its own copy if it can outlive this request.
+		request.Data = bytes.Clone(request.Data)
+		defer zero(request.Data)
+	}
 	// Seal routes differently: RouteForSeal admits standby and qualified bindings, because an
 	// envelope sealed today must open after tomorrow's rotation. Release routes differently
 	// again: it must reach the KEK the envelope names, which after a rotation is not the active
@@ -249,6 +262,21 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		Algorithm: route.Algorithm, ContentType: contentType, PayloadBytes: payloadBytes(request),
 		ExpiresAt: request.Context.ExpiresAt, Nonce: request.Context.Nonce,
 	}
+	if contentType == x509TBSContentType {
+		parsed, err := policy.ParseX509TBS(request.Data)
+		if err != nil {
+			coordinator.recordOrCount(ctx, request, route, "deny", "policy-x509-malformed", started, false, nil)
+			return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
+		}
+		policyRequest.X509 = parsed
+		// The selected registry object must also be development-only; the caller's
+		// context cannot authorize a production or staging object for this slice.
+		// Only Nitrokey enforces this fingerprint against the token. Legacy advisory
+		// fingerprints and other backends are not a trusted pin.
+		if route.Environment == "development" && route.Binding.Backend == "nitrokey-pkcs11" {
+			policyRequest.KeyFingerprint = route.Binding.PublicKeySHA256
+		}
+	}
 	// THE APPROVERS ARE VERIFIED HERE, NOT ASSERTED BY THE CALLER.
 	//
 	// request.Approvals is the raw header: attacker-controlled bytes. Verify returns only
@@ -281,18 +309,18 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		//
 		// "Policy denied it" is not an answer anybody can act on. The engine already knew which
 		// rule, and threw it away one line before it would have been recorded.
-		coordinator.recordOrCount(ctx, request, route, "deny", policyReason(decision), started, false, policyRequest.VerifiedApprovers)
+		coordinator.recordOrCount(ctx, request, route, "deny", policyReason(decision), started, false, policyRequest.VerifiedApprovers, decision.SigningIntent)
 		code, status, retryable := "DENIED", http.StatusForbidden, false
 		if decision.Code == policy.CodeStateUnavailable {
 			code, status, retryable = "DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true
 		} else if decision.Code == policy.CodeReplay {
 			code, status = "CONFLICT", http.StatusConflict
 		} else if decision.Code == policy.CodeLimitExceeded {
-			code, status, retryable = "RESOURCE_EXHAUSTED", http.StatusTooManyRequests, true
+			code, status, retryable = "RESOURCE_EXHAUSTED", http.StatusTooManyRequests, contentType != x509TBSContentType
 		}
 		return api.Result{}, failure(code, status, retryable)
 	}
-	if err := coordinator.record(ctx, request, route, "allow", "authorized", started, true, policyRequest.VerifiedApprovers); err != nil {
+	if err := coordinator.record(ctx, request, route, "allow", "authorized", started, true, policyRequest.VerifiedApprovers, decision.SigningIntent); err != nil {
 		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 	}
 	output, outputType, err := coordinator.executeHardware(ctx, route, request, contentType)
@@ -307,17 +335,17 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		// AEAD proof is a security event someone should see as one; a backend fault is an
 		// availability event. They are not the same thing to anyone reading this trail afterwards.
 		if errors.Is(err, envelope.ErrInvalidEnvelope) {
-			coordinator.recordOrCount(ctx, request, route, "allow", "integrity-failed", started, true, policyRequest.VerifiedApprovers)
+			coordinator.recordOrCount(ctx, request, route, "allow", "integrity-failed", started, true, policyRequest.VerifiedApprovers, decision.SigningIntent)
 			return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
 		}
 		// THE LEASE LAPSED WHILE THE OPERATION WAITED OR RAN. Policy had allowed it and the token may
 		// even have signed; the output is discarded above. Recorded as what it is, not as a backend
 		// fault: an operator reading "backend-failed" would go and look at a healthy token.
 		if errors.Is(err, admission.ErrNotAdmitted) {
-			coordinator.recordOrCount(ctx, request, route, "deny", "not-admitted", started, true, policyRequest.VerifiedApprovers)
+			coordinator.recordOrCount(ctx, request, route, "deny", "not-admitted", started, true, policyRequest.VerifiedApprovers, decision.SigningIntent)
 			return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 		}
-		coordinator.recordOrCount(ctx, request, route, "allow", "backend-failed", started, true, policyRequest.VerifiedApprovers)
+		coordinator.recordOrCount(ctx, request, route, "allow", "backend-failed", started, true, policyRequest.VerifiedApprovers, decision.SigningIntent)
 		return api.Result{}, classifyExecution(err)
 	}
 	if len(output) == 0 || outputType == "" {
@@ -325,10 +353,10 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		// Neither the caller's fault nor the card's: the operation reported success and produced
 		// nothing. Recorded as its own outcome because it is a defect in this daemon, and one
 		// indistinguishable from an outage if it is filed under the same word.
-		coordinator.recordOrCount(ctx, request, route, "allow", "empty-output", started, true, policyRequest.VerifiedApprovers)
+		coordinator.recordOrCount(ctx, request, route, "allow", "empty-output", started, true, policyRequest.VerifiedApprovers, decision.SigningIntent)
 		return api.Result{}, failure("INTERNAL", http.StatusInternalServerError, false)
 	}
-	if err := coordinator.record(ctx, request, route, "allow", "success", started, true, policyRequest.VerifiedApprovers); err != nil {
+	if err := coordinator.record(ctx, request, route, "allow", "success", started, true, policyRequest.VerifiedApprovers, decision.SigningIntent); err != nil {
 		zero(output)
 		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 	}
@@ -364,7 +392,7 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 // on, without changing what the daemon does.
 //
 // Counted here rather than at the nine sites so the behaviour cannot drift apart between them.
-func (coordinator *Coordinator) recordOrCount(ctx context.Context, request api.Request, route registry.Route, decision, outcome string, started time.Time, requireRemote bool, approvers []string) {
+func (coordinator *Coordinator) recordOrCount(ctx context.Context, request api.Request, route registry.Route, decision, outcome string, started time.Time, requireRemote bool, approvers []string, intents ...*policy.SigningIntent) {
 	// NOT EVERY ERROR IS A LOST RECORD. Record advances its sequence only after Write and Sync
 	// both succeed, and three of its failure returns come after that: the high-water-mark write,
 	// the no-shipper case under requireRemote, and a remote acknowledgement that does not arrive.
@@ -372,7 +400,7 @@ func (coordinator *Coordinator) recordOrCount(ctx context.Context, request api.R
 	// still fails closed, but nothing was lost. Counting those would make this metric measure
 	// collector latency and call it data loss, and three of the sites below pass requireRemote,
 	// so it is reachable rather than theoretical. Raised in review on #315.
-	if err := coordinator.record(ctx, request, route, decision, outcome, started, requireRemote, approvers); err != nil && !audit.Durable(err) {
+	if err := coordinator.record(ctx, request, route, decision, outcome, started, requireRemote, approvers, intents...); err != nil && !audit.Durable(err) {
 		coordinator.droppedMu.Lock()
 		if coordinator.droppedRecords == nil {
 			coordinator.droppedRecords = make(map[string]uint64)
@@ -403,15 +431,21 @@ func (coordinator *Coordinator) DroppedAuditRecords() map[string]uint64 {
 	return dropped
 }
 
-func (coordinator *Coordinator) record(ctx context.Context, request api.Request, route registry.Route, decision, outcome string, started time.Time, requireRemote bool, approvers []string) error {
-	return coordinator.audit.Record(ctx, audit.Draft{
+func (coordinator *Coordinator) record(ctx context.Context, request api.Request, route registry.Route, decision, outcome string, started time.Time, requireRemote bool, approvers []string, intents ...*policy.SigningIntent) error {
+	draft := audit.Draft{
 		Timestamp: coordinator.now(), RequestID: request.RequestID, Principal: request.Principal,
 		Decision: decision, ObjectID: request.ObjectID, Purpose: request.Context.Purpose,
 		Operation: request.Operation, DeviceID: route.Binding.DeviceID, Outcome: outcome,
 		LatencyMilliseconds: max(coordinator.now().Sub(started).Milliseconds(), 0),
 		RegistryDigest:      coordinator.router.Digest(), PolicyDigest: coordinator.policyDigest,
 		RBACDigest: coordinator.authorizerDigest, VerifiedApprovers: approvers,
-	}, requireRemote)
+	}
+	if len(intents) > 0 && intents[0] != nil {
+		intent := intents[0]
+		draft.X509ProfileID, draft.PayloadDigest = intent.ProfileID, intent.PayloadDigest
+		draft.ArtifactKind, draft.KeyFingerprint = intent.ArtifactKind, intent.KeyFingerprint
+	}
+	return coordinator.audit.Record(ctx, draft, requireRemote)
 }
 
 // payloadBytes measures what policy's payload cap should govern: the ciphertext for a

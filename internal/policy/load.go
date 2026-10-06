@@ -61,6 +61,17 @@ type filePolicy struct {
 	RequiredApprovals int               `json:"required_approvals"`
 	Approvers         []string          `json:"approvers"`
 	Cosmos            *fileCosmosPolicy `json:"cosmos,omitempty"`
+	X509              *fileX509Policy   `json:"x509,omitempty"`
+}
+
+type fileX509Policy struct {
+	ID                     string   `json:"id"`
+	IssuerDER              []byte   `json:"issuer_der"`
+	DNSSuffixes            []string `json:"dns_suffixes"`
+	MaxLeafValiditySeconds int64    `json:"max_leaf_validity_seconds"`
+	MaxCRLValiditySeconds  int64    `json:"max_crl_validity_seconds"`
+	LeafPerDay             uint64   `json:"leaf_per_day"`
+	CRLPerDay              uint64   `json:"crl_per_day"`
 }
 
 type fileCosmosPolicy struct {
@@ -120,6 +131,19 @@ func Load(reader io.Reader) ([]Policy, string, error) {
 				MaxGasLimit: input.Cosmos.MaxGasLimit, MaxFee: input.Cosmos.MaxFee,
 				MaxPerTransaction: input.Cosmos.MaxPerTransaction, MaxPerDay: input.Cosmos.MaxPerDay,
 			}
+		}
+		if input.X509 != nil {
+			profile := input.X509
+			// Check the integer bounds before multiplying: unchecked duration
+			// conversion can wrap a huge configured lifetime into a small one.
+			if profile.MaxLeafValiditySeconds < 1 || profile.MaxLeafValiditySeconds > 86400 ||
+				profile.MaxCRLValiditySeconds < 1 || profile.MaxCRLValiditySeconds > 86400 {
+				return nil, "", errors.New("X.509 validity seconds must be between 1 and 86400")
+			}
+			output.X509 = &X509Policy{ID: profile.ID, IssuerDER: profile.IssuerDER, DNSSuffixes: profile.DNSSuffixes,
+				MaxLeafValidity: time.Duration(profile.MaxLeafValiditySeconds) * time.Second,
+				MaxCRLValidity:  time.Duration(profile.MaxCRLValiditySeconds) * time.Second,
+				LeafPerDay:      profile.LeafPerDay, CRLPerDay: profile.CRLPerDay}
 		}
 		policies = append(policies, output)
 	}

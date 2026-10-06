@@ -21,6 +21,7 @@ var (
 	// promoted away from. The quota is a GLOBAL budget on one journal, so a leader that
 	// was replaced mid-window must not keep spending from it.
 	ErrEpoch     = errors.New("stale fencing epoch")
+	ErrQuotaDate = errors.New("stale X.509 quota date")
 	noncePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
 )
 
@@ -82,6 +83,7 @@ type Policy struct {
 	RequiredApprovals int
 	Approvers         []string
 	Cosmos            *CosmosPolicy
+	X509              *X509Policy
 }
 
 type Request struct {
@@ -98,7 +100,20 @@ type Request struct {
 	Nonce             string
 	VerifiedApprovers []string
 	Cosmos            *CosmosTransaction
+	X509              *X509TBS
+	KeyFingerprint    string // Server-selected binding's enforced public_key_sha256.
 }
+
+// SigningIntent is derived from inspected bytes and the server-owned profile.
+// It carries no certificate, DNS name, signature or private-key material.
+type SigningIntent struct {
+	ProfileID      string `json:"profile_id"`
+	PayloadDigest  string `json:"payload_digest"`
+	ArtifactKind   string `json:"artifact_kind"`
+	KeyFingerprint string `json:"key_fingerprint"`
+}
+
+const x509QuotaID = "x509-count-v1"
 
 type Reservation struct {
 	PolicyID string `json:"policy_id"`
@@ -108,14 +123,16 @@ type Reservation struct {
 	// bytes, so epoch-0 (unfenced) reservations must marshal exactly as pre-epoch
 	// journals did or every existing journal stops verifying at the next open — the
 	// RBACDigest lesson, applied at the field's birth rather than after the breakage.
-	Epoch       uint64            `json:"epoch,omitempty"`
-	Principal   string            `json:"principal"`
-	Nonce       string            `json:"nonce"`
-	UTCDate     string            `json:"utc_date"`
-	Amounts     map[string]uint64 `json:"amounts"`
-	DailyCaps   map[string]uint64 `json:"daily_caps"`
-	Sequence    *uint64           `json:"sequence,omitempty"`
-	SequenceKey string            `json:"sequence_key,omitempty"`
+	Epoch         uint64            `json:"epoch,omitempty"`
+	Principal     string            `json:"principal"`
+	Nonce         string            `json:"nonce"`
+	UTCDate       string            `json:"utc_date"`
+	Amounts       map[string]uint64 `json:"amounts"`
+	DailyCaps     map[string]uint64 `json:"daily_caps"`
+	Sequence      *uint64           `json:"sequence,omitempty"`
+	SequenceKey   string            `json:"sequence_key,omitempty"`
+	QuotaID       string            `json:"quota_id,omitempty"`
+	SigningIntent *SigningIntent    `json:"signing_intent,omitempty"`
 }
 
 type State interface {
@@ -129,10 +146,11 @@ type readyState interface {
 }
 
 type Decision struct {
-	Allowed  bool
-	Code     Code
-	PolicyID string
-	Rule     string
+	Allowed       bool
+	Code          Code
+	PolicyID      string
+	Rule          string
+	SigningIntent *SigningIntent
 }
 
 type Engine struct {
@@ -168,6 +186,7 @@ type compiledPolicy struct {
 	messages     map[string]struct{}
 	destinations map[string]struct{}
 	sources      map[string]struct{}
+	x509         *compiledX509
 }
 
 func New(policies []Policy, state State, now func() time.Time) (*Engine, error) {
@@ -176,6 +195,12 @@ func New(policies []Policy, state State, now func() time.Time) (*Engine, error) 
 	}
 	engine := &Engine{policies: make(map[string]compiledPolicy, len(policies)), state: state, now: now}
 	seenIDs := make(map[string]struct{}, len(policies))
+	x509Objects := make(map[string]bool)
+	for _, configured := range policies {
+		if configured.X509 != nil {
+			x509Objects[configured.ObjectID] = true
+		}
+	}
 	for _, policy := range policies {
 		if policy.ID == "" || policy.ObjectID == "" || policy.Purpose == "" || policy.Environment == "" ||
 			policy.Operation == "" || policy.Algorithm == "" || policy.MaxPayloadBytes < 1 || policy.MaxFuture <= 0 {
@@ -192,9 +217,26 @@ func New(policies []Policy, state State, now func() time.Time) (*Engine, error) 
 		compiled := compiledPolicy{
 			policy: policy, contentTypes: stringSet(policy.ContentTypes), approvers: stringSet(policy.Approvers),
 		}
+		if x509Objects[policy.ObjectID] && policy.Operation != "sign" {
+			return nil, errors.New("X.509 CA objects cannot have alternate operation policies")
+		}
 		if len(compiled.contentTypes) != len(policy.ContentTypes) || len(policy.ContentTypes) == 0 ||
 			len(compiled.approvers) != len(policy.Approvers) || policy.RequiredApprovals < 0 || policy.RequiredApprovals > len(compiled.approvers) {
 			return nil, errors.New("policy lists are empty, duplicated or inconsistent")
+		}
+		if policy.X509 != nil {
+			if policy.Cosmos != nil || policy.Environment != "development" || policy.Operation != "sign" || policy.Algorithm != "p256" ||
+				len(policy.ContentTypes) != 1 || policy.ContentTypes[0] != "application/vnd.regalia.x509-tbs" || policy.MaxPayloadBytes > 32<<10 {
+				return nil, errors.New("X.509 policy requires exclusive bounded development P-256 TBS signing")
+			}
+			var err error
+			compiled.x509, err = compileX509(policy.X509)
+			if err != nil {
+				return nil, err
+			}
+			compiled.policy.X509 = &compiled.x509.profile
+		} else if _, tbs := compiled.contentTypes["application/vnd.regalia.x509-tbs"]; tbs {
+			return nil, errors.New("X.509 signing content requires a server-owned profile")
 		}
 		if policy.Cosmos != nil {
 			if _, generic := compiled.contentTypes["application/octet-stream"]; generic {
@@ -282,6 +324,28 @@ func (engine *Engine) Evaluate(ctx context.Context, request Request) Decision {
 		return decision.deny("approval")
 	}
 	amounts := map[string]uint64{}
+	quotaID := ""
+	if policy.x509 != nil {
+		if request.X509 == nil || request.Cosmos != nil {
+			return decision.deny("x509-input")
+		}
+		decision.SigningIntent = &SigningIntent{
+			ProfileID: policy.x509.profile.ID, PayloadDigest: request.X509.Digest(),
+			ArtifactKind: request.X509.Kind(), KeyFingerprint: policy.x509.keyFingerprint,
+		}
+		kind, refusal := policy.x509.validate(request.X509, now, request.KeyFingerprint)
+		if refusal != "" {
+			return decision.deny(refusal)
+		}
+		denom := "x509-leaf"
+		if kind == "crl" {
+			denom = "x509-crl"
+		}
+		amounts[denom] = 1
+		quotaID = x509QuotaID
+	} else if request.X509 != nil {
+		return decision.deny("unexpected-domain-data")
+	}
 	if policy.policy.Cosmos != nil {
 		// THE RULE NAMES THE DIMENSION. This used to deny every Cosmos refusal as "cosmos", so the
 		// audit record of a refused transfer could not say whether the chain, the destination or
@@ -310,23 +374,26 @@ func (engine *Engine) Evaluate(ctx context.Context, request Request) Decision {
 		Sequence:    sequence,
 		SequenceKey: sequenceKey,
 		DailyCaps:   cloneAmounts(policy.dailyCaps()),
+		QuotaID:     quotaID, SigningIntent: decision.SigningIntent,
 	})
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrReplay):
-			return Decision{Code: CodeReplay, PolicyID: policy.policy.ID, Rule: "replay"}
+			return Decision{Code: CodeReplay, PolicyID: policy.policy.ID, Rule: "replay", SigningIntent: decision.SigningIntent}
 		case errors.Is(err, ErrLimit):
 			engine.quotaRejections.Add(1)
-			return Decision{Code: CodeLimitExceeded, PolicyID: policy.policy.ID, Rule: "quota"}
+			return Decision{Code: CodeLimitExceeded, PolicyID: policy.policy.ID, Rule: "quota", SigningIntent: decision.SigningIntent}
 		case errors.Is(err, ErrEpoch):
-			return Decision{Code: CodeDenied, PolicyID: policy.policy.ID, Rule: "epoch"}
+			return Decision{Code: CodeDenied, PolicyID: policy.policy.ID, Rule: "epoch", SigningIntent: decision.SigningIntent}
+		case errors.Is(err, ErrQuotaDate):
+			return Decision{Code: CodeDenied, PolicyID: policy.policy.ID, Rule: "quota-date", SigningIntent: decision.SigningIntent}
 		case errors.Is(err, ErrSequence):
 			return Decision{Code: CodeDenied, PolicyID: policy.policy.ID, Rule: "sequence"}
 		default:
-			return Decision{Code: CodeStateUnavailable, PolicyID: policy.policy.ID, Rule: "durable-state"}
+			return Decision{Code: CodeStateUnavailable, PolicyID: policy.policy.ID, Rule: "durable-state", SigningIntent: decision.SigningIntent}
 		}
 	}
-	return Decision{Allowed: true, Code: CodeAllowed, PolicyID: policy.policy.ID, Rule: "allow"}
+	return Decision{Allowed: true, Code: CodeAllowed, PolicyID: policy.policy.ID, Rule: "allow", SigningIntent: decision.SigningIntent}
 }
 
 // SetEpochSource binds the fencing epoch the daemon stamps into every reservation. It is
@@ -443,6 +510,9 @@ func (policy compiledPolicy) validateCosmos(transaction *CosmosTransaction) (map
 }
 
 func (policy compiledPolicy) dailyCaps() map[string]uint64 {
+	if policy.x509 != nil {
+		return map[string]uint64{"x509-leaf": policy.x509.profile.LeafPerDay, "x509-crl": policy.x509.profile.CRLPerDay}
+	}
 	if policy.policy.Cosmos == nil {
 		return map[string]uint64{}
 	}

@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,21 +36,39 @@ func pocString(t *testing.T, data map[string]json.RawMessage, field string) stri
 	return value
 }
 
-func pocEvidence(t *testing.T, backend *pocSoftwareCA, kind string, raw []byte) {
+func pocEvidence(t *testing.T, f *signingFixture, backend *pocDaemonCA, kind string, raw []byte) {
 	t.Helper()
 	if len(raw) <= sha256.Size {
 		t.Fatal("expected complete unhashed signing input")
 	}
 	want := sha256.Sum256(raw)
+	token := false
 	for _, record := range backend.snapshot() {
-		if record.Allowed && record.Kind == kind && record.Digest == want {
-			return
-		}
+		token = token || record.Allowed && record.Kind == "digest" && record.Digest == want
 	}
-	t.Fatal("signed artifact has no matching inspected full-byte input", kind)
+	if !token {
+		t.Fatal("signed artifact has no matching digest-only token call", kind)
+	}
+	digest := "sha256:" + hex.EncodeToString(want[:])
+	events := f.audit.snapshotEvents()
+	for _, event := range events {
+		if event.Outcome != "success" || event.X509ProfileID != f.profile.ID || event.PayloadDigest != digest || event.ArtifactKind != kind || event.KeyFingerprint != f.keyConfig["public_key_sha256"] {
+			continue
+		}
+		authorized := false
+		for _, first := range events {
+			authorized = authorized || first.Outcome == "authorized" && first.RequestID == event.RequestID && first.X509ProfileID == event.X509ProfileID && first.PayloadDigest == digest && first.ArtifactKind == kind && first.KeyFingerprint == event.KeyFingerprint
+		}
+		if !authorized {
+			t.Fatal("signature missing correlated server-owned authorization intent")
+		}
+		pocDurableIntent(t, f, event, kind)
+		return
+	}
+	t.Fatal("signed artifact missing server-owned audit intent", kind)
 }
 
-func pocLeaf(t *testing.T, encoded string, root, issuer *x509.Certificate, backend *pocSoftwareCA) *x509.Certificate {
+func pocLeaf(t *testing.T, encoded string, root, issuer *x509.Certificate, f *signingFixture, backend *pocDaemonCA) *x509.Certificate {
 	t.Helper()
 	block, _ := pem.Decode([]byte(encoded))
 	if block == nil || block.Type != "CERTIFICATE" {
@@ -65,7 +84,7 @@ func pocLeaf(t *testing.T, encoded string, root, issuer *x509.Certificate, backe
 	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, DNSName: "web.svc.poc.invalid"}); err != nil {
 		t.Fatal("synthetic leaf chain failed", err)
 	}
-	pocEvidence(t, backend, "certificate", leaf.RawTBSCertificate)
+	pocEvidence(t, f, backend, "certificate", leaf.RawTBSCertificate)
 	return leaf
 }
 
@@ -81,7 +100,7 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 	b.seedSyntheticKV(t)
 	caKey := testSigner(t, "p256").(*ecdsa.PrivateKey)
 	issuer, root := pocIssuerChain(t, caKey)
-	backend := &pocSoftwareCA{key: caKey, issuer: issuer, leafCap: 3, crlCap: 16}
+	backend := &pocDaemonCA{key: caKey, issuer: issuer, leafCap: 3, crlCap: 16}
 	f := newSigningFixtureWith(t, "p256", "sha256", caKey, backend, true)
 	provider := externalProviderConfig(f.pki.caConfig)
 	provider["plugin"] = "regalia"
@@ -122,19 +141,21 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 	role := map[string]any{"allowed_domains": []string{"svc.poc.invalid"}, "allow_subdomains": true, "key_type": "ec", "key_bits": 256, "key_usage": []string{"DigitalSignature"}, "server_flag": true, "client_flag": false, "ttl": "5m", "max_ttl": "10m", "not_before_duration": "30s", "basic_constraints_valid_for_non_ca": true}
 	b.must(t, http.MethodPost, "/v1/pki/roles/poc", role)
 	response := pocData(t, b.must(t, http.MethodPost, "/v1/pki/issue/poc", map[string]string{"common_name": "web.svc.poc.invalid"}))
-	leaf := pocLeaf(t, pocString(t, response, "certificate"), root, issuer, backend)
-	pocACME(t, b, root, issuer, backend)
+	leaf := pocLeaf(t, pocString(t, response, "certificate"), root, issuer, f, backend)
+	pocACME(t, b, root, issuer, f, backend)
 	// The API and both ACME orders consumed all three leaf reservations.
 	beforeExhaustion, signs := len(backend.snapshot()), f.audit.successful("sign")
+	auditBefore := len(f.audit.snapshotEvents())
 	status, _, err = b.call(http.MethodPost, "/v1/pki/issue/poc", map[string]string{"common_name": "web.svc.poc.invalid"})
-	attempts := backend.snapshot()
-	if err != nil || status < 400 || len(attempts) <= beforeExhaustion || f.audit.successful("sign") != signs {
-		t.Fatal("leaf budget not exhausted")
+	if err != nil || status < 400 || len(backend.snapshot()) != beforeExhaustion || f.audit.successful("sign") != signs {
+		t.Fatal("leaf budget not exhausted before token execution")
 	}
-	for _, attempt := range attempts[beforeExhaustion:] {
-		if attempt.Kind != "certificate" || attempt.Allowed {
-			t.Fatal("leaf quota refusal did not inspect a valid certificate")
-		}
+	denied := false
+	for _, event := range f.audit.snapshotEvents()[auditBefore:] {
+		denied = denied || event.Decision == "deny" && event.ArtifactKind == "certificate" && event.X509ProfileID == f.profile.ID && strings.HasSuffix(event.Outcome, ":quota")
+	}
+	if !denied {
+		t.Fatal("exhausted issuance missing durable-policy quota denial")
 	}
 	// Exhausted leaf issuance must still allow a bounded CRL update and revocation.
 	b.must(t, http.MethodPost, "/v1/pki/revoke", map[string]string{"serial_number": pocString(t, response, "serial_number")})
@@ -144,7 +165,7 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 	if err != nil || status != 200 || parseErr != nil || crl.CheckSignatureFrom(issuer) != nil {
 		t.Fatal("invalid KMS-signed CRL", status)
 	}
-	pocEvidence(t, backend, "crl", crl.RawTBSRevocationList)
+	pocEvidence(t, f, backend, "crl", crl.RawTBSRevocationList)
 	found := false
 	for _, entry := range crl.RevokedCertificateEntries {
 		found = found || entry.SerialNumber.Cmp(leaf.SerialNumber) == 0
@@ -162,10 +183,10 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 	b.assertValue(t)
 	p.stop(t)
 	assertBaoArtifactsClean(t, dir, filepath.Join(dir, "openbao-plugin-kms-regalia-poc"), b.token, share)
-	t.Log("Real OpenBao PKI: read-only CA mapping, exact mount grant and revocation, externally held intermediate, full-byte inspected leaf and CRL signatures, verified chain/revoked serial after leaf budget exhaustion, EAB-gated DNS-01 ACME issuance and renewal, HTTPS certificate rotation and unsafe issuance refusals; software fixture only.")
+	t.Log("Real OpenBao PKI: read-only CA mapping, exact mount grant and revocation, externally held intermediate, server-owned full-byte inspected leaf and CRL signatures, durable quotas and audited intent, verified chain/revoked serial after leaf budget exhaustion, EAB-gated DNS-01 ACME issuance and renewal, HTTPS certificate rotation and unsafe issuance refusals; software fixture only.")
 }
 
-func pocBaoRefusals(t *testing.T, b baoAPI, f *signingFixture, backend *pocSoftwareCA, role map[string]any) {
+func pocBaoRefusals(t *testing.T, b baoAPI, f *signingFixture, backend *pocDaemonCA, role map[string]any) {
 	t.Helper()
 	permissive := map[string]any{}
 	for name, value := range role {
@@ -178,19 +199,21 @@ func pocBaoRefusals(t *testing.T, b baoAPI, f *signingFixture, backend *pocSoftw
 		{"common_name": "web.svc.poc.invalid", "ttl": "20m"},
 	} {
 		before, signs := len(backend.snapshot()), f.audit.successful("sign")
+		auditBefore := len(f.audit.snapshotEvents())
 		status, _, err := b.call(http.MethodPost, "/v1/pki/issue/permissive", input)
-		records := backend.snapshot()
-		if err != nil || status < 400 || len(records) <= before || f.audit.successful("sign") != signs {
-			t.Fatal("permissive OpenBao role bypassed inspected KMS profile", status)
+		if err != nil || status < 400 || len(backend.snapshot()) != before || f.audit.successful("sign") != signs {
+			t.Fatal("permissive OpenBao role bypassed server-owned KMS profile", status)
 		}
-		for _, record := range records[before:] {
-			if record.Allowed || record.Kind != "refused" {
-				t.Fatal("unsafe issuance signed")
-			}
+		denied := false
+		for _, event := range f.audit.snapshotEvents()[auditBefore:] {
+			denied = denied || event.Decision == "deny" && strings.Contains(event.Outcome, "x509-")
+		}
+		if !denied {
+			t.Fatal("unsafe OpenBao issuance did not reach server-owned profile denial")
 		}
 	}
 	// OpenBao or the inspected KMS may refuse subordinate CA issuance first;
-	// the direct KMS refusal test separately proves the token-side CA boundary.
+	// the direct KMS refusal test separately proves the server-owned CA boundary.
 	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "subca.svc.poc.invalid"}}, testSigner(t, "p256"))
 	if err != nil {
 		t.Fatal(err)

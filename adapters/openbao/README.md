@@ -111,7 +111,10 @@ only. This HTTP listener configuration is for disposable tests only.
 
 The integration fixture uses Regalia's real HTTP authentication, registry, RBAC,
 purpose policy, durable replay state and audit coordinator, with a software RSA
-provider standing in for the hardware. The deployed KMS executable, fencing,
+provider standing in for seal hardware and software signing keys for Transit/PKI.
+The [PKI/ACME drill](PKI-E2E-POC.md) now uses the actual daemon parser, immutable
+issuing profile, durable per-object leaf/CRL budgets and hashed audit intent; its
+token only signs approved digests. The deployed KMS executable, fencing,
 hardware key attributes and physical recovery are not exercised. Its software
 provider is test-only and is never linked into the plugin executable.
 Listener recovery reuses the fixture's in-memory RSA key; it does not prove KMS
@@ -141,7 +144,9 @@ an automatic migration from frame 1.
 
 Initial target: OpenBao 2.7.1, wrapping SDK 2.9.0, plugin SDK 2.4.0.
 Native External Keys/Transit and namespace/mount refusals are exercised on the
-pinned real server. PKI, upgrades and production deployment remain separate
+pinned real server. The isolated PKI/internal ACME drill also exercises
+server-owned inspection and durable intent. Other upstream versions, deployed
+daemon recovery, physical custody and production deployment remain separate
 qualification work.
 
 ## Run

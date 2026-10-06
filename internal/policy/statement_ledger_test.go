@@ -116,7 +116,7 @@ func statementLedger() []statementFact {
 			file:     "policy.go",
 			where:    "Evaluate, the quota refusal",
 			landmark: "func (engine *Engine) Evaluate(ctx context.Context, request Request) Decision {",
-			anchor:   "\t\t\treturn Decision{Code: CodeLimitExceeded, PolicyID: policy.policy.ID, Rule: \"quota\"}\n",
+			anchor:   "\t\t\treturn Decision{Code: CodeLimitExceeded, PolicyID: policy.policy.ID, Rule: \"quota\", SigningIntent: decision.SigningIntent}\n",
 			dropped:  "the policy id on a limit-exceeded decision",
 			verdict:  verdictCovered,
 			why: "The quota counter is asserted by TestQuotaRejectionsAreCountedSeparatelyFromOtherDenials " +
@@ -144,7 +144,7 @@ func statementLedger() []statementFact {
 			file:     "policy.go",
 			where:    "Evaluate, the durable-state refusal",
 			landmark: "Rule: \"durable-state\"",
-			anchor:   "\t\t\treturn Decision{Code: CodeStateUnavailable, PolicyID: policy.policy.ID, Rule: \"durable-state\"}\n",
+			anchor:   "\t\t\treturn Decision{Code: CodeStateUnavailable, PolicyID: policy.policy.ID, Rule: \"durable-state\", SigningIntent: decision.SigningIntent}\n",
 			dropped:  "the policy id on a state-unavailable decision",
 			verdict:  verdictCovered,
 			why: "Same statement shape, same gap: TestReplayQuotaStateFailureFailsClosed asserts the " +
@@ -217,7 +217,7 @@ func statementLedger() []statementFact {
 			file:     "state.go",
 			where:    "nonceKey",
 			landmark: "func nonceKey(reservation Reservation) string {",
-			anchor:   "return reservation.PolicyID + \"\\x00\" + reservation.ObjectID + \"\\x00\" + reservation.Principal + \"\\x00\" + reservation.Nonce\n",
+			anchor:   "return identity + \"\\x00\" + reservation.ObjectID + \"\\x00\" + reservation.Principal + \"\\x00\" + reservation.Nonce\n",
 			dropped:  "the principal component of the replay key",
 			verdict:  verdictCovered,
 			why: "TestTwoIdentitiesThatConcatenateAlikeAreNotOneNonce varies the policy and the object " +
@@ -225,7 +225,10 @@ func statementLedger() []statementFact {
 				"it green. Without it two different workloads share one replay namespace: the second " +
 				"principal to present a nonce the first already used is refused as a replay of a " +
 				"request it never made, which is a denial of service one tenant can inflict on " +
-				"another by choosing nonces.",
+				"another by choosing nonces. The selected identity remains the historical policy ID " +
+				"for ordinary reservations; X.509 selects its fixed namespace so a policy revision " +
+				"cannot restore consumed nonces. This mutation still drops only the principal " +
+				"component from the shared return statement, preserving its original scope.",
 			run: func(t *testing.T) {
 				state := openState(t)
 				first := Reservation{PolicyID: "cosmos", ObjectID: "hotwallet",

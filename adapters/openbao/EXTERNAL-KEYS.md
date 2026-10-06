@@ -83,8 +83,13 @@ deletion and disable/remount refusal. The fixture readiness response is a
 read-only test shim; actual daemon readiness and physical custody require the
 [hardware record](HARDWARE-QUALIFICATION.md).
 
-CA mappings are refused, including prehashed or raw signing. #122 still needs
-server-side inspected certificate/CRL payloads, issuing profiles and negative
-tests, a reviewed CA payload digest audit field and daily signature counts.
-There is no digest-only CA fallback. No internal ACME, OCSP or production PKI
-support is claimed. Public ACME continues at the ingress.
+The normal External Keys factory still refuses every CA mapping, including raw
+or prehashed signing. The separate [PKI/ACME development experiment](PKI-E2E-POC.md)
+uses a server-owned issuing profile and durable leaf/CRL reservations before a
+software token receives an approved digest. Its artifact evidence checks the
+actual token input against verified daemon audit and durable policy intent.
+
+There is no client-facing digest-only CA fallback. The experimental binary is
+excluded from development packages; production PKI and OCSP support are not
+claimed. Public ACME continues at the ingress. #122 remains open for review,
+release/collector upgrades, independent trust and physical qualification.

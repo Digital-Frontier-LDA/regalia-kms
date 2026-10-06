@@ -19,7 +19,7 @@ import (
 func TestPKIPoCBudgetsRemainIndependentUnderConcurrentCalls(t *testing.T) {
 	ca := testSigner(t, "p256").(*ecdsa.PrivateKey)
 	issuer := pocIssuer(t, ca)
-	backend := &pocSoftwareCA{key: ca, issuer: issuer, leafCap: 2, crlCap: 3}
+	backend := &pocDaemonCA{key: ca, issuer: issuer, leafCap: 2, crlCap: 3}
 	f := newSigningFixtureWith(t, "p256", "sha256", ca, backend, true)
 	key := configuredPKIPoC(t, f, f.pki.caConfig)
 	now := time.Now().UTC()
@@ -103,23 +103,33 @@ func TestPKIPoCBudgetsRemainIndependentUnderConcurrentCalls(t *testing.T) {
 	batch(key, [][]byte{leaf, leaf, leaf, leaf, leaf, leaf}, 2)
 	batch(key, [][]byte{crl.RawTBSRevocationList, crl.RawTBSRevocationList, crl.RawTBSRevocationList, crl.RawTBSRevocationList, crl.RawTBSRevocationList, crl.RawTBSRevocationList}, 3)
 	allowed := map[string]int{}
-	digests := map[string][32]byte{"certificate": sha256.Sum256(leaf), "crl": sha256.Sum256(crl.RawTBSRevocationList)}
+	digests := map[[32]byte]string{sha256.Sum256(leaf): "certificate", sha256.Sum256(crl.RawTBSRevocationList): "crl"}
 	for _, record := range backend.snapshot() {
-		if !record.Allowed {
-			continue
+		kind, ok := digests[record.Digest]
+		if !record.Allowed || record.Kind != "digest" || !ok {
+			t.Fatal("token received a digest unrelated to inspected inputs")
 		}
-		allowed[record.Kind]++
-		if expected, ok := digests[record.Kind]; !ok || record.Digest != expected {
-			t.Fatal("accepted signing record does not match inspected input")
-		}
+		allowed[kind]++
 	}
 	if allowed["certificate"] != 2 || allowed["crl"] != 3 || f.audit.successful("sign") != 5 {
-		t.Fatal("concurrent calls overshot a budget or consumed revocation reserve")
+		t.Fatal("concurrent calls overshot durable budgets or consumed CRL reserve")
 	}
-
-	t.Run("backend-reservation-concurrency", func(t *testing.T) {
-		// Exercise the reservation mutex directly because the API fixture's
-		// single hardware executor would otherwise hide backend contention.
+	counts := map[string]int{}
+	for _, event := range f.audit.snapshotEvents() {
+		if event.Outcome != "success" {
+			continue
+		}
+		if event.X509ProfileID != f.profile.ID || event.KeyFingerprint != f.keyConfig["public_key_sha256"] {
+			t.Fatal("successful signing lacks server-owned profile/key identity")
+		}
+		counts[event.ArtifactKind]++
+	}
+	if counts["certificate"] != 2 || counts["crl"] != 3 {
+		t.Fatal("audit intent counts differ from actual token calls")
+	}
+	t.Run("legacy-software-reservation-concurrency", func(t *testing.T) {
+		// Preserve the earlier software-only PoC mutex regression for comparison.
+		// Server-owned durable reservations are exercised through the API above.
 		backend := &pocSoftwareCA{key: ca, issuer: issuer, leafCap: 2, crlCap: 3}
 		route := registry.Route{ObjectID: "poc-pki-ca", Purpose: "openbao-pki-poc", Environment: "development", Algorithm: "p256"}
 		type result struct {
