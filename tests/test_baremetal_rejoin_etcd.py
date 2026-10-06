@@ -121,7 +121,8 @@ class RejoinRealEtcd(unittest.TestCase):
                 mock.patch.object(rj.etcdconf, "check", json.loads), mock.patch.object(rj, "JOIN_PAUSE_S", 1), \
                 contextlib.redirect_stdout(io.StringIO()) as said:
             line, member_id = rj.admit(a, self.chain, "a", "b")
-            self.assertEqual(line, "a=%s,b=%s" % (urls["a"], urls["b"]))
+            # etcd lists its members by ID, random: the line's order is etcd's, and etcd takes it in any order
+            self.assertEqual(sorted(line.split(",")), sorted(["a=%s" % urls["a"], "b=%s" % urls["b"]]))
             self.assertEqual(h.ctl(h.client["a"], "put", "/while-learner", "v").returncode, 0)   # quorum 1 still: a commits
             export = rj.join(b, self.chain, "b", line, member_id)
             rj.promote(a, self.chain, "a", "b")
