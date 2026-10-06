@@ -16,6 +16,7 @@ from tests.test_baremetal_enrol import SYSTEM_PUB
 
 NEW = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 NEW_PUB = NEW.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+OTHER_POINT = OTHER_K_A.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()
 NEW_PRIVATE = NEW.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
 
 
@@ -108,13 +109,13 @@ class NodeChecks(unittest.TestCase):
         doc = copy.deepcopy(self.doc)
         if change:
             change(doc)
-        return self.node._resigned(self.cfg, doc, SYSTEM_PUB, pcr11=pcr11 or self.pcr11)
+        return self.node._resigned(self.cfg, doc, SYSTEM_PUB, POINT, pcr11=pcr11 or self.pcr11)
 
     def test_a_good_re_sign_moves_the_node_to_the_new_key_s_generation(self):
         got = self.resigned()
         self.assertEqual((got["pem"], got["generation"]), (NEW_PUB, GENERATIONS["a"] + 1))
         self.assertEqual(got["entry"]["pkfp"], signkey.pcr_key_fingerprint(NEW_PUB))
-        self.assertIsNone(self.node._resigned(self.cfg, documents()[1], SYSTEM_PUB, pcr11=self.pcr11), "nothing re-signed: None")
+        self.assertIsNone(self.node._resigned(self.cfg, documents()[1], SYSTEM_PUB, POINT, pcr11=self.pcr11), "nothing re-signed: None")
 
     def test_each_check_refuses_with_its_own_words(self):
         old = lambda d: d["nodes"]["a"]["accepted"][0]["signing"]                  # noqa: E731
@@ -133,7 +134,14 @@ class NodeChecks(unittest.TestCase):
                  "is over another policy than PolicyPCR(11 = "),
                 ("another boot", None, "77" * 32, "this TPM's PCR 11 is 7777777777777777..., not the "),
                 ("no approvals on the new key's set", lambda d: d["nodes"]["a"]["accepted"][1]["signing"].pop("anchor_approvals"), None,
-                 "the new key's set for a carries no K_A approvals")):
+                 "the new key's set for a carries no K_A approvals"),
+                # 05 on #517: the approvals are checked, not taken as given
+                ("another node's approvals", lambda d: d["nodes"]["a"]["accepted"][1]["signing"].update(
+                    anchor_approvals=copy.deepcopy(d["nodes"]["b"]["accepted"][1]["signing"]["anchor_approvals"])), None,
+                 "does not verify under the K_A it names"),
+                ("approvals under another K_A", lambda d: d["nodes"]["a"]["accepted"][1]["signing"].update(
+                    anchor_approvals=ap.approvals_for(OTHER_K_A, NEW_PUB, OTHER_POINT, GENERATIONS["a"] + 1, "a")), None,
+                 "does not verify under the K_A it names")):
             with self.subTest(name), self.assertRaises(m.Refused) as caught:
                 self.resigned(change, pcr11)
             self.assertIn(reason, str(caught.exception))
@@ -176,3 +184,10 @@ class NodeChecks(unittest.TestCase):
             self.addCleanup(p.stop)
         self.node.catch_up_rotation(self.cfg)
         self.assertEqual(seen, [GENERATIONS["a"] + 1], "the catch-up did not take the re-sign's generation")
+        # 05 on #517: a re-sign whose approvals are at another generation than the published one bumps nothing
+        rotations.append({"from": GENERATIONS["a"] + 1, "signature": "00" * 64})          # published G is now G + 2
+        del seen[:]
+        with self.assertRaisesRegex(m.Refused, "the re-sign moves a to approvals at generation %d, not the published %d: nothing is "
+                                    "bumped" % (GENERATIONS["a"] + 1, GENERATIONS["a"] + 2)):
+            self.node.catch_up_rotation(self.cfg)
+        self.assertEqual(seen, [])

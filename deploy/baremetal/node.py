@@ -537,13 +537,15 @@ def _booted_set(document, node_id, pem):
     return sets[0]
 
 
-def _resigned(cfg, document, pem, pcr11=None):
+def _resigned(cfg, document, pem, k_a, pcr11=None):
     """#361 C4b (regalia-kms-05's conditions on #361): the new system-phase key's re-sign of the image this node is booted
     on (its set's signing.resigned), checked here before it is used: refused by name unless
       * the entry names the key of one of this node's accepted sets (05's addition), and its PEM is that key;
       * its signature verifies under that key over its policy digest;
       * the digest is PolicyPCR(11 = the booted set's system-phase value), and THIS TPM's PCR 11, read now, is that value;
-      * the new key's set carries K_A's approvals for this node (their generation is returned).
+      * the new key's set carries K_A's approvals of the new key for THIS node, under the manifest's K_A (`k_a`), checked
+        (anchorpolicy.check_approvals, regalia-kms-05 on #517): their generation is returned, and the catch-up requires it
+        to be the published one, or R would move onto approvals the TPM refuses.
     None when the booted set carries no re-sign. Returns {"pem", "entry", "generation"}."""
     import base64
     from cryptography.exceptions import InvalidSignature
@@ -572,7 +574,8 @@ def _resigned(cfg, document, pem, pcr11=None):
     require(measured == want, "this TPM's PCR 11 is %s..., not the %s... the re-sign is for: this boot is not that image's"
             % (measured[:16], want[:16]))
     require("anchor_approvals" in new[0]["signing"], "the new key's set for %s carries no K_A approvals" % node_id)
-    return {"pem": new_pem, "generation": new[0]["signing"]["anchor_approvals"]["generation"],
+    generation = anchorpolicy.check_approvals(new[0]["signing"]["anchor_approvals"], new_pem, k_a, node_id)
+    return {"pem": new_pem, "generation": generation,
             "entry": {"pcrs": [11], "pkfp": resigned["system"], "pol": resigned["pol"], "sig": resigned["sig"]}}
 
 
@@ -597,7 +600,7 @@ def _switched(cfg, manifest, document, pem):
     booted = booted[0]
     if anchorpolicy.read_rotation(anchorpolicy.ROTATION_INDEX, _tpm_run(cfg)) <= booted["signing"]["anchor_approvals"]["generation"]:
         return None
-    resigned = _resigned(cfg, document, pem)
+    resigned = _resigned(cfg, document, pem, manifest["anchor_policy_key"]["key"])
     _keep_resigned(resigned["entry"])
     return resigned
 
@@ -648,8 +651,10 @@ def catch_up_rotation(cfg, manifest=None, pem_path=None):
     if target is not None and booted < target:
         # #361 C4b: the booted image re-signed by the new key, its checks passed, moves this node to the new key's
         # approvals on the boot it is in (written where the writes find it BEFORE the bump, so none is stranded)
-        resigned = _resigned(cfg, document, pem)
+        resigned = _resigned(cfg, document, pem, manifest["anchor_policy_key"]["key"])
         if resigned is not None:
+            require(resigned["generation"] == target, "the re-sign moves %s to approvals at generation %d, not the published %d: "
+                    "nothing is bumped" % (cfg["node_id"], resigned["generation"], target))
             _keep_resigned(resigned["entry"])
             booted = resigned["generation"]
     return anchorpolicy.catch_up(anchorpolicy.ROTATION_INDEX, manifest["anchor_policy_key"]["key"], cfg["node_id"], rotations,
