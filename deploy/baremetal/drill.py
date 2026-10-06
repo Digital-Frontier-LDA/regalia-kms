@@ -478,7 +478,7 @@ def scenarios(backend, plan, judge):
         return {"name": "S3", "inject": lambda: ctx.update(t_inject_ms=now(), cut=backend.partition(node)) or ctx,
                 "judge": lambda: judge("S3", ctx), "recover": healed}
 
-    def s4(spec):                           # two down: the survivor alone under the owner's authorization (D32.6)
+    def s4(spec):                           # two down: the survivor alone under the owner's authorization (D32.6; scope stateless, then full: #432)
         survivor, others = spec["survivor"], list(spec["others"])
         ctx = {"node": survivor, "others": others}
 

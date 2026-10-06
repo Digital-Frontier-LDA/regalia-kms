@@ -91,23 +91,34 @@ class Fixture:
         self._sampling = (threading.Thread(target=self._sample, args=(survivor, stop), daemon=True), stop)
         self._sampling[0].start()
         self.marks["quarantine_begins"] = int(time.time())
-        manifest, _ = self.cluster.advance(survivor, signer="owner", owner_recovery=True, **{o: "QUARANTINED" for o in others})
+        try:
+            manifest, _ = self.cluster.advance(survivor, signer="owner", owner_recovery=True, **{o: "QUARANTINED" for o in others})
+        except BaseException:
+            self._stop_sampler()
+            raise
         self.marks["quarantine_done"] = int(time.time())
         return {"epoch": manifest["epoch"]}
 
     def authorize(self, survivor):
         signed = self.cluster.survivor_authorization(survivor)
         self.marks["install_begins"] = int(time.time())
-        done = self.cluster.install_survivor(survivor, signed)
-        self.marks["installed"] = int(time.time())
-        time.sleep(10)                                  # the sampler sees 10 s past the install, then stops
-        if self._sampling:
-            self._sampling[1].set()
-            self._sampling[0].join(5)
+        try:
+            done = self.cluster.install_survivor(survivor, signed)
+            self.marks["installed"] = int(time.time())
+            if done.returncode == 0:
+                time.sleep(10)                          # the sampler sees 10 s past the install, then stops
+        finally:
+            self._stop_sampler()
         if done.returncode != 0:
             raise RuntimeError("survivor install on %s failed (%d): %s" % (survivor, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
         return {"expires_at": signed["authorization"]["expires_at"], "scope": signed["authorization"]["scope"],
                 "said": (done.stdout or "").strip()[-200:]}
+
+    def _stop_sampler(self):
+        if self._sampling:
+            self._sampling[1].set()
+            self._sampling[0].join(5)
+            self._sampling = None
 
     def lift(self, survivor, others):
         """A root-signed epoch with `others` ACTIVE again, delivered to the survivor (deliver.py): any new epoch ends the
@@ -180,12 +191,17 @@ class LeaseJudge:
         # serving-state line just before it is either a not-serving one, or a lease-mode ALLOW under an EARLIER epoch (its
         # issuer quarantined in the recovery's epoch, so that lease is refused there). Not "a DENY first": with the
         # authorization already installed when a restarted admission first publishes, there is no not-serving round.
-        whole = [e for e in self._events(node, 0) if e["event"] == "admission-serving"]
-        at_switch = next((i for i, e in enumerate(whole) if e["outcome"] == "ALLOW" and (e["reason"] or "").startswith(self.RECOVERY)), None)
+        # from one lease window before the outage (48 on #507): an earlier run's RECOVERY line on the same trail, or a real
+        # server's persistent trail, is never the switch judged here; the switch is the first one since the install
+        window_ms = (lease.MAX_LIFETIME + admission.MARGIN + SLACK_S) * 1000
+        whole = [e for e in self._events(node, t_off - window_ms) if e["event"] == "admission-serving"]
+        at_switch = next((i for i, e in enumerate(whole) if e["outcome"] == "ALLOW" and (e["reason"] or "").startswith(self.RECOVERY)
+                          and e["at"] >= t_auth // 1000), None)
+        # 0: nothing before the switch inside the window, so nothing shows what came before it: no evidence, not a pass
         before = whole[at_switch - 1] if at_switch else None
         recovery_epoch = whole[at_switch]["epoch"] if at_switch is not None else None
-        no_valid_lease = at_switch is not None and (before is None or before["outcome"] == "DENY"
-                                                    or (before["epoch"] is not None and before["epoch"] < recovery_epoch))
+        no_valid_lease = bool(at_switch) and (before["outcome"] == "DENY"
+                                              or (before["epoch"] is not None and before["epoch"] < recovery_epoch))
         # it switched to recovery as soon as it could: by the later of its lease's end (one lease after the others went off)
         # and the authorization's install, plus a round. Serving on under its old lease would make the switch late
         bound_s = max(t_off // 1000 + lease.MAX_LIFETIME + admission.MARGIN, t_auth // 1000) + SLACK_S

@@ -294,9 +294,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     a serves alone in RECOVERY under the owner's survivor authorization (signed on the fixture's SoftHSM token,
     installed with the shipped `survivor install`). A root epoch then lifts the quarantine, b and c return, and a leaves
     recovery at its first normal lease.
-  - **Not judged in S4:** stateless-only in recovery, because the daemon refuses to serve in recovery until its gate
-    exists. Also not built yet: the G1 fence evidence (the fixture uses the typed fallback), and the G5 export with the
-    readmitting epoch (#432 part 2).
+  - **S4 judges scope stateless only.** The owner's decision makes a lone survivor's scope stateless and then full
+    (full_from = the attestation + 900 + 60 s, plus 600 with a typed fence; #432). Scope full (`survivor_full_scope` in
+    `e2e/lib/drills.py`, #497) isn't judged until the daemon's gate and the take-over (#432 part 2) exist. Neither is
+    what the daemon serves in recovery: it refuses until its gate exists. Also not built yet: the G1 fence evidence (the
+    fixture uses the typed fallback), and the G5 export with the readmitting epoch.
   - **On the real servers, S4's owner acts are by hand:** the hardware backend refuses them and says so.
   - None of it has run on the real servers.
 
