@@ -10,6 +10,7 @@ import unittest
 
 from deploy.baremetal import etcdconf, membership as m, opstate, survivor as sv, takeover as tk
 from tests.test_baremetal_membership_v4 import NODE_KEYS, OWNER_KEYS, manifest4, nodes4, p256_sig, pub
+from tests.test_baremetal_fence import redfish_evidence
 
 T0 = 1791201600                                              # 2026-10-05T12:00:00Z, the authorization's not_before
 NOW = T0 + sv.REQUEST_LIFE_S + sv.SKEW_S + 100               # inside the full scope of a power-readback fence
@@ -24,8 +25,8 @@ def chain():
 def authorization(tip, scope="full", method="redfish"):
     auth = {"schema": sv.AUTH_SCHEMA, "node_id": "a", "quarantine_epoch": tip["epoch"], "quarantine_digest": m.digest(tip),
             "not_before": "2026-10-05T12:00:00Z", "expires_at": "2026-10-06T12:00:00Z", "fenced": "b, c: off at the iLO", "scope": scope,
-            "fence": {"method": method, "nodes": {o: {"power_state": "Off" if method == "redfish" else "unreachable",
-                                                      "read_at": "2026-10-05T11:59:00Z"} for o in ("b", "c")}}}
+            "fence": redfish_evidence() if method == "redfish" else
+            {"method": method, "nodes": {o: {"power_state": "unreachable", "read_at": "2026-10-05T11:59:00Z"} for o in ("b", "c")}}}
     return {"authorization": auth, "signature": {"party": m.OWNER, "key": pub(OWNER_KEYS[0]),
                                                  "sig": OWNER_KEYS[0].sign(sv.authorization_message(auth)).hex()}}
 
