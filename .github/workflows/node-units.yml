@@ -19,6 +19,7 @@ on:
       - e2e/three-node-netns.py
       - e2e/three-node-recovery.py
       - e2e/three-node-outage.py
+      - e2e/three-node-reanchor.py
       - e2e/rolling-threenode.py
       - e2e/three-node-theft.py
       - e2e/three-node-leases.py
@@ -41,6 +42,7 @@ on:
       - e2e/three-node-netns.py
       - e2e/three-node-recovery.py
       - e2e/three-node-outage.py
+      - e2e/three-node-reanchor.py
       - e2e/rolling-threenode.py
       - e2e/three-node-theft.py
       - e2e/three-node-leases.py
@@ -50,6 +52,13 @@ on:
 
 permissions:
   contents: read
+
+# One run per pull request: a new push cancels its own superseded run (seven sessions' pushes starved the hosted
+# runners, 2026-10-05). Anything else (main, a schedule) is a group of its own run: GitHub cancels an older PENDING
+# run of a group even without cancel-in-progress, and every main run must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   node-units-systemd:
@@ -172,8 +181,8 @@ jobs:
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
             sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-recovery.py | tee "$RUNNER_TEMP/recovery.log"
-          grep -q '^three-node-recovery: 65 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
-            echo "::error::the three-node recovery test did not pass all 65 checks" >&2; exit 1; }
+          grep -q '^three-node-recovery: 69 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
+            echo "::error::the three-node recovery test did not pass all 69 checks" >&2; exit 1; }
 
   # #75 (Phase 15), tier N: a new image rolled through the three nodes while CURRENT and NEXT are both accepted
   # (an image is PCR 11, extended after a power cycle); may_reboot on live leases as update.py asks it; the retire
@@ -233,6 +242,33 @@ jobs:
             python3 -Es e2e/three-node-outage.py | tee "$RUNNER_TEMP/outage.log"
           grep -q '^three-node-outage: 34 passed, 0 failed$' "$RUNNER_TEMP/outage.log" || {
             echo "::error::the three-node outage test did not pass all 34 checks" >&2; exit 1; }
+
+  # #388: a re-anchor in a total outage. One node's TPM anchor unusable; the other two opened by hand, each with its own
+  # recovery key; reanchor from their two chains at the node's terminal; the node serves again (MEMBERSHIP-RECOVERY.md).
+  three-node-reanchor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
+      - name: Build the pre-root client
+        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+      - name: A total outage, one node's anchor unusable, re-anchored from the other two opened by hand
+        run: |
+          set -o pipefail
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+            python3 -Es e2e/three-node-reanchor.py | tee "$RUNNER_TEMP/reanchor.log"
+          grep -q '^three-node-reanchor: 26 passed, 0 failed$' "$RUNNER_TEMP/reanchor.log" || {
+            echo "::error::the three-node re-anchor test did not pass all 26 checks" >&2; exit 1; }
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.

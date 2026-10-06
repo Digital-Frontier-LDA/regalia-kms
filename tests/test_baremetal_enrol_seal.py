@@ -228,6 +228,7 @@ class ApprovedImage(unittest.TestCase):
                  "phases": {phase: {"11": value} for phase, value in pcr11.items()}}
         if signing:
             entry["signing"] = self.signing if signing is True else signing
+            entry["rootfs_sha256"] = "6e" * 32
         document = {"schema": measurements.SCHEMA, "name": "v1", "nodes": {"a": {"accepted": [entry]}}}
         measurements.validate(document)
         return document

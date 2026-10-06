@@ -663,7 +663,29 @@ class Verification(unittest.TestCase):
         def policy(*sets):
             return {"schema": attest.POLICY_SCHEMA, "nodes": {"site-a": {"ek_name": self.ek_name.hex(), "accepted": list(sets)}}}
         signing = {"initrd": "1a" * 32, "system": "5b" * 32, "secure_boot_cert": "5c" * 32}
-        attest.validate_policy(policy(dict(self.one("a", self.IMAGE1), signing=signing)))
+        root = "6e" * 32
+        attest.validate_policy(policy(dict(self.one("a", self.IMAGE1), signing=signing, rootfs_sha256=root)))
+        # ... and the root filesystem it is installed with (#61): required with "signing", allowed nowhere else. No PCR
+        # covers it, so two sets that differ only there cannot be told apart by a quote: the same measurements
+        roots = (
+            ("a signed set naming no root", "a signed image's set must name its root filesystem",
+             dict(self.one("a", self.IMAGE1), signing=signing)),
+            ("a root not hex", "rootfs_sha256 must be 64 lowercase hex", dict(self.one("a", self.IMAGE1), signing=signing, rootfs_sha256="6E" * 32)),
+            ("a root too short", "rootfs_sha256 must be 64 lowercase hex", dict(self.one("a", self.IMAGE1), signing=signing, rootfs_sha256="6e" * 31)),
+            ("a root not a string", "rootfs_sha256 must be 64 lowercase hex", dict(self.one("a", self.IMAGE1), signing=signing, rootfs_sha256=None)),
+            ("a root on an unsigned set", "only a signed image's set (one that names its signing keys) names its root filesystem",
+             dict(self.one("a", self.IMAGE1), rootfs_sha256=root)),
+            ("a root on a set with no per-phase PCR 11", "only a signed image's set (one that names its signing keys) names its root",
+             dict(self.one("a", None), rootfs_sha256=root)),
+        )
+        for label, reason, entry in roots:
+            with self.subTest(label), self.assertRaises(attest.Refused) as caught:
+                attest.validate_policy(policy(entry))
+            self.assertIn(reason, str(caught.exception))
+        with self.assertRaises(attest.Refused) as caught:
+            attest.validate_policy(policy(dict(self.one("a", self.IMAGE1), signing=signing, rootfs_sha256=root),
+                                          dict(self.one("b", self.IMAGE1), signing=signing, rootfs_sha256="7f" * 32)))
+        self.assertIn("the two sets are the same measurements under two labels", str(caught.exception))
         cases = (
             ("a field missing", "signing fields mismatch", dict(self.one("a", self.IMAGE1), signing={"initrd": "1a" * 32, "system": "5b" * 32})),
             ("a field more", "signing fields mismatch", dict(self.one("a", self.IMAGE1), signing=dict(signing, pcrpkey="77" * 32))),

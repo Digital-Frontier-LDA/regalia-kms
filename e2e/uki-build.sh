@@ -241,13 +241,16 @@ opens system && F "another image opened the system-phase secret" || P "another i
 hdr "5  the measurement set of this image for a host"
 printf '{"0": "%s", "7": "%s"}' "$(printf '00%.0s' $(seq 32))" "$(printf '77%.0s' $(seq 32))" > "$W/pcrs.json"
 mkdir -p "$W/esp/loader/credentials"; printf 'test-node\n' > "$W/esp/loader/credentials/regalia.node-id.cred"
-uki set --record "$SIGNED" --label test-image --tpm-firmware-version 2019102300163636 --pcrs "$W/pcrs.json" --esp "$W/esp" > "$W/set.json" 2>"$W/set.err"
-python3 -IB - "$HERE" "$W/set.json" "$i11" "$s11" <<'EOF' && P "the set gives PCR 11 per phase from the record, and a measurement document accepts it" || F "the set: $(cat "$W/set.err" "$W/set.json")"
+printf '{"schema": "regalia.rootfs-build/v1", "rootfs_sha256": "%s"}' "$(printf '6e%.0s' $(seq 32))" > "$W/rootfs-build.json"
+uki set --record "$SIGNED" --label test-image --tpm-firmware-version 2019102300163636 --pcrs "$W/pcrs.json" --esp "$W/esp" \
+  --rootfs-record "$W/rootfs-build.json" > "$W/set.json" 2>"$W/set.err"
+python3 -IB - "$HERE" "$W/set.json" "$i11" "$s11" <<'EOF' && P "the set gives PCR 11 per phase from the record and names the root, and a measurement document accepts it" || F "the set: $(cat "$W/set.err" "$W/set.json")"
 import sys; sys.path.append(sys.argv.pop(1))
 import json, sys
 from deploy.baremetal import measurements
 entry = json.load(open(sys.argv[1]))
 assert entry["phases"] == {"initrd": {"11": sys.argv[2]}, "system": {"11": sys.argv[3]}}, entry
+assert entry["rootfs_sha256"] == "6e" * 32, entry
 measurements.version({"schema": measurements.SCHEMA, "name": "v1", "nodes": {n: {"accepted": [entry]} for n in "abc"}})
 EOF
 

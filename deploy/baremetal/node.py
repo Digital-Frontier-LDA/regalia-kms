@@ -67,6 +67,7 @@ import argparse
 import binascii
 import contextlib
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -288,6 +289,67 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
     anchor.anchor(epoch, membership.Store._digests(manifests))
     anchor.check(epoch)
     return epoch, hashlib.sha256(chain).hexdigest(), rewritten, unrenderable
+
+
+ESP_SETTLE_RUNS = 5          # runs of esp_advance at most, while the published chain keeps changing under it
+
+
+def esp_advance_settled(node, esp, lock_path=ESP_LOCK, advance=None):
+    """esp_advance, run again while the published chain changed DURING the run, at most ESP_SETTLE_RUNS times.
+
+    regalia-esp-advance.path's PathChanged= is edge-triggered: a publication that lands while a run is already active
+    is folded into that run by systemd and starts nothing afterwards. If that run had read the chain before it changed,
+    the ESP and the anchor would stay one epoch behind until the NEXT publication (regalia-kms-24 and 3e on main's
+    three-node-recovery; on a host, the unit's boot run beside sync's first publication). So the published file is read
+    before and after each run; a run that saw what is published now is the last one. Still changing after the bound (a
+    sync publishing faster than a run, not something sync does), it is refused, and the unit's Restart= tries again.
+    That cannot strand a node (24): every run that completes has written the ESP and moved the anchor to the chain it
+    read, so each run makes progress and the anchor is never more than one publication behind; and the refusal is
+    what guarantees ANOTHER run (Restart=on-failure, 15 s later, re-reading the newest), where a success after the
+    bound could leave a lost trigger behind it."""
+    advance = advance or esp_advance
+    path = node.path(PUBLISHED)
+    # the RUN holds `lock_path` (node.ESP_LOCK): the same file reanchor holds for its whole re-anchor (#391), so the unit,
+    # a hand-run esp-advance and a re-anchor all serialize on one lock (regalia-kms-24). The anchor's own HighWater lock
+    # inside each run is another file beside it: HighWater flocks its lock_path itself, and a second open of the held
+    # file in this process would block on itself (regalia-kms-95)
+    with _one_run(lock_path):
+        for _ in range(ESP_SETTLE_RUNS):
+            before = _read_regular(path, membership.MAX_CHAIN_BYTES + 1)
+            result = advance(node, esp, lock_path=lock_path + ".anchor")
+            if _read_regular(path, membership.MAX_CHAIN_BYTES + 1) == before:
+                return result
+    raise Refused("the published membership chain changed during each of %d runs: not settled; the unit tries again"
+                  % ESP_SETTLE_RUNS)
+
+
+@contextlib.contextmanager
+def _one_run(path):
+    """One ESP advance at a time, across the WHOLE run (every rerun: the ESP's write and the anchor's move), on
+    node.ESP_LOCK, which reanchor also holds for its whole re-anchor (#391). Without it a hand-run `esp-advance` beside the
+    unit could write an OLDER chain to the ESP after the other run anchored a newer one: an ESP below its anchor, a
+    ROLLBACK at the next boot (regalia-kms-95 on #471). Its directory is the unit's RuntimeDirectory; a hand-run while the
+    unit is stopped makes it (root's, 0700) rather than run unlocked. Opened as reanchor opens it: never through a link, a
+    regular file with one name. Held by another run or a re-anchor, it is a refusal, not a wait: the unit's Restart=
+    tries again, and an operator is told."""
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as failure:
+        if failure.errno == errno.ELOOP:
+            raise Refused("the ESP advance's lock %s is a symbolic link: it is not taken through one" % path) from None
+        raise
+    try:
+        held = os.fstat(fd)
+        require(stat.S_ISREG(held.st_mode) and held.st_nlink == 1, "the ESP advance's lock %s is not a regular file with one name" % path)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refused("another regalia-esp-advance run, or a re-anchor, holds %s: one at a time (try again when it has "
+                          "finished)" % path) from None
+        yield
+    finally:
+        os.close(fd)
 
 
 def esp_metrics(node, ok, renderable=None, publish=None):
@@ -554,7 +616,7 @@ class Node:
         """The membership epoch anchor: membership.HighWater on its own index (and the pair and slots after it),
         with this node's approved-image write policy (image_policy) for an index written by policy (#242), judged by the
         schema of the chain tip this node holds (_tip_schema, #242 B3).
-        `lock_path`: the writer's lock. The run-time writer is esp_advance, with its own (ESP_LOCK); the default, in
+        `lock_path`: the writer's lock. The run-time writer is esp_advance: its run holds ESP_LOCK, and this lock is ESP_LOCK + ".anchor"; the default, in
         the state directory, is for the hand tools that build an anchoring store (enrolment). sync only reads.
         `schema`: the schema of the chain this anchor is judged by, for a caller holding another chain than the node's
         (esp_advance: the published one it anchors); default, the chain tip this node holds."""
@@ -744,7 +806,7 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
 
     def renew(request):
         manifest = node.manifest()
-        sources = node.sources(manifest)
+        sources = node.sources(manifest, timeout=admission.RENEW_TIMEOUT)    # a silent peer costs seconds, not a lease
         peers = sorted(sources)
         require(peers, "no peer to ask for a lease")
         order[:] = order[1:] + order[:1] if order and set(order) == set(peers) else peers
@@ -771,6 +833,48 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
                              record=trail)                                                     # #340: serving and not, on its trail
 
 
+class RoundLog:
+    """#470: one journal line per source per pull round, saying what happened: an epoch applied, nothing newer, a DENY
+    with the reason the trail records, or a peer that did not answer. The trail (sync-audit.jsonl) stays the record;
+    this is what an operator reads in `journalctl -u regalia-sync`. Rate-bounded per source: a line when the outcome
+    changes, and the same outcome again at most once every REPEAT_S seconds. Nothing in it the trail does not hold
+    already (source names, epochs, the bounded reason), so no secrets."""
+
+    REPEAT_S = 900
+
+    def __init__(self, clock=time.monotonic, out=None):
+        self.clock = clock
+        self.out = out or (lambda line: print("sync: " + line, file=sys.stderr, flush=True))
+        self.last = {}                          # source -> (outcome key, when it was last said)
+
+    def _say(self, source, key, line):
+        now, prev = self.clock(), self.last.get(source)
+        if prev is not None and prev[0] == key and now - prev[1] < self.REPEAT_S:
+            return
+        try:
+            self.out(line)
+        except OSError:                         # the journal is best-effort: a closed stderr never stops a round
+            return
+        self.last[source] = (key, now)
+
+    def pulled(self, source, held, epoch):
+        if held is None or epoch > held:
+            self._say(source, ("applied", epoch), "applied epoch %d from %s (held %s before)" % (epoch, source, "none" if held is None else held))
+        else:
+            self._say(source, ("nothing", epoch), "nothing newer from %s: epoch %d held" % (source, epoch))
+
+    def refused(self, source, refusal, event):
+        text = convergence._printable(refusal, membership.REASON_LIMIT)
+        if text.startswith("%s did not answer (" % source):            # the error class is the whole key
+            self._say(source, ("silent", text), "peer " + text)
+            return
+        kind, reason = (event["event"], event["reason"]) if event is not None else ("pull", text)
+        # printable again, though audited() made them so: a sink event written raw later must not reach the journal
+        kind, reason = convergence._printable(kind, 64), convergence._printable(reason, membership.REASON_LIMIT)
+        # keyed with digit runs collapsed: a reason that carries a count, a time or a sequence is the same outcome
+        self._say(source, ("deny", kind, re.sub(r"[0-9]+", "#", reason)), "DENY %s from %s: %s" % (kind, source, reason))
+
+
 class Sync:
     """The `sync` process: the two listeners, the pull loop and the heartbeat watch, on one store."""
 
@@ -782,6 +886,7 @@ class Sync:
         self.signer = lease.TpmSigner(node.tcti, node.run)
         self._beat_signer = None        # beat.Signer, made at the first heartbeat signed (beat_signer())
         self.published = None
+        self.rounds = RoundLog()                # #470: each pull round's outcome, in the journal
         # the unlock listener's refusals, by cause (#317), in regalia-sync's metrics directory
         self.refusals = metrics.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", metrics.UNLOCK_CAUSES)
 
@@ -861,11 +966,25 @@ class Sync:
         chain is published after EACH source, not after all of them: a commit moves the TPM anchor, and
         the root services refuse the published chain until it catches up (Node.manifest)."""
         sources = self.node.sources(self.manifest())
-        client = sync.Client(self.node.node_id, self.store, self.freshness, sources, self.trail, documents=self.node.documents())
+        seen = []
+
+        def sink(event):
+            self.trail(event)                   # the trail first: it is the record, and a sink that fails still stops the round
+            seen.append(event)
+        client = sync.Client(self.node.node_id, self.store, self.freshness, sources, sink, documents=self.node.documents())
         changed = False
         for name in sorted(sources):
-            with contextlib.suppress(Refused):
-                client.pull(name)
+            del seen[:]
+            try:
+                now_at, _ = client.pull(name)
+            except Refused as refused:
+                denied = [e for e in seen if e.get("outcome") == "DENY"]
+                self.rounds.refused(name, refused, denied[-1] if denied else None)
+            else:
+                # the epoch held when this source's pull began: its first sync-apply event was filed under it (no
+                # second store load, and no TPM read, per round: 3e's read)
+                applies = [e["epoch"] for e in seen if e.get("event") == "sync-apply"]
+                self.rounds.pulled(name, applies[0] if applies and applies[0] else None, now_at["epoch"])
             changed = self.publish() or changed
         return changed
 
@@ -975,7 +1094,7 @@ def main(argv=None):
             print("wg-svc and %s applied under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
         elif args.service == "esp-advance":
             try:
-                epoch, sha, rewritten, unrenderable = esp_advance(node, args.esp, lock_path=args.esp_lock)
+                epoch, sha, rewritten, unrenderable = esp_advance_settled(node, args.esp, lock_path=args.esp_lock)
             except BaseException:
                 esp_metrics(node, ok=False)
                 raise

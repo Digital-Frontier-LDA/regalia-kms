@@ -80,6 +80,10 @@ SIGNING_KEYS = ("initrd", "system", "secure_boot_cert")
 # #361 C2: K_A's approvals of the set's system-phase key for THIS node, one per class an approved image writes or signs
 # under at run time (anchorpolicy.REFS less "rotation", whose increments are approved one at a time)
 APPROVAL_CLASSES = ("anchor", "slots", "heartbeat", "signing-counter", "signing")
+# a signed image's root filesystem (#61): the SHA-256 of the rootfs.tar it is installed from (build-rootfs.sh's
+# record), REQUIRED beside "signing" and allowed nowhere else. No PCR covers it, so a quote cannot tell two roots
+# apart: it is what the installer checks, not what a peer judges
+ROOTFS_KEY = "rootfs_sha256"
 # The phases a node is judged in, and what it may ask for there: "initrd" an unlock (replacement.may_unlock),
 # "system" a runtime lease (lease.issue). Which systemd phase path each one is belongs to the image's build
 # record (#57): enter-initrd, and enter-initrd:leave-initrd:sysinit:ready.
@@ -267,6 +271,8 @@ def validate_set(entry, label):
     them per boot phase (the module text)."""
     require(is_hex(entry["tpm_firmware_version"], 16), "%s.tpm_firmware_version must be 16 hex" % label)
     _validate_pcrs(entry["pcrs"], "%s.pcrs" % label)
+    require(ROOTFS_KEY not in entry or "signing" in entry, "%s.%s: only a signed image's set (one that names its signing keys) "
+            "names its root filesystem" % (label, ROOTFS_KEY))
     if "phases" not in entry:
         require("signing" not in entry, "%s.signing: only a set with per-phase PCR 11 (a signed unified kernel image) names "
                 "signing keys" % label)
@@ -291,6 +297,12 @@ def validate_set(entry, label):
         require(len({signing["initrd"], signing["system"]}) == 2, "%s.signing: the two phases' PCR keys must be two keys" % label)
         if "anchor_approvals" in signing:
             validate_approvals(signing["anchor_approvals"], "%s.signing.anchor_approvals" % label)
+
+        # an image is its UKI AND the root it is installed with: one root-approved set names both (#61). The root
+        # is not measured, so this binds what is installed, not what runs (no dm-verity yet)
+        require(ROOTFS_KEY in entry, "%s: a signed image's set must name its root filesystem (%s, from build-rootfs.sh's "
+                "record)" % (label, ROOTFS_KEY))
+        require(is_hex(entry[ROOTFS_KEY], 64), "%s.%s must be 64 lowercase hex" % (label, ROOTFS_KEY))
 
 
 def validate_approvals(approvals, label):
@@ -326,7 +338,7 @@ def validate_sets(sets, label):
     for i, entry in enumerate(sets):
         here = "%s.accepted[%d]" % (label, i)
         require(isinstance(entry, dict), "%s must be an object" % here)
-        exact_keys(entry, SET_KEYS + tuple(k for k in ("phases", "signing") if k in entry), here)
+        exact_keys(entry, SET_KEYS + tuple(k for k in ("phases", "signing", ROOTFS_KEY) if k in entry), here)
         require(isinstance(entry["label"], str) and re.fullmatch(r"[A-Za-z0-9._-]{1,48}", entry["label"]), "%s.label must be a short plain name" % here)
         validate_set(entry, here)
     if len(sets) == 2:
