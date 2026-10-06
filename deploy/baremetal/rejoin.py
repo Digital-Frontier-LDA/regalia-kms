@@ -13,7 +13,8 @@ promoted only once etcd says it is in sync (measured on etcd 3.6.15, regalia-kms
     (on the survivor, a learner that never syncs: ... abandon --node R)
 
 ADMIT (survivor). Refused while the take-over's drop-in is in force (takeover.forcing, regalia-kms-d9: its next restart
-would force a new cluster again and drop R), while any other learner or unstarted member exists (one at a time), if R
+would force a new cluster again and drop R), while a voting member that has not started is joining, while
+etcdconf.MAX_LEARNERS learners other than R are pending (two returners learn at once, never more: the window below), if R
 does not count under the current manifest, or if R is already a voting member. `etcdctl member add R --learner` at
 R's mesh URL; it says the initial-cluster R starts with (the members NOW, from etcd's answer, never the manifest's)
 and the learner's member ID. Run again, it finds R's learner and says the same.
@@ -36,10 +37,11 @@ etcd itself decides "in sync": it promotes a learner whose match index is at lea
 (readyPercentThreshold, server/etcdserver/server.go in v3.6.15), never forced. Raft keeps that safe; the cost is that
 the survivor's commits, now needing two of two, wait while R catches up the rest.
 
-THE TWO-OF-TWO WINDOW (05). From R's promotion until the third node is promoted, the cluster is two voting members:
-losing either stops every commit until the third is promoted, or another take-over. One learner at a time is
-etcd's default (--max-learners 1, which etcdconf renders by leaving it out); admitting the third as a learner before
-promoting R would shorten the window and is not done.
+THE TWO-OF-TWO WINDOW (05). From the first returner's promotion until the second's, the cluster is two voting members:
+losing either stops every commit until the second is promoted, or another take-over. Both returners are admitted as
+learners together and catch up at once (etcdconf renders max-learners 2, measured on v3.6.15: etcd's default 1 refuses a
+second learner), so they are promoted back to back and the window is about the time between the two promotions, not
+the second one's whole catch-up (62, #519; agreed with 2f). A learner votes in nothing, so the second changes no quorum.
 FINISH (R). R answers as a voting member of the cluster, holding the state-epoch entry: the daemon starts, and its
 leases name the same (cluster, state epoch) as the survivor's.
 """
@@ -91,8 +93,11 @@ def admit(host, chain, me, node):
     members = _members(host)
     mine = [m for m in members if m["peerURLs"] == [url]]
     others = [m for m in members if m not in mine]
-    pending = [m.get("name") or "an unstarted member" for m in others if m.get("isLearner") or not m.get("name")]
-    require(not pending, "%s is still joining: one node at a time" % ", ".join(pending))
+    require(not [m for m in others if not m.get("isLearner") and not m.get("name")],
+            "a voting member that has not started is still joining: no learner is admitted beside it")
+    learners = [m.get("name") or "an unstarted learner" for m in others if m.get("isLearner")]
+    require(len(learners) < etcdconf.MAX_LEARNERS, "%s %s still joining: at most %d learners at once (etcdconf.MAX_LEARNERS)"
+            % (", ".join(learners), "is" if len(learners) == 1 else "are", etcdconf.MAX_LEARNERS))
     if mine:
         require(mine[0].get("isLearner"), "%s is already a voting member" % node)
         member_id = "%x" % mine[0]["ID"]
