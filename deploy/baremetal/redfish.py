@@ -18,7 +18,8 @@ The mainstream reference is Pacemaker's fence_redfish: reset, then poll PowerSta
   * EVIDENCE. Every action returns a record: the iLO, its serial, model and firmware, the certificate digest, the
     request (ResetType, HTTP status) and every PowerState readback with its time (integer ms). A fence or a drill
     step is done only when the readback says so; a timeout is a refusal with the readbacks it saw.
-  * UNDO. undoers() gives the drill journal (drill.py, #498) its {"power-on": node} replay.
+  * UNDO. undoers() gives the drill journal (drill.py, #498) its replays: "power-on" for a ForceOff, "power-cycle"
+    (ForceRestart, whatever PowerState says) for a restart that did not come back.
 
 CURRENT LIMITATIONS (also in LIMITATIONS.md):
   * Built and tested against a stand-in Redfish service only; NOT YET RUN against a DL360 Gen9's iLO 4. The allowable
@@ -169,12 +170,12 @@ class Client:
                 "cert_sha256": self.cert_sha256, "action": action, "reset_type": reset_type, "http_status": status,
                 "power_before": found["power"], "readbacks": readbacks, "outcome": outcome}
 
-    def _reset_and_wait(self, action, reset_type, want):
+    def _reset_and_wait(self, action, reset_type, want, always=False):
         found = self.discover()
         require(reset_type in found["reset_types"], "the iLO at %s does not offer ResetType %s (it offers %s): nothing was sent"
                 % (self.ilo, reset_type, ", ".join(found["reset_types"])))
         readbacks = [{"at_ms": self.clock(), "power": found["power"]}]
-        if found["power"] == want:
+        if found["power"] == want and not always:
             return self._record(found, action, None, None, readbacks, "already %s: nothing sent" % want)
         status, _ = self.transport.request("POST", found["reset_target"], {"ResetType": reset_type})
         require(status in (200, 202, 204), "the iLO at %s refused ResetType %s with HTTP %s" % (self.ilo, reset_type, status))
@@ -204,13 +205,23 @@ class Client:
         return self._reset_and_wait("power-off", "ForceOff", "Off")
 
     def power_on(self):
-        """The undo of force_off: On, then PowerState read back until On."""
+        """The undo of force_off: On, then PowerState read back until On. Marking a fault undone on it is right only
+        when the last readback says On, which this guarantees (a timeout is a refusal)."""
         return self._reset_and_wait("power-on", "On", "On")
+
+    def force_restart(self):
+        """The undo of a restart that did not come back (regalia-kms-d9 on #504): a server hung after `systemctl reboot`
+        is still powered On, so On would send nothing. ForceRestart is sent whatever PowerState says (a server found Off
+        is powered On instead), then PowerState read back until On. The readback proves power, not service: the caller
+        waits for the server to serve before it marks the fault undone."""
+        if self.discover()["power"] == "Off":
+            return self._reset_and_wait("power-cycle", "On", "On")
+        return self._reset_and_wait("power-cycle", "ForceRestart", "On", always=True)
 
 
 def undoers(client_for):
-    """The drill journal's replay for power (drill.py, #498): {"power-on": node -> the readback record}."""
-    return {"power-on": lambda node: client_for(node).power_on()}
+    """The drill journal's replay for power (drill.py, #498): {"power-on": node -> record, "power-cycle": node -> record}."""
+    return {"power-on": lambda node: client_for(node).power_on(), "power-cycle": lambda node: client_for(node).force_restart()}
 
 
 # ---- the command --------------------------------------------------------------------------------------------------

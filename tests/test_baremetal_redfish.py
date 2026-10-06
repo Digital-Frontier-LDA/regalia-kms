@@ -81,6 +81,24 @@ class Power(unittest.TestCase):
         record = redfish.undoers(lambda node: client(service))["power-on"]("b")
         self.assertEqual((service.posts, record["outcome"]), ([{"ResetType": "On"}], "On"))
 
+    def test_force_restart_is_sent_to_a_server_that_reads_on(self):
+        """The undo of a restart that did not come back (d9 on #504): a hung server is still On, so On would do nothing."""
+        service = StandIn(power="On", lag=1)
+        record = client(service).force_restart()
+        self.assertEqual(service.posts, [{"ResetType": "ForceRestart"}])
+        self.assertEqual((record["action"], record["reset_type"], record["outcome"]), ("power-cycle", "ForceRestart", "On"))
+
+    def test_force_restart_powers_on_a_server_found_off(self):
+        service = StandIn(power="Off", lag=1)
+        record = client(service).force_restart()
+        self.assertEqual((service.posts, record["action"], record["outcome"]), ([{"ResetType": "On"}], "power-cycle", "On"))
+
+    def test_the_journal_s_undoers_cover_both_power_faults(self):
+        service = StandIn(power="On", lag=1)
+        undo = redfish.undoers(lambda node: client(service))
+        self.assertEqual(sorted(undo), ["power-cycle", "power-on"])
+        self.assertEqual(undo["power-cycle"]("b")["reset_type"], "ForceRestart")
+
     def test_already_in_the_state_sends_nothing(self):
         service = StandIn(power="Off")
         record = client(service).force_off()
