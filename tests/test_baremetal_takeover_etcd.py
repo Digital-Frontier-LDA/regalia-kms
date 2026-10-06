@@ -57,13 +57,17 @@ class RealEtcd:
         """The member's working directory, as /run/regalia-etcd is the unit's: its client socket is made there."""
         return os.path.join(self.root, n + "-run")
 
-    def start(self, n, force=False):
-        argv = [BINS["ETCD_BIN"], "--name", n, "--data-dir", os.path.join(self.root, n), "--listen-peer-urls", self.peer[n],
+    def start(self, n, force=False, initial=None, state="new"):
+        argv = [BINS["ETCD_BIN"], "--name", n, "--data-dir", self.data_dir(n), "--listen-peer-urls", self.peer[n],
                 "--initial-advertise-peer-urls", self.peer[n], "--listen-client-urls", etcdconf.CLIENT_URL, "--advertise-client-urls",
-                etcdconf.CLIENT_URL, "--initial-cluster", ",".join("%s=%s" % (m, self.peer[m]) for m in "abc"),
-                "--initial-cluster-token", "takeover-test", "--initial-cluster-state", "new"] + (["--force-new-cluster"] if force else [])
+                etcdconf.CLIENT_URL, "--initial-cluster", initial or ",".join("%s=%s" % (m, self.peer[m]) for m in "abc"),
+                "--initial-cluster-token", "takeover-test", "--initial-cluster-state", state] + (["--force-new-cluster"] if force else [])
+        os.makedirs(os.path.dirname(self.data_dir(n)), exist_ok=True)
         with open(os.path.join(self.root, n + ".log"), "ab") as log:     # the child keeps its own descriptor
             self.procs[n] = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=log, cwd=self.run_dir(n))
+
+    def data_dir(self, n):
+        return os.path.join(self.root, n)
 
     def stop(self, n):
         proc = self.procs.pop(n, None)
@@ -137,7 +141,7 @@ class RealEtcd:
         real = {tk.ETCDCTL: BINS["ETCDCTL_BIN"], tk.ETCDUTL: BINS["ETCDUTL_BIN"]}[argv[0]]
         # only the derived endpoint is mapped to this test's working directory: a take-over that dials anything else
         # (the ":0"-less literal 05 found on #513) dials a socket that does not exist, here as on a host
-        argv = [real] + [self.client["a"] if a == etcdconf.client_endpoint() else os.path.join(self.root, "a", "member", "snap", "db")
+        argv = [real] + [self.client["a"] if a == etcdconf.client_endpoint() else os.path.join(self.data_dir("a"), "member", "snap", "db")
                          if a == tk.BACKEND else a for a in argv[1:]]
         return subprocess.run(argv, input=input, capture_output=True, text=True, timeout=60)
 

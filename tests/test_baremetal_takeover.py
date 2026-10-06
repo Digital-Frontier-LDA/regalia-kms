@@ -4,6 +4,7 @@ import base64
 import contextlib
 import io
 import json
+import os
 import subprocess
 import unittest
 
@@ -285,3 +286,28 @@ class Endpoint(unittest.TestCase):
         import pathlib
         profile = (pathlib.Path(__file__).resolve().parents[1] / "deploy" / "baremetal" / "apparmor" / "usr.sbin.regalia-kms").read_text()
         self.assertIn("  %s rw," % tk.ENDPOINT[len("unix://"):], profile)
+
+
+class TheUnit(unittest.TestCase):
+    """#524 (05 on #513): regalia-etcd.service (#484) and the take-over cannot drift apart: the socket's directory, the
+    command the drop-in replaces, and the one writable path the forced configuration must be in."""
+
+    def unit(self):
+        import pathlib
+        text = (pathlib.Path(__file__).resolve().parents[1] / "deploy" / "baremetal" / "units" / "regalia-etcd.service").read_text()
+        found = {}
+        for line in text.splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                key, value = line.split("=", 1)
+                found.setdefault(key.strip(), []).append(value.strip())
+        return found
+
+    def test_the_socket_s_directory_is_the_unit_s_working_directory(self):
+        self.assertEqual(self.unit()["WorkingDirectory"], [etcdconf.WORKING_DIR])
+
+    def test_the_drop_in_replaces_the_unit_s_own_command_with_the_forced_configuration(self):
+        unit = self.unit()
+        self.assertEqual(unit["ExecStart"], ["%s --config-file %s" % (tk.ETCD, etcdconf.CONFIG_PATH)])
+        self.assertEqual(tk.dropin(), "[Service]\nExecStart=\nExecStart=%s --config-file %s\n" % (tk.ETCD, tk.TAKEOVER_CONFIG))
+        writable = " ".join(unit.get("ReadWritePaths", [])).split()
+        self.assertIn(os.path.dirname(tk.TAKEOVER_CONFIG), writable)
