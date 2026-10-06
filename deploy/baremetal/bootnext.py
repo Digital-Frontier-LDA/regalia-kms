@@ -26,10 +26,11 @@ trial(entry, esp, accepted, run)
 clear_next(run)       delete BootNext, then read back (an apply that set it and did not reboot)
 promote(entry, run)   BootOrder := entry first, the rest in their order, then read back
 remove(entry, run)    delete an entry that is not the one booted, nor first in BootOrder, nor BootNext
-install_entry(disk, part, label, loader, run)
+install_entry(disk, part, partuuid, label, loader, run)
                       a NEW host's first entry (install-host.sh, #61): its image on `disk`'s partition `part`, created
-                      only if no entry has that label, then read back: exactly one new entry, active, loading `loader`,
-                      first in BootOrder (`python3 -Es -m deploy.baremetal.bootnext install-entry …`)
+                      only if no entry has that label, then read back: exactly one new entry, active, on the GPT
+                      partition `partuuid`, loading `loader`, first in BootOrder; one that reads back otherwise is deleted
+                      again (`python3 -Es -m deploy.baremetal.bootnext install-entry …`)
 image(esp, entry)     the file an entry boots, on the ESP this host booted from: the entry's GPT partition
                       must be BootCurrent's, and `esp` must BE that partition (a vfat mount whose device is
                       /dev/disk/by-partuuid/<GUID>, the partition systemd-stub names in LoaderDevicePartUUID);
@@ -173,15 +174,18 @@ DISK = re.compile(r"/dev/[A-Za-z0-9][A-Za-z0-9/_.-]{0,63}")
 LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}")
 
 
-def install_entry(disk, part, label, loader, run=subprocess.run):
+def install_entry(disk, part, partuuid, label, loader, run=subprocess.run):
     """A new host's first entry (install-host.sh, #61): `loader` (\\EFI\\Linux\\<name>.efi) on partition `part` of `disk`,
     labelled `label`. Refused if an entry already carries the label (a re-install removes it first, by `remove`).
-    Read back: exactly one new entry, active, loading `loader` (case-insensitive, as FAT), and first in BootOrder,
-    where efibootmgr --create puts it: on a new host it IS the image to boot. Returns {"entry", "state"}."""
+    Read back: exactly one new entry, active, on the GPT partition `partuuid` (the ESP the installer made: a wrong
+    --disk or --part names another partition, regalia-kms-ed), loading `loader` (case-insensitive, as FAT), and first
+    in BootOrder, where efibootmgr --create puts it: on a new host it IS the image to boot. An entry that reads back
+    otherwise is deleted again before the refusal, so a rerun is not stuck on its label. Returns {"entry", "state"}."""
     require(isinstance(disk, str) and DISK.fullmatch(disk) and ".." not in disk, "the disk %r is not a /dev path" % (disk,))
     require(isinstance(part, int) and not isinstance(part, bool) and 1 <= part <= 128, "the partition %r is not 1-128" % (part,))
     require(isinstance(label, str) and LABEL.fullmatch(label), "the label %r is not plain text" % (label,))
     require(isinstance(loader, str) and LOADER.fullmatch(loader), "the loader %r is not \\EFI\\…\\<name>.efi" % (loader,))
+    require(isinstance(partuuid, str) and re.fullmatch(GUID, partuuid), "the ESP's PARTUUID %r is not a GUID" % (partuuid,))
     before = state(run)
     same = sorted(n for n, e in before["entries"].items() if e["label"] == label)
     require(not same, "Boot%s already carries the label %r: remove it first (a re-install), nothing was created" % (",".join(same), label))
@@ -190,9 +194,21 @@ def install_entry(disk, part, label, loader, run=subprocess.run):
     new = sorted(set(after["entries"]) - set(before["entries"]))
     require(len(new) == 1, "efibootmgr --create left %d new entries (%s), not one" % (len(new), ",".join(new) or "none"))
     entry, made = new[0], after["entries"][new[0]]
-    require(made["label"] == label and made["active"], "Boot%s reads %r (active %s), not the active %r created" % (entry, made["label"], made["active"], label))
-    require((made["path"] or "").lower() == loader.lower(), "Boot%s loads %r, not %r" % (entry, made["path"], loader))
-    require(after["order"][:1] == [entry], "Boot%s is not first in BootOrder (%s) after its creation" % (entry, ",".join(after["order"])))
+    try:
+        require(made["label"] == label and made["active"], "Boot%s reads %r (active %s), not the active %r created" % (entry, made["label"], made["active"], label))
+        require(made["partition"] == partuuid.lower(), "Boot%s is on partition %s, not the ESP %s: a wrong --disk or --part" % (entry, made["partition"], partuuid.lower()))
+        require((made["path"] or "").lower() == loader.lower(), "Boot%s loads %r, not %r" % (entry, made["path"], loader))
+        require(after["order"][:1] == [entry], "Boot%s is not first in BootOrder (%s) after its creation" % (entry, ",".join(after["order"])))
+    except Refused as refusal:
+        # the entry just made is undone, by its number: never left first in BootOrder under a label a rerun refuses
+        try:
+            _efibootmgr(run, "--bootnum", entry, "--delete-bootnum")
+            gone = entry not in state(run)["entries"]
+        except Refused:
+            gone = False
+        raise Refused("%s; %s" % (refusal, "Boot%s, just created, was deleted again" % entry if gone else
+                                  "Boot%s, just created, could NOT be deleted: delete it by hand (efibootmgr --bootnum %s --delete-bootnum) "
+                                  "before a rerun" % (entry, entry))) from None
     return {"entry": entry, "state": after}
 
 
@@ -205,11 +221,12 @@ def main(argv=None):
     c = sub.add_parser("install-entry", help="a new host's first entry (install-host.sh)")
     c.add_argument("--disk", required=True)
     c.add_argument("--part", required=True, type=int)
+    c.add_argument("--partuuid", required=True, help="the ESP's GPT PARTUUID, which the entry must point at")
     c.add_argument("--label", required=True)
     c.add_argument("--loader", required=True)
     args = parser.parse_args(argv)
     try:
-        done = install_entry(args.disk, args.part, args.label, args.loader)
+        done = install_entry(args.disk, args.part, args.partuuid, args.label, args.loader)
     except Refused as refusal:
         print("bootnext: %s refused: %s" % (args.command, refusal), file=sys.stderr)
         return 1

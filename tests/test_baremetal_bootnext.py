@@ -316,7 +316,7 @@ class InstallEntry(unittest.TestCase):
 
     def test_the_entry_is_created_and_read_back_first_in_boot_order(self):
         fake = FakeEfibootmgr()
-        done = bootnext.install_entry("/dev/sda", 1, "regalia image-2", r"\EFI\Linux\image-2.efi", run=fake)
+        done = bootnext.install_entry("/dev/sda", 1, ESP_GUID, "regalia image-2", r"\EFI\Linux\image-2.efi", run=fake)
         self.assertEqual(done["entry"], "0002")
         self.assertEqual(done["state"]["order"][0], "0002")
         self.assertIn([bootnext.EFIBOOTMGR, "-v", "--create", "--disk", "/dev/sda", "--part", "1", "--label", "regalia image-2",
@@ -325,7 +325,7 @@ class InstallEntry(unittest.TestCase):
     def test_an_existing_label_is_refused_before_anything_is_created(self):
         fake = FakeEfibootmgr()
         with self.assertRaisesRegex(m.Refused, r"Boot0001 already carries the label 'regalia-kms image-1': remove it first"):
-            bootnext.install_entry("/dev/sda", 1, "regalia-kms image-1", r"\EFI\Linux\image-1.efi", run=fake)
+            bootnext.install_entry("/dev/sda", 1, ESP_GUID, "regalia-kms image-1", r"\EFI\Linux\image-1.efi", run=fake)
         self.assertFalse([c for c in fake.calls if "--create" in c])
 
     def test_an_entry_that_reads_back_wrong_is_refused(self):
@@ -340,7 +340,36 @@ class InstallEntry(unittest.TestCase):
                 done = subprocess.CompletedProcess(argv, 0, fake.report(), "")
             return done
         with self.assertRaisesRegex(m.Refused, r"Boot0002 loads '\\\\EFI\\\\Linux\\\\other.efi', not"):
-            bootnext.install_entry("/dev/sda", 1, "regalia image-2", r"\EFI\Linux\image-2.efi", run=wrong_loader)
+            bootnext.install_entry("/dev/sda", 1, ESP_GUID, "regalia image-2", r"\EFI\Linux\image-2.efi", run=wrong_loader)
+
+    def test_an_entry_on_another_partition_is_refused_and_deleted_again(self):
+        """ed on #474: a wrong --disk/--part reads back with the right loader, first in order, on another partition."""
+        fake = FakeEfibootmgr()
+        with self.assertRaisesRegex(m.Refused, r"Boot0002 is on partition %s, not the ESP %s: a wrong --disk or --part; "
+                                               r"Boot0002, just created, was deleted again" % (ESP_GUID, OTHER_GUID)):
+            bootnext.install_entry("/dev/sda", 1, OTHER_GUID, "regalia image-2", r"\EFI\Linux\image-2.efi", run=fake)
+        self.assertNotIn("0002", fake.entries)
+        self.assertEqual(fake.order, ["0001", "0000"])
+        # and a rerun with the right ESP then goes through: its label is free again
+        self.assertEqual(bootnext.install_entry("/dev/sda", 1, ESP_GUID, "regalia image-2", r"\EFI\Linux\image-2.efi", run=fake)["entry"], "0002")
+
+    def test_an_entry_that_cannot_be_deleted_again_names_the_recovery(self):
+        fake = FakeEfibootmgr()
+        real = fake.__call__
+
+        def no_delete(argv, **kw):
+            if "--delete-bootnum" in argv:
+                return subprocess.CompletedProcess(argv, 5, "", "Could not delete")
+            return real(argv, **kw)
+        with self.assertRaisesRegex(m.Refused, r"Boot0002, just created, could NOT be deleted: delete it by hand "
+                                               r"\(efibootmgr --bootnum 0002 --delete-bootnum\) before a rerun"):
+            bootnext.install_entry("/dev/sda", 1, OTHER_GUID, "regalia image-2", r"\EFI\Linux\image-2.efi", run=no_delete)
+
+    def test_the_esp_partuuid_must_be_a_guid(self):
+        fake = FakeEfibootmgr()
+        with self.assertRaisesRegex(m.Refused, "is not a GUID"):
+            bootnext.install_entry("/dev/sda", 1, "not-a-guid", "x", r"\EFI\Linux\a.efi", run=fake)
+        self.assertEqual(fake.calls, [])
 
     def test_its_arguments_are_judged_before_efibootmgr(self):
         for args, why in ((("sda", 1, "x", r"\EFI\Linux\a.efi"), "not a /dev path"),
@@ -350,7 +379,7 @@ class InstallEntry(unittest.TestCase):
                           (("/dev/sda", 1, "x", r"\EFI\..\a.efi"), "is not")):
             fake = FakeEfibootmgr()
             with self.subTest(args=args), self.assertRaisesRegex(m.Refused, why):
-                bootnext.install_entry(*args, run=fake)
+                bootnext.install_entry(args[0], args[1], ESP_GUID, args[2], args[3], run=fake)
             self.assertEqual(fake.calls, [])
 
 

@@ -113,6 +113,10 @@ RECORD="$OUT/install-$SERIAL.json"
 [ ! -e "$RECORD" ] && [ ! -L "$RECORD" ] || die "$RECORD exists: move it away first (it is the previous install's evidence)"
 mkdir -p "$OUT"
 
+# the firmware entry needs a UEFI-booted live medium: said before anything is written, not at step 7 (regalia-kms-ed)
+[ "$EFI_ENTRY" = 0 ] || [ -d /sys/firmware/efi ] \
+  || die "this live medium was not booted in UEFI mode: boot it in UEFI mode (or give --no-efi-entry and make the entry later). Nothing was written"
+
 # the passphrase, before the disk is touched (typed twice, or one line on stdin in the test mode)
 if [ "$TEST" = 1 ]; then
   IFS= read -r PASSPHRASE || die "the test mode reads the installer passphrase from standard input"
@@ -181,7 +185,7 @@ if [ "$EFI_ENTRY" = 1 ]; then
   [ -d /sys/firmware/efi ] || die "this system was not booted by UEFI: no firmware entry can be made (--no-efi-entry to skip)"
   # through bootnext.py, the one place that writes the firmware's boot variables (its guard test): created only if no
   # entry has the label, and read back active, loading the UKI, first in BootOrder
-  ( cd "$REPO" && python3 -Es -m deploy.baremetal.bootnext install-entry --disk "$DISK" --part 1 --label "regalia $NAME" \
+  ( cd "$REPO" && python3 -Es -m deploy.baremetal.bootnext install-entry --disk "$DISK" --part 1 --partuuid "$ESP_UUID" --label "regalia $NAME" \
       --loader "\\EFI\\Linux\\$NAME.efi" ) \
     || die "the firmware entry was not made (above; the disk IS installed): an old 'regalia $NAME' entry from a previous install is removed first, then rerun the entry by hand (KERNEL-UPDATE 3.1)"
 fi
