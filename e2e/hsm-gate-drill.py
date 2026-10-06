@@ -46,6 +46,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from deploy.baremetal import admission  # noqa: E402
+from deploy.baremetal import lease as lease_module  # noqa: E402
 
 MODULE = "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so"
 SITE, DEVICE, OBJECT, PRINCIPAL = "g3-drill", "hsm-drill", "g3-drill-key", "spiffe://regalia/workload/g3-drill"
@@ -262,12 +263,15 @@ def drill(serial, label, pin, w, runtime, key_id, processes):
     (w / "boot-session").write_text(SESSION + "\n")
     run(["sudo", "install", "-m", "0644", "-o", "root", "-g", "root", w / "boot-session", runtime / "boot-session"])
 
-    def lease(serve=True):
-        """The lease service's file: a lease asked for NOW, listing this token (G1), or a refusal."""
+    def lease(serve=True, asked=None):
+        """The lease service's file: a lease asked for NOW (or at `asked`, on the boot clock), listing this token (G1), or a
+        refusal. It lives what a real one does (lease.MAX_LIFETIME less admission.MARGIN, ADR-0002 D32: 25 s), so a step
+        that waits on the operator writes it again before it relies on it."""
         now = admission.boottime_ms()
         document = {"schema": admission.SCHEMA, "node_id": NODE, "session_id": SESSION, "boot_id": admission.boot_id(), "epoch": 1,
                     "manifest_digest": "d1" * 32, "hsm_serials": serial, "lease_issued_at": day(0),
-                    "requested_boottime_ms": now if serve else 0, "serve_until_boottime_ms": now + 250_000 if serve else 0,
+                    "requested_boottime_ms": (now if asked is None else asked) if serve else 0,
+                    "serve_until_boottime_ms": now + (lease_module.MAX_LIFETIME - admission.MARGIN) * 1000 if serve else 0,
                     "reason": "" if serve else "the drill refuses the lease"}
         tmp = runtime / "admission" / ".admission.new"
         tmp.write_text(json.dumps(document) + "\n")
@@ -339,19 +343,26 @@ def drill(serial, label, pin, w, runtime, key_id, processes):
     lease()
     check(wait(200) == 200 and sign() == (200, True), "a lease again: it serves again")
     say("### 12.4  the token pulled, then put back")
+    before_pull = admission.boottime_ms() - 1          # the lease from before it left: asked for before this moment
     operator("PULL token %s out of its USB port (leave it out)" % serial)
     check(sign()[0] == 503 and wait(503) == 503, "with the token out: a sign is refused, not ready")
     operator("PUT token %s back into a USB port" % serial)
     time.sleep(3)
     confirm(serial)
+    lease(asked=before_pull)                         # still that lease (asked before the pull), alive again after the operator's wait
     check(sign()[0] == 503 and wait(503, 15) == 503, "back, under the lease from before it left: still refused, not ready")
     lease()
     check(wait(200) == 200 and sign() == (200, True), "under a lease asked for after its return: it serves")
     say("### G2  pulled and put back BETWEEN two requests, nothing asking meanwhile")
+    lease()
     check(sign() == (200, True), "serving before")
+    before_pull = admission.boottime_ms() - 1
     operator("PULL token %s and PUT IT BACK within ten seconds" % serial)
     time.sleep(3)
     confirm(serial)          # also: listed again, so a slow re-enumeration is not what refuses the next request
+    # alive again across the operator's wait (a 25 s lease), with its request time from BEFORE the pull: so the refusal
+    # below is the reader watcher's, never a lapsed lease nor a fresh request (CodeRabbit on #485)
+    lease(asked=before_pull)
     # Nothing asked the daemon since the last request: it has no background health check (a binding's health is
     # evaluated only when a request routes or readiness is asked, internal/registry), so the refusal below is the
     # reader watcher's, not an absence some other look saw.

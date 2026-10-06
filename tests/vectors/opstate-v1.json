@@ -5394,7 +5394,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "3d62bae8d2111f248a2d559ecf050f049b1c30cb4429c0e3591f12e103cd3ef96a8e6b6e6634552b26deba4f444beb8d08fb156629d92b582fe40d280f833a45"
+    "signature": "9efe7c854d5a41c0ba872a9a73419adacc395a72bde8a828da9eb54d104b202747bbedc1877f3ec0f3771cf5484112c58a3d32970227fd45f6476d62499f47d4"
    }
   },
   {
@@ -5410,7 +5410,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618"
     },
-    "signature": "6afd4192e8dad1f02b006cc5233ad3e716aaa8a7e6f91c9dda873b423dec02553c0da92d10bcb82e442a814eb8121a16350345e21c39315373d5b246aa305fc4"
+    "signature": "99b41f1dc4ddcd360d84b08729beb30c2a4ee0b56092150a3b49bdc8398295a8118600d86e35367f0ad9057f25430b7ab64c2729da07b7ea550d05a96439d9f0"
    }
   },
   {
@@ -5426,7 +5426,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
     },
-    "signature": "d8774fc938c3e581ff9a62ffd14085bc1a8463b5001ec986d37b13ca38e5aaba735413d96caf52de76380babf60c9227cffcb9926f042c66a7e24ba33366c6d0"
+    "signature": "29b8eea2a4d7becf76742c4fbbcc7c890e3904f4087308ae7eaa6dc27326217c40ef1d540bcec2f6ff7569aacaaa3292d0b88c521973111dfcdffcf17de72417"
    }
   },
   {
@@ -5442,7 +5442,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "ace226e3f580c2cfda414e46f5eef30331d69e09482a821b3886563472d0946c009f75ce58eaba461f498440917edd98b7374ed19dfd1fcf3dd2be1cc7de6baa"
+    "signature": "e3b8330ec30b17e43e5ead06cae009f913ac5c2e946ae934a29f6c787cefc9560a2bb3ac76b2d3eb246dcdec2720baca9533b4b0fc15ccb02491701659884ac4"
    }
   },
   {
@@ -5458,7 +5458,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "5bfb283be1115d52ff1f286f50781550e1f61905944ce171e8198d9863c349e941bef74d1680b7661ab9813999530da7e76d515c93f1811d06ae686436cc9f2f"
+    "signature": "bb029e8073096a9de87a4998a611d2086f445739ad98bfee8d334041429be48e541ed4e8ba9ad8791c8bc06e3d27f02a2fa5049b5067aeca38a4def8a302e17a"
    }
   },
   {
@@ -5474,7 +5474,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "0f6a7a860a42a1cf7ecbe7d4650de006376eba30a58bbe47908944d273ded9580420178a1d87d6aa609a2345c1d1eb71f01ab165140a39a8258132b9fd107809"
+    "signature": "a50d18096e16d2d77ffb10f5e868ba9e2715bc6c6657c8fc03cc9ae7a426748e6239d25279fa89072772c68b6714dffe1e6a80e493a941aef9c722b9a79d9379"
    }
   },
   {
@@ -5490,7 +5490,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "99b0f57166a9bd145151c0ff7946cd951cc5993817540140750d549395420eae5ca71ccb4ad9f577083726fa8b4b221e07d9ad142c7677cfe1946a093a8a8d5b"
+    "signature": "d19389bcc682041204cb60be377fbe012211f2187bb665d2ec8872a82fc7aa8d7444ba9f33cde1dd94eadda3faae3cccfa22853cfabbb48cade99fd445d2ab85"
    }
   },
   {
@@ -5506,7 +5506,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "fd66f2c6dac47252ec6e3ff0d4bee22a324c959eb11c217ad2bc3e4a899dc2dd0d186bab032e16a9c9f2b280f9c9a4bd8c54f770b81810220e0bb3f8ad1bce43"
+    "signature": "06034f8f095b57b6e8fda4bebb8a095005d549fd5a125bdf08e18e978674e6404e9b6cb0d2eefe5aac944d0d960933f7296042bc73e989fb29aee1d92c480e54"
    }
   },
   {
@@ -5522,7 +5522,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "00000000000000000000000000000000000000000000000000000000000000"
     },
-    "signature": "86616ac52a303def69c7467abdb8c575e1e3af4568e6c65ccf5107de59d3bb073419edf77889598a62d13391d3125d24b0d734ed4a44455b6d9374d07a41069c"
+    "signature": "1c85187dc64f5ad047bd529006d6ce0e654eaf46782637dbc53ea6132a76be8204688407f1e25a5f2351dca4f3e07292dcb0d399dd189e090a55688158f0948a"
    }
   },
   {
@@ -5538,7 +5538,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "64cb34c769075c87eeabb479d923e2f20157511be6a3986f30ea72c178fbe40d70cf9d1e73b7c1dc55e01fbc0f737aebe4236c911956a5714db92a5a5c92b5c0"
+    "signature": "e68cf545f293dd7f484ea9b66a32ebf9319a3ae48cae6a82e510cd62215a220744cbf20ac9116589b56e7f2ae30d64a6b3c714a23ae8f98e53302afc3bce9dce"
    }
   }
  ],
