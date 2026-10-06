@@ -325,8 +325,11 @@ func TestThePublisherWritesTheAppliedRevisionWhileLive(t *testing.T) {
 		t.Fatal("a cache that is not live wrote the applied revision")
 	}
 	publisher.Applied(Snapshot{ClusterID: 0xc1, Revision: 7, ConfirmedAt: time.Hour, Live: true})
-	if d := read(); d != (appliedDocument{BootID: boot, BoottimeNs: int64(time.Hour), ClusterID: "00000000000000c1", Revision: 7}) {
+	if d := read(); d != (appliedDocument{BootID: boot, BoottimeNs: int64(time.Hour), ClusterID: "00000000000000c1", Revision: 7, StateEpoch: 0}) {
 		t.Fatalf("wrote %+v", d)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(dir, AppliedFile)); !strings.Contains(string(raw), `"state_epoch":0`) {
+		t.Fatalf("state_epoch is not written: %s", raw) // #489's reader requires exactly five fields
 	}
 	if info, _ := os.Stat(filepath.Join(dir, AppliedFile)); info.Mode().Perm() != 0o644 {
 		t.Fatalf("mode %v", info.Mode())

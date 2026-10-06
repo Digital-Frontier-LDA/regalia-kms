@@ -167,6 +167,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - The lone survivor's stateless serving under the owner's authorization (D32 item 6) has no gate path yet.
   - The session key's private half lives in the Go heap. It is never written, but it isn't locked against
     swap: the hosts are expected to run without swap, and nothing checks that.
+  - **`applied.json`'s `state_epoch` is always 0 for now.** The signed `/regalia/v1/state-epoch` entry (#492's
+    format) isn't verified by the cache yet. Until it is, a survivor's history after `--force-new-cluster` can't
+    be told from the lost tail by this field.
   - **Once the runtime lease v2 (#489) is in, production must set the three settings.** Without them the
     daemon writes neither file, so its node requests no lease and stops serving.
   - **Restoring etcd from a snapshot moves its revision back.** The cache refuses a store that went backwards

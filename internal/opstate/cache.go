@@ -78,6 +78,9 @@ type Snapshot struct {
 	Revision    int64
 	ConfirmedAt time.Duration // CLOCK_BOOTTIME
 	Live        bool
+	// StateEpoch is the state epoch the cache holds: 0 until the signed /regalia/v1/state-epoch entry is verified
+	// here (its format is #492's; until then the key is not read and 0 is published, as at genesis).
+	StateEpoch int64
 }
 
 type entry struct {

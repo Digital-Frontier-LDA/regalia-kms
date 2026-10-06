@@ -13,7 +13,7 @@ import (
 // AppliedFile is what this server has applied of the operational state, for the processes that stamp or
 // judge a lease's state_revision (regalia-admission's lease request, regalia-sync's revision floor; #432):
 //
-//	{"boot_id": …, "boottime_ns": …, "cluster_id": "<16 hex>", "revision": …}
+//	{"boot_id": …, "boottime_ns": …, "cluster_id": "<16 hex>", "revision": …, "state_epoch": …}
 //
 // written by temp+rename, 0644, only while the watch is live. A cache that is not live stops writing, so
 // the file goes stale and its readers refuse it: nothing ever writes "stale". Readers judge its age on their
@@ -27,6 +27,9 @@ type appliedDocument struct {
 	BoottimeNs int64  `json:"boottime_ns"`
 	ClusterID  string `json:"cluster_id"`
 	Revision   int64  `json:"revision"`
+	// StateEpoch is /regalia/v1/state-epoch's epoch (0 while the key is absent): it tells a survivor's history
+	// from the lost tail, which (cluster_id, revision) cannot after --force-new-cluster (#432, 95's contract).
+	StateEpoch int64 `json:"state_epoch"`
 }
 
 // Publisher writes AppliedFile from the cache's confirmations, at most once per Every.
@@ -58,7 +61,8 @@ func (p *Publisher) Applied(s Snapshot) {
 	if !s.Live || (p.any && s.Revision == p.last && s.ConfirmedAt-p.written < p.Every) {
 		return
 	}
-	if err := writeApplied(p.Dir, appliedDocument{BootID: p.BootID, BoottimeNs: int64(s.ConfirmedAt), ClusterID: fmt.Sprintf("%016x", s.ClusterID), Revision: s.Revision}); err != nil {
+	if err := writeApplied(p.Dir, appliedDocument{BootID: p.BootID, BoottimeNs: int64(s.ConfirmedAt), ClusterID: fmt.Sprintf("%016x", s.ClusterID),
+		Revision: s.Revision, StateEpoch: s.StateEpoch}); err != nil {
 		if p.Err != nil {
 			p.Err(err)
 		}
