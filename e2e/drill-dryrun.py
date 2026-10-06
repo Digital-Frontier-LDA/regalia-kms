@@ -75,7 +75,7 @@ def scenario(cluster, work):
     journal = drill.Journal(str(work / "faults.jsonl"))
     backend = drillfixture.Fixture(cluster, journal, SERVICES)
     plan = {"S1": "c", "S2": "b", "S3": "a", "S4": {"survivor": "a", "others": ["b", "c"]}, "S5": ["a", "b", "c"]}
-    outcome = drill.run(drill.scenarios(backend, plan, drillfixture.LeaseJudge(cluster)), abort=lambda: None,
+    outcome = drill.run(drill.scenarios(backend, plan, drillfixture.LeaseJudge(cluster, backend)), abort=lambda: None,
                         restore=lambda: journal.restore(backend.undoers()))
     for entry in outcome["scenarios"]:
         ok(entry.get("passed"), "%s: every lease-level predicate holds (%s)" % (entry["scenario"], ", ".join(sorted(entry.get("predicates", {})))),

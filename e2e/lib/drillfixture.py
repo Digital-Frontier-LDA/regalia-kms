@@ -16,6 +16,7 @@ requests, stateful commits, caught up before a served request) are NOT claimed: 
 run's report (its context), never entered as predicates, and they pass nowhere until the daemon runs in tier N
 (regalia-kms-24's tracked item on #495)."""
 import json
+import threading
 import time
 
 from threenode import until
@@ -28,6 +29,18 @@ SLACK_S = 5                       # the admission's round (5 s) and the lapse wa
 class Fixture:
     def __init__(self, cluster, journal, services):
         self.cluster, self.journal, self.services = cluster, journal, services
+        self.samples, self.marks, self._sampling = [], {}, None      # S4's admission.json, every 2 s (48 on #507)
+
+    def _sample(self, node, stop):
+        path = self.cluster.nodes[node].run / "admission" / "admission.json"
+        while not stop.wait(2):
+            try:
+                d = json.loads(path.read_text())
+            except (OSError, ValueError) as error:
+                d = {"unreadable": str(error)[:60]}
+            self.samples.append({"t": int(time.time()), "mode": d.get("mode"), "serve_until_boottime_ms": d.get("serve_until_boottime_ms"),
+                                 "epoch": d.get("epoch"), "reason": (d.get("reason") or "")[:80], "lease_issued_at": d.get("lease_issued_at"),
+                                 **({"unreadable": d["unreadable"]} if "unreadable" in d else {})})
 
     def _others(self, node):
         return [n for n in self.cluster.nodes if n != node]
@@ -74,12 +87,23 @@ class Fixture:
     def quarantine(self, survivor, others):
         """An owner-signed epoch with `others` QUARANTINED, given to the survivor; alone, it takes the owner's hand
         heartbeat for it (owner_recovery: #199's hand recovery)."""
+        stop = threading.Event()
+        self._sampling = (threading.Thread(target=self._sample, args=(survivor, stop), daemon=True), stop)
+        self._sampling[0].start()
+        self.marks["quarantine_begins"] = int(time.time())
         manifest, _ = self.cluster.advance(survivor, signer="owner", owner_recovery=True, **{o: "QUARANTINED" for o in others})
+        self.marks["quarantine_done"] = int(time.time())
         return {"epoch": manifest["epoch"]}
 
     def authorize(self, survivor):
         signed = self.cluster.survivor_authorization(survivor)
+        self.marks["install_begins"] = int(time.time())
         done = self.cluster.install_survivor(survivor, signed)
+        self.marks["installed"] = int(time.time())
+        time.sleep(10)                                  # the sampler sees 10 s past the install, then stops
+        if self._sampling:
+            self._sampling[1].set()
+            self._sampling[0].join(5)
         if done.returncode != 0:
             raise RuntimeError("survivor install on %s failed (%d): %s" % (survivor, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
         return {"expires_at": signed["authorization"]["expires_at"], "scope": signed["authorization"]["scope"],
@@ -96,8 +120,8 @@ class LeaseJudge:
     """judge(name, context) for drill.scenarios, from the admission trails. Every predicate waits (bounded) for the
     line it needs and returns (ok, evidence); none passes on absent evidence."""
 
-    def __init__(self, cluster):
-        self.cluster = cluster
+    def __init__(self, cluster, backend=None):
+        self.cluster, self.backend = cluster, backend
 
     def serving(self, node, since_ms):
         path = self.cluster._trail_path(node, "admission")
@@ -160,8 +184,10 @@ class LeaseJudge:
                     "serve_until_boottime_ms": document.get("serve_until_boottime_ms")}, "switch bound": bound_s,
                     # and its journal: a round that raised before recording (48 on #507) would show there
                     "admission journal": self.cluster.journal(node, "admission", lines=60)[-2500:],
-                    # and EVERY event on its admission trail since then (renewals included): what each round did
-                    "every admission event since the others went off": self._events(node, t_off)[-25:]}
+                    # and its WHOLE admission trail, unfiltered (48 on #507), the times to place it, admission.json sampled
+                    "whole admission trail (last 40)": self._events(node, 0)[-40:],
+                    "times": dict({"t_off": t_off // 1000, "t_auth": t_auth // 1000}, **(self.backend.marks if self.backend else {})),
+                    "admission.json every 2 s": (self.backend.samples if self.backend else [])}
         return {"a not-serving round precedes the RECOVERY line (no lease-to-recovery without a gap)": (bool(denied_before), evidence),
                 "it switched to recovery no later than its lease's end or the install, whichever was later":
                     (first_recovery is not None and first_recovery <= bound_s, {"switched at": first_recovery, "bound": bound_s}),
