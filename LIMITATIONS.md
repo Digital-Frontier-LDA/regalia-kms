@@ -154,6 +154,14 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.
+  - **Break-glass custody is decided, not yet produced** (owner, 2026-10-05; 24 on rc#111). One binary SOPS file per
+    node, `ownerauth-<node>.bg.sops`, replaces the ceremony's `.bg.age` envelope. It is encrypted to the post-quantum
+    "ownerauth-recovery" identity in offline-keys' D28 key map, under the same SLIP-39 shares. That is
+    regalia-ceremony#111's change; until it lands, the ceremony writes `.bg.age`. The record keeps `bg_sha256` as that
+    file's digest, so `ownerauth.verify` is unchanged. The drill's check (`python3 -Es -m deploy.baremetal.ownerauth check`)
+    is built. With sops 3.13.1, age 1.3.2 and the test vector it was run by hand without a TPM: the post-quantum
+    recipient (an mlkem768x25519 stanza) decrypts byte for byte, and another node's value is refused. That hand run
+    split the key with ssss as a stand-in for offline-keys' opening, which rc#111 is building.
 - **The total-outage re-anchor is rehearsed on software TPMs only** (#391, `e2e/three-node-reanchor.py`). It covers one
   kind of damage, uses cryptsetup and a pty rather than a console, and doesn't run the operator's source checks.
   The one-peer and both-peers-destroyed cases aren't rehearsed (MEMBERSHIP-RECOVERY.md, "What the rehearsal does
@@ -210,6 +218,35 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
+- **The operational state (ADR-0002 D32, #432): watched by the daemon, not yet enforced.** When
+  `operational_state_endpoint`, `operational_state_dir` and `session_key_dir` are configured, the daemon
+  (`internal/opstate`):
+  - watches the local etcd member through its unix socket;
+  - publishes the revision it has applied (`/run/regalia-state/applied.json`);
+  - makes a session key at each start and publishes its public half (`/run/regalia-kms/session-key.json`).
+
+  Not done yet:
+  - The state gate (`opstate.StateGate`: the lease names this daemon's session key and cluster, the cache has
+    applied the lease's `state_revision`, the last confirmation is within one lease) is built and tested but
+    **not wired into the fence**. It joins once the serving lease (runtime lease v2, regalia-kms-95) carries
+    those fields.
+  - The entries aren't verified in Go yet (`opstate-v1`), and spends, high-water marks and key state aren't
+    committed through etcd. The policy journal is still the per-node file (`policy.FileState`).
+  - The daemon's unit doesn't yet join `regalia-etcd-client`, the group that may open etcd's socket. That
+    group arrives with #484's sysusers, and naming it before then would stop the unit from starting.
+  - The lone survivor's stateless serving under the owner's authorization (D32 item 6) has no gate path yet.
+  - The session key's private half lives in the Go heap. It is never written, but it isn't locked against
+    swap: the hosts are expected to run without swap, and nothing checks that.
+  - **`applied.json`'s `state_epoch` is always 0 for now.** The signed `/regalia/v1/state-epoch` entry (#492's
+    format) isn't verified by the cache yet. Until it is, a survivor's history after `--force-new-cluster` can't
+    be told from the lost tail by this field.
+  - **Once the runtime lease v2 (#489) is in, production must set the three settings.** Without them the
+    daemon writes neither file, so its node requests no lease and stops serving.
+  - **Restoring etcd from a snapshot moves its revision back.** The cache refuses a store that went backwards
+    and publishes nothing, so the file goes stale. Every issuer's revision floor refuses too (#489). Both
+    fail closed. The recovery step after a restore is to restart `regalia-kms` and `regalia-sync` on every
+    node: a fresh cache, a fresh floor, then one lease of fail-closed. It belongs in the etcd recovery runbook
+    when that is written.
 
 ## Tokens and the HSM gate (#72)
 
