@@ -169,7 +169,7 @@ def ask_again_after(verdict):
     lease.RevisionFloor's warm-up), else one lease."""
     texts = [str(verdict.get("reason", ""))] + [str(v) for v in (verdict.get("refused") or {}).values()]
     asked = [int(n) for t in texts for n in re.findall(r"ask again in (\d+) s", t)]
-    return max(asked) if asked else lease.MAX_LIFETIME
+    return max(1, max(asked)) if asked else lease.MAX_LIFETIME           # never 0: no tight loop (05 on #523)
 
 
 def moved(cluster, name, image, what):
