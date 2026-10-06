@@ -45,7 +45,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       ResetTypes it expects (no GracefulRestart on iLO 4), the firmware string's form and the power timings are to be
       measured at commissioning, from the discovery it records. It uses Basic authentication over the pinned TLS, with no
       Redfish session tokens. Its firmware floor (2.30, where Redfish begins) is not the security minimum: commissioning
-      pins the current iLO 4 release;
+      pins the current iLO 4 release. Its own command (the drills') reads the iLO password typed or from a 0600 file,
+      not from a pipe as the fence does: the owner-card-encrypted credentials would have to be decrypted to a file
+      first (#520);
     - the fence on real iLOs. `deploy/baremetal/fence.py` (`owner.py fence`) exists. It runs from the owner's machine
       on the management network, never a node, and does, in order:
       1. TLS pinned to each iLO's certificate before any credential is sent;
@@ -88,6 +90,14 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       - from the first returner's promotion until the second's, the cluster is two voting members. Losing either stops
         every commit until the other returner is promoted, or another take-over. Admitting both as learners before
         either promotion (etcd's --max-learners 2) would shorten that window; it is not done;
+    - the survivor trail (G6). takeover.py and rejoin.py write each step to /var/log/regalia/survivor.jsonl, shipped by
+      regalia-audit-ship@survivor. Each step writes a REQUEST before it acts, then ALLOW (the cluster, the revisions, the
+      state epoch, the divergent tail's digest) or DENY. Not yet:
+      - the collector does not compare a take-over's state epoch with the leases the nodes ask for afterwards;
+      - the fence runs off the nodes and writes no trail. Its evidence lives only in the signed authorization;
+      - a step that finished but whose ALLOW could not be written (a full disk) says "DONE" and exits 3. It is never
+        to be re-run (a take-over's force would run twice), and the operator writes the line by hand. Nothing writes
+        it later by itself;
     - the daemon's halts (a peer heard below the quarantine epoch);
     - approvals naming their spending node (1e).
     Until they land, `full` is a recorded intent the daemon does not act on;

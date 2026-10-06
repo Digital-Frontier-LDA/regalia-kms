@@ -359,3 +359,31 @@ class Main(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Trail(Case):
+    """G6: each rejoin step on the survivor trail; join's ALLOW names the divergent tail it kept."""
+
+    def test_admit_and_join_are_recorded_with_what_they_did(self):
+        lines = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            rj.audited_command(self.a, self.chain, "a", "admit", node="b", record=lines.append)
+        admitted = lines[-1]
+        self.assertEqual((admitted["event"], admitted["outcome"], admitted["subject"], admitted["member_id"]),
+                         ("rejoin-admit", "ALLOW", "b", "3d4f5dd237552cf1"))
+        self.b.learner, self.b.member_id = True, 0x3d4f5dd237552cf1
+        with contextlib.redirect_stdout(io.StringIO()):
+            rj.audited_command(self.b, self.chain, "b", "join", line=admitted["initial_cluster"], member_id=admitted["member_id"],
+                               record=lines.append)
+        joined = lines[-1]
+        self.assertEqual((joined["event"], joined["outcome"], joined["divergent_revision"], joined["divergent_db_sha256"]),
+                         ("rejoin-join", "ALLOW", 4689, "ab" * 32))
+        self.assertEqual([e["outcome"] for e in lines], ["REQUEST", "ALLOW", "REQUEST", "ALLOW"])
+
+    def test_a_refused_step_is_a_deny(self):
+        lines = []
+        self.cluster.forcing = True
+        with self.assertRaises(m.Refused), contextlib.redirect_stdout(io.StringIO()):
+            rj.audited_command(self.a, self.chain, "a", "admit", node="b", record=lines.append)
+        self.assertEqual([e["outcome"] for e in lines], ["REQUEST", "DENY"])
+        self.assertIn("take-over drop-in", lines[-1]["reason"])
