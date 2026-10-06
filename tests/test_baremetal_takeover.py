@@ -271,3 +271,17 @@ class Main(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Endpoint(unittest.TestCase):
+    """05 on #513: the socket etcd makes is named "client.sock:0"; a literal without ":0" dialled a file that is not there."""
+
+    def test_the_endpoint_is_derived_from_etcd_s_own_configuration(self):
+        self.assertEqual(tk.ENDPOINT, "unix:///run/regalia-etcd/client.sock:0")
+        self.assertEqual(tk.ENDPOINT, etcdconf.client_endpoint())
+        self.assertEqual(etcdconf.client_endpoint("/x/"), "unix:///x/client.sock:0")
+
+    def test_the_daemon_s_apparmor_profile_names_the_same_socket(self):
+        import pathlib
+        profile = (pathlib.Path(__file__).resolve().parents[1] / "deploy" / "baremetal" / "apparmor" / "usr.sbin.regalia-kms").read_text()
+        self.assertIn("  %s rw," % tk.ENDPOINT[len("unix://"):], profile)
