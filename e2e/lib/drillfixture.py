@@ -136,21 +136,25 @@ class LeaseJudge:
     RECOVERY = "RECOVERY: serving alone under the owner's survivor authorization"
 
     def _s4(self, ctx):
-        node, t_auth = ctx["node"], ctx["t_auth_ms"]
-        # NOT "it stops serving first": with the authorization installed before its peer's lease runs out, admission goes
-        # from serving under the lease straight to serving in recovery, with no gap and so no not-serving line (CI's first
-        # S4 run). What must hold is that it serves under a lease no longer than one lease after the others went off: S4-back
-        # judges that over the whole outage. Here: serving in RECOVERY, and its admission file says so
+        node, t_off, t_auth = ctx["node"], ctx["t_inject_ms"], ctx["t_auth_ms"]
         got = until(lambda: [e for e in self.serving(node, t_auth) if e.get("outcome") == "ALLOW"
                              and (e.get("reason") or "").startswith(self.RECOVERY)], 120, 2)
         recovered = got if isinstance(got, list) else []
         document = self.cluster.lease(node) or {}
-        # and it switched to recovery as soon as it could: by the later of its lease's end (one lease after the others went
-        # off) and the authorization's install, plus a round. Serving on under its old lease would make the switch late
-        bound_s = max(ctx["t_inject_ms"] // 1000 + lease.MAX_LIFETIME + admission.MARGIN, t_auth // 1000) + SLACK_S
-        switched = recovered[0]["at"] if recovered else None
-        return {"it switched to recovery no later than its lease's end or the install, whichever was later":
-                    (switched is not None and switched <= bound_s, {"switched at": switched, "bound": bound_s}),
+        # every serving-state line since the others went off, as evidence either way (48 on #507: the intended order is a
+        # DENY round, its held lease refused under the quarantine epoch, then the RECOVERY ALLOW)
+        lines = [{"at": e.get("at"), "outcome": e.get("outcome"), "epoch": e.get("epoch"), "reason": (e.get("reason") or "")[:80]}
+                 for e in self.serving(node, t_off)]
+        first_recovery = recovered[0]["at"] if recovered else None
+        denied_before = [e for e in lines if e["outcome"] == "DENY" and first_recovery is not None and e["at"] <= first_recovery]
+        # it switched to recovery as soon as it could: by the later of its lease's end (one lease after the others went off)
+        # and the authorization's install, plus a round. Serving on under its old lease would make the switch late
+        bound_s = max(t_off // 1000 + lease.MAX_LIFETIME + admission.MARGIN, t_auth // 1000) + SLACK_S
+        evidence = {"serving lines since the others went off": lines, "admission.json": {"mode": document.get("mode"),
+                    "serve_until_boottime_ms": document.get("serve_until_boottime_ms")}, "switch bound": bound_s}
+        return {"a not-serving round precedes the RECOVERY line (no lease-to-recovery without a gap)": (bool(denied_before), evidence),
+                "it switched to recovery no later than its lease's end or the install, whichever was later":
+                    (first_recovery is not None and first_recovery <= bound_s, {"switched at": first_recovery, "bound": bound_s}),
                 "it serves in RECOVERY under the owner's authorization, its admission file in mode recovery":
                     (bool(recovered) and document.get("mode") == "recovery",
                      {"recovery line": recovered[0] if recovered else None, "mode": document.get("mode")})}
