@@ -54,11 +54,15 @@ func (c *Coordinator) executeHardware(ctx context.Context, route registry.Route,
 			result, resultType, operationErr = c.seal(operationCtx, route, owned)
 		} else {
 			data := owned.Data
-			if contentType == "application/vnd.cosmos.tx+protobuf" {
+			hardwareContentType := contentType
+			if contentType == "application/vnd.cosmos.tx+protobuf" || contentType == x509TBSContentType {
 				digest := sha256.Sum256(data)
 				data = digest[:]
+				if contentType == x509TBSContentType {
+					hardwareContentType = "application/vnd.regalia.digest"
+				}
 			}
-			result, resultType, operationErr = c.hardware.Execute(operationCtx, route, owned.Operation, owned.Format, contentType, data, owned.EnvelopeAAD)
+			result, resultType, operationErr = c.hardware.Execute(operationCtx, route, owned.Operation, owned.Format, hardwareContentType, data, owned.EnvelopeAAD)
 		}
 		mu.Lock()
 		defer mu.Unlock()

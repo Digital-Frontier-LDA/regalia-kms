@@ -370,6 +370,8 @@ func (c *Collector) handleEvent(writer http.ResponseWriter, request *http.Reques
 		Operation: event.Operation, DeviceID: event.DeviceID, Outcome: event.Outcome,
 		LatencyMilliseconds: event.LatencyMilliseconds, RegistryDigest: event.RegistryDigest,
 		PolicyDigest: event.PolicyDigest, RBACDigest: event.RBACDigest,
+		X509ProfileID: event.X509ProfileID, PayloadDigest: event.PayloadDigest,
+		ArtifactKind: event.ArtifactKind, KeyFingerprint: event.KeyFingerprint,
 	}); err != nil {
 		c.reject(request, writer, http.StatusBadRequest, alarm.withReason("the event fails the audit contract's own field validation: "+err.Error()))
 		return

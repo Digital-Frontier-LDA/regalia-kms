@@ -92,6 +92,10 @@ type Draft struct {
 	// keep verifying and only approval-bearing events carry the field. Stripping the field
 	// from an event that had one still changes the hash and is still detected.
 	VerifiedApprovers []string
+	X509ProfileID     string
+	PayloadDigest     string
+	ArtifactKind      string
+	KeyFingerprint    string
 }
 
 type Event struct {
@@ -110,6 +114,10 @@ type Event struct {
 	PolicyDigest        string    `json:"policy_digest"`
 	RBACDigest          string    `json:"rbac_digest"`
 	VerifiedApprovers   []string  `json:"verified_approvers,omitempty"`
+	X509ProfileID       string    `json:"x509_profile_id,omitempty"`
+	PayloadDigest       string    `json:"payload_digest,omitempty"`
+	ArtifactKind        string    `json:"artifact_kind,omitempty"`
+	KeyFingerprint      string    `json:"key_fingerprint,omitempty"`
 	PreviousHash        string    `json:"previous_hash"`
 	Hash                string    `json:"hash"`
 }
@@ -373,7 +381,9 @@ func (recorder *Recorder) Record(ctx context.Context, draft Draft, requireRemote
 		Outcome: draft.Outcome, LatencyMilliseconds: draft.LatencyMilliseconds,
 		RegistryDigest: draft.RegistryDigest, PolicyDigest: draft.PolicyDigest, RBACDigest: draft.RBACDigest,
 		VerifiedApprovers: draft.VerifiedApprovers,
-		PreviousHash:      recorder.lastHash,
+		X509ProfileID:     draft.X509ProfileID, PayloadDigest: draft.PayloadDigest,
+		ArtifactKind: draft.ArtifactKind, KeyFingerprint: draft.KeyFingerprint,
+		PreviousHash: recorder.lastHash,
 	}
 	event.Hash = eventHash(event)
 	line, err := json.Marshal(event)
@@ -510,6 +520,8 @@ func eventHash(event Event) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+var x509ProfileIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+
 func validateDraft(draft Draft) error {
 	if draft.Timestamp.IsZero() || !requestIDPattern.MatchString(draft.RequestID) || draft.LatencyMilliseconds < 0 {
 		return errors.New("invalid audit metadata")
@@ -521,7 +533,7 @@ func validateDraft(draft Draft) error {
 		draft.RegistryDigest == "" || draft.PolicyDigest == "" || draft.RBACDigest == "" {
 		return errors.New("incomplete audit metadata")
 	}
-	values := []string{draft.RequestID, draft.Principal, draft.Decision, draft.ObjectID, draft.Purpose, draft.Operation, draft.DeviceID, draft.Outcome, draft.RegistryDigest, draft.PolicyDigest, draft.RBACDigest}
+	values := []string{draft.RequestID, draft.Principal, draft.Decision, draft.ObjectID, draft.Purpose, draft.Operation, draft.DeviceID, draft.Outcome, draft.RegistryDigest, draft.PolicyDigest, draft.RBACDigest, draft.X509ProfileID, draft.PayloadDigest, draft.ArtifactKind, draft.KeyFingerprint}
 	for _, value := range values {
 		if len(value) > 512 || strings.Contains(strings.ToUpper(value), "PRIVATE KEY") || strings.Contains(strings.ToUpper(value), "AGE-SECRET-KEY") {
 			return errors.New("unsafe audit metadata")
@@ -530,6 +542,13 @@ func validateDraft(draft Draft) error {
 			if unicode.IsControl(character) {
 				return errors.New("unsafe audit metadata")
 			}
+		}
+	}
+	if draft.X509ProfileID != "" || draft.PayloadDigest != "" || draft.ArtifactKind != "" || draft.KeyFingerprint != "" {
+		if draft.Operation != "sign" || !x509ProfileIDPattern.MatchString(draft.X509ProfileID) ||
+			!auditHashPattern.MatchString(draft.PayloadDigest) || !auditHashPattern.MatchString(draft.KeyFingerprint) ||
+			(draft.ArtifactKind != "certificate" && draft.ArtifactKind != "crl") {
+			return errors.New("invalid X.509 signing intent")
 		}
 	}
 	return nil

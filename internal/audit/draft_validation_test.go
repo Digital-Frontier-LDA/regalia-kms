@@ -36,6 +36,10 @@ func draftFields() map[string]func(*Draft, string) {
 		"RegistryDigest": func(d *Draft, v string) { d.RegistryDigest = v },
 		"PolicyDigest":   func(d *Draft, v string) { d.PolicyDigest = v },
 		"RBACDigest":     func(d *Draft, v string) { d.RBACDigest = v },
+		"X509ProfileID":  func(d *Draft, v string) { d.X509ProfileID = v },
+		"PayloadDigest":  func(d *Draft, v string) { d.PayloadDigest = v },
+		"ArtifactKind":   func(d *Draft, v string) { d.ArtifactKind = v },
+		"KeyFingerprint": func(d *Draft, v string) { d.KeyFingerprint = v },
 	}
 }
 
@@ -136,8 +140,11 @@ func TestNoFieldMayCarryKeyMaterialOrForgeALine(t *testing.T) {
 // cap rather than about long values in general.
 func TestTheLengthCapIsInclusiveAtItsEdge(t *testing.T) {
 	for field, set := range draftFields() {
-		if field == "RequestID" || field == "Decision" {
-			continue // both have their own shape rules and cannot hold 512 arbitrary bytes
+		switch field {
+		case "RequestID", "Decision", "X509ProfileID", "PayloadDigest", "ArtifactKind", "KeyFingerprint":
+			// These have stricter shape rules. X.509 limits are pinned separately
+			// in TestX509IntentFieldShapes, while unsafe content remains covered above.
+			continue
 		}
 		t.Run(field, func(t *testing.T) {
 			item := draft("018f0000-0000-7000-8000-000000000001", "allow")

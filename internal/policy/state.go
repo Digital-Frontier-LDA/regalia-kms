@@ -38,6 +38,7 @@ type FileState struct {
 	// budget a newer leader owns, and an epoch-0 reservation after a fenced one is a
 	// site that lost its fence without losing its journal.
 	maxEpoch uint64
+	x509Days map[string]string
 	closed   bool
 	failed   bool
 	path     string
@@ -322,6 +323,9 @@ func (state *FileState) Reserve(ctx context.Context, reservation Reservation) er
 	if reservation.Epoch < state.maxEpoch || (reservation.Epoch == 0 && state.maxEpoch > 0) {
 		return ErrEpoch
 	}
+	if reservation.QuotaID == x509QuotaID && reservation.UTCDate < state.x509Days[reservation.ObjectID] {
+		return ErrQuotaDate
+	}
 	nonce := nonceKey(reservation)
 	if _, exists := state.nonces[nonce]; exists {
 		return ErrReplay
@@ -380,6 +384,19 @@ func (state *FileState) Reserve(ctx context.Context, reservation Reservation) er
 }
 
 func (state *FileState) apply(reservation Reservation) error {
+	if reservation.QuotaID != "" || reservation.SigningIntent != nil {
+		if err := validateReservation(reservation); err != nil {
+			return err
+		}
+	}
+	if reservation.QuotaID == x509QuotaID {
+		if state.x509Days == nil {
+			state.x509Days = make(map[string]string)
+		}
+		if reservation.UTCDate < state.x509Days[reservation.ObjectID] {
+			return ErrQuotaDate
+		}
+	}
 	// Replay does not enforce the epoch rule — it RECONSTRUCTS the high-water the rule
 	// runs against (a journal that refused a reservation at commit time records nothing,
 	// so there is nothing to refuse again). The guard lives in Reserve alone.
@@ -398,6 +415,9 @@ func (state *FileState) apply(reservation Reservation) error {
 		state.totals[key] += amount
 	}
 	state.nonces[nonce] = struct{}{}
+	if reservation.QuotaID == x509QuotaID {
+		state.x509Days[reservation.ObjectID] = reservation.UTCDate
+	}
 	if reservation.Sequence != nil {
 		state.sequences[reservation.SequenceKey] = *reservation.Sequence
 	}
@@ -489,6 +509,23 @@ func validateReservation(reservation Reservation) error {
 	if err != nil || parsed.Format(utcDateLayout) != reservation.UTCDate {
 		return errors.New("invalid policy reservation date")
 	}
+	if reservation.QuotaID != "" || reservation.SigningIntent != nil {
+		intent := reservation.SigningIntent
+		if reservation.QuotaID != x509QuotaID || intent == nil || !x509ProfileID.MatchString(intent.ProfileID) ||
+			!x509FingerprintPattern.MatchString(intent.PayloadDigest) || !x509FingerprintPattern.MatchString(intent.KeyFingerprint) ||
+			len(reservation.Amounts) != 1 || reservation.Sequence != nil || reservation.SequenceKey != "" {
+			return errors.New("invalid X.509 reservation intent")
+		}
+		denom := "x509-leaf"
+		if intent.ArtifactKind == "crl" {
+			denom = "x509-crl"
+		} else if intent.ArtifactKind != "certificate" {
+			return errors.New("invalid X.509 reservation artifact")
+		}
+		if reservation.Amounts[denom] != 1 {
+			return errors.New("invalid X.509 reservation count")
+		}
+	}
 	for denom, amount := range reservation.Amounts {
 		if denom == "" || amount == 0 || reservation.DailyCaps[denom] == 0 || amount > reservation.DailyCaps[denom] {
 			return errors.New("invalid policy reservation amount")
@@ -504,11 +541,19 @@ func validateReservation(reservation Reservation) error {
 }
 
 func nonceKey(reservation Reservation) string {
-	return reservation.PolicyID + "\x00" + reservation.ObjectID + "\x00" + reservation.Principal + "\x00" + reservation.Nonce
+	identity := reservation.PolicyID
+	if reservation.QuotaID == x509QuotaID {
+		identity = reservation.QuotaID
+	}
+	return identity + "\x00" + reservation.ObjectID + "\x00" + reservation.Principal + "\x00" + reservation.Nonce
 }
 
 func quotaKey(reservation Reservation, denom string) string {
-	return reservation.PolicyID + "\x00" + reservation.ObjectID + "\x00" + reservation.UTCDate + "\x00" + denom
+	identity := reservation.PolicyID
+	if reservation.QuotaID == x509QuotaID {
+		identity = reservation.QuotaID
+	}
+	return identity + "\x00" + reservation.ObjectID + "\x00" + reservation.UTCDate + "\x00" + denom
 }
 
 func stateEventHash(event stateEvent) string {
