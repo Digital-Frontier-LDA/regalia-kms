@@ -390,6 +390,19 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 
 ## Tests
 
+- **The production drills (#495) are dry-run in tier N at the lease level only.** `e2e/drill-dryrun.py` runs the drill
+  runner's S1, S2, S3 and S5 on the three-node fixture, each fault journaled first. It judges them from the admission
+  trails: the others keep serving, a cut node stops within one lease, a returning node serves again under the current
+  epoch. The fixture runs no KMS daemon, so the request-level predicates (no failed request, stateful commits, caught
+  up before a served request) are listed as not judged in the run's report and are never entered as passes. S4 (the
+  owner's recovery authorization) isn't in the dry run. None of it has run on the real servers.
+  S5 waits one lease (30 s) before each restart, after the previous host serves again, as KERNEL-UPDATE step 3.5
+  (#522) says for every planned restart. Under lease v2 (#489), a host back less than one lease ago issues no lease
+  yet, so restarting the next one at once leaves the third with no issuer. It did, on #504's first run after #489. The
+  wait is a fixed time, not a check that the returned host issues again. It holds because the issuer's one-lease
+  warm-up starts when its `regalia-sync` starts, before the host serves. `rollout.may_reboot` isn't used: it answers
+  only inside an approved update.
+
 - `moved_by_sync` (the sync round that moved a node to an epoch) cannot see how many envelopes a round received:
   trail events don't carry it. A node moved other than by its sync, right after a no-op round from the same peer,
   would be credited to that peer. In the scenarios only the seed is moved otherwise, and it is never asked (#393).
