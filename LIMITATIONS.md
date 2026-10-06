@@ -39,6 +39,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     600 s more when the fence is only typed rather than an iLO power readback.
   Not built yet:
   - the full scope's machinery:
+    - the iLO Redfish client (`deploy/baremetal/redfish.py`, regalia-kms-d9's, from #501) has not run against a
+      DL360's iLO 4. It is shared by the drills' power faults and the fence. It is tested against a stand-in Redfish
+      service, and its certificate pin against a loopback TLS server, on every path the drills and the fence use. The
+      ResetTypes it expects (no GracefulRestart on iLO 4), the firmware string's form and the power timings are to be
+      measured at commissioning, from the discovery it records. It uses Basic authentication over the pinned TLS, with no
+      Redfish session tokens. Its firmware floor (2.30, where Redfish begins) is not the security minimum: commissioning
+      pins the current iLO 4 release;
     - the fence on real iLOs. `deploy/baremetal/fence.py` (`owner.py fence`) exists. It runs from the owner's machine
       on the management network, never a node, and does, in order:
       1. TLS pinned to each iLO's certificate before any credential is sent;
