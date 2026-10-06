@@ -213,7 +213,7 @@ class Cluster:
         sh("systemd-sysusers", str(ROOT / "deploy" / "baremetal" / "units" / "regalia.sysusers.conf"))
         # D32 (#432): the daemon's user, which writes /run/regalia-state/applied.json and /run/regalia-kms/session-key.json
         # on a host (deploy/systemd/regalia-kms.service). No daemon runs here: the fixture writes both as that user would
-        (self.work / "regalia-kms.sysusers.conf").write_text('u regalia-kms - "Regalia KMS daemon (e2e: the fixture writes its files)" - -\n')
+        (self.work / "regalia-kms.sysusers.conf").write_text('u regalia-kms - "Regalia KMS daemon e2e" - -\n')
         sh("systemd-sysusers", str(self.work / "regalia-kms.sysusers.conf"))
         for mount_point in (os.path.dirname(lease.APPLIED_PATH), os.path.dirname(lease.SESSION_KEY_PATH)):
             os.makedirs(mount_point, exist_ok=True)   # where each node's own directory is bound in its units

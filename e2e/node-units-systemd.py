@@ -578,8 +578,11 @@ def scenario(work, binaries, user):
     doc = until(lambda: json.loads(admission.read_text()), 60, 2)
     doc = doc if isinstance(doc, dict) else {}
     ok(doc.get("serve_until_boottime_ms") == 0 and doc.get("epoch") == 1 and doc.get("manifest_digest", "00" * 32) != "00" * 32
-       and doc.get("reason", "").startswith("renewal failed: no peer gave a lease"),
-       "not admitted, under epoch 1 verified against the TPM anchor, because no peer answered (%s)" % doc.get("reason", "")[:90],
+       and "/run/regalia-state/applied.json does not exist" in doc.get("reason", ""),
+       # lease v2 (D32, #489): no regalia-kms daemon runs on this host, so there is no etcd state to state and the node
+       # asks no peer for a lease at all: it fails closed before the network
+       "not admitted, under epoch 1 verified against the TPM anchor, because without the daemon's etcd state it asks for "
+       "no lease (%s)" % doc.get("reason", "")[:90],
        doc or journal("regalia-admission.service")[-600:])
     served = pathlib.Path(metrics.path("admission"))
     ok(until(lambda: served.exists() and "regalia_admission_serving 0" in served.read_text(), 30, 2),

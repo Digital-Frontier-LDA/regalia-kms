@@ -111,7 +111,7 @@ class Case(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
         self.now, self.authenticated, self.ticks = T0 + 60, True, 5000
-        self.boot, self.revision = 100000.0, REVISION               # CLOCK_BOOTTIME (s), and the subject's applied revision
+        self.boottime, self.revision = 100000.0, REVISION               # CLOCK_BOOTTIME (s), and the subject's applied revision
         self.clock = lambda: (self.now, self.authenticated)
         self.m1 = self.manifest()
         self.sequence = 0
@@ -136,10 +136,10 @@ class Case(unittest.TestCase):
         """An issuer's RevisionFloor that has watched etcd for `watched` seconds (default: just over one lease) and had
         applied revision `held` one lease ago."""
         watched = lease.MAX_LIFETIME + 1 if watched is None else watched
-        floor = lease.RevisionFloor(clock=lambda: self.boot)
-        floor.started = self.boot - watched
+        floor = lease.RevisionFloor(clock=lambda: self.boottime)
+        floor.started = self.boottime - watched
         if watched > lease.MAX_LIFETIME:
-            floor.cluster_id, floor.epoch, floor.seen = CLUSTER, STATE_EPOCH, [(self.boot - lease.MAX_LIFETIME - 1, held)]
+            floor.cluster_id, floor.epoch, floor.seen = CLUSTER, STATE_EPOCH, [(self.boottime - lease.MAX_LIFETIME - 1, held)]
         return floor
 
     @staticmethod
@@ -726,12 +726,12 @@ class StateAndSessionKey(Case):
     def test_the_floor_is_what_was_applied_a_lease_ago(self):
         """applied() keeps the newest revision at or before the cutoff and everything after; revisions only rise; one
         cluster; a revision applied only recently does not count until a lease has passed."""
-        floor = lease.RevisionFloor(clock=lambda: self.boot)
-        floor.started = self.boot - 1000
-        for t, rev in ((self.boot - 400, 3), (self.boot - 350, 5), (self.boot - 10, 9)):
-            self.boot, saved = t, self.boot
+        floor = lease.RevisionFloor(clock=lambda: self.boottime)
+        floor.started = self.boottime - 1000
+        for t, rev in ((self.boottime - 400, 3), (self.boottime - 350, 5), (self.boottime - 10, 9)):
+            self.boottime, saved = t, self.boottime
             floor.applied(CLUSTER, STATE_EPOCH, rev)
-            self.boot = saved
+            self.boottime = saved
         floor.require(CLUSTER, STATE_EPOCH, 5)                                          # held 5 a lease ago (at -350 <= -300)
         self.refused("below the 5 this issuer had applied", floor.require, CLUSTER, STATE_EPOCH, 4)
         self.refused("the applied etcd revision went back (8 after 9)", floor.applied, CLUSTER, STATE_EPOCH, 8)
@@ -751,16 +751,16 @@ class StateAndSessionKey(Case):
     def test_a_rise_of_the_issuers_epoch_starts_its_floor_again(self):
         """A force-new-cluster's history may lack a tail the old one had: the old revisions say nothing about it, so the
         floor forgets them and fails closed for one lease; the epoch never goes back, nor does a revision within it."""
-        floor = lease.RevisionFloor(clock=lambda: self.boot)
-        floor.started = self.boot - 1000
-        self.boot, saved = self.boot - 400, self.boot
+        floor = lease.RevisionFloor(clock=lambda: self.boottime)
+        floor.started = self.boottime - 1000
+        self.boottime, saved = self.boottime - 400, self.boottime
         floor.applied(CLUSTER, STATE_EPOCH, 50)
-        self.boot = saved
+        self.boottime = saved
         floor.require(CLUSTER, STATE_EPOCH, 50)
         floor.applied(CLUSTER, STATE_EPOCH + 1, 40)                        # below 50: the new history's own numbers
-        self.assertEqual((floor.epoch, floor.seen, floor.started), (STATE_EPOCH + 1, [(self.boot, 40)], self.boot))
+        self.assertEqual((floor.epoch, floor.seen, floor.started), (STATE_EPOCH + 1, [(self.boottime, 40)], self.boottime))
         self.refused("less than one lease", floor.require, CLUSTER, STATE_EPOCH + 1, 40)
-        self.boot += lease.MAX_LIFETIME
+        self.boottime += lease.MAX_LIFETIME
         floor.applied(CLUSTER, STATE_EPOCH + 1, 41)
         floor.require(CLUSTER, STATE_EPOCH + 1, 40)                        # a lease on: the new history's floor, 40
         self.refused("ANOTHER HISTORY", floor.require, CLUSTER, STATE_EPOCH, 99)
