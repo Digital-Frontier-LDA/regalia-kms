@@ -58,6 +58,12 @@ class FakeEfibootmgr:
         elif rest[:1] == ["--bootnum"] and rest[2:] == ["--delete-bootnum"]:
             del self.entries[rest[1]]
             self.order = [e for e in self.order if e != rest[1]]
+        elif rest[:1] == ["--create"]:
+            # what efibootmgr --create does: the next free number, the new entry first in BootOrder
+            opts = dict(zip(rest[1::2], rest[2::2]))
+            number = "%04X" % (max(int(n, 16) for n in self.entries) + 1)
+            self.add(number, opts["--label"], opts["--loader"])
+            self.order = [number] + self.order
         else:
             assert rest == [], rest
         return subprocess.CompletedProcess(argv, 0, self.report(), "")
@@ -303,6 +309,49 @@ class TheHostsOwnRecords(Case):
         self.refused("LoaderDevicePartUUID is not a GUID", bootnext._loader_partition, self.d)
         os.unlink(name)
         self.assertIsNone(bootnext._loader_partition(self.d))
+
+
+class InstallEntry(unittest.TestCase):
+    """install_entry (#61, install-host.sh): a new host's first entry, through bootnext.py as every other write is."""
+
+    def test_the_entry_is_created_and_read_back_first_in_boot_order(self):
+        fake = FakeEfibootmgr()
+        done = bootnext.install_entry("/dev/sda", 1, "regalia image-2", r"\EFI\Linux\image-2.efi", run=fake)
+        self.assertEqual(done["entry"], "0002")
+        self.assertEqual(done["state"]["order"][0], "0002")
+        self.assertIn([bootnext.EFIBOOTMGR, "-v", "--create", "--disk", "/dev/sda", "--part", "1", "--label", "regalia image-2",
+                       "--loader", r"\EFI\Linux\image-2.efi"], fake.calls)
+
+    def test_an_existing_label_is_refused_before_anything_is_created(self):
+        fake = FakeEfibootmgr()
+        with self.assertRaisesRegex(m.Refused, r"Boot0001 already carries the label 'regalia-kms image-1': remove it first"):
+            bootnext.install_entry("/dev/sda", 1, "regalia-kms image-1", r"\EFI\Linux\image-1.efi", run=fake)
+        self.assertFalse([c for c in fake.calls if "--create" in c])
+
+    def test_an_entry_that_reads_back_wrong_is_refused(self):
+        fake = FakeEfibootmgr()
+        real = fake.__call__
+
+        def wrong_loader(argv, **kw):
+            done = real(argv, **kw)
+            if "--create" in argv:
+                label, active, _ = fake.entries["0002"]
+                fake.entries["0002"] = (label, active, fake.disk(ESP_GUID, r"\EFI\Linux\other.efi"))
+                done = subprocess.CompletedProcess(argv, 0, fake.report(), "")
+            return done
+        with self.assertRaisesRegex(m.Refused, r"Boot0002 loads '\\\\EFI\\\\Linux\\\\other.efi', not"):
+            bootnext.install_entry("/dev/sda", 1, "regalia image-2", r"\EFI\Linux\image-2.efi", run=wrong_loader)
+
+    def test_its_arguments_are_judged_before_efibootmgr(self):
+        for args, why in ((("sda", 1, "x", r"\EFI\Linux\a.efi"), "not a /dev path"),
+                          (("/dev/../etc", 1, "x", r"\EFI\Linux\a.efi"), "not a /dev path"),
+                          (("/dev/sda", 0, "x", r"\EFI\Linux\a.efi"), "not 1-128"),
+                          (("/dev/sda", 1, "a;b", r"\EFI\Linux\a.efi"), "not plain text"),
+                          (("/dev/sda", 1, "x", r"\EFI\..\a.efi"), "is not")):
+            fake = FakeEfibootmgr()
+            with self.subTest(args=args), self.assertRaisesRegex(m.Refused, why):
+                bootnext.install_entry(*args, run=fake)
+            self.assertEqual(fake.calls, [])
 
 
 class NothingElseWritesBootVariables(unittest.TestCase):

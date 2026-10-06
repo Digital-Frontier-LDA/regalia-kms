@@ -19,7 +19,7 @@
 #   5. ext4 (label regalia-root-fs) inside it, rootfs.tar extracted with numeric owners; an empty /efi for the ESP
 #   6. the ESP: the UKI at \EFI\Linux\<name>.efi and at the removable-media path \EFI\BOOT\BOOTX64.EFI, nothing else
 #      (the per-host loader credentials and the membership chain come from enrolment, #66 B3)
-#   7. a firmware entry for \EFI\Linux\<name>.efi, first in BootOrder (not with --no-efi-entry)
+#   7. a firmware entry for \EFI\Linux\<name>.efi, first in BootOrder, through bootnext.py (not with --no-efi-entry)
 #   8. DIR/install-<serial>.json: the inputs' digests, the disk, the partition and LUKS UUIDs, the time. Nothing secret
 #
 # THE TEST MODE: with REGALIA_INSTALL_TEST=1, and only when --disk is a /dev/loopN backed by a regular file, the serial is not asked (a loop
@@ -40,6 +40,7 @@
 set -euo pipefail
 umask 077
 export LC_ALL=C TZ=UTC PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd -P)"     # the checkout this runs from: its bootnext.py makes the firmware entry
 die(){ echo "install-host: $*" >&2; exit 2; }
 say(){ echo "install-host: $*"; }
 ESP_TYPE=C12A7328-F81F-11D2-BA4B-00A0C93EC93B
@@ -178,8 +179,11 @@ cryptsetup close "$MAPPED"
 # 7. the firmware entry
 if [ "$EFI_ENTRY" = 1 ]; then
   [ -d /sys/firmware/efi ] || die "this system was not booted by UEFI: no firmware entry can be made (--no-efi-entry to skip)"
-  efibootmgr --create --disk "$DISK" --part 1 --label "regalia $NAME" --loader "\\EFI\\Linux\\$NAME.efi" >/dev/null \
-    || die "efibootmgr could not create the entry (the disk is installed; make it by hand, KERNEL-UPDATE 3.1)"
+  # through bootnext.py, the one place that writes the firmware's boot variables (its guard test): created only if no
+  # entry has the label, and read back active, loading the UKI, first in BootOrder
+  ( cd "$REPO" && python3 -Es -m deploy.baremetal.bootnext install-entry --disk "$DISK" --part 1 --label "regalia $NAME" \
+      --loader "\\EFI\\Linux\\$NAME.efi" ) \
+    || die "the firmware entry was not made (above; the disk IS installed): an old 'regalia $NAME' entry from a previous install is removed first, then rerun the entry by hand (KERNEL-UPDATE 3.1)"
 fi
 
 # 8. the install record
