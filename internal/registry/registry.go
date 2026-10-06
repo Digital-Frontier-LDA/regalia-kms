@@ -169,9 +169,9 @@ type Route struct {
 	Binding        Binding
 	// SigningProfile is the key's (ProfileCosmosAccount for every secp256k1 key today), "" for any other key.
 	SigningProfile string
-	// CosmosPublicKey is the key's pinned compressed public key (33 bytes), nil when the manifest pins none: a
-	// cosmos-account signature is then refused.
-	CosmosPublicKey []byte
+	// CosmosPublicKey is the key's pinned compressed public key (its 33 raw bytes as a string, so a Route stays
+	// comparable with ==), "" when the manifest pins none: a cosmos-account signature is then refused.
+	CosmosPublicKey string
 }
 
 // sealEligibleStates is the set of binding states seal-envelope accepts. The release path's
@@ -1430,10 +1430,10 @@ func (registry *Registry) RoutedTo(backend string) []RoutedObject {
 }
 
 // cosmosKey is the object's pinned Cosmos public key, as validated by signingProfile.
-func cosmosKey(object *custodyObject) []byte {
+func cosmosKey(object *custodyObject) string {
 	key, _ := hex.DecodeString(object.CosmosPublicKey)
 	if len(key) != 33 {
-		return nil
+		return ""
 	}
-	return key
+	return string(key)
 }

@@ -107,7 +107,7 @@ func newCosmosAccountFixture(t *testing.T) *cosmosAccountFixture {
 		}
 		router := &fakeRouter{route: registry.Route{ObjectID: "production-sops", Purpose: "sops-data-key", Environment: "production",
 			Algorithm: "secp256k1", PolicyID: "wallet", Binding: registry.Binding{DeviceID: "hsm-1"}, SigningProfile: registry.ProfileCosmosAccount,
-			CosmosPublicKey: f.key}}
+			CosmosPublicKey: string(f.key)}}
 		recorder, hardware := &fakeAudit{}, &fakeHardware{output: []byte("signature")}
 		coordinator, err := New(fakeAuthorizer{allowed: true, digest: "sha256:rbac"}, router, engine, recorder, directRunner{}, hardware, "sha256:policy", nil, func() time.Time { return now })
 		if err != nil {
