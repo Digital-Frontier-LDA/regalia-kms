@@ -633,6 +633,22 @@ jobs:
             ${{ runner.temp }}/rootfs/build-*/rootfs-build.json
           retention-days: 14
 
+  # regalia-kms#61, second slice: install-host.sh on a loop device (GPT, LUKS2 made on the host, the rootfs, the ESP),
+  # read back from the disk, and its refusals before anything is written
+  install-host-loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the disk tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends cryptsetup-bin dosfstools
+      - name: Install onto a loop device and read it back
+        run: sudo bash e2e/install-host-loop.sh | tee "$RUNNER_TEMP/install.log"; grep -q ' 0 failed$' "$RUNNER_TEMP/install.log"
+
   initrd-reproducible-debian:
     runs-on: ubuntu-latest
     timeout-minutes: 60
