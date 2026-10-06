@@ -167,11 +167,24 @@ class Admit(Case):
         self.cluster.forcing = True
         self.refused("still carries the take-over drop-in", rj.admit, self.a, self.chain, "a", "b")
 
-    def test_one_node_at_a_time(self):
+    def test_both_returners_learn_at_once_and_never_a_third(self):
+        """etcdconf's max-learners 2 (#519): c is admitted while b is still a learner, unstarted or started, so both catch
+        up together; a third learner is refused, and so is any learner beside a voting member that has not started."""
         self.quiet(rj.admit, self.a, self.chain, "a", "b")
-        self.refused("an unstarted member is still joining: one node at a time", rj.admit, self.a, self.chain, "a", "c")
-        self.cluster.members[1]["name"] = "b"                                       # b started, still a learner
-        self.refused("b is still joining: one node at a time", rj.admit, self.a, self.chain, "a", "c")
+        (line, _), _ = self.quiet(rj.admit, self.a, self.chain, "a", "c")           # b unstarted, still a learner: c too
+        self.assertEqual([m.get("isLearner") for m in self.cluster.members[1:]], [True, True])
+        # b's unstarted learner is named b by its URL, never after the caller (2f on #528): c's join takes the line
+        tip = self.chain[-1]
+        self.assertEqual(line, ",".join("%s=%s" % (n, url(tip, n)) for n in ("a", "b", "c")))
+        self.assertEqual(rj._parse_initial(line, tip, "c"), line)
+        self.cluster.members[1]["name"] = "b"
+        self.quiet(rj.admit, self.a, self.chain, "a", "c")                          # run again: the same, nothing added
+        self.assertEqual(len(self.cluster.members), 3)
+        self.cluster.members.pop()                                                  # c's learner gone: a third stands in
+        self.cluster.members.append({"ID": 99, "name": "z", "peerURLs": ["https://[fd72:6567:6c61::99]:2380"], "isLearner": True})
+        self.refused("b, z are still joining: at most 2 learners at once", rj.admit, self.a, self.chain, "a", "c")
+        self.cluster.members[2] = {"ID": 99, "peerURLs": ["https://[fd72:6567:6c61::99]:2380"]}     # an unstarted VOTER
+        self.refused("a voting member that has not started is still joining", rj.admit, self.a, self.chain, "a", "c")
 
     def test_only_a_node_the_manifest_counts_and_never_a_voting_one(self):
         self.refused("b is not an etcd member under epoch 2", rj.admit, self.a, self.chain[:-1], "a", "b")   # before the lift
