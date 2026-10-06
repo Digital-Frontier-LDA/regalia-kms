@@ -120,8 +120,24 @@ jobs:
           sudo locale-gen en_US.UTF-8 >/dev/null
           python3 -Es -m unittest discover -s tests -p 'test_*.py'
 
+      - name: Install checksum-pinned etcd v3.6.15 for the operational-state cache's real-store test (ADR-0002 D32)
+        env:
+          ETCD_SHA256: b51d86e6bff2168de5ba8cd631c0fe6c785c7a1b32b083079f5677d6b7e2772c
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/etcd.tar.gz" \
+            https://github.com/etcd-io/etcd/releases/download/v3.6.15/etcd-v3.6.15-linux-amd64.tar.gz
+          echo "$ETCD_SHA256  $RUNNER_TEMP/etcd.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/etcd.tar.gz" \
+            --directory "$RUNNER_TEMP" --strip-components=1 etcd-v3.6.15-linux-amd64/etcd
+          chmod 0755 "$RUNNER_TEMP/etcd"
+          echo "ETCD_BIN=$RUNNER_TEMP/etcd" >> "$GITHUB_ENV"
+
       - name: test (both modules, race + vet)
         env:
+          # internal/opstate's real-store test runs against the etcd installed above; with this set, a
+          # missing one fails instead of skipping.
+          REGALIA_EXPECT_ETCD: "1"
           # internal/pin's mlock refusal can only be exercised where mlock can be made to fail, and
           # on linux it can. With this set the test fails rather than skips if that stops being true.
           REGALIA_EXPECT_MLOCK_ENFORCED: "1"
