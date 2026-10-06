@@ -254,5 +254,82 @@ class OwnerTool(Case):
         self.assertEqual((code, signed), (1, None))
 
 
+class OnTheNode(Case):
+    """survivor.py install / remove / directive (root, at the node's console) and the admission's reader, seconds_left."""
+
+    def setUp(self):
+        super().setUp()
+        import json
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.signed = self.authorize(life_s=3600)
+        self.auth = os.path.join(self.d, "auth.json")
+        with open(self.auth, "w") as f:
+            json.dump(self.signed, f)
+
+    def run_main(self, argv, now=T0 + 60, authenticated=True):
+        from unittest import mock
+        from deploy.baremetal import node as node_module
+        fake = mock.Mock(node_id="a")
+        fake.held.side_effect = lambda name: os.path.join(self.d, name)
+        fake.manifest.return_value = self.m2
+        fake.clock.return_value = lambda: (now, authenticated)
+        with mock.patch.object(node_module, "Node", lambda cfg: fake), mock.patch.object(node_module, "load", lambda path: {}), \
+                mock.patch.object(sv.os, "geteuid", lambda: 0), mock.patch("builtins.print"):
+            return sv.main(["--config", "/etc/regalia/node.json"] + argv)
+
+    def test_install_through_main_writes_what_the_admission_reads(self):
+        self.assertEqual(self.run_main(["install", "--authorization", self.auth]), 0)
+        path = os.path.join(self.d, sv.AUTH_FILE)
+        self.assertEqual(sv.installed(path, owner_uid=os.getuid()), self.signed)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o644)
+        clock = lambda: (T0 + 100, True)                                   # noqa: E731
+        self.assertEqual(sv.seconds_left(path, self.m2, "a", clock, owner_uid=os.getuid()), 3600 - 100)
+        m3 = manifest4(3, m.digest(self.m2), nodes4(b="QUARANTINED", c="QUARANTINED"))
+        self.refused("a new epoch ends it", sv.seconds_left, path, m3, "a", clock, owner_uid=os.getuid())
+        self.refused("EXPIRED", sv.seconds_left, path, self.m2, "a", lambda: (T0 + 3600, True), owner_uid=os.getuid())
+        self.refused("time is not authenticated", sv.seconds_left, path, self.m2, "a", lambda: (T0 + 100, False), owner_uid=os.getuid())
+        self.assertEqual(self.run_main(["remove"]), 0)
+        self.assertIsNone(sv.seconds_left(path, self.m2, "a", clock, owner_uid=os.getuid()))
+
+    def test_install_refuses_what_does_not_hold_and_writes_nothing(self):
+        self.assertEqual(self.run_main(["install", "--authorization", self.auth], now=T0 + 7200), 1)          # expired
+        self.assertEqual(self.run_main(["install", "--authorization", self.auth], authenticated=False), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.d, sv.AUTH_FILE)))
+
+    def test_the_reader_takes_only_a_root_owned_file_only_root_may_write(self):
+        path = os.path.join(self.d, sv.AUTH_FILE)
+        sv._write_root(path, self.signed)
+        self.refused("is not a regular file of root's", sv.installed, path)          # owned by this test's user, not root
+        os.chmod(path, 0o666)
+        self.refused("is not a regular file of", sv.installed, path, owner_uid=os.getuid())
+        os.unlink(path)
+        os.symlink(self.auth, path)
+        self.refused("cannot be opened", sv.installed, path, owner_uid=os.getuid())
+
+    def test_directive_through_main_applies_a_disable(self):
+        import json
+        directive = sv.make_directive(self.m2, "release-signing", "stolen", T0,
+                                      lambda text: text.split("Type exactly: ")[1].split("\n")[0], lambda: OwnerKey(OWNER_KEYS[1]))
+        f = os.path.join(self.d, "directive.json")
+        with open(f, "w") as out:
+            json.dump(directive, out)
+        self.assertEqual(self.run_main(["directive", "--file", f]), 0)
+        self.assertEqual(sv.Directives(os.path.join(self.d, "survivor-directives.jsonl")).disabled(), {"release-signing"})
+
+    def test_the_admission_service_is_wired_to_the_installed_authorization(self):
+        from unittest import mock
+        from deploy.baremetal import node as node_module
+        fake = mock.Mock(node_id="a", runtime=self.d, run=None)
+        fake.held.side_effect = lambda name: os.path.join(self.d, name)
+        fake.clock.return_value = lambda: (T0 + 60, True)
+        with mock.patch.object(node_module, "boot_session", return_value=("ab" * 32, b"pub")), \
+                mock.patch.object(node_module.lease, "Holder"), mock.patch.object(node_module, "Trail"):
+            service = node_module.admission_service(fake, daemon_started=lambda: None)
+        self.assertIsNone(service.survivor(self.m2))                        # none installed
+        sv._write_root(os.path.join(self.d, sv.AUTH_FILE), self.signed)
+        self.refused("is not a regular file of root's", service.survivor, self.m2)    # the real reader: root's file only
+
+
 if __name__ == "__main__":
     unittest.main()
