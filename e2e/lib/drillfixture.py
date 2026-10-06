@@ -176,7 +176,16 @@ class LeaseJudge:
         lines = [{"at": e.get("at"), "outcome": e.get("outcome"), "epoch": e.get("epoch"), "reason": (e.get("reason") or "")[:80]}
                  for e in self.serving(node, t_off)]
         first_recovery = recovered[0]["at"] if recovered else None
-        denied_before = [e for e in lines if e["outcome"] == "DENY" and first_recovery is not None and e["at"] <= first_recovery]
+        # THE INVARIANT (48 on #507): at the RECOVERY line no VALID normal lease exists. Its order on the trail decides: the
+        # serving-state line just before it is either a not-serving one, or a lease-mode ALLOW under an EARLIER epoch (its
+        # issuer quarantined in the recovery's epoch, so that lease is refused there). Not "a DENY first": with the
+        # authorization already installed when a restarted admission first publishes, there is no not-serving round.
+        whole = [e for e in self._events(node, 0) if e["event"] == "admission-serving"]
+        at_switch = next((i for i, e in enumerate(whole) if e["outcome"] == "ALLOW" and (e["reason"] or "").startswith(self.RECOVERY)), None)
+        before = whole[at_switch - 1] if at_switch else None
+        recovery_epoch = whole[at_switch]["epoch"] if at_switch is not None else None
+        no_valid_lease = at_switch is not None and (before is None or before["outcome"] == "DENY"
+                                                    or (before["epoch"] is not None and before["epoch"] < recovery_epoch))
         # it switched to recovery as soon as it could: by the later of its lease's end (one lease after the others went off)
         # and the authorization's install, plus a round. Serving on under its old lease would make the switch late
         bound_s = max(t_off // 1000 + lease.MAX_LIFETIME + admission.MARGIN, t_auth // 1000) + SLACK_S
@@ -188,7 +197,9 @@ class LeaseJudge:
                     "whole admission trail (last 40)": self._events(node, 0)[-40:],
                     "times": dict({"t_off": t_off // 1000, "t_auth": t_auth // 1000}, **(self.backend.marks if self.backend else {})),
                     "admission.json every 2 s": (self.backend.samples if self.backend else [])}
-        return {"a not-serving round precedes the RECOVERY line (no lease-to-recovery without a gap)": (bool(denied_before), evidence),
+        evidence["the serving line just before the RECOVERY line"] = before
+        return {"no valid normal lease at the switch to recovery (the line before it: not serving, or a lease under an earlier epoch)":
+                    (no_valid_lease, evidence),
                 "it switched to recovery no later than its lease's end or the install, whichever was later":
                     (first_recovery is not None and first_recovery <= bound_s, {"switched at": first_recovery, "bound": bound_s}),
                 "it serves in RECOVERY under the owner's authorization, its admission file in mode recovery":
