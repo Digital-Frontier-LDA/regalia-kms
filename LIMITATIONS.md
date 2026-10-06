@@ -248,6 +248,17 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     node: a fresh cache, a fresh floor, then one lease of fail-closed. It belongs in the etcd recovery runbook
     when that is written.
 
+## The chain an admission is judged against (#432)
+
+- **With `membership_chain_path` set, an admission is good only for the epoch it was judged under.** The daemon
+  verifies regalia-sync's `chain.json` from the pinned root (cached on the file's identity) and refuses an
+  admission whose epoch and manifest digest aren't the chain's tip.
+- **A chain briefly ahead of the admission refuses too.** This happens when sync has published epoch N+1 and
+  admission hasn't judged it yet. It lasts until admission's next round: seconds, with #494's lapse watcher and
+  publish-at-start. That's fail closed, on purpose.
+- **Without the setting**, an admission from the previous epoch can serve until its own lease runs out (at most
+  30 s). The shipped example sets it, and production must too.
+
 ## Tokens and the HSM gate (#72)
 
 - **The physical pull-and-reinsert drill has not been run** (G3). The script is merged

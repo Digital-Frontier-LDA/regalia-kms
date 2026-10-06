@@ -46,6 +46,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/Digital-Frontier-LDA/regalia-kms/cmd/regalia-unlock/membership"
 )
 
 const (
@@ -117,6 +119,12 @@ type Options struct {
 	BootID func() (string, error)
 	// OnTransition is called each time the answer changes, and for the first answer.
 	OnTransition func(Status)
+	// ChainPath is the membership chain regalia-sync publishes (chain.json). When it is set, an admission is
+	// good only for the epoch it was judged under: the chain, verified from Root, must have the admission's
+	// epoch and manifest digest as its tip (48 on #432). ChainOwnerUID is who may write it (regalia-sync).
+	ChainPath     string
+	ChainOwnerUID uint32
+	Root          any // the pinned membership root (membership.LoadRoot)
 }
 
 // Gate answers whether this node may serve right now.
@@ -127,6 +135,68 @@ type Gate struct {
 	mutex   sync.Mutex
 	decided bool
 	last    Status
+
+	// the chain's verified tip, cached on the file's identity: read again only when the file changes
+	chainMutex sync.Mutex
+	chainID    fileIdentity
+	chainKnown bool
+	tipEpoch   uint64
+	tipDigest  string
+	tipErr     error
+}
+
+// fileIdentity names one version of a file: any write, chmod, chown or replacement changes it.
+type fileIdentity struct {
+	dev, ino     uint64
+	size         int64
+	mtime, ctime unix.Timespec
+}
+
+func identityOf(stat unix.Stat_t) fileIdentity {
+	return fileIdentity{dev: stat.Dev, ino: stat.Ino, size: stat.Size, mtime: stat.Mtim, ctime: stat.Ctim}
+}
+
+// MaxChainBytes is membership.MAX_CHAIN_BYTES.
+const MaxChainBytes = 64 << 20
+
+// chainTip is the published chain's tip, verified from the pinned root: read again only when the file is
+// another one or has changed.
+func (gate *Gate) chainTip() (uint64, string, error) {
+	gate.chainMutex.Lock()
+	defer gate.chainMutex.Unlock()
+	var stat unix.Stat_t
+	if err := unix.Lstat(gate.options.ChainPath, &stat); err == nil && gate.chainKnown && identityOf(stat) == gate.chainID {
+		return gate.tipEpoch, gate.tipDigest, gate.tipErr
+	}
+	raw, opened, err := readTrustedStat(gate.options.ChainPath, gate.options.ChainOwnerUID, MaxChainBytes)
+	if err != nil {
+		gate.chainKnown = false
+		return 0, "", err
+	}
+	gate.chainID, gate.chainKnown = identityOf(opened), true
+	gate.tipEpoch, gate.tipDigest, gate.tipErr = verifyChain(raw, gate.options.Root)
+	return gate.tipEpoch, gate.tipDigest, gate.tipErr
+}
+
+func verifyChain(raw []byte, root any) (uint64, string, error) {
+	document, err := membership.Load(raw, MaxChainBytes)
+	if err != nil {
+		return 0, "", fmt.Errorf("it is not JSON: %w", err)
+	}
+	envelopes, ok := document.([]any)
+	if !ok {
+		return 0, "", errors.New("it is not a list of envelopes")
+	}
+	manifests, err := membership.ReadChain(envelopes, root)
+	if err != nil {
+		return 0, "", err
+	}
+	tip := manifests[len(manifests)-1]
+	epoch, err := strconv.ParseUint(fmt.Sprint(tip["epoch"]), 10, 64)
+	if err != nil {
+		return 0, "", errors.New("its tip has no epoch")
+	}
+	return epoch, membership.Digest(tip), nil
 }
 
 // Open prepares a gate. It does not need the admission file to exist: until the lease service
@@ -145,6 +215,14 @@ func Open(options Options) (*Gate, error) {
 	}
 	if !nodeIDPattern.MatchString(options.NodeID) {
 		return nil, errors.New("admission needs this node's ID as the membership manifest spells it")
+	}
+	if options.ChainPath != "" {
+		if !filepath.IsAbs(options.ChainPath) || filepath.Clean(options.ChainPath) != options.ChainPath {
+			return nil, errors.New("the membership chain's path must be absolute and clean")
+		}
+		if _, err := membership.RootEntries(options.Root, "the membership root"); err != nil {
+			return nil, fmt.Errorf("the membership chain needs the pinned root: %w", err)
+		}
 	}
 	if options.Boottime == nil {
 		options.Boottime = Boottime
@@ -308,6 +386,21 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 	if document.RequestedBoottimeMs > now {
 		return refuse("the admission names a request made in the future")
 	}
+	// AN ADMISSION IS GOOD ONLY FOR THE EPOCH IT WAS JUDGED UNDER (48 on #432): once the chain has moved, a file
+	// the lease service wrote under the previous epoch (a lease from a now-quarantined issuer, say) is refused,
+	// not served until it expires. A chain briefly ahead of the admission refuses too, until the next round.
+	if gate.options.ChainPath != "" {
+		epoch, digest, err := gate.chainTip()
+		if err != nil {
+			return refuse("the membership chain: " + err.Error())
+		}
+		if epoch != document.Epoch {
+			return refuse(fmt.Sprintf("the admission is for epoch %d; the chain is at %d", document.Epoch, epoch))
+		}
+		if digest != document.ManifestDigest {
+			return refuse(fmt.Sprintf("the admission is for another manifest at epoch %d than the chain's", epoch))
+		}
+	}
 	return Status{Admitted: true, Epoch: document.Epoch, RequestedBoottimeMs: document.RequestedBoottimeMs, HSMSerials: document.HSMSerials}
 }
 
@@ -327,41 +420,49 @@ func (gate *Gate) read() (Document, error) {
 // nobody else can rename it away. The file's own checks run on the opened descriptor, so the file that
 // is checked is the file that is read.
 func readTrusted(path string, ownerUID uint32) ([]byte, error) {
+	contents, _, err := readTrustedStat(path, ownerUID, maxFileBytes)
+	return contents, err
+}
+
+// readTrustedStat is readTrusted for a file of up to `limit` bytes, with the opened file's own status (the file
+// that was checked is the file that was read, and its identity is the one cached).
+func readTrustedStat(path string, ownerUID uint32, limit int) ([]byte, unix.Stat_t, error) {
+	var none unix.Stat_t
 	trusted := func(uid uint32) bool { return uid == ownerUID || uid == 0 }
 	var directory unix.Stat_t
 	if err := unix.Lstat(filepath.Dir(path), &directory); err != nil {
-		return nil, errors.New("its directory cannot be examined")
+		return nil, none, errors.New("its directory cannot be examined")
 	}
 	if directory.Mode&unix.S_IFMT != unix.S_IFDIR || !trusted(directory.Uid) || directory.Mode&0o022 != 0 {
-		return nil, errors.New("its directory is not one only its owner or root can write")
+		return nil, none, errors.New("its directory is not one only its owner or root can write")
 	}
 	if err := ancestorsTrusted(filepath.Dir(path), directory.Uid, trusted); err != nil {
-		return nil, err
+		return nil, none, err
 	}
 	descriptor, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, errors.New("it cannot be opened")
+		return nil, none, errors.New("it cannot be opened")
 	}
 	file := os.NewFile(uintptr(descriptor), filepath.Base(path))
 	defer file.Close()
 	var stat unix.Stat_t
 	if err := unix.Fstat(descriptor, &stat); err != nil {
-		return nil, errors.New("it cannot be examined")
+		return nil, none, errors.New("it cannot be examined")
 	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
-		return nil, errors.New("it is not a regular file")
+		return nil, none, errors.New("it is not a regular file")
 	}
 	if !trusted(stat.Uid) || stat.Mode&0o022 != 0 {
-		return nil, errors.New("it is not a file only its owner or root can write")
+		return nil, none, errors.New("it is not a file only its owner or root can write")
 	}
-	contents, err := io.ReadAll(io.LimitReader(file, maxFileBytes+1))
+	contents, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {
-		return nil, errors.New("it cannot be read")
+		return nil, none, errors.New("it cannot be read")
 	}
-	if len(contents) > maxFileBytes {
-		return nil, errors.New("it is oversized")
+	if len(contents) > limit {
+		return nil, none, errors.New("it is oversized")
 	}
-	return contents, nil
+	return contents, stat, nil
 }
 
 // ancestorsTrusted walks from directory's parent up to "/". childUID is the owner of the component

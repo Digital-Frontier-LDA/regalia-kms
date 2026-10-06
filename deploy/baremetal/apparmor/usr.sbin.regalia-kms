@@ -110,6 +110,14 @@ profile regalia-kms {
   owner /run/regalia-kms/session-key.json rw,
   owner /run/regalia-kms/.session-key.json.* rw,
 
+  # ---- the chain an admission is judged against (#432) ----
+  # membership_chain_path: regalia-sync's published chain, read only, verified from the pinned root
+  # (membership_root_key_path, the image's by default); its directory, for the trusted reader's checks.
+  #                                                        internal/admission/admission.go chainTip
+  /var/lib/regalia-sync/ r,
+  /var/lib/regalia-sync/chain.json r,
+  /usr/lib/regalia/root-key.json r,
+
   # ---- runtime admission (regalia-kms#74) ----
   # runtime_admission_path: written by the lease service as its own user, regalia-admission (#191,
   # deploy/baremetal/admission.py), in its own directory, read here; boot_session_path: this boot's
