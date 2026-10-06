@@ -50,7 +50,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       It records the power-restore policy, and `sign-survivor` checks the evidence against the same inventory. It is
       tested against a local Redfish stand-in over real TLS, never an iLO 4. Not yet:
       - the commissioning step that records each iLO's certificate, serial and UUID in the inventory;
-      - the fence-only iLO accounts;
+      - the fence-only iLO accounts. Whether iLO 4 lets such an account read its own Accounts record, which the
+        fence's privilege check reads, is unmeasured. If it does not, every correct account is refused and the fence is
+        the typed fallback;
       - the credentials encrypted to the owner cards' decryption keys (the tool reads them decrypted, from a pipe);
       - whether a management VPN reaches all three sites' iLOs is the owner's to say. Without it, the fence is the owner
         at each iLO in turn, or the typed fallback;

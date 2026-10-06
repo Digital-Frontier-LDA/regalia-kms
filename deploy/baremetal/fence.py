@@ -26,13 +26,20 @@ THE INVENTORY binds each node to its box, recorded at commissioning (public data
 FOR EACH NODE, in order, every step refused unless the one before it held:
   1. TLS to the iLO, the certificate's SHA-256 equal to the pinned one BEFORE any byte of the credentials is sent.
   2. The account is fence-only: the iLO's own account record shows VirtualPowerAndResetPriv and no privilege beyond
-     login (Oem.Hp on iLO 4, Oem.Hpe on iLO 5). An account the fence cannot see is refused.
+     login (Oem.Hp on iLO 4, Oem.Hpe on iLO 5). An account the fence cannot see is refused. UNMEASURED (05): that an
+     iLO 4 lets a login-and-power-only account read the Accounts listing at all. If it does not, every correct account is
+     refused here, and the fence is the typed fallback until this check is changed to what the iLO does show.
   3. The box: /redfish/v1/Systems/1's SerialNumber and UUID equal the inventory's, so the right server goes off.
   4. ForceOff (ComputerSystem.Reset), unless it already reads Off.
   5. PowerState read Off, then read Off AGAIN at least REREAD_S later: the evidence carries both times.
   6. The power-restore policy is recorded as the iLO reports it: anyone with the iLO's power right can turn the server
      back on, and a policy of "always on" does it after a power cut. That server then holds an older epoch and is
      halted by its peers (G4); the evidence says what was there, it does not stop it.
+
+WHEN. After the quarantine epoch is signed, and within the hour before the owner signs the authorization: survivor.py
+refuses evidence read before the quarantine's issued_at, or whose second readback is more than FENCE_MAX_AGE_S before
+the authorization's not_before (05: a drill's evidence against the same inventory does not replay). The nodes to fence
+are every other node but the RETIRED and REVOKED_STOLEN ones (survivor.fenceable).
 
 The evidence, per node: {"power_state": "Off", "read_at", "read_again_at", "serial", "uuid", "ilo_cert_sha256",
 "power_restore_policy"}, under {"method": "redfish", "nodes": {...}}. survivor.validate_authorization requires that
