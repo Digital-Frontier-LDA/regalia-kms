@@ -396,6 +396,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   epoch. The fixture runs no KMS daemon, so the request-level predicates (no failed request, stateful commits, caught
   up before a served request) are listed as not judged in the run's report and are never entered as passes. S4 (the
   owner's recovery authorization) isn't in the dry run. None of it has run on the real servers.
+  S5 asks `rollout.may_reboot` before each restart, the check `update apply` makes, and a WAIT is asked again for
+  up to three leases (90 s). Under lease v2 (#489), a node back less than one lease ago issues no lease yet, so rolling
+  the next node at once leaves the third with no issuer. It did, on #504's first run after #489. On a host the check runs
+  over SSH as an inline `python3 -c` (`drill.MAY_REBOOT`, the same code as `e2e/rolling-threenode.py`'s): `update` has
+  no read-only `may-reboot` command yet.
 
 - `moved_by_sync` (the sync round that moved a node to an epoch) cannot see how many envelopes a round received:
   trail events don't carry it. A node moved other than by its sync, right after a no-op round from the same peer,
