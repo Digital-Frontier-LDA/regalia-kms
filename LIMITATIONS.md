@@ -55,6 +55,64 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     may be up to that old, except what a directive disabled.
   - The directives live on the survivor alone until the majority returns. If its disk is lost, they are lost there, so
     the owner keeps every directive file the tool wrote and gives them again to a rebuilt survivor and to the majority.
+- **etcd's configuration from the manifest: the renderer only** (#432, ADR-0002 D32; `deploy/baremetal/etcdconf.py`).
+  Built:
+  - who is a member (the manifest's ACTIVE, MAINTENANCE and DRAINING nodes);
+  - each member's certificate bound once by the signing key the manifest pins for it (no CA). The latest binding that
+    verifies wins, and a rendered one is never gone back on;
+  - the timings from the measured p99 round trip (a commissioning failure above 500 ms);
+  - the configuration and a check of each of its settings:
+    - clients over the unix socket only, with no client TLS, which etcd ignores on a socket (d9, measured). The client
+      boundary is the socket's group;
+    - peers on the mesh over TLS 1.3, with certificates both ways, the key from the unit's credentials, and trust that is
+      the rendered bundle only;
+    - periodic compaction (1 h) and an explicit 2 GiB quota;
+    - the corruption checks (feature gates).
+  Not built yet:
+  - enrolment making the peer and server keys (into `systemd-creds`), the self-signed certificates and the binding;
+  - the bindings travelling by sync;
+  - defragmentation and the alerts on the backend's size and the corruption checks;
+  - a run of the rendered configuration under the image's etcd. The feature-gate names are v3.6's and are to be
+    confirmed there (d9's `e2e/etcd-unit-sandbox.sh`);
+  - writing the files, and the reconciler that adds or removes a running member after a root-signed epoch;
+  - where the measured round trip comes from (an input today).
+  **Accepted:** a member re-enrolled on the same TPM keeps its signing key, so an older binding still verifies. Renderers
+  that have seen the newer one refuse to go back, but a renderer starting fresh takes the newest binding it is shown.
+- **The shared operational state, `opstate/v1`: format only** (#432, ADR-0002 D32; `deploy/baremetal/opstate.py`,
+  `tests/vectors/opstate-v1.json`). Built:
+  - the entries (spend, sequence, quota, key-state), the etcd key each lives under, their verification, each kind's
+    transition rule, and one Reserve's transaction rule, as a library with a vector for the Go side.
+  Not built yet:
+  - nothing writes or reads etcd: the daemon's transactions and watch cache are regalia-kms-ed's;
+  - nothing yet writes the session entries (`sessions/<node>/<boot_id>/<key>`, signed by the node's signing key at each
+    daemon start), nor the spend's approvals into the signer's audit line, which the collector re-verifies against
+    `approvals_sha256` (`check_approvals`); the daemon calls `may_sign` at sign (ed);
+  - the D25 approver sets are the caller's, not yet read from the policy;
+  - garbage collection by hour-bucketed etcd leases.
+  - the etcd role that grants the daemons put, never delete, under `/regalia/v1/` (ed's daemon). Until it exists, a
+    client of the etcd socket could delete a key. A reader that has seen a key-state refuses its absence, but a reader
+    starting fresh cannot tell a deleted key from a new one.
+  **Accepted:**
+  - etcd isn't Byzantine-tolerant. A member with root can withhold entries or serve old ones. It cannot forge an
+    entry, because every entry carries its own signatures. A whole-cluster rollback is caught by the revision in the
+    signed heartbeats (planned, #432).
+  - A transaction that loses a race is retried at most three times, one round trip each, then refused.
+  - A request stays spendable at most 900 s after it is spent (`MAX_REQUEST_LIFE_S`, enforced on every spend). A lone
+    survivor's full scope waits that long, plus 60 s, from the owner's attestation that the others are fenced, so
+    nothing the far side spent before it was fenced can be spent again (regalia-kms-1e).
+  - A spend's key is collected by an etcd lease of `(expires_at - at) + 60 s`, on the etcd leader's clock. A leader whose
+    clock runs more than 60 s ahead of the signer's could collect it before the request expires, and the nonce could
+    then be spent again. Authenticated time (NTS) on every server bounds that, and `may_sign` refuses a request that
+    expires within 60 s.
+  - A node's session key vouches only until the node's signing key is replaced (its window ends at the replacing
+    manifest's issued_at). A node still running the old key between then and its adoption of the new epoch writes
+    nothing that verifies. That fails closed.
+  - An entry's `at` is judged on arrival (`fresh`, within 60 s of the reader's clock). A reader that only lists
+    entries later can't tell a backdated entry inside a session's window; the collector judges `at` against when it
+    saw the entry's create revision.
+  - Session entries are never deleted, so every old spend stays verifiable. They are about 300 bytes each, one per
+    daemon start.
+  - Quota days are UTC days.
 - **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
   refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
   its verification under the current manifest's `activation_signers`, each node's grant record and
@@ -63,7 +121,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   enrolment, sync has no activation ops, there is no `owner.py sign-activation`, and the Go Gate still
   takes `regalia-fence`'s single key. By the rule, a new cluster's first activation waits about 11 minutes
   (`RECOVERY_WAIT_S`): every node starts with no grant record, so each is busy for that long after it
-  starts. Expected at first bring-up, not a fault. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
+  starts. Expected at first bring-up, not a fault. **The runtime lease (`lease.py`) is the one serving lease under D32: 30 s, renewed at a third (every 10 s)**, issued by **one** peer over the subject's re-attested TPM. A node cut off from both peers stops within 30 s, less the 5 s admission margin. Each renewal is a re-attestation and a quote on two TPMs (no NV write), so a node's TPM does one or two quotes every 10 s. While renewals fail they back off 2 s doubling to 10 s, so a healed node is serving again within about 10 s. Each connection of a renewal may take `admission.RENEW_TIMEOUT` (3 s), so a round with both peers silent ends within 12 s, before the margin (3e's #473 finding: about 110 s at sync's 10 s deadline). Serving stops at `serve_until` on the daemon's own clock whatever the lease service is doing. A lapse watcher beside the rounds writes "not serving" to the file and the trail within half a second of the bound, even while a round waits on a peer (#486). A peer that needs more than 3 s per ask (a slow TPM, a congested link) is treated as silent. A peer whose authenticated time is more than 5 s fast issues leases the others refuse (`FUTURE_SKEW`). It does not yet carry `state_revision` or the session key (95's v2, #432). Runtime leases are issued by **one** active peer, and `regalia-fence` is still
   the authority for which site signs ([`FENCING.md`](FENCING.md)).
   **Accepted in the design:**
   - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
@@ -98,9 +156,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     anchor is a lab node's, or one laid down before B2b. sync refuses the next chain, and the ESP advance reports
     `regalia_esp_advance_ok 0`. The repair is `reanchor` (MEMBERSHIP-RECOVERY.md), which needs two peer chains,
     or one and the owner's statement (`--one-source`, above).
-  - **The v3 → v4 step is refused on such a node, with nothing moved.** Every node must be re-anchored by policy
-    before the root signs the first v4 manifest. No tool checks the whole fleet's layout first; each node's refusal is
-    what tells.
+  - **The v3 → v4 step is refused on such a node, with nothing moved.** This concerns lab nodes only: production
+    starts at a v4 genesis, and every v4 enrolment defines its anchor by policy (#419), so no production node has an
+    owner-written anchor. A lab fleet moving to v4 is re-anchored by policy node by node first; no tool checks the
+    whole fleet's layout beforehand (not needed for production: regalia-kms-24 and 95, 2026-10-05), and each node's
+    refusal names the fix.
   - Under a v1–v3 (lab) chain both layouts still read, by design: lab images write with the owner authorization.
   - Anyone holding the owner authorization can still undefine the indices. That is a denial (Unusable), which a
     re-anchor repairs; it cannot write them under v4.
@@ -112,19 +172,25 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     unsalted. A bus probe on the DL360 sees those, not the value.
   - The value cannot be zeroed in Python memory. While an owner-authorized call runs, the value is readable through
     /proc by root (a memfd; `seal-hsm-pin.sh` uses a root-only file on /run).
-  - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path
-    is held by unit tests and by swtpm tests of the anchor's owner calls.
-  - During `enrol commit` the owner authorization is held by a process of uid regalia-sync, the network-facing
-    sync daemon's user. **Who could read it, and when:**
-    - Who: root, and any process of uid regalia-sync (through /proc/<pid>/fd, or by attaching to the step where
-      Yama allows).
-    - When: only while commit's `_anchor` and `_first-heartbeat` steps run, seconds each, at enrolment.
-    - commit refuses to start a step while any other process of that uid exists (`pgrep -u regalia-sync`). The race
-      left is a process of that uid starting during a step: at enrolment the node's services are not yet running.
-    - Moving the owner calls into the root parent is #419.
+  - `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420, `InitOnSwtpm`), from
+    `enrol ownerauth`'s salted set to epoch 1. Its regalia-sync steps run in-process there, not through `runuser`
+    as that user (that needs root and the user, a CI e2e).
+  - Under v4 the owner authorization never enters a process of regalia-sync (#419): `enrol commit` makes every
+    owner-authorized definition itself, as root, and its regalia-sync steps commit by policy. With a lab chain
+    (v1–v3, owner-written) the value is still handed to them (a memfd, refused while another process of that uid
+    runs). Under v4 the node is fresh at its sync's first pull (10–60 s after enrolment), not at once: the heartbeat
+    counter is defined one below the highest heartbeat the root parent verified.
   - `enrol init` takes no owner authorization (it runs before `enrol ownerauth`). `attest.py node-init` (the lab
     CLI) keeps an empty one.
   - Rotating a set owner authorization is not built.
+  - **Break-glass custody is decided, not yet produced** (owner, 2026-10-05; 24 on rc#111). One binary SOPS file per
+    node, `ownerauth-<node>.bg.sops`, replaces the ceremony's `.bg.age` envelope. It is encrypted to the post-quantum
+    "ownerauth-recovery" identity in offline-keys' D28 key map, under the same SLIP-39 shares. That is
+    regalia-ceremony#111's change; until it lands, the ceremony writes `.bg.age`. The record keeps `bg_sha256` as that
+    file's digest, so `ownerauth.verify` is unchanged. The drill's check (`python3 -Es -m deploy.baremetal.ownerauth check`)
+    is built. With sops 3.13.1, age 1.3.2 and the test vector it was run by hand without a TPM: the post-quantum
+    recipient (an mlkem768x25519 stanza) decrypts byte for byte, and another node's value is refused. That hand run
+    split the key with ssss as a stand-in for offline-keys' opening, which rc#111 is building.
 - **The total-outage re-anchor is rehearsed on software TPMs only** (#391, `e2e/three-node-reanchor.py`). It covers one
   kind of damage, uses cryptsetup and a pty rather than a console, and doesn't run the operator's source checks.
   The one-peer and both-peers-destroyed cases aren't rehearsed (MEMBERSHIP-RECOVERY.md, "What the rehearsal does
@@ -181,6 +247,35 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
+- **The operational state (ADR-0002 D32, #432): watched by the daemon, not yet enforced.** When
+  `operational_state_endpoint`, `operational_state_dir` and `session_key_dir` are configured, the daemon
+  (`internal/opstate`):
+  - watches the local etcd member through its unix socket;
+  - publishes the revision it has applied (`/run/regalia-state/applied.json`);
+  - makes a session key at each start and publishes its public half (`/run/regalia-kms/session-key.json`).
+
+  Not done yet:
+  - The state gate (`opstate.StateGate`: the lease names this daemon's session key and cluster, the cache has
+    applied the lease's `state_revision`, the last confirmation is within one lease) is built and tested but
+    **not wired into the fence**. It joins once the serving lease (runtime lease v2, regalia-kms-95) carries
+    those fields.
+  - The entries aren't verified in Go yet (`opstate-v1`), and spends, high-water marks and key state aren't
+    committed through etcd. The policy journal is still the per-node file (`policy.FileState`).
+  - The daemon's unit doesn't yet join `regalia-etcd-client`, the group that may open etcd's socket. That
+    group arrives with #484's sysusers, and naming it before then would stop the unit from starting.
+  - The lone survivor's stateless serving under the owner's authorization (D32 item 6) has no gate path yet.
+  - The session key's private half lives in the Go heap. It is never written, but it isn't locked against
+    swap: the hosts are expected to run without swap, and nothing checks that.
+  - **`applied.json`'s `state_epoch` is always 0 for now.** The signed `/regalia/v1/state-epoch` entry (#492's
+    format) isn't verified by the cache yet. Until it is, a survivor's history after `--force-new-cluster` can't
+    be told from the lost tail by this field.
+  - **Once the runtime lease v2 (#489) is in, production must set the three settings.** Without them the
+    daemon writes neither file, so its node requests no lease and stops serving.
+  - **Restoring etcd from a snapshot moves its revision back.** The cache refuses a store that went backwards
+    and publishes nothing, so the file goes stale. Every issuer's revision floor refuses too (#489). Both
+    fail closed. The recovery step after a restore is to restart `regalia-kms` and `regalia-sync` on every
+    node: a fresh cache, a fresh floor, then one lease of fail-closed. It belongs in the etcd recovery runbook
+    when that is written.
 
 ## Tokens and the HSM gate (#72)
 
@@ -262,10 +357,23 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   recovery scenarios (#402). Outage, leases and replace are not covered. The time trail and the update trail
   are never checked end to end in a three-node scenario. In recovery, "each node's change to serving" is not
   tied to a step, and the victims' not-serving lines are not checked.
-- **`regalia-sync` says nothing in the journal about its rounds** (#470). Its decisions (pulls, applies,
-  refusals and their reasons) are only in its hash-chained trail. `journalctl -u regalia-sync` shows systemd's
-  start and stop lines, so an operator asking why a node is behind its peers must read the trail. In the
-  three-node fixture, `advance()` now prints the puller's trail when a node doesn't take an epoch (#469).
+- **`regalia-sync`'s journal is a summary; the trail is the record** (#470). Each pull round now writes one
+  line per peer to the journal: an epoch applied, nothing newer, `DENY <event> from <peer>: <reason>` (the
+  trail's reason, word for word), or the peer did not answer, with the error class. Each peer's line is
+  rate-bounded: it is written when the outcome changes, and the same outcome repeats at most every 15 minutes.
+  What the journal does not say:
+  - A refused round names only its last DENY. If a round applies an epoch and the heartbeat after it is then
+    refused, the line says `DENY sync-heartbeat`, and the new epoch shows up in the next round's line.
+  - A taken heartbeat is not reported, and neither is its freshness.
+  - Unlock, enrolment and beat-sign answers given to peers are not reported.
+  - A DENY that repeats inside the 15-minute window is written once. Repeats are matched with digit runs
+    ignored, so a reason that carries a count, a time or a sequence doesn't write a line every round. A DENY
+    whose reason differs only in its numbers therefore stays hidden for up to 15 minutes.
+  - The journal lines aren't hash-chained or shipped. Anyone who can write the journal can edit or drop
+    them. The trail is the evidence.
+
+  For any of these, read the trail. In the three-node fixture, `advance()` prints the puller's trail when a
+  node doesn't take an epoch (#469).
 - **Collector receipts carry no signed time** (#398), so a stale receipt still verifies. This matters
   for the one-peer recovery witness (#387).
 
