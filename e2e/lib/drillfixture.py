@@ -136,15 +136,21 @@ class LeaseJudge:
     RECOVERY = "RECOVERY: serving alone under the owner's survivor authorization"
 
     def _s4(self, ctx):
-        node, t_off, t_auth = ctx["node"], ctx["t_inject_ms"], ctx["t_auth_ms"]
-        # alone, its peer's lease runs out: it stops serving in lease mode (before or after the quarantine epoch)
-        stopped = self._stops_within_a_lease(node, t_off)
-        # then the owner's authorization: serving in RECOVERY, and its admission file says so
+        node, t_auth = ctx["node"], ctx["t_auth_ms"]
+        # NOT "it stops serving first": with the authorization installed before its peer's lease runs out, admission goes
+        # from serving under the lease straight to serving in recovery, with no gap and so no not-serving line (CI's first
+        # S4 run). What must hold is that it serves under a lease no longer than one lease after the others went off: S4-back
+        # judges that over the whole outage. Here: serving in RECOVERY, and its admission file says so
         got = until(lambda: [e for e in self.serving(node, t_auth) if e.get("outcome") == "ALLOW"
                              and (e.get("reason") or "").startswith(self.RECOVERY)], 120, 2)
         recovered = got if isinstance(got, list) else []
         document = self.cluster.lease(node) or {}
-        return {"alone, it stops serving under a lease within one lease": stopped,
+        # and it switched to recovery as soon as it could: by the later of its lease's end (one lease after the others went
+        # off) and the authorization's install, plus a round. Serving on under its old lease would make the switch late
+        bound_s = max(ctx["t_inject_ms"] // 1000 + lease.MAX_LIFETIME + admission.MARGIN, t_auth // 1000) + SLACK_S
+        switched = recovered[0]["at"] if recovered else None
+        return {"it switched to recovery no later than its lease's end or the install, whichever was later":
+                    (switched is not None and switched <= bound_s, {"switched at": switched, "bound": bound_s}),
                 "it serves in RECOVERY under the owner's authorization, its admission file in mode recovery":
                     (bool(recovered) and document.get("mode") == "recovery",
                      {"recovery line": recovered[0] if recovered else None, "mode": document.get("mode")})}
@@ -159,7 +165,8 @@ class LeaseJudge:
                              and not (e.get("reason") or "").startswith(self.RECOVERY)], 300, 3)
         normal = got if isinstance(got, list) else []
         document = self.cluster.lease(node) or {}
-        return {"never served under a lease while the others were down": (not lease_mode, {"lease-mode lines": lease_mode}),
+        return {"never served under a lease from one lease after the others went off until the lift":
+                    (not lease_mode, {"lease-mode lines": lease_mode}),
                 "the others back, it leaves recovery at its first normal lease":
                     (bool(normal) and document.get("mode") == "lease" and normal[0].get("epoch") == self.epoch(),
                      {"first normal line": normal[0] if normal else None, "mode": document.get("mode"), "epoch now": self.epoch()})}
