@@ -26,14 +26,43 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **The lone survivor (ADR-0002 D32 item 6): the owner's authorization and directive only** (#432 item (e);
+  `deploy/baremetal/survivor.py`, `owner.py sign-survivor` and `sign-directive`). Built:
+  - one owner authorization, held only at the quarantine epoch (any new epoch ends it), with every other server stopped
+    and the owner's typed fencing attestation, for at most 7 days;
+  - the owner's directive, which only disables a key: never enables one and never destroys one (d9: one stolen owner
+    token must not destroy keys irreversibly with no approver able to intervene);
+  - the survivor's append-only store of the signed directives it applied. Each is verified before it is written, and
+    a corrupt file refuses every key.
+  - **the owner's one-server decision (2026-10-05): scope `full`.** Stateful operations continue on the lone survivor from
+    the owner's attestation plus 900 s plus 60 s (every request the fenced far side could have spent has expired), plus
+    600 s more when the fence is only typed rather than an iLO power readback.
+  Not built yet:
+  - the full scope's machinery:
+    - the iLO/Redfish fence step that produces the power readback;
+    - the take-over (an owner-gated etcd force-new-cluster, and the state-epoch key 95 proposes);
+    - the rejoin (export the divergent tail, wipe, member add);
+    - the daemon's halts (a peer heard below the quarantine epoch);
+    - approvals naming their spending node (1e).
+    Until they land, `full` is a recorded intent the daemon does not act on;
+  - the daemon serving stateless operations only in that mode, and refusing keys under a directive (ed);
+  - the majority committing a directive as a key-state change on its return;
+  - the cap coming from the manifest's `recovery_authorization_max_s` (#459, stacked on #438; it is a constant here).
+  **Accepted** (D28.6 amendment 5, D32.6):
+  - A false fencing attestation holds for the authorization's life. While it holds, the survivor uses key state that
+    may be up to that old, except what a directive disabled.
+  - The directives live on the survivor alone until the majority returns. If its disk is lost, they are lost there, so
+    the owner keeps every directive file the tool wrote and gives them again to a rebuilt survivor and to the majority.
 - **The survivor's admission mode** (ADR-0002 D32.6, #432 item (e) part 2): admission's v3 document says whether the
   node serves under a peer's lease (`mode: lease`) or alone under the owner's survivor authorization (`mode: recovery`).
   - Recovery is entered only while no normal lease holds, is left at the first one, and is bounded by one lease
     lifetime and by the authorization's end.
   - It is recorded on the admission trail and raises `RegaliaSurvivorRecoveryActive` for as long as it holds.
+  - The authorization is installed by root at the node's console (`survivor.py install`, verified against the node's
+    manifest on its authenticated clock), and read again by admission every round: only a root-owned file only root
+    may write. `survivor.py remove` takes it away, and `survivor.py directive` applies an owner's disable.
   **The daemon serves nothing in recovery yet:** it refuses `mode: recovery` until its stateless-only gate exists
-  (ed). Not built yet: the node's source of the authorization (installed at the console, survivor.py, #493) and its
-  wiring into the admission service.
+  (ed). The directives applied on the node are not yet read by the daemon either.
 - **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
   refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
   its verification under the current manifest's `activation_signers`, each node's grant record and
