@@ -22,6 +22,8 @@ export LC_ALL=C
 TAR="${1:?usage: etcd-unit-sandbox.sh ROOTFS_TAR}"
 # not under /run (often noexec) nor /tmp or /var/tmp (the unit's PrivateTmp hides them): where an executable is run from
 W="$(mktemp -d /usr/local/lib/etcd-unit-sandbox.XXXXXX)"
+# mktemp makes it 0700 root's: the unit's user, regalia-etcd, could not reach the binary under it (203/EXEC)
+chmod 0755 "$W"
 UNIT=/run/systemd/system/regalia-etcd.service
 CONF=/etc/regalia/etcd.conf.yml
 CRED=/etc/credstore.encrypted
@@ -69,7 +71,10 @@ systemctl daemon-reload
 
 set +e
 echo "### the unit, started"
-timeout 90 systemctl start regalia-etcd.service; ok $? "it starts and reaches ready (Type=notify)"
+timeout 90 systemctl start regalia-etcd.service; started=$?
+ok "$started" "it starts and reaches ready (Type=notify)"
+# a start that failed says why: the unit's own status and etcd's last lines, not only "see journalctl"
+[ "$started" = 0 ] || { systemctl status regalia-etcd.service --no-pager -l 2>&1 | tail -15; journalctl -u regalia-etcd.service --no-pager -o cat | tail -40; }
 sleep 5
 [ "$(systemctl is-active regalia-etcd.service)" = active ] && [ "$(systemctl show -p NRestarts --value regalia-etcd.service)" = 0 ]
 ok $? "it stays up, with no restart"
