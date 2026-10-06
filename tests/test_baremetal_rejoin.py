@@ -265,6 +265,15 @@ class Join(Case):
         self.assertEqual(json.loads(self.b.files[export + ".json"])["db_sha256"], "cd" * 32)     # the first digest, kept
         self.assertFalse(any(c[0] == tk.ETCDUTL for c in self.b.calls))
 
+    def test_a_wrong_configuration_refuses_before_anything_is_stopped_or_moved(self):
+        """CodeRabbit on #515: judged first, so a wrong configuration leaves the node serving and its data where it was."""
+        line = self.admitted()
+        self.b.files[etcdconf.CONFIG_PATH] = config_for("c", self.chain[-1])
+        self.refused("etcd's configuration is c's, not b's", rj.join, self.b, self.chain, "b", line, self.member_id)
+        self.assertEqual(self.b.calls, [])
+        self.assertEqual(self.b.dirs, {etcdconf.DATA_DIR})
+        self.assertTrue(self.b.running[tk.UNIT] and self.b.running[tk.DAEMON])
+
     def test_it_must_answer_as_the_learner_admit_made(self):
         line = self.admitted()
         self.b.member_id = 0x1234
