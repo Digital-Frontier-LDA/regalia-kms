@@ -324,3 +324,24 @@ func repr(value any) string {
 	}
 	return string(Canonical(value))
 }
+
+// NodeSigningKey is opstate._signing_key: the node's signing_key in `manifest` (validated here) as (alg, key
+// hex); ok is false when the manifest names no such node or it has no signing_key.
+func NodeSigningKey(manifest map[string]any, nodeID string) (alg, key string, ok bool, err error) {
+	nodes, err := Validate(manifest)
+	if err != nil {
+		return "", "", false, err
+	}
+	node, named := nodes[nodeID]
+	if !named || node["signing_key"] == nil {
+		return "", "", false, nil
+	}
+	alg, key, err = typedKey(node["signing_key"], nodeID+"'s signing_key", signingKeyAlgs)
+	return alg, key, err == nil, err
+}
+
+// VerifyTypedSignature is membership.verify_revocation: `message` signed by (alg, key), `sig` the hex signature
+// (Ed25519, or P-256 r||s low-S). `what` names it in the refusal ("the <what> signature does not verify").
+func VerifyTypedSignature(alg, key string, message []byte, sig any, what string) error {
+	return verifyTyped(alg, key, message, sig, what)
+}

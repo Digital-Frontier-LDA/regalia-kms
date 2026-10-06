@@ -56,7 +56,7 @@ func (s *EtcdSource) Watch(ctx context.Context, prefix string, fromRevision int6
 			}
 			for _, event := range response.Events {
 				update.Changes = append(update.Changes, Change{Key: string(event.Kv.Key), Value: event.Kv.Value,
-					Deleted: event.Type == clientv3.EventTypeDelete, ModRevision: event.Kv.ModRevision})
+					Deleted: event.Type == clientv3.EventTypeDelete, Created: event.IsCreate(), ModRevision: event.Kv.ModRevision})
 			}
 			select {
 			case out <- update:

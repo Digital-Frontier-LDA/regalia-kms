@@ -96,7 +96,11 @@ func start(t *testing.T, verify func(string, []byte) error, seed map[string][]by
 		r.source.values[k] = v
 	}
 	r.source.revision = revision
-	cache, err := New(Options{Source: r.source, Prefix: "/regalia/v1/", Verify: verify, Boottime: r.clock.read,
+	var judge func(string, []byte, any) (any, error)
+	if verify != nil {
+		judge = func(key string, value []byte, _ any) (any, error) { return string(value), verify(key, value) }
+	}
+	cache, err := New(Options{Source: r.source, Prefix: "/regalia/v1/", Verify: judge, Boottime: r.clock.read,
 		ProgressEvery: 10 * time.Millisecond, Retry: 10 * time.Millisecond,
 		OnState: func(live bool, reason string) {
 			if live {

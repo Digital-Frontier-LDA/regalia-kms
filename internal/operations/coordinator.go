@@ -250,6 +250,8 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		Algorithm: route.Algorithm, ContentType: contentType, PayloadBytes: payloadBytes(request),
 		ExpiresAt: request.Context.ExpiresAt, Nonce: request.Context.Nonce,
 	}
+	payloadDigest := sha256.Sum256(approvalPayload(request))
+	policyRequest.PayloadSHA256 = hex.EncodeToString(payloadDigest[:])
 	// THE APPROVERS ARE VERIFIED HERE, NOT ASSERTED BY THE CALLER.
 	//
 	// request.Approvals is the raw header: attacker-controlled bytes. Verify returns only
