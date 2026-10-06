@@ -54,6 +54,13 @@ class Gate(unittest.TestCase):
                 got = membership.run_tpm2(run, ["tpm2_nvread"], None, tcti)
             self.assertEqual((got.returncode, len(run.calls)), (1, 1), tcti)
 
+    def test_the_code_alone_is_enough(self):
+        for err in ("ERROR: Esys_StartAuthSession(0x903) - tpm:warn(2.0): (reworded)", "Esys Finish ErrorCode (0x00000903)"):
+            run = Recorder(done(1, err=err.encode()), done(), done())
+            self.assertEqual(membership.run_tpm2(run, ["tpm2_nvread"], None, "swtpm:path=/x").returncode, 0, err)
+        run = Recorder(done(1, err=b"ERROR: Esys_ContextSave(0x901) - tpm:warn(2.0): gap for context ID is too large"))
+        self.assertEqual(len((membership.run_tpm2(run, ["tpm2_nvread"], None, "swtpm:path=/x"), run.calls)[1]), 1)   # 0x901: not ours
+
     def test_any_other_failure_is_answered_as_it_is(self):
         run = Recorder(done(1, err=b"ERROR: Esys_NV_Read(0x98E) - tpm:session(1):the authorization HMAC check failed"))
         self.assertEqual((membership.run_tpm2(run, ["tpm2_nvread"], None, "swtpm:path=/x").returncode, len(run.calls)), (1, 1))

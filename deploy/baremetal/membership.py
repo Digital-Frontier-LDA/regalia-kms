@@ -180,6 +180,7 @@ class Unusable(Refused):
 
 
 SESSION_MEMORY = "out of memory for session contexts"     # TPM_RC_SESSION_MEMORY (0x903): no slot to load a session in
+SESSION_MEMORY_CODE = re.compile(r"\(0x(?:00000)?903\)")  # the same, by its code as tss2 prints it: "(0x903)", "(0x00000903)"
 
 
 def simulator_tcti(tcti=None):
@@ -202,7 +203,8 @@ def run_tpm2(run, argv, env, tcti=None, **kw):
     if done.returncode == 0 or not simulator_tcti(tcti):
         return done
     err = done.stderr or b""
-    if SESSION_MEMORY not in (err if isinstance(err, str) else err.decode("utf-8", "replace")):
+    text = err if isinstance(err, str) else err.decode("utf-8", "replace")
+    if SESSION_MEMORY not in text and not SESSION_MEMORY_CODE.search(text):    # the code too: a decoder may reword (cc's read)
         return done
     import sys
     print("regalia: %s: no session slot on a software TPM; its orphaned loaded sessions flushed, asked once more (#512)"
