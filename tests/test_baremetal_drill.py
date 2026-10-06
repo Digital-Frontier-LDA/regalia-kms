@@ -457,6 +457,38 @@ class HardwareBackend(unittest.TestCase):
         self.assertIn("a: unpartition done", lines)
         self.assertIn("STILL PENDING: b: power-cycle by hand", lines)
 
+    def test_s4_on_the_real_servers_stops_at_the_owners_act_by_hand(self):
+        out = drill.run(drill.scenarios(self.hw, {"S4": {"survivor": "a", "others": ["b", "c"]}}, lambda name, ctx: {"x": (True, "")}),
+                        abort=lambda: None, restore=lambda: self.journal.restore(self.hw.undoers()))
+        self.assertIn("quarantining b, c is the owner's act", out["stopped"])
+        self.assertEqual([x for x in self.log if x[0] in ("off", "on")], [("off", "b"), ("off", "c"), ("on", "c"), ("on", "b")])   # restored
+        self.assertEqual(self.journal.pending(), [])
+
+    def test_s4_runs_its_owner_acts_and_its_return_through_the_backend(self):
+        steps = []
+
+        class Owner(drill.Hardware):
+            def quarantine(self, survivor, others):
+                steps.append(("quarantine", survivor, tuple(others)))
+                return {"epoch": 3}
+
+            def authorize(self, survivor):
+                steps.append(("authorize", survivor))
+                return {"scope": "stateless"}
+
+            def lift(self, survivor, others):
+                steps.append(("lift", survivor, tuple(others)))
+                return {"epoch": 4}
+        hw = Owner(self.journal, self.hw.ssh, self.hw.redfish_for)
+        judged = []
+        out = drill.run(drill.scenarios(hw, {"S4": {"survivor": "a", "others": ["b", "c"]}},
+                                        lambda name, ctx: judged.append(name) or {"x": (True, name)}), abort=lambda: None, restore=lambda: None)
+        self.assertTrue(out["passed"], out)
+        self.assertEqual(steps, [("quarantine", "a", ("b", "c")), ("authorize", "a"), ("lift", "a", ("b", "c"))])
+        self.assertEqual(judged, ["S4", "S4-back"])
+        self.assertIn("after recovery: x", out["scenarios"][0]["predicates"])
+        self.assertEqual(self.journal.pending(), [])
+
     def test_a_plan_with_no_scenario_is_refused(self):
         with self.assertRaises(m.Refused):
             drill.scenarios(self.hw, {}, lambda name, ctx: {})

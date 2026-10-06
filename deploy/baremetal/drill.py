@@ -419,17 +419,30 @@ class Hardware:
     def undoers(self):
         return {"power-on": self.power_on, "power-cycle": self.power_cycle, "unpartition": self.heal}
 
+    # S4's owner acts: at the owner's console with the owner's card (owner.py), never automated on the real servers
+    def quarantine(self, survivor, others):
+        raise Refused("S4: quarantining %s is the owner's act (an owner-signed epoch, owner.py, at the owner's console): by hand"
+                      % ", ".join(others))
+
+    def authorize(self, survivor):
+        raise Refused("S4: the survivor authorization for %s is the owner's (owner.py sign-survivor, then survivor install at "
+                      "%s's console): by hand" % (survivor, survivor))
+
+    def lift(self, survivor, others):
+        raise Refused("S4: lifting the quarantine is a root-signed epoch (the offline laptop): by hand")
+
 
 def _all_ok(predicates):
     return bool(predicates) and all(bool(good) for good, _ in predicates.values())
 
 
 def scenarios(backend, plan, judge):
-    """S1, S2, S3 and S5 as run() takes them, over any backend with power_off/power_on/restart/restarted/partition/heal
+    """S1, S2, S3, S4 and S5 as run() takes them, over any backend with power_off/power_on/restart/restarted/partition/heal
     (Hardware here; the tier-N fixture's in e2e/lib/drillfixture.py). `plan`: {"S1": node, "S2": node, "S3": node,
-    "S5": [nodes in order]}; only the scenarios it names. `judge(name, context)` -> {predicate: (ok, evidence)}, where
-    context holds the injection's times (ms) and records; the predicates are the shared ones (e2e/lib/drills.py). S4
-    needs the owner's recovery authorization: not here yet."""
+    "S4": {"survivor": node, "others": [two nodes]}, "S5": [nodes in order]}; only the scenarios it names. `judge(name, context)` -> {predicate: (ok, evidence)}, where
+    context holds the injection's times (ms) and records; the predicates are the shared ones (e2e/lib/drills.py). S4's
+    owner acts (the quarantine epoch, the survivor authorization, the root epoch lifting it) are the backend's: by hand
+    on the real servers (Hardware refuses them, saying so), done for real in the tier-N fixture."""
     def now():
         return int(time.time() * 1000)
 
@@ -465,6 +478,26 @@ def scenarios(backend, plan, judge):
         return {"name": "S3", "inject": lambda: ctx.update(t_inject_ms=now(), cut=backend.partition(node)) or ctx,
                 "judge": lambda: judge("S3", ctx), "recover": healed}
 
+    def s4(spec):                           # two down: the survivor alone under the owner's authorization (D32.6; scope stateless, then full: #432)
+        survivor, others = spec["survivor"], list(spec["others"])
+        ctx = {"node": survivor, "others": others}
+
+        def inject():
+            ctx["t_inject_ms"] = now()
+            ctx["off"] = [backend.power_off(o) for o in others]
+            ctx["t_quarantine_ms"] = now()
+            ctx["quarantine"] = backend.quarantine(survivor, others)
+            ctx["t_auth_ms"] = now()
+            ctx["authorization"] = backend.authorize(survivor)
+            return ctx
+
+        def back():                         # the quarantine lifted by a root epoch, the others powered on
+            ctx["t_lift_ms"] = now()
+            ctx["lift"] = backend.lift(survivor, others)
+            ctx["on"] = [backend.power_on(o) for o in others]
+            return {"record": {"lift": ctx["lift"], "on": ctx["on"]}, "predicates": judge("S4-back", ctx)}
+        return {"name": "S4", "inject": inject, "judge": lambda: judge("S4", ctx), "recover": back}
+
     def s5(order):
         ctx = {"restarts": []}
 
@@ -480,7 +513,7 @@ def scenarios(backend, plan, judge):
             return ctx
         return {"name": "S5", "inject": roll, "judge": lambda: judge("S5", ctx)}
 
-    built = [make(plan[name]) for name, make in (("S1", s1), ("S2", s2), ("S3", s3), ("S5", lambda order: s5(list(order))))
+    built = [make(plan[name]) for name, make in (("S1", s1), ("S2", s2), ("S3", s3), ("S4", s4), ("S5", lambda order: s5(list(order))))
              if name in plan]
     require(built, "the plan names no scenario")
     return built

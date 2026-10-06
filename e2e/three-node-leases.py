@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """#74 (Phase 14), tier N: runtime leases on three nodes (e2e/lib/threenode.py, v4 since #199: the nodes sign their own
-heartbeats; no authority host): the real regalia-admission asking the real peers' sync, leases of at most 300 s
+heartbeats; no authority host): the real regalia-admission asking the real peers' sync, leases of at most lease.MAX_LIFETIME (30 s)
 (lease.MAX_LIFETIME) renewed at a third of their life, and a running node revoked by two nodes (revoke.py).
 
     REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-leases.py
@@ -15,7 +15,7 @@ whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
   4  renewals go on, on the heartbeats the nodes sign themselves
   5  a cut off from one peer (its service mesh): it renews through the other
   6  14.3: running a revoked by b and c, each at its own console (revoke.py); both peers refuse its renewals (it is off their service tunnels; by name through a
-     tunnel forced open), and a's admission stops serving by itself when its lease ends (measured against 300 s)
+     tunnel forced open), and a's admission stops serving by itself when its lease ends (measured against lease.MAX_LIFETIME)
 
 The KMS daemon's own refusal at the lease's end and on revocation is e2e/runtime-admission.py's (two nodes, the
 real daemon: steps 1, 3 and 6); the three-node daemon waits with 14.4. Clock skew is not here: the namespaces share
@@ -143,7 +143,21 @@ def scenario(cluster):
 
     header("6  14.3: running a revoked; nobody renews it, and it stops serving by itself")
     service_a = base64.b64encode(bytes.fromhex(cluster.keys["a"]["service"][1])).decode()
+    # watched from the revocation on, beside the checks below: a 30 s lease (D32) runs out while they run, and a watch
+    # begun after them would see the stop late (regalia-kms-48, #485's CI)
+    import threading
+    expiry, stop = [lease_expiry(cluster, "a")], [None]
+
+    def watch():
+        while stop[0] is None and time.time() < revoked_at + lease.MAX_LIFETIME + admission.MARGIN + 120:
+            if cluster.lease("a"):
+                expiry[0] = lease_expiry(cluster, "a") or expiry[0]
+            else:
+                stop[0] = time.time()
+            time.sleep(0.5)
     revoked_at = time.time()
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
     # #199: by two nodes, each at its own console (revoke.py propose on b, cosign on c, which commits it)
     cluster.revoke_by_nodes("b", "c", "a", "REVOKED_STOLEN", "e2e: revoked while running")
     off = until(lambda: all(service_a not in cluster.wg_peers(p, "wg-svc") for p in ("b", "c")), 90, 2)
@@ -154,18 +168,11 @@ def scenario(cluster):
     named = until(lambda: [e.get("reason") for e in cluster.trail("b") if e.get("event", "").startswith("sync") and e.get("outcome") == "DENY"
                            and "a is REVOKED_STOLEN under epoch 2" in e.get("reason", "") and e.get("at", 0) >= revoked_at], 150, 3)
     ok(bool(named), "through a tunnel forced open on b, b's sync refuses a's requests by name", named)
-    expiry = [lease_expiry(cluster, "a")]
-
-    def stopped():                                    # the expiry of the last lease a held, read while it still served
-        if cluster.lease("a"):
-            expiry[0] = lease_expiry(cluster, "a") or expiry[0]
-            return False
-        return True
-    done = until(stopped, lease.MAX_LIFETIME + admission.MARGIN + 60, 2)
-    stop_at = time.time()
+    watcher.join(lease.MAX_LIFETIME + admission.MARGIN + 130)
+    done, stop_at = stop[0] is not None, stop[0] or time.time()
     took = stop_at - revoked_at
     due = (expiry[0] - admission.MARGIN) if expiry[0] else None
-    ok(done is True and due is not None and expiry[0] - revoked_at <= lease.MAX_LIFETIME and abs(stop_at - due) <= 10,
+    ok(done is True and due is not None and expiry[0] - revoked_at <= lease.MAX_LIFETIME and abs(stop_at - due) <= 3,
        "a's admission stopped serving by itself %.0f s after the revocation: at its last lease's end less the %d s margin "
        "(expected %.0f s; that lease had at most %d s left)" % (took, admission.MARGIN, (due or 0) - revoked_at, lease.MAX_LIFETIME),
        {"stop_minus_due": round(stop_at - due, 1) if due else None, "held": held(cluster, "a")})

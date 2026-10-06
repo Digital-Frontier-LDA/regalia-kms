@@ -26,6 +26,43 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
   revocation goes through `revoke.py import`, which the scenarios exercise separately
   (`revoke_by_owner`).
+- **The lone survivor (ADR-0002 D32 item 6): the owner's authorization and directive only** (#432 item (e);
+  `deploy/baremetal/survivor.py`, `owner.py sign-survivor` and `sign-directive`). Built:
+  - one owner authorization, held only at the quarantine epoch (any new epoch ends it), with every other server stopped
+    and the owner's typed fencing attestation, for at most 7 days;
+  - the owner's directive, which only disables a key: never enables one and never destroys one (d9: one stolen owner
+    token must not destroy keys irreversibly with no approver able to intervene);
+  - the survivor's append-only store of the signed directives it applied. Each is verified before it is written, and
+    a corrupt file refuses every key.
+  - **the owner's one-server decision (2026-10-05): scope `full`.** Stateful operations continue on the lone survivor from
+    the owner's attestation plus 900 s plus 60 s (every request the fenced far side could have spent has expired), plus
+    600 s more when the fence is only typed rather than an iLO power readback.
+  Not built yet:
+  - the full scope's machinery:
+    - the iLO/Redfish fence step that produces the power readback;
+    - the take-over (an owner-gated etcd force-new-cluster, and the state-epoch key 95 proposes);
+    - the rejoin (export the divergent tail, wipe, member add);
+    - the daemon's halts (a peer heard below the quarantine epoch);
+    - approvals naming their spending node (1e).
+    Until they land, `full` is a recorded intent the daemon does not act on;
+  - the daemon serving stateless operations only in that mode, and refusing keys under a directive (ed);
+  - the majority committing a directive as a key-state change on its return;
+  - the cap coming from the manifest's `recovery_authorization_max_s` (#459, stacked on #438; it is a constant here).
+  **Accepted** (D28.6 amendment 5, D32.6):
+  - A false fencing attestation holds for the authorization's life. While it holds, the survivor uses key state that
+    may be up to that old, except what a directive disabled.
+  - The directives live on the survivor alone until the majority returns. If its disk is lost, they are lost there, so
+    the owner keeps every directive file the tool wrote and gives them again to a rebuilt survivor and to the majority.
+- **The survivor's admission mode** (ADR-0002 D32.6, #432 item (e) part 2): admission's v3 document says whether the
+  node serves under a peer's lease (`mode: lease`) or alone under the owner's survivor authorization (`mode: recovery`).
+  - Recovery is entered only while no normal lease holds, is left at the first one, and is bounded by one lease
+    lifetime and by the authorization's end.
+  - It is recorded on the admission trail and raises `RegaliaSurvivorRecoveryActive` for as long as it holds.
+  - The authorization is installed by root at the node's console (`survivor.py install`, verified against the node's
+    manifest on its authenticated clock), and read again by admission every round: only a root-owned file only root
+    may write. `survivor.py remove` takes it away, and `survivor.py directive` applies an owner's disable.
+  **The daemon serves nothing in recovery yet:** it refuses `mode: recovery` until its stateless-only gate exists
+  (ed). The directives applied on the node are not yet read by the daemon either.
 - **Activation by quorum: partly built** (#432). D28.6 as first written (2 of {a, b, c, owner}) is
   refined by #432; see the ADR. Built (step 1, `deploy/baremetal/activation.py`): the activation lease,
   its verification under the current manifest's `activation_signers`, each node's grant record and
@@ -34,7 +71,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   enrolment, sync has no activation ops, there is no `owner.py sign-activation`, and the Go Gate still
   takes `regalia-fence`'s single key. By the rule, a new cluster's first activation waits about 11 minutes
   (`RECOVERY_WAIT_S`): every node starts with no grant record, so each is busy for that long after it
-  starts. Expected at first bring-up, not a fault. Runtime leases (`lease.py`) are issued by **one** active peer, and `regalia-fence` is still
+  starts. Expected at first bring-up, not a fault. **The runtime lease (`lease.py`) is the one serving lease under D32: 30 s, renewed at a third (every 10 s)**, issued by **one** peer over the subject's re-attested TPM. A node cut off from both peers stops within 30 s, less the 5 s admission margin. Each renewal is a re-attestation and a quote on two TPMs (no NV write), so a node's TPM does one or two quotes every 10 s. While renewals fail they back off 2 s doubling to 10 s, so a healed node is serving again within about 10 s. Each connection of a renewal may take `admission.RENEW_TIMEOUT` (3 s), so a round with both peers silent ends within 12 s, before the margin (3e's #473 finding: about 110 s at sync's 10 s deadline). Serving stops at `serve_until` on the daemon's own clock whatever the lease service is doing. A lapse watcher beside the rounds writes "not serving" to the file and the trail within half a second of the bound, even while a round waits on a peer (#486). A peer that needs more than 3 s per ask (a slow TPM, a congested link) is treated as silent. A peer whose authenticated time is more than 5 s fast issues leases the others refuse (`FUTURE_SKEW`). It does not yet carry `state_revision` or the session key (95's v2, #432). Runtime leases are issued by **one** active peer, and `regalia-fence` is still
   the authority for which site signs ([`FENCING.md`](FENCING.md)).
   **Accepted in the design:**
   - The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)
@@ -252,8 +289,18 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   runner's S1, S2, S3 and S5 on the three-node fixture, each fault journaled first. It judges them from the admission
   trails: the others keep serving, a cut node stops within one lease, a returning node serves again under the current
   epoch. The fixture runs no KMS daemon, so the request-level predicates (no failed request, stateful commits, caught
-  up before a served request) are listed as not judged in the run's report and are never entered as passes. S4 (the
-  owner's recovery authorization) isn't in the dry run. None of it has run on the real servers.
+  up before a served request) are listed as not judged in the run's report and are never entered as passes.
+  - **S4 is in the dry run at the lease level.** b and c are powered off and quarantined by an owner-signed epoch, and
+    a serves alone in RECOVERY under the owner's survivor authorization (signed on the fixture's SoftHSM token,
+    installed with the shipped `survivor install`). A root epoch then lifts the quarantine, b and c return, and a leaves
+    recovery at its first normal lease.
+  - **S4 judges scope stateless only.** The owner's decision makes a lone survivor's scope stateless and then full
+    (full_from = the attestation + 900 + 60 s, plus 600 with a typed fence; #432). Scope full (`survivor_full_scope` in
+    `e2e/lib/drills.py`, #497) isn't judged until the daemon's gate and the take-over (#432 part 2) exist. Neither is
+    what the daemon serves in recovery: it refuses until its gate exists. Also not built yet: the G1 fence evidence (the
+    fixture uses the typed fallback), and the G5 export with the readmitting epoch.
+  - **On the real servers, S4's owner acts are by hand:** the hardware backend refuses them and says so.
+  - None of it has run on the real servers.
 
 - `moved_by_sync` (the sync round that moved a node to an epoch) cannot see how many envelopes a round received:
   trail events don't carry it. A node moved other than by its sync, right after a no-op round from the same peer,

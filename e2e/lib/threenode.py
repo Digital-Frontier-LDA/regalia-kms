@@ -1203,6 +1203,25 @@ class Cluster:
         self._as_sync(name, self.OWNER_ACCEPT, {"cfg": cfg, "envelope": envelope})
         return envelope
 
+    def survivor_authorization(self, name, how="powered off by the drill (fixture)", life_s=3600, scope="stateless", which=0):
+        """D32.6: the owner's survivor authorization for `name` under the CURRENT manifest (the quarantine one), signed as
+        owner.py sign-survivor signs it: survivor.make_authorization, the line it asks typed as shown, the owner's key
+        `which` on the fixture's SoftHSM token (owner_signer). `fence`: the typed fallback (the fixture has no iLO).
+        Returns the signed authorization."""
+        from deploy.baremetal import survivor
+        typed = lambda shown: shown.split("Type exactly: ", 1)[1].split("\n", 1)[0]      # noqa: E731 - as the owner types it
+        return survivor.make_authorization(self.manifest, name, how, int(time.time()), typed, lambda: self.owner_signer(which),
+                                           life_s=life_s, scope=scope)
+
+    def install_survivor(self, name, signed):
+        """`python3 -m deploy.baremetal.survivor --config <node.json> install --authorization FILE`, the shipped command,
+        as root on `name`'s host (as_root). Returns the completed process (not checked)."""
+        path = self.work / ("survivor-%s.json" % name)
+        path.write_bytes(membership.canonical(signed))
+        return self.as_root(name, "survivor-install-%d" % time.monotonic_ns(),
+                            ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.survivor", "--config", str(self.nodes[name].cfg_path),
+                             "install", "--authorization", str(path)])
+
     def _beaten(self, manifest, owner_recovery=False, timeout=300):
         """#199: with two counting nodes running, each holds the heartbeat their own proposers sign for the new epoch
         (beat.Proposer goes at once when it holds none for it). With one, nobody can co-sign it: the node stays without a

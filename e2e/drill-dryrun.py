@@ -10,9 +10,11 @@ GitHub-hosted runner, or on a throwaway host whose /etc/machine-id is in REGALIA
 
   1  three nodes, every node leased; drill.preflight on what the fixture can show (three serving; an operator and a
      different witness): the hardware-only checks (iLO, collector, baseline, PIN retries) are not this tier's
-  2  drill.run over S1 (c powered off, then on), S2 (b restarted), S3 (a cut off from the mesh, then healed) and S5 (a
-     rolling restart of a, b, c), each fault journaled before it is injected; each scenario PASSES on its lease-level
-     predicates (drillfixture.LeaseJudge)
+  2  drill.run over S1 (c powered off, then on), S2 (b restarted), S3 (a cut off from the mesh, then healed), S4 (b and c
+     powered off, quarantined by an owner-signed epoch; a alone under the owner's survivor authorization, signed on the
+     fixture's SoftHSM token and installed with the shipped `survivor install`; then a root epoch lifts the quarantine
+     and b and c return) and S5 (a rolling restart of a, b, c), each fault journaled before it is injected; each
+     scenario PASSES on its lease-level predicates (drillfixture.LeaseJudge)
   3  nothing left pending in the fault journal, restore ran, and the report's canonical bytes and digest are made, the
      request-level predicates listed as NOT JUDGED in it (the fixture runs no KMS daemon: #495)
 """
@@ -69,16 +71,16 @@ def scenario(cluster, work):
         ok(False, "preflight", str(refusal))
         return
 
-    header("2  drill.run: S1, S2, S3 and S5 on the fixture, each fault journaled first")
+    header("2  drill.run: S1, S2, S3, S4 and S5 on the fixture, each fault journaled first")
     journal = drill.Journal(str(work / "faults.jsonl"))
     backend = drillfixture.Fixture(cluster, journal, SERVICES)
-    plan = {"S1": "c", "S2": "b", "S3": "a", "S5": ["a", "b", "c"]}
-    outcome = drill.run(drill.scenarios(backend, plan, drillfixture.LeaseJudge(cluster)), abort=lambda: None,
+    plan = {"S1": "c", "S2": "b", "S3": "a", "S4": {"survivor": "a", "others": ["b", "c"]}, "S5": ["a", "b", "c"]}
+    outcome = drill.run(drill.scenarios(backend, plan, drillfixture.LeaseJudge(cluster, backend)), abort=lambda: None,
                         restore=lambda: journal.restore(backend.undoers()))
     for entry in outcome["scenarios"]:
         ok(entry.get("passed"), "%s: every lease-level predicate holds (%s)" % (entry["scenario"], ", ".join(sorted(entry.get("predicates", {})))),
            {name: p for name, p in entry.get("predicates", {}).items() if not p["ok"]})
-    ok(outcome["stopped"] is None and len(outcome["scenarios"]) == 4, "the run ended by itself, all four scenarios run", outcome["stopped"])
+    ok(outcome["stopped"] is None and len(outcome["scenarios"]) == 5, "the run ended by itself, all five scenarios run", outcome["stopped"])
 
     header("3  the journal empty, restore ran, the report made")
     restored = outcome["restored"]
