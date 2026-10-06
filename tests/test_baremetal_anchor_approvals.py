@@ -23,7 +23,8 @@ OTHER_K_A = ec.derive_private_key(0x0BAD, ec.SECP256R1())
 def signed_set(pem=SYSTEM_PUB, label="image-1", eleven=("a1", "b2")):
     return {"label": label, "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32},
             "phases": {"initrd": {"11": eleven[0] * 32}, "system": {"11": eleven[1] * 32}},
-            "signing": {"initrd": "11" * 32, "system": signkey.pcr_key_fingerprint(pem), "secure_boot_cert": "22" * 32}}
+            "signing": {"initrd": "11" * 32, "system": signkey.pcr_key_fingerprint(pem), "secure_boot_cert": "22" * 32},
+            "rootfs_sha256": "6e" * 32}                     # a signed image's root (#61, #478)
 
 
 def document(*sets):
