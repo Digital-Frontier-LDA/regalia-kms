@@ -672,6 +672,28 @@ class RunsAtTheLapse(Case):
         self.assertEqual(seen["written"]["serve_until_boottime_ms"], 0)
         self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY"])   # recorded at the bound, once
 
+    def test_a_round_that_crashes_is_recorded_as_not_serving_before_the_error_is_raised(self):
+        """3e's S4 on #507: a restarted lease service that crashed before any refusal left no line on the trail."""
+        service = self.recording()
+        service.step()                                                     # serving, recorded
+        def boom():
+            raise RuntimeError("the TPM did not answer")
+        service.manifest = boom
+        with self.assertRaises(RuntimeError):
+            service.run(lambda: False, interval=5, sleep=lambda s: None, watch=60)
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY"])
+        self.assertIn("the lease service failed: the TPM did not answer", self.trail[-1]["reason"])
+        self.assertEqual(self.on_disk()["serve_until_boottime_ms"], 0)
+
+    def test_a_fresh_service_that_crashes_first_is_recorded_too(self):
+        service = self.recording()                                          # recorded is None: nothing on the trail yet
+        def boom():
+            raise RuntimeError("no store")
+        service.manifest = boom
+        with self.assertRaises(RuntimeError):
+            service.run(lambda: False, interval=5, sleep=lambda s: None, watch=60)
+        self.assertEqual([e["outcome"] for e in self.trail], ["DENY"])
+
     def test_run_s_watcher_writes_at_the_bound_between_rounds_and_stops_with_run(self):
         import threading
         import time as real_time
