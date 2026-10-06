@@ -52,9 +52,9 @@ const (
 	Schema = "regalia.admission/v2"
 	// MaxSerials is admission.MAX_SERIALS: the hardware tokens one node may list.
 	MaxSerials = 16
-	// MaxAheadMilliseconds is one lease lifetime (lease.MAX_LIFETIME, 300 s). The writer holds a
-	// margin back from it, so an admission reaching further ahead was not derived from a lease.
-	MaxAheadMilliseconds = 300_000
+	// MaxAheadMilliseconds is one lease lifetime (lease.MAX_LIFETIME, 30 s; ADR-0002 D32). The writer
+	// holds a margin back from it, so an admission reaching further ahead was not derived from a lease.
+	MaxAheadMilliseconds = 30_000
 	maxFileBytes         = 4096
 	bootIDPath           = "/proc/sys/kernel/random/boot_id"
 	processStatPath      = "/proc/self/stat"
