@@ -420,7 +420,6 @@ func TestTheCanonicalBindingIsTheBytesAPIMdPublishes(t *testing.T) {
 	}
 }
 
-
 // AN APPROVAL IS FOR ONE NODE (#432 G3): the signer is the seventh record, so an approval an approver gave for
 // node b does not verify over node a's binding, and a binding with no signer is another binding again.
 func TestAnApprovalForAnotherNodeDoesNotVerifyHere(t *testing.T) {
