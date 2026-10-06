@@ -74,9 +74,12 @@ pkcheck | os_probe only looks for polkit, which the image does not ship (absence
 # Deploy modules the host neither runs nor imports.
 activation | the activation lease (#440): no unit imports it yet; issuance over sync follows (#432, rewritten by D32)
 cardrecord | the card-ceremony record, verified on the laptop (manifest propose --genesis)
+drill | the fault-injection drill runner (#495): the operator runs it from the laptop against the three hosts (SSH, BMC)
+etcdconf | the etcd configuration renderer (#432, D32): nothing renders it on a host yet; enrolment does, next
 firewall | renders a host's nftables ruleset from its site config, from the operator's checkout
 initrd_drift | the scheduled initrd drift report (CI)
 manifest | regalia-manifest: propose, sign and verify membership manifests, on the laptop
+opstate | the operational-state entries (#432, D32): the format and its vector; the daemon (Go) reads and writes etcd
 owner | the owner's co-signatures, off the nodes
 p11sign | a key on a PKCS#11 token for the laptop's signing paths
 ssh_trust | an administrator's known_hosts, generated from the membership, on the operator's side

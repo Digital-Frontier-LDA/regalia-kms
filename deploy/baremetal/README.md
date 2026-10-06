@@ -275,7 +275,7 @@ Commissioning has two halves:
   `regalia-audit-ship@time`) before it is published, as `time-authenticated` or `time-unauthenticated`
   with the reason; a transition that cannot be recorded is published as not authenticated.
   **If time is not authenticated, nothing is served:** peers authorize no unlock and issue no lease, a
-  node's own lease is not renewed, and within the lease bound (300 s) the KMS daemon stops. That is
+  node's own lease is not renewed, and within the lease bound (30 s, ADR-0002 D32) the KMS daemon stops. That is
   intended. So NTS must get out of each site: TCP 4460 to each server for the key exchange and UDP 123
   for the time itself; an outage of the NTS servers, or of that path, longer than those bounds stops the
   nodes. Proven against live chrony daemons in `e2e/authtime-chrony-nts.py`.
@@ -462,7 +462,7 @@ An update is three documents:
    a time: the first, in order, that is not on NEXT. **The limit:** a node judges "the one before me is
    back" from its own last re-attestation of that node, which it repeats only at the next lease
    renewal. If the earlier node falls back or goes down just after, the next node may still pass for up
-   to the lease lifetime (five minutes), and two nodes can then be down together. Three cannot. So
+   to the lease lifetime (30 s), and two nodes can then be down together. Three cannot. So
    wait for a node to be back and serving before starting the next, and do not treat `may_reboot` alone
    as the interlock. A node that is down
    and must not hold the others up is taken out by a signed manifest (QUARANTINED); there is no
@@ -913,8 +913,23 @@ removing only what it can prove it made.
     list, a bench image included, is therefore refused at the genesis: enrol on the reviewed production image.
 - `ownerauth` (#242 step C), after `init` and before `commit`: `gpg --decrypt ownerauth-X.yk.gpg | enrol ownerauth
   --node-id X --root-key ROOT --record ownerauth.record.json` sets the TPM's owner authorization to this node's
-  value from the ceremony's envelope (regalia-ceremony#111; the break-glass `.bg.age` gives the same value through
-  `age --decrypt`). The value comes on standard input only. It is checked against the record verified under the
+  value from the ceremony's envelope (regalia-ceremony#111). **Custody** (owner, 2026-10-05, #242): two independent
+  paths. Day to day, `.yk.gpg`, to the owner pair's decryption keys (ADR-0002 D30.7, regalia#568). Break-glass, one binary SOPS file per node
+  (`ownerauth-X.bg.sops`), encrypted to the post-quantum "ownerauth-recovery" age identity that offline-keys keeps
+  in its D28 key map under the platform SLIP-39 shares (no server holds the value or that key). On the signing
+  laptop (regalia-ceremony#111):
+  `python3 -Es offline-keys.py open-recovery-identity --sealed offline-keys.sealed.json --out /dev/shm/ownerauth-recovery.key`
+  (k offline shares on standard input, then Ctrl-D; it writes a NEW mode-0600 file on a RAM filesystem), then
+  `SOPS_AGE_KEY_FILE=/dev/shm/ownerauth-recovery.key sops decrypt --input-type binary --output-type binary ownerauth-X.bg.sops | sudo ...`,
+  then `shred -u -- /dev/shm/ownerauth-recovery.key`. On a disk, removing a file does not destroy it. On the laptop
+  offline-keys can also check a decrypted value without regalia-kms:
+  `... | python3 -Es offline-keys.py ownerauth-check --record ownerauth.record.json --node X --sealed offline-keys.sealed.json`.
+  It refuses a record that is not signed by the sealed set's own root (regalia-ceremony#133). The ceremony's drill
+  checks every node. It must be a binary SOPS file, not a YAML map: `sops decrypt --extract` drops the newline
+  that the value's form requires (measured with sops 3.13.1). The drill, at the ceremony rehearsal, checks a
+  decrypted value with no TPM: `... | python3 -Es -m deploy.baremetal.ownerauth check --node-id X --root-key ROOT
+  --record ownerauth.record.json`. ROOT is the network's pinned root, from a node's node.json or the root card's
+  printed fingerprint, never from the record or the folder it came in. The value comes on standard input only. It is checked against the record verified under the
   pinned root BEFORE the TPM is touched (`deploy/baremetal/ownerauth.py`), and it is never written to disk. Every
   owner-authorized TPM call then gets it through one channel: a sealed in-memory file descriptor, never the command
   line (readable through /proc by root while the call runs). It sets the authorization from EMPTY only: a TPM whose owner authorization is already set is refused, never
@@ -925,17 +940,20 @@ removing only what it can prove it made.
   `gpg --decrypt ownerauth-X.yk.gpg | sudo <tool> ... --ownerauth ownerauth.record.json`, for `enrol commit`,
   `reanchor` and `recount`, and `seal-hsm-pin.sh --init-import-key --ownerauth-stdin`. The value always comes on
   standard input, never on another descriptor: sudo closes every one above 2. What the operator types (commit's
-  root fingerprint, the reanchor and recount phrases) is then read from the terminal itself. `commit` hands the value
-  to its regalia-sync steps through an inherited sealed memfd (runuser keeps it). Under v4 `commit` refuses unless
+  root fingerprint, the reanchor and recount phrases) is then read from the terminal itself. With a lab chain (v1–v3)
+  `commit` hands the value to its regalia-sync steps through an inherited sealed memfd (runuser keeps it); under v4
+  it hands them nothing and makes the owner's definitions itself (#419, below). Under v4 `commit` refuses unless
   the TPM's owner and lockout authorizations are both set and the value is given.
   **Current limitations:**
   - `init` takes no owner authorization; it runs before `ownerauth`.
-  - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path is
-    held by unit tests: the decision, the handoff to the regalia-sync steps, and every owner call site against a TPM
-    stand-in that refuses a missing value. The anchor's owner calls are also proven on swtpm.
-  - While commit's regalia-sync steps run, the owner authorization is held by a process of that uid, the
-    network-facing sync daemon's. commit refuses to hand it over while any other process of the uid exists, which
-    leaves a race with one starting meanwhile; doing the owner calls in the root parent is #419.
+  - `enrol commit` under v4 with an owner authorization set by `enrol ownerauth` runs on swtpm (`InitOnSwtpm`,
+    #420), but its regalia-sync steps run in-process there, not through `runuser` as that user (that needs root and
+    the user: a CI e2e), and its heartbeat probe is a stand-in that finds no source.
+  - Under v4, commit makes every owner-authorized definition itself, as root (#419): the anchor and the signing
+    counter before its regalia-sync step, which then commits by policy with no owner authorization, and the
+    heartbeat counter after that step's probe. The probe only fetches the sources' heartbeats; root verifies them
+    and defines the counter one below the highest, so the node is fresh at its sync's first pull, not at once. With a
+    lab chain (v1–v3) the value is still handed to the regalia-sync steps (a memfd), as before.
   - `seal-hsm-pin.sh` passes the value to tpm2-tools as a file in a root-only directory on /run (tmpfs), removed on
     exit. A run killed outright leaves it until reboot. The script doesn't check it against the record: a wrong
     value is refused by the TPM.
@@ -966,9 +984,12 @@ removing only what it can prove it made.
 - `commit --replace OLD_ID` (#76): a host that replaces a node is enrolled only as the replacement typed.
   The manifest that first names it must retire `OLD_ID` and change nothing else (replacement's rules);
   without `--replace`, such a manifest is refused, and so is any other ID.
-- The heartbeat counter starts at a heartbeat this node verifies from a peer
-  (`Freshness.accept_first`), never at 0 on a running network. `--bootstrap` allows 0 only at epoch 1, when
-  no reachable source holds a heartbeat. An existing counter is checked against the network.
+- The heartbeat counter starts at a heartbeat this node verifies from a peer, never at 0 on a running network.
+  With a lab chain (v1–v3) that is `Freshness.accept_first` in the regalia-sync step. Under v4 (#419) root verifies
+  the envelopes the step's probe fetched, counts only those live by authenticated time, and defines the counter at
+  max(highest verified sequence − 1, 0), so the node's sync takes that heartbeat at its first pull.
+  `--bootstrap` allows 0 only at epoch 1, when no reachable source holds a heartbeat. An existing counter is checked
+  against the network (v4: adopted only as defined, `HighWater._as_defined`).
 - **What stays on disk in the clear, and for how long.**
   - The WG-BOOT private key stays only until its sealed copy is on the ESP.
   - The local unlock contribution (`/var/lib/regalia-enrol/local.bin`, root 0600) stays until

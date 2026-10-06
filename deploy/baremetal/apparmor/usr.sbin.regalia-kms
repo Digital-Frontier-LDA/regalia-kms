@@ -95,6 +95,21 @@ profile regalia-kms {
   /run/regalia-kms/ r,
   /run/regalia-kms/*.json r,
 
+  # ---- the operational state (ADR-0002 D32, regalia-kms#432) ----
+  # operational_state_endpoint: the local etcd member's client socket, reached through its client group
+  # (regalia-etcd.service).                               internal/opstate/etcd.go
+  /run/regalia-etcd/ r,
+  /run/regalia-etcd/client.sock:0 rw,
+  # operational_state_dir: the revision this daemon has applied, for the lease request and the revision
+  # floor; written by temp+rename.                         internal/opstate/publish.go
+  owner /run/regalia-state/ r,
+  owner /run/regalia-state/applied.json rw,
+  owner /run/regalia-state/.applied.json.* rw,
+  # session_key_dir: this instance's session key, its public half only; temp+rename.
+  #                                                        internal/opstate/session.go
+  owner /run/regalia-kms/session-key.json rw,
+  owner /run/regalia-kms/.session-key.json.* rw,
+
   # ---- runtime admission (regalia-kms#74) ----
   # runtime_admission_path: written by the lease service as its own user, regalia-admission (#191,
   # deploy/baremetal/admission.py), in its own directory, read here; boot_session_path: this boot's

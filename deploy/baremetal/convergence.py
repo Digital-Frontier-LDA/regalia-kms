@@ -31,7 +31,7 @@ THE BOUNDS, for a node revoked as stolen:
     its issue time, and one issued up to 5 minutes ahead of the peer's clock is accepted:
     heartbeat.FUTURE_SKEW), or less if the nodes sign shorter-lived heartbeats. exposure() is that
     number for a peer, now;
-  * a stolen node that was running stops 300 s after its issuing peers hold the manifest (lease.py).
+  * a stolen node that was running stops 30 s (lease.MAX_LIFETIME) after its issuing peers hold the manifest (lease.py).
 
 Nothing here weakens a check: every envelope goes through Store.commit (signature, chain, tombstones, the
 TPM anchor) and every heartbeat through Freshness.accept (signer, manifest, time, the TPM counter).
