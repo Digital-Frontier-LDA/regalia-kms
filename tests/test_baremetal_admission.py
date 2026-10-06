@@ -672,6 +672,21 @@ class RunsAtTheLapse(Case):
         self.assertEqual(seen["written"]["serve_until_boottime_ms"], 0)
         self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY"])   # recorded at the bound, once
 
+    def test_a_restarted_service_publishes_what_it_knows_before_its_first_renewal(self):
+        """3e's S4 on #507: a restart under a new epoch left the previous process's file (serving, the old epoch)
+        standing for the whole first renewal round, and nothing on the trail."""
+        first = self.recording()
+        first.step()                                                       # serving under epoch 1
+        self.manifest_now = self.manifest(2, m.digest(self.m1), b="QUARANTINED", c="QUARANTINED")
+        restarted = self.recording()                                       # a new process: nothing written by it yet
+        self.peer_up = False
+        asked = []
+        restarted.renew = lambda request: asked.append(1) or (_ for _ in ()).throw(ConnectionError("silent"))
+        once = iter([True])                                                # stop before any round: only the start
+        restarted.run(lambda: next(once), interval=5, sleep=lambda s: None, watch=60)
+        self.assertEqual((self.on_disk()["serve_until_boottime_ms"], self.on_disk()["epoch"], asked), (0, 2, []))
+        self.assertEqual([e["outcome"] for e in self.trail], ["DENY"])       # on the trail at its start, before any renewal
+
     def test_a_round_that_crashes_is_recorded_as_not_serving_before_the_error_is_raised(self):
         """3e's S4 on #507: a restarted lease service that crashed before any refusal left no line on the trail."""
         service = self.recording()
