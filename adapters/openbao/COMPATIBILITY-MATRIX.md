@@ -38,8 +38,8 @@ Latest sanitized run IDs and results are recorded in existing issue #123 and
 draft PR #137; the PKI experiment is recorded separately under #122. A passing
 entry remains development evidence with software tokens;
 production topology, partitions, load, physical custody/fencing/recovery,
-off-host audit reconciliation, deployed-daemon recovery and inspected PKI
-retain separate acceptance gates. Packages and the plugin remain development-only.
+off-host audit reconciliation, deployed-daemon recovery and release of the
+server-owned PKI path retain separate acceptance gates. Packages and the plugin remain development-only.
 
 The runner labels are documented by
 [GitHub's hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).

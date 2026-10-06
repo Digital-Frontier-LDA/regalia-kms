@@ -14,8 +14,11 @@ fixture uses the real HTTP handler, workload authentication, exact RBAC grants,
 registry routing, content/purpose policy, replay state, audit journal and executor.
 Only the token backend and readiness shim are test implementations.
 
-The backend's inspector lives exclusively in `_test.go` files. It checks the
-input before signing with an in-memory P-256 intermediate key. A distinct
+The coordinator parses complete signing input with the daemon implementation in
+`internal/policy`, evaluates a frozen server-owned issuing profile, and durably
+reserves a leaf or CRL count before hardware execution. It hashes the approved
+bytes once and sends only the SHA-256 digest to a software P-256 token. This
+token has no certificate parser, issuing policy or quota counter. A distinct
 synthetic offline root signs the constrained intermediate; OpenBao imports only
 the certificates and references the externally held key. The offline root key
 is never mapped or imported. The workload mTLS CA is independent of this issuing
@@ -28,7 +31,8 @@ chain, so issuing a server certificate does not grant KMS service authority.
   revoking that grant.
 - Leaf issuance through the external intermediate, chain/name verification
   against the pinned root, and a SHA-256 match between the returned artifact's
-  full TBS bytes and the fixture's inspected signing input.
+  full TBS bytes, the actual digest-only token call, and the correlated daemon
+  authorization/success intent in verified audit and policy journals.
 - Leaf revocation, CRL rebuild, verification of the CRL signature and revoked
   serial, and the same full-byte evidence for CRLs after exhausting the separate
   leaf issuance budget. CRL signing has its own bounded reserve.
@@ -45,10 +49,12 @@ chain, so issuing a server certificate does not grant KMS service authority.
 
 The focused KMS tests additionally exercise prehashed/opaque-digest refusals,
 wrong workload identity, CA privilege escalation, unknown extensions, trailing
-DER, mismatched signer options, and exhaustion of each fixture signing budget.
-Concurrent callers cannot exceed either budget; invalid input and unauthorized
-workloads consume neither. A clock rollback refuses stale-day requests without
-refilling either budget. These counters remain a software fixture.
+DER, mismatched signer options, and exhaustion of each durable signing budget.
+Concurrent API callers cannot exceed either budget; invalid input and unauthorized
+workloads consume neither. Separate core policy tests exercise restart, stale
+snapshots, clock rollback and fencing. Explicitly named legacy software clock
+and mutex tests retain the earlier in-memory experiment for comparison; they
+are independent of enforcement in the running PKI fixture.
 
 Failure-injection tests exercise lost and truncated responses, a reused HTTP/1
 connection closing after signing, a backend error after signing, and a recovered
@@ -79,10 +85,13 @@ nonnegative, bounded and less than the new CRL number. There is no digest-only,
 CSR, OCSP or arbitrary-signing fallback.
 
 Strict raw-field checks supplement the standard X.509 parser, which can ignore
-some nested fields. The fixture refuses leftover data in certificate validity,
+some nested fields. The daemon parser refuses leftover data in certificate validity,
 subject attributes, SPKI, extension wrappers and known extension values, and in
 CRL revoked entries. Authority key identifiers contain only the pinned key ID;
-leaf basic constraints and key usage have the exact supported encodings.
+leaf basic constraints and key usage have the supported encodings. The pinned
+intermediate must have path length zero, exact certificate/CRL signing usages,
+a nonempty subject key identity, and critical positive DNS-only name constraints.
+The profile's explicit DNS suffixes must stay within those issuer constraints.
 
 Everything listens on loopback with ephemeral ports. ACME HTTP targets are
 restricted to the synthetic OpenBao listener and require no Bao root token;
@@ -107,8 +116,8 @@ The native amd64/arm64 matrix also runs this drill with the complete existing
 suite; missing real-server fixtures are failures. The earlier native-plugin
 fixture remains required for the separate upgrade/rollback drill.
 
-Both native CI jobs also fuzz each inspector for 20,000 executions with two
-workers. Seeds cover valid certificate/CRL structures, cross-kind input,
+Both native CI jobs fuzz the daemon parser and both earlier fixture inspectors
+for 20,000 executions per target with two workers. Seeds cover valid certificate/CRL structures, cross-kind input,
 truncation, trailing DER, indefinite-length BER, duplicate certificate
 extensions, structured oversized input and nested DER leftovers in otherwise
 valid certificate/CRL structures. Accepted input must preserve its
@@ -116,6 +125,10 @@ complete bounded TBS bytes, remain specific to its artifact type and reject
 appended bytes. Run the same checks locally:
 
 ```sh
+# From the repository root, fuzz the server-owned parser:
+go test -run '^$' -fuzz '^FuzzParseX509TBS$' -fuzztime=20000x -fuzzminimizetime=0x -parallel=2 ./internal/policy
+
+# From adapters/openbao, retain the earlier inspector comparison:
 go test -run '^$' -fuzz '^FuzzPOCCertificateInspection$' -fuzztime=20000x -fuzzminimizetime=0x -parallel=2 .
 go test -run '^$' -fuzz '^FuzzPOCCRLInspection$' -fuzztime=20000x -fuzzminimizetime=0x -parallel=2 .
 ```
@@ -129,40 +142,45 @@ signing bytes through this adapter and produce usable certificates. Renewal here
 means a second successful order and application certificate rotation; it does
 not exercise a renewal scheduler or waiting until expiry.
 
-## Production work still required under #122
+## Development enforcement and remaining adoption gates
 
-The inspector is a deliberately narrow software fixture, not a reviewed
-server-owned issuing profile or parser. The generic daemon API is unchanged and
-does not implement this inspection. It must not be paired with a generic
-production signing backend as a substitute for certificate policy.
+The running fixture now uses the daemon's server-owned parser, immutable profile,
+nonretryable semantic refusals, durable quota reservations and verified audit
+intent. These checks happen before the digest-only token is invoked. Unknown
+extensions, unsafe certificate semantics and out-of-scope names cannot be rescued
+by a permissive OpenBao role. Quota refusals also occur before hardware execution.
 
-Fixture payload-digest records and separate daily leaf/CRL caps are in memory.
-Full and delta CRLs share the bounded CRL reserve. The monotonic day guard
-prevents a stale timestamp from refilling these counters; restart, trusted time,
-snapshot recovery and distributed fencing remain unproved. These are not
-production audit schema fields or durable quota reservations.
+Full and delta CRLs share a separate bounded reserve. Counts belong to the CA
+object, so a policy/profile version change, caller change or same-object issuer
+rotation does not create a fresh budget. The core policy tests exercise persisted
+counts after restart, stale day refusal, journal high-water rejection, competing
+writers, fencing epochs and ambiguous reservations. The OpenBao drill checks
+verified durable intent and usable revocation after exhausting leaf issuance.
+It does not test a deployed daemon restart, an external fencing authority or
+physical hardware recovery.
 
-The backend manager still collapses inspection failures into
-`BACKEND_UNAVAILABLE`. The experimental CA client now sends one attempt, but
-proper nonretryable profile-denial errors need a separately reviewed server
-change. Server-owned inspection should run at the coordinator policy boundary,
-derive certificate/CRL counts from inspected bytes and reserve those counts
-before hardware execution. Existing durable policy reservations and their
-journal, rollback detection and fencing should be extended for this purpose.
-Arbitrary provider errors must remain sanitized backend failures. Reservations
-must stay spent when signing or response delivery is ambiguous.
+Arbitrary provider errors remain sanitized backend failures. The experimental CA
+client sends one attempt, disables HTTP replay and does not return retryable CA
+errors. Lost responses and backend failures retain their durable reservations;
+a server success event does not prove that the client received its signature.
 
-Quota identity must remain stable across immutable profile revisions and caller
-identity changes: the current generic quota key includes the policy ID, so a
-profile-version change must not silently replenish issuance or CRL capacity.
-Required production regressions include restart with exhausted counters, stale
-snapshot/high-water refusal, fenced competing writers, audit failure after
-reservation, ambiguous signature completion and bounded revocation capacity.
+See [the server-owned policy and journal contract](X509-POLICY.md) for the
+configuration schema, pinning requirements, durable namespace and upgrade gates.
+Collectors and verifiers must support the optional audit intent fields before the
+first such event. Older readers cannot safely replay X.509 intent journals; journal
+rollback and downgrade require explicit qualification.
 
-Production support still requires reviewed certificate/CRL parsing and immutable
-profiles, durable count limits and digest audit records, distributed fencing,
-physical nonexportability/recovery evidence, deployed-daemon readiness, an OCSP
-decision, and independent trust provisioning. A green software PoC does not close
+The normal plugin factory still refuses CA mappings, the package builder excludes
+the experimental binary, and X.509 profiles are limited to development policies.
+The legacy test-only inspectors are retained as comparison tests and provide no
+authority to the new digest-only backend.
+
+Production adoption still requires review of the narrow profile/parser, a supported
+release and collector migration, independent trust provisioning, physical
+nonexportability/recovery evidence, production topology and fencing qualification,
+off-host audit reconciliation, deployed-daemon readiness and recovery, and an OCSP
+or revocation-consumer decision. CRL number history and delta-base reconciliation
+are not enforced by this initial profile. A green software PoC does not close
 #122/#123 or qualify production PKI or another OpenBao/SDK version.
 
 Upstream references:

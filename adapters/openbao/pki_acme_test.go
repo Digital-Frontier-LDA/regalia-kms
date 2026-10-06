@@ -141,7 +141,7 @@ func pocACMEOrder(t *testing.T, client *acme.Client, dns *pocChallengeDNS) tls.C
 	return tls.Certificate{Certificate: certs, PrivateKey: leafKey, Leaf: leaf}
 }
 
-func pocACME(t *testing.T, b baoAPI, root, issuer *x509.Certificate, backend *pocSoftwareCA) {
+func pocACME(t *testing.T, b baoAPI, root, issuer *x509.Certificate, f *signingFixture, backend *pocDaemonCA) {
 	t.Helper()
 	dns := newPOCChallengeDNS(t)
 	b.must(t, http.MethodPost, "/v1/sys/mounts/pki/tune", map[string]any{"allowed_response_headers": []string{"Replay-Nonce", "Link", "Location"}})
@@ -176,8 +176,8 @@ func pocACME(t *testing.T, b baoAPI, root, issuer *x509.Certificate, backend *po
 	pocUnprovenACME(t, client, backend)
 	first := pocACMEOrder(t, client, dns)
 	second := pocACMEOrder(t, client, dns)
-	leaf1 := pocLeaf(t, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: first.Certificate[0]})), root, issuer, backend)
-	leaf2 := pocLeaf(t, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: second.Certificate[0]})), root, issuer, backend)
+	leaf1 := pocLeaf(t, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: first.Certificate[0]})), root, issuer, f, backend)
+	leaf2 := pocLeaf(t, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: second.Certificate[0]})), root, issuer, f, backend)
 	if leaf1.SerialNumber.Cmp(leaf2.SerialNumber) == 0 || string(leaf1.RawSubjectPublicKeyInfo) == string(leaf2.RawSubjectPublicKeyInfo) {
 		t.Fatal("ACME renewal did not issue a fresh serial and client key")
 	}
@@ -190,7 +190,7 @@ func pocACME(t *testing.T, b baoAPI, root, issuer *x509.Certificate, backend *po
 	}
 }
 
-func pocUnprovenACME(t *testing.T, client *acme.Client, backend *pocSoftwareCA) {
+func pocUnprovenACME(t *testing.T, client *acme.Client, backend *pocDaemonCA) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

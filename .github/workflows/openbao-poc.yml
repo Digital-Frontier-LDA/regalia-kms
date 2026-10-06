@@ -97,6 +97,11 @@ jobs:
           baseline_checksum=$(sha256sum "$RUNNER_TEMP/openbao-native-baseline-plugin")
           echo "OPENBAO_POC_PREVIOUS_PLUGIN=$RUNNER_TEMP/openbao-native-baseline-plugin" >> "$GITHUB_ENV"
           echo "OPENBAO_POC_PREVIOUS_SHA256=${baseline_checksum%% *}" >> "$GITHUB_ENV"
+      - name: Daemon issuing profile, durable counts and audit boundary
+        working-directory: .
+        run: |
+          go vet ./internal/policy ./internal/operations ./internal/audit
+          go test -race -count=1 -timeout 3m ./internal/policy ./internal/operations ./internal/audit
       - name: Unit and real-server tests (absence is a failure)
         env:
           OPENBAO_POC_REQUIRE_E2E: '1'
@@ -107,6 +112,9 @@ jobs:
         run: |
           go test -run '^$' -fuzz '^FuzzPOCCertificateInspection$' -fuzztime=20000x -fuzzminimizetime=0x -parallel=2 .
           go test -run '^$' -fuzz '^FuzzPOCCRLInspection$' -fuzztime=20000x -fuzzminimizetime=0x -parallel=2 .
+      - name: Fuzz the daemon X.509 boundary
+        working-directory: .
+        run: go test -run '^$' -fuzz '^FuzzParseX509TBS$' -fuzztime=20000x -fuzzminimizetime=0x -parallel=2 ./internal/policy
       - name: Build and verify reproducible development packages
         working-directory: .
         run: |

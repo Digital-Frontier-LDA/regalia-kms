@@ -15,7 +15,7 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
 )
 
-func TestPKIPoCClockRollbackCannotRefillBudgets(t *testing.T) {
+func TestPKIPoCLegacySoftwareClockRollbackCannotRefillBudgets(t *testing.T) {
 	ca := testSigner(t, "p256").(*ecdsa.PrivateKey)
 	beforeMidnight := time.Date(2026, time.October, 5, 23, 59, 50, 0, time.UTC)
 	afterMidnight := beforeMidnight.Add(20 * time.Second)

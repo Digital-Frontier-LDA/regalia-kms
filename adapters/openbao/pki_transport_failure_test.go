@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"errors"
 	"io"
 	"math/big"
@@ -25,14 +26,14 @@ import (
 
 // A signature can execute without ever reaching the caller. These tests use the
 // real mTLS API, policy state and coordinator audit recorder; only the software
-// token and the response-loss injector are synthetic. The in-memory reservation
+// token and the response-loss injector are synthetic. The durable reservation
 // must remain spent, and this logical signing request must never be retried.
 func TestPKIPoCLostSignatureResponseIsNotRetried(t *testing.T) {
 	for _, mode := range []string{"transport-error", "truncated-response"} {
 		t.Run(mode, func(t *testing.T) {
 			ca := testSigner(t, "p256").(*ecdsa.PrivateKey)
 			issuer := pocIssuer(t, ca)
-			provider := &pocSoftwareCA{key: ca, issuer: issuer, leafCap: 1}
+			provider := &pocDaemonCA{key: ca, issuer: issuer, leafCap: 1, crlCap: 1}
 			f := newSigningFixtureWith(t, "p256", "sha256", ca, provider, true)
 			key := configuredPKIPoC(t, f, f.pki.caConfig).(*pkiPOCKey)
 			input := pocFailureLeafTBS(t, issuer, ca)
@@ -85,7 +86,7 @@ func (pocTruncatedSignatureBody) Read([]byte) (int, error) { return 0, io.ErrUne
 func TestPKIPoCClosedConnectionAfterSigningIsNotReplayed(t *testing.T) {
 	ca := testSigner(t, "p256").(*ecdsa.PrivateKey)
 	issuer := pocIssuer(t, ca)
-	provider := &pocSoftwareCA{key: ca, issuer: issuer, leafCap: 1}
+	provider := &pocDaemonCA{key: ca, issuer: issuer, leafCap: 1, crlCap: 1}
 	f := newSigningFixtureWith(t, "p256", "sha256", ca, provider, true)
 	var requests atomic.Int64
 	original := f.server.Config.Handler
@@ -147,14 +148,14 @@ func TestPKIPoCClosedConnectionAfterSigningIsNotReplayed(t *testing.T) {
 }
 
 type pocExecutedFailureCA struct {
-	*pocSoftwareCA
+	*pocDaemonCA
 	mode  string
 	calls atomic.Int64
 }
 
 func (p *pocExecutedFailureCA) Execute(ctx context.Context, route registry.Route, op, format, content string, data, aad []byte) ([]byte, string, error) {
 	p.calls.Add(1)
-	result, outputType, err := p.pocSoftwareCA.Execute(ctx, route, op, format, content, data, aad)
+	result, outputType, err := p.pocDaemonCA.Execute(ctx, route, op, format, content, data, aad)
 	if err != nil {
 		return result, outputType, err
 	}
@@ -172,8 +173,8 @@ func TestPKIPoCExecutedBackendFailureIsNotRetried(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			ca := testSigner(t, "p256").(*ecdsa.PrivateKey)
 			issuer := pocIssuer(t, ca)
-			software := &pocSoftwareCA{key: ca, issuer: issuer, leafCap: 1}
-			provider := &pocExecutedFailureCA{pocSoftwareCA: software, mode: mode}
+			software := &pocDaemonCA{key: ca, issuer: issuer, leafCap: 1, crlCap: 1}
+			provider := &pocExecutedFailureCA{pocDaemonCA: software, mode: mode}
 			f := newSigningFixtureWith(t, "p256", "sha256", ca, provider, true)
 			key := configuredPKIPoC(t, f, f.pki.caConfig)
 			input := pocFailureLeafTBS(t, issuer, ca)
@@ -185,6 +186,9 @@ func TestPKIPoCExecutedBackendFailureIsNotRetried(t *testing.T) {
 			pocAssertFailureAccounting(t, f, software, input, "backend-failed")
 			if result, err = key.Sign(context.Background(), &kms.SignOptions{Data: input, SignerOpts: crypto.SHA256}); err == nil || len(result) != 0 {
 				t.Fatal("backend failure reclaimed the consumed issuance reservation")
+			}
+			if provider.calls.Load() != 1 || len(software.snapshot()) != 1 {
+				t.Fatal("a later request executed after the failed signature consumed its issuance reservation")
 			}
 			if f.audit.successful("sign") != 0 {
 				t.Fatal("an executed backend failure was audited as a successful signature release")
@@ -209,15 +213,22 @@ func pocFailureLeafTBS(t *testing.T, issuer *x509.Certificate, ca *ecdsa.Private
 	return parsed.RawTBSCertificate
 }
 
-func pocAssertFailureAccounting(t *testing.T, f *signingFixture, provider *pocSoftwareCA, input []byte, terminal string) {
+func pocAssertFailureAccounting(t *testing.T, f *signingFixture, provider *pocDaemonCA, input []byte, terminal string) {
 	t.Helper()
 	records := provider.snapshot()
-	if len(records) != 1 || !records[0].Allowed || records[0].Kind != "certificate" || records[0].Digest != sha256.Sum256(input) {
+	if len(records) != 1 || !records[0].Allowed || records[0].Kind != "digest" || records[0].Digest != sha256.Sum256(input) {
 		t.Fatal("lost signature accounting does not identify exactly one accepted payload")
 	}
-	f.audit.mu.Lock()
-	defer f.audit.mu.Unlock()
-	if len(f.audit.events) != 2 || f.audit.events[0].Outcome != "authorized" || f.audit.events[1].Outcome != terminal || f.audit.events[0].RequestID != f.audit.events[1].RequestID {
+	events := f.audit.snapshotEvents()
+	digest := sha256.Sum256(input)
+	payloadDigest := "sha256:" + hex.EncodeToString(digest[:])
+	if len(events) != 2 || events[0].Outcome != "authorized" || events[1].Outcome != terminal || events[0].RequestID != events[1].RequestID {
 		t.Fatal("coordinator audit does not correlate authorization and terminal outcome")
 	}
+	for _, event := range events {
+		if event.X509ProfileID != f.profile.ID || event.PayloadDigest != payloadDigest || event.ArtifactKind != "certificate" || event.KeyFingerprint != f.keyConfig["public_key_sha256"] {
+			t.Fatal("ambiguous signature lacks server-derived intent")
+		}
+	}
+	pocDurableIntent(t, f, events[1], "certificate")
 }
