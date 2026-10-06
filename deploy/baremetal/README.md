@@ -463,7 +463,7 @@ An update is three documents:
    back" from its own last re-attestation of that node, which it repeats only at the next lease
    renewal. If the earlier node falls back or goes down just after, the next node may still pass for up
    to the lease lifetime (30 s), and two nodes can then be down together. Three cannot. So
-   wait for a node to be back and serving, **and then one lease more (30 s)**, before starting the next, and
+   wait for a node to be back and serving, **and then one lease more (30 s, plus a few seconds)**, before starting the next, and
    do not treat `may_reboot` alone as the interlock. A host that has just restarted issues no lease for one
    lease (lease v2, #489), so while the next node is down the third may get no renewal and stop serving.
    **The same wait applies to every planned restart of a host**, not only an update: a maintenance reboot, a
