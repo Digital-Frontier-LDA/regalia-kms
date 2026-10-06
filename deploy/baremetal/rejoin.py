@@ -323,6 +323,9 @@ def main(argv=None, host=None, record=None):
         audited_command(host, chain, node.node_id, args.command, node=getattr(args, "node", None),
                         line=getattr(args, "initial_cluster", None), member_id=getattr(args, "member_id", None),
                         record=record or tk.trail_writer(args.audit_log))
+    except tk.Unrecorded as done:
+        say(str(done))
+        return 3
     except (Refused, OSError, ValueError, KeyError) as refused:
         say("REFUSED: %s" % refused)
         return 1

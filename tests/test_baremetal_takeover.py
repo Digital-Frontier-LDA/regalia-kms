@@ -329,3 +329,35 @@ class Trail(unittest.TestCase):
             events = [json.loads(line) for line in f]
         self.assertEqual([(e["seq"], e["outcome"]) for e in events], [(1, "REQUEST"), (2, "ALLOW")])
         self.assertTrue(all(e["time"].endswith("Z") for e in events))
+
+
+class TrailAfterTheForce(Trail):
+    """05 on #518: a take-over refused after its force has made a new cluster; its DENY says what was there."""
+
+    def test_a_deny_after_the_force_carries_the_facts_gathered(self):
+        self.host.kv = (1, "not json", 4712)                          # step 7 refuses: the key holds something unverifiable
+        with self.assertRaises(m.Refused):
+            self.take()
+        denied = self.lines[-1]
+        self.assertEqual(denied["outcome"], "DENY")
+        self.assertEqual((denied["cluster_id"], denied["applied_revision"], denied["backend_revision"], denied["revision_before"],
+                          denied["forced"]), ("%016x" % CLUSTER, 4700, 4711, 4711, True))
+        self.assertNotIn("state_epoch", denied)
+
+    def test_a_deny_before_the_force_says_nothing_was_forced(self):
+        self.host.backend_revision = 4699
+        with self.assertRaises(m.Refused):
+            self.take()
+        self.assertNotIn("forced", self.lines[-1])
+        self.assertEqual(self.lines[-1]["backend_revision"], 4699)
+
+    def test_an_allow_that_cannot_be_written_is_done_not_refused(self):
+        def fails_on_allow(event):
+            if event["outcome"] == "ALLOW":
+                raise OSError("disk full")
+            self.lines.append(event)
+        with self.assertRaises(tk.Unrecorded) as caught:
+            self.take(record=fails_on_allow)
+        self.assertIn("DONE: takeover finished, but its ALLOW could not be written", str(caught.exception))
+        self.assertIn("Do not run it again", str(caught.exception))
+        self.assertEqual(self.host.kv[0], 1)                          # the take-over was done

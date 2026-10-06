@@ -165,22 +165,34 @@ def _start(host, *units, verb="start"):
         require(done.returncode == 0, "%s failed (%d)" % (" ".join(argv), done.returncode))
 
 
-def audited(record, event, fields, act):
+class Unrecorded(Exception):
+    """The step was DONE, and its ALLOW could not be written to the trail: never to be read as a refusal (05 on #518),
+    nor run again for it (a take-over's force would run twice)."""
+
+
+def audited(record, event, fields, act, facts=None):
     """`act()` between its REQUEST and its outcome on the survivor trail (G6; trails.py's rule: an operation is never
     done unrecorded, so a REQUEST that cannot be written stops it before it acts). ALLOW carries what act() returns
-    (a dict of facts), DENY the refusal, INCOMPLETE anything else that stopped it part way (run it again)."""
+    (a dict of facts); DENY the refusal and INCOMPLETE anything else that stopped it part way (run it again), each with
+    the facts gathered before it stopped (`facts`, which act fills as it goes: 05 on #518, a take-over refused after
+    its force has made a new cluster, and that is what G6 records). An ALLOW that cannot be written is Unrecorded."""
     from deploy.baremetal import convergence
+    facts = {} if facts is None else facts
     record(dict({"event": event, "outcome": "REQUEST", "reason": ""}, **fields))
     try:
         done = act() or {}
     except Refused as refused:
-        record(dict({"event": event, "outcome": "DENY", "reason": convergence._printable(str(refused))}, **fields))
+        record(dict({"event": event, "outcome": "DENY", "reason": convergence._printable(str(refused))}, **dict(fields, **facts)))
         raise
     except Exception as error:
         record(dict({"event": event, "outcome": "INCOMPLETE", "reason": convergence._printable("%s: %s" % (type(error).__name__, error))},
-                    **fields))
+                    **dict(fields, **facts)))
         raise
-    record(dict({"event": event, "outcome": "ALLOW", "reason": ""}, **dict(fields, **done)))
+    try:
+        record(dict({"event": event, "outcome": "ALLOW", "reason": ""}, **dict(fields, **done)))
+    except Exception as error:
+        raise Unrecorded("DONE: %s finished, but its ALLOW could not be written to the trail (%s). Do not run it again: write "
+                         "what it did to the trail by hand" % (event, error)) from error
     return done
 
 
@@ -202,7 +214,7 @@ def take_over(host, signed, chain, node_id, now, sign, record):
     def act():
         run(host, signed, chain, node_id, now, sign, facts)
         return facts
-    return audited(record, "takeover", authorization_fields(signed, node_id), act)
+    return audited(record, "takeover", authorization_fields(signed, node_id), act, facts)
 
 
 def run(host, signed, chain, node_id, now, sign, facts=None):
@@ -233,6 +245,7 @@ def run(host, signed, chain, node_id, now, sign, facts=None):
         # 4. the revision check, offline
         backend = _json(host.run([ETCDUTL, "snapshot", "status", BACKEND, "-w", "json"]), "etcdutl snapshot status")
         held = backend.get("revision")
+        facts.update(backend_revision=held if isinstance(held, int) else None)    # as read, the refusal's evidence too
         require(isinstance(held, int) and held >= applied_revision, "the backend on disk is at revision %r, below the %d this node "
                 "applied: it is not this node's store" % (held, applied_revision))
         say("the backend holds revision %d" % held)
@@ -245,10 +258,11 @@ def run(host, signed, chain, node_id, now, sign, facts=None):
     # the way on (each step takes the state the last left), and a reboot drops the drop-in
     host.write(TAKEOVER_CONFIG, forced_text, owner=ETCD_USER, mode=0o600)
     host.write(DROPIN, dropin())
+    facts.update(forced=True)                        # from here etcd may be a new cluster of one: a DENY says so (05)
     _start(host, UNIT)
     # 6. alone and whole
     revision = alone(host, node_id, cluster_id, held)
-    facts.update(backend_revision=held, revision_before=revision)
+    facts.update(revision_before=revision)
     say("etcd is a cluster of %s alone (cluster %s, revision %d)" % (node_id, cluster_id, revision))
     # 7. the first write
     version, previous = current_state_epoch(host, chain, cluster_id)
@@ -353,6 +367,9 @@ def main(argv=None, host=None, now=None, signer=None, record=None):
             signer = lambda raw: signkey.sign(raw, pem, node.tcti, node.run)  # noqa: E731
         clock = now if now is not None else node.clock()()
         take_over(host, signed, chain, node.node_id, clock, signer, record or trail_writer(args.audit_log))
+    except Unrecorded as done:
+        say(str(done))
+        return 3
     except (Refused, OSError, ValueError, KeyError) as refused:
         say("REFUSED: %s" % refused)
         return 1

@@ -86,6 +86,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       state epoch, the divergent tail's digest) or DENY. Not yet:
       - the collector does not compare a take-over's state epoch with the leases the nodes ask for afterwards;
       - the fence runs off the nodes and writes no trail. Its evidence lives only in the signed authorization;
+      - a step that finished but whose ALLOW could not be written (a full disk) says "DONE" and exits 3. It is never
+        to be re-run (a take-over's force would run twice), and the operator writes the line by hand. Nothing writes
+        it later by itself;
     - the daemon's halts (a peer heard below the quarantine epoch);
     - approvals naming their spending node (1e).
     Until they land, `full` is a recorded intent the daemon does not act on;
