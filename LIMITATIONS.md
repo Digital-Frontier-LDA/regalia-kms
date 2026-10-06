@@ -24,6 +24,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   until enrolment renders its configuration. Not built yet: that renderer, the enrolment-issued
   certificates, member changes driven by the manifest, and the netem scenario (#432). The DL360s' WAL
   fdatasync p99 (< 10 ms) and the inter-site round trips are unmeasured; the plan is in ETCD.md.
+  The unit has run only in CI's sandbox (`e2e/etcd-unit-sandbox.sh`): the image's binary and unit, one member, its peer
+  on an http loopback URL and its own small configuration, not etcdconf's. So the unit's hardening, its socket and its
+  data directory are shown, but **peer TLS on the mesh, `IPAddressAllow` on the mesh prefix and a multi-member cluster
+  have not run under the unit** (05's read of #484).
 - **The root's permissive epochs reach the cluster by hand** (#386 retired the authority host).
   An image approval, or a replacement, signed by the root on the offline laptop, is given to ONE
   running node with `deliver` (root, at its console), and the others pull it. Nothing carries them
