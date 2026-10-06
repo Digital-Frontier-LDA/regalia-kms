@@ -8,6 +8,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 for tool in go softhsm2-util pkcs11-tool; do
   command -v "$tool" >/dev/null || { echo "PKI recovery requires $tool" >&2; exit 2; }
 done
+# The harness selects only these software-token libraries and never accepts a
+# bench module override. Check that dependency before building the processes.
+if [ ! -f /usr/lib/softhsm/libsofthsm2.so ] && \
+   [ ! -f /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so ] && \
+   [ ! -f /usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so ]; then
+  echo 'PKI recovery requires the SoftHSM library' >&2
+  exit 2
+fi
 STATE="$(mktemp -d)"
 trap 'rm -rf -- "$STATE"' EXIT HUP INT TERM
 chmod 0700 "$STATE"
