@@ -101,9 +101,10 @@ class LeaseJudge:
         bound = lease.MAX_LIFETIME + admission.MARGIN + SLACK_S
         got = until(lambda: [e for e in self.serving(node, since_ms) if e.get("outcome") == "DENY"], bound + 30, 1)
         denied = got if isinstance(got, list) else []
-        took = (denied[0]["at"] - since_ms / 1000) if denied else None
-        return (took is not None and took <= bound), {"stopped after (s)": took, "bound (s)": bound,
-                                                      "line": denied[0] if denied else None}
+        # integer ms in the evidence: the report's canonical bytes refuse a float (drill.report)
+        took_ms = (denied[0]["at"] * 1000 - since_ms) if denied else None
+        return (took_ms is not None and took_ms <= bound * 1000), {"stopped after (ms)": took_ms, "bound (s)": bound,
+                                                                   "line": denied[0] if denied else None}
 
     def __call__(self, name, ctx):
         node, t = ctx.get("node"), ctx.get("t_inject_ms")
