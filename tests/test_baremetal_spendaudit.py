@@ -77,10 +77,17 @@ class Pairing(unittest.TestCase):
         self.refused("s from this reader's clock when it arrived", watched={self.key: dict(self.watched[self.key], arrived=gen.NOW + 3600)})
 
     def test_the_signature_is_made_inside_its_spend_s_lifetime(self):
-        for when in ("2026-10-05T11:59:59Z", "2026-10-05T12:15:01Z"):
+        for when in ("2026-10-05T11:58:59Z", "2026-10-05T12:15:01Z"):
             with self.subTest(when):
-                self.refused("request r-1 was signed at %s, outside [2026-10-05T12:00:00Z, 2026-10-05T12:00:00Z + 900 s] of its spend" % when,
-                             streams=self.changed(lambda e: e.update(timestamp=when)))
+                self.refused("request r-1 was signed on a at %s, outside [2026-10-05T12:00:00Z - 60 s, 2026-10-05T12:00:00Z + 900 s] of its "
+                             "spend" % when, streams=self.changed(lambda e: e.update(timestamp=when)))
+        # 62: a step of the node's own clock backwards between reserve and record, within SKEW_S, is not a fault
+        self.assertEqual(self.check(streams=self.changed(lambda e: e.update(timestamp="2026-10-05T11:59:01Z")))["signatures"], 1)
+
+    def test_the_detail_is_measured_as_go_writes_it(self):
+        """62: Go's json.Marshal writes UTF-8 raw and escapes <, > and &; membership.canonical escapes non-ASCII instead."""
+        self.assertEqual(sa._go_json_len({"p": "é<"}), len('{"p":"é\\u003c"}'.encode()))
+        self.assertLess(sa._go_json_len({"p": "é" * 100}), len(m.canonical({"p": "é" * 100})))
 
     def test_signed_on_another_node_than_the_spend_names(self):
         self.refused("request r-1 was signed on b under a spend %s committed for a" % self.key, streams={"b": [self.event]})

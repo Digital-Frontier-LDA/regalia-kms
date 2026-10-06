@@ -61,7 +61,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -196,7 +196,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -555,7 +555,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -686,7 +686,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -780,7 +780,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -911,7 +911,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -1006,8 +1006,8 @@
   },
   {
    "accept": false,
-   "name": "signed before its spend",
-   "python_reason": "request r-1 was signed at 2026-10-05T11:59:59Z, outside [2026-10-05T12:00:00Z, 2026-10-05T12:00:00Z + 900 s] of its spend",
+   "name": "signed more than SKEW_S before its spend",
+   "python_reason": "request r-1 was signed on a at 2026-10-05T11:58:59Z, outside [2026-10-05T12:00:00Z - 60 s, 2026-10-05T12:00:00Z + 900 s] of its spend",
    "reason": "outside [",
    "result": null,
    "streams": {
@@ -1042,7 +1042,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -1088,7 +1088,142 @@
       "principal": "spiffe://regalia/ci/release",
       "purpose": "sign",
       "request_id": "r-1",
-      "timestamp": "2026-10-05T11:59:59Z",
+      "timestamp": "2026-10-05T11:58:59Z",
+      "verified_approvers": [
+       "alice",
+       "bob"
+      ]
+     }
+    ]
+   },
+   "watched": {
+    "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4": {
+     "arrived": 1791201605,
+     "mod_revision": 7,
+     "value": {
+      "entry": {
+       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+       "approvers": [
+        "alice",
+        "bob"
+       ],
+       "at": "2026-10-05T12:00:00Z",
+       "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+       "environment": "production",
+       "expires_at": "2026-10-05T12:05:00Z",
+       "kind": "spend",
+       "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+       "lease_expires_at": "2026-10-05T12:00:20Z",
+       "node_id": "a",
+       "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+       "object_id": "release-signing",
+       "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+       "principal": "spiffe://regalia/ci/release",
+       "purpose": "sign",
+       "schema": "regalia.opstate/v1"
+      },
+      "signatures": [
+       {
+        "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+        "party": "a",
+        "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "accept": true,
+   "name": "signed within SKEW_S before its spend: the node's clock stepped back",
+   "python_reason": "",
+   "reason": "",
+   "result": {
+    "burned": [],
+    "signatures": 1,
+    "watched": 1
+   },
+   "streams": {
+    "a": [
+     {
+      "decision": "allow",
+      "detail": {
+       "approvals": [
+        {
+         "approver_id": "alice",
+         "expires_at": "2026-10-05T12:05:00Z",
+         "nonce": "request-nonce-1",
+         "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+        },
+        {
+         "approver_id": "bob",
+         "expires_at": "2026-10-05T12:05:00Z",
+         "nonce": "request-nonce-1",
+         "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+        }
+       ],
+       "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+       "session": {
+        "public": "/regalia/v1/sessions/a/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0/8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+        "value": {
+         "entry": {
+          "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+          "issued_at": "2026-10-05T12:00:00Z",
+          "node_id": "a",
+          "schema": "regalia.opstate-session/v1",
+          "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+         },
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+        }
+       },
+       "spend": {
+        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "mod_revision": 7,
+        "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+        "value": {
+         "entry": {
+          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
+          "approvers": [
+           "alice",
+           "bob"
+          ],
+          "at": "2026-10-05T12:00:00Z",
+          "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+          "environment": "production",
+          "expires_at": "2026-10-05T12:05:00Z",
+          "kind": "spend",
+          "lease_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "lease_expires_at": "2026-10-05T12:00:20Z",
+          "node_id": "a",
+          "nonce_digest": "d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
+          "object_id": "release-signing",
+          "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
+          "principal": "spiffe://regalia/ci/release",
+          "purpose": "sign",
+          "schema": "regalia.opstate/v1"
+         },
+         "signatures": [
+          {
+           "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+           "party": "a",
+           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+          }
+         ]
+        }
+       }
+      },
+      "object_id": "release-signing",
+      "outcome": "success",
+      "principal": "spiffe://regalia/ci/release",
+      "purpose": "sign",
+      "request_id": "r-1",
+      "timestamp": "2026-10-05T11:59:01Z",
       "verified_approvers": [
        "alice",
        "bob"
@@ -1138,7 +1273,7 @@
   {
    "accept": false,
    "name": "signed after the request's life",
-   "python_reason": "request r-1 was signed at 2026-10-05T12:15:01Z, outside [2026-10-05T12:00:00Z, 2026-10-05T12:00:00Z + 900 s] of its spend",
+   "python_reason": "request r-1 was signed on a at 2026-10-05T12:15:01Z, outside [2026-10-05T12:00:00Z - 60 s, 2026-10-05T12:00:00Z + 900 s] of its spend",
    "reason": "outside [",
    "result": null,
    "streams": {
@@ -1173,7 +1308,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -1304,7 +1439,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -1435,7 +1570,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -1566,7 +1701,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -1689,7 +1824,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -1820,7 +1955,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {
@@ -1902,7 +2037,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "c6ddc557dd4b37e37df86b01726ffd30bb30a1b36e33eb77c6647b860518f63f122965cd97ac9b08ef2c3e59477a3ecd79e2913d4063c94be15d71a86e5d7bec"
+         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
         }
        },
        "spend": {

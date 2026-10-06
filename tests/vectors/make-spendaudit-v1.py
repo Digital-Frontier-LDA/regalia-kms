@@ -64,7 +64,8 @@ case("committed at another revision", {"a": [EVENT]}, False, "etcd committed ano
      watched={KEY: dict(WATCHED[KEY], mod_revision=8)})
 case("a backdated spend, seen arriving an hour after its at", {"a": [EVENT]}, False, "from this reader's clock when it arrived",
      watched={KEY: dict(WATCHED[KEY], arrived=gen.NOW + 3600)})
-case("signed before its spend", {"a": [event(timestamp="2026-10-05T11:59:59Z")]}, False, "outside [")
+case("signed more than SKEW_S before its spend", {"a": [event(timestamp="2026-10-05T11:58:59Z")]}, False, "outside [")
+case("signed within SKEW_S before its spend: the node's clock stepped back", {"a": [event(timestamp="2026-10-05T11:59:01Z")]}, True)
 case("signed after the request's life", {"a": [event(timestamp="2026-10-05T12:15:01Z")]}, False, "outside [")
 case("signed on another server than the spend names", {"b": [EVENT]}, False, "committed for a")
 case("another payload than the spend's", {"a": [event(**{"detail.payload_sha256": "dd" * 32})]}, False, "payload_sha256 is")
