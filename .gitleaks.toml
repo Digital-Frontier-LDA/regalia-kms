@@ -47,3 +47,17 @@ regexTarget = "secret"
 regexes = [
     '''^76584946437bf4e61a99805663321c864da655197a406063af5e7da0840817da$''',
 ]
+
+[[allowlists]]
+description = "PUBLIC values in tests/vectors/offline-keys-record/, the generation records regalia-ceremony's offline-keys generate wrote once each (rc fd8df0a by regalia-kms-1e, and offline-keys.record.rc133.json from rc#133 178e358 by regalia-kms-51; shares and sealed files not kept): K_A's public point, the lab root's public key, and the SHA-256 digests of the sealed and break-glass files it names, pinned by value"
+regexTarget = "secret"
+regexes = [
+    '''^04364c0471d19f84996841493aeb83ea017d6786118e4c00ee7f4ba79f47a4b7830e09ed163bc53c2e094cab29d28fba349d2593e69d4ee4674192501042ccf2c1$''',
+    '''^d253f87454a3717ca6d4aa59b0a64db1e1e0a1a0d6c577d701f02580fd62cb95$''',
+    '''^ce739290666ef5cb672e1eb94f747aa00f5c2cae39f95c2e70eb0478929feea5$''',
+    '''^13b6cbcc7020cc1f332ea1fbefe5b2ebc3e1300d17947b3d8a26f97ac3cff909$''',
+    '''^0443b9bc064a4d867c7c4233d0bc6a816792d8825f9ae251aa4217469f1ad27b091b527ba7f15aa942f05d63f38baeec94943518d7712480a6fbfc7d5063b0aaa9$''',
+    '''^5a91603f023794dd2c8acc92fd470da260bbf06a4d08e2b916dca643c9b605a9$''',
+    '''^05bda3f3fac1daa860af8bc9cb4c7fa2da6631b7b72cac9e4f63bab5065ca97d$''',
+    '''^53056b14b272594b1172613673116ab04fc1b21d172db118552d854b05f1b8b0$''',
+]

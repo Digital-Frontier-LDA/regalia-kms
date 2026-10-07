@@ -448,6 +448,19 @@ class Command(Case):
             code = tool.main(list(args))
         return code, out.getvalue(), err.getvalue()
 
+    def test_verify_prints_the_tip_s_card_record_pin(self):
+        """#406 (regalia-kms-51): regalia-ceremony's readers take the verified chain's newest card_record as --pin SEQ:DIGEST."""
+        from tests.test_baremetal_membership import ROOT, ROOT_PUB, sign
+        from tests.test_baremetal_membership_v4 import manifest4, nodes4
+        first = manifest4(1, "", nodes4())
+        later = manifest4(2, m.digest(first), nodes4(), card_record={"sequence": 2, "digest": "cb" * 32})
+        chain = os.path.join(self.d, "chain4.json")
+        with open(chain, "w") as f:
+            json.dump([sign(first, ROOT), sign(later, ROOT)], f)
+        code, out, err = self.run_main("verify", "--chain", chain, "--root-key", ROOT_PUB)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.splitlines()[-1], "CARD-RECORD-PIN 2 " + "cb" * 32)
+
     def test_verify_propose_and_diff(self):
         chain = os.path.join(self.d, "chain.json")
         with open(chain, "w") as f:
@@ -456,6 +469,7 @@ class Command(Case):
         code, out, _ = self.run_main("verify", "--chain", chain, "--root-key", root)
         self.assertEqual(code, 0)
         self.assertIn("epoch 1", out)
+        self.assertNotIn("CARD-RECORD-PIN", out)                         # no pin before v4
         proposal = os.path.join(self.d, "p.json")
         code, out, _ = self.run_main("propose", "--chain", chain, "--root-key", root, "--set-state", "c=MAINTENANCE",
                                      "--issued-at", "2026-10-03T12:00:00Z", "--out", proposal)
@@ -891,8 +905,9 @@ class ProposeGenesis(unittest.TestCase):
 
     def setUp(self):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        from tests.test_baremetal_membership_v4 import nodes4, OWNER_KEYS, typed
+        from tests.test_baremetal_membership_v4 import nodes4, OWNER_KEYS, K_A, typed
         self.d = tempfile.mkdtemp()
+        self.k_a = K_A
         self.addCleanup(shutil.rmtree, self.d, True)
         self.root_key = Ed25519PrivateKey.generate()
         self.root = OfflineRoot.raw(self.root_key).hex()
@@ -908,10 +923,36 @@ class ProposeGenesis(unittest.TestCase):
     def owners(self):
         return {self.MAIN: self.owner_a, self.BACKUP: self.owner_b}
 
-    def propose(self, entries=None, owners=None, release=None, policy=None, document=None):
+    def propose(self, entries=None, owners=None, release=None, policy=None, document=None, anchor=None, card_record=None):
         return tool.propose_genesis(self.entries if entries is None else entries, document or self.document,
                                     self.owners() if owners is None else owners, release or self.release, self.root,
-                                    "2026-10-04T12:00:00Z", policy)
+                                    "2026-10-04T12:00:00Z", policy, anchor or self.anchor(),
+                                    card_record or {"sequence": 1, "digest": "ca" * 32})
+
+    def anchor(self, key=None):
+        from tests.test_baremetal_membership_v4 import typed
+        return typed(key or self.k_a)
+
+    def generation_record(self, signer=None, change=None, k_a=None):
+        """regalia-ceremony's offline-keys generation record (rc#129, offline-keys.record.json; the real one is
+        tests/vectors/offline-keys-record/), signed by `signer` (default: the pinned root) over the ceremony record domain."""
+        import base64
+        import copy
+        import hashlib
+        from deploy.baremetal import cardrecord
+        signer = signer or self.root_key
+        k_a = k_a or self.k_a
+        root = signer.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+        spki = base64.b64encode(k_a.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).decode()
+        record = {"schema": tool.OFFLINE_KEYS_SCHEMA, "event": "generate", "threshold": 2, "shares": 3, "slip39_identifier": 1234,
+                  "master_id": "ab" * 16, "publics": {"anchor-policy": {"alg": "ecdsa-p256", "spki": spki}},
+                  "root_entry": {"alg": "ed25519", "key": root}, "anchor_policy_entry": self.anchor(k_a),
+                  "root_fingerprint": hashlib.sha256(bytes.fromhex(root)).hexdigest(), "files": {},
+                  "operation_proof": {"anchor-policy": "verified", "root": "verified"}, "tool": "offline-keys.py/1", "at": "2026-10-04T10:00:00Z"}
+        record = copy.deepcopy(record)
+        if change:
+            change(record)
+        return {"record": record, "signature": signer.sign(cardrecord.RECORD_DOMAIN + m.canonical(record)).hex()}
 
     def card_record(self, signer=None, change=None):
         """The card ceremony's record of the owner's two cards and the release card, as regalia-ceremony writes it
@@ -1003,6 +1044,79 @@ class ProposeGenesis(unittest.TestCase):
         partial = dict(self.document, nodes={k: v for k, v in self.document["nodes"].items() if k != "c"})
         self.refused("the measurements have no entry for c", self.propose, document=partial)
 
+    def test_k_a_and_the_card_record_are_in_the_genesis(self):
+        """#361, #405: K_A pinned in epoch 1; the card record's sequence and digest, and nothing else of it."""
+        from tests.test_baremetal_membership_v4 import typed
+        candidate = self.propose(card_record={"sequence": 2, "digest": "cb" * 32, "owners": {}, "session": "x"})
+        self.assertEqual((candidate["anchor_policy_key"], candidate["card_record"]), (typed(self.k_a), {"sequence": 2, "digest": "cb" * 32}))
+        self.refused("a v4 genesis names K_A (the anchor-policy key) and the card record",
+                     tool.propose_genesis, self.entries, self.document, self.owners(), self.release, self.root, "2026-10-04T12:00:00Z")
+
+    def test_k_a_comes_from_the_root_signed_generation_record(self):
+        """regalia-kms-95 on #438: K_A is pinned for the genesis's life, so it is taken from the sealed set's generation
+        record, verified under the pinned root, and nowhere else. Each guard by an input only it refuses."""
+        import pathlib
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from tests.test_baremetal_membership_v4 import typed
+        self.assertEqual(tool.offline_keys_record(self.generation_record(), self.root)[0], typed(self.k_a))
+        # regalia-ceremony's own output (offline-keys generate at rc fd8df0a, run once; the shares and sealed file not kept)
+        here = pathlib.Path(__file__).parent / "vectors" / "offline-keys-record"
+        real = json.loads((here / "offline-keys.record.json").read_text())
+        entry, record = tool.offline_keys_record(real, (here / "root.hex").read_text().strip())
+        self.assertEqual((entry, record["event"]), (real["record"]["anchor_policy_entry"], "generate"))
+        # and rc#133's (head 178e358, by regalia-kms-51): ownerauth-recovery's age recipient published beside the keys
+        real = json.loads((here / "offline-keys.record.rc133.json").read_text())
+        self.assertIn("ownerauth-recovery", real["record"]["publics"])
+        entry, _ = tool.offline_keys_record(real, (here / "root-rc133.hex").read_text().strip())
+        self.assertEqual(entry, real["record"]["anchor_policy_entry"])
+        # rc#133 (regalia-kms-51): the record also publishes the ownerauth-recovery age recipient (no spki) and its proof;
+        # only K_A's entries are read, so other keys of publics and operation_proof never refuse it
+        def recovery(r):
+            r["publics"]["ownerauth-recovery"] = {"alg": "age-pq", "recipient": "age1pq1" + "q" * 60}
+            r["operation_proof"]["ownerauth-recovery"] = "verified"
+        self.assertEqual(tool.offline_keys_record(self.generation_record(change=recovery), self.root)[0], typed(self.k_a))
+        other = ec.generate_private_key(ec.SECP256R1())
+        flipped = self.generation_record()
+        flipped["signature"] = ("00" if flipped["signature"][:2] != "00" else "01") + flipped["signature"][2:]
+        for name, envelope, reason in (
+                ("another root's set", self.generation_record(signer=Ed25519PrivateKey.generate()), "names another root than the pinned one"),
+                ("a signature not the root's", flipped, "the offline-keys record's signature is not the pinned root's"),
+                ("a short signature", dict(self.generation_record(), signature="ab"), "the offline-keys record's signature is not 128 hex"),
+                ("an extra field", self.generation_record(change=lambda r: r.update(extra=1)), "the offline-keys record fields mismatch"),
+                ("another event", self.generation_record(change=lambda r: r.update(event="card-record")),
+                 "the offline-keys record is not a regalia.offline-keys-record/v1 generation record"),
+                ("a wrong fingerprint", self.generation_record(change=lambda r: r.update(root_fingerprint="ab" * 32)),
+                 "the offline-keys record's root_fingerprint is not the root's"),
+                ("an entry not the published key", self.generation_record(change=lambda r: r.update(anchor_policy_entry=typed(other))),
+                 "the offline-keys record's anchor_policy_entry is not its published anchor-policy key"),
+                ("an Ed25519 entry", self.generation_record(change=lambda r: r.update(anchor_policy_entry={"alg": "ed25519", "key": "00" * 32})),
+                 "anchor_policy_entry: alg must be one of ecdsa-p256"),
+                ("no published K_A", self.generation_record(change=lambda r: r["publics"].pop("anchor-policy")),
+                 "the offline-keys record publishes no ecdsa-p256 anchor-policy key"),
+                ("a published key off P-256", self.generation_record(change=lambda r: r["publics"]["anchor-policy"].update(spki="AAAA")),
+                 "the offline-keys record's published anchor-policy key is not a P-256 public key"),
+                ("a published P-384 key", self.generation_record(change=lambda r: r["publics"]["anchor-policy"].update(spki=__import__("base64").b64encode(
+                    ec.generate_private_key(ec.SECP384R1()).public_key().public_bytes(serialization.Encoding.DER,
+                                                                                    serialization.PublicFormat.SubjectPublicKeyInfo)).decode())),
+                 "the offline-keys record's published anchor-policy key is not a P-256 public key"),
+                ("a threshold as a string", self.generation_record(change=lambda r: r.update(threshold="2")),
+                 "the offline-keys record's threshold and shares are not counts with threshold <= shares"),
+                ("a threshold above the shares", self.generation_record(change=lambda r: r.update(threshold=4)),
+                 "the offline-keys record's threshold and shares are not counts with threshold <= shares"),
+                ("an at that is not a string", self.generation_record(change=lambda r: r.update(at=5)),
+                 "the offline-keys record's at and master_id are not strings"),
+                ("no generation proof", self.generation_record(change=lambda r: r["operation_proof"].pop("anchor-policy")),
+                 "the offline-keys record shows no generation proof for K_A")):
+            with self.subTest(name):
+                self.refused(reason, tool.offline_keys_record, envelope, self.root)
+
+    def test_k_a_is_no_other_key(self):
+        from tests.test_baremetal_membership_v4 import NODE_KEYS
+        self.refused("anchor_policy_key is already used (signing_key of a)", self.propose, anchor=self.anchor(NODE_KEYS["a"]))
+        self.refused("the anchor-policy key is the pinned root's or the release card's", self.propose,
+                     anchor={"alg": "ecdsa-p256", "key": self.root})
+
     def test_a_policy_override_below_its_floor_is_refused(self):
         self.refused("owner_heartbeat_lifetime_s must be an integer from 300", self.propose, policy={"owner_heartbeat_lifetime_s": 100})
         self.assertEqual(self.propose(policy={"heartbeat_max_lifetime_s": 7200})["heartbeat_max_lifetime_s"], 7200)
@@ -1047,7 +1161,11 @@ class ProposeGenesis(unittest.TestCase):
         args = ["propose", "--genesis", "--root-key", root or self.root, "--measurements", doc, "--out", out,
                 "--issued-at", "2026-10-04T12:00:00Z"] + (["--card-record", cards] if with_record else []) \
             + (["--state-dir", self.state(*(logged or [record]))] if with_state else [])
-        args += ["--system-pub", pub]
+        generated = os.path.join(self.d, "offline-keys.record.json")
+        with open(generated, "w") as f:
+            json.dump(self.generation_record(), f)
+        args += ["--system-pub", pub] + ([] if "no-anchor" in extra else ["--offline-keys-record", generated])
+        extra = tuple(x for x in extra if x != "no-anchor")
         for files in nodes:
             args += ["--node"] + files
 
@@ -1076,6 +1194,21 @@ class ProposeGenesis(unittest.TestCase):
         written = json.load(open(path))
         self.assertEqual((written["epoch"], written["owner_keys"]), (1, [{"alg": "ed25519", "key": self.owner_a}, {"alg": "ed25519", "key": self.owner_b}]))
         self.assertNotIn(self.release, json.dumps(written))
+        from deploy.baremetal import cardrecord
+        from tests.test_baremetal_membership_v4 import typed
+        with open(os.path.join(self.d, "cards.record.json")) as f:              # the record the command read
+            given = json.load(f)["record"]
+        self.assertEqual(written["card_record"], {"sequence": 1, "digest": cardrecord.digest(given)})
+        self.assertEqual(written["anchor_policy_key"], typed(self.k_a))
+        self.assertIn("anchor-policy key K_A (#361; fixed for the life of this genesis: a new one is a new genesis): " + typed(self.k_a)["key"], out)
+        self.assertIn("K_A is from the offline-keys generation record of 2026-10-04T10:00:00Z (sealed set " + "ab" * 16 + ", 2 of 3 shares), "
+                      "signed by the pinned root", out)
+
+    def test_the_genesis_needs_k_a(self):
+        code, _, err, path = self.run_cli("no-anchor")
+        self.assertEqual(code, 2)
+        self.assertIn("--genesis needs --offline-keys-record (offline-keys.record.json, signed by the pinned root: K_A is taken from it, #361)", err)
+        self.assertFalse(os.path.exists(path))
 
     def test_the_keys_come_only_from_a_record_the_pinned_root_signed(self):
         """24, 2026-10-04: --card-record is the one path; the typed --owner-key/--release-key are gone, never mixed."""
@@ -1107,7 +1240,7 @@ class ProposeGenesis(unittest.TestCase):
             self.assertEqual(tool.main(["propose", "--root-key", self.root, "--chain", os.path.join(self.d, "none.json"),
                                         "--card-record", os.path.join(self.d, "x.json"), "--set-state", "c=MAINTENANCE",
                                         "--out", os.path.join(self.d, "x")]), 2)
-        self.assertIn("--node, --system-pub, --measurements, --card-record, --state-dir and the lifetimes are for --genesis only", stderr.getvalue())
+        self.assertIn("--node, --system-pub, --measurements, --card-record, --state-dir, --offline-keys-record and the lifetimes are for --genesis only", stderr.getvalue())
 
     def test_each_node_was_enrolled_on_the_reviewed_image(self):
         """#399 (regalia-kms-d9): the PCR 11 each node's AK quoted at activation is the SYSTEM-phase value the genesis

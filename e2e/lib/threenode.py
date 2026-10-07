@@ -512,6 +512,7 @@ class Cluster:
                          "nodes": {n.name: {"accepted": [dict(self.reference[n.name])]} for n in self.nodes.values()}}
         # #199: the first real manifest is v4 (no ceremony has run): the nodes and the owner sign, by quorum
         from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         names = [n.name for n in self.nodes.values()]
         self.manifest = {"schema": membership.SCHEMA_V4, "epoch": 1, "prev_digest": "", "policy_version": measurements.version(self.document),
@@ -520,6 +521,11 @@ class Cluster:
                          "heartbeat_signers": {"threshold": 2, "parties": names + [membership.OWNER]},
                          "activation_signers": {"threshold": 2, "parties": names},
                          "revocation_signers": [{"threshold": 2, "parties": names}, {"threshold": 1, "parties": [membership.OWNER]}],
+                         # #361/#405: K_A (a fresh public P-256 point: nothing is defined under it until #361 C) and the
+                         # card record's pin (no card ceremony runs here: a placeholder record)
+                         "anchor_policy_key": {"alg": "ecdsa-p256", "key": ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+                             serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()},
+                         "card_record": {"sequence": 1, "digest": "ca" * 32},
                          "nodes": [{"node_id": n.name, "state": "ACTIVE", "ek_name": self.ids[n.name][0], "ak_name": self.ids[n.name][1],
                                     "wg_boot_pub": self.keys[n.name]["boot"][1], "wg_service_pub": self.keys[n.name]["service"][1],
                                     "hsm_serials": ["E2E3%s" % n.name.upper()]} for n in self.nodes.values()]}
@@ -1547,12 +1553,18 @@ class Cluster:
         """The collector's signed receipt for position `sequence` of the node's stream, asked as its shipper asks: over
         mutual TLS with the shipper's certificate, for its own stream (X-Regalia-Site)."""
         import ssl
+        import urllib.parse
         import urllib.request
+        if type(sequence) is not int or sequence < 0:
+            raise ValueError("a receipt's sequence is a non-negative int, not %r" % (sequence,))
+        url = "https://127.0.0.1:%d/v1/receipt?sequence=%d" % (COLLECTOR_PORT, sequence)
+        parts = urllib.parse.urlsplit(url)        # only the local collector, over https: never another scheme, host or path
+        if (parts.scheme, parts.hostname, parts.port, parts.path) != ("https", "127.0.0.1", COLLECTOR_PORT, "/v1/receipt"):
+            raise ValueError("refusing to fetch a receipt from %r: not the local collector" % url)
         d = self.audit_dir
         context = ssl.create_default_context(cafile=str(d / "ca.pem"))
         context.load_cert_chain(str(d / "shipper.pem"), str(d / "shipper.key"))
-        request = urllib.request.Request("https://127.0.0.1:%d/v1/receipt?sequence=%d" % (COLLECTOR_PORT, sequence),
-                                         headers={"X-Regalia-Site": "e2e3-%s.%s" % (name, trail)})
+        request = urllib.request.Request(url, headers={"X-Regalia-Site": "e2e3-%s.%s" % (name, trail)})
         with urllib.request.urlopen(request, context=context, timeout=10) as answer:
             return json.loads(answer.read())
 
