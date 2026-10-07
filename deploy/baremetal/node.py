@@ -80,7 +80,7 @@ import tempfile
 import threading
 import time
 
-from deploy.baremetal import (admission, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
+from deploy.baremetal import (admission, anchorpolicy, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
                               measurements, membership, metrics, signkey, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
@@ -117,7 +117,9 @@ def validate(doc):
     # slots; the heartbeat counter and the signing counter (#199): counter and base each), never retyped here
     taken = {"nv_epoch": membership.HighWater(_index(doc["nv_epoch"], "nv_epoch")).indices(),
              "nv_heartbeat": heartbeat.Counter(_index(doc["nv_heartbeat"], "nv_heartbeat")).indices(),
-             "nv_signing": heartbeat.Counter(_index(doc["nv_signing"], "nv_signing")).indices()}
+             "nv_signing": heartbeat.Counter(_index(doc["nv_signing"], "nv_signing")).indices(),
+             # #361 C1: the rotation counter, at a fixed index on every node (enrol init defines it before node.json exists)
+             "the rotation counter": {int(anchorpolicy.ROTATION_INDEX, 16)}}
     names = list(taken)
     for i, one in enumerate(names):
         for other in names[i + 1:]:
