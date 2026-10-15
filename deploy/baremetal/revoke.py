@@ -57,6 +57,8 @@ def candidate(current, target, state, now):
             "%s is already %s" % (target, nodes[target]["state"]))
     nxt = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), issued_at=beat.stamp(now),
                nodes=[dict(n, state=state) if n["node_id"] == target else n for n in current["nodes"]])
+    if "recovery_ends_by" in nxt and membership.below_quorum(nxt) and not membership.below_quorum(current):
+        nxt["recovery_ends_by"] = None       # dropping below the activation threshold clears it (#432, ed)
     membership.transition(current, nxt, "quorum")
     return nxt
 

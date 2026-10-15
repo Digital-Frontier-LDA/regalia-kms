@@ -43,7 +43,7 @@ class Case(unittest.TestCase):
         with open(os.path.join(self.d, "etc", "wg-service.key"), "w") as f:
             f.write(PRIVATE + "\n")
         self.cfg = {"schema": node.SCHEMA, "node_id": "a", "site": self.d + "/etc/site.json", "root_key": ROOT, "tcti": None,
-                    "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "nv_signing": "0x0150001c", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
+                    "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "nv_signing": "0x0150001c", "nv_activation": "0x0150001e", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
                     "wg_service_key": self.d + "/etc/wg-service.key", "measurements": self.d + "/etc/measurements.json",
                     "pcrs": [7, 11], "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
         self.tpm = hbt.FakeTpm()

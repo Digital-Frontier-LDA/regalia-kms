@@ -24,6 +24,9 @@ and HOW MUCH of it is accepted.
                   enrolment key, and that key              wrapped to that key
     beat-sign     a heartbeat body the caller proposes,    this node's signature       beat.cosign (#199)
                   and the caller's signature over it       over it
+    activate-sign an activation lease for the CALLER       this node's signature       activation.cosign (#432)
+                  (its own site), unsigned: the co-signer  over it, its grant
+                  records and signs first                  recorded first
 
 THE ENROLMENT OPERATIONS (#190) need the node's enrolpeer.Peer; a server without one refuses them. They are spent from their own rate class, so a node enrolling cannot use up its
 pulls, and another node is not touched at all.
@@ -116,7 +119,9 @@ REQUEST_FIELDS = {"pull": ("v", "op", "summary", "sequence"),
                   # the measurement document a manifest commits to, by its policy_version (#332)
                   "measurements": ("v", "op", "version"),
                   # #199: co-sign a heartbeat the caller proposes and has signed (beat.py)
-                  "beat-sign": ("v", "op", "heartbeat", "signature")}
+                  "beat-sign": ("v", "op", "heartbeat", "signature"),
+                  # #432: co-sign an activation lease for the caller's own site (activation.py); the co-signer goes first
+                  "activate-sign": ("v", "op", "lease")}
 ANSWER_FIELDS = {"pull": ("v", "ok", "summary", "bundle"),
                  "lease-nonce": ("v", "ok", "nonce"),
                  "lease": ("v", "ok", "lease"),
@@ -127,11 +132,12 @@ ANSWER_FIELDS = {"pull": ("v", "ok", "summary", "bundle"),
                  "path-nonce": ("v", "ok", "nonce"),
                  "path": ("v", "ok", "enrolment"),
                  "measurements": ("v", "ok", "document"),
-                 "beat-sign": ("v", "ok", "signature")}
+                 "beat-sign": ("v", "ok", "signature"),
+                 "activate-sign": ("v", "ok", "signature")}
 ENROL_OPS = ("ak-challenge", "ak-enroll", "ak-public", "ak-activate", "path-nonce", "path")
 REFUSAL_FIELDS = ("v", "ok", "refused")
 EVIDENCE_FIELDS = ("ephemeral_public", "nonce", "quote", "signature")
-RATE = {"address": (30, 60), "any": (20, 60), "lease": (6, 60), "beat": (6, 60), "enrol": (12, 60), "drop": (1, 60), "listener": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
+RATE = {"address": (30, 60), "any": (20, 60), "lease": (6, 60), "beat": (6, 60), "activate": (6, 60), "enrol": (12, 60), "drop": (1, 60), "listener": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
 OPEN = ("address", "drop")       # the classes keyed by a source address: anybody who can connect makes a key
 MAX_BUCKETS = 4096               # address-keyed buckets remembered at once; idle ones are forgotten first
 EVERYBODY = "*"                  # the one key the "too many callers" refusal is counted under
@@ -286,13 +292,15 @@ class Server:
     that has already expired."""
 
     def __init__(self, node_id, store, freshness, attester, signer, identify, sink, buckets=None, clock=time.time, enrol=None,
-                 documents=None, cosigner=None):
+                 documents=None, cosigner=None, activator=None):
         """`enrol`: an enrolpeer.Peer, for the enrolment operations (None: they are refused).
         `cosigner(manifest, caller, heartbeat, signature)`: this node's co-signature of a proposed heartbeat (beat.cosign,
-        #199), or None: beat-sign is refused."""
+        #199), or None: beat-sign is refused.
+        `activator(manifest, caller, lease)`: this node's co-signature of an activation lease for `caller` (activation.cosign,
+        #432), or None: activate-sign is refused."""
         self.node_id, self.store, self.freshness, self.attester, self.signer = node_id, store, freshness, attester, signer
         self.documents = documents        # measurements.Documents: what a `measurements` request is answered from (#332)
-        self.cosigner = cosigner
+        self.cosigner, self.activator = cosigner, activator
         self.enrol, self._offered, self._offered_lock = enrol, {}, threading.Lock()   # ak-public given: caller -> when
         self.identify, self.sink, self.buckets, self.clock = identify, sink, buckets or Buckets(), clock
         self._seen = None       # the manifest of the last request that read the store: see _is_a_node
@@ -529,6 +537,14 @@ class Server:
         self._spend(view.late, caller, "beat")
         return {"signature": self.cosigner(manifest, caller, message["heartbeat"], message["signature"])}
 
+    def _activate_sign(self, view, manifest, caller, message):
+        """#432: this node's signature over an activation lease for `caller`'s own site (activation.cosign decides, and
+        records the grant before it signs). Its own rate class, spent before the TPM is touched."""
+        require(self.activator is not None, "this node co-signs no activations")
+        require(isinstance(message["lease"], dict), "lease is an object")
+        self._spend(view.late, caller, "activate")
+        return {"signature": self.activator(manifest, caller, message["lease"])}
+
     # ---- a node's enrolment (#190): every one of these is from the node the tunnel identified, as above ----
 
     @staticmethod
@@ -606,6 +622,7 @@ class Client:
     def __init__(self, node_id, store, freshness, transports, sink, documents=None):
         """`documents` (measurements.Documents): where the measurement document of an epoch about to be committed is
         put, fetched from the same source first when it is not held (#332)."""
+        self.peer_epochs = {}           # source -> the epoch its last pull answer said it holds (#432)
         self.node_id, self.store, self.freshness, self.transports, self.sink = node_id, store, freshness, transports, sink
         self.documents = documents
 
@@ -673,6 +690,16 @@ class Client:
                 raise Refused("%s (%s)" % (what, type(failure).__name__)) from None
         return run
 
+    def activate_sign(self, source, lease):
+        """`source`'s co-signature of the activation `lease` this node proposes for itself, or Refused. Only its shape is
+        checked here: the proposer verifies the assembled envelope (activation.propose)."""
+        answer = self._ask(source, "activate-sign", lease=lease)
+        theirs = answer["signature"]
+        require(isinstance(theirs, dict), "the co-signature is not an object")
+        membership.exact(theirs, ("party", "key", "sig"), "co-signature")
+        require(theirs["party"] == source, "%s answered with a signature by %s" % (source, convergence._printable(theirs["party"])))
+        return theirs
+
     def beat_sign(self, source, body, signature):
         """`source`'s co-signature of the heartbeat `body` this node proposes and signed (`signature`), or Refused.
         Only its shape is checked here: the proposer verifies the assembled envelope (beat.Proposer)."""
@@ -702,6 +729,7 @@ class Client:
                 started = convergence.summary(self.store)
                 answer = self._ask(source, "pull", summary=started, sequence=sequence)
                 convergence.validate_summary(answer["summary"])
+                self.peer_epochs[source] = answer["summary"]["epoch"]    # what the peer said it holds (#432 amendment 5's exit)
                 bundle = answer["bundle"]
                 require(isinstance(bundle, dict) and isinstance(bundle.get("envelopes"), list)
                         and len(bundle["envelopes"]) <= MAX_ENVELOPES, "a bundle carries at most %d envelopes" % MAX_ENVELOPES)
