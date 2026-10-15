@@ -277,3 +277,14 @@ func TestANestedFieldOnTheWrongWireTypeIsRefused(t *testing.T) {
 // so there is nothing to assert. If decodeVarint ever grows a rule walkFields does not apply, or
 // account_number is ever read from bytes walkFields did not validate, this becomes constructible
 // and wants a row above.
+
+// An unordered transaction (Cosmos SDK 0.53's TxBody.unordered = true, field 4) is refused by name, whatever
+// else the body holds: it has no sequence, so the chain cannot arbitrate two servers signing for one account.
+func TestAnUnorderedTransactionIsRefusedByName(t *testing.T) {
+	msg := encodeMsgSend("cosmos1source", "cosmos1dest", "uatom", 900_000)
+	body := append(encodeTxBody([][2][]byte{{[]byte("/cosmos.bank.v1beta1.MsgSend"), msg}}), encodeTopVarint(4, 1)...)
+	refuses(t, encodeSignDoc("cosmoshub-4", 42, body), "TxBody.unordered is refused")
+	// false is refused too: the field's presence, not its value, is what this parser cannot vouch for
+	body = append(encodeTxBody([][2][]byte{{[]byte("/cosmos.bank.v1beta1.MsgSend"), msg}}), encodeTopVarint(4, 0)...)
+	refuses(t, encodeSignDoc("cosmoshub-4", 42, body), "TxBody.unordered is refused")
+}

@@ -18,6 +18,7 @@ import (
 	api "github.com/Digital-Frontier-LDA/regalia-kms/internal/api"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/approval"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/cosmosrpc"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/envelope"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/executor"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/policy"
@@ -73,6 +74,13 @@ type Coordinator struct {
 	now              func() time.Time
 	// admission is nil unless the configuration requires a runtime lease (RequireAdmission).
 	admission Admission
+	// chain answers what a Cosmos chain says of an account (internal/cosmosrpc), for cosmos-account keys
+	// (#432). Nil: every cosmos-account request is refused, never signed unchecked.
+	chain Chain
+	// keyLocks serialises a cosmos-account key's requests on this server, from the chain's answer to the
+	// result: two requests for one account would otherwise both read sequence N and one would be wasted
+	// on-chain. Across servers the chain arbitrates.
+	keyLocks sync.Map // object ID -> *sync.Mutex
 
 	// droppedMu guards droppedRecords, which Execute writes from concurrent request
 	// goroutines and the metrics handler reads.
@@ -105,6 +113,19 @@ func New(authorizer Authorizer, router Router, semantic Policy, recorder Auditor
 		return nil, errors.New("operations: authorizer reports an empty digest")
 	}
 	return &Coordinator{authorizer: authorizer, router: router, policy: semantic, audit: recorder, runner: runner, hardware: hardware, policyDigest: policyDigest, authorizerDigest: digest, approvers: approvers, now: now}, nil
+}
+
+// Chain is what a Cosmos chain says of an account, just before a cosmos-account key signs (cosmosrpc.Client).
+type Chain interface {
+	Account(ctx context.Context, chainID, address string) (cosmosrpc.Account, error)
+}
+
+// SetChain gives the coordinator the chains' endpoints. Without it every cosmos-account request is refused.
+func (coordinator *Coordinator) SetChain(chain Chain) { coordinator.chain = chain }
+
+func (coordinator *Coordinator) keyLock(objectID string) *sync.Mutex {
+	lock, _ := coordinator.keyLocks.LoadOrStore(objectID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 // Admission answers whether this node holds a runtime trust lease right now (internal/admission).
@@ -270,6 +291,46 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 			return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
 		}
 		policyRequest.Cosmos = parsed
+		if route.SigningProfile == registry.ProfileCosmosAccount {
+			// HELD FROM THE CHAIN'S ANSWER TO THE RESULT (see keyLocks)
+			lock := coordinator.keyLock(request.ObjectID)
+			lock.Lock()
+			defer lock.Unlock()
+			source := ""
+			for _, message := range parsed.Messages {
+				if source != "" && message.Source != source {
+					coordinator.recordOrCount(ctx, request, route, "deny", "policy-cosmos-signers", started, false, policyRequest.VerifiedApprovers)
+					return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
+				}
+				source = message.Source
+			}
+			// THE SIGNER IS THIS KEY (d9 on #499): the messages' signer must be the account of the key's pinned
+			// public key, before the chain is asked about it; otherwise "the signer" is whatever the request names
+			if err := cosmosrpc.MatchesKey(source, []byte(route.CosmosPublicKey)); err != nil {
+				coordinator.recordOrCount(ctx, request, route, "deny", "cosmos-signer-not-key", started, false, policyRequest.VerifiedApprovers)
+				return api.Result{}, failure("DENIED", http.StatusForbidden, false)
+			}
+			if coordinator.chain == nil {
+				// retryable, as API.md says of every DEPENDENCY_UNAVAILABLE: another server may have the chain configured
+				coordinator.recordOrCount(ctx, request, route, "deny", "cosmos-chain-unconfigured", started, false, policyRequest.VerifiedApprovers)
+				return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
+			}
+			account, err := coordinator.chain.Account(ctx, parsed.ChainID, source)
+			if err != nil {
+				coordinator.recordOrCount(ctx, request, route, "deny", "cosmos-chain-unavailable", started, false, policyRequest.VerifiedApprovers)
+				return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
+			}
+			// once the account has signed, the chain holds its key: it must be this key
+			if account.PubKey != nil && string(account.PubKey) != route.CosmosPublicKey {
+				coordinator.recordOrCount(ctx, request, route, "deny", "cosmos-pubkey-mismatch", started, false, policyRequest.VerifiedApprovers)
+				return api.Result{}, failure("DENIED", http.StatusForbidden, false)
+			}
+			// the endpoint for parsed.ChainID was checked to serve that chain (cosmosrpc's node_info): the fact
+			// names it so policy compares all three values alike
+			policyRequest.SigningProfile = route.SigningProfile
+			policyRequest.CosmosChain = &policy.CosmosChainFacts{ChainID: parsed.ChainID, Address: account.Address,
+				AccountNumber: account.AccountNumber, Sequence: account.Sequence}
+		}
 	}
 	decision := coordinator.policy.Evaluate(ctx, policyRequest)
 	if !decision.Allowed {

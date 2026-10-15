@@ -307,6 +307,14 @@ func parseFee(input []byte) ([]Coin, uint64, error) {
 func parseTxBodyMessages(input []byte) ([]CosmosMessage, error) {
 	var messages []CosmosMessage
 	err := walkFields(input, func(tag, wire uint64, value []byte) error {
+		// UNORDERED TRANSACTIONS ARE REFUSED BY NAME (#432, the cosmos-account profile; d9's hole 2). Cosmos SDK
+		// 0.53's TxBody.unordered (field 4) drops the account sequence, so two different unordered transactions
+		// would both execute: the chain could no longer arbitrate between two servers signing for one account.
+		// Every TxBody field but the messages is refused below anyway; this one is named so that admitting a
+		// memo or a timeout later cannot admit it with them.
+		if tag == 4 {
+			return fmt.Errorf("%w: TxBody.unordered is refused: an unordered transaction carries no sequence for the chain to arbitrate", ErrCosmosSignDoc)
+		}
 		if tag != 1 || wire != 2 {
 			return fmt.Errorf("%w: TxBody.field %d wire %d not allowed", ErrCosmosSignDoc, tag, wire)
 		}
