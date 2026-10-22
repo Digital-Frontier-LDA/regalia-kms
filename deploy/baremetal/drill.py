@@ -34,6 +34,11 @@ THIS SLICE (3e): the runner's frame, every seam a callable:
     the owner's card (kept for owner acts; it signs only S4's recovery authorization). Signing and shipping come with
     ed's mTLS client.
 
+  * Hardware: the real servers' faults over a backend interface (power_off/power_on through d9's redfish.Client, restart
+    in-band over SSH, partition/heal), every fault journaled before it is injected and its undo marked after; and
+    scenarios(backend, plan, judge): S1, S2, S3 and S5 as run() takes them, each with its own node and a recover step,
+    judged by the caller's predicates. The tier-N fixture's backend (e2e/lib/drillfixture.py) runs the same scenarios.
+
 NOT IN THIS SLICE (each its own PR, by its owner): the Redfish client (d9, redfish.py, shared with D32's G1 fence),
 the load generator (ed, e2e/lib/loadgen.py), the predicates (48, e2e/lib/drills.py), the Gate's gate-serving line
 (ed), signing (the KMS's drill-report key) and shipping the report. Until they land, `run` has nothing to inject or judge with.
@@ -51,7 +56,7 @@ import subprocess
 import sys
 import time
 
-from deploy.baremetal import membership
+from deploy.baremetal import lease, membership
 
 Refused, require = membership.Refused, membership.require
 
@@ -184,6 +189,12 @@ class Journal:
         done = {e["id"] for e in self.entries() if e.get("kind") == "undone"}
         return [e for e in reversed(self.entries()) if e.get("kind") == "fault" and e["id"] not in done]
 
+    def undone_matching(self, undo):
+        """Every pending fault whose undo is `undo`, marked undone (a power-on or a heal done by the run itself)."""
+        for entry in self.pending():
+            if entry["undo"] == undo:
+                self.undone(entry["id"])
+
     def restore(self, undoers, torn_checked=False):
         """Each pending fault's undo, newest first, through undoers[undo["action"]](node); each marked undone once it
         succeeds. Returns (done, failed): a failed undo stays pending, said, and is tried again next time. `torn_checked`:
@@ -300,8 +311,18 @@ def run(scenarios, abort, restore, clock=time.time):
             entry["predicates"] = {name: {"ok": bool(good), "evidence": evidence}
                                    for name, (good, evidence) in scenario["judge"]().items()}
             entry["passed"] = bool(entry["predicates"]) and all(p["ok"] for p in entry["predicates"].values())
-            entry["ended_ms"] = _ms(clock)
             check("after judging %s" % scenario["name"])
+            if scenario.get("recover"):                # the fault undone (a server powered back on, a cut healed)
+                recovered = scenario["recover"]()
+                # what the recovery itself must show (a returning server catching up before it serves) counts too
+                after = recovered.pop("predicates", {}) if isinstance(recovered, dict) else {}
+                entry["recovered"] = recovered
+                for name, (good, evidence) in after.items():
+                    entry["predicates"]["after recovery: " + name] = {"ok": bool(good), "evidence": evidence}
+                entry["passed"] = bool(entry["predicates"]) and all(p["ok"] for p in entry["predicates"].values())
+                check("after recovering %s" % scenario["name"])
+            entry["ended_ms"] = _ms(clock)
+
     def said(failure):
         return "%s: %s" % ("ABORTED" if isinstance(failure, (Aborted, Stopped)) else type(failure).__name__, failure)
     with signals_stop_the_run() as signals:
@@ -361,6 +382,161 @@ def ssh_runner(host_of, user="root"):
     return ssh
 
 
+class Hardware:
+    """The real servers' faults, each JOURNALED before it is injected (Journal.fault, fsynced), its undo marked when the
+    run itself undoes it:
+      power_off / power_on   redfish.Client (d9, #501): ForceOff or On, PowerState read back; the record returned
+      restart                in-band `systemctl reboot` over SSH (iLO 4 has no GracefulRestart); its undo, should the
+                             server not come back, is a power-on
+      partition / heal       S3's Partition (the dead-man timer first)
+    `redfish_for(node)` -> a redfish.Client for that server; `ssh(node, argv, input=None)`."""
+
+    def __init__(self, journal, ssh, redfish_for, ttl=600):
+        self.journal, self.ssh, self.redfish_for, self.ttl = journal, ssh, redfish_for, ttl
+        self.cut = Partition(ssh)
+
+    def power_off(self, node):
+        self.journal.fault("power-off", node, {"action": "power-on", "node": node})
+        return self.redfish_for(node).force_off()
+
+    def power_on(self, node):
+        record = self.redfish_for(node).power_on()
+        # undone only on the final readback of On (d9 on #504): anything else leaves the fault pending for restore
+        readbacks = record.get("readbacks") or []
+        require(readbacks and readbacks[-1].get("power") == "On", "%s did not read back On after power-on: %s" % (node, record))
+        self.journal.undone_matching({"action": "power-on", "node": node})
+        return record
+
+    def restart(self, node):
+        # its undo is a power CYCLE, not a power-on: a server hung while still powered reads "already On" (d9 on #504)
+        self.journal.fault("restart", node, {"action": "power-cycle", "node": node})
+        done = self.ssh(node, ["systemctl", "reboot"])
+        # the connection drops as the server goes down (OpenSSH exits 255): that is the reboot taking, not a failure
+        require(done.returncode in (0, 255), "systemctl reboot on %s failed (exit %s): %s" % (node, done.returncode, (done.stderr or "").strip()[:200]))
+        return {"node": node, "reboot_asked_ms": int(time.time() * 1000)}
+
+    def restarted(self, node):
+        """The restart's server is back (its scenario's predicates held): its fault is undone."""
+        self.journal.undone_matching({"action": "power-cycle", "node": node})
+
+    def partition(self, node):
+        self.journal.fault("partition", node, {"action": "unpartition", "node": node})
+        return self.cut.install(node, self.ttl)
+
+    def heal(self, node):
+        record = self.cut.remove(node)
+        self.journal.undone_matching({"action": "unpartition", "node": node})
+        return record
+
+    def power_cycle(self, node):
+        """restore's undo of a restart (or a hung server): ForceRestart, power read back On. Marked undone on that
+        readback, because otherwise every later restore would power-cycle the server again. Whether it SERVES is the
+        next run's mandatory preflight ("three-serving" refuses until it does). Inside a run, S2 and S5 mark a restart
+        undone only after their serving predicates hold."""
+        client = self.redfish_for(node)
+        require(hasattr(client, "force_restart"), "the Redfish client has no force_restart yet (d9, #501): power-cycle %s through "
+                "its iLO by hand, then run restore again" % node)
+        record = client.force_restart()
+        readbacks = record.get("readbacks") or []
+        require(readbacks and readbacks[-1].get("power") == "On", "%s did not read back On after its power cycle: %s" % (node, record))
+        self.journal.undone_matching({"action": "power-cycle", "node": node})
+        return record
+
+    def undoers(self):
+        return {"power-on": self.power_on, "power-cycle": self.power_cycle, "unpartition": self.heal}
+
+
+def _all_ok(predicates):
+    return bool(predicates) and all(bool(good) for good, _ in predicates.values())
+
+
+# KERNEL-UPDATE step 3.5 (#522): a host back and serving, then one lease more, before the next is touched. Under lease
+# v2 (#489) a host restarted less than one lease ago issues no lease; restarting the next sooner leaves the third with no
+# issuer (#504's first red after #489). rollout.may_reboot is not this interlock: it answers only inside an approved
+# update, and the runbook says it alone does not hold.
+S5_SETTLE_S = lease.MAX_LIFETIME
+
+
+def scenarios(backend, plan, judge, settle=S5_SETTLE_S, sleep=time.sleep):
+    """S1, S2, S3 and S5 as run() takes them, over any backend with power_off/power_on/restart/restarted/partition/heal
+    (Hardware here; the tier-N fixture's in e2e/lib/drillfixture.py). `plan`: {"S1": node, "S2": node, "S3": node,
+    "S5": [nodes in order]}; only the scenarios it names. `judge(name, context)` -> {predicate: (ok, evidence)}, where
+    context holds the injection's times (ms) and records; the predicates are the shared ones (e2e/lib/drills.py). S4
+    needs the owner's recovery authorization: not here yet."""
+    def now():
+        return int(time.time() * 1000)
+
+    # each scenario in its own scope: its node is bound when it is built, never read later from a shared name
+    def s1(node):
+        ctx = {"node": node}
+        def back():                         # S1, then the server powered on: S2's predicates on its return
+            ctx.update(on=backend.power_on(node), t_on_ms=now())
+            return {"record": ctx["on"], "predicates": judge("S1-back", ctx)}
+        return {"name": "S1", "inject": lambda: ctx.update(t_inject_ms=now(), off=backend.power_off(node)) or ctx,
+                "judge": lambda: judge("S1", ctx), "recover": back}
+
+    def s2(node):
+        ctx = {"node": node}
+
+        def judged():
+            ctx["judged"] = judge("S2", ctx)
+            return ctx["judged"]
+
+        def back():                         # undone only if it came back as its predicates say (d9 on #504)
+            if not _all_ok(ctx.get("judged", {})):
+                return {"left pending": "%s's restart: its predicates did not hold; restore power-cycles it" % node}
+            backend.restarted(node)
+            return {"restarted": node}
+        return {"name": "S2", "inject": lambda: ctx.update(t_inject_ms=now(), restart=backend.restart(node)) or ctx,
+                "judge": judged, "recover": back}
+
+    def s3(node):
+        ctx = {"node": node}
+        def healed():                       # on heal it catches up before it serves
+            ctx.update(healed=backend.heal(node), t_heal_ms=now())
+            return {"record": ctx["healed"], "predicates": judge("S3-healed", ctx)}
+        return {"name": "S3", "inject": lambda: ctx.update(t_inject_ms=now(), cut=backend.partition(node)) or ctx,
+                "judge": lambda: judge("S3", ctx), "recover": healed}
+
+    def s5(order):
+        ctx = {"restarts": []}
+
+        def roll():
+            for node in order:              # one at a time; each must be BACK, by its predicates, before the next goes down
+                # and one lease more (step 3.5), before the first too: S2 restarted a node just before
+                sleep(settle)
+                ctx["restarts"].append({"node": node, "settled_s": settle, "t_inject_ms": now(), "restart": backend.restart(node)})
+                back = judge("S5-wait", dict(ctx, node=node))
+                ctx["restarts"][-1]["back"] = {name: {"ok": bool(good), "evidence": evidence} for name, (good, evidence) in back.items()}
+                if not _all_ok(back):       # two of three down otherwise (d9 on #504): stop, the fault left pending
+                    raise Aborted("S5: %s did not come back (%s): the roll stops, its restart left pending for restore"
+                                  % (node, {n: e for n, (g, e) in back.items() if not g}))
+                backend.restarted(node)
+            return ctx
+        return {"name": "S5", "inject": roll, "judge": lambda: judge("S5", ctx)}
+
+    built = [make(plan[name]) for name, make in (("S1", s1), ("S2", s2), ("S3", s3), ("S5", lambda order: s5(list(order))))
+             if name in plan]
+    require(built, "the plan names no scenario")
+    return built
+
+
+def restore_summary(restored, failed):
+    """What restore says to the operator, who is often about to leave (d9 on #504): every server it powered on or
+    power-cycled is ON BY READBACK ONLY, its serving not confirmed; every undo that failed is still pending."""
+    lines = []
+    for entry in restored:
+        undo = entry["undo"]
+        if undo["action"] in ("power-on", "power-cycle"):
+            lines.append("%s: powered On by readback; SERVING NOT CONFIRMED. Check that %s serves (or that RegaliaNodeDown has "
+                         "cleared) before you leave" % (undo["node"], undo["node"]))
+        else:
+            lines.append("%s: %s done" % (undo["node"], undo["action"]))
+    for entry in failed:
+        lines.append("STILL PENDING: %s" % entry["error"])
+    return lines
+
+
 def power_on_by_hand(node):
     """The power undo until the Redfish client lands (d9, redfish.py): said, never pretended."""
     raise Refused("the Redfish client is not built yet: power %s on through its iLO by hand, then run restore again" % node)
@@ -399,7 +575,9 @@ def main(argv=None, ssh=None):
                     journal.undone(entry["id"])
         else:
             restored, failed = journal.restore({"unpartition": cut.remove, "power-on": power_on_by_hand}, torn_checked=args.torn_checked)
-            done = {"restored": restored, "still_pending": failed}
+            done = {"restored": restored, "still_pending": failed, "summary": restore_summary(restored, failed)}
+            for line in done["summary"]:
+                print("drill: restore: " + line, file=sys.stderr)
             print(json.dumps(done, sort_keys=True))
             return 0 if not failed else 3
     except Refused as refusal:
