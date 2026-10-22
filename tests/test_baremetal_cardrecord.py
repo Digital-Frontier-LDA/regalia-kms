@@ -306,10 +306,15 @@ class ProducersVectors(unittest.TestCase):
         root = (here / "root.hex").read_text().strip()
         expect = json.loads((here / "expect.json").read_text())
         log = [json.loads(line) for line in (here / "signing-record.jsonl").read_text().splitlines()]
-        self.assertEqual(sorted(expect), sorted(list(self.SAME) + ["valid.json", "sequence-2.json"]))
+        self.assertEqual(sorted(expect), sorted(list(self.SAME) + ["valid.json", "sequence-2.json", "rebuilt-3.json"]))
         for name, want in sorted(expect.items()):
             with self.subTest(vector=name):
                 envelope = json.loads((here / name).read_text())
+                if name == "rebuilt-3.json":          # #406: judged by its rebuilt state directory (ProducersFreshness)
+                    rebuilt = here / "freshness" / "current-rebuilt" / cr.SIGNING_RECORD
+                    got = cr.verify(envelope, root, [json.loads(line) for line in rebuilt.read_text().splitlines()])
+                    self.assertEqual((got["sequence"], got["baseline"]["sequence"], got["supersedes_checked"]), (3, 2, True))
+                    continue
                 if want == "ok":
                     got = cr.verify(envelope, root, log[:envelope["record"]["sequence"]])
                     self.assertEqual(sorted(got["roles"]), sorted(cr.ROLES))
@@ -337,7 +342,12 @@ class ProducersFreshness(unittest.TestCase):
             "gap": "card-record lines are not 1..", "marker-other-root": "the state directory is another root's signing state",
             "no-marker": "has no regalia-signing-state.json", "not-an-object": "line 2 is not an object with a kind",
             "superseded": "this card record (sequence 1) is not the newest the root signed (sequence 2",
-            "torn-line": "the signing record's line 2 is not JSON"}
+            "torn-line": "the signing record's line 2 is not JSON",
+            # #406, a rebuilt state directory: 51's words, the same in both readers
+            "baseline-not-first": "a card-record-baseline line is not the first card line of the signing record",
+            "two-baselines": "the signing record holds more than one card-record-baseline line",
+            "rebuild-record-missing": "the signing record has a baseline but",
+            "pin-mismatch": "this card record is not the one the chain pins (sequence 2): only the pinned record counts after genesis"}
 
     def test_every_case_as_the_producer_judges_it(self):
         import pathlib
@@ -346,7 +356,7 @@ class ProducersFreshness(unittest.TestCase):
         here = pathlib.Path(__file__).parent / "vectors" / "card-ceremony-record"
         root = (here / "root.hex").read_text().strip()
         cases = json.loads((here / "freshness-expect.json").read_text())
-        self.assertEqual(sorted(cases), sorted(list(self.SAME) + ["current-1", "current-2"]))
+        self.assertEqual(sorted(cases), sorted(list(self.SAME) + ["current-1", "current-2", "current-rebuilt", "current-rebuilt-pinned"]))
         for case, want in sorted(cases.items()):
             with self.subTest(case=case):
                 state = tempfile.mkdtemp()
@@ -356,12 +366,13 @@ class ProducersFreshness(unittest.TestCase):
                     os.chmod(os.path.join(state, source.name), 0o600)
                 os.chmod(state, 0o700)
                 envelope = json.loads((here / want["record"]).read_text())
+                pin = tuple(want["pin"]) if "pin" in want else None
                 if want["expect"] == "ok":
-                    got = cr.verify(envelope, root, cr.read_signing_state(state, root))
+                    got = cr.verify(envelope, root, cr.read_signing_state(state, root), pin)
                     self.assertEqual((got["sequence"], got["of"]), (envelope["record"]["sequence"],) * 2)
                     continue
                 with self.assertRaises(m.Refused) as caught:
-                    cr.verify(envelope, root, cr.read_signing_state(state, root))
+                    cr.verify(envelope, root, cr.read_signing_state(state, root), pin)
                 self.assertIn(self.SAME[case], str(caught.exception))
 
     def test_a_line_without_a_kind_is_refused(self):
@@ -379,6 +390,196 @@ class ProducersFreshness(unittest.TestCase):
         with self.assertRaises(m.Refused) as caught:
             cr.read_signing_state(state, "8a" * 32)
         self.assertIn("the signing record's line 1 is not an object with a kind", str(caught.exception))
+
+
+class Rebuilt(unittest.TestCase):
+    """#406: a rebuilt state directory (regalia-ceremony#131's writer): ONE card-record-baseline line first, standing for
+    the lost history 1..N, card lines N+1..M after it, and the root-signed rebuild record beside it under its own domain.
+    Each guard by an input only it refuses, and its own words; the producer's cases are ProducersFreshness."""
+
+    def setUp(self):
+        import pathlib
+        import shutil
+        import tempfile
+        self.here = pathlib.Path(__file__).parent / "vectors" / "card-ceremony-record"
+        self.root = (self.here / "root.hex").read_text().strip()
+        self.envelope = json.loads((self.here / "rebuilt-3.json").read_text())
+        self.state = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.state, True)
+        os.chmod(self.state, 0o700)
+        for source in (self.here / "freshness" / "current-rebuilt").iterdir():
+            shutil.copyfile(source, os.path.join(self.state, source.name))
+            os.chmod(os.path.join(self.state, source.name), 0o600)
+        self.lines = cr.read_signing_state(self.state, self.root)
+        self.rebuild = json.loads((self.here / "freshness" / "current-rebuilt" / cr.REBUILD_RECORD).read_text())
+
+    def write(self, name, text):
+        with open(os.path.join(self.state, name), "w") as f:
+            f.write(text)
+
+    def refused(self, reason, fn, *args):
+        with self.assertRaises(m.Refused) as caught:
+            fn(*args)
+        self.assertIn(reason, str(caught.exception))
+
+    def test_the_rebuilt_record_is_the_newest_and_its_baseline_is_reported(self):
+        got = cr.verify(self.envelope, self.root, self.lines)
+        self.assertEqual((got["of"], got["baseline"]["source"], got["baseline"]["sequence"], got["supersedes_checked"]), (3, "chain", 2, True))
+
+    def test_the_baseline_alone_is_the_newest_and_supersedes_is_not_checked(self):
+        """A crash between the baseline line and line N+1: the record N the baseline names is then the newest."""
+        record_2 = json.loads((self.here / "sequence-2.json").read_text())
+        self.assertEqual(cr.digest(record_2["record"]), self.lines[0]["digest"])
+        got = cr.verify(record_2, self.root, self.lines[:1])
+        self.assertEqual((got["of"], got["supersedes_checked"]), (2, False))
+
+    def test_card_lines_after_the_baseline_run_from_n_plus_1(self):
+        line = dict(self.lines[1], sequence=4)
+        self.refused("the signing record's card-record lines are not 3..3 without a gap after its baseline",
+                     cr.verify, self.envelope, self.root, [self.lines[0], line])
+
+    def test_a_malformed_baseline_or_another_root_s(self):
+        for name, change, reason in (
+                ("a bool sequence", {"sequence": True}, "the card-record-baseline line is malformed"),
+                ("an unknown source", {"source": "memory"}, "the card-record-baseline line is malformed"),
+                ("a short digest", {"digest": "ab" * 31}, "the card-record-baseline line is malformed"),
+                ("another root", {"key": "ab" * 32}, "the card-record-baseline line names another root than the pinned one")):
+            with self.subTest(name):
+                self.refused(reason, cr.verify, self.envelope, self.root, [dict(self.lines[0], **change), self.lines[1]])
+        self.refused("the card-record-baseline line fields mismatch", cr.verify, self.envelope, self.root,
+                     [{k: v for k, v in self.lines[0].items() if k != "source"}, self.lines[1]])
+
+    def test_a_pin_on_a_never_rebuilt_record(self):
+        """regalia-kms-51's read on #444: under a pin there is no supersedes verdict (None), and no baseline to report."""
+        log = [json.loads(line) for line in (self.here / "signing-record.jsonl").read_text().splitlines()]
+        record_2 = json.loads((self.here / "sequence-2.json").read_text())
+        got = cr.verify(record_2, self.root, log, (2, cr.digest(record_2["record"])))
+        self.assertEqual((got["baseline"], got["supersedes_checked"], got["pinned"], got["of"]), (None, None, True, 2))
+        record_1 = json.loads((self.here / "valid.json").read_text())
+        got = cr.verify(record_1, self.root, log, (1, cr.digest(record_1["record"])))
+        self.assertEqual((got["sequence"], got["of"], got["pinned"]), (1, 2, True))   # the pinned 1, whatever the laptop signed since
+
+    def test_the_pin_counts_after_genesis(self):
+        pinned = (3, cr.digest(self.envelope["record"]))
+        self.assertEqual(cr.verify(self.envelope, self.root, self.lines, pinned)["sequence"], 3)
+        # the pinned record, but the laptop's record does not hold it
+        self.refused("the chain's pinned card record is not in this signing record", cr.verify, self.envelope, self.root,
+                     [self.lines[0], dict(self.lines[1], digest="cd" * 32)], pinned)
+        self.refused("the pin is (sequence, digest)", cr.verify, self.envelope, self.root, self.lines, ("3", pinned[1]))
+
+    def test_the_rebuild_record_names_the_baseline_and_the_re_signed_record(self):
+        for name, change, reason in (
+                ("the baseline line's digest", lambda lines: lines.__setitem__(0, dict(lines[0], digest="cd" * 32)),
+                 "the rebuild record does not name the signing record's baseline"),
+                ("line N+1's digest", lambda lines: lines.__setitem__(1, dict(lines[1], digest="cd" * 32)),
+                 "the signing record's card record 3 is not the one its rebuild record re-signed")):
+            with self.subTest(name):
+                lines = [json.loads(l) for l in (self.here / "freshness" / "current-rebuilt" / cr.SIGNING_RECORD).read_text().splitlines()]
+                change(lines)
+                self.write(cr.SIGNING_RECORD, "".join(json.dumps(l, sort_keys=True) + "\n" for l in lines))
+                self.refused(reason, cr.read_signing_state, self.state, self.root)
+
+    def test_the_rebuild_record_is_the_pinned_root_s_under_its_own_domain(self):
+        self.assertEqual(cr.verify_rebuild(self.rebuild, self.root)["rebuilt"]["sequence"], 3)
+        record = self.rebuild["record"]
+        flipped = dict(self.rebuild, signature=("00" if self.rebuild["signature"][:2] != "00" else "01") + self.rebuild["signature"][2:])
+        self.refused("the rebuild record's signature does not verify under the pinned root", cr.verify_rebuild, flipped, self.root)
+        self.refused("the rebuild record names another root than the pinned one", cr.verify_rebuild,
+                     dict(self.rebuild, record=dict(record, root_entry={"alg": "ed25519", "key": "ab" * 32})), self.root)
+        self.refused("the rebuild record fields mismatch", cr.verify_rebuild, dict(self.rebuild, record=dict(record, extra=1)), self.root)
+        self.refused("the rebuild record's signature is not 128 hex", cr.verify_rebuild, dict(self.rebuild, signature="ab"), self.root)
+
+    def test_the_rebuild_record_s_content_after_its_signature(self):
+        """Signed by a test root of our own, so each content rule is reached by an input only it refuses."""
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization
+        key = Ed25519PrivateKey.generate()
+        root = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+        base = dict(self.rebuild["record"], root_entry={"alg": "ed25519", "key": root}, root_fingerprint=hashlib.sha256(bytes.fromhex(root)).hexdigest())
+
+        def signed(record, domain=cr.REBUILD_DOMAIN):
+            return {"record": record, "signature": key.sign(domain + m.canonical(record)).hex()}
+        self.assertEqual(cr.verify_rebuild(signed(base), root)["baseline"]["sequence"], 2)
+        for name, record, reason in (
+                ("over the card record's domain", None, "the rebuild record's signature does not verify under the pinned root"),
+                ("another schema", dict(base, schema="regalia.card-ceremony-record/v1"), "the rebuild record is not a regalia.card-record-rebuild/v1"),
+                ("an unknown source", dict(base, baseline=dict(base["baseline"], source="memory")), "baseline.source is not one of chain, sheet"),
+                ("a bool sequence", dict(base, baseline=dict(base["baseline"], sequence=True)), "baseline.sequence is not a count from 1"),
+                ("rebuilt not N+1", dict(base, rebuilt=dict(base["rebuilt"], sequence=4)), "rebuilt record is not the one after its baseline"),
+                ("a short rebuilt digest", dict(base, rebuilt=dict(base["rebuilt"], digest="ab")),
+                 "the rebuild record's rebuilt.digest is not a SHA-256 (64 lowercase hex)"),
+                ("a baseline with an extra field", dict(base, baseline=dict(base["baseline"], at="x")),
+                 "the rebuild record's baseline fields mismatch"),
+                ("a short disc digest", dict(base, disc_record_sha256="ab"), "disc_record_sha256 is not a SHA-256 (64 lowercase hex)"),
+                ("a wrong fingerprint", dict(base, root_fingerprint="ab" * 32), "the rebuild record's root_fingerprint is not the root's")):
+            with self.subTest(name):
+                envelope = signed(base, cr.RECORD_DOMAIN) if record is None else signed(record)
+                self.refused(reason, cr.verify_rebuild, envelope, root)
+
+
+    def test_propose_genesis_prints_the_baseline_for_the_sheet(self):
+        """#406 condition (d): the operator sees that the history was rebuilt, from where, and the baseline's digest."""
+        out = _genesis(self, self.root, str(self.here / "rebuilt-3.json"), self.state)
+        self.assertIn("card record 3 of 3 (the newest on this laptop's signing record)", out)
+        self.assertIn("this laptop's signing record was REBUILT: card records 1..2 stand as one baseline from the chain, digest "
+                      + self.lines[0]["digest"], out)
+        self.assertNotIn("supersedes not checked", out)
+        # the baseline alone (a crash before line N+1): the disc's record N, and the note that supersedes was not checked
+        with open(os.path.join(self.state, cr.SIGNING_RECORD), "w") as f:
+            f.write(json.dumps(self.lines[0], sort_keys=True) + "\n")
+        out = _genesis(self, self.root, str(self.here / "sequence-2.json"), self.state)
+        self.assertIn("supersedes not checked: history before 2 rebuilt from chain", out)
+
+
+    def test_propose_genesis_under_a_pin_prints_pinned_and_no_baseline_note(self):
+        """51's read on #444: a pinned, never-rebuilt record printed without a TypeError, and named as the chain's pin."""
+        from unittest import mock
+        from deploy.baremetal import manifest as tool
+        record_2 = json.loads((self.here / "sequence-2.json").read_text())
+        pin = (2, cr.digest(record_2["record"]))
+        with open(os.path.join(self.state, cr.SIGNING_RECORD), "w") as f:
+            f.write((self.here / "signing-record.jsonl").read_text())
+        os.unlink(os.path.join(self.state, cr.REBUILD_RECORD))
+        with mock.patch.object(tool, "card_record_keys", lambda envelope, root, state: cr.verify(envelope, root, cr.read_signing_state(state, root), pin)):
+            out = _genesis(self, self.root, str(self.here / "sequence-2.json"), self.state)
+        self.assertIn("card record 2 of 2 (pinned by the chain)", out)
+        self.assertNotIn("supersedes not checked", out)
+        self.assertNotIn("REBUILT", out)
+
+
+def _genesis(test, root, record, state):
+    """`manifest propose --genesis` on `record` and `state`, each node as `enrol` proves it (stubbed: enrol's own test
+    proves it). Returns its standard output."""
+    import io
+    import shutil
+    import tempfile
+    from unittest import mock
+    from deploy.baremetal import manifest as tool, measurements
+    from tests.test_baremetal_membership_v4 import nodes4
+    d = tempfile.mkdtemp()
+    test.addCleanup(shutil.rmtree, d, True)
+    entries = [{k: v for k, v in n.items() if k != "state"} for n in nodes4()]
+    doc = {"schema": measurements.SCHEMA, "name": "genesis", "nodes": {
+        e["node_id"]: {"accepted": [{"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32},
+                                     "phases": {"initrd": {"11": "aa" * 32}, "system": {"11": "bb" * 32}}}]} for e in entries}}
+    with open(os.path.join(d, "doc.json"), "w") as f:
+        json.dump(doc, f)
+    with open(os.path.join(d, "system.pem"), "w") as f:
+        f.write("stub\n")
+    args = ["propose", "--genesis", "--root-key", root, "--card-record", record, "--state-dir", state, "--measurements",
+            os.path.join(d, "doc.json"), "--out", os.path.join(d, "e1.json"), "--issued-at", "2026-10-04T12:00:00Z",
+            "--system-pub", os.path.join(d, "system.pem")]
+    for e in entries:
+        path = os.path.join(d, "bundle-%s.json" % e["node_id"])
+        with open(path, "w") as f:
+            json.dump(e, f)
+        args += ["--node", path, path, path]
+    out, err = io.StringIO(), io.StringIO()
+    with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch.object(tool.keyfd, "tty_line", lambda p: "40000001 40000002"), \
+            mock.patch.object(tool.enrol, "proven_entry", lambda bundle, pub, keep, act, run=None: (bundle, {"7": "00" * 32, "11": "bb" * 32})):
+        test.assertEqual(tool.main(args), 0, err.getvalue())
+    return out.getvalue()
 
 
 class ProducersWriterRun(unittest.TestCase):
