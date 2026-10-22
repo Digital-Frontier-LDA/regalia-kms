@@ -5,7 +5,6 @@ package operations
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -296,22 +295,7 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 	if err := coordinator.record(ctx, request, route, "allow", "authorized", started, true, policyRequest.VerifiedApprovers); err != nil {
 		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 	}
-	var output []byte
-	var outputType string
-	err = coordinator.runner.Run(ctx, func(operationCtx context.Context) error {
-		if request.Operation == "seal-envelope" {
-			output, outputType, err = coordinator.seal(operationCtx, route, request)
-			return err
-		}
-		var backendErr error
-		data := request.Data
-		if contentType == "application/vnd.cosmos.tx+protobuf" {
-			digest := sha256.Sum256(data)
-			data = digest[:]
-		}
-		output, outputType, backendErr = coordinator.hardware.Execute(operationCtx, route, request.Operation, request.Format, contentType, data, request.EnvelopeAAD)
-		return backendErr
-	})
+	output, outputType, err := coordinator.executeHardware(ctx, route, request, contentType)
 	if err != nil {
 		zero(output)
 		// An integrity failure is the caller's bytes failing the AEAD proof — a 400, not a
