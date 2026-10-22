@@ -242,6 +242,16 @@ class OSProbeTests(unittest.TestCase):
         self.assertIn("allowed: none", results["kms_capabilities_minimal"]["why"])
         self.assertIn("'regalia-kms' in enforce mode", results["kms_apparmor_enforced"]["why"])
 
+    def test_the_profile_stacked_on_unconfined_is_the_profile(self):
+        # systemd 259 (ubuntu-26.04) labels a User= service this way; enforce still refuses what the
+        # profile denies (regalia-kms#548)
+        for label in ("regalia-kms//&unconfined (enforce)\n", "unconfined//&regalia-kms (enforce)\n"):
+            with self.subTest(label=label):
+                host = FakeHost()
+                host.files["/proc/20/attr/apparmor/current"] = label
+                results = measure_sandbox(host)
+                self.assertTrue(results["kms_apparmor_enforced"]["value"], results["kms_apparmor_enforced"]["why"])
+
     def test_each_sandbox_control_fails_on_the_one_thing_that_breaks_it(self):
         def sandbox(**changed):
             return lambda g: g.commands.__setitem__(SANDBOX_SHOW, hardened_sandbox(**changed))
@@ -285,6 +295,10 @@ class OSProbeTests(unittest.TestCase):
                 lambda g: g.files.pop("/sys/module/apparmor/parameters/enabled"),
                 label("unconfined\n"), label("regalia-kms (complain)\n"), label("regalia-kms (kill)\n"),
                 label("unconfined (enforce)\n"), label(""),
+                # in enforce mode, but not the profile: another, a stack with another, a child, a namespace's
+                label("lax (enforce)\n"), label("regalia-kms//&lax (enforce)\n"), label("lax//&unconfined (enforce)\n"),
+                label("regalia-kms//null-1 (enforce)\n"), label(":e2e:regalia-kms (enforce)\n"),
+                label("regalia-kms//&unconfined (complain)\n"), label("regalia-kms//&unconfined (mixed)\n"),
                 lambda g: g.files.pop("/proc/20/attr/apparmor/current"),
             ],
         }

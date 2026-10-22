@@ -23,9 +23,13 @@ and the KMS unit's sandbox (#61):
                               beyond ALLOWED_CAPABILITIES (nothing: an unprivileged KMS on a high
                               port needs none), and so do the bounding, permitted, effective and
                               ambient sets the kernel reports for the running process
-  kms_apparmor_enforced       AppArmor is enabled and the running KMS process is confined by a
-                              profile in enforce mode (read from /proc/<MainPID>/attr, not from the
-                              unit: AppArmorProfile=-name starts unconfined when the profile is missing)
+  kms_apparmor_enforced       AppArmor is enabled and the running KMS process is confined by
+                              PROFILE in enforce mode (read from /proc/<MainPID>/attr, not from the
+                              unit: AppArmorProfile=-name starts unconfined when the profile is missing).
+                              Any other profile is refused, however strict. So is a stack, except
+                              PROFILE stacked on unconfined: systemd 259 labels a User= service
+                              'regalia-kms//&unconfined', and that still refuses what the profile denies
+                              (regalia-kms#548)
 
 and that the daemon needs a runtime lease to serve (#74):
 
@@ -70,6 +74,7 @@ import subprocess
 import sys
 
 SERVICE = "regalia-kms.service"
+PROFILE = "regalia-kms"            # deploy/baremetal/apparmor/usr.sbin.regalia-kms, the unit's AppArmorProfile=
 MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged",
             "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced", "kms_runtime_admission_required",
             "kms_opensc_leaves_piv_cards", "kms_pcscd_access_rule")
@@ -296,6 +301,11 @@ def apparmor(host):
     profile, mode = found.groups()
     if mode != "enforce" or profile == "unconfined":
         return False, f"the running KMS (pid {pid}) is under {profile!r} in {mode} mode, not enforce"
+    # A stack is "a//&b": confined by each. unconfined adds nothing to one, so PROFILE on unconfined
+    # is PROFILE; anything else (another profile, a child "a//b", a namespace ":ns:a") is not.
+    stack = set(profile.split("//&"))
+    if PROFILE not in stack or stack - {PROFILE, "unconfined"}:
+        return False, f"the running KMS (pid {pid}) is under {profile!r}, not {PROFILE!r}"
     return True, f"pid {pid} is confined by {profile!r} in enforce mode"
 
 
