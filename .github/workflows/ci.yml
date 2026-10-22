@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   build-test:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -520,7 +520,7 @@ jobs:
   # loss, latency, an unreachable peer and a wrong key each end within a bound. Every ruleset is
   # loaded only inside a throwaway namespace.
   wg-boot-netns:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -721,7 +721,7 @@ jobs:
   # as authenticated only while chrony is synchronised to two agreeing NTS sources; one server
   # stopping, a plain NTP source in the configuration, and a check that has stopped each end it.
   authtime-chrony-nts:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -730,7 +730,9 @@ jobs:
       - name: Install chrony
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends chrony python3-cryptography
+          # tzdata-legacy: /usr/share/zoneinfo/right/UTC, chronyd's leap-second table (leapsectz), a node
+          # requirement on Debian 13; ubuntu-26.04's tzdata no longer carries it
+          sudo apt-get install -y -qq --no-install-recommends chrony python3-cryptography tzdata-legacy
       - name: The clock is authenticated only under two agreeing NTS sources (live chronyd)
         run: |
           set -o pipefail
