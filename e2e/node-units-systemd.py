@@ -310,6 +310,13 @@ def tpm(work):
     state = work / "tpm"
     state.mkdir()
     shutil.chown(state, "tss", "tss")
+
+    def appeared(how):
+        if not until(lambda: os.path.exists("/dev/tpmrm0"), 10, 0.2):
+            log = work / "swtpm.log"
+            raise SystemExit("node-units-systemd: no /dev/tpmrm0 10 s after starting %s; swtpm's log: %s" %
+                             (how, log.read_text(errors="replace")[-800:] if log.exists() else "none"))
+
     if sh("modprobe", "tpm_vtpm_proxy", check=False).returncode == 0:
         done = sh("swtpm", "chardev", "--vtpm-proxy", "--tpm2", "--tpmstate", "dir=%s" % state, "--flags", "not-need-init,startup-clear",
                   "--daemon", "--log", "file=%s" % (work / "swtpm.log"))
@@ -321,20 +328,17 @@ def tpm(work):
         if made and made.group(1) != "0":
             raise SystemExit("node-units-systemd: the vTPM proxy made /dev/tpm%s; the units allow only /dev/tpmrm0 (is a TPM "
                              "already on this host?)" % made.group(1))
-        until(lambda: os.path.exists("/dev/tpmrm0"), 10, 0.2)
+        appeared(how)
     else:
         sh("modprobe", "cuse", check=False)
         (work / "swtpm.log").touch()
         shutil.chown(work / "swtpm.log", "tss", "tss")
         sh("swtpm", "cuse", "-n", "tpmrm0", "--tpm2", "--tpmstate", "dir=%s" % state, "--log", "file=%s" % (work / "swtpm.log"),
            "--runas", "tss")
-        until(lambda: os.path.exists("/dev/tpmrm0"), 10, 0.2)
+        how = "swtpm's CUSE device"
+        appeared(how)
         sh("swtpm_ioctl", "-i", "/dev/tpmrm0")
         sh("tpm2_startup", "-c", "-T", "device:/dev/tpmrm0")
-        how = "swtpm's CUSE device"
-    if not os.path.exists("/dev/tpmrm0"):
-        raise SystemExit("node-units-systemd: no /dev/tpmrm0 10 s after starting %s; swtpm's log: %s" %
-                         (how, (work / "swtpm.log").read_text(errors="replace")[-800:] if (work / "swtpm.log").exists() else "none"))
     sh("udevadm", "settle", check=False)
     # the distribution's rule (tpm-udev: KERNEL=="tpmrm[0-9]*", group tss, 0660) where udev applied it
     by_test = sh("stat", "-c", "%G %a", "/dev/tpmrm0", check=False).stdout.strip() != "tss 660"
