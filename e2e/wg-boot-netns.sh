@@ -366,7 +366,7 @@ x lisbon nft -f "$T/lisbon.boot.nft"
 hdr "6  the outsider"
 tcpok outsider "${IP[porto]}" "$UNLOCK" && F "the outsider reached the unlock port at the peer's address" || P "the outsider does not reach the unlock port at the peer's address"
 tcpok outsider "${TUN[porto]}" "$UNLOCK" && F "the outsider reached the peer's tunnel address from outside the tunnel" || P "the outsider does not reach the peer's tunnel address from outside the tunnel"
-x outsider ip link add wg-out type wireguard; x outsider wg set wg-out private-key "$T/outsider.key" peer "$(cat "$T/porto.service.pub")" \
+x outsider ip link add wg-out type wireguard; x outsider wg set wg-out private-key /dev/stdin < <(cat "$T/outsider.key") peer "$(cat "$T/porto.service.pub")" \
   allowed-ips "${TUN[porto]}/32" endpoint "${IP[porto]}:$WG"
 x outsider ip route del "${TUN[porto]}/32"; x outsider ip addr add 10.89.0.9/32 dev wg-out; x outsider ip link set wg-out up; x outsider ip route add "${TUN[porto]}/32" dev wg-out
 asked outsider "${TUN[porto]}" 2 && F "a key that is in no manifest got an answer" || P "a key that is in no manifest gets no answer"
@@ -396,9 +396,15 @@ timed asked lisbon "${TUN[faro]}" 3; rc=$?
 asked lisbon "${TUN[porto]}" && P "the other peer still answers" || F "the other peer does not answer"
 x faro ip link set eth0 up; x faro ip route add default dev eth0 2>/dev/null
 # what bootnet.py warns of, shown: a configuration applied without its key leaves the interface with none
-x faro wg syncconf wg-unlock "$T/faro.unlock.conf"
-[ "$(x faro wg show wg-unlock private-key)" = "(none)" ] && P "measured: wg syncconf with a file that has no PrivateKey unsets the interface's key" \
-  || F "wg syncconf without a key did not unset it: bootnet.py's warning is out of date"
+# Piped from this root shell: ubuntu-26.04's AppArmor profile for wg reads no file in $T, and a refused read
+# left the key in place, which this check took for wg's behaviour (regalia-kms#550). So the apply must succeed.
+if ! x faro wg syncconf wg-unlock /dev/stdin < <(cat "$T/faro.unlock.conf"); then
+  F "wg syncconf of the keyless configuration failed: nothing was measured"
+elif [ "$(x faro wg show wg-unlock private-key)" = "(none)" ]; then
+  P "measured: wg syncconf with a file that has no PrivateKey unsets the interface's key"
+else
+  F "wg syncconf without a key did not unset it: bootnet.py's warning is out of date"
+fi
 boot_up lisbon "$T/wrong.key"
 timed asked lisbon "${TUN[porto]}" 3; rc=$?
 [ "$rc" != 0 ] && [ "$took" -le 10 ] && P "a wrong WG-BOOT key: no answer, after ${took}s" || F "a wrong key: rc=$rc after ${took}s"
