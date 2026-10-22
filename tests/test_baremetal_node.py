@@ -144,6 +144,17 @@ class Indices(unittest.TestCase):
                 self.assertIn(which.split(" and ")[0], str(caught.exception))
         self.assertEqual(int(base["nv_signing"], 16), epoch + 6)
 
+    def test_nothing_overlaps_the_rotation_counter(self):
+        """#361 C1: the rotation counter's fixed index (anchorpolicy.ROTATION_INDEX) is apart from every index node.json names."""
+        from deploy.baremetal import anchorpolicy
+        base = json.loads(open(os.path.join(os.path.dirname(node.__file__), "node.example.json")).read())
+        node.validate(base)
+        r = int(anchorpolicy.ROTATION_INDEX, 16)
+        for key, index in (("nv_signing", r), ("nv_heartbeat", r - 1), ("nv_epoch", r)):
+            with self.subTest(key=key), self.assertRaises(m.Refused) as caught:
+                node.validate(dict(base, **{key: "0x%08x" % index}))
+            self.assertIn("and the rotation counter must not overlap (both take 0x%x)" % r, str(caught.exception))
+
 
 class Publishing(Case):
     """sync owns the store; the root services read a published copy and verify it themselves."""
