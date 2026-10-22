@@ -145,6 +145,7 @@ BENCH_YUBIKEYS = ("36345471", "36344616", "35718625")
 BENCH_TOKENS = frozenset(BENCH_NITROKEYS + BENCH_PICOS + BENCH_YUBIKEYS + tuple("0006%08d" % int(s) for s in BENCH_YUBIKEYS))
 DOMAIN = b"regalia-membership/v1\0"
 MAX_BYTES = 256 * 1024
+MAX_DEPTH = 64            # arrays and objects in one another; the deepest document here is 10 (tests/vectors/opstate-v1.json)
 MAX_CHAIN_BYTES = 64 * 1024 * 1024
 CAPABILITIES = {
     "ACTIVE": frozenset({"serve", "request", "authorize"}),
@@ -277,8 +278,25 @@ def _no_float(text):
     raise Refused("floats are not allowed (%s)" % text)
 
 
+_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+_NOT_A_BRACKET = re.compile(r"[^\[\]{}]")
+
+
+def _depth(text):
+    """How deeply arrays and objects nest in `text`, brackets inside strings not counted."""
+    depth = deepest = 0
+    for c in _NOT_A_BRACKET.sub("", _STRING.sub("", text)):
+        depth += 1 if c in "[{" else -1
+        deepest = max(deepest, depth)
+    return deepest
+
+
 def load(raw, limit=MAX_BYTES):
     require(isinstance(raw, (bytes, str)) and len(raw) <= limit, "a document is at most %d bytes here" % limit)
+    # Refused before parsing, on every Python: 3.12 json.loads raised RecursionError on 30000 levels,
+    # 3.14 parses 100000, and the depth would then reach code that walks the document.
+    text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+    require(_depth(text) <= MAX_DEPTH, "not valid JSON: nested too deeply (more than %d levels)" % MAX_DEPTH)
     try:
         return json.loads(raw, object_pairs_hook=_pairs, parse_float=_no_float, parse_constant=_no_float)
     except ValueError as error:

@@ -100,6 +100,18 @@ class Manifests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(m.Refused):
                 m.load(raw)
 
+    def test_nesting_is_bounded_before_parsing_on_every_python(self):
+        """Python 3.14's json parses 100000 levels where 3.12 raised RecursionError, so the bound is the loader's."""
+        deepest = "[" * m.MAX_DEPTH + "]" * m.MAX_DEPTH
+        self.assertEqual(m._depth(deepest), m.MAX_DEPTH)
+        m.load(deepest)                                                          # the bound itself is accepted
+        for raw in ("[" * (m.MAX_DEPTH + 1) + "]" * (m.MAX_DEPTH + 1), '{"a":' * (m.MAX_DEPTH + 1) + "1" + "}" * (m.MAX_DEPTH + 1),
+                    b"[" * 100000 + b"]" * 100000):
+            with self.subTest(depth=len(raw) // 2), self.assertRaisesRegex(m.Refused, "nested too deeply"):
+                m.load(raw)
+        # brackets inside strings, escaped quotes included, are not nesting
+        self.assertEqual(m.load('{"a": "%s\\" [[[", "b": ["]]]"]}' % ("[" * 500)), {"a": "[" * 500 + '" [[[', "b": ["]]]"]})
+
     def test_hostile_input_is_a_refusal_never_another_exception(self):
         """48's findings: both are reachable with an unsigned envelope, before any signature is checked."""
         with self.assertRaisesRegex(m.Refused, "not valid JSON: nested too deeply"):
