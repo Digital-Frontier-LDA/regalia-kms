@@ -1,7 +1,8 @@
 # Bare-metal KMS host commissioning (HPE ProLiant DL360 Gen9)
 
 ADR-0002 D21: the KMS runs on **dedicated bare metal with a discrete TPM 2.0**, not as a Proxmox
-guest. Three DL360 Gen9 with the HPE TPM 2.0 module: Lisbon, Porto, and a spare (regalia#46).
+guest. Three DL360 Gen9 with the HPE TPM 2.0 module, one per site, all three active (D32): Lisbon, Porto and
+Coimbra (regalia#46).
 
 Commissioning has two halves:
 - **Firmware and hardware** (below): BIOS/RBSU and iLO settings the operating system cannot read.
