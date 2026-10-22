@@ -358,6 +358,36 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   judgement assumes the host had finished booting (systemd-pcrphase "ready" extended) when `activate`
   ran, which a software TPM cannot show: a bench item (#297), and the refusal says to re-run once
   `systemctl is-system-running` reports running. Run only on software TPMs so far.
+- **K_A and the card record are pinned in the v4 manifest, and nothing uses K_A yet** (#361, #405).
+  `anchor_policy_key` is set at genesis and no signer, the root included, changes it: every node's
+  anchor, counters and signing key will be defined under it, so losing or replacing K_A means a new
+  genesis and re-enrolling every node (its Shamir backup, D28, guards the loss). No node defines or
+  uses an object under K_A until #361's PR C. `card_record` pins the card ceremony record's sequence
+  and digest, never the record itself: a node cannot read a card record (it has no laptop signing
+  record to judge it by), so it holds only that the root moved to a later one whenever owner_keys
+  changed, not what that record says.
+- **The rotation counter R is made at `enrol init`, and nothing uses it yet** (#361 C1). Each node defines R
+  under PolicyAuthorize(Name(K_A), its own 32-byte policyRef, SHA-256("regalia-rotation/v1\0" || node ID)), so R's
+  Name and every approval naming it are that node's alone (a shared Name would let one node's public approval at a
+  higher G open another's objects after a retire). Its first increment uses K_A's approval for that node. Its
+  Name and first value are AK-quoted, and the genesis requires the Name under the manifest's K_A. K_A's per-node
+  approvals (C2) and the writes under them (C3) are not built: until then no index is written under R. Its value
+  is the TPM's saved highest count, so it differs per node (regalia-kms-95). Measured on swtpm only. A node
+  enrolled before C1 has no R and is refused at the genesis ("made before #361 C1").
+- **K_A's approvals are made and carried, and nothing uses them yet** (#361 C2). A signed set's
+  `signing.anchor_approvals` holds K_A's signature per class over P(K_sys, G) for THAT node's rotation
+  counter. The signer (`anchorpolicy approve`, `approve-first`, `approve-increment`) takes G from each
+  node's AK-quoted first value at the genesis, and from the current root-committed document at a rotation
+  (the same G for a key already approved, one above the highest otherwise). It never takes a typed G. The
+  node's use of them (the composite write session) is C3; until then the approvals are only validated by
+  form, at load, and by signature, in the signer. The signer runs on the offline laptop under
+  regalia-ceremony's offline-keys (its TOOLS entries come in an rc PR after this merges); it is unit-tested
+  with keys on pipes, not yet run there.
+- **K_A is taken from the sealed set's generation record** (`--offline-keys-record`, regalia-kms-95 on
+  #438). It is verified under the pinned root, and its published key must equal the entry. Its private
+  half is shown only by the record's `operation_proof` ("verified": the generating tool's own check of a
+  challenge signature, vouched for by the root's signature on the record). It is not re-proven at
+  genesis: a sealed file damaged after generation is found only at the first approval K_A signs.
 - **Card attestation: not built** (#400). Nothing yet produces the YubiKeys' OpenPGP attestation
   certificates (`ykman openpgp keys attest`). The card record's `attestation_sha256` values are
   placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is

@@ -431,23 +431,37 @@ class ProducersWriterRun(unittest.TestCase):
             json.dump(doc, f)
         with open(os.path.join(d, "system.pem"), "w") as f:
             f.write("stub\n")
-        args = ["propose", "--genesis", "--root-key", self.root, "--card-record", str(self.here / "card-record-2.record.json"),
+        from tests.test_baremetal_membership_v4 import K_A, typed
+        # K_A's generation record is signed by the root of its sealed set, and this writer run's lab root is gone (its shares
+        # were not kept): the record is stood in for here, as this test is the card record's (K_A's is test_baremetal_manifest's)
+        with open(os.path.join(d, "offline-keys.record.json"), "w") as f:
+            json.dump({"stand-in": True}, f)
+        generated = {"at": "2026-10-04T10:00:00Z", "master_id": "ab" * 16, "threshold": 2, "shares": 3}
+        args = ["--offline-keys-record", os.path.join(d, "offline-keys.record.json")]
+        args = ["propose", "--genesis", *args, "--root-key", self.root, "--card-record", str(self.here / "card-record-2.record.json"),
                 "--state-dir", self.state, "--measurements", os.path.join(d, "doc.json"), "--out", os.path.join(d, "e1.json"),
                 "--issued-at", "2026-10-04T12:00:00Z", "--system-pub", os.path.join(d, "system.pem")]
+        from deploy.baremetal import anchorpolicy
+        rotation = lambda e: {"index": anchorpolicy.ROTATION_INDEX, "value": 3,          # noqa: E731  (#361 C1: R under K_A)
+                              "name": anchorpolicy.rotation_name(int(anchorpolicy.ROTATION_INDEX, 16), typed(K_A)["key"], node_id=e["node_id"]).hex()}
         for e in entries:                   # each node as `enrol` proves it (#399; stubbed here: its proof is enrol's own test)
             path = os.path.join(d, "bundle-%s.json" % e["node_id"])
             with open(path, "w") as f:
-                json.dump(e, f)
+                json.dump(dict(e, rotation=rotation(e)), f)
             args += ["--node", path, path, path]
         out, err = io.StringIO(), io.StringIO()
         with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch.object(tool.keyfd, "tty_line", lambda p: "40000001 40000002"), \
-                mock.patch.object(tool.enrol, "proven_entry", lambda bundle, pub, keep, act, run=None: (bundle, {"7": "00" * 32, "11": "bb" * 32})):
+                mock.patch.object(tool.enrol, "proven_entry", lambda bundle, pub, keep, act, run=None: ({k: v for k, v in bundle.items() if k != "rotation"}, {"7": "00" * 32, "11": "bb" * 32})), \
+                mock.patch.object(tool, "offline_keys_record", lambda envelope, root: (typed(K_A), generated)):
             self.assertEqual(tool.main(args), 0, err.getvalue())
         self.assertIn("card record 2 of 2 (the newest on this laptop's signing record)", out.getvalue())
         with open(os.path.join(d, "e1.json")) as f:
             written = json.load(f)
         owners = self.record(2)["record"]["owner_keys"]
         self.assertEqual(written["owner_keys"], [{"alg": "ed25519", "key": k["key"]} for k in sorted(owners, key=lambda k: k["serial"])])
+        # the writer's own record, pinned by sequence and digest (#405), and K_A (#361; from the stood-in record)
+        self.assertEqual(written["card_record"], {"sequence": 2, "digest": cr.digest(self.record(2)["record"])})
+        self.assertEqual(written["anchor_policy_key"], typed(K_A))
 
 
 if __name__ == "__main__":
