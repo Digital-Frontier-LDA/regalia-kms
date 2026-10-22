@@ -415,7 +415,7 @@ jobs:
   # PCRs, another TPM's AK, a session carried across a reboot and rolled-back TPM state are refused.
   # The script exits nonzero on any FAIL; the count guards against it passing by running nothing.
   tpm-attest:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -431,7 +431,7 @@ jobs:
           bash e2e/tpm-attest-swtpm.sh > "$RUNNER_TEMP/attest.log" 2>&1 || status=$?
           cat "$RUNNER_TEMP/attest.log"
           [ "$status" -eq 0 ] || exit "$status"
-          grep -q '^tpm-attest-swtpm: 31 passed, 0 failed$' "$RUNNER_TEMP/attest.log" || {
+          grep -q '^tpm-attest-swtpm: 33 passed, 0 failed$' "$RUNNER_TEMP/attest.log" || {
             echo "::error::the attestation battery did not run all 31 checks" >&2; exit 1; }
       - name: regalia-node enrol init against swtpm (keys made on the host, nothing foreign touched, a crash at every call) — may not skip
         env:
