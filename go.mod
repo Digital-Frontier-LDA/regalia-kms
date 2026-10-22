@@ -9,7 +9,7 @@ require (
 	github.com/miekg/pkcs11 v1.1.2
 	go.etcd.io/etcd/client/v3 v3.6.15
 	go.uber.org/zap v1.27.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
