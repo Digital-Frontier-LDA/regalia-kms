@@ -79,8 +79,9 @@ python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/initrd" > "$W/
 # holds it to (#266: `uki provenance` reads them from this checkout; the real record is e2e/unlock-boot-qemu.sh's)
 python3 -Es -m deploy.baremetal.uki provenance > "$W/provenance.json"
 PINNED_KEYRING="$(sed -n 's/^KEYRING_SHA256 = "\([0-9a-f]\{64\}\)"$/\1/p' deploy/baremetal/debverify.py)"
-# the client is built with go.mod's Go release, and uki.py refuses a record that names another
-GO_RELEASE="go$(sed -n 's/^go \([0-9.]*\)$/\1/p' go.mod)"
+# the client is built with go.mod's Go release (its toolchain line, else its go line), and uki.py refuses
+# a record that names another: ask uki.py, so the two cannot read go.mod differently
+GO_RELEASE="$(python3 -Es -c 'from deploy.baremetal.uki import Checkout; print(Checkout().go_release())')"
 python3 -I - "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/initrd-build.json" "$W/initrd-inventory.txt" "$PINNED_KEYRING" "$W/provenance.json" "$W/root-key.json" "$GO_RELEASE" <<'PY'
 import hashlib, json, sys
 digest = lambda path: hashlib.sha256(open(path, "rb").read()).hexdigest()
