@@ -12,7 +12,7 @@ replaces the system chrony's configuration (the system clock follows two private
 loopback), creates the user regalia-sync, installs the units, and writes /etc/regalia and /var/lib/regalia-*.
 
 THE TPM is swtpm. Where the kernel has the vTPM proxy it sits behind the kernel's resource manager, as on a
-host; GitHub's Azure kernel has none, and there it is swtpm's CUSE device, which has NO resource manager:
+host (GitHub's Azure kernel has it from the 2026-10-18 images); where it has none, swtpm's CUSE device, which has NO resource manager:
 one command buffer, no per-connection context, so two processes using it at once could receive each
 other's responses, and sessions survive between processes (on a host the kernel flushes them when a
 connection closes). Part 1 therefore lets one unit at a time use the TPM after the first one. Part 2 needs
@@ -303,17 +303,25 @@ def main():
 
 def tpm(work):
     """A software TPM as a character device the units open as a host's: /dev/tpmrm0, the tss group's, 0660.
-    The kernel's vTPM proxy where the kernel has it; else (GitHub's Azure kernel is built without it)
-    swtpm's CUSE device under that name, which needs no kernel module but FUSE's CUSE, and is a TPM
-    without the kernel's resource manager (see the module's docstring). Returns (how, whether the test
-    set the device's group and mode itself)."""
+    The kernel's vTPM proxy where the kernel has it; else (GitHub's Azure kernel was built without it
+    until the 2026-10-18 images) swtpm's CUSE device under that name, which needs no kernel module but
+    FUSE's CUSE, and is a TPM without the kernel's resource manager (see the module's docstring).
+    Returns (how, whether the test set the device's group and mode itself)."""
     state = work / "tpm"
     state.mkdir()
     shutil.chown(state, "tss", "tss")
     if sh("modprobe", "tpm_vtpm_proxy", check=False).returncode == 0:
         done = sh("swtpm", "chardev", "--vtpm-proxy", "--tpm2", "--tpmstate", "dir=%s" % state, "--flags", "not-need-init,startup-clear",
                   "--daemon", "--log", "file=%s" % (work / "swtpm.log"))
-        how = "the kernel's vTPM proxy (%s)" % (done.stdout + done.stderr).strip()
+        said = (done.stdout + done.stderr).strip()
+        how = "the kernel's vTPM proxy (%s)" % said
+        # swtpm says "New TPM device: /dev/tpmN"; the kernel registers it (and tpmrmN) only once its own
+        # startup through the proxy is answered, after swtpm has daemonized, so the node comes later
+        made = re.search(r"/dev/tpm(\d+)\b", said)
+        if made and made.group(1) != "0":
+            raise SystemExit("node-units-systemd: the vTPM proxy made /dev/tpm%s; the units allow only /dev/tpmrm0 (is a TPM "
+                             "already on this host?)" % made.group(1))
+        until(lambda: os.path.exists("/dev/tpmrm0"), 10, 0.2)
     else:
         sh("modprobe", "cuse", check=False)
         (work / "swtpm.log").touch()
@@ -324,6 +332,9 @@ def tpm(work):
         sh("swtpm_ioctl", "-i", "/dev/tpmrm0")
         sh("tpm2_startup", "-c", "-T", "device:/dev/tpmrm0")
         how = "swtpm's CUSE device"
+    if not os.path.exists("/dev/tpmrm0"):
+        raise SystemExit("node-units-systemd: no /dev/tpmrm0 10 s after starting %s; swtpm's log: %s" %
+                         (how, (work / "swtpm.log").read_text(errors="replace")[-800:] if (work / "swtpm.log").exists() else "none"))
     sh("udevadm", "settle", check=False)
     # the distribution's rule (tpm-udev: KERNEL=="tpmrm[0-9]*", group tss, 0660) where udev applied it
     by_test = sh("stat", "-c", "%G %a", "/dev/tpmrm0", check=False).stdout.strip() != "tss 660"
