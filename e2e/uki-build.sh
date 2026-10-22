@@ -81,7 +81,7 @@ python3 -Es -m deploy.baremetal.uki provenance > "$W/provenance.json"
 PINNED_KEYRING="$(sed -n 's/^KEYRING_SHA256 = "\([0-9a-f]\{64\}\)"$/\1/p' deploy/baremetal/debverify.py)"
 # the client is built with go.mod's Go release (its toolchain line, else its go line), and uki.py refuses
 # a record that names another: ask uki.py, so the two cannot read go.mod differently
-GO_RELEASE="$(python3 -Es -c 'from deploy.baremetal.uki import Checkout; print(Checkout().go_release())')"
+GO_RELEASE="$(python3 -IB -c 'import sys; sys.path.append(sys.argv.pop(1)); from deploy.baremetal.uki import Checkout; print(Checkout().go_release())' "$PWD")"
 python3 -I - "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/initrd-build.json" "$W/initrd-inventory.txt" "$PINNED_KEYRING" "$W/provenance.json" "$W/root-key.json" "$GO_RELEASE" <<'PY'
 import hashlib, json, sys
 digest = lambda path: hashlib.sha256(open(path, "rb").read()).hexdigest()
