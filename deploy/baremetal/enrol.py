@@ -59,6 +59,7 @@ import base64
 import contextlib
 import glob
 import hashlib
+import io
 import json
 import os
 import re
@@ -2158,24 +2159,102 @@ def enrolled_ek_name(directory, node_id):
     return journal.get("identity")["ek_name"]
 
 
+OWNERAUTH_STATE = "ownerauth.json"
+
+
+def ownerauth_current(directory):
+    """The SHA-256 of the owner-authorization record this node's TPM answers to, as `enrol ownerauth` last set, rotated
+    or adopted it (`directory`/ownerauth.json, root's 0600; regalia-kms-d9 on #456), or None when none is held (a node set
+    up before this, or none set)."""
+    path = os.path.join(directory, OWNERAUTH_STATE)
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) & 0o077 == 0,
+            "%s is not a regular file of root's that only root reads: the node's owner-authorization state cannot be trusted" % path)
+    with open(path, "rb") as f:
+        doc = membership.load(f.read(4096), 4096)
+    require(isinstance(doc, dict) and sorted(doc) == ["current"] and isinstance(doc["current"], str)
+            and re.fullmatch(r"[0-9a-f]{64}", doc["current"]) is not None, "%s is not {\"current\": <64 hex>}" % path)
+    return doc["current"]
+
+
+def _ownerauth_hold(directory, digest):
+    _atomic_json(os.path.join(directory, OWNERAUTH_STATE), {"current": digest})
+
+
 def set_ownerauth(node_id, root_key, record_path, stream, check=False, tcti=None, run=subprocess.run, directory=ENROL_DIR,
-                  ek_name=None):
+                  ek_name=None, rotate_from=None, adopt=False):
     """`enrol ownerauth` (#242 step C): this TPM's owner authorization from the node's envelope, the value on `stream`
     (gpg --decrypt ownerauth-<node>.yk.gpg | ...), checked against ownerauth.record.json verified under the pinned
     root BEFORE the TPM is touched. Sets it from EMPTY only (ownerauth.set_owner refuses one already set, never
     overwriting it). `check`: changes nothing, and proves in ONE owner-authorized call that the TPM's owner
     authorization is this node's envelope value. The value is set in a session salted to the EK `enrol init` recorded
-    (`ek_name`, else read from `directory`'s journal; #414). Returns what to print."""
+    (`ek_name`, else read from `directory`'s journal; #414).
+    `rotate_from` (a rotation, ownerauth.rotate_owner): the record of the value the TPM holds now. Then `stream` carries
+    that CURRENT value first and the NEW one (of `record_path`) second, each "<64 hex>\n", and BOTH are checked against
+    their records under the pinned root before the TPM is touched.
+    THE NODE REMEMBERS which record it is on (ownerauth_current; regalia-kms-d9): set and rotate write the record's
+    SHA-256 once the TPM answers to it; a rotation is refused unless its current record is that one (a stale record never
+    reaches the TPM); `adopt` (with `check`) writes it, one way, for a node set up before this: only when none is held,
+    and only after the TPM answered to the record given. Returns what to print."""
+    require(not (check and rotate_from), "--check and --rotate-from are different commands: give one")
+    require(not adopt or check, "--adopt goes with --check: it records the record the TPM answers to")
+    digest_of = lambda envelope: hashlib.sha256(membership.canonical(envelope)).hexdigest()
+    held = ownerauth_current(directory)
+    if rotate_from is not None:
+        # both values in one read: read_value reads one byte past its 65 to see trailing input, which would eat the
+        # second value's first; so exactly 130 bytes, each half judged by read_value on its own
+        raw = stream.read(131)
+        raw = raw.encode() if isinstance(raw, str) else raw
+        require(len(raw) == 130, "a rotation takes, on standard input, the CURRENT value then the NEW one, each 64 lowercase "
+                "hex and a newline (e.g. (gpg --decrypt old.yk.gpg; gpg --decrypt new.yk.gpg) | ...), nothing else")
+        with open(rotate_from, "rb") as f:
+            current_envelope = membership.load(f.read(membership.MAX_BYTES + 1), membership.MAX_BYTES)
+        require(held is not None, "this node holds no record of which owner-authorization record it is on (%s): prove the "
+                "current one first with `enrol ownerauth --check --adopt --record CURRENT_RECORD` (its value on standard "
+                "input). Nothing was changed" % os.path.join(directory, OWNERAUTH_STATE))
+        require(digest_of(current_envelope) == held, "the current record given is not the one this node is on (%s..., the "
+                "node holds %s...): a stale record's value would only be refused by the TPM. Nothing was changed"
+                % (digest_of(current_envelope)[:16], held[:16]))
+        current = ownerauth.from_envelope(io.BytesIO(raw[:65]), current_envelope, root_key, node_id)
+        stream = io.BytesIO(raw[65:])
     with open(record_path, "rb") as f:
         envelope = membership.load(f.read(membership.MAX_BYTES + 1), membership.MAX_BYTES)
     auth = ownerauth.from_envelope(stream, envelope, root_key, node_id)
+    if rotate_from is not None:
+        # never back to an older record (regalia-kms-51): a rotation cuts out retired or lost cards, whose envelopes an older
+        # record's are. Both records are root-signed and the TPM's answer to the current value proves which is current, so
+        # their `at` is a signed order, not a clock: the new one must be later
+        stamps = [e["record"]["at"] for e in (current_envelope, envelope)]
+        require(all(isinstance(t, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", t) for t in stamps),
+                "a record's `at` is not a UTC time (%%Y-%%m-%%dT%%H:%%M:%%SZ): the records cannot be ordered. Nothing was changed")
+        require(stamps[1] > stamps[0], "the new record is not newer than the current one (%s, not after %s): a rotation never "
+                "goes back to an older record, whose envelopes retired or lost cards may open. Nothing was changed" % (stamps[1], stamps[0]))
+        changed = ownerauth.rotate_owner(current, auth, ek_name or enrolled_ek_name(directory, node_id), tcti, run)
+        _ownerauth_hold(directory, digest_of(envelope))
+        if changed:
+            return ("the TPM's owner authorization is rotated to %s's NEW envelope value, and answers to it; from now on every "
+                    "owner-authorized tool takes the new record (--ownerauth %s)" % (node_id, record_path))
+        return ("the TPM's owner authorization already answers to %s's NEW envelope value: nothing was changed on the TPM; "
+                "the node now holds the new record" % node_id)
     if check:
         require(ownerauth.posture(tcti, run)["owner"], "the TPM's owner authorization is empty: nothing to check; set it "
                 "(this command without --check)")
         require(ownerauth.holds(auth, tcti, run), "the TPM's owner authorization is NOT %s's envelope value: this TPM was "
                 "provisioned otherwise, or the envelope is another node's. Nothing was changed" % node_id)
-        return "the TPM's owner authorization is %s's envelope value" % node_id
+        if adopt:
+            # one way (regalia-kms-d9): missing -> written; a node that already holds another record is not overwritten
+            require(held is None or held == digest_of(envelope), "this node already holds another owner-authorization record "
+                    "(%s...): --adopt only records one for a node that holds none. Nothing was changed" % (held or "")[:16])
+            _ownerauth_hold(directory, digest_of(envelope))
+            return "the TPM's owner authorization is %s's envelope value; the node now holds this record" % node_id
+        on = ("the node holds this record" if held == digest_of(envelope) else "the node holds NO record of it (--adopt)"
+              if held is None else "but the node holds ANOTHER record (%s...)" % held[:16])
+        return "the TPM's owner authorization is %s's envelope value; %s" % (node_id, on)
     ownerauth.set_owner(auth, ek_name or enrolled_ek_name(directory, node_id), tcti, run)
+    _ownerauth_hold(directory, digest_of(envelope))
     return "the TPM's owner authorization is set to %s's envelope value, and answers to it; keep the envelope, never the value" % node_id
 
 
@@ -2194,6 +2273,10 @@ def main(argv=None):
     o.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex: the record is verified under it")
     o.add_argument("--record", required=True, help="the ceremony's ownerauth.record.json")
     o.add_argument("--check", action="store_true", help="change nothing: prove the TPM's owner authorization is this envelope's")
+    o.add_argument("--adopt", action="store_true", help="with --check: record that this node is on this record (a node "
+                   "set up before the node held one; one way)")
+    o.add_argument("--rotate-from", metavar="OLD_RECORD.json", help="rotate a SET owner authorization: the record of the value "
+                   "the TPM holds now; standard input carries that current value, then the new one (of --record)")
     o.add_argument("--enrol-dir", default=ENROL_DIR, help="the enrolment directory: the EK `init` recorded salts the session")
     g = sub.add_parser("challenge", help="(the root's side, no TPM) a credential to the bundle's EK and AK, for `activate`")
     g.add_argument("--bundle", required=True)
@@ -2257,7 +2340,8 @@ def main(argv=None):
     if args.command == "ownerauth":
         try:
             ownerauth.measured_once()             # the value stays off the TPM bus only on measured tools (#414)
-            print(set_ownerauth(args.node_id, args.root_key, args.record, sys.stdin.buffer, check=args.check, directory=args.enrol_dir))
+            print(set_ownerauth(args.node_id, args.root_key, args.record, sys.stdin.buffer, check=args.check, directory=args.enrol_dir,
+                                rotate_from=args.rotate_from, adopt=args.adopt))
         except (Refused, membership.Refused, OSError, ValueError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
