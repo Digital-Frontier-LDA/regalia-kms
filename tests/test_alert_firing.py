@@ -6,7 +6,7 @@ still be unable to fire, or fire on a state that is normal.
 
 Both have happened here, and neither was caught by a test:
 
-  * RegaliaFencingLeaseLost would have paged on EVERY daemon restart, because `lease_held 0`
+  * RegaliaFencingLeaseLost (now RegaliaNoActiveSite, across the sites) would have paged on EVERY daemon restart, because `lease_held 0`
     before the first evaluation is byte-identical to a lease just lost. A rule that pages on
     every restart is a rule somebody silences.
   * Fixing that by making the gauge absent until first evaluation left
@@ -106,10 +106,22 @@ SCENARIOS: dict[str, dict] = {
         "healthy": [("regalia_audit_verify_last_run_seconds", {}, "580+0x10")],
         "at": 600,
     },
-    "RegaliaFencingLeaseLost": {
-        "fault": [("regalia_fencing_lease_held", {}, "0+0x10")],
-        "healthy": [("regalia_fencing_lease_held", {}, "1+0x10")],
-        "at": 300,
+    # across the sites of one job (#432): no site holding, or two; `labels` because the rules aggregate the instance away
+    "RegaliaNoActiveSite": {
+        "fault": [("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "a"}, "0+0x25"), ("regalia_fencing_last_check_seconds", {"job": "regalia-kms", "instance": "a"}, "0+60x25"),
+                  ("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "b"}, "0+0x25"), ("regalia_fencing_last_check_seconds", {"job": "regalia-kms", "instance": "b"}, "0+60x25")],
+        "healthy": [("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "a"}, "1+0x25"), ("regalia_fencing_last_check_seconds", {"job": "regalia-kms", "instance": "a"}, "0+60x25"),
+                    ("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "b"}, "0+0x25"), ("regalia_fencing_last_check_seconds", {"job": "regalia-kms", "instance": "b"}, "0+60x25")],
+        "labels": {"job": "regalia-kms"},
+        "at": 1380,
+    },
+    "RegaliaTwoActiveSites": {
+        "fault": [("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "a"}, "1+0x5"), ("regalia_fencing_last_check_seconds", {"job": "regalia-kms", "instance": "a"}, "0+60x5"),
+                  ("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "b"}, "1+0x5"), ("regalia_fencing_last_check_seconds", {"job": "regalia-kms", "instance": "b"}, "0+60x5")],
+        "healthy": [("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "a"}, "1+0x5"), ("regalia_fencing_last_check_seconds", {"job": "regalia-kms", "instance": "a"}, "0+60x5"),
+                    ("regalia_fencing_lease_held", {"job": "regalia-kms", "instance": "b"}, "0+0x5"), ("regalia_fencing_last_check_seconds", {"job": "regalia-kms", "instance": "b"}, "0+60x5")],
+        "labels": {"job": "regalia-kms"},
+        "at": 120,
     },
     "RegaliaFencingNeverEvaluated": {
         "fault": [("regalia_fencing_evaluated", {}, "0+0x10")],
@@ -207,6 +219,7 @@ def build_cases(rules: dict[str, dict]) -> list[dict]:
         labels = {}
         for _, series_labels, _ in scenario["fault"]:
             labels.update(series_labels)
+        labels = scenario.get("labels", labels)      # a rule that aggregates labels away states the ones it keeps
         expected_labels = {"alertname": name, **rule.get("labels", {}), **labels}
         expected_annotations = {
             key: render(value, labels)
@@ -325,7 +338,7 @@ class AlertFiringTests(unittest.TestCase):
                 },
                 # A restart must not page. This is the regression that would have woken
                 # somebody on every deploy.
-                {"eval_time": "400s", "alertname": "RegaliaFencingLeaseLost", "exp_alerts": []},
+                {"eval_time": "400s", "alertname": "RegaliaNoActiveSite", "exp_alerts": []},
                 # And the stale rule genuinely cannot see this state, which is why the one
                 # above has to.
                 {"eval_time": "400s", "alertname": "RegaliaFencingEvaluationStale",
@@ -351,6 +364,79 @@ class AlertFiringTests(unittest.TestCase):
         self.assertNotIn("no file match pattern", output, "the rules file was not loaded")
         self.assertEqual(0, completed.returncode, output)
 
+
+
+class FencingAcrossSites(unittest.TestCase):
+    """RegaliaNoActiveSite and RegaliaTwoActiveSites judge the sites of one job together (#432), counting a site as holding
+    only while its verdict is fresh (evaluated in the last 60 s): a planned switchover does not page, an idle old site that
+    still exports held=1 after its lease expired is not a second active site (48's read), and one cluster's sites are never
+    judged with another's."""
+
+    def setUp(self):
+        self.promtool = shutil.which("promtool")
+        if self.promtool is None:
+            if REQUIRE_PROMTOOL:
+                self.fail("promtool is required in this job and was not found on PATH")
+            self.skipTest("promtool not installed; set ALERT_RULES_JOB=1 to require it")
+
+    def run_suite(self, tests):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            shutil.copy(RULES_PATH, workspace / RULES_PATH.name)
+            (workspace / "sites.test.yml").write_text(yaml.safe_dump(
+                {"rule_files": [RULES_PATH.name], "evaluation_interval": "1m", "tests": tests}, sort_keys=False), encoding="utf-8")
+            completed = subprocess.run([self.promtool, "test", "rules", "sites.test.yml"], cwd=workspace,
+                                       capture_output=True, text=True, check=False)
+        output = completed.stdout + completed.stderr
+        self.assertNotIn("no file match pattern", output)
+        self.assertEqual(0, completed.returncode, output)
+
+    @staticmethod
+    def site(labels, held, checked):
+        """A site's two series: held, and when it last evaluated ("0+60xN" follows promtool's time(): fresh)."""
+        return [{"series": series("regalia_fencing_lease_held", labels), "values": held},
+                {"series": series("regalia_fencing_last_check_seconds", labels), "values": checked}]
+
+    def expected(self, name, job):
+        rule = alert_rules()[name]
+        return [{"exp_labels": {"alertname": name, **rule["labels"], "job": job},
+                 "exp_annotations": {k: render(v, {"job": job}) for k, v in rule["annotations"].items()}}]
+
+    def test_a_planned_switchover_does_not_page_and_clusters_are_judged_apart(self):
+        a, b, c = ({"job": "regalia-kms", "instance": i} for i in ("a", "b", "c"))
+        other = {"job": "regalia-kms-other", "instance": "x"}
+        fresh = "0+60x40"
+        self.run_suite([
+            {"name": "a switchover: a holds, no site for 12 minutes, then b", "interval": "1m",
+             "input_series": self.site(a, "1+0x5 0+0x35", fresh) + self.site(b, "0+0x17 1+0x23", fresh),
+             "alert_rule_test": [{"eval_time": "25m", "alertname": "RegaliaNoActiveSite", "exp_alerts": []},
+                                 {"eval_time": "25m", "alertname": "RegaliaTwoActiveSites", "exp_alerts": []}]},
+            {"name": "two clusters: only the one where no site holds", "interval": "1m",
+             "input_series": self.site(a, "1+0x30", fresh) + self.site(c, "0+0x30", fresh) + self.site(other, "0+0x30", fresh),
+             "alert_rule_test": [{"eval_time": "23m", "alertname": "RegaliaNoActiveSite",
+                                  "exp_alerts": self.expected("RegaliaNoActiveSite", "regalia-kms-other")}]},
+            {"name": "two clusters, each with one holder: never two active", "interval": "1m",
+             "input_series": self.site(a, "1+0x5", fresh) + self.site(other, "1+0x5", fresh),
+             "alert_rule_test": [{"eval_time": "3m", "alertname": "RegaliaTwoActiveSites", "exp_alerts": []}]},
+        ])
+
+    def test_an_idle_old_site_still_exporting_held_is_not_a_second_site(self):
+        """48's read: the daemon evaluates on Ready(), not on a timer. The old site, idle since its lease expired at minute
+        5, still exports held=1 with its last evaluation at minute 5; the new site is promoted at minute 7 (expiry plus the
+        60 s skew, plus the promote). No "two sites"; and no "no site" either while the new one holds. But with NO fresh
+        holder at all (the old site idle and stale, nobody promoted) "no site" pages: a stale held=1 does not hide it."""
+        a, b = ({"job": "regalia-kms", "instance": i} for i in ("a", "b"))
+        stale_after_5 = "0+60x5 300+0x30"           # evaluated until minute 5, then nobody asks it
+        self.run_suite([
+            {"name": "old site idle after expiry, new site promoted", "interval": "1m",
+             "input_series": self.site(a, "1+0x35", stale_after_5) + self.site(b, "0+0x6 1+0x29", "0+60x35"),
+             "alert_rule_test": [{"eval_time": "10m", "alertname": "RegaliaTwoActiveSites", "exp_alerts": []},
+                                 {"eval_time": "30m", "alertname": "RegaliaNoActiveSite", "exp_alerts": []}]},
+            {"name": "old site idle and stale, nobody promoted: no site", "interval": "1m",
+             "input_series": self.site(a, "1+0x35", stale_after_5) + self.site(b, "0+0x35", "0+60x35"),
+             "alert_rule_test": [{"eval_time": "30m", "alertname": "RegaliaNoActiveSite",
+                                  "exp_alerts": self.expected("RegaliaNoActiveSite", "regalia-kms")}]},
+        ])
 
 if __name__ == "__main__":
     unittest.main()
