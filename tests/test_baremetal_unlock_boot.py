@@ -278,7 +278,7 @@ class OnQemu(tub.OnSwtpm):
         if os.path.exists(ctrl):
             os.unlink(ctrl)
         tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--ctrl", "type=unixio,path=" + ctrl,
-                                "--log", "file=%s/swtpm-%s.log,level=20" % (BOOT, label)],               # EXPERIMENT regalia-a0y
+                                "--log", "file=%s/swtpm-%s.log,level=20" % (self.d, label)],             # EXPERIMENT regalia-a0y
                                stdout=subprocess.DEVNULL, stderr=open("%s/swtpm-%s.stderr.log" % (BOOT, label), "wb"))
         self.processes.append(tpm)
         for _ in range(100):
@@ -342,6 +342,8 @@ class OnQemu(tub.OnSwtpm):
         qemu.wait(30)
         tpm.terminate()
         tpm.wait(30)
+        if os.path.exists("%s/swtpm-%s.log" % (self.d, label)):                                       # EXPERIMENT regalia-a0y
+            shutil.copyfile("%s/swtpm-%s.log" % (self.d, label), "%s/swtpm-%s.log" % (BOOT, label))
         text = said.decode(errors="replace")
         print("\n----- boot %s (%s): %d lines of console; the lines that matter:" % (label, "KVM" if kvm else "TCG", text.count("\n")), file=sys.stderr)
         for line in text.splitlines():
