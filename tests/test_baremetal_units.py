@@ -76,6 +76,10 @@ class ChronyDropIn(unittest.TestCase):
         execs = [line for line in lines if line.startswith("ExecStart=")]
         # an empty ExecStart= first: a drop-in otherwise ADDS a second command instead of replacing the package's
         self.assertEqual(execs, ["ExecStart=", "ExecStart=!/usr/sbin/chronyd -f %s $DAEMON_OPTS" % enrol.CHRONY_CONF])
+        # that start forks, so the drop-in says so itself: Debian's unit from chrony 4.8 is Type=notify with -n, and
+        # under it this ExecStart wrote no latch on a kill (ubuntu-26.04's chrony 4.8, run 39890995085)
+        self.assertEqual([l for l in lines if l.startswith(("Type=", "PIDFile="))], ["Type=forking", "PIDFile=/run/chrony/chronyd.pid"])
+        self.assertNotIn(" -n", execs[1])
         self.assertTrue(enrol.CHRONY_CONF.startswith("/etc/chrony/") and enrol.CHRONY_CONF != "/etc/chrony/chrony.conf")
         self.assertIn("Conflicts=systemd-timesyncd.service", lines)
         self.assertIn("ConditionPathExists=%s" % enrol.CHRONY_CONF, lines)        # skipped, not latched, before enrolment
