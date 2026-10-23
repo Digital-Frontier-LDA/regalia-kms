@@ -77,6 +77,7 @@ pkcheck | os_probe only looks for polkit, which the image does not ship (absence
 [not-on-host]
 # Deploy modules the host neither runs nor imports.
 activation | the activation lease (#440): no unit imports it yet; issuance over sync follows (#432, rewritten by D32)
+anchorpolicy | the anchor-policy authority's arithmetic (#361 A, #437): nothing on the host imports it yet; enrol init does from #361 C1 (#462), which removes this line
 cardrecord | the card-ceremony record, verified on the laptop (manifest propose --genesis)
 drill | the fault-injection drill runner (#495): the operator runs it from the laptop against the three hosts (SSH, BMC)
 etcdconf | the etcd configuration renderer (#432, D32): nothing renders it on a host yet; enrolment does, next
