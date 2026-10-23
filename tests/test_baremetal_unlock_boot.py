@@ -277,7 +277,8 @@ class OnQemu(tub.OnSwtpm):
         ctrl = self.d + "/a.ctrl"
         if os.path.exists(ctrl):
             os.unlink(ctrl)
-        tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--ctrl", "type=unixio,path=" + ctrl],
+        tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--ctrl", "type=unixio,path=" + ctrl,
+                                "--log", "file=%s/swtpm-%s.log,level=20" % (BOOT, label)],               # EXPERIMENT regalia-a0y
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.processes.append(tpm)
         for _ in range(100):

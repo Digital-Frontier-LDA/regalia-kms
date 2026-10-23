@@ -86,7 +86,8 @@ cleanup(){
     rm -rf --one-file-system -- "$W"
   fi
 }
-trap cleanup EXIT
+keep(){ [ -n "${REGALIA_KEEP_DIR:-}" ] && { mkdir -p "$REGALIA_KEEP_DIR"; cp "$W"/console-*.log "$W"/swtpm-*.log "$REGALIA_KEEP_DIR"/ 2>/dev/null; chmod -R a+rX "$REGALIA_KEEP_DIR"; }; cleanup; }   # EXPERIMENT regalia-a0y
+trap keep EXIT
 RECOVERY="cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuuvvcb"
 
 SUITE="${REGALIA_BOOT_SUITE:-trixie}"

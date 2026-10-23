@@ -1,0 +1,37 @@
+# THROWAWAY EXPERIMENT (regalia-a0y): unlock-boot-qemu on ubuntu-26.04, twice, with swtpm logging and every boot's
+# console kept, so an intermittent "Failed to set up credentials: Protocol error" can be read. Not for merging.
+name: exp-unseal
+on:
+  push:
+    branches: [exp/unseal-a0y]
+permissions:
+  contents: read
+jobs:
+  unlock-boot-qemu:
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install QEMU, the guest builder, the software TPM, WireGuard and nftables
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 mmdebstrap debian-archive-keyring \
+            swtpm swtpm-tools tpm2-tools cryptsetup-bin wireguard-tools nftables iproute2 cpio e2fsprogs ovmf dosfstools openssl
+          dpkg-query -W swtpm libtpms0 qemu-system-x86 ovmf 2>/dev/null || dpkg-query -W 'swtpm*' 'libtpms*' 'qemu-system-x86' ovmf
+      - name: A guest boots a measured UKI through a peer
+        run: sudo REGALIA_KEEP_DIR="$RUNNER_TEMP/keep" REGALIA_EXPECT_KVM=1 REGALIA_GO="$(command -v go)" REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/20261003T121500Z/ REGALIA_BOOT_SECURITY_MIRROR=https://snapshot.debian.org/archive/debian-security/20261003T121500Z/ bash e2e/unlock-boot-qemu.sh
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unseal-${{ matrix.run }}
+          path: ${{ runner.temp }}/keep
+          if-no-files-found: warn
