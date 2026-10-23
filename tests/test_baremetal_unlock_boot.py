@@ -293,7 +293,7 @@ class OnQemu(tub.OnSwtpm):
                 # virtio NIC) tried PXE and HTTP boot first, about 60 s each, and boot 1 asked after 158 s (regalia-oiq)
                 "-drive", "file=%s,format=raw,if=none,id=boot" % self.image, "-device", "virtio-blk-pci,drive=boot,bootindex=0",
                 "-netdev", "tap,id=n0,ifname=tap0,script=no,downscript=no", "-device", "virtio-net-pci,netdev=n0,mac=%s" % GUEST_MAC,
-                "-chardev", "socket,id=chrtpm,path=" + ctrl, "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-tis,tpmdev=tpm0"]
+                "-chardev", "socket,id=chrtpm,path=" + ctrl, "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-crb,tpmdev=tpm0"]
         if enrol_disk:
             argv += ["-drive", "file=%s,format=raw,if=virtio" % enrol_disk]
         for name, content in sorted((smbios or {}).items()):        # SMBIOS type 11: a channel the firmware owns
