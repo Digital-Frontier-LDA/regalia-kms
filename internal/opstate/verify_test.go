@@ -245,6 +245,65 @@ func TestAnApproverSetHeldUnderAnotherDigestIsRefused(t *testing.T) {
 	t.Fatal("the vector has no accepted key-state case")
 }
 
+// A RELIST OF AN UNCHANGED STORE IS NOT A NEW ENTRY (CodeRabbit on #526). After a watch error the cache lists
+// the store again and judges every value against the last good one under its key, which is the same entry: it is
+// read again, not replaced, so it must still verify (a key state is not "a replay of itself").
+func TestARelistOfAnUnchangedEntryStillVerifies(t *testing.T) {
+	v := opstateVector(t)
+	sessions, sets := vectorResolvers(t, v)
+	cases := v["cases"].([]any)
+	raw := func(i int) []byte { return membership.Canonical(cases[i].(map[string]any)["value"]) }
+	key := cases[6].(map[string]any)["key"].(string)
+	r := newFakeSource()
+	r.values[key], r.revision = raw(6), 10
+	clk := &clock{now: time.Hour}
+	cache, err := New(Options{Source: r, Prefix: Prefix, Boottime: clk.read, ProgressEvery: time.Hour, Retry: 10 * time.Millisecond,
+		Verify: Judge(sessions, func() map[string]ApproverSet { return sets }, nil), Tombstone: KeyStateTombstone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { cache.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	stream := func() chan Update {
+		select {
+		case s := <-r.streams:
+			return s
+		case <-time.After(5 * time.Second):
+			t.Fatal("no watch")
+		}
+		return nil
+	}
+	s := stream()
+	waitLive := func(rev int64) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if got, _, live := cache.Applied(); live && got >= rev {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("never reached revision %d (%s)", rev, cache.Reason())
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	waitLive(10)
+	if _, _, err := cache.Entry(key); err != nil {
+		t.Fatalf("v1 listed: %v", err)
+	}
+	r.mu.Lock()
+	r.revision = 11 // the store moved on elsewhere; this key did not change
+	r.mu.Unlock()
+	s <- Update{Err: errors.New("leader changed")}
+	stream()
+	waitLive(11)
+	if parsed, ok, err := cache.Entry(key); !ok || err != nil || parsed.(map[string]any)["state"] != "enabled" {
+		t.Fatalf("v1 listed again, unchanged, after a relist: ok=%v %v", ok, err)
+	}
+}
+
 // THE CACHE JUDGES EACH ENTRY AGAINST THE LAST GOOD ONE (#488 finding 4, 48's version and prev_digest). On the
 // vector's key-state chain: v1 listed, v2 watched, the old v1 put back (refused, REPLAY), v3 still judged
 // against v2 (a refused entry does not reset it), a delete kept as a refusal, and v1 listed again after a
@@ -259,7 +318,7 @@ func TestTheCacheRefusesAReplayedOrDeletedKeyState(t *testing.T) {
 	r.values[key], r.revision = raw(6), 10
 	clk := &clock{now: time.Hour}
 	cache, err := New(Options{Source: r, Prefix: Prefix, Boottime: clk.read, ProgressEvery: time.Hour, Retry: 10 * time.Millisecond,
-		Verify: Judge(sessions, func() map[string]ApproverSet { return sets }), Tombstone: KeyStateTombstone})
+		Verify: Judge(sessions, func() map[string]ApproverSet { return sets }, nil), Tombstone: KeyStateTombstone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +467,7 @@ func TestTheCacheJudgesACreatedEntryFreshOnArrival(t *testing.T) {
 	wall := time.Date(2026, 10, 5, 12, 5, 0, 0, time.UTC)                      // five minutes after the entry's `at`
 	clk := &clock{now: time.Hour}
 	cache, err := New(Options{Source: r, Prefix: Prefix, Boottime: clk.read, ProgressEvery: time.Hour, Retry: 10 * time.Millisecond,
-		Verify: Judge(sessions, func() map[string]ApproverSet { return sets }), Fresh: FreshAt(func() time.Time { return wall })})
+		Verify: Judge(sessions, func() map[string]ApproverSet { return sets }, nil), Fresh: FreshAt(func() time.Time { return wall })})
 	if err != nil {
 		t.Fatal(err)
 	}

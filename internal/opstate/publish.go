@@ -61,6 +61,14 @@ func (p *Publisher) Applied(s Snapshot) {
 	if !s.Live || (p.any && s.Revision == p.last && s.ConfirmedAt-p.written < p.Every) {
 		return
 	}
+	if s.StateEpoch < 0 {
+		// the state-epoch entry does not verify, or was deleted after it was seen: no epoch to report, so nothing
+		// is written and the file goes stale; its readers then refuse it (no lease asked for, none issued)
+		if p.Err != nil {
+			p.Err(errors.New("the store's state-epoch entry does not verify: applied.json is not written"))
+		}
+		return
+	}
 	if err := writeApplied(p.Dir, appliedDocument{BootID: p.BootID, BoottimeNs: int64(s.ConfirmedAt), ClusterID: fmt.Sprintf("%016x", s.ClusterID),
 		Revision: s.Revision, StateEpoch: s.StateEpoch}); err != nil {
 		if p.Err != nil {
