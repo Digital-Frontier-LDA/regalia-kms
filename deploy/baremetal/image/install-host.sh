@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # install-host.sh — put the KMS host image on THIS host's disk, with this host's own LUKS2 volume key (#61, second slice).
 #
-#   sudo deploy/baremetal/image/install-host.sh --disk /dev/sdX --rootfs rootfs.tar --rootfs-record rootfs-build.json \
+#   sudo deploy/baremetal/image/install-host.sh --disk /dev/sdX [--disk /dev/sdY] --rootfs rootfs.tar --rootfs-record rootfs-build.json \
 #        --uki NAME.efi --uki-record NAME.signed.json --out DIR [--wipe] [--no-efi-entry]
+#
+# --disk twice makes a MIRROR (regalia-kms#544): on each disk an ESP and a Linux RAID member, RAID1 (metadata 1.2) over
+# the two members as /dev/md/regalia-root, and the one LUKS2 volume on it. One volume key and one keyslot set, as on one
+# disk; each disk holds ciphertext only. The ESPs are two copies of the same files, not a RAID (the firmware reads an ESP
+# before anything assembles an md). Each disk's serial is typed, and two disks reporting one serial are refused.
 #
 # Run as root from a live medium ON the host (a Debian 13 live USB, the iLO's virtual media). The reproducible
 # artifacts are rootfs.tar (build-rootfs.sh) and the signed UKI (uki.py sign); the disk is made here, per host,
@@ -32,7 +37,9 @@
 #     operator compares the printed digests with the ceremony's.
 #   * THE ROOT FILESYSTEM HAS NO RUNTIME INTEGRITY: LUKS2 keeps it confidential, not unaltered (dm-verity on /usr is
 #     #61's next design).
-#   * ONE DISK: no mirror (#61's baseline asks for mirrored SSDs).
+#   * THE MIRROR IS NOT BOOTABLE YET (#544): the initrd has no mdadm and opens PARTLABEL=regalia-root, so --disk twice is
+#     refused outside the test mode. Its firmware entries (one per ESP), keeping the ESPs in step on an update, and what a
+#     degraded mirror means at boot and in the evidence are #544's next steps and its owner's questions 2-4.
 #   * /efi relies on systemd-gpt-auto-generator mounting the ESP the stub booted from; not yet seen on a booted
 #     installed disk (the QEMU boot of an installed disk is this slice's next step).
 #   * The TPM is not touched: no clear, no owner authorization; enrolment does that.
@@ -45,10 +52,11 @@ die(){ echo "install-host: $*" >&2; exit 2; }
 say(){ echo "install-host: $*"; }
 ESP_TYPE=C12A7328-F81F-11D2-BA4B-00A0C93EC93B
 ROOT_TYPE=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709        # Linux root (x86-64), the discoverable-partitions type
-DISK="" ROOTFS="" ROOTFS_RECORD="" UKI="" UKI_RECORD="" OUT="" WIPE=0 EFI_ENTRY=1
+RAID_TYPE=A19D880F-05FC-4D3B-A006-743F0F84911E        # Linux RAID: a mirror's member
+DISKS=() ROOTFS="" ROOTFS_RECORD="" UKI="" UKI_RECORD="" OUT="" WIPE=0 EFI_ENTRY=1
 while [ $# -gt 0 ]; do
   case "$1" in
-    --disk) DISK="${2:-}"; shift 2 ;;
+    --disk) DISKS+=("${2:-}"); shift 2 ;;
     --rootfs) ROOTFS="${2:-}"; shift 2 ;;
     --rootfs-record) ROOTFS_RECORD="${2:-}"; shift 2 ;;
     --uki) UKI="${2:-}"; shift 2 ;;
@@ -60,17 +68,30 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ "$(id -u)" = 0 ] || die "run as root"
-for v in DISK ROOTFS ROOTFS_RECORD UKI UKI_RECORD OUT; do [ -n "${!v}" ] || die "--$(tr '[:upper:]_' '[:lower:]-' <<< "$v") is required"; done
+[ "${#DISKS[@]}" -ge 1 ] || die "--disk is required"
+[ "${#DISKS[@]}" -le 2 ] || die "--disk is given once, or twice for a mirror; not ${#DISKS[@]} times"
+for v in ROOTFS ROOTFS_RECORD UKI UKI_RECORD OUT; do [ -n "${!v}" ] || die "--$(tr '[:upper:]_' '[:lower:]-' <<< "$v") is required"; done
+MIRROR=0; [ "${#DISKS[@]}" = 2 ] && MIRROR=1
 for t in sfdisk wipefs losetup cryptsetup mkfs.ext4 mkfs.vfat tar python3 lsblk blkid udevadm; do command -v "$t" >/dev/null || die "$t is required"; done
-[ -b "$DISK" ] || die "$DISK is not a block device"
+[ "$MIRROR" = 0 ] || command -v mdadm >/dev/null || die "mdadm is required for a mirror"
+for d in "${DISKS[@]}"; do [ -b "$d" ] || die "$d is not a block device"; done
+# one disk named twice, by two paths, is one disk: compared as the kernel's device numbers
+[ "$MIRROR" = 0 ] || [ "$(stat -Lc %t:%T "${DISKS[0]}")" != "$(stat -Lc %t:%T "${DISKS[1]}")" ] || die "the two --disk are the same disk"
+DISK="${DISKS[0]}"
 TEST=0
 if [ "${REGALIA_INSTALL_TEST:-}" = 1 ]; then
-  [[ "$DISK" =~ ^/dev/loop[0-9]+$ ]] || die "REGALIA_INSTALL_TEST is for a /dev/loopN only, never a host's disk"
-  # ... and one backed by a FILE: a loop device over a real disk (losetup /dev/loopN /dev/sda) is that disk
-  BACK="$(losetup -nO BACK-FILE "$DISK" 2>/dev/null | sed 's/[[:space:]]*$//')"
-  [ -f "$BACK" ] && [ ! -L "$BACK" ] || die "REGALIA_INSTALL_TEST is for a loop device backed by a regular file; $DISK is backed by '${BACK:-nothing}'"
+  for d in "${DISKS[@]}"; do
+    [[ "$d" =~ ^/dev/loop[0-9]+$ ]] || die "REGALIA_INSTALL_TEST is for a /dev/loopN only, never a host's disk"
+    # ... and one backed by a FILE: a loop device over a real disk (losetup /dev/loopN /dev/sda) is that disk
+    BACK="$(losetup -nO BACK-FILE "$d" 2>/dev/null | sed 's/[[:space:]]*$//')"
+    [ -f "$BACK" ] && [ ! -L "$BACK" ] || die "REGALIA_INSTALL_TEST is for a loop device backed by a regular file; $d is backed by '${BACK:-nothing}'"
+  done
   TEST=1; EFI_ENTRY=0
 fi
+# A MIRROR IS NOT BOOTABLE YET (#544): the image's initrd has no mdadm to assemble it, its crypttab opens
+# PARTLABEL=regalia-root, and the unlock service answers that device's request only. Until those land, a mirrored
+# install would leave a host that cannot boot, so only the test mode makes one.
+[ "$MIRROR" = 0 ] || [ "$TEST" = 1 ] || die "a mirrored install is not bootable yet (regalia-kms#544: the initrd cannot assemble it): refused. Nothing was written"
 NAME="$(basename "$UKI" .efi)"
 [[ "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || die "the UKI's name '$NAME' is not a plain file name"
 
@@ -87,29 +108,39 @@ UKI_SHA="$(sha256sum < "$UKI" | cut -d' ' -f1)"
 say "inputs: rootfs.tar $ROOTFS_SHA, commit $(read_field "$ROOTFS_RECORD" commit); UKI $NAME $UKI_SHA"
 say "COMPARE both digests with the ceremony's before going on (no release check yet: the header's first limitation)"
 
-# 2. the disk, by its serial typed at the console
-SERIAL="$(lsblk -dno SERIAL "$DISK" 2>/dev/null | tr -d ' ')"
+# 2. each disk, by its serial typed at the console
 ask(){ local prompt="$1" answer; read -r -p "$prompt" answer < /dev/tty; printf '%s' "$answer"; }
-if [ "$TEST" = 0 ]; then
-  [ -n "$SERIAL" ] || die "$DISK reports no serial: refused (an installer writes only to a disk it can name)"
-  # the serial names the install record's file: plain characters only (it is the firmware's text)
-  [[ "$SERIAL" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "$DISK's serial is not plain text ([A-Za-z0-9._-]): refused"
-  [ "$(ask "Type the serial of the disk to install on ($DISK, $(lsblk -dno SIZE,MODEL "$DISK" | tr -s ' ')): ")" = "$SERIAL" ] \
-    || die "the serial typed is not $DISK's: nothing was written"
-else
-  SERIAL="test-$(basename "$DISK")"
-fi
+SERIALS=()
+for d in "${DISKS[@]}"; do
+  if [ "$TEST" = 0 ]; then
+    s="$(lsblk -dno SERIAL "$d" 2>/dev/null | tr -d ' ')"
+    [ -n "$s" ] || die "$d reports no serial: refused (an installer writes only to a disk it can name)"
+    # the serial names the install record's file: plain characters only (it is the firmware's text)
+    [[ "$s" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "$d's serial is not plain text ([A-Za-z0-9._-]): refused"
+    [ "$(ask "Type the serial of the disk to install on ($d, $(lsblk -dno SIZE,MODEL "$d" | tr -s ' ')): ")" = "$s" ] \
+      || die "the serial typed is not $d's: nothing was written"
+  else
+    s="test-$(basename "$d")"
+  fi
+  SERIALS+=("$s")
+done
+# two disks reporting one serial cannot be told apart, at the console or in the record
+[ "$MIRROR" = 0 ] || [ "${SERIALS[0]}" != "${SERIALS[1]}" ] || die "the two disks report the same serial (${SERIALS[0]}): refused"
+SERIAL="${SERIALS[0]}"
 # data is a partition OR any signature on the whole device (a filesystem, a LUKS header, an LVM PV, an md member,
 # a partition table with no partitions): either needs --wipe. A device whose signatures cannot be read is refused
-SIGS="$(wipefs --noheadings "$DISK")" || die "cannot read $DISK's signatures (wipefs): refused"
-if [ -n "$(lsblk -no NAME "$DISK" | tail -n +2)" ] || [ -n "$SIGS" ]; then
-  [ "$WIPE" = 1 ] || die "$DISK holds data (partitions or signatures): refused without --wipe"
-  if [ "$TEST" = 0 ]; then
-    [ "$(ask "$DISK holds data. Type its serial AGAIN to wipe it: ")" = "$SERIAL" ] || die "not confirmed: nothing was written"
+for i in "${!DISKS[@]}"; do
+  d="${DISKS[$i]}"
+  SIGS="$(wipefs --noheadings "$d")" || die "cannot read $d's signatures (wipefs): refused"
+  if [ -n "$(lsblk -no NAME "$d" | tail -n +2)" ] || [ -n "$SIGS" ]; then
+    [ "$WIPE" = 1 ] || die "$d holds data (partitions or signatures): refused without --wipe"
+    if [ "$TEST" = 0 ]; then
+      [ "$(ask "$d holds data. Type its serial AGAIN to wipe it: ")" = "${SERIALS[$i]}" ] || die "not confirmed: nothing was written"
+    fi
   fi
-fi
+done
 # the record is made last: one that exists would fail the install at its very end, the disk written and unrecorded
-RECORD="$OUT/install-$SERIAL.json"
+RECORD="$OUT/install-$(IFS=+; printf '%s' "${SERIALS[*]}").json"
 [ ! -e "$RECORD" ] && [ ! -L "$RECORD" ] || die "$RECORD exists: move it away first (it is the previous install's evidence)"
 mkdir -p "$OUT"
 
@@ -130,25 +161,53 @@ fi
 
 W="$(mktemp -d /run/regalia-install.XXXXXX)"
 MAPPED="regalia-install-$$"
+MD="/dev/md/regalia-root"
 cleanup(){
   for m in "$W/esp" "$W/root"; do mountpoint -q "$m" 2>/dev/null && umount "$m"; done
   [ -e "/dev/mapper/$MAPPED" ] && cryptsetup close "$MAPPED"
+  [ "$MIRROR" = 1 ] && [ -e "$MD" ] && mdadm --stop "$MD" >/dev/null 2>&1
   rm -rf --one-file-system -- "$W"
   unset PASSPHRASE
 }
 trap cleanup EXIT
 
-# 3. GPT
-say "partitioning $DISK (GPT: ESP 1 GiB, regalia-root)"
-wipefs -aq "$DISK"
-sfdisk -q "$DISK" <<EOF
+# 3. GPT. One disk: an ESP and regalia-root. A mirror: on each disk an ESP and a Linux RAID member
+# (regalia-root-a, regalia-root-b); the md RAID1 over the two members is regalia-root, and LUKS2 goes on it
+part(){ local p; p="$(lsblk -lnpo NAME "$1" | sed -n "$((1 + $2))p")"; [ -b "$p" ] || die "partition $2 of $1 did not appear"; printf '%s' "$p"; }
+ESP_DEVS=() MEMBERS=()
+for i in "${!DISKS[@]}"; do
+  d="${DISKS[$i]}"
+  wipefs -aq "$d"
+  if [ "$MIRROR" = 0 ]; then
+    say "partitioning $d (GPT: ESP 1 GiB, regalia-root)"
+    sfdisk -q "$d" <<EOF
 label: gpt
 size=1GiB, type=$ESP_TYPE, name="esp"
 type=$ROOT_TYPE, name="regalia-root"
 EOF
+  else
+    side="$([ "$i" = 0 ] && echo a || echo b)"
+    say "partitioning $d (GPT: ESP 1 GiB, regalia-root-$side, a mirror's member)"
+    sfdisk -q "$d" <<EOF
+label: gpt
+size=1GiB, type=$ESP_TYPE, name="esp-$side"
+type=$RAID_TYPE, name="regalia-root-$side"
+EOF
+  fi
+done
 udevadm settle
-part(){ local p; p="$(lsblk -lnpo NAME "$DISK" | sed -n "$((1 + $1))p")"; [ -b "$p" ] || die "partition $1 of $DISK did not appear"; printf '%s' "$p"; }
-ESP_DEV="$(part 1)" ROOT_DEV="$(part 2)"
+for d in "${DISKS[@]}"; do ESP_DEVS+=("$(part "$d" 1)"); MEMBERS+=("$(part "$d" 2)"); done
+ESP_DEV="${ESP_DEVS[0]}"
+if [ "$MIRROR" = 0 ]; then
+  ROOT_DEV="${MEMBERS[0]}"
+else
+  # metadata 1.2 (at the start of each member): nothing outside the md reads a member as a filesystem
+  say "RAID1 $MD over ${MEMBERS[*]} (metadata 1.2)"
+  [ ! -e "$MD" ] || die "$MD already exists on this system: refused"
+  mdadm --create "$MD" --level=1 --raid-devices=2 --metadata=1.2 --name=regalia-root --homehost=any --run --quiet "${MEMBERS[@]}"
+  udevadm settle
+  ROOT_DEV="$MD"
+fi
 
 # 4. LUKS2, the volume key made here
 say "LUKS2 on $ROOT_DEV (argon2id), its volume key from this host"
@@ -164,23 +223,38 @@ tar --numeric-owner -xpf "$ROOTFS" -C "$W/root"
 mkdir -p "$W/root/efi"
 chmod 0700 "$W/root/efi"
 
-# 6. the ESP: the UKI at its own place and at the removable-media fallback, nothing else
-mkfs.vfat -F 32 -n ESP "$ESP_DEV" >/dev/null
-mount -o umask=0077 "$ESP_DEV" "$W/esp"
-mkdir -p "$W/esp/EFI/Linux" "$W/esp/EFI/BOOT"
-cp "$UKI" "$W/esp/EFI/Linux/$NAME.efi"
-cp "$UKI" "$W/esp/EFI/BOOT/BOOTX64.EFI"
-sync
-for f in "EFI/Linux/$NAME.efi" EFI/BOOT/BOOTX64.EFI; do
-  [ "$(sha256sum < "$W/esp/$f" | cut -d' ' -f1)" = "$UKI_SHA" ] || die "the ESP's $f is not the UKI after writing"
+# 6. the ESP (each disk's, on a mirror): the UKI at its own place and at the removable-media fallback, nothing else.
+# The firmware reads an ESP before anything can assemble an md, so a mirror's ESPs are two copies, not a RAID: the
+# same files, each read back against the UKI's digest
+umount "$W/root"
+for e in "${ESP_DEVS[@]}"; do
+  mkfs.vfat -F 32 -n ESP "$e" >/dev/null
+  mount -o umask=0077 "$e" "$W/esp"
+  mkdir -p "$W/esp/EFI/Linux" "$W/esp/EFI/BOOT"
+  cp "$UKI" "$W/esp/EFI/Linux/$NAME.efi"
+  cp "$UKI" "$W/esp/EFI/BOOT/BOOTX64.EFI"
+  sync
+  for f in "EFI/Linux/$NAME.efi" EFI/BOOT/BOOTX64.EFI; do
+    [ "$(sha256sum < "$W/esp/$f" | cut -d' ' -f1)" = "$UKI_SHA" ] || die "the ESP $e's $f is not the UKI after writing"
+  done
+  umount "$W/esp"
 done
 
-ESP_UUID="$(blkid -s PARTUUID -o value "$ESP_DEV")" ROOT_UUID="$(blkid -s PARTUUID -o value "$ROOT_DEV")"
+ESP_UUID="$(blkid -s PARTUUID -o value "$ESP_DEV")"
 LUKS_UUID="$(cryptsetup luksUUID "$ROOT_DEV")"
-umount "$W/esp" "$W/root"
 cryptsetup close "$MAPPED"
+if [ "$MIRROR" = 0 ]; then
+  ROOT_UUID="$(blkid -s PARTUUID -o value "$ROOT_DEV")"
+else
+  ESP_UUIDS=() MEMBER_UUIDS=()
+  for e in "${ESP_DEVS[@]}"; do ESP_UUIDS+=("$(blkid -s PARTUUID -o value "$e")"); done
+  for m in "${MEMBERS[@]}"; do MEMBER_UUIDS+=("$(blkid -s PARTUUID -o value "$m")"); done
+  MD_UUID="$(mdadm --detail --export "$MD" | sed -n 's/^MD_UUID=//p')"
+  [ -n "$MD_UUID" ] || die "cannot read $MD's UUID"
+fi
 
-# 7. the firmware entry
+# 7. the firmware entry (a mirror's two entries, one per ESP, are #544's next step; refused above outside the test mode)
+[ "$MIRROR" = 0 ] || [ "$EFI_ENTRY" = 0 ] || die "a mirror's firmware entries are not made yet (regalia-kms#544)"
 if [ "$EFI_ENTRY" = 1 ]; then
   [ -d /sys/firmware/efi ] || die "this system was not booted by UEFI: no firmware entry can be made (--no-efi-entry to skip)"
   # through bootnext.py, the one place that writes the firmware's boot variables (its guard test): created only if no
@@ -192,6 +266,7 @@ fi
 
 # 8. the install record
 # (values as arguments, never pasted into the code: a disk's serial is the firmware's text)
+if [ "$MIRROR" = 0 ]; then
 python3 -I - "$RECORD" "$SERIAL" "$ROOTFS_SHA" "$NAME" "$UKI_SHA" "$ESP_UUID" "$ROOT_UUID" "$LUKS_UUID" "$EFI_ENTRY" <<'PY'
 import json, sys, time
 path, serial, rootfs, name, uki, esp, root, luks, entry = sys.argv[1:]
@@ -203,4 +278,18 @@ with open(path, "x") as f:
     f.write("\n")
 PY
 say "installed on $DISK ($SERIAL): ESP $ESP_UUID, regalia-root $ROOT_UUID (LUKS $LUKS_UUID). Record: $RECORD"
+else
+python3 -I - "$RECORD" "$ROOTFS_SHA" "$NAME" "$UKI_SHA" "$MD_UUID" "$LUKS_UUID" "$EFI_ENTRY" \
+  "${SERIALS[0]}" "${ESP_UUIDS[0]}" "${MEMBER_UUIDS[0]}" "${SERIALS[1]}" "${ESP_UUIDS[1]}" "${MEMBER_UUIDS[1]}" <<'PY'
+import json, sys, time
+path, rootfs, name, uki, md, luks, entry = sys.argv[1:8]
+disks = [{"disk_serial": s, "esp_partuuid": e, "member_partuuid": m} for s, e, m in (sys.argv[8:11], sys.argv[11:14])]
+record = {"schema": "regalia.install/v2", "layout": "raid1", "disks": disks, "md_uuid": md, "rootfs_sha256": rootfs, "uki": name,
+          "uki_sha256": uki, "luks_uuid": luks, "efi_entry": entry == "1", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+with open(path, "x") as f:
+    json.dump(record, f, indent=1, sort_keys=True)
+    f.write("\n")
+PY
+say "installed a mirror on ${DISKS[*]} (${SERIALS[*]}): md $MD_UUID (LUKS $LUKS_UUID), ESPs ${ESP_UUIDS[*]}. Record: $RECORD"
+fi
 say "next, on the booted host: recovery-key.sh --enrol, the enrolment, then wipe the installer passphrase (README)"
