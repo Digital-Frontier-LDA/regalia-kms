@@ -3,6 +3,7 @@ package opstate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -149,6 +150,31 @@ func TestTheCacheReportsTheVerifiedStateEpochAndNeverForgetsIt(t *testing.T) {
 	other := startJudged(t, chain, map[string][]byte{StateEpochKey: a}, map[string]int64{StateEpochKey: 4712}, 0x0123456789abcdef, 4800)
 	other.stream(t)
 	waitEpoch(t, other, -1) // another cluster's
+}
+
+// A relist with the state-epoch entry unchanged reads the same entry again (CodeRabbit on #526): the epoch stays,
+// never -1 for "2 is not above 2". A changed entry is still judged against the last good one (the test above).
+func TestARelistKeepsAnUnchangedStateEpoch(t *testing.T) {
+	a, chain := stateEpochCase(t, "a's take-over at its quarantine epoch, signed by the key a holds since that epoch")
+	r := startJudged(t, chain, map[string][]byte{StateEpochKey: a}, map[string]int64{StateEpochKey: 4712}, vectorCluster, 4800)
+	s := r.stream(t)
+	waitEpoch(t, r, 2)
+	r.source.mu.Lock()
+	r.source.revision = 4801 // the store moved on elsewhere; the state-epoch key did not change
+	r.source.mu.Unlock()
+	s <- Update{Err: errors.New("leader changed")}
+	r.stream(t)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if got, _, live := r.cache.Applied(); live && got >= 4801 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	waitEpoch(t, r, 2)
+	if _, _, err := r.cache.Entry(StateEpochKey); err != nil {
+		t.Fatalf("the unchanged state-epoch entry, listed again: %v", err)
+	}
 }
 
 // The publisher writes the epoch the cache reports, and nothing at all while it is unusable: the file goes stale and

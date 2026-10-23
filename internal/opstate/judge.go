@@ -2,6 +2,7 @@ package opstate
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/cmd/regalia-unlock/membership"
@@ -19,19 +20,32 @@ func Judge(sessions Sessions, approverSets func() map[string]ApproverSet, chain 
 		if err != nil {
 			return nil, refuse("the value is not JSON: %v", err)
 		}
+		before, _ := previous.(map[string]any)
 		if key == StateEpochKey {
-			before, _ := previous.(map[string]any)
 			var manifests []map[string]any
 			if chain != nil {
 				manifests = chain()
 			}
-			return VerifyStateEpoch(key, document, manifests, before, &StoreRef{ClusterID: fmt.Sprintf("%016x", at.ClusterID), ModRevision: at.ModRevision})
+			store := &StoreRef{ClusterID: fmt.Sprintf("%016x", at.ClusterID), ModRevision: at.ModRevision}
+			entry, err := VerifyStateEpoch(key, document, manifests, nil, store)
+			if err != nil {
+				return nil, err
+			}
+			if before != nil && reflect.DeepEqual(entry, before) {
+				return entry, nil // the same entry read again (a relist), not a new epoch
+			}
+			return VerifyStateEpoch(key, document, manifests, before, store)
 		}
 		entry, err := VerifyValue(key, document, sessions, approverSets())
 		if err != nil {
 			return nil, err
 		}
-		before, _ := previous.(map[string]any)
+		// A relist judges every value against the last good one under its key, which for an unchanged key IS
+		// this entry: read again, it is not a replay of itself, a spend twice, or a sequence that did not rise.
+		// Verified on its own first (above), so a revoked session or set still refuses it.
+		if before != nil && reflect.DeepEqual(entry, before) {
+			return entry, nil
+		}
 		if err := Transition(before, entry); err != nil {
 			return nil, err
 		}
