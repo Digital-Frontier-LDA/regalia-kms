@@ -295,7 +295,7 @@ def load(raw, limit=MAX_BYTES):
     require(isinstance(raw, (bytes, str)) and len(raw) <= limit, "a document is at most %d bytes here" % limit)
     # Refused before parsing, on every Python: 3.12 json.loads raised RecursionError on 30000 levels,
     # 3.14 parses 100000, and the depth would then reach code that walks the document.
-    text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+    text = raw.decode(json.detect_encoding(raw), "replace") if isinstance(raw, bytes) else raw     # as json.loads decodes it
     require(_depth(text) <= MAX_DEPTH, "not valid JSON: nested too deeply (more than %d levels)" % MAX_DEPTH)
     try:
         return json.loads(raw, object_pairs_hook=_pairs, parse_float=_no_float, parse_constant=_no_float)

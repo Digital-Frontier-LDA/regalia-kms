@@ -109,7 +109,12 @@ class Manifests(unittest.TestCase):
                     b"[" * 100000 + b"]" * 100000):
             with self.subTest(depth=len(raw) // 2), self.assertRaisesRegex(m.Refused, "nested too deeply"):
                 m.load(raw)
-        # brackets inside strings, escaped quotes included, are not nesting
+        # brackets inside strings, escaped quotes included, are not nesting; in every encoding json.loads takes
+        for encoding in ("utf-8", "utf-16", "utf-16-be", "utf-32"):
+            with self.subTest(encoding=encoding):
+                self.assertEqual(m.load(json.dumps(['"' + "[" * (m.MAX_DEPTH + 1)]).encode(encoding)), ['"' + "[" * (m.MAX_DEPTH + 1)])
+                with self.assertRaisesRegex(m.Refused, "nested too deeply"):
+                    m.load(("[" * (m.MAX_DEPTH + 1) + "]" * (m.MAX_DEPTH + 1)).encode(encoding))
         self.assertEqual(m.load('{"a": "%s\\" [[[", "b": ["]]]"]}' % ("[" * 500)), {"a": "[" * 500 + '" [[[', "b": ["]]]"]})
 
     def test_hostile_input_is_a_refusal_never_another_exception(self):
