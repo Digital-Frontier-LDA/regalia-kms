@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -79,7 +79,7 @@ jobs:
     # also when build failed before it could report (an install, the client's build, the upload): silence is not
     # an answer; with no artifact, rc defaults to 2 and the issue says the check FAILED
     if: always() && github.event_name != 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       issues: write

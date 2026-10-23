@@ -62,7 +62,7 @@ concurrency:
 
 jobs:
   node-units-systemd:
-    runs-on: ubuntu-24.04     # pinned: the chrony and systemd behaviour observed is 24.04's
+    runs-on: ubuntu-26.04     # was pinned: "the chrony and systemd behaviour observed is 24.04's"; tried on 26.04 (regalia-oiq)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -111,7 +111,7 @@ jobs:
   # capability it reads a trail only through its instance's group, and a trail cut short under what was
   # shipped stops it with an alarm and no restart.
   audit-ship-systemd:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -134,7 +134,7 @@ jobs:
   # #70 (Phase 10), PR 1: three nodes on one machine, each its real services in its own namespace against
   # its own software TPM, the fixture the recovery rehearsals build on (e2e/lib/threenode.py).
   three-node-netns:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -156,7 +156,7 @@ jobs:
   # #70 (Phase 10), PR 2: every directed peer recovery path (PoC 10.1) and the nodes that must not be
   # restored, on the three-node fixture: real disks (LUKS2 on loop devices), the real pre-root client.
   three-node-recovery:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -188,7 +188,7 @@ jobs:
   # (an image is PCR 11, extended after a power cycle); may_reboot on live leases as update.py asks it; the retire
   # judged from the peers' real attestation state.
   rolling-threenode:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -219,7 +219,7 @@ jobs:
   # #71 (Phase 11): a total outage of the three nodes, restored by one manual recovery (one node by hand, its
   # heartbeat co-signed by an owner key, owner.py beat; then the other two through it; #199: no authority host).
   three-node-outage:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -246,7 +246,7 @@ jobs:
   # #388: a re-anchor in a total outage. One node's TPM anchor unusable; the other two opened by hand, each with its own
   # recovery key; reanchor from their two chains at the node's terminal; the node serves again (MEMBERSHIP-RECOVERY.md).
   three-node-reanchor:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -273,7 +273,7 @@ jobs:
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.
   three-node-replace:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -300,7 +300,7 @@ jobs:
   # #69 (Phase 9): a stolen node revoked by the owner off the nodes (revoke.py), the revocation spreading, and the window a
   # partition leaves (an nftables table inside one node's namespace only).
   three-node-theft:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -334,7 +334,7 @@ jobs:
   # #74 (Phase 14): runtime leases on three nodes signing their own heartbeats: renewal, failover to the other peer,
   # a partition, and a running node revoked by two nodes (it stops serving by itself at its lease's end).
   three-node-leases:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
