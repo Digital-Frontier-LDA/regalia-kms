@@ -181,15 +181,28 @@ def judge(reading, now, declared, minimum=MINIMUM, max_age=MAX_AGE, max_offset=M
     require(abs(reading["system_offset"]) <= max_offset, "the system clock is %.3f s from chrony's time: a correction is pending" % reading["system_offset"])
 
 
+# chronyc 4.8 drops root by default, to the chrony user, and that needs CAP_SETUID and CAP_SETGID, which
+# regalia-authtime.service does not hold: "setgroups() failed : Operation not permitted" (measured on
+# ubuntu-26.04's 4.8). `-u root` keeps it as the unit runs it. chronyc before 4.8 (Debian 13's 4.6.1) has
+# no -u and refuses it as an option; then it is asked again without, and never on any other failure.
+KEEP_ROOT = ["-u", "root"]
+NO_U_OPTION = b"invalid option -- 'u'"
+
+
 def ask(run=subprocess.run, chronyc="chronyc", socket_path=None):
     """One reading from chrony, over its command socket. -N: sources by their configured names."""
-    reports = []
+    reports, keep = [], KEEP_ROOT
     for report in ("tracking", "sources", "authdata"):
-        argv = [chronyc] + (["-h", socket_path] if socket_path else []) + ["-N", "-c", report]
-        try:
-            done = run(argv, capture_output=True, timeout=10)
-        except (OSError, subprocess.SubprocessError) as failure:
-            raise Refused("chrony could not be asked (%s)" % type(failure).__name__) from None
+        while True:
+            argv = [chronyc] + keep + (["-h", socket_path] if socket_path else []) + ["-N", "-c", report]
+            try:
+                done = run(argv, capture_output=True, timeout=10)
+            except (OSError, subprocess.SubprocessError) as failure:
+                raise Refused("chrony could not be asked (%s)" % type(failure).__name__) from None
+            if done.returncode != 0 and keep and NO_U_OPTION in (done.stderr or b""):
+                keep = []                                          # a chronyc before 4.8
+                continue
+            break
         require(done.returncode == 0, "chrony could not be asked for %s" % report)
         reports.append(done.stdout.decode(errors="replace"))
     return parse(*reports)
