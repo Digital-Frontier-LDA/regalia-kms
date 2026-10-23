@@ -20,8 +20,8 @@
      granted under.
    - It lives 30 seconds and is renewed every 10 seconds. A server cut off from the majority can't renew, so
      it stops serving within one lease.
-   - It carries no epoch and nothing is exclusive, so there is no grant record and no epoch for the Gate to
-     keep monotonic. The Gate's epoch journal stays, for audit only.
+   - It carries no `activation_epoch` (the lease's `state_epoch`, below, is etcd's history, not an activation) and
+     nothing is exclusive, so there is no grant record and no activation epoch for the Gate to keep monotonic. The Gate's epoch journal stays, for audit only.
 2. **Sign and decrypt need no coordination.** Every server's HSM holds the same keys (one users' DKEK, D29.1).
    Two servers signing at the same moment is safe, because nothing in a signature depends on a single signer.
 3. **A stateful operation is committed by a majority before the HSM is used.** This is the default for every
@@ -124,7 +124,8 @@ between the servers (at least 100 ms round trip):
 - a lease kept past its length by a slow clock is refused (the first-seen fence);
 - a stalled watch stops the server;
 - a server restored from an old disk doesn't serve until it has caught up, because peers co-sign only a
-  revision at or above what they had applied one lease ago (equality would flap at 500 km);
+  revision at or above what they had applied one lease ago: equality is accepted, because refusing it would flap at
+  500 km (`lease.RevisionFloor.require`: `revision >= held`);
 - a lone survivor serves stateless keys only, and only under the owner's authorization.
 
 ## What goes
@@ -170,7 +171,9 @@ The authority must never issue overlapping valid leases to different sites.
 `internal/fencing.Gate` verifies the signature, site, registry, time window and durable local epoch
 journal. An expired, future, corrupt, substituted, stale or rolled-back lease makes readiness false.
 
-- `FencedRunner` checks once before executor admission and again immediately before hardware use.
+- `FencedRunner` checks the lease three times: before executor admission, immediately before hardware use, and
+  after the operation returns, before its result is handed back (the coordinator zeroes the output when that
+  last check fails, so an operation that outlived its lease publishes nothing).
 - It never promotes a standby because the primary looks unhealthy.
 - A lease is refreshed by atomically replacing the public lease file, not by restarting the daemon.
 
