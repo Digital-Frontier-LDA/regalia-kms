@@ -77,7 +77,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "This node serves ALONE under the owner's survivor authorization (ADR-0002 D32.6): stateless operations only, the other servers fenced. It holds for as long as the authorization is in force."
+          summary: "This node is in survivor recovery under the owner's authorization (ADR-0002 D32.6), the other servers fenced. The KMS daemon serves NOTHING in recovery yet: it refuses mode recovery until its stateless-only gate is built. regalia_admission_lease_seconds_left is then the authorization's time left, capped at one lease, not a lease."
       - alert: RegaliaAuditTrailBehind
         expr: regalia_audit_trail_backlog > 0 and (time() - regalia_audit_trail_last_success_seconds) > 900
         labels:

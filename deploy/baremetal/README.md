@@ -458,8 +458,8 @@ An update is three documents:
 3. **One node at a time.** On each node, in the order of the node IDs, `rollout.may_reboot(...)` must
    pass before the reboot: an update is approved for this node and it is not yet on NEXT; every node
    before it has been seen back on NEXT by this node's own verifier; and every peer that will have to
-   unlock it holds the new manifest and has vouched for it, in its current boot, in the last five
-   minutes (a runtime lease for this boot session). With every record current, one node can pass at
+   unlock it holds the new manifest and has vouched for it, in its current boot, within one lease
+   lifetime (30 s: a runtime lease for this boot session). With every record current, one node can pass at
    a time: the first, in order, that is not on NEXT. **The limit:** a node judges "the one before me is
    back" from its own last re-attestation of that node, which it repeats only at the next lease
    renewal. If the earlier node falls back or goes down just after, the next node may still pass for up
@@ -478,7 +478,7 @@ An update is three documents:
    the document that gives NEXT up instead), the root signs manifest N+2 for the NEXT-only document.
    From then on a node booted
    into the old image gets no unlock and no lease. A lease issued just before the retirement runs out
-   within five minutes.
+   within one lease lifetime (30 s).
 
 Both manifests can be signed in one root-key session and the second released later; if a revocation
 is published in between, the second no longer chains and is signed again.
@@ -869,7 +869,7 @@ Six systemd units in `deploy/baremetal/units/`, all run from one configuration, 
 | `regalia-authtime` | root | none, no network | asks chrony every 15 s whether time is authenticated; writes `/run/regalia/authtime.json` |
 | `regalia-wg-apply` (+ `.path`) | root | `CAP_NET_ADMIN` | makes `wg-svc` and `wg-unlock` what the current manifest says, reads them back, brings them up only then; re-run whenever the published chain changes |
 | `regalia-boot-session` | root | none, no network, no device; a oneshot | on a boot where the unlock client presented no session (recovery key), makes one and writes the pair in `/run/regalia` |
-| `regalia-admission` | `regalia-admission` (#191) | none; the TPM through `tss`; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission/admission.json`, its own directory and nothing else. Its trail (`admission_dir/audit.jsonl`, #340) holds each renewal (`admission-renew`: the issuing peer; a refusal whole the first time of its kind, then counted, one line a minute at most, so a node cut off writes tens of lines a day; attempts back off from 5 s to 60 s while they fail) and each change between serving and not (`admission-serving`, with the reason): it serves only once that change is recorded, and stops serving at once, recording after (a failed record is logged loudly and tried again) |
+| `regalia-admission` | `regalia-admission` (#191) | none; the TPM through `tss`; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission/admission.json`, its own directory and nothing else. Its trail (`admission_dir/audit.jsonl`, #340) holds each renewal (`admission-renew`: the issuing peer; a refusal whole the first time of its kind, then counted, one line a minute at most, so a node cut off writes tens of lines a day; attempts back off from 2 s doubling to 10 s while they fail (`admission.RETRY_FIRST`, `RETRY_MAX`)) and each change between serving and not (`admission-serving`, with the reason): it serves only once that change is recorded, and stops serving at once, recording after (a failed record is logged loudly and tried again) |
 | `regalia-sync` | `regalia-sync` | none; the TPM through `tss` | answers peers and booting nodes, pulls manifests and heartbeats, keeps the membership store (never moving the TPM anchor), runs the heartbeat watch |
 | `regalia-esp-advance` (+ `.path`) | root | none, no network; the TPM through `tss`; writes `/efi` only | on each new published chain: writes it to the ESP (`EFI/regalia/membership.json`), then moves the TPM anchor to it (§7, #66 B3) |
 
