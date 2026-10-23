@@ -853,7 +853,7 @@ class Sync:
         self.node, self.store, self.freshness = node, node.store(), node.freshness()
         self.trail = Trail(node.path("sync-audit.jsonl"), "sync")
         self.signer = lease.TpmSigner(node.tcti, node.run)
-        self.floor = lease.RevisionFloor()  # D32 (#432): fed each round (observe_state); fails closed for one lease after start
+        self.floor = lease.RevisionFloor()  # D32 (#432): fed every few seconds (observe_state); fails closed for one lease after start
         self._beat_signer = None        # beat.Signer, made at the first heartbeat signed (beat_signer())
         self.published = None
         self.rounds = RoundLog()                # #470: each pull round's outcome, in the journal
@@ -883,14 +883,30 @@ class Sync:
                            wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents(), cosigner=self.cosign,
                            floor=self.floor, applied=lease.read_applied)
 
+    FLOOR_SAMPLE_S = 5
+
+    def between_rounds(self, stop, interval, clock=time.monotonic, sleep=time.sleep):
+        """The wait until the next pull round (`interval` s, or until `stop()`), feeding the RevisionFloor every
+        FLOOR_SAMPLE_S meanwhile. The floor issues only once it holds a sample a lease old, so sampling once a pull round
+        (60 s on a host) could keep a restarted issuer closed for up to a pull interval past "serving + one lease",
+        which the runbook's wait (KERNEL-UPDATE 3.5) and the drills rely on (62's read of c4's #504). Sampled every few
+        seconds, its warm-up ends at most FLOOR_SAMPLE_S after one lease from its watch's first fresh applied.json,
+        and the node serves only after that file is fresh (its own lease request carries it)."""
+        deadline, sample = clock() + interval, clock() + self.FLOOR_SAMPLE_S
+        while not stop() and clock() < deadline:
+            sleep(1)
+            if clock() >= sample:
+                self.observe_state()
+                sample = clock() + self.FLOOR_SAMPLE_S
+
     def observe_state(self):
-        """D32 (#432): this issuer's RevisionFloor fed from its etcd watch's file, each round. A refusal here (a stale,
+        """D32 (#432): this issuer's RevisionFloor fed from its etcd watch's file, each round and every FLOOR_SAMPLE_S. A refusal here (a stale,
         absent or regressed file: a revision or state epoch gone back) records nothing; it is not lost, because each
         lease request reads the file again (sync.Server.observe_state) and that read refuses the lease (fail closed;
         regalia-kms-48)."""
         try:
             self.floor.applied(*lease.read_applied())
-        except Refused:
+        except (Refused, OSError):          # an I/O error too (an EIO, /proc): a missed sample, never the end of Sync.run (c4)
             pass
 
     # ---- heartbeats signed by the nodes (#199, beat.py) ----
@@ -1011,9 +1027,7 @@ class Sync:
                     watch.step()
                 self.refusals.flush()
                 self.membership_metrics()
-                deadline = time.monotonic() + self.node.cfg["pull_interval"]
-                while not stop() and time.monotonic() < deadline:
-                    time.sleep(1)
+                self.between_rounds(stop, self.node.cfg["pull_interval"])
         finally:
             for listener in listeners:
                 listener.close()
