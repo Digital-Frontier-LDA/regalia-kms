@@ -157,10 +157,10 @@ func TestASequenceOnlyMovesUp(t *testing.T) {
 	if err := w.a.Reserve(ctx, w.reservation("018f0000000070008000000000000a01", 1, seq(7))); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.b.Reserve(ctx, w.reservation("018f0000000070008000000000000a02", 1, seq(7))); !errors.Is(err, policy.ErrReplay) {
+	if err := w.b.Reserve(ctx, w.reservation("018f0000000070008000000000000a02", 1, seq(7))); !errors.Is(err, policy.ErrSequence) {
 		t.Fatalf("the same sequence on the other server: %v", err)
 	}
-	if err := w.b.Reserve(ctx, w.reservation("018f0000000070008000000000000a03", 1, seq(6))); !errors.Is(err, policy.ErrReplay) {
+	if err := w.b.Reserve(ctx, w.reservation("018f0000000070008000000000000a03", 1, seq(6))); !errors.Is(err, policy.ErrSequence) {
 		t.Fatalf("a lower sequence: %v", err)
 	}
 	if err := w.b.Reserve(ctx, w.reservation("018f0000000070008000000000000a04", 1, seq(8))); err != nil {

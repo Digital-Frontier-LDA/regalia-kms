@@ -317,6 +317,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       verified `sessions/` entries from the cache, and the coordinator handing the Reservation the approver set's
       digest and the counted approvals' digest (`internal/approval` returns IDs only today).
     - `Reservation.Epoch` (#428) is still stamped. It goes with that wiring.
+    - **A rollback cannot read a newer journal.** `Evaluate` now fills a reservation's `purpose`, `environment`,
+      `payload_sha256`, `approvers` and `expires_at`, so `FileState`'s journal events carry them. A build from before
+      these fields decodes the journal with `DisallowUnknownFields` and refuses it. That fails closed (the state is
+      unavailable, nothing is signed), but such a daemon does not start until it runs a build that knows the fields.
+    - **`EtcdState` takes any higher Cosmos sequence; `FileState` only the next.** Both refuse a sequence that is not
+      higher, as `ErrSequence`. `EtcdState` accepts a gap (9 after 7), `FileState` does not. Which is right for two or
+      more servers reserving is the D32 lane's to decide.
     - **An ambiguous commit burns the approval.** A Reserve whose transaction answers an error may still have
       committed. It isn't retried, the HSM never signs, and the request is approved again. That fails closed.
   - The daemon's unit doesn't yet join `regalia-etcd-client`, the group that may open etcd's socket. That

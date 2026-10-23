@@ -165,7 +165,7 @@ func (s *EtcdState) try(ctx context.Context, r policy.Reservation) (bool, error)
 			if previous != nil {
 				was, _ := strconv.ParseUint(string(previous["value"].(json.Number)), 10, 64)
 				if *r.Sequence <= was {
-					return false, policy.ErrReplay
+					return false, policy.ErrSequence // as FileState answers a sequence that is not the next
 				}
 			}
 		case "quota":
