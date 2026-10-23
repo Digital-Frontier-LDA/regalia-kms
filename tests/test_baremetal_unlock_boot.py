@@ -288,7 +288,9 @@ class OnQemu(tub.OnSwtpm):
                 "-cpu", "host" if kvm else "max", "-m", "1536", "-smp", "2", "-display", "none", "-no-reboot", "-serial", "stdio",
                 "-drive", "if=pflash,format=raw,unit=0,readonly=on,file=%s/OVMF_CODE_4M.fd" % OVMF,
                 "-drive", "if=pflash,format=raw,unit=1,file=" + variables,
-                "-drive", "file=%s,format=raw,if=virtio" % self.image,
+                # The guest's disk is the first boot option, whatever OVMF would order: ubuntu-26.04's (fresh variables, a
+                # virtio NIC) tried PXE and HTTP boot first, about 60 s each, and boot 1 asked after 158 s (regalia-oiq)
+                "-drive", "file=%s,format=raw,if=none,id=boot" % self.image, "-device", "virtio-blk-pci,drive=boot,bootindex=0",
                 "-netdev", "tap,id=n0,ifname=tap0,script=no,downscript=no", "-device", "virtio-net-pci,netdev=n0,mac=%s" % GUEST_MAC,
                 "-chardev", "socket,id=chrtpm,path=" + ctrl, "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-tis,tpmdev=tpm0"]
         if enrol_disk:

@@ -62,7 +62,7 @@ concurrency:
 
 jobs:
   node-units-systemd:
-    runs-on: ubuntu-24.04     # pinned: the chrony and systemd behaviour observed is 24.04's
+    runs-on: ubuntu-26.04     # was pinned: "the chrony and systemd behaviour observed is 24.04's"; tried on 26.04 (regalia-oiq)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -74,7 +74,9 @@ jobs:
       - name: Install the software TPM, chrony and WireGuard tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools chrony wireguard-tools iproute2 \
+          # tzdata-legacy: right/UTC, which authtime requires before it calls time authenticated (a node
+          # requirement on Debian 13); ubuntu-26.04's tzdata no longer carries it. Every job here runs authtime.
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools chrony wireguard-tools iproute2 \
             openssl python3-cryptography softhsm2 opensc libpcsclite-dev tpm2-abrmd libtss2-tcti-tabrmd0
           # tpm-udev: the tss group and its rule for /dev/tpmrm*. The runner's Azure kernel had no vTPM proxy
           # before the 2026-10-18 images; where it has none, the test makes the device with swtpm's CUSE mode.
@@ -111,7 +113,7 @@ jobs:
   # capability it reads a trail only through its instance's group, and a trail cut short under what was
   # shipped stops it with an alarm and no restart.
   audit-ship-systemd:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -134,7 +136,7 @@ jobs:
   # #70 (Phase 10), PR 1: three nodes on one machine, each its real services in its own namespace against
   # its own software TPM, the fixture the recovery rehearsals build on (e2e/lib/threenode.py).
   three-node-netns:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -144,7 +146,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           # softhsm2, opensc and python3-pykcs11: the owner's two keys under v4 (#199), signed through Pkcs11Signer
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 python3-cryptography \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 python3-cryptography \
             softhsm2 opensc python3-pykcs11
       - name: Three nodes, their sync and wg-apply, the service mesh, a power cut
         run: |
@@ -156,7 +158,7 @@ jobs:
   # #70 (Phase 10), PR 2: every directed peer recovery path (PoC 10.1) and the nodes that must not be
   # restored, on the three-node fixture: real disks (LUKS2 on loop devices), the real pre-root client.
   three-node-recovery:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -168,7 +170,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client, and the audit trail shipper and collector (#340)
         run: |
@@ -188,7 +190,7 @@ jobs:
   # (an image is PCR 11, extended after a power cycle); may_reboot on live leases as update.py asks it; the retire
   # judged from the peers' real attestation state.
   rolling-threenode:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -200,7 +202,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client, and the audit trail shipper and collector (#340)
         run: |
@@ -219,7 +221,7 @@ jobs:
   # #71 (Phase 11): a total outage of the three nodes, restored by one manual recovery (one node by hand, its
   # heartbeat co-signed by an owner key, owner.py beat; then the other two through it; #199: no authority host).
   three-node-outage:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -231,7 +233,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
@@ -246,7 +248,7 @@ jobs:
   # #388: a re-anchor in a total outage. One node's TPM anchor unusable; the other two opened by hand, each with its own
   # recovery key; reanchor from their two chains at the node's terminal; the node serves again (MEMBERSHIP-RECOVERY.md).
   three-node-reanchor:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -258,7 +260,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
@@ -273,7 +275,7 @@ jobs:
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.
   three-node-replace:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -285,7 +287,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
@@ -300,7 +302,7 @@ jobs:
   # #69 (Phase 9): a stolen node revoked by the owner off the nodes (revoke.py), the revocation spreading, and the window a
   # partition leaves (an nftables table inside one node's namespace only).
   three-node-theft:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -312,7 +314,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client, and the audit trail shipper and collector (#340)
         run: |
@@ -334,7 +336,7 @@ jobs:
   # #74 (Phase 14): runtime leases on three nodes signing their own heartbeats: renewal, failover to the other peer,
   # a partition, and a running node revoked by two nodes (it stops serving by itself at its lease's end).
   three-node-leases:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -346,7 +348,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
