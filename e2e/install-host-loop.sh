@@ -156,6 +156,13 @@ for side, layout in zip("ab", sys.argv[1:]):
     assert parts[1]["type"].upper() == "A19D880F-05FC-4D3B-A006-743F0F84911E" and parts[1].get("name") == "regalia-root-" + side, parts[1]
 PY
 mdadm --assemble /dev/md/regalia-root "${MA}p2" "${MB}p2" >/dev/null 2>&1; ok $? "the two members assemble"
+# an md of that name already running is someone else's: refused before any write, and left running
+before="$(cryptsetup luksUUID /dev/md/regalia-root)"
+out="$(mirror "$MA" "$MB" --wipe --out "$W/out-again" 2>&1)" && rc=0 || rc=$?
+# (--out elsewhere: the first install's record would refuse it earlier, and this is about the md)
+[ "$rc" != 0 ] && grep -q "/dev/md/regalia-root already exists on this system" <<< "$out" && [ -e /dev/md/regalia-root ] \
+  && [ "$(cryptsetup luksUUID /dev/md/regalia-root)" = "$before" ]
+ok $? "an md of that name already assembled is refused before anything is written, and left running"
 detail="$(mdadm --detail --export /dev/md/regalia-root)"
 grep -qx 'MD_LEVEL=raid1' <<< "$detail" && grep -qx 'MD_DEVICES=2' <<< "$detail" && grep -qx 'MD_METADATA=1.2' <<< "$detail"; ok $? "RAID1, two devices, metadata 1.2"
 mmeta="$(cryptsetup luksDump --dump-json-metadata /dev/md/regalia-root)"

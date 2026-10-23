@@ -140,7 +140,7 @@ for i in "${!DISKS[@]}"; do
   fi
 done
 # the record is made last: one that exists would fail the install at its very end, the disk written and unrecorded
-RECORD="$OUT/install-$(IFS=+; printf '%s' "${SERIALS[*]}").json"
+RECORD="$OUT/install-${SERIALS[0]}${SERIALS[1]:++${SERIALS[1]}}.json"     # one serial, or the two joined by +
 [ ! -e "$RECORD" ] && [ ! -L "$RECORD" ] || die "$RECORD exists: move it away first (it is the previous install's evidence)"
 mkdir -p "$OUT"
 
@@ -159,13 +159,16 @@ else
 fi
 [ "${#PASSPHRASE}" -ge 12 ] || die "the installer passphrase is shorter than 12 characters"
 
+MD="/dev/md/regalia-root" MADE_MD=0
+# an md of that name already on this system (an earlier install's, assembled again by udev) is someone else's: refused
+# before anything is written, and never stopped by this run
+[ "$MIRROR" = 0 ] || [ ! -e "$MD" ] || die "$MD already exists on this system (mdadm --detail $MD): refused. Nothing was written"
 W="$(mktemp -d /run/regalia-install.XXXXXX)"
 MAPPED="regalia-install-$$"
-MD="/dev/md/regalia-root"
 cleanup(){
   for m in "$W/esp" "$W/root"; do mountpoint -q "$m" 2>/dev/null && umount "$m"; done
   [ -e "/dev/mapper/$MAPPED" ] && cryptsetup close "$MAPPED"
-  [ "$MIRROR" = 1 ] && [ -e "$MD" ] && mdadm --stop "$MD" >/dev/null 2>&1
+  [ "$MADE_MD" = 1 ] && [ -e "$MD" ] && mdadm --stop "$MD" >/dev/null 2>&1
   rm -rf --one-file-system -- "$W"
   unset PASSPHRASE
 }
@@ -203,8 +206,8 @@ if [ "$MIRROR" = 0 ]; then
 else
   # metadata 1.2 (at the start of each member): nothing outside the md reads a member as a filesystem
   say "RAID1 $MD over ${MEMBERS[*]} (metadata 1.2)"
-  [ ! -e "$MD" ] || die "$MD already exists on this system: refused"
   mdadm --create "$MD" --level=1 --raid-devices=2 --metadata=1.2 --name=regalia-root --homehost=any --run --quiet "${MEMBERS[@]}"
+  MADE_MD=1
   udevadm settle
   ROOT_DEV="$MD"
 fi
