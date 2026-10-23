@@ -74,7 +74,9 @@ jobs:
       - name: Install the software TPM, chrony and WireGuard tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools chrony wireguard-tools iproute2 \
+          # tzdata-legacy: right/UTC, which authtime requires before it calls time authenticated (a node
+          # requirement on Debian 13); ubuntu-26.04's tzdata no longer carries it. Every job here runs authtime.
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools chrony wireguard-tools iproute2 \
             openssl python3-cryptography softhsm2 opensc libpcsclite-dev tpm2-abrmd libtss2-tcti-tabrmd0
           # tpm-udev: the tss group and its rule for /dev/tpmrm*. The runner's Azure kernel had no vTPM proxy
           # before the 2026-10-18 images; where it has none, the test makes the device with swtpm's CUSE mode.
@@ -144,7 +146,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           # softhsm2, opensc and python3-pykcs11: the owner's two keys under v4 (#199), signed through Pkcs11Signer
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 python3-cryptography \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 python3-cryptography \
             softhsm2 opensc python3-pykcs11
       - name: Three nodes, their sync and wg-apply, the service mesh, a power cut
         run: |
@@ -168,7 +170,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client, and the audit trail shipper and collector (#340)
         run: |
@@ -200,7 +202,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client, and the audit trail shipper and collector (#340)
         run: |
@@ -231,7 +233,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
@@ -258,7 +260,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
@@ -285,7 +287,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
@@ -312,7 +314,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client, and the audit trail shipper and collector (#340)
         run: |
@@ -346,7 +348,7 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
