@@ -529,7 +529,12 @@ def scenario(work, binaries, user):
     # SIGKILL stands in for the real trigger, which a host under test cannot be made to see: on maxchange, Debian 13's
     # chronyd 4.6.1 exits with status 1 after "exceeds the allowed maximum" (measured by regalia-kms-d9 in
     # authtime-chrony-nts.py's scenario 8), SERVICE_RESULT=exit-code, which latches the same way as this signal
-    sh("systemctl", "kill", "-s", "KILL", "chrony.service", check=False)
+    # The main PID alone, as a crash is: `systemctl kill` under systemd 259 (ubuntu-26.04) kills the unit's whole cgroup,
+    # ExecStopPost with it, and the latch writer died with chronyd ("Control process exited, code=killed"; regalia-oiq)
+    main = int(show("chrony.service", "MainPID").get("MainPID") or 0)
+    if main <= 1:                                      # 0 would be this process group, 1 init: never signal either
+        raise SystemExit("node-units-systemd: chrony.service has no main PID to kill (%d)" % main)
+    os.kill(main, 9)
     latch = pathlib.Path(authtime.LATCH)
     ok(until(lambda: show("chrony.service", "ActiveState")["ActiveState"] in ("failed", "inactive") and latch.exists(), 20) and
        json.loads(latch.read_text())["result"] == "signal",
