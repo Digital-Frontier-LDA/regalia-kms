@@ -236,21 +236,22 @@ class Directive(Case):
         self.refused("is not a regular, singly linked file", store.apply, self.directive("ci-signing"), self.m2)
         self.refused("is not a regular, singly linked file", store.disabled)
         os.unlink(other)
-        self.refused("is not a regular, singly linked file",
-                     sv.Directives(store.path, owner_uid=os.getuid() + 1).disabled)        # not the owner's
+        # not the owner's: its directory is this test user's too, so that is refused first (StoreOnDisk); the file's own
+        # owner check stands behind it for a file planted in root's directory
+        self.refused("is not a directory of root's", sv.Directives(store.path, owner_uid=os.getuid() + 1).disabled)
         os.unlink(store.path)
         os.symlink(other, store.path)
         self.refused("cannot be opened", store.disabled)
 
     def test_a_wiped_store_replayed_can_only_disable_again(self):
         """The store is not an anti-replay record: a directive only disables, so presenting an old one again after the
-        store is lost (a reboot: it is on /run) disables its key again, never enables one; and one signed under an
-        earlier epoch is refused against the node's current manifest. What a wipe does lose is the disabled set itself:
-        that is regalia-kds, for the daemon's refusal (ed), not a replay."""
+        store is lost (its disk replaced: since regalia-kds it outlives a reboot) disables its key again, never enables
+        one; and one signed under an earlier epoch is refused against the node's current manifest. What a lost store
+        does lose is the disabled set itself, which is why it is on the disk (StoreOnDisk), not a replay."""
         store = self.store()
         old = self.directive()
         store.apply(old, self.m2)
-        os.unlink(store.path)                                             # the reboot
+        os.unlink(store.path)                                             # the store lost
         self.assertEqual(store.disabled(), set())                         # the loss, measured
         self.assertEqual(store.apply(old, self.m2), {"release-signing"})  # the replay: the same key disabled again
         self.refused("is for epoch 2's manifest", store.apply, old, self.m1)
@@ -340,6 +341,50 @@ class OwnerTool(Case):
         self.assertEqual((code, signed), (1, None))
 
 
+class StoreOnDisk(Case):
+    """regalia-kds: the applied directives outlive a reboot. They live in STORE_DIR, a directory of root's on the disk that
+    no group or other may enter, never in /run; the store is read and written through that directory's descriptor, and a
+    directory that is not such a one refuses every key (never "nothing disabled")."""
+
+    def directive(self, object_id="release-signing"):
+        return sv.make_directive(self.m2, object_id, "stolen", T0, lambda text: text.split("Type exactly: ")[1].split("\n")[0],
+                                 lambda: OwnerKey(OWNER_KEYS[1]))
+
+    def directory(self, mode=0o700):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        os.chmod(d, mode)
+        return d
+
+    def test_the_store_is_root_s_on_the_disk_never_in_run(self):
+        self.assertFalse(sv.STORE_DIR.startswith("/run"), "a reboot empties /run, and with it the keys the owner disabled")
+        import pathlib
+        conf = (pathlib.Path(__file__).resolve().parents[1] / "deploy" / "baremetal" / "units" / "regalia.tmpfiles.conf").read_text()
+        self.assertIn("d %s 0700 root root -" % sv.STORE_DIR, conf.splitlines())
+
+    def test_a_restart_reads_the_same_disabled_set(self):
+        path = os.path.join(self.directory(), sv.DIRECTIVES_FILE)
+        sv.Directives(path, owner_uid=os.getuid()).apply(self.directive(), self.m2)
+        self.assertEqual(sv.Directives(path, owner_uid=os.getuid()).disabled(), {"release-signing"})     # a new process, same disk
+
+    def test_a_directory_others_may_enter_or_another_s_refuses_every_key(self):
+        for mode in (0o750, 0o705, 0o770):
+            with self.subTest(oct(mode)):
+                store = sv.Directives(os.path.join(self.directory(mode), sv.DIRECTIVES_FILE), owner_uid=os.getuid())
+                self.refused("only root may enter (0700): every key is refused", store.disabled)
+                self.refused("only root may enter (0700): every key is refused", store.apply, self.directive(), self.m2)
+        store = sv.Directives(os.path.join(self.directory(), sv.DIRECTIVES_FILE), owner_uid=os.getuid() + 1)
+        self.refused("is not a directory of root's", store.disabled)
+
+    def test_a_link_in_place_of_the_directory_or_none_refuses_every_key(self):
+        real = self.directory()
+        link = real + ".link"
+        os.symlink(real, link)
+        self.addCleanup(os.unlink, link)
+        self.refused("cannot be opened", sv.Directives(os.path.join(link, sv.DIRECTIVES_FILE), owner_uid=os.getuid()).disabled)
+        self.refused("cannot be opened", sv.Directives(os.path.join(real, "gone", sv.DIRECTIVES_FILE), owner_uid=os.getuid()).disabled)
+
+
 class OnTheNode(Case):
     """survivor.py install / remove / directive (root, at the node's console) and the admission's reader, seconds_left."""
 
@@ -348,6 +393,7 @@ class OnTheNode(Case):
         import json
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
+        self.store_dir = tempfile.mkdtemp(dir=self.d)                       # STORE_DIR's stand-in, 0700 as tmpfiles makes it
         self.signed = self.authorize(life_s=3600)
         self.auth = os.path.join(self.d, "auth.json")
         with open(self.auth, "w") as f:
@@ -362,7 +408,8 @@ class OnTheNode(Case):
         fake.clock.return_value = lambda: (now, authenticated)
         with mock.patch.object(node_module, "Node", lambda cfg: fake), mock.patch.object(node_module, "load", lambda path: {}), \
                 mock.patch.object(sv.os, "geteuid", lambda: 0), mock.patch("builtins.print") as said, \
-                mock.patch.object(sv, "Directives", lambda path, real=sv.Directives: real(path, owner_uid=os.getuid())):
+                mock.patch.object(sv, "Directives", lambda path, real=sv.Directives: real(path, owner_uid=os.getuid())), \
+                mock.patch.object(sv, "STORE_DIR", self.store_dir):
             code = sv.main(["--config", "/etc/regalia/node.json"] + argv)
         self.said = " ".join(str(c.args[0]) for c in said.call_args_list if c.args)
         return code
@@ -429,7 +476,9 @@ class OnTheNode(Case):
         with open(f, "w") as out:
             json.dump(directive, out)
         self.assertEqual(self.run_main(["directive", "--file", f]), 0)
-        self.assertEqual(sv.Directives(os.path.join(self.d, sv.DIRECTIVES_FILE), owner_uid=os.getuid()).disabled(), {"release-signing"})
+        self.assertEqual(sv.Directives(os.path.join(self.store_dir, sv.DIRECTIVES_FILE), owner_uid=os.getuid()).disabled(),
+                         {"release-signing"})
+        self.assertFalse(os.path.lexists(os.path.join(self.d, sv.DIRECTIVES_FILE)), "written in the run directory, which a reboot empties")
 
     def test_the_admission_service_is_wired_to_the_installed_authorization(self):
         from unittest import mock

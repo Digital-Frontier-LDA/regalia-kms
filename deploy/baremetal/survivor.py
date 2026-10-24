@@ -301,7 +301,8 @@ def make_directive(tip, object_id, reason, now, confirm, open_signer, state="dis
 
 
 class Directives:
-    """The survivor's directives, append-only in `path` (root's run directory, DIRECTIVES_FILE): one line per SIGNED directive it applied,
+    """The survivor's directives, append-only in `path` (STORE_DIR/DIRECTIVES_FILE: root's, on the disk, so they outlive a
+    reboot; regalia-kds): one line per SIGNED directive it applied,
     verified before it is written (d9 on #493: the majority's commit needs the envelopes, and states are derived from
     them, never kept apart). `disabled()` is the set of keys the daemon refuses (not built: ed). A file that is there and
     cannot be read raises: the daemon then refuses EVERY key, never takes it for "nothing disabled"."""
@@ -309,10 +310,33 @@ class Directives:
     def __init__(self, path, owner_uid=0):
         self.path, self.owner_uid = path, owner_uid
 
+    def _directory(self):
+        """The store's directory, opened without following a link: a directory of root's that no group or other may enter
+        (0700, image/units/regalia.tmpfiles.conf). Every file is opened relative to it, so no path component after it
+        can be swapped. A directory that is not there, or not such a one, refuses every key."""
+        import stat
+        directory = os.path.dirname(os.path.abspath(self.path))
+        try:
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError as error:
+            raise Refused("the directives directory %s cannot be opened (%s): every key is refused" % (directory, error.strerror)) from None
+        st = os.fstat(fd)
+        if not (stat.S_ISDIR(st.st_mode) and st.st_uid == self.owner_uid and not st.st_mode & 0o077):
+            os.close(fd)
+            raise Refused("%s is not a directory of root's that only root may enter (0700): every key is refused" % directory)
+        return fd
+
+    def _open(self, flags, mode=0o640):
+        directory = self._directory()
+        try:
+            return os.open(os.path.basename(self.path), flags | os.O_NOFOLLOW | os.O_CLOEXEC, mode, dir_fd=directory)
+        finally:
+            os.close(directory)
+
     def held(self):
         """The signed directives on file, in order. Refused (refuse every key) if the file is corrupt."""
         try:
-            fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            fd = self._open(os.O_RDONLY)
         except FileNotFoundError:
             return []
         except OSError as error:
@@ -341,7 +365,7 @@ class Directives:
                 "%s is not a regular, singly linked file of root's that only root may write: every key is refused" % self.path)
 
     def disabled(self):
-        # the set does not survive a reboot (the store is on /run) until regalia-kds: do not consume it before then (regalia-j18)
+        # the daemon's refusal of these keys is regalia-j18 (ed), not built; the set survives a reboot (regalia-kds)
         return {signed["directive"]["object_id"] for signed in self.held()}
 
     def apply(self, signed, at_quarantine):
@@ -350,7 +374,7 @@ class Directives:
         held = self.held()
         if any(membership.canonical(h) == membership.canonical(signed) for h in held):
             return {h["directive"]["object_id"] for h in held}
-        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC, 0o640)
+        fd = self._open(os.O_WRONLY | os.O_CREAT | os.O_APPEND)
         with os.fdopen(fd, "ab") as f:
             self._root_s(f.fileno())
             f.write(membership.canonical(signed) + b"\n")
@@ -362,7 +386,8 @@ class Directives:
 # ---- on the node: the installed authorization (#432 item (e), part 3) ----
 
 AUTH_FILE = "survivor-authorization.json"         # in root's run directory (node.runtime): never admission's own
-DIRECTIVES_FILE = "survivor-directives.jsonl"     # beside it
+STORE_DIR = "/var/lib/regalia-survivor"            # the directives' own: root's, 0700, on the disk (regalia-kds), never /run
+DIRECTIVES_FILE = "survivor-directives.jsonl"     # in STORE_DIR
 MAX_AUTH_BYTES = 16 * 1024
 
 
@@ -460,7 +485,7 @@ def main(argv=None):
             signed = membership.load(f.read(MAX_AUTH_BYTES + 1))
         if args.op == "directive":
             # judged against the manifest at its quarantine epoch: on a survivor that is the current one
-            state = Directives(os.path.join(node.runtime, DIRECTIVES_FILE)).apply(signed, manifest)
+            state = Directives(os.path.join(STORE_DIR, DIRECTIVES_FILE)).apply(signed, manifest)
             print("APPLIED: %s is disabled on this node (%s)" % (signed["directive"]["object_id"], sorted(state)))
             return 0
         seconds, authenticated = node.clock()()

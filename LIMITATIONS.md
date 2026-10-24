@@ -42,7 +42,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - the owner's directive, which only disables a key: never enables one and never destroys one (d9: one stolen owner
     token must not destroy keys irreversibly with no approver able to intervene);
   - the survivor's append-only store of the signed directives it applied. Each is verified before it is written, and
-    a corrupt file refuses every key.
+    a corrupt file refuses every key. It lives in `/var/lib/regalia-survivor` (root's, 0700, on the disk), so it
+    outlives a reboot; a store directory that is missing, a link, or open to others also refuses every key (regalia-kds).
+    The store is never cleared by the tool: until the majority commits the directives on its return (not built), the
+    keys stay disabled on that survivor across later outages, the safe side.
   - **the owner's one-server decision (2026-10-05): scope `full`.** Stateful operations continue on the lone survivor from
     the owner's attestation plus 900 s plus 60 s (every request the fenced far side could have spent has expired), plus
     600 s more when the fence is only typed rather than an iLO power readback.
