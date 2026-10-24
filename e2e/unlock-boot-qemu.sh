@@ -293,7 +293,7 @@ cryptsetup close regalia-boot-build
 losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 
-python3 -BEs -c 'import sys; sys.path.insert(0, "e2e/lib"); import tpmdiag; print(tpmdiag.versions())' || true
+python3 -BI -c 'import sys; sys.path.insert(0, "e2e/lib"); import tpmdiag; print(tpmdiag.versions())' || true
 echo "### twelve boots"
 out="$(REGALIA_EXPECT_QEMU=1 REGALIA_EXPECT_KVM="${REGALIA_EXPECT_KVM:-0}" REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot.OnQemu </dev/null 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out"
