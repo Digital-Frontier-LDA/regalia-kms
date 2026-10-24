@@ -16,6 +16,8 @@ import (
 const (
 	testBoot    = "0f3a9c1e-1111-4222-8333-444455556666"
 	testSession = "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+	testCluster = "c1c1c1c1c1c1c1c1"
+	testKey     = "e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7"
 	testDigest  = "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
 )
 
@@ -52,7 +54,8 @@ func good(now int64) map[string]any {
 	return map[string]any{
 		"schema": Schema, "node_id": "a", "session_id": testSession, "boot_id": testBoot, "epoch": 7,
 		"manifest_digest": testDigest, "hsm_serials": "DENK0404144 36345471", "lease_issued_at": "2026-10-02T09:00:00Z",
-		"requested_boottime_ms": now - 5_000, "serve_until_boottime_ms": now + 25_000, "mode": "lease", "reason": "",
+		"requested_boottime_ms": now - 5_000, "cluster_id": testCluster, "state_epoch": 2, "state_revision": 41,
+		"session_key": testKey, "serve_until_boottime_ms": now + 25_000, "mode": "lease", "reason": "",
 	}
 }
 
@@ -131,6 +134,10 @@ func TestANodeWithACurrentAdmissionIsAdmitted(t *testing.T) {
 	}
 	if !w.gate.Ready(context.Background()) {
 		t.Fatal("Ready is false for a current admission")
+	}
+	// the held lease's operational state reaches the daemon's state gate as written (D32, #510)
+	if want := (LeaseState{ClusterID: testCluster, StateEpoch: 2, StateRevision: 41, SessionKey: testKey}); status.State != want {
+		t.Fatalf("state = %+v, want %+v", status.State, want)
 	}
 	// up to the last millisecond, and not at it
 	w.now += 24_999
@@ -235,18 +242,30 @@ func TestEveryDefectOfTheFileIsNotAdmitted(t *testing.T) {
 		{"seventeen serials", "lists more than 16 hardware tokens", change("hsm_serials", serials(17))},
 		{"the old schema", "another schema", change("schema", "regalia.admission/v1")},
 		{"the v2 schema (no mode)", "another schema", change("schema", "regalia.admission/v2")},
+		// v4 is v3's mode (#494) and the lease's state (#510) together: a v3 file, of either shape, is another schema
+		{"the v3 schema (#494's mode, no lease state)", "another schema", change("schema", "regalia.admission/v3")},
+		{"a cluster ID of 15 hex", "cluster_id is not 16 lowercase hex", change("cluster_id", testCluster[1:])},
+		{"an uppercase cluster ID", "cluster_id is not 16 lowercase hex", change("cluster_id", "C1C1C1C1C1C1C1C1")},
+		{"a cluster ID as a number", "cluster_id is not a string", change("cluster_id", 7)},
+		{"a negative state epoch", "state_epoch is not a whole number", change("state_epoch", -1)},
+		{"a state revision as text", "state_revision is not a whole number", change("state_revision", "41")},
+		{"a session key of 63 hex", "session_key is not 64 lowercase hex", change("session_key", testKey[1:])},
+		// a lease that serves carries its state, or the state gate has nothing to check (2f's read of #510)
+		{"serving under a lease with no cluster", "serves under a lease but carries no lease state", change("cluster_id", strings.Repeat("0", 16))},
+		{"serving under a lease with no session key", "serves under a lease but carries no lease state", change("session_key", strings.Repeat("0", 64))},
 		{"an unknown mode", "neither lease nor recovery", change("mode", "standby")},
 		{"recovery, with no stateless-only gate yet", "no stateless-only gate yet", change("mode", "recovery")},
 		{"a local time", "lease_issued_at is not UTC", change("lease_issued_at", "2026-10-02T09:00:00+02:00")},
 		{"a fractional bound", "serve_until_boottime_ms is not a whole number", change("serve_until_boottime_ms", 1.0e6+0.5)},
-		{"an exponent bound", "serve_until_boottime_ms is not a whole number", raw(`{"schema":"regalia.admission/v3","node_id":"a","session_id":"` + testSession +
+		{"an exponent bound", "serve_until_boottime_ms is not a whole number", raw(`{"schema":"` + Schema + `","node_id":"a","session_id":"` + testSession +
 			`","boot_id":"` + testBoot + `","epoch":7,"manifest_digest":"` + testDigest + `","hsm_serials":"DENK0404144` +
-			`","lease_issued_at":"2026-10-02T09:00:00Z","requested_boottime_ms":1,"serve_until_boottime_ms":1e9,"mode":"lease","reason":""}`)},
+			`","lease_issued_at":"2026-10-02T09:00:00Z","requested_boottime_ms":1,"cluster_id":"` + testCluster + `","state_epoch":2,"state_revision":41,"session_key":"` + testKey +
+			`","serve_until_boottime_ms":1e9,"mode":"lease","reason":""}`)},
 		{"a bound as text", "serve_until_boottime_ms is not a whole number", change("serve_until_boottime_ms", "1025000")},
 		{"a negative request time", "requested_boottime_ms is not a whole number", change("requested_boottime_ms", -1)},
 		{"a reason that is not a string", "reason is not a string", change("reason", 0)},
 		{"a reason with a control character", "reason is not printable ASCII", change("reason", "bad\x1b[31m")},
-		{"a reason too long", "reason is too long", change("reason", strings.Repeat("x", 241))},
+		{"a reason too long", "reason is too long", change("reason", strings.Repeat("x", MaxReasonBytes+1))},
 		{"zero, with the service's reason", "not admitted by the lease service: a may not serve under epoch 8 (REVOKED_STOLEN)", func(w *world) {
 			document := good(w.now)
 			document["serve_until_boottime_ms"], document["reason"] = 0, "a may not serve under epoch 8 (REVOKED_STOLEN)"

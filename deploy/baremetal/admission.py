@@ -13,16 +13,25 @@ so it can replace this file and nothing else there. The daemon accepts the file 
 from that user (runtime_admission_owner) or root, with no group or other write, and nothing above it that
 anyone else could swap; and it accepts the boot session beside it only from root.
 
-    {"schema": "regalia.admission/v3",
+    {"schema": "regalia.admission/v4",
      "node_id": ..., "session_id": "<64 hex: this boot's attested session>",
      "boot_id": "<the kernel's boot ID>",
      "epoch": <the manifest epoch the check was made under>, "manifest_digest": "<64 hex>",
      "hsm_serials": "<this node's hsm_serials in that manifest, space-separated; "" when none>",
      "lease_issued_at": "YYYY-MM-DDTHH:MM:SSZ",
      "requested_boottime_ms": <when this node asked for the lease it holds>,
+     "cluster_id": "<16 hex>", "state_epoch": <n>, "state_revision": <n>, "session_key": "<64 hex>",
      "serve_until_boottime_ms": <the daemon may serve while its CLOCK_BOOTTIME is below this; 0 = no>,
      "mode": "lease" | "recovery" (a lone survivor under the owner's authorization: stateless operations only),
      "reason": "<why not, when serve_until is 0; in recovery, that it is>"}
+
+THE LEASE'S OPERATIONAL STATE (v4; ADR-0002 D32, #510). cluster_id, state_epoch, state_revision and session_key
+are the held lease's own (lease.py v2): the etcd history and revision the issuer vouched this node had applied, and
+the session key of the daemon start it was asked for. The daemon's state gate serves only while its own watch is of
+that cluster and state epoch, has reached that revision, and the session key is its own (internal/opstate.StateGate).
+When no lease is held they are zeros (NO_STATE), in recovery as when nothing is served; a lease-mode document that
+serves with them zero is refused, here and by the daemon. v4 is v3's mode (#494) and these together: a v3 file, of
+either shape, is another schema to the daemon.
 
 THE DAEMON NEEDS NO WALL CLOCK. The service turns the lease's expiry, judged on authenticated time, into
 this host's CLOCK_BOOTTIME (which runs through suspend and cannot be set), less a margin. The daemon
@@ -77,9 +86,11 @@ from deploy.baremetal import lease, membership
 
 Refused, require = membership.Refused, membership.require
 
-SCHEMA = "regalia.admission/v3"
+SCHEMA = "regalia.admission/v4"
 FIELDS = ("schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "hsm_serials", "lease_issued_at",
-          "requested_boottime_ms", "serve_until_boottime_ms", "mode", "reason")
+          "requested_boottime_ms", "cluster_id", "state_epoch", "state_revision", "session_key", "serve_until_boottime_ms",
+          "mode", "reason")
+NO_STATE = {"cluster_id": "00" * 8, "state_epoch": 0, "state_revision": 0, "session_key": "00" * 32}
 # v3 (ADR-0002 D32 item 6, #432 item (e)): "lease", served under a peer's runtime lease; "recovery", a lone survivor
 # served under the owner's survivor authorization (survivor.py), stateless operations only. The daemon refuses
 # "recovery" until its stateless-only gate exists (internal/admission; ed): fail closed.
@@ -146,10 +157,19 @@ def _printable(text, limit=membership.NAME_LIMIT):
     return membership.printable(text, limit)
 
 
+def _checked(document):
+    """What write() and read() both require beyond the fields: a known mode, and a lease that serves carries its state
+    (a real cluster ID or session key is never all zeros; 2f's read of #510, as internal/admission.Parse)."""
+    require(document["mode"] in MODES, "an admission's mode is one of %s" % ", ".join(MODES))
+    no_state = document["cluster_id"] == NO_STATE["cluster_id"] or document["session_key"] == NO_STATE["session_key"]
+    require(not (document["mode"] == "lease" and document["serve_until_boottime_ms"] and no_state),
+            "an admission that serves under a lease carries the lease's state")
+
+
 def write(path, document):
     """Replace the admission file: complete or not at all, readable by the daemon, writable by its writer only."""
     require(tuple(document) == FIELDS, "an admission document has exactly its fields, in order")
-    require(document["mode"] in MODES, "an admission's mode is one of %s" % ", ".join(MODES))
+    _checked(document)
     directory = os.path.dirname(os.path.abspath(path))
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".admission-")
     try:
@@ -222,6 +242,7 @@ class Service:
                 "lease_issued_at": held["issued_at"] if held and serve_until else NEVER,
                 "requested_boottime_ms": (requested if requested is not None else
                                           self._requests().get(held["nonce"], 0) if held and serve_until else 0),
+                **({k: held[k] for k in lease.STATE_KEYS} if held and serve_until and mode == "lease" else NO_STATE),
                 "serve_until_boottime_ms": serve_until, "mode": mode, "reason": _printable(reason, ADMISSION_REASON_LIMIT)}
 
     def _may_serve(self, manifest):
@@ -429,7 +450,7 @@ def read(path):
     with open(path, "rb") as f:
         document = membership.load(f.read(4097))
     membership.exact(document, FIELDS, "admission")
-    require(document["mode"] in MODES, "an admission's mode is one of %s" % ", ".join(MODES))
+    _checked(document)
     return document
 
 
