@@ -92,6 +92,8 @@ import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "e2e" / "lib"))
+import tpmdiag                                                                       # noqa: E402  regalia-zga
 
 from deploy.baremetal import admission, attest, authtime, enrol, heartbeat, lease, measurements, membership, metrics, node, os_probe, sync, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                    # noqa: E402  the root and revocation keys, and beat()
@@ -256,7 +258,7 @@ def peer_tpm(work):
     """b's TPM: swtpm on a socket of the test's own (b is the fixture here, not what is tested)."""
     (work / "b-tpm").mkdir()
     sh("swtpm", "socket", "--tpm2", "--server", "type=unixio,path=%s" % (work / "b-tpm.sock"), "--ctrl", "type=unixio,path=%s.ctrl" % (work / "b-tpm.sock"),
-       "--tpmstate", "dir=%s" % (work / "b-tpm"), "--flags", "not-need-init,startup-clear", "--daemon")
+       "--tpmstate", "dir=%s" % (work / "b-tpm"), "--flags", "not-need-init,startup-clear", "--daemon", "--log", tpmdiag.log_arg(work / "b-tpm.log"))
     until(lambda: (work / "b-tpm.sock").exists(), 10, 0.2)
     return "swtpm:path=%s" % (work / "b-tpm.sock")
 
@@ -319,7 +321,7 @@ def tpm(work):
 
     if sh("modprobe", "tpm_vtpm_proxy", check=False).returncode == 0:
         done = sh("swtpm", "chardev", "--vtpm-proxy", "--tpm2", "--tpmstate", "dir=%s" % state, "--flags", "not-need-init,startup-clear",
-                  "--daemon", "--log", "file=%s" % (work / "swtpm.log"))
+                  "--daemon", "--log", tpmdiag.log_arg(work / "swtpm.log"))
         said = (done.stdout + done.stderr).strip()
         how = "the kernel's vTPM proxy (%s)" % said
         # swtpm says "New TPM device: /dev/tpmN"; the kernel registers it (and tpmrmN) only once its own
@@ -333,7 +335,7 @@ def tpm(work):
         sh("modprobe", "cuse", check=False)
         (work / "swtpm.log").touch()
         shutil.chown(work / "swtpm.log", "tss", "tss")
-        sh("swtpm", "cuse", "-n", "tpmrm0", "--tpm2", "--tpmstate", "dir=%s" % state, "--log", "file=%s" % (work / "swtpm.log"),
+        sh("swtpm", "cuse", "-n", "tpmrm0", "--tpm2", "--tpmstate", "dir=%s" % state, "--log", tpmdiag.log_arg(work / "swtpm.log"),
            "--runas", "tss")
         how = "swtpm's CUSE device"
         appeared(how)
@@ -476,6 +478,7 @@ def provision(work):
 
 
 def scenario(work, binaries, user):
+    print(tpmdiag.versions(), flush=True)                                            # regalia-zga: the stack it ran on
     header("0  the TPM, as a device, and the controls")
     how, by_test = tpm(work)
     rm = "/dev/tpmrm0"

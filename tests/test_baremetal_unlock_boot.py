@@ -28,6 +28,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from deploy.baremetal import attest, bootcreds, bootnet, espcreds, firewall, membership, sitecfg, uki, unlock
 import tests.test_baremetal_unlock as tub
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "e2e", "lib"))
+import tpmdiag  # noqa: E402  regalia-zga, regalia-a0y: what a TPM failure is diagnosed from
+
 BOOT = os.environ.get("REGALIA_BOOT_DIR", "")
 UNDERLAY = {"a": "192.0.2.10", "b": "198.51.100.7", "c": "198.51.100.9"}
 TUNNEL = {"a": "10.89.0.1", "b": "10.89.0.2", "c": "10.89.0.3"}
@@ -299,7 +302,11 @@ class OnQemu(tub.OnSwtpm):
         ctrl = self.d + "/a.ctrl"
         if os.path.exists(ctrl):
             os.unlink(ctrl)
-        tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--ctrl", "type=unixio,path=" + ctrl],
+        # regalia-a0y's cause was in this swtpm's log at level 20 (an answered PCR_Extend, then CMD_CANCEL_TPM_CMD): written in
+        # self.d (under /tmp, where swtpm's AppArmor profile lets it write), then kept beside the boot's console
+        tpm_log = "%s/swtpm-%s.log" % (self.d, label)
+        tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--ctrl", "type=unixio,path=" + ctrl,
+                                "--log", tpmdiag.log_arg(tpm_log)],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.processes.append(tpm)
         for _ in range(100):
@@ -363,6 +370,8 @@ class OnQemu(tub.OnSwtpm):
         qemu.wait(30)
         tpm.terminate()
         tpm.wait(30)
+        if os.path.exists(tpm_log):
+            shutil.copyfile(tpm_log, "%s/swtpm-%s.log" % (BOOT, label))      # e2e/unlock-boot-qemu.sh keeps it on a failure
         text = said.decode(errors="replace")
         fault = host_tpm_fault(text)
         if fault:
@@ -800,7 +809,8 @@ class OnQemu(tub.OnSwtpm):
         does on a running host, after the ESP holds the chain: node.esp_advance)."""
         sock = self.d + "/a-off.sock"
         tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--server", "type=unixio,path=" + sock,
-                                "--ctrl", "type=unixio,path=%s.ctrl" % sock, "--flags", "not-need-init,startup-clear"],
+                                "--ctrl", "type=unixio,path=%s.ctrl" % sock, "--flags", "not-need-init,startup-clear",
+                                "--log", tpmdiag.log_arg("%s/swtpm-anchor.log" % self.d)],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             for _ in range(100):
