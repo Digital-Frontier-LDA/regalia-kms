@@ -59,10 +59,17 @@ def approval(entry, who, nonce=RAW_NONCE, **over):
     """internal/approval's Approval by `who` for the request `entry` spent: signed over its Binding."""
     keys = {"alice": ALICE, "bob": BOB, "mallory": STRANGER}
     out = {"approver_id": who, "nonce": nonce, "expires_at": entry["expires_at"], "payload_digest": entry["payload_sha256"]}
-    out.update({k: v for k, v in over.items() if k != "signed_as"})
+    out.update({k: v for k, v in over.items() if k not in ("signed_as", "v2")})
     signed = dict(entry, **over.get("signed_as", {}))
-    out["signature"] = base64.b64encode(keys[who].sign(opstate.binding_bytes(signed, nonce))).decode()
+    out["signature"] = base64.b64encode(keys[who].sign((v2_bytes if over.get("v2") else opstate.binding_bytes)(signed, nonce))).decode()
     return out
+
+
+def v2_bytes(spend, nonce):
+    """The v2 binding an approver's tool signed before #432 G3, written out here (six records, no signer node):
+    opstate.binding_bytes no longer makes it, and a v2 approval must not count under v3."""
+    fields = (spend["object_id"], spend["purpose"], spend["environment"], nonce, spend["expires_at"], spend["payload_sha256"])
+    return ("regalia-approval-v2\n" + "".join("%d:%s\n" % (len(f.encode()), f) for f in fields)).encode()
 
 
 def spend(approvals=("alice", "bob"), **over):
@@ -211,6 +218,7 @@ check("an approval that outlives the request", S, [approval(S, "alice"), approva
 check("an approval signed over another environment", S, [approval(S, "alice"), approval(S, "bob", signed_as={"environment": "staging"})], False)
 check("an approval given for another node (#432 G3)", S,
       [approval(S, "alice"), approval(S, "bob", signed_as={"node_id": "b" if S["node_id"] != "b" else "c"})], False)
+check("an approval an approver's tool signed over the v2 binding (#432 G3)", S, [approval(S, "alice"), approval(S, "bob", v2=True)], False)
 check("the same approver twice", S, [approval(S, "alice"), approval(S, "alice")], False)
 check("approvals that are not the approvers the spend names", spend(approvals=("alice", "bob"), approvers=["alice", "carol"]),
       [approval(S, "alice"), approval(S, "bob")], False)

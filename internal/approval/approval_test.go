@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -438,5 +439,34 @@ func TestAnApprovalForAnotherNodeDoesNotVerifyHere(t *testing.T) {
 		if ed25519.Verify(public, onOther.CanonicalBytes(), signature) {
 			t.Fatalf("DEFECT: node b's approval verifies over a binding whose signer is %q", signer)
 		}
+	}
+}
+
+// A V2 APPROVAL DOES NOT COUNT UNDER V3.
+//
+// #432 G3 moved the label to regalia-approval-v3 and added the signer node, so an approver's tool
+// still signing v2 bindings must get no approval counted, never a partial or silent match. The v2
+// bytes are written out literally (the v2 contract, six records), not built by CanonicalBytes,
+// which no longer can. The control: the same approver over the v3 bytes counts, so a v2 approval
+// fails for its version and nothing else.
+func TestAV2ApprovalDoesNotCountUnderV3(t *testing.T) {
+	alice, aliceKey, alicePublic := approver(t, "spiffe://regalia/approver/alice")
+	set := NewKeySet(map[string]ed25519.PublicKey{alice: alicePublic})
+	binding := Binding{ObjectID: "signing-key-1", Purpose: "release-signing", Environment: "production",
+		Nonce: "nonce-aaaa-bbbb-cccc", ExpiresAt: time.Now().Add(time.Hour).UTC().Truncate(time.Second),
+		Payload: []byte("the bytes being signed"), Signer: "site-a"}
+	expires := binding.ExpiresAt.Format(time.RFC3339Nano)
+	digest := binding.PayloadDigest()
+	v2 := "regalia-approval-v2\n"
+	for _, field := range []string{binding.ObjectID, binding.Purpose, binding.Environment, binding.Nonce, expires, digest} {
+		v2 += strconv.Itoa(len(field)) + ":" + field + "\n"
+	}
+	old := Approval{ApproverID: alice, Nonce: binding.Nonce, ExpiresAt: expires, PayloadDigest: digest,
+		Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(aliceKey, []byte(v2)))}
+	if got := set.Verify(header(t, old), binding); len(got) != 0 {
+		t.Fatalf("DEFECT: a v2 approval counted under v3: %v", got)
+	}
+	if got := set.Verify(header(t, sign(t, alice, aliceKey, binding, binding)), binding); len(got) != 1 {
+		t.Fatalf("control: the same approver over the v3 bytes must count, got %v", got)
 	}
 }

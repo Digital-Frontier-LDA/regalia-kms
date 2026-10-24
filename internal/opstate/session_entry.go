@@ -141,11 +141,12 @@ func ApprovalsDigest(approvals []any) string {
 }
 
 // bindingBytes is opstate.binding_bytes: internal/approval.Binding.CanonicalBytes for the request the spend
-// consumed, from its payload's digest.
+// consumed, from its payload's digest. v3 (#432 G3): the seventh record is the one node that may spend it, the
+// spend's own node, so an approval given for another node does not verify for this spend.
 func bindingBytes(spend map[string]any, nonce string) []byte {
-	out := []byte("regalia-approval-v2\n")
+	out := []byte("regalia-approval-v3\n")
 	for _, field := range []string{spend["object_id"].(string), spend["purpose"].(string), spend["environment"].(string), nonce,
-		spend["expires_at"].(string), spend["payload_sha256"].(string)} {
+		spend["expires_at"].(string), spend["payload_sha256"].(string), spend["node_id"].(string)} {
 		out = append(out, strconv.Itoa(len(field))+":"+field+"\n"...)
 	}
 	return out
