@@ -74,6 +74,8 @@ ADMISSION_DIR_MODE = _state_directory_mode("regalia-admission.service")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import tpmdiag                                                                                      # noqa: E402
 from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, lease, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
@@ -204,6 +206,9 @@ OWNER_PIN = "246813"                              # the SoftHSM owner token's TE
 class Cluster:
     def __init__(self, work, names=NAMES, audit=False):
         self.work = pathlib.Path(work)
+        # regalia-zga: what a TPM failure is diagnosed from, kept in this run (e2e/lib/tpmdiag.py): which stack it ran on;
+        # each node's swtpm logs at level 20 (_tpm)
+        print(tpmdiag.versions(), flush=True)
         # #199: the cluster is v4. The nodes sign their own heartbeats with their TPM signing keys (beat.py), the owner's
         # party is two Ed25519 keys on a SoftHSM token (the two owner YubiKeys of ADR-0002 D30), and each node boots an
         # image whose PCR 11 a fixture system-phase key signed
@@ -310,7 +315,7 @@ class Cluster:
         ctrl = "type=unixio,path=%s.ctrl,mode=0660,gid=%d" % (n.tpm_sock, tss)
         done = sh("swtpm", "socket", "--tpm2", "--server", server, "--ctrl", ctrl,
                   "--tpmstate", "dir=%s" % (n.dir / "tpm"), "--flags", "not-need-init,startup-clear", "--daemon",
-                  "--pid", "file=%s" % (n.dir / "tpm.pid"), "--log", "file=%s" % (n.dir / "tpm.log"), check=False)
+                  "--pid", "file=%s" % (n.dir / "tpm.pid"), "--log", tpmdiag.log_arg(n.dir / "tpm.log"), check=False)
         if done.returncode != 0 or not until(lambda: n.tpm_sock.exists(), 10, 0.2):
             log = (n.dir / "tpm.log").read_text()[-800:] if (n.dir / "tpm.log").exists() else ""
             denied = sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False).stdout[-800:]
@@ -1749,6 +1754,8 @@ class Cluster:
             except (OSError, ValueError):
                 pass
             sh("ip", "netns", "del", n.ns, check=False)
+        # regalia-zga: the scripts remove the work directory after this; in CI each node's swtpm log is kept first
+        tpmdiag.keep({"%s/tpm.log" % n.name: str(n.dir / "tpm.log") for n in self.members()}, self.work.name)
         sh("ip", "netns", "del", SWITCH, check=False)
         for loop in self.loops.values():
             sh("losetup", "-d", loop, check=False)

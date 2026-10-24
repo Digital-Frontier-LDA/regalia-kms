@@ -580,7 +580,12 @@ jobs:
         # are built by deploy/baremetal/initrd/build-initrd.sh (#248), with the Go release go.mod pins.
         # REGALIA_EXPECT_KVM=1: without /dev/kvm the test FAILS, so boots 8 and 9 (#70: 150 s with no peer, the
         # peers back after 150 s) can never be skipped here.
-        run: sudo REGALIA_EXPECT_KVM=1 REGALIA_GO="$(command -v go)" REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/20261003T121500Z/ REGALIA_BOOT_SECURITY_MIRROR=https://snapshot.debian.org/archive/debian-security/20261003T121500Z/ bash e2e/unlock-boot-qemu.sh
+        run: sudo REGALIA_DIAG_DIR="$RUNNER_TEMP/unlock-diag" REGALIA_EXPECT_KVM=1 REGALIA_GO="$(command -v go)" REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/20261003T121500Z/ REGALIA_BOOT_SECURITY_MIRROR=https://snapshot.debian.org/archive/debian-security/20261003T121500Z/ bash e2e/unlock-boot-qemu.sh
+      - name: Keep the software TPM's logs and the consoles (regalia-zga, regalia-a0y)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: unlock-boot-qemu
 
   # regalia-kms#248: the KMS host initrd is REPRODUCIBLE, and stays so. deploy/baremetal/initrd/build-initrd.sh
   # builds it from pinned inputs (one snapshot.debian.org time with the security suite, dracut --reproducible,

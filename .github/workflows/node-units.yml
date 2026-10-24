@@ -110,6 +110,11 @@ jobs:
           REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/node-units-systemd.py | tee "$RUNNER_TEMP/units.log"
           grep -q '^node-units-systemd: 70 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
             echo "::error::the units test did not pass all 70 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: node-units-systemd
 
   # #278: the trail shipper's unit, as shipped, against the real collector: as its own user with no
   # capability it reads a trail only through its instance's group, and a trail cut short under what was
@@ -134,6 +139,11 @@ jobs:
           REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/audit-ship-systemd.py | tee "$RUNNER_TEMP/ship.log"
           grep -q '^audit-ship-systemd: 21 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
             echo "::error::the shipper test did not pass all 20 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: audit-ship-systemd
 
   # #70 (Phase 10), PR 1: three nodes on one machine, each its real services in its own namespace against
   # its own software TPM, the fixture the recovery rehearsals build on (e2e/lib/threenode.py).
@@ -156,6 +166,11 @@ jobs:
           sudo --preserve-env=RUNNER_ENVIRONMENT python3 -Es e2e/three-node-netns.py | tee "$RUNNER_TEMP/three.log"
           grep -q '^three-node-netns: 40 passed, 0 failed$' "$RUNNER_TEMP/three.log" || {
             echo "::error::the three-node test did not pass all 40 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-netns
 
   # #70 (Phase 10), PR 2: every directed peer recovery path (PoC 10.1) and the nodes that must not be
   # restored, on the three-node fixture: real disks (LUKS2 on loop devices), the real pre-root client.
@@ -187,6 +202,11 @@ jobs:
             python3 -Es e2e/three-node-recovery.py | tee "$RUNNER_TEMP/recovery.log"
           grep -q '^three-node-recovery: 69 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
             echo "::error::the three-node recovery test did not pass all 69 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-recovery
 
   # #75 (Phase 15), tier N: a new image rolled through the three nodes while CURRENT and NEXT are both accepted
   # (an image is PCR 11, extended after a power cycle); may_reboot on live leases as update.py asks it; the retire
@@ -219,6 +239,11 @@ jobs:
             python3 -Es e2e/rolling-threenode.py | tee "$RUNNER_TEMP/rolling.log"
           grep -q '^rolling-threenode: 50 passed, 0 failed$' "$RUNNER_TEMP/rolling.log" || {
             echo "::error::the rolling-update test did not pass all 50 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: rolling-threenode
 
   # #71 (Phase 11): a total outage of the three nodes, restored by one manual recovery (one node by hand, its
   # heartbeat co-signed by an owner key, owner.py beat; then the other two through it; #199: no authority host).
@@ -246,6 +271,11 @@ jobs:
             python3 -Es e2e/three-node-outage.py | tee "$RUNNER_TEMP/outage.log"
           grep -q '^three-node-outage: 34 passed, 0 failed$' "$RUNNER_TEMP/outage.log" || {
             echo "::error::the three-node outage test did not pass all 34 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-outage
 
   # #388: a re-anchor in a total outage. One node's TPM anchor unusable; the other two opened by hand, each with its own
   # recovery key; reanchor from their two chains at the node's terminal; the node serves again (MEMBERSHIP-RECOVERY.md).
@@ -273,6 +303,11 @@ jobs:
             python3 -Es e2e/three-node-reanchor.py | tee "$RUNNER_TEMP/reanchor.log"
           grep -q '^three-node-reanchor: 26 passed, 0 failed$' "$RUNNER_TEMP/reanchor.log" || {
             echo "::error::the three-node re-anchor test did not pass all 26 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-reanchor
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.
@@ -300,6 +335,11 @@ jobs:
             python3 -Es e2e/three-node-replace.py | tee "$RUNNER_TEMP/replace.log"
           grep -q '^three-node-replace: 16 passed, 0 failed$' "$RUNNER_TEMP/replace.log" || {
             echo "::error::the three-node replacement test did not pass all 16 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-replace
 
   # #69 (Phase 9): a stolen node revoked by the owner off the nodes (revoke.py), the revocation spreading, and the window a
   # partition leaves (an nftables table inside one node's namespace only).
@@ -331,6 +371,11 @@ jobs:
             python3 -Es e2e/three-node-theft.py | tee "$RUNNER_TEMP/theft.log"
           grep -q '^three-node-theft: 24 passed, 0 failed$' "$RUNNER_TEMP/theft.log" || {
             echo "::error::the three-node theft test did not pass all 24 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-theft
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.
@@ -361,6 +406,11 @@ jobs:
             python3 -Es e2e/three-node-leases.py | tee "$RUNNER_TEMP/leases.log"
           grep -q '^three-node-leases: 12 passed, 0 failed$' "$RUNNER_TEMP/leases.log" || {
             echo "::error::the three-node lease test did not pass all 12 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-leases
 
   # #432 (owner requirement 2026-10-05: servers about 500 km apart): today's leases, sync, failover and an epoch across
   # a WAN, ~100 ms round trip with jitter (netem in the nodes' namespaces), measured for the multi-active design.
@@ -388,6 +438,11 @@ jobs:
             python3 -Es e2e/three-node-wan.py | tee "$RUNNER_TEMP/wan.log"
           grep -q '^three-node-wan: 29 passed, 0 failed$' "$RUNNER_TEMP/wan.log" || {
             echo "::error::the three-node WAN test did not pass all 29 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-wan
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.

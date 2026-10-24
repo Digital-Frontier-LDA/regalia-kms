@@ -293,11 +293,17 @@ cryptsetup close regalia-boot-build
 losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 
+python3 -BI -c 'import sys; sys.path.insert(0, "e2e/lib"); import tpmdiag; print(tpmdiag.versions())' || true
 echo "### twelve boots"
 out="$(REGALIA_EXPECT_QEMU=1 REGALIA_EXPECT_KVM="${REGALIA_EXPECT_KVM:-0}" REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot.OnQemu </dev/null 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out"
 if [ "$rc" != 0 ]; then
   for log in "$W"/console-*.log; do [ -e "$log" ] && { echo "----- $(basename "$log") (last 80 lines)"; tail -80 "$log"; }; done
+  # regalia-zga/a0y: $W is removed on exit, so a failing run's consoles and swtpm logs (level 20) are copied out first,
+  # for the job to upload (.github/actions/tpm-diagnostics)
+  if [ -n "${REGALIA_DIAG_DIR:-}" ]; then
+    mkdir -p "$REGALIA_DIAG_DIR"; cp -- "$W"/console-*.log "$W"/swtpm-*.log "$REGALIA_DIAG_DIR"/ 2>/dev/null || true
+  fi
   # regalia-a0y: a boot whose firmware could not measure is the host's QEMU/swtpm, named apart from a product failure
   faulted="$(grep -l 'Failed to measure data for event [0-9]*: 0x8000000000000007' "$W"/console-*.log 2>/dev/null | wc -l | tr -d ' ')"
   if [ "$faulted" != 0 ]; then
