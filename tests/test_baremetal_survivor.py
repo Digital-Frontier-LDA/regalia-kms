@@ -204,6 +204,19 @@ class Directive(Case):
         os.symlink(other, store.path)
         self.refused("cannot be opened", store.disabled)
 
+    def test_a_wiped_store_replayed_can_only_disable_again(self):
+        """The store is not an anti-replay record: a directive only disables, so presenting an old one again after the
+        store is lost (a reboot: it is on /run) disables its key again, never enables one; and one signed under an
+        earlier epoch is refused against the node's current manifest. What a wipe does lose is the disabled set itself:
+        that is regalia-kds, for the daemon's refusal (ed), not a replay."""
+        store = self.store()
+        old = self.directive()
+        store.apply(old, self.m2)
+        os.unlink(store.path)                                             # the reboot
+        self.assertEqual(store.disabled(), set())                         # the loss, measured
+        self.assertEqual(store.apply(old, self.m2), {"release-signing"})  # the replay: the same key disabled again
+        self.refused("is for epoch 2's manifest", store.apply, old, self.m1)
+
     def test_a_node_s_directive_is_not_the_owner_s(self):
         directive = self.directive()["directive"]
         by_a = {"directive": directive, "signature": {"party": "a", "key": pub(NODE_KEYS["a"]), "sig": p256_sig(NODE_KEYS["a"], sv.directive_message(directive))}}
