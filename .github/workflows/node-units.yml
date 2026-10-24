@@ -167,7 +167,7 @@ jobs:
           grep -q '^three-node-netns: 40 passed, 0 failed$' "$RUNNER_TEMP/three.log" || {
             echo "::error::the three-node test did not pass all 40 checks" >&2; exit 1; }
       - name: Keep the software TPMs' logs (regalia-zga)
-        if: failure()
+        if: always()   # TEMPORARY: proves the upload on a green run; reverted before merge
         uses: ./.github/actions/tpm-diagnostics
         with:
           name: three-node-netns
