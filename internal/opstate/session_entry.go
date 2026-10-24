@@ -189,6 +189,10 @@ func CheckApprovals(spend any, approvals any, sets map[string]ApproverSet) ([]st
 			return nil, refuse("%s is not an approver of the set, or counted twice", printableName(a["approver_id"]))
 		}
 		nonce, isText := a["nonce"].(string)
+		if isText && nonce == "" {
+			// opstate.nonce_digest's own rule, reached on the way: an empty nonce is no nonce (regalia-u1r)
+			return nil, refuse("a nonce is a non-empty string")
+		}
 		if !isText || hashName(nonce) != entry["nonce_digest"] {
 			return nil, refuse("%s approved another request's nonce", who)
 		}

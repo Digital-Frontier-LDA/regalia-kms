@@ -100,9 +100,19 @@ func previousOf(value any) map[string]any {
 func TestEveryOpstateDecisionIsTheSame(t *testing.T) {
 	v := opstateVector(t)
 	sessions, sets := vectorResolvers(t, v)
+	// every set digests to the key it is held under, but for one a refused case is about (regalia-u1r: a
+	// verifier configured with a set under a digest that is not that set's)
 	for digest, set := range sets {
-		if set.Digest() != digest {
-			t.Fatalf("the approver set under %s digests to %s in Go", digest[:16], set.Digest()[:16])
+		if set.Digest() == digest {
+			continue
+		}
+		named := false
+		for _, value := range v["cases"].([]any) {
+			c := value.(map[string]any)
+			named = named || (c["accept"] == false && c["python_reason"] == "the approver set held under "+digest[:16]+" is not that set")
+		}
+		if !named {
+			t.Fatalf("the approver set under %s digests to %s in Go, and no case is about that", digest[:16], set.Digest()[:16])
 		}
 	}
 	accepted, refused := 0, 0
@@ -183,7 +193,10 @@ func TestADamagedOpstateValueIsRefusedNeverAPanic(t *testing.T) {
 	for _, value := range v["cases"].([]any) {
 		c := value.(map[string]any)
 		stored := c["value"].(map[string]any)
-		entry := stored["entry"].(map[string]any)
+		entry, ok := stored["entry"].(map[string]any)
+		if !ok {
+			continue // the case whose entry is not an object (regalia-u1r): nothing in it to damage
+		}
 		try := func(label string, changed any) {
 			tried++
 			defer func() {
@@ -418,7 +431,7 @@ func TestEverySessionApprovalAndSignCheckIsTheSame(t *testing.T) {
 	}
 	for _, value := range v["session_checks"].([]any) {
 		c := value.(map[string]any)
-		_, until, err := VerifySession(c["key"].(string), c["value"], chain)
+		_, until, err := VerifySession(c["key"].(string), c["value"], caseChain(c, chain))
 		judge("session", c["name"].(string), c["accept"] == true, c["python_reason"].(string), err)
 		if c["accept"] == true && until != c["python_reason"] {
 			t.Errorf("session %s: valid until %q, Python %q", c["name"], until, c["python_reason"])

@@ -56,7 +56,7 @@ class Vectors(unittest.TestCase):
         for c in doc["session_checks"]:
             with self.subTest(c["name"]):
                 try:
-                    _, until = opstate.verify_session(c["key"], c["value"], doc["chain"])
+                    _, until = opstate.verify_session(c["key"], c["value"], c.get("chain", doc["chain"]))
                     got, why = True, until or ""
                 except m.Refused as refused:
                     got, why = False, str(refused)
@@ -80,7 +80,7 @@ class Vectors(unittest.TestCase):
         for c in doc["state_epoch_checks"]:
             with self.subTest(c["name"]):
                 try:
-                    entry = opstate.verify_state_epoch(c["key"], c["value"], doc["state_epoch_chain"], c["previous"],
+                    entry = opstate.verify_state_epoch(c["key"], c["value"], c.get("chain", doc["state_epoch_chain"]), c["previous"],
                                                        tuple(c["store"]) if c["store"] else None)
                     got, why = True, ""
                     self.assertEqual(entry["state_epoch"], c["applied_state_epoch"])
@@ -103,13 +103,17 @@ class Vectors(unittest.TestCase):
             """P-256 signatures (the session entries') are randomized: compared as present, verified by the replay above."""
             for c in doc["session_checks"] + doc["state_epoch_checks"]:
                 c["value"]["signature"] = "<p-256>"
+            for c in doc["state_epoch_checks"]:
+                auth = c["value"]["entry"].get("authorization") if isinstance(c["value"]["entry"], dict) else None
+                if isinstance(auth, dict) and auth.get("signature", {}).get("party") != "owner":
+                    auth["signature"]["sig"] = "<p-256>"          # a node's key over an authorization (regalia-u1r)
             return doc
         self.assertEqual(steady(restored(json.loads(made))), steady(load()),
                          "regenerate: python3 -Es tests/vectors/make-opstate-v1.py > tests/vectors/opstate-v1.json")
 
     def test_both_outcomes_and_every_kind_are_covered(self):
         doc = load()
-        kinds = {c["value"]["entry"].get("kind") for c in doc["cases"]}
+        kinds = {c["value"]["entry"].get("kind") for c in doc["cases"] if isinstance(c["value"]["entry"], dict)}
         self.assertTrue(set(opstate.KINDS) <= kinds)
         self.assertTrue(any(c["accept"] for c in doc["cases"]) and any(not c["accept"] for c in doc["cases"]))
         self.assertTrue(any(b["accept"] for b in doc["batches"]) and any(not b["accept"] for b in doc["batches"]))
