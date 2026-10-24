@@ -39,6 +39,7 @@ jobs:
       - name: go vet (every module)
         run: |
           go vet ./...
+          go vet -tags piv ./...
           ( cd adapters/sops && go vet ./... )
           ( cd adapters/gpgsign && go vet ./... )
 
@@ -163,6 +164,14 @@ jobs:
         run: |
           umask 002
           go test -race ./...
+          # The piv-tagged tests too (DEV1, 2026-10-24): `go test ./...` builds without the tag and never ran them, 24
+          # files, hardware-free ones among them (the YubiKey PIV driver, its seam and conformance). The physical ones
+          # skip without their env. The packages are DERIVED from the files, never listed, so a new piv-tagged test
+          # cannot be left out; finding none fails, so a renamed tag cannot turn this into a step that runs nothing.
+          piv="$(grep -rlE --include='*_test.go' '^//go:build .*\bpiv\b' . | xargs -r grep -LE '^//go:build .*!piv' | xargs -r -n1 dirname | sort -u)"
+          [ -n "$piv" ] || { echo "::error::no piv-tagged test file found: the tag or this step's search changed"; exit 1; }
+          echo "piv-tagged test packages:"; printf '  %s\n' $piv
+          go test -race -tags piv $piv
           ( cd adapters/sops && go test -race ./... )
           # regalia-sign's claim is that GnuPG and git accept what it makes, so both must be here:
           # with this set, a test that cannot find them fails instead of skipping.
