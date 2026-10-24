@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
 from deploy.baremetal import membership as m, opstate, survivor  # noqa: E402
+from tests.test_baremetal_fence import redfish_evidence  # noqa: E402
 from tests.test_baremetal_membership_v4 import NODE_KEYS, OWNER_KEYS, manifest4, nodes4, p256, p256_sig, typed  # noqa: E402
 
 
@@ -287,23 +288,28 @@ _SE2 = nodes4(b="QUARANTINED", c="QUARANTINED")
 _SE2[0]["signing_key"] = typed(A_NEW)
 _SE4 = nodes4(a="QUARANTINED", c="QUARANTINED")
 _SE4[0]["signing_key"] = typed(A_NEW)
+_SE5 = nodes4(a="QUARANTINED", c="RETIRED")       # at 5, b survives with c retired: the fence reaches a alone (fenceable)
+_SE5[0]["signing_key"] = typed(A_NEW)
 SE_CHAIN = [_M1]
 for _epoch, _nodes, _at in ((2, _SE2, "2026-10-05T11:00:00Z"), (3, copy.deepcopy(_NODES2), "2026-10-06T00:00:00Z"),
-                            (4, _SE4, "2026-10-07T00:00:00Z")):
+                            (4, _SE4, "2026-10-07T00:00:00Z"), (5, _SE5, "2026-10-08T00:00:00Z")):
     SE_CHAIN.append(manifest4(_epoch, m.digest(SE_CHAIN[-1]), _nodes, issued_at=_at))
 STATE_EPOCH_CASES = []
 
 
-def survivor_authorization(epoch=2, who="a", scope="full", day="2026-10-05", **over):
+def survivor_authorization(epoch=2, who="a", scope="full", day="2026-10-05", unchecked=False, **over):
     tip = SE_CHAIN[epoch - 1]
     others = sorted({"a", "b", "c"} - {who})
     auth = {"schema": survivor.AUTH_SCHEMA, "node_id": who, "quarantine_epoch": epoch, "quarantine_digest": m.digest(tip),
             "not_before": day + "T12:00:00Z", "expires_at": "%s-%02dT12:00:00Z" % (day[:7], int(day[8:]) + 1),
             "fenced": "%s: off at the iLO" % ", ".join(others), "scope": scope,
-            "fence": {"method": "redfish", "nodes": {o: {"power_state": "Off", "read_at": day + "T11:59:00Z"} for o in others}}}
+            "fence": redfish_evidence(others, day)}
     auth.update(over)
     return {"authorization": auth, "signature": {"party": m.OWNER, "key": typed(OWNER_KEYS[0])["key"],
-                                                 "sig": OWNER_KEYS[0].sign(survivor.authorization_message(auth)).hex()}}
+                                                 # `unchecked`: the owner's key over a malformed authorization (what a
+                                                 # broken tool would sign), so the node's own form check is what refuses it
+                                                 "sig": OWNER_KEYS[0].sign(survivor.AUTH_DOMAIN + m.canonical(auth) if unchecked
+                                                                           else survivor.authorization_message(auth)).hex()}}
 
 
 def state_epoch(epoch=2, who="a", authorization=None, **over):
@@ -342,6 +348,34 @@ state_epoch_case("signed by b's key for a's take-over", took_over(state_epoch(),
 state_epoch_case("b's authorization carried in a's entry", took_over(state_epoch(4, "a", survivor_authorization(4, "b", day="2026-10-07"),
                                                                        issued_at="2026-10-07T12:20:00Z")), False)
 state_epoch_case("under another key", took_over(state_epoch()), False, where=opstate.PREFIX + "state-epoch/2")
+
+
+def fenced_b(**change):
+    """a's redfish evidence with b's entry changed (None drops a field): the node's check of what fence.py makes."""
+    fence = redfish_evidence(["b", "c"], "2026-10-05")
+    for k, v in change.items():
+        if v is None:
+            del fence["nodes"]["b"][k]
+        else:
+            fence["nodes"]["b"][k] = v
+    return took_over(state_epoch(authorization=survivor_authorization(fence=fence, unchecked=True)))
+
+
+state_epoch_case("a redfish fence read Off twice only 9 s apart", fenced_b(read_again_at="2026-10-05T11:59:09Z"), False)
+state_epoch_case("a redfish fence whose box names no UUID", fenced_b(uuid="not-a-uuid"), False)
+state_epoch_case("a redfish fence whose iLO certificate digest is not one", fenced_b(ilo_cert_sha256="zz" * 32), False)
+state_epoch_case("a redfish fence read before the quarantine was signed",
+                 fenced_b(read_at="2026-10-05T10:59:00Z", read_again_at="2026-10-05T10:59:10Z"), False)
+state_epoch_case("a redfish fence's second readback after the owner signed, beyond the skew",
+                 fenced_b(read_again_at="2026-10-05T12:05:01Z"), False)
+FIFTH = dict(day="2026-10-08", fence=redfish_evidence(["a"], "2026-10-08"))
+state_epoch_case("b's take-over at 5 with c retired: the fence reaches a alone",
+                 took_over(state_epoch(5, "b", survivor_authorization(5, "b", **FIFTH), issued_at="2026-10-08T12:20:00Z"), NODE_KEYS["b"]), True)
+state_epoch_case("the same take-over with the retired c named in the fence",
+                 took_over(state_epoch(5, "b", survivor_authorization(5, "b", day="2026-10-08", fence=redfish_evidence(["a", "c"], "2026-10-08")),
+                                       issued_at="2026-10-08T12:20:00Z"), NODE_KEYS["b"]), False)
+state_epoch_case("an attested-shaped entry under a redfish fence", fenced_b(read_again_at=None, serial=None, uuid=None,
+                                                                            ilo_cert_sha256=None, power_restore_policy=None), False)
 state_epoch_case("a signature over the entry without its domain", took_over(state_epoch(), raw=m.canonical(state_epoch())), False)
 state_epoch_case("an entry with a field the format does not have", took_over(dict(state_epoch(), note="x")), False)
 state_epoch_case("read before it is stored (the writer's own check): no store to bind", took_over(state_epoch()), True, store=None)
