@@ -286,6 +286,7 @@ class Directives:
                 "%s is not a regular, singly linked file of root's that only root may write: every key is refused" % self.path)
 
     def disabled(self):
+        # the set does not survive a reboot (the store is on /run) until regalia-kds: do not consume it before then (regalia-j18)
         return {signed["directive"]["object_id"] for signed in self.held()}
 
     def apply(self, signed, at_quarantine):
