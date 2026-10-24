@@ -386,9 +386,19 @@ asked lisbon "${TUN[porto]}" && P "(the manifest put back for the checks below: 
 hdr "8  PoC 6.4: loss and latency, an unreachable peer, a wrong key: each ends within a bound"
 timed(){ local start=$SECONDS; "$@"; local rc=$?; took=$((SECONDS - start)); return $rc; }
 x lisbon tc qdisc add dev eth0 root netem loss 20% delay 100ms || F "netem is not available: the loss and latency case did not run"
-ok=0; worst=0
-for _ in 1 2 3 4 5; do timed asked lisbon "${TUN[faro]}" 10 && ok=$((ok+1)); [ "$took" -gt "$worst" ] && worst=$took; done
-[ "$ok" -ge 4 ] && [ "$worst" -le 12 ] && P "with 20% loss and 100 ms delay: $ok of 5 requests answered, the slowest in ${worst}s" || F "with loss and delay: $ok of 5 answered, the slowest in ${worst}s"
+# regalia-6x5: "4 of 5 answered" failed by chance alone (2 in 5 lost once, run 39966082981): with a per-request
+# failure rate p it fails 8% of runs at p=0.1 and 26% at p=0.2. Now: ask until 4 are answered, at most 20 times, every
+# request ending within 12 s. It fails by chance with P(Bin(20, 1-p) <= 3): 8e-10 at p=0.2, 5e-5 at p=0.4, so a red is
+# the system, not the dice. Each attempt is printed (o answered, x not) so p can be read from CI.
+ok=0; worst=0; tried=0; seen=""
+while [ "$ok" -lt 4 ] && [ "$tried" -lt 20 ]; do
+  tried=$((tried+1))
+  if timed asked lisbon "${TUN[faro]}" 10; then ok=$((ok+1)); seen="${seen}o"; else seen="${seen}x"; fi
+  [ "$took" -gt "$worst" ] && worst=$took
+done
+echo "  (loss and delay: attempts $seen)"
+[ "$ok" -ge 4 ] && [ "$worst" -le 12 ] && P "with 20% loss and 100 ms delay: 4 requests answered in $tried, each ending within ${worst}s" \
+  || F "with loss and delay: $ok answered in $tried (at most 20), the slowest ending in ${worst}s"
 x lisbon tc qdisc del dev eth0 root
 x faro ip link set eth0 down
 timed asked lisbon "${TUN[faro]}" 3; rc=$?
