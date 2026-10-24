@@ -80,12 +80,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     - the take-over on a real host. `deploy/baremetal/takeover.py` exists: a graceful etcd stop, the revision
       check, force-new-cluster through a /run drop-in, then the state-epoch entry (`opstate.verify_state_epoch`) as
       its first write, and the drop-in read back gone. It is tested on a scripted host and, in CI, against a real
-      etcd 3.6.15 with systemctl played by the test. Not yet:
+      etcd 3.6.15 with systemctl played by the test. The daemon's cache verifies that entry (`opstate.VerifyStateEpoch`,
+      #526): `applied.json` carries the verified state epoch, 0 while there is none, and an entry it cannot judge
+      publishes nothing, so the gate refuses. Not yet:
       - regalia-etcd.service (#484), so it has never run under systemd;
       - the take-over has never signed with a real TPM signing key;
-      - the Go verifier exists (`opstate.VerifyStateEpoch`, the vector's 21 cases alike) but the daemon's cache isn't given
-        it yet (the wiring PR), so on a running daemon `applied.json`'s `state_epoch` stays 0 (no entry) or the file
-        stops being written (an entry it cannot judge: fail closed);
       - the daemon's rule that a stateful operation in recovery needs the store at the authorization's own epoch;
       - an arrival-time freshness check on the entry. A replaced signing key can still sign an entry dated before the
         replacement, inside the owner's authorization window;
@@ -110,8 +109,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       - a step that finished but whose ALLOW could not be written (a full disk) says "DONE" and exits 3. It is never
         to be re-run (a take-over's force would run twice), and the operator writes the line by hand. Nothing writes
         it later by itself;
-    - the daemon's halts (a peer heard below the quarantine epoch);
-    - approvals naming their spending node (1e).
+    - the daemon's halts (a peer heard below the quarantine epoch).
     Until they land, `full` is a recorded intent the daemon does not act on;
   - the daemon serving stateless operations only in that mode, and refusing keys under a directive (ed);
   - the majority committing a directive as a key-state change on its return;
