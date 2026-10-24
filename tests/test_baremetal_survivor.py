@@ -157,7 +157,7 @@ class Directive(Case):
     def store(self):
         d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, d, True)
-        return sv.Directives(os.path.join(d, "directives.jsonl"))
+        return sv.Directives(os.path.join(d, "directives.jsonl"), owner_uid=os.getuid())
 
     def test_the_survivor_keeps_the_signed_directives_and_derives_the_disabled_keys_from_them(self):
         store = self.store()
@@ -185,6 +185,37 @@ class Directive(Case):
         with open(store.path, "ab") as f:
             f.write(b'{"directive": {"state": "enabled"}}\n')
         self.refused("every key is refused", store.disabled)
+
+    def test_the_store_is_a_singly_linked_file_only_its_owner_may_write(self):
+        store = self.store()
+        store.apply(self.directive(), self.m2)
+        os.chmod(store.path, 0o666)
+        self.refused("is not a regular, singly linked file", store.disabled)
+        self.refused("is not a regular, singly linked file", store.apply, self.directive("ci-signing"), self.m2)
+        os.chmod(store.path, 0o640)
+        other = store.path + ".other"
+        os.link(store.path, other)                                         # a hard link: never appended to, never read
+        self.refused("is not a regular, singly linked file", store.apply, self.directive("ci-signing"), self.m2)
+        self.refused("is not a regular, singly linked file", store.disabled)
+        os.unlink(other)
+        self.refused("is not a regular, singly linked file",
+                     sv.Directives(store.path, owner_uid=os.getuid() + 1).disabled)        # not the owner's
+        os.unlink(store.path)
+        os.symlink(other, store.path)
+        self.refused("cannot be opened", store.disabled)
+
+    def test_a_wiped_store_replayed_can_only_disable_again(self):
+        """The store is not an anti-replay record: a directive only disables, so presenting an old one again after the
+        store is lost (a reboot: it is on /run) disables its key again, never enables one; and one signed under an
+        earlier epoch is refused against the node's current manifest. What a wipe does lose is the disabled set itself:
+        that is regalia-kds, for the daemon's refusal (ed), not a replay."""
+        store = self.store()
+        old = self.directive()
+        store.apply(old, self.m2)
+        os.unlink(store.path)                                             # the reboot
+        self.assertEqual(store.disabled(), set())                         # the loss, measured
+        self.assertEqual(store.apply(old, self.m2), {"release-signing"})  # the replay: the same key disabled again
+        self.refused("is for epoch 2's manifest", store.apply, old, self.m1)
 
     def test_a_node_s_directive_is_not_the_owner_s(self):
         directive = self.directive()["directive"]
@@ -252,6 +283,114 @@ class OwnerTool(Case):
         code, signed = self.run_tool(["sign-survivor", "--chain", self.chain, "--root-key", self.root, "--node-id", "a",
                                       "--how", "off", "--out", out], "authorize b")
         self.assertEqual((code, signed), (1, None))
+
+
+class OnTheNode(Case):
+    """survivor.py install / remove / directive (root, at the node's console) and the admission's reader, seconds_left."""
+
+    def setUp(self):
+        super().setUp()
+        import json
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.signed = self.authorize(life_s=3600)
+        self.auth = os.path.join(self.d, "auth.json")
+        with open(self.auth, "w") as f:
+            json.dump(self.signed, f)
+
+    def run_main(self, argv, now=T0 + 60, authenticated=True):
+        from unittest import mock
+        from deploy.baremetal import node as node_module
+        fake = mock.Mock(node_id="a", runtime=self.d)                     # root's run directory
+        fake.held.side_effect = lambda name: self.fail("%s is put in the admission user's own directory" % name)
+        fake.manifest.return_value = self.m2
+        fake.clock.return_value = lambda: (now, authenticated)
+        with mock.patch.object(node_module, "Node", lambda cfg: fake), mock.patch.object(node_module, "load", lambda path: {}), \
+                mock.patch.object(sv.os, "geteuid", lambda: 0), mock.patch("builtins.print") as said, \
+                mock.patch.object(sv, "Directives", lambda path, real=sv.Directives: real(path, owner_uid=os.getuid())):
+            code = sv.main(["--config", "/etc/regalia/node.json"] + argv)
+        self.said = " ".join(str(c.args[0]) for c in said.call_args_list if c.args)
+        return code
+
+    def test_install_through_main_writes_what_the_admission_reads(self):
+        self.assertEqual(self.run_main(["install", "--authorization", self.auth]), 0)
+        path = os.path.join(self.d, sv.AUTH_FILE)
+        self.assertEqual(sv.installed(path, owner_uid=os.getuid()), self.signed)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o644)
+        clock = lambda: (T0 + 100, True)                                   # noqa: E731
+        self.assertEqual(sv.seconds_left(path, self.m2, "a", clock, owner_uid=os.getuid()), 3600 - 100)
+        m3 = manifest4(3, m.digest(self.m2), nodes4(b="QUARANTINED", c="QUARANTINED"))
+        self.refused("a new epoch ends it", sv.seconds_left, path, m3, "a", clock, owner_uid=os.getuid())
+        self.refused("EXPIRED", sv.seconds_left, path, self.m2, "a", lambda: (T0 + 3600, True), owner_uid=os.getuid())
+        self.refused("time is not authenticated", sv.seconds_left, path, self.m2, "a", lambda: (T0 + 100, False), owner_uid=os.getuid())
+        self.assertEqual(self.run_main(["remove"]), 0)
+        self.assertIsNone(sv.seconds_left(path, self.m2, "a", clock, owner_uid=os.getuid()))
+
+    def test_install_refuses_what_does_not_hold_and_writes_nothing(self):
+        self.assertEqual(self.run_main(["install", "--authorization", self.auth], now=T0 + 7200), 1)          # expired
+        self.assertEqual(self.run_main(["install", "--authorization", self.auth], authenticated=False), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.d, sv.AUTH_FILE)))
+
+    def test_the_reader_takes_only_a_root_owned_file_only_root_may_write(self):
+        path = os.path.join(self.d, sv.AUTH_FILE)
+        sv._write_root(path, self.signed)
+        self.refused("is not a regular file of root's", sv.installed, path, owner_uid=os.getuid() + 1)    # another's (root's, as root)
+        os.chmod(path, 0o666)
+        self.refused("is not a regular file of", sv.installed, path, owner_uid=os.getuid())
+        os.unlink(path)
+        os.symlink(self.auth, path)
+        self.refused("cannot be opened", sv.installed, path, owner_uid=os.getuid())
+        os.unlink(path)
+        sv._write_root(self.auth + ".kept", self.signed)
+        os.link(self.auth + ".kept", path)                                 # a hard link to another such file
+        self.refused("has 2 links", sv.installed, path, owner_uid=os.getuid())
+
+    def test_a_malformed_document_is_a_refusal_never_a_crash_of_the_round(self):
+        path = os.path.join(self.d, sv.AUTH_FILE)
+        for label, doc in (("not an object", [1, 2]), ("no authorization", {"signature": {}}),
+                           ("wrong types", {"authorization": "x", "signature": 3})):
+            with self.subTest(label):
+                sv._write_root(path, doc)
+                with self.assertRaises(m.Refused):
+                    sv.seconds_left(path, self.m2, "a", lambda: (T0 + 100, True), owner_uid=os.getuid())
+
+    def test_a_clock_that_cannot_be_read_is_a_refusal_with_its_reason(self):
+        path = os.path.join(self.d, sv.AUTH_FILE)
+        sv._write_root(path, self.signed)
+
+        def clock():
+            raise OSError(5, "Input/output error", "/run/regalia/authtime.json")
+        self.refused("cannot be read as one: [Errno 5]", sv.seconds_left, path, self.m2, "a", clock, owner_uid=os.getuid())
+
+    def test_remove_says_when_nothing_was_installed(self):
+        self.assertEqual(self.run_main(["remove"]), 0)
+        self.assertIn("NOTHING INSTALLED", self.said)
+
+    def test_directive_through_main_applies_a_disable(self):
+        import json
+        directive = sv.make_directive(self.m2, "release-signing", "stolen", T0,
+                                      lambda text: text.split("Type exactly: ")[1].split("\n")[0], lambda: OwnerKey(OWNER_KEYS[1]))
+        f = os.path.join(self.d, "directive.json")
+        with open(f, "w") as out:
+            json.dump(directive, out)
+        self.assertEqual(self.run_main(["directive", "--file", f]), 0)
+        self.assertEqual(sv.Directives(os.path.join(self.d, sv.DIRECTIVES_FILE), owner_uid=os.getuid()).disabled(), {"release-signing"})
+
+    def test_the_admission_service_is_wired_to_the_installed_authorization(self):
+        from unittest import mock
+        from deploy.baremetal import node as node_module
+        fake = mock.Mock(node_id="a", runtime=self.d, run=None)
+        fake.held.side_effect = lambda name: os.path.join(self.d, "admission", name)
+        fake.clock.return_value = lambda: (T0 + 60, True)
+        with mock.patch.object(node_module, "boot_session", return_value=("ab" * 32, b"pub")), \
+                mock.patch.object(node_module.lease, "Holder"), mock.patch.object(node_module, "Trail"):
+            service = node_module.admission_service(fake, daemon_started=lambda: None)
+        self.assertIsNone(service.survivor(self.m2))                        # none installed
+        path = os.path.join(self.d, sv.AUTH_FILE)                           # in root's run directory, not admission's
+        sv._write_root(path, self.signed)
+        if os.getuid() == 0:
+            os.chown(path, 65534, 65534)                                    # as root: make it another's, so the refusal is real
+        self.refused("is not a regular file of root's", service.survivor, self.m2)    # the real reader: root's file only
 
 
 if __name__ == "__main__":
