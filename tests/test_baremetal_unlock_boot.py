@@ -39,6 +39,16 @@ GUEST_MAC = "52:54:00:ab:cd:02"
 # ("recovery key" when that is the only kind of keyslot it knows of, "passphrase or recovery key" otherwise)
 PROMPT = re.compile(rb"Please enter (?:passphrase or )?(?:recovery key|passphrase) for disk (?:root|regalia-root \(root\))")
 OVMF = os.environ.get("REGALIA_OVMF", "/usr/share/OVMF")
+# regalia-a0y: on ubuntu-26.04's QEMU 10.2.1 + swtpm 0.10.1 the FIRMWARE fails to extend a PCR about one boot in
+# fifteen: swtpm answers the PCR_Extend at once, QEMU cancels it (CMD_CANCEL_TPM_CMD) and systemd-stub logs
+# EFI_DEVICE_ERROR. The host's emulation, never the product: a boot that says so fails as exactly that, by name.
+HOST_TPM_FAULT = re.compile(r"Failed to measure data for event \d+: 0x8000000000000007")
+
+
+def host_tpm_fault(console):
+    """The firmware's own line when the host's TPM emulation dropped a measurement (regalia-a0y), or None."""
+    found = HOST_TPM_FAULT.search(console)
+    return found.group(0) if found else None
 run = tub.run
 
 
@@ -83,6 +93,18 @@ def unattended(test, said):
     test.assertRegex(said, PROMPT.pattern.decode())
     test.assertIn("regalia-unlock: gave the key of ", said)
     test.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+
+
+class HostTpmFault(unittest.TestCase):
+    """regalia-a0y's signature, judged without a guest: the firmware's line from runs 39919392188 and 39922567279."""
+
+    def test_the_firmware_s_measurement_failure_is_named(self):
+        console = "EFI stub: WARNING: Failed to measure data for event 1: 0x8000000000000007\r\nLoading Linux ...\n"
+        self.assertEqual(host_tpm_fault(console), "Failed to measure data for event 1: 0x8000000000000007")
+
+    def test_a_good_boot_and_another_error_are_not_it(self):
+        self.assertIsNone(host_tpm_fault("EFI stub: Measured initrd data into PCR 9.\nWelcome to Debian\n"))
+        self.assertIsNone(host_tpm_fault("Failed to measure data for event 1: 0x8000000000000002\n"))   # another status
 
 
 @unittest.skipUnless(os.environ.get("REGALIA_EXPECT_QEMU") == "1", "needs a guest built by e2e/unlock-boot-qemu.sh")
@@ -342,6 +364,14 @@ class OnQemu(tub.OnSwtpm):
         tpm.terminate()
         tpm.wait(30)
         text = said.decode(errors="replace")
+        fault = host_tpm_fault(text)
+        if fault:
+            # a distinct outcome, never retried in silence: the boots share one TPM and one disk, so a boot run again
+            # is not the same boot; the shell runner counts these and says so (e2e/unlock-boot-qemu.sh)
+            print("\nHOST TPM EMULATION FAULT (regalia-a0y) in boot %s: %s" % (label, fault), file=sys.stderr)
+            self.fail("boot %s: HOST TPM EMULATION FAULT (regalia-a0y): the firmware could not measure (%s); the host's "
+                      "QEMU/swtpm, not the product. The job runs on ubuntu-24.04 for this reason (.github/workflows/ci.yml)"
+                      % (label, fault))
         print("\n----- boot %s (%s): %d lines of console; the lines that matter:" % (label, "KVM" if kvm else "TCG", text.count("\n")), file=sys.stderr)
         for line in text.splitlines():
             if re.search(r"REGALIA-E2E|regalia-unlock|wg-boot|Please enter|time limit|cryptsetup\[", line):

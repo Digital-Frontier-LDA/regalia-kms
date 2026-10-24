@@ -547,7 +547,10 @@ jobs:
   unlock-boot-qemu:
     # Kept on 24.04 (regalia-a0y): on 26.04 the guest's credentials intermittently fail to unseal ("Failed to set up
     # credentials: Protocol error", a different boot each run: 2c in 39886774777, 2 in 39890995069), and never on
-    # 24.04. The guest is the same Debian 13 on both, so the host's swtpm or QEMU differs; not yet explained.
+    # 24.04. Explained (regalia-d8, runs 39919392188, 39922567279, 39928371319): QEMU 10.2.1 with swtpm 0.10.1 cancels a
+    # PCR_Extend swtpm already answered, so the firmware drops a measurement (EFI_DEVICE_ERROR), with tpm-tis and tpm-crb
+    # alike; 0 in 38 boots on 24.04. The host's emulation, not the product. Such a boot now fails BY NAME ("HOST TPM
+    # EMULATION FAULT"). Move when the 26.04 image's QEMU/swtpm change, or before GitHub retires 24.04.
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
