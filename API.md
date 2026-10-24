@@ -227,7 +227,9 @@ new request, and may repeat an operation the token already performed.
 cannot succeed: it is refused (`INVALID_ARGUMENT`, `approval-signer-other-node`) or, with no
 `context.signer`, its approvals simply do not count there. That is the design, not a fault: collect
 approvals for the new node and send the request there with a new nonce. Requests without
-`required_approvals` are not pinned and fail over freely.
+`required_approvals` fail over freely only when they leave `context.signer` out: a request that
+names a signer is refused on any other node (`INVALID_ARGUMENT`, `approval-signer-other-node`)
+whether or not it is gated, because that check comes before the policy is read.
 
 ## What a client must not build on
 
