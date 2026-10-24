@@ -104,6 +104,35 @@ def show_state(unit):
     return props.get("LoadState"), props.get("ActiveState"), props.get("Result"), props.get("InvocationID")
 
 
+def tpm_stop_report(pid, log, shutdown=None, proc="/proc"):
+    """What a software TPM that did not stop looked like (regalia-zga): observed, never guessed, so the next failure names
+    its cause. Whether `pid` is still swtpm (a reused pid would not be), its State (a "Z" exited but was not reaped),
+    its parent, where it waits in the kernel, how the orderly TPM2_Shutdown went, the end of its log, and AppArmor."""
+    def read(name, limit=600):
+        try:
+            with open("%s/%d/%s" % (proc, pid, name), "rb") as f:
+                return f.read(limit).decode(errors="replace").replace("\0", " ").strip()
+        except OSError as error:
+            return "<%s>" % (error.strerror or error)
+    status = dict(line.split(":", 1) for line in read("status", 4096).splitlines() if ":" in line)
+    parts = ["pid %d" % pid, "cmdline %r" % read("cmdline", 300),
+             "State %s" % status.get("State", "?").strip(), "PPid %s" % status.get("PPid", "?").strip(),
+             "wchan %s" % read("wchan", 100), "stack %r" % read("stack", 1200)]
+    if shutdown is not None:
+        parts.append("tpm2_shutdown %d %r" % (shutdown.returncode, (shutdown.stdout + shutdown.stderr).strip()[-300:]))
+    try:
+        parts.append("log %r" % pathlib.Path(log).read_text(errors="replace")[-800:])
+    except OSError as error:
+        parts.append("log <%s>" % (error.strerror or error))
+    if proc == "/proc":
+        try:   # bounded: a stalled journal must never keep the stop error from being raised (CodeRabbit on #563)
+            parts.append("apparmor %r" % sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False,
+                                            timeout=10).stdout[-600:])
+        except subprocess.TimeoutExpired:
+            parts.append("apparmor <journalctl did not answer within 10 s>")
+    return " | ".join(parts)
+
+
 def until(what, seconds, interval=1.0):
     """`what()` until it is true or the time is up; its last value (or the exception it raised)."""
     deadline, last = time.monotonic() + seconds, None
@@ -412,12 +441,12 @@ class Cluster:
         their reset values, every transient object and session gone, as on a host. Without `orderly`, a cut: no
         Shutdown, which a TPM counts against its dictionary-attack limit (#57)."""
         n = self.member(name)
-        if orderly:
-            sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False)
+        shutdown = sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False) if orderly else None
         pid = int((n.dir / "tpm.pid").read_text())
         os.kill(pid, 15)
         if not until(lambda: not os.path.exists("/proc/%d" % pid), 10, 0.2):
-            raise RuntimeError("%s's software TPM did not stop" % name)
+            # regalia-zga: still a failure, now with what the process looked like; the fix waits for this evidence
+            raise RuntimeError("%s's software TPM did not stop: %s" % (name, tpm_stop_report(pid, n.dir / "tpm.log", shutdown)))
         self._tpm(n)
 
     # ---- images (#75, Phase 15's tier N) ----
