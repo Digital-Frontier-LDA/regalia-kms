@@ -1754,6 +1754,8 @@ class Cluster:
             except (OSError, ValueError):
                 pass
             sh("ip", "netns", "del", n.ns, check=False)
+        # regalia-zga: the scripts remove the work directory after this; in CI each node's swtpm log is kept first
+        tpmdiag.keep({"%s/tpm.log" % n.name: str(n.dir / "tpm.log") for n in self.members()}, self.work.name)
         sh("ip", "netns", "del", SWITCH, check=False)
         for loop in self.loops.values():
             sh("losetup", "-d", loop, check=False)

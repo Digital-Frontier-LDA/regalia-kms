@@ -20,6 +20,20 @@ class TpmDiag(unittest.TestCase):
             self.assertIn(part, line)
         self.assertTrue(line.startswith("TPM stack: "))
 
+    def test_keep_copies_the_logs_in_ci_only(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        log = os.path.join(d, "tpm.log")
+        with open(log, "w") as f:
+            f.write("swtpm level 20\n")
+        files = {"a/tpm.log": log, "b/tpm.log": os.path.join(d, "missing.log")}
+        self.assertEqual(tpmdiag.keep(files, "run1", root=d + "/kept", environ={}), [])                     # a laptop: nothing
+        kept = tpmdiag.keep(files, "run1", root=d + "/kept", environ={"RUNNER_ENVIRONMENT": "github-hosted"})
+        self.assertEqual(kept, [d + "/kept/run1/a/tpm.log"])                                               # a missing one skipped
+        with open(kept[0]) as f:
+            self.assertEqual(f.read(), "swtpm level 20\n")
+
     def test_every_harness_that_starts_swtpm_logs_it(self):
         """The three harnesses this covers pass tpmdiag.log_arg to each swtpm they start, never a bare --log."""
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
