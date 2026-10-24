@@ -32,8 +32,10 @@ const (
 	survivorFallback    = 600 // FALLBACK_EXTRA_S: a fence only attested, not read over iLO
 	survivorMaxLife     = 7 * 24 * 3600
 	survivorMaxFenced   = 512
-	fenceRereadS        = 10  // survivor.REREAD_S: a redfish fence reads Off twice at least this far apart
-	fenceMaxPolicy      = 128 // the power_restore_policy text's bound
+	fenceRereadS        = 10   // survivor.REREAD_S: a redfish fence reads Off twice at least this far apart
+	fenceMaxPolicy      = 128  // the power_restore_policy text's bound
+	fenceMaxAgeS        = 3600 // survivor.FENCE_MAX_AGE_S: the second Off readback, at most this long before the owner signs
+	futureSkewS         = 300  // heartbeat.FUTURE_SKEW
 )
 
 var (
@@ -319,18 +321,22 @@ func verifySurvivorAuthorization(value any, current map[string]any, nodeID strin
 	if node, has := nodes[survivor]; !has || membership.NotCounting(fmt.Sprint(node["state"])) {
 		return nil, refuse("%s does not count under epoch %d: it is no survivor", survivor, epoch)
 	}
-	var loose, others []string
+	// must is survivor.fenceable: every other node but the RETIRED and REVOKED_STOLEN, whose hardware may be gone
+	var loose, must []string
 	for id, node := range nodes {
 		if id == survivor {
 			continue
 		}
-		others = append(others, id)
-		if !membership.NotCounting(fmt.Sprint(node["state"])) {
+		state := fmt.Sprint(node["state"])
+		if state != "RETIRED" && state != "REVOKED_STOLEN" {
+			must = append(must, id)
+		}
+		if !membership.NotCounting(state) {
 			loose = append(loose, id)
 		}
 	}
 	sort.Strings(loose)
-	sort.Strings(others)
+	sort.Strings(must)
 	if len(loose) > 0 {
 		verb := "are"
 		if len(loose) == 1 {
@@ -338,13 +344,38 @@ func verifySurvivorAuthorization(value any, current map[string]any, nodeID strin
 		}
 		return nil, refuse("a lone survivor needs every other node quarantined, revoked or retired under epoch %d; %s %s not", epoch, strings.Join(loose, ", "), verb)
 	}
+	fence := auth["fence"].(map[string]any)
+	fenced := fence["nodes"].(map[string]any)
 	var named []string
-	for id := range auth["fence"].(map[string]any)["nodes"].(map[string]any) {
+	for id := range fenced {
 		named = append(named, id)
 	}
 	sort.Strings(named)
-	if strings.Join(named, ",") != strings.Join(others, ",") {
-		return nil, refuse("the fence evidence names %s; the other nodes are %s", pyList(named), pyList(others))
+	if strings.Join(named, ",") != strings.Join(must, ",") {
+		return nil, refuse("the fence evidence names %s; the nodes to fence are %s (every other node but the RETIRED and "+
+			"REVOKED_STOLEN ones, whose hardware may be gone)", pyList(named), pyList(must))
+	}
+	if fence["method"] == "redfish" {
+		// this outage's evidence, never a drill's or an earlier one's replayed against the same inventory (05 on #516):
+		// read after the quarantine was signed, and again shortly before the owner signed (survivor.verify_authorization)
+		quarantined, err := timeOf(current["issued_at"], "the quarantine manifest's issued_at")
+		if err != nil {
+			return nil, err
+		}
+		signedAt, _ := timeOf(auth["not_before"], "not_before") // validateSurvivorAuthorization read it
+		for _, id := range named {
+			seen := fenced[id].(map[string]any)
+			first, _ := timeOf(seen["read_at"], "read_at") // fenceEvidence read both
+			again, _ := timeOf(seen["read_again_at"], "read_again_at")
+			if first < quarantined {
+				return nil, refuse("%s was read Off at %s, before epoch %d's quarantine was signed (%s): fence it again",
+					id, seen["read_at"], epoch, current["issued_at"])
+			}
+			if again < signedAt-fenceMaxAgeS || again > signedAt+futureSkewS {
+				return nil, refuse("%s's second Off readback (%s) is not within %d s before the owner signed (%s): fence it again",
+					id, seen["read_again_at"], fenceMaxAgeS, auth["not_before"])
+			}
+		}
 	}
 	if survivor != nodeID {
 		return nil, refuse("the survivor authorization is for %s, not %s", survivor, nodeID)

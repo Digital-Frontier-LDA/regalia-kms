@@ -5437,7 +5437,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "54664bff90e354e7ad91ec78376b49e56957839ef584e35e3cc0aa9d0744660021747a96412a29ab20977d84f80f312a524b686eb50ae5d05591e1b383078f5c"
+    "signature": "b6d988831ce04f03b48ab3921ccd7bd063c2f783ed747a279eda7ff5f01c6105061d51bd15b1912b56fd18063cfb8e5bc0201c50553d257029d50ec81a741b29"
    }
   },
   {
@@ -5453,7 +5453,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618"
     },
-    "signature": "e774a5459bcb4d9719d0f15725c640796e56956ffa993493def970dbe4d99e15778c2c6c08c52256b57f4c2ae880f9fb01fa3479a587c19a5ceb95191ec120a4"
+    "signature": "fb88b25f1e3c92a71a6e2bfd43e6f332897e551b25642605493690bceed2c3664764b5cc5a81fff863360e113fd4419d1c306638a1d89326c93d5b19a3028701"
    }
   },
   {
@@ -5469,7 +5469,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
     },
-    "signature": "b800e0c67cf6966ad8e91ac7cfb9cd94daef428d0e7338178a859848ffbcbc9d4c1a4555dec61cda512c68ffe7e16359970bd85e16adc1307c60e876da118d8c"
+    "signature": "0fd8c1cff17a56cd771096f69b6628ec1ca6f9e4ee5bc00fd536c8f71e98db2f129395516166a6138e36aa7c90ed06e4ff6b1959d1c88e9ac71e940a12259097"
    }
   },
   {
@@ -5485,7 +5485,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "95b70437aa469e1b6a52732c2794c3bdef9c897d462103d71492f03408291fab7f93710439c2d866c79cf5b748fd18380bd54b6bf7ae6d837e1b683643ea00a7"
+    "signature": "4f6f7da91c805b049bb9ea4749626ccd819c78743c86af68b658d247065adb9b60e35a275d100d3713251b6c4b0d6a76e0de4b02a87fb46f5e9e253ee85420d6"
    }
   },
   {
@@ -5501,7 +5501,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "924dc29546e61059cf13719beea4adfafcebcd4b8ba1857e58500aef7c1b323500f19f1760a69fadc9c6c7ee06dd0c14e6e42030dd94bfd8cc0840e504c49db2"
+    "signature": "10bc68f2fd0d283985ed7a00caafe4e4578ab50cf6cb90d1a7ac915e527386f953f38aa57eba6165d102cffbb95320278f9023589e1e30e8399c8d04e141f8a8"
    }
   },
   {
@@ -5517,7 +5517,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "e8678d88bc358af28cb4413a105402ca5b565d6e33e4eaf48900cdf0f8776851682e322624b60920ad6d3c3aa2984ca6f3c4e28d8d7bcbd945cc0b12ad30910d"
+    "signature": "dc50b07a026d80d5736e33651474a338814b04d6f806fd1375f2660b8801ce7f2c89b32ddeced4abea7c2f06467a51b945beb3c52aee2f4325414132394e04a6"
    }
   },
   {
@@ -5533,7 +5533,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "19b9381f5ba303edfbcaaff9482bda9314a0f2381da41af6a0b38e01d0d7621551c129da49aac82c7ef51434951291eeac60d6de301dfd8651e4e5082bfac774"
+    "signature": "03dffcf17f4d4a027e0a9546a3a8ee475737e6f1be10e0d08ac8561818d98e562a55262451aaf808f112cbefd8a28eb327ff04ea8703c6c86cea9075f7e55826"
    }
   },
   {
@@ -5549,7 +5549,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "3b612378e2149db34a83064282101df30eafc6b6ecb34317d91036d874ef50a36010d16eb102643a806de511b140008c88ad15dfb42d8292121c921f8247956f"
+    "signature": "157073e64fcdeb3845c8eb452c4e97c4b6336f403ba9fb5213861dce1d3f002d433cf2766dab3b430e3d29720caf348c69836272ee04bf32e479b0450e1f4577"
    }
   },
   {
@@ -5565,7 +5565,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "00000000000000000000000000000000000000000000000000000000000000"
     },
-    "signature": "e42e337c1560f24f788423be5979dd57e83aab0ca81957696c57439332b3260350db6dd47d3a418f8b16bdfb802429a2729354741a79052dea4f02b6babd5817"
+    "signature": "40f24f04132a5cccb1ac0b4b3ef81716c49248ea832f40bb2681d06b6dcf25d464dbd33e3ba15003282bcb451a5dc93d8fff002ad6216fa0230db668277905f9"
    }
   },
   {
@@ -5581,7 +5581,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "787c43e87599f4f922ea0980f2c9bb03a1bafbaea4346ca8ea7d95f1f4d634c130699578d309f032a2d2fb88a7d4fb1d3857d3f934ca2bf5ff3a7504287ed41a"
+    "signature": "4238fa3f89d34b0c7fbe87eaa9b639312cb3ead1e9f23bba377fb6422e6540160ea0496b9204dc8f1951bfb09e39a6b4dbc5b0de994b4f6add570236bdc3e06c"
    }
   }
  ],
@@ -6146,6 +6146,112 @@
     }
    ],
    "schema": "regalia.membership/v4"
+  },
+  {
+   "activation_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c"
+    ],
+    "threshold": 2
+   },
+   "epoch": 5,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c",
+     "owner"
+    ],
+    "threshold": 2
+   },
+   "issued_at": "2026-10-08T00:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "044225b303dcd056cc74990f6e70bc522da8140650803607f709d6e7826aca2b803cf17536986eb98b9918f41fe9a44a7bd34eccd2cc3cd5c709c1b20f28a3dce2"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "QUARANTINED",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    },
+    {
+     "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
+     "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+     "hsm_serials": [
+      "DENK0404101"
+     ],
+     "node_id": "b",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2"
+     },
+     "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
+     "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+     "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
+     "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
+     "hsm_serials": [
+      "DENK0404102"
+     ],
+     "node_id": "c",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee"
+     },
+     "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+     "state": "RETIRED",
+     "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
+     "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "policy_version": "p1",
+   "prev_digest": "3a14f9eda8b463e5d217ad70706c9552e2b11faba005050f254e17b0563c8fe7",
+   "revocation_signers": [
+    {
+     "parties": [
+      "a",
+      "b",
+      "c"
+     ],
+     "threshold": 2
+    },
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v4"
   }
  ],
  "state_epoch_checks": [
@@ -6209,7 +6315,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "37215da583dd83d0ead10845ba9d1ce8014e88b4e2fb02cc340b366e36c29dd625306c535eb360dbc3a32d7ada2a0544069c0a3f41ea2d40381de617a33c17d6"
+    "signature": "01876e49e1d14c42dc3a14dc5b117c0a693284ed119cb4490fd89ba0092811a4748adf6fe0b956a26b353c4d7ddc83833f324bef10ce5f7063c1b21d70917bc1"
    }
   },
   {
@@ -6319,7 +6425,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 4
     },
-    "signature": "dd3c5fbb8cf05524d50d22f3ad6db4114199a8975d8a1f1b317ff489ae8aca0771f128618bd15d723209e03654a5f7a73d9ad03fd92a03d74c8b16ff168f0f06"
+    "signature": "bc34439ed6cc1524468d7d18acfcda9afb2f46df1c868ef2ae1e0e19f51d25d04f09b1740c972daacb94afe245d57bdbc6868f9a69dc432dbcd6433833bc3f3d"
    }
   },
   {
@@ -6429,7 +6535,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "1d2d43fc061a3706110afc554e612a7a9bbf92b84e11d49f57b4b4f33ac6ee5433ae9371442d941821bbbaddbadf80520d061cf604918c76ac673707247756c7"
+    "signature": "7fb02a8a6aadbf8b22a30199443dde601d4cfb2c2a81eb0209daf60e4408af9d71e4c6c85d928795410d09c0588418ab7ea6439e19ca6b5d996d8fe02abb0bef"
    }
   },
   {
@@ -6539,7 +6645,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "276af88f1b7649cb7966bfba0393953bfa01476b590aedbabe983d88027c189d0748a72827ff2d623b72ae269994bebce6215ef2f6735a376d7c663ad07e6214"
+    "signature": "13913ab77a20280b0114100a70c84e8419e7ae319e9efb01733dea4516b58b026ca5595080e54d7a4fb9c0ec2150ac79fceef77933a954fe1d1c06489d6b2348"
    }
   },
   {
@@ -6602,7 +6708,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "1cc10f9d0c5ca5c21e53f8d623a7b7ed492d49c68c8caec44fa4167cd66b96b551b79dda3f728592733062db9999c2250fee4505eb859dc34afd4fc5f2a67eb3"
+    "signature": "291251fcf812bc5dc1761c9e86bba6b80c77c78f1c70762aecdf85239414901749fb139ace789715886ef05919d681258a4843844a87dfec4e72db2080b4a343"
    }
   },
   {
@@ -6665,7 +6771,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "49cde90ba7b38a87c3169a203ed73db8ae49a61a20be49f456ad38a344d4e6fd5d2f46faf1eeecea304b2b8e845ed27c102064e859204cbc8943271f66651349"
+    "signature": "598e4c75a0135eea42ec75c09154a619177e6a021d26128edc7326aa70d840c940851446a32bede320b4c0a99adb51b4e13302091d3af41409a03da1da5b36df"
    }
   },
   {
@@ -6728,7 +6834,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "ac1d4dbc573fc4ef6ea4de30f22b37e7e5c1973705895d8ee96c98e1472b36757d4698cb64d1ea4aee50dd1274b3567fe4e2dc3951cdf2e0d3fd919fa427211d"
+    "signature": "4ce4c1728e6aa1bd22edab5c2ec8cfebde62b4fdd6caf0f45c3ec35b4bc839ac6e311d9001dc0c70d8419f8465aaf21636cf8d6424942d0f85db2ca4a6c750ea"
    }
   },
   {
@@ -6791,7 +6897,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "02c88fd6a051be08fa8a2a5b1a2d8ea49da895a15dab92d481d675eb48a99f873217d882df29feb25f5783a043a7944858fcb4677871b828c42661b784e97237"
+    "signature": "a7080f99bc0d75722ab374260d39c7a0653a5b2e25a6a07399773ffbf68741cd4087a7aea92cf701454a3e80b5e6c83e0f09fb1e4c242e7490dbd5ff45341fa3"
    }
   },
   {
@@ -6854,7 +6960,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 9
     },
-    "signature": "492a0a03a22f015c1799aea378fc90bf1f1c899df3e76017680cadf4987124f52b7ebae0eaead41ec2d593b5ede640c0868574ced9e9badb07378e30048a90ca"
+    "signature": "02dfee1dba3f2bc1fd7c4b960e2c9f6e06c0225c73a000fc7f8d342474bfc08a6e6cf3fab7ea03983a27935fe2093d7c8592795296fa4fb5c975f89a2bb78384"
    }
   },
   {
@@ -6917,7 +7023,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "3e52fe5625362b2d763131e199c723101689b3b025663dca3f14f2afdcd9bce4077e3695c8ddf35c11d04bd0ab9d7c6f594ae088888ee1c546649406dd3ac78d"
+    "signature": "af87d1cd9cecdbd3db0eb7eb23eecb37950f27c30e87edce001dd1585141890555b4df36f9af94aa126938341b0638f0814735e51487a666c1d474fe5500343b"
    }
   },
   {
@@ -6980,7 +7086,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "2af64d014195b1c43afa412e30325aa49544a08ad9d2c6c8c57c2c68d5deb9351a83f179af836d911cf94b401ab69b724e206562ca9f186d2bffc48c4ce67ce4"
+    "signature": "9fe55264db7196334f1c855cc29dcb854436492a686419a45a1e7a14ff504e3f2fa8d40cbc37e106966718de5317160a41ee66eb4ee203d8d9bba59a48ad4883"
    }
   },
   {
@@ -7043,7 +7149,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 4
     },
-    "signature": "7eb5cedc9d93a3414d8b52f3909d6bc1e0424df54dabd663da88ac595043042c51051c69d18f834dee402a52b56db73a59f92a55f049fbb4fc2ef21fdca19739"
+    "signature": "b63f1567e674dd7e7a4e8ffb397d0c01058b2b96efb883e88b400f6d8b38253c7fcf4a24c5f83b2e68afe384d818d5b66a7f2068140f28e74ca28286a981333e"
    }
   },
   {
@@ -7106,7 +7212,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "e54f48395a4ba83ed802b1a81eb19bae05382c3e5d1dffcc96dd2c0c5796c41b0849269c92d4192bbe28ec547f2c2c64542e6d0969ea4047d36078d4c24c167b"
+    "signature": "51dfe883c3f5b23b5e7fe5878236e4d7ff378e76fd3c5c9f39d4e95609a824125841abc2e15ae360f4610ee49e8f8dec3ddd977f294ab710659128127e656c53"
    }
   },
   {
@@ -7169,7 +7275,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "6eeaa4f993e976cdaebb0cae2bb6bee84aa7a6e267c27c03ea9f4e41e7e457e024b186268d2fd8387852b45772cf9ca382786303d2a41dc23746f47171210c4c"
+    "signature": "9ae5166a3a8af6bd438be37d12caede0a99ebeae873685236ea5bd08714288847675920f04089b310cad12ac48776d5e23cc74ac81d8c57476c2631fa2a2c599"
    }
   },
   {
@@ -7232,7 +7338,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "3321d6bfea3780ab4e6152f70fbd2dcf0fdb1c1a92b3a592d002691ac4a6fb0969ee53ed0256f6af9c10971a1cdf452eddb8e913d98105af57d3e2d54b7a992f"
+    "signature": "6bcb6b95348b08ae0c2997df3d9f0073f03875f0ba563f64d745f2a9f7fbff7a686f126386539023001532067e278031f24efdc184114f5c58a3710e492bffc0"
    }
   },
   {
@@ -7295,7 +7401,250 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "2d2bfb557976233f4c51226227a766f48c4336f52735168e4dbf6d69b0bfbe2e2ae7c083f4bcd2150ea13a69a8e2e067dde7134ef670239525e9dae416003519"
+    "signature": "2ecd1eb443ae44721edc40e317ac7b9909c9ef7d855f6f345e206fc59dbd5ed37af2da979b8acc785095f2a03598a5d2c286b01f50626472ed08945363824fa0"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "a redfish fence read before the quarantine was signed",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "b was read Off at 2026-10-05T10:59:00Z, before epoch 2's quarantine was signed (2026-10-05T11:00:00Z): fence it again",
+   "store": [
+    "62ff5b5c1a2e3d4f",
+    4712
+   ],
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "ilo_cert_sha256": "b04e0029adc98bb0c5c9b92ffe08f977401ae1b511c310cc14bd00cf04ec2bc5",
+          "power_restore_policy": "RestoreLastState",
+          "power_state": "Off",
+          "read_again_at": "2026-10-05T10:59:10Z",
+          "read_at": "2026-10-05T10:59:00Z",
+          "serial": "CZJ50001Q",
+          "uuid": "30373737-3632-435a-4a35-300000000001"
+         },
+         "c": {
+          "ilo_cert_sha256": "93c8b54c59154ba2dc00910150324eeeaed356f44131fd8c19b2ca21a60d2f6e",
+          "power_restore_policy": "RestoreLastState",
+          "power_state": "Off",
+          "read_again_at": "2026-10-05T11:59:10Z",
+          "read_at": "2026-10-05T11:59:00Z",
+          "serial": "CZJ50002Q",
+          "uuid": "30373737-3632-435a-4a35-300000000002"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "74ab15981bb1d50029c7caea4abf70b4624a839917d860907692e2a6264e6db4ee9faed3e36eacf71d5b706a8f10f4395a99f88e326986d7e68ff87c29135101"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "d0529a7f516b7ad00b6fc0268cd2de3bda18d30d2d76148388c174f528076ec10df86d7c4318dad0dc7acb52ee5627375ee73f644d0c67bb21d2fed399046be9"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "a redfish fence's second readback after the owner signed, beyond the skew",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "b's second Off readback (2026-10-05T12:05:01Z) is not within 3600 s before the owner signed (2026-10-05T12:00:00Z): fence it again",
+   "store": [
+    "62ff5b5c1a2e3d4f",
+    4712
+   ],
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-06T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "b": {
+          "ilo_cert_sha256": "b04e0029adc98bb0c5c9b92ffe08f977401ae1b511c310cc14bd00cf04ec2bc5",
+          "power_restore_policy": "RestoreLastState",
+          "power_state": "Off",
+          "read_again_at": "2026-10-05T12:05:01Z",
+          "read_at": "2026-10-05T11:59:00Z",
+          "serial": "CZJ50001Q",
+          "uuid": "30373737-3632-435a-4a35-300000000001"
+         },
+         "c": {
+          "ilo_cert_sha256": "93c8b54c59154ba2dc00910150324eeeaed356f44131fd8c19b2ca21a60d2f6e",
+          "power_restore_policy": "RestoreLastState",
+          "power_state": "Off",
+          "read_again_at": "2026-10-05T11:59:10Z",
+          "read_at": "2026-10-05T11:59:00Z",
+          "serial": "CZJ50002Q",
+          "uuid": "30373737-3632-435a-4a35-300000000002"
+         }
+        }
+       },
+       "fenced": "b, c: off at the iLO",
+       "node_id": "a",
+       "not_before": "2026-10-05T12:00:00Z",
+       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_epoch": 2,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "d27d04f59ff4bd2b2a2bf8c727eb8ccc1f31e50e93d9212420c0fa94f33fa322e66bc56e6ccb08061e163e8973f0e14e19166f6ee064af9ae2879df06fedab08"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-05T12:20:00Z",
+     "node_id": "a",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 2
+    },
+    "signature": "7fd122b2e4ddf7db1e19679beb7450f340ecee1b6036cec59fc3bd2fceffa705310f078b4a4f54943397e4df8c250304adb9f2ac6b5ef8b8fbadff5e1e9b1746"
+   }
+  },
+  {
+   "accept": true,
+   "applied_state_epoch": 5,
+   "name": "b's take-over at 5 with c retired: the fence reaches a alone",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "",
+   "store": [
+    "62ff5b5c1a2e3d4f",
+    4712
+   ],
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-09T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "a": {
+          "ilo_cert_sha256": "76120e49d64435d8d026425afe6a1d2f3c7a8d78c6178ffc25520b99003a452d",
+          "power_restore_policy": "RestoreLastState",
+          "power_state": "Off",
+          "read_again_at": "2026-10-08T11:59:10Z",
+          "read_at": "2026-10-08T11:59:00Z",
+          "serial": "CZJ50000Q",
+          "uuid": "30373737-3632-435a-4a35-300000000000"
+         }
+        }
+       },
+       "fenced": "a, c: off at the iLO",
+       "node_id": "b",
+       "not_before": "2026-10-08T12:00:00Z",
+       "quarantine_digest": "38ad7fe69443f4ccd9ee6d3b8aff3fb89b4b7008d509af4082324ab1ddcfd7ed",
+       "quarantine_epoch": 5,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "fe7aa7da916412259380ac982cce1097cfb6b56f95231f2a5809af43408955dc2f05af7f4d11a76ee2ff06293e54756ede27a049f8c725f4d860e9a10e94f50b"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-08T12:20:00Z",
+     "node_id": "b",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 5
+    },
+    "signature": "d4805b7d5f76da0b8cb80193474fa1a2fd149e66b39829581bdb3c4f005c53737fc670cd855595881387561998c9a53030d83b48f0acd96a7eb706f97b525ec8"
+   }
+  },
+  {
+   "accept": false,
+   "applied_state_epoch": null,
+   "name": "the same take-over with the retired c named in the fence",
+   "previous": null,
+   "public": "/regalia/v1/state-epoch",
+   "python_reason": "the fence evidence names ['a', 'c']; the nodes to fence are ['a'] (every other node but the RETIRED and REVOKED_STOLEN ones, whose hardware may be gone)",
+   "store": [
+    "62ff5b5c1a2e3d4f",
+    4712
+   ],
+   "value": {
+    "entry": {
+     "authorization": {
+      "authorization": {
+       "expires_at": "2026-10-09T12:00:00Z",
+       "fence": {
+        "method": "redfish",
+        "nodes": {
+         "a": {
+          "ilo_cert_sha256": "76120e49d64435d8d026425afe6a1d2f3c7a8d78c6178ffc25520b99003a452d",
+          "power_restore_policy": "RestoreLastState",
+          "power_state": "Off",
+          "read_again_at": "2026-10-08T11:59:10Z",
+          "read_at": "2026-10-08T11:59:00Z",
+          "serial": "CZJ50000Q",
+          "uuid": "30373737-3632-435a-4a35-300000000000"
+         },
+         "c": {
+          "ilo_cert_sha256": "93c8b54c59154ba2dc00910150324eeeaed356f44131fd8c19b2ca21a60d2f6e",
+          "power_restore_policy": "RestoreLastState",
+          "power_state": "Off",
+          "read_again_at": "2026-10-08T11:59:10Z",
+          "read_at": "2026-10-08T11:59:00Z",
+          "serial": "CZJ50002Q",
+          "uuid": "30373737-3632-435a-4a35-300000000002"
+         }
+        }
+       },
+       "fenced": "a, c: off at the iLO",
+       "node_id": "b",
+       "not_before": "2026-10-08T12:00:00Z",
+       "quarantine_digest": "38ad7fe69443f4ccd9ee6d3b8aff3fb89b4b7008d509af4082324ab1ddcfd7ed",
+       "quarantine_epoch": 5,
+       "schema": "regalia.survivor-authorization/v1",
+       "scope": "full"
+      },
+      "signature": {
+       "party": "owner",
+       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
+       "sig": "c7d91e7829d7a068ba8364b4aa6b0c776536e31b99f0bc57f6205abc8d55b79164d481a73c1d753e942396cd3d3a209091fc065e9781db256cd6574168f5a70b"
+      }
+     },
+     "cluster_id": "62ff5b5c1a2e3d4f",
+     "issued_at": "2026-10-08T12:20:00Z",
+     "node_id": "b",
+     "revision_before": 4711,
+     "schema": "regalia.opstate-state-epoch/v1",
+     "state_epoch": 5
+    },
+    "signature": "02f0152d068b35bf552f35aa4a1f3ba26ccbc8431f55f33f92e477777b00c2b054f1dc94d20614047797a6df0f18c1b08846cd163ece88cc01257222ee66e7ce"
    }
   },
   {
@@ -7353,7 +7702,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "3f79e3a393a39b8c9bab75f49310855da5bcf0abf97e771cf2c6e0b8cc555cae6d59aab1f35d0da717c781b2e6dcf5f893209f46c85e0919fcc4ad6505022b25"
+    "signature": "4bad164eb76a01fa55101d403ef97b5fdcd04924c50741394a2f916a12d103935056797c22ea400d076e4a6636fdaf1c936bc394a8315c82bd9a8295b1ccb963"
    }
   },
   {
@@ -7416,7 +7765,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "e9bb20ab39ff7c69b78dd0a7c35e2c39c95c46ba7cd1fe13665a450518968f9c577e5d87b022ce125f850bb27871aee2978d1307c62bc444a8d7bebf4fa39c01"
+    "signature": "88e5395d6cb18c6669271e9dcd4c29526855aaa67d743f8bca8f266571b7b6e50e0363ea37a4da024c3856a2c330e717cd72ace01d7e826d2c9b1eebbda54d10"
    }
   },
   {
@@ -7480,7 +7829,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "866b641ef0c8e84ed18894065239599f079d7594698b52b660584967552fb0170eb8224f9afe1ecc4abfb3aebbbecf224a59dd4c7c8c03d91e14a06cb37e675c"
+    "signature": "547e91851e3d35f8e262514e7973c2fc1583ca98ae7fc324bd87fac97e8c42797315f23cefa573b224448fd9b4c8dd159f79d3a711650ce6a09e977aa42653a0"
    }
   },
   {
@@ -7540,7 +7889,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "b25b15c3448ba8a18643e2286947c443356057ffc535eaa44c42fa2ac74e87a3252bf0ab084f134e42b7fade133f06cb1560db40e0ec92f728e5d7810e15aac1"
+    "signature": "f2843ef5abf6f29bf0796b880d730f1c983255dd5427149a37ad07c461db719d57826cb5927ffcb817c29bff850f719b6d44be848d53a1d42aa1c6f4b65b7fd0"
    }
   },
   {
@@ -7603,7 +7952,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "54fa2bfc3dce30d72b7385176e99777da1309aa7a97151e41f18a0205fe270cf405b76424dbbe32b68eff08df60f7843131cf94beda879620a5b3ccaa620a505"
+    "signature": "97fffb6595da5d8c5c11f9ef3678452c615472e6041ab2814cfb8545cbb1ec5643d1b56b4b1f19f3418ae8189bc840a1c6f6f2f68fe41d4ab94902a74e91866c"
    }
   },
   {
@@ -7666,7 +8015,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "3006c6f30fd27c5bea7bbc4a93dd64b6c8da9fe59bf2e96d4e6336825168a8c37a81ac1c5e9165a11f9b4f0495b2804794753e8f5f6e579db907bb47fae3a647"
+    "signature": "5fe78d4a33b8a51554d53a3dc2635e6808b2fe7d0c157e659b5a559bc2de1cb24865b97f1da910022b75a1eb7eff37a962493dbdd25988bc59f44628669ca9be"
    }
   },
   {
@@ -7729,7 +8078,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "63dbe0b32cd3a6cbb11c243d5f8b717cb6a66e76eeadcbbe6650a16057ba49011c47b08f0c84053bb98be69eaaa5997785c1f7856f6c2ef8a839dfdd57f0db04"
+    "signature": "937e45fdd14b3f5a787d7c94fbc7ab95ab696b5340b78232ccbefdcffe32e76358d4bf0e3fe902dbba1515e4c62162de1cab2c1efa5cf6c639d2849dc31c75d1"
    }
   },
   {
@@ -7792,7 +8141,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "3c72febdf853b9544f98cbe49b72dfc5bef35c590f079bc4b9a279028e9100946e20b0bb9613bd3bfec1f6ed9547d943e131d2ea858d948d61425e3582eb6ec1"
+    "signature": "5ea4d3d1ec38d3fe94e2986915abf0ed8c8c25133ea509e673e8c7103bc622977ef67e8cad06b7db8d19e1ab10da5da7e265f2fdeb5615cf0848ddc9126cdc3b"
    }
   },
   {
@@ -7855,7 +8204,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "2cffb4919a8f7e46edf2095f0d4d253d4c871be98717491ae6f5ea9eda80beea0e83e12f354f81081fa5beb0cdf03080bb06d0941fee2c8f786aa869648d3c22"
+    "signature": "23990ef2ac909cad95e99ec8e86cceb8eef164aecf8203270e6757135c36427c1f578bd1e4468c6fe9c420753fbdf2477cbf5e52a931959bf444a9d15ad539fe"
    }
   }
  ]

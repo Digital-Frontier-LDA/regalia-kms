@@ -288,9 +288,11 @@ _SE2 = nodes4(b="QUARANTINED", c="QUARANTINED")
 _SE2[0]["signing_key"] = typed(A_NEW)
 _SE4 = nodes4(a="QUARANTINED", c="QUARANTINED")
 _SE4[0]["signing_key"] = typed(A_NEW)
+_SE5 = nodes4(a="QUARANTINED", c="RETIRED")       # at 5, b survives with c retired: the fence reaches a alone (fenceable)
+_SE5[0]["signing_key"] = typed(A_NEW)
 SE_CHAIN = [_M1]
 for _epoch, _nodes, _at in ((2, _SE2, "2026-10-05T11:00:00Z"), (3, copy.deepcopy(_NODES2), "2026-10-06T00:00:00Z"),
-                            (4, _SE4, "2026-10-07T00:00:00Z")):
+                            (4, _SE4, "2026-10-07T00:00:00Z"), (5, _SE5, "2026-10-08T00:00:00Z")):
     SE_CHAIN.append(manifest4(_epoch, m.digest(SE_CHAIN[-1]), _nodes, issued_at=_at))
 STATE_EPOCH_CASES = []
 
@@ -362,6 +364,16 @@ def fenced_b(**change):
 state_epoch_case("a redfish fence read Off twice only 9 s apart", fenced_b(read_again_at="2026-10-05T11:59:09Z"), False)
 state_epoch_case("a redfish fence whose box names no UUID", fenced_b(uuid="not-a-uuid"), False)
 state_epoch_case("a redfish fence whose iLO certificate digest is not one", fenced_b(ilo_cert_sha256="zz" * 32), False)
+state_epoch_case("a redfish fence read before the quarantine was signed",
+                 fenced_b(read_at="2026-10-05T10:59:00Z", read_again_at="2026-10-05T10:59:10Z"), False)
+state_epoch_case("a redfish fence's second readback after the owner signed, beyond the skew",
+                 fenced_b(read_again_at="2026-10-05T12:05:01Z"), False)
+FIFTH = dict(day="2026-10-08", fence=redfish_evidence(["a"], "2026-10-08"))
+state_epoch_case("b's take-over at 5 with c retired: the fence reaches a alone",
+                 took_over(state_epoch(5, "b", survivor_authorization(5, "b", **FIFTH), issued_at="2026-10-08T12:20:00Z"), NODE_KEYS["b"]), True)
+state_epoch_case("the same take-over with the retired c named in the fence",
+                 took_over(state_epoch(5, "b", survivor_authorization(5, "b", day="2026-10-08", fence=redfish_evidence(["a", "c"], "2026-10-08")),
+                                       issued_at="2026-10-08T12:20:00Z"), NODE_KEYS["b"]), False)
 state_epoch_case("an attested-shaped entry under a redfish fence", fenced_b(read_again_at=None, serial=None, uuid=None,
                                                                             ilo_cert_sha256=None, power_restore_policy=None), False)
 state_epoch_case("a signature over the entry without its domain", took_over(state_epoch(), raw=m.canonical(state_epoch())), False)

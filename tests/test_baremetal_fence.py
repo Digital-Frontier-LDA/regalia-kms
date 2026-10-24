@@ -292,6 +292,50 @@ class OwnerFence(Stand):
 
 import unittest.mock  # noqa: E402,F811
 
+class OwnerFenceOrder(unittest.TestCase):
+    """owner.py fence reserves its evidence file before any server is powered off (CodeRabbit on #516): a path it cannot
+    write refuses with no fence run, and a fence that refuses leaves no file behind."""
+
+    def run_fence(self, out, fence):
+        from deploy.baremetal import owner
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        inventory = os.path.join(d, "inv.json")
+        with open(inventory, "w") as f:
+            json.dump({"schema": fe.INVENTORY_SCHEMA, "nodes": {"b": BOXES["b"]}}, f)
+        read, write = os.pipe()
+        os.write(write, b'{"b": {"username": "u", "password": "p"}}')
+        os.close(write)
+        with unittest.mock.patch.object(fe, "fence", fence), unittest.mock.patch.object(owner, "off_the_nodes", lambda: None), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as complained:
+            got = owner.main(["fence", "--inventory", inventory, "--node", "b", "--credentials-fd", str(read), "--out", out])
+        return got, complained.getvalue()
+
+    def test_a_path_it_cannot_write_refuses_before_any_fence(self):
+        calls = []
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        taken = os.path.join(d, "fence.json")
+        open(taken, "w").close()
+        for out in (taken, os.path.join(d, "missing", "fence.json")):
+            with self.subTest(out):
+                got, said = self.run_fence(out, lambda *a, **k: calls.append(a))
+                self.assertEqual(got, 1, said)
+                self.assertEqual(calls, [], "a server was fenced before the evidence file was reserved")
+
+    def test_a_fence_that_refuses_leaves_no_file(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        out = os.path.join(d, "fence.json")
+
+        def refuses(*a, **k):
+            raise fe.Refused("b's iLO certificate is not the one pinned for it")
+        got, said = self.run_fence(out, refuses)
+        self.assertEqual(got, 1, said)
+        self.assertIn("not the one pinned", said)
+        self.assertFalse(os.path.lexists(out))
+
+
 class OneFormat(unittest.TestCase):
     """The node judges the fence evidence (survivor.validate_authorization, in admission) without the iLO client, which
     is never on a node: the format lives in survivor.py and the fence takes it from there. The serial is the Redfish

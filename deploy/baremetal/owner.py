@@ -328,9 +328,15 @@ def main(argv=None):
                 credentials = json.loads(bytes(raw))
             finally:
                 keyfd.zero(raw)
-            evidence = fence_tool.fence(boxes, args.node, credentials)
+            # the evidence file is reserved BEFORE any server is powered off: an existing path, a missing directory or no
+            # permission refuses here, never after the fence ran (CodeRabbit on #516). A fence that refuses leaves no file.
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
             with os.fdopen(fd, "w") as out:
+                try:
+                    evidence = fence_tool.fence(boxes, args.node, credentials)
+                except BaseException:
+                    os.unlink(args.out)
+                    raise
                 json.dump(evidence, out, sort_keys=True)
             for nid, seen in sorted(evidence["nodes"].items()):
                 print("FENCED: %s Off at %s and again at %s (serial %s, power restore %s)" % (nid, seen["read_at"], seen["read_again_at"],
