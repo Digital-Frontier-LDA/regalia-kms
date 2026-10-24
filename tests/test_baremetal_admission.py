@@ -291,8 +291,9 @@ class Admission(Case):
         self.assertEqual(document, self.on_disk())
         self.assertEqual(list(document), list(admission.FIELDS))
         self.assertEqual(document, {
-            "schema": "regalia.admission/v3", "node_id": "a", "session_id": lt.SESSION, "boot_id": BOOT, "epoch": 1,
+            "schema": "regalia.admission/v4", "node_id": "a", "session_id": lt.SESSION, "boot_id": BOOT, "epoch": 1,
             "manifest_digest": m.digest(self.m1), "hsm_serials": " ".join(self.m1["nodes"][0]["hsm_serials"]), "lease_issued_at": hbt.stamp(self.now), "requested_boottime_ms": asked_at,
+            **lt.STATE,                                                    # the held lease's own (D32): what the state gate checks
             "serve_until_boottime_ms": self.ticks + (lease.MAX_LIFETIME - admission.MARGIN) * 1000, "mode": "lease", "reason": ""})
         self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o644)       # the daemon, another user, reads it
         self.assertEqual([n for n in os.listdir(self.d) if n.startswith(".admission-")], [])
@@ -343,6 +344,7 @@ class Admission(Case):
         self.later(admission.MARGIN)
         gone = self.service.step()
         self.assertEqual((gone["serve_until_boottime_ms"], gone["lease_issued_at"], gone["requested_boottime_ms"]), (0, admission.NEVER, 0))
+        self.assertEqual({k: gone[k] for k in lease.STATE_KEYS}, admission.NO_STATE)   # nothing served: no lease's state either
         self.assertIn("EXPIRED: the runtime lease expired", gone["reason"])
         self.peer_up = True                                                               # the peer is back: admitted again,
         self.later(admission.RETRY_MAX)                                                   # at the next attempt its back-off allows
@@ -385,6 +387,22 @@ class Admission(Case):
         reason = self.service.step()["reason"]
         self.assertEqual(reason, "bad???[31m" + "x" * 500)
 
+    def test_a_lease_that_serves_carries_its_state_and_recovery_none(self):
+        """v4 (#510, 2f's read adopted): a lease-mode document that serves must carry the lease's state, or the daemon's
+        state gate would have nothing to check. Recovery holds no peer lease, so its state is NO_STATE; so is a
+        document that serves nothing. write() and read() refuse what internal/admission.Parse refuses."""
+        served = self.service.step()
+        self.assertEqual(served["mode"], "lease")
+        self.assertNotEqual({k: served[k] for k in lease.STATE_KEYS}, admission.NO_STATE)
+        target = os.path.join(self.d, "check.json")
+        for label, change in (("no cluster", {"cluster_id": admission.NO_STATE["cluster_id"]}),
+                              ("no session key", {"session_key": admission.NO_STATE["session_key"]}), ("none", admission.NO_STATE)):
+            with self.subTest(label):
+                self.refused("an admission that serves under a lease carries the lease's state", admission.write, target, dict(served, **change))
+        admission.write(target, dict(served, **admission.NO_STATE, serve_until_boottime_ms=0, reason="not serving"))    # serves nothing
+        admission.write(target, dict(served, **admission.NO_STATE, mode="recovery"))                                     # a survivor alone
+        self.assertEqual(admission.read(target)["mode"], "recovery")
+
     def test_the_longest_document_fits_what_the_daemon_reads(self):
         """internal/admission refuses a file above maxFileBytes (4096) as oversized, which would hide the reason:
         the reason is cut at ADMISSION_REASON_LIMIT, and the document with every field at its largest fits."""
@@ -394,7 +412,8 @@ class Admission(Case):
         widest = {"schema": admission.SCHEMA, "node_id": "n" * 32, "session_id": "f" * 64, "boot_id": "b" * 36,
                   "epoch": 2 ** 63 - 1, "manifest_digest": "d" * 64, "hsm_serials": " ".join(["S" * 32] * admission.MAX_SERIALS),
                   "lease_issued_at": "9999-12-31T23:59:59Z",
-                  "requested_boottime_ms": 2 ** 63 - 1, "serve_until_boottime_ms": 2 ** 63 - 1, "mode": "recovery",
+                  "requested_boottime_ms": 2 ** 63 - 1, "cluster_id": "c" * 16, "state_epoch": 2 ** 63 - 1,
+                  "state_revision": 2 ** 63 - 1, "session_key": "e" * 64, "serve_until_boottime_ms": 2 ** 63 - 1, "mode": "recovery",
                   "reason": "\\" * admission.ADMISSION_REASON_LIMIT}            # every character escaped: the worst case
         self.assertEqual(set(widest), set(self.service.step()))                     # the same fields the service writes
         self.assertLessEqual(len(json.dumps(widest).encode()) + 1, 4096)
