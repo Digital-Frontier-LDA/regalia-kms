@@ -49,10 +49,12 @@ class Metrics(Case):
         service = admission.Service(self.holder, lambda: self.manifest_now, self.renew, self.path,
                                     boottime=lambda: self.ticks, boot=lambda: BOOT, metrics=published.append)
         service.step()
-        self.assertEqual(published[-1], [("regalia_admission_serving", {}, 1), ("regalia_admission_lease_seconds_left", {}, lease.MAX_LIFETIME)])
+        self.assertEqual(published[-1], [("regalia_admission_serving", {}, 1), ("regalia_admission_lease_seconds_left", {}, lease.MAX_LIFETIME),
+                                         ("regalia_admission_recovery", {}, 0)])
         self.manifest_now = None                                          # no manifest: not admitted
         service.step()
-        self.assertEqual(published[-1], [("regalia_admission_serving", {}, 0), ("regalia_admission_lease_seconds_left", {}, 0)])
+        self.assertEqual(published[-1], [("regalia_admission_serving", {}, 0), ("regalia_admission_lease_seconds_left", {}, 0),
+                                         ("regalia_admission_recovery", {}, 0)])
         for samples in published:
             metrics.render("admission", samples)
 
@@ -108,6 +110,82 @@ class StalledPeer(Case):
             self.later(5)
         self.assertEqual(gaps, [])
         self.assertEqual(self.holder.held()["lease"]["issuer"], "c")
+
+
+class Recovery(Case):
+    """ADR-0002 D32.6 (#432 item (e)): a lone survivor serves under the owner's authorization, mode "recovery"; only while no
+    normal lease holds, and back to "lease" at the first normal lease (regalia-kms-d9's both directions)."""
+
+    def surviving(self, answer):
+        self.trail, self.asked = [], []
+
+        def survivor(manifest):
+            self.asked.append(manifest["epoch"])
+            if isinstance(answer[0], Exception):
+                raise answer[0]
+            return answer[0]
+        self.answer = answer
+        return admission.Service(self.holder, lambda: self.manifest_now, self.renew, self.path, boottime=lambda: self.ticks,
+                                 boot=lambda: BOOT, record=self.trail.append, survivor=survivor,
+                                 metrics=lambda samples: setattr(self, "samples", dict((n, v) for n, _, v in samples)))
+
+    def test_with_no_lease_the_authorization_admits_in_recovery_mode_and_the_first_lease_ends_it(self):
+        answer = [3600]
+        service = self.surviving(answer)
+        self.peer_up = False                                                   # no peer: no lease, ever, here
+        document = service.step()
+        self.assertEqual((document["mode"], document["serve_until_boottime_ms"]), ("recovery", self.ticks + (lease.MAX_LIFETIME - admission.MARGIN) * 1000))
+        self.assertEqual(document["requested_boottime_ms"], 0)        # no peer vouched: never satisfies #72's re-authorization
+        self.assertTrue(document["reason"].startswith("RECOVERY: serving alone under the owner's survivor authorization"))
+        self.assertEqual([(e["outcome"], e["reason"][:9]) for e in self.trail], [("ALLOW", "RECOVERY:")])
+        self.assertEqual(self.samples["regalia_admission_recovery"], 1)
+        self.peer_up = True                                                    # a peer back: the first normal lease
+        self.later(admission.RETRY_MAX)
+        document = service.step()
+        self.assertEqual((document["mode"], document["reason"]), ("lease", ""))
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "ALLOW"])    # the change of mode is on the trail
+        self.assertEqual(self.samples["regalia_admission_recovery"], 0)
+
+    def test_the_authorization_is_never_consulted_while_a_lease_holds(self):
+        service = self.surviving([3600])
+        self.assertEqual(service.step()["mode"], "lease")
+        self.later(5)
+        self.assertEqual(service.step()["mode"], "lease")
+        self.assertEqual(self.asked, [])
+
+    def test_an_authorization_that_does_not_hold_or_runs_out_admits_nothing(self):
+        self.peer_up = False
+        for label, answer, said in (("none installed", None, "no runtime lease is held"),
+                                    ("refused", m.Refused("a new epoch ends it"), "the survivor authorization does not hold: a new epoch ends it"),
+                                    ("inside the margin", admission.MARGIN, "inside the %d s margin" % admission.MARGIN)):
+            with self.subTest(label):
+                document = self.surviving([answer]).step()
+                self.assertEqual((document["serve_until_boottime_ms"], document["mode"]), (0, "lease"))
+                self.assertIn(said, document["reason"])
+
+    def test_a_lease_still_alive_inside_its_margin_is_not_replaced_by_recovery(self):
+        """ed on #494: recovery only with NO unexpired normal lease."""
+        service = self.surviving([3600])
+        self.assertEqual(service.step()["mode"], "lease")
+        self.peer_up = False
+        self.later(lease.MAX_LIFETIME - admission.MARGIN)                   # into the margin: the lease is alive, not served on
+        document = service.step()
+        self.assertEqual((document["serve_until_boottime_ms"], document["mode"], self.asked), (0, "lease", []))
+        self.later(admission.MARGIN)                                         # it has run out: now recovery may begin
+        self.assertEqual(service.step()["mode"], "recovery")
+
+    def test_a_node_the_manifest_does_not_let_serve_is_never_admitted_in_recovery(self):
+        for state in ("QUARANTINED", "REVOKED_STOLEN", "MAINTENANCE"):
+            with self.subTest(state):
+                self.manifest_now = self.manifest(2, m.digest(self.m1), a=state)
+                self.peer_up = False
+                document = self.surviving([3600]).step()
+                self.assertEqual((document["serve_until_boottime_ms"], self.asked), (0, []))
+
+    def test_recovery_is_bounded_by_the_authorization_s_own_end(self):
+        self.peer_up = False
+        document = self.surviving([admission.MARGIN + 7]).step()
+        self.assertEqual(document["serve_until_boottime_ms"], self.ticks + 7000)
 
 
 class Backoff(Case):
@@ -213,9 +291,9 @@ class Admission(Case):
         self.assertEqual(document, self.on_disk())
         self.assertEqual(list(document), list(admission.FIELDS))
         self.assertEqual(document, {
-            "schema": "regalia.admission/v2", "node_id": "a", "session_id": lt.SESSION, "boot_id": BOOT, "epoch": 1,
+            "schema": "regalia.admission/v3", "node_id": "a", "session_id": lt.SESSION, "boot_id": BOOT, "epoch": 1,
             "manifest_digest": m.digest(self.m1), "hsm_serials": " ".join(self.m1["nodes"][0]["hsm_serials"]), "lease_issued_at": hbt.stamp(self.now), "requested_boottime_ms": asked_at,
-            "serve_until_boottime_ms": self.ticks + (lease.MAX_LIFETIME - admission.MARGIN) * 1000, "reason": ""})
+            "serve_until_boottime_ms": self.ticks + (lease.MAX_LIFETIME - admission.MARGIN) * 1000, "mode": "lease", "reason": ""})
         self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o644)       # the daemon, another user, reads it
         self.assertEqual([n for n in os.listdir(self.d) if n.startswith(".admission-")], [])
 
@@ -316,7 +394,7 @@ class Admission(Case):
         widest = {"schema": admission.SCHEMA, "node_id": "n" * 32, "session_id": "f" * 64, "boot_id": "b" * 36,
                   "epoch": 2 ** 63 - 1, "manifest_digest": "d" * 64, "hsm_serials": " ".join(["S" * 32] * admission.MAX_SERIALS),
                   "lease_issued_at": "9999-12-31T23:59:59Z",
-                  "requested_boottime_ms": 2 ** 63 - 1, "serve_until_boottime_ms": 2 ** 63 - 1,
+                  "requested_boottime_ms": 2 ** 63 - 1, "serve_until_boottime_ms": 2 ** 63 - 1, "mode": "recovery",
                   "reason": "\\" * admission.ADMISSION_REASON_LIMIT}            # every character escaped: the worst case
         self.assertEqual(set(widest), set(self.service.step()))                     # the same fields the service writes
         self.assertLessEqual(len(json.dumps(widest).encode()) + 1, 4096)
@@ -612,6 +690,43 @@ class RunsAtTheLapse(Case):
         self.assertFalse(seen["alive"], "lapse() waited for the round")
         self.assertEqual(seen["written"]["serve_until_boottime_ms"], 0)
         self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY"])   # recorded at the bound, once
+
+    def test_a_restarted_service_publishes_what_it_knows_before_its_first_renewal(self):
+        """3e's S4 on #507: a restart under a new epoch left the previous process's file (serving, the old epoch)
+        standing for the whole first renewal round, and nothing on the trail."""
+        first = self.recording()
+        first.step()                                                       # serving under epoch 1
+        self.manifest_now = self.manifest(2, m.digest(self.m1), b="QUARANTINED", c="QUARANTINED")
+        restarted = self.recording()                                       # a new process: nothing written by it yet
+        self.peer_up = False
+        asked = []
+        restarted.renew = lambda request: asked.append(1) or (_ for _ in ()).throw(ConnectionError("silent"))
+        once = iter([True])                                                # stop before any round: only the start
+        restarted.run(lambda: next(once), interval=5, sleep=lambda s: None, watch=60)
+        self.assertEqual((self.on_disk()["serve_until_boottime_ms"], self.on_disk()["epoch"], asked), (0, 2, []))
+        self.assertEqual([e["outcome"] for e in self.trail], ["DENY"])       # on the trail at its start, before any renewal
+
+    def test_a_round_that_crashes_is_recorded_as_not_serving_before_the_error_is_raised(self):
+        """3e's S4 on #507: a restarted lease service that crashed before any refusal left no line on the trail."""
+        service = self.recording()
+        service.step()                                                     # serving, recorded
+        def boom():
+            raise RuntimeError("the TPM did not answer")
+        service.manifest = boom
+        with self.assertRaises(RuntimeError):
+            service.run(lambda: False, interval=5, sleep=lambda s: None, watch=60)
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY"])
+        self.assertIn("the lease service failed: the TPM did not answer", self.trail[-1]["reason"])
+        self.assertEqual(self.on_disk()["serve_until_boottime_ms"], 0)
+
+    def test_a_fresh_service_that_crashes_first_is_recorded_too(self):
+        service = self.recording()                                          # recorded is None: nothing on the trail yet
+        def boom():
+            raise RuntimeError("no store")
+        service.manifest = boom
+        with self.assertRaises(RuntimeError):
+            service.run(lambda: False, interval=5, sleep=lambda s: None, watch=60)
+        self.assertEqual([e["outcome"] for e in self.trail], ["DENY"])
 
     def test_run_s_watcher_writes_at_the_bound_between_rounds_and_stops_with_run(self):
         import threading

@@ -52,7 +52,7 @@ func good(now int64) map[string]any {
 	return map[string]any{
 		"schema": Schema, "node_id": "a", "session_id": testSession, "boot_id": testBoot, "epoch": 7,
 		"manifest_digest": testDigest, "hsm_serials": "DENK0404144 36345471", "lease_issued_at": "2026-10-02T09:00:00Z",
-		"requested_boottime_ms": now - 5_000, "serve_until_boottime_ms": now + 25_000, "reason": "",
+		"requested_boottime_ms": now - 5_000, "serve_until_boottime_ms": now + 25_000, "mode": "lease", "reason": "",
 	}
 }
 
@@ -234,11 +234,14 @@ func TestEveryDefectOfTheFileIsNotAdmitted(t *testing.T) {
 		{"a serial of 33 characters", "hsm_serials is not distinct serials", change("hsm_serials", strings.Repeat("S", 33))},
 		{"seventeen serials", "lists more than 16 hardware tokens", change("hsm_serials", serials(17))},
 		{"the old schema", "another schema", change("schema", "regalia.admission/v1")},
+		{"the v2 schema (no mode)", "another schema", change("schema", "regalia.admission/v2")},
+		{"an unknown mode", "neither lease nor recovery", change("mode", "standby")},
+		{"recovery, with no stateless-only gate yet", "no stateless-only gate yet", change("mode", "recovery")},
 		{"a local time", "lease_issued_at is not UTC", change("lease_issued_at", "2026-10-02T09:00:00+02:00")},
 		{"a fractional bound", "serve_until_boottime_ms is not a whole number", change("serve_until_boottime_ms", 1.0e6+0.5)},
-		{"an exponent bound", "serve_until_boottime_ms is not a whole number", raw(`{"schema":"regalia.admission/v2","node_id":"a","session_id":"` + testSession +
+		{"an exponent bound", "serve_until_boottime_ms is not a whole number", raw(`{"schema":"regalia.admission/v3","node_id":"a","session_id":"` + testSession +
 			`","boot_id":"` + testBoot + `","epoch":7,"manifest_digest":"` + testDigest + `","hsm_serials":"DENK0404144` +
-			`","lease_issued_at":"2026-10-02T09:00:00Z","requested_boottime_ms":1,"serve_until_boottime_ms":1e9,"reason":""}`)},
+			`","lease_issued_at":"2026-10-02T09:00:00Z","requested_boottime_ms":1,"serve_until_boottime_ms":1e9,"mode":"lease","reason":""}`)},
 		{"a bound as text", "serve_until_boottime_ms is not a whole number", change("serve_until_boottime_ms", "1025000")},
 		{"a negative request time", "requested_boottime_ms is not a whole number", change("requested_boottime_ms", -1)},
 		{"a reason that is not a string", "reason is not a string", change("reason", 0)},
