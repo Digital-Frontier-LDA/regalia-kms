@@ -124,9 +124,12 @@ def tpm_stop_report(pid, log, shutdown=None, proc="/proc"):
         parts.append("log %r" % pathlib.Path(log).read_text(errors="replace")[-800:])
     except OSError as error:
         parts.append("log <%s>" % (error.strerror or error))
-    denied = sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False) if proc == "/proc" else None
-    if denied is not None:
-        parts.append("apparmor %r" % denied.stdout[-600:])
+    if proc == "/proc":
+        try:   # bounded: a stalled journal must never keep the stop error from being raised (CodeRabbit on #563)
+            parts.append("apparmor %r" % sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False,
+                                            timeout=10).stdout[-600:])
+        except subprocess.TimeoutExpired:
+            parts.append("apparmor <journalctl did not answer within 10 s>")
     return " | ".join(parts)
 
 

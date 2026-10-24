@@ -41,5 +41,16 @@ class TpmStopReport(unittest.TestCase):
         self.assertNotIn("tpm2_shutdown", report)                     # a cut: no orderly shutdown was asked
 
 
+class JournalStalls(unittest.TestCase):
+    def test_a_stalled_journal_is_said_and_the_report_still_returns(self):
+        from unittest import mock
+
+        def stalls(*argv, **kw):
+            raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+        with mock.patch.object(tn, "sh", stalls):
+            report = tn.tpm_stop_report(1, "/nonexistent/tpm.log")          # the real /proc: pid 1 is there
+        self.assertIn("apparmor <journalctl did not answer within 10 s>", report)
+
+
 if __name__ == "__main__":
     unittest.main()
