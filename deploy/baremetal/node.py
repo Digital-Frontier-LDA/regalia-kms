@@ -804,7 +804,7 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
                              record=trail,                                                     # #340: serving and not, on its trail
                              # D32.6: the owner's survivor authorization root installed (survivor.py install), read every
                              # round; consulted by the service only with no unexpired normal lease (#494)
-                             survivor=lambda manifest: survivor.seconds_left(node.held(survivor.AUTH_FILE), manifest,
+                             survivor=lambda manifest: survivor.seconds_left(os.path.join(node.runtime, survivor.AUTH_FILE), manifest,
                                                                              node.node_id, clock))
 
 

@@ -157,7 +157,7 @@ class Directive(Case):
     def store(self):
         d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, d, True)
-        return sv.Directives(os.path.join(d, "directives.jsonl"))
+        return sv.Directives(os.path.join(d, "directives.jsonl"), owner_uid=os.getuid())
 
     def test_the_survivor_keeps_the_signed_directives_and_derives_the_disabled_keys_from_them(self):
         store = self.store()
@@ -185,6 +185,24 @@ class Directive(Case):
         with open(store.path, "ab") as f:
             f.write(b'{"directive": {"state": "enabled"}}\n')
         self.refused("every key is refused", store.disabled)
+
+    def test_the_store_is_a_singly_linked_file_only_its_owner_may_write(self):
+        store = self.store()
+        store.apply(self.directive(), self.m2)
+        os.chmod(store.path, 0o666)
+        self.refused("is not a regular, singly linked file", store.disabled)
+        self.refused("is not a regular, singly linked file", store.apply, self.directive("ci-signing"), self.m2)
+        os.chmod(store.path, 0o640)
+        other = store.path + ".other"
+        os.link(store.path, other)                                         # a hard link: never appended to, never read
+        self.refused("is not a regular, singly linked file", store.apply, self.directive("ci-signing"), self.m2)
+        self.refused("is not a regular, singly linked file", store.disabled)
+        os.unlink(other)
+        self.refused("is not a regular, singly linked file",
+                     sv.Directives(store.path, owner_uid=os.getuid() + 1).disabled)        # not the owner's
+        os.unlink(store.path)
+        os.symlink(other, store.path)
+        self.refused("cannot be opened", store.disabled)
 
     def test_a_node_s_directive_is_not_the_owner_s(self):
         directive = self.directive()["directive"]
@@ -270,12 +288,13 @@ class OnTheNode(Case):
     def run_main(self, argv, now=T0 + 60, authenticated=True):
         from unittest import mock
         from deploy.baremetal import node as node_module
-        fake = mock.Mock(node_id="a")
-        fake.held.side_effect = lambda name: os.path.join(self.d, name)
+        fake = mock.Mock(node_id="a", runtime=self.d)                     # root's run directory
+        fake.held.side_effect = lambda name: self.fail("%s is put in the admission user's own directory" % name)
         fake.manifest.return_value = self.m2
         fake.clock.return_value = lambda: (now, authenticated)
         with mock.patch.object(node_module, "Node", lambda cfg: fake), mock.patch.object(node_module, "load", lambda path: {}), \
-                mock.patch.object(sv.os, "geteuid", lambda: 0), mock.patch("builtins.print") as said:
+                mock.patch.object(sv.os, "geteuid", lambda: 0), mock.patch("builtins.print") as said, \
+                mock.patch.object(sv, "Directives", lambda path, real=sv.Directives: real(path, owner_uid=os.getuid())):
             code = sv.main(["--config", "/etc/regalia/node.json"] + argv)
         self.said = " ".join(str(c.args[0]) for c in said.call_args_list if c.args)
         return code
@@ -302,7 +321,7 @@ class OnTheNode(Case):
     def test_the_reader_takes_only_a_root_owned_file_only_root_may_write(self):
         path = os.path.join(self.d, sv.AUTH_FILE)
         sv._write_root(path, self.signed)
-        self.refused("is not a regular file of root's", sv.installed, path)          # owned by this test's user, not root
+        self.refused("is not a regular file of root's", sv.installed, path, owner_uid=os.getuid() + 1)    # another's (root's, as root)
         os.chmod(path, 0o666)
         self.refused("is not a regular file of", sv.installed, path, owner_uid=os.getuid())
         os.unlink(path)
@@ -342,19 +361,22 @@ class OnTheNode(Case):
         with open(f, "w") as out:
             json.dump(directive, out)
         self.assertEqual(self.run_main(["directive", "--file", f]), 0)
-        self.assertEqual(sv.Directives(os.path.join(self.d, "survivor-directives.jsonl")).disabled(), {"release-signing"})
+        self.assertEqual(sv.Directives(os.path.join(self.d, sv.DIRECTIVES_FILE), owner_uid=os.getuid()).disabled(), {"release-signing"})
 
     def test_the_admission_service_is_wired_to_the_installed_authorization(self):
         from unittest import mock
         from deploy.baremetal import node as node_module
         fake = mock.Mock(node_id="a", runtime=self.d, run=None)
-        fake.held.side_effect = lambda name: os.path.join(self.d, name)
+        fake.held.side_effect = lambda name: os.path.join(self.d, "admission", name)
         fake.clock.return_value = lambda: (T0 + 60, True)
         with mock.patch.object(node_module, "boot_session", return_value=("ab" * 32, b"pub")), \
                 mock.patch.object(node_module.lease, "Holder"), mock.patch.object(node_module, "Trail"):
             service = node_module.admission_service(fake, daemon_started=lambda: None)
         self.assertIsNone(service.survivor(self.m2))                        # none installed
-        sv._write_root(os.path.join(self.d, sv.AUTH_FILE), self.signed)
+        path = os.path.join(self.d, sv.AUTH_FILE)                           # in root's run directory, not admission's
+        sv._write_root(path, self.signed)
+        if os.getuid() == 0:
+            os.chown(path, 65534, 65534)                                    # as root: make it another's, so the refusal is real
         self.refused("is not a regular file of root's", service.survivor, self.m2)    # the real reader: root's file only
 
 
