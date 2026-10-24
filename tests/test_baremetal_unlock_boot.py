@@ -808,9 +808,10 @@ class OnQemu(tub.OnSwtpm):
         """The guest's TPM anchor moved to the tip of `envelopes` while the guest is off (what regalia-esp-advance
         does on a running host, after the ESP holds the chain: node.esp_advance)."""
         sock = self.d + "/a-off.sock"
+        tpm_log = self.d + "/swtpm-anchor.log"
         tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--server", "type=unixio,path=" + sock,
                                 "--ctrl", "type=unixio,path=%s.ctrl" % sock, "--flags", "not-need-init,startup-clear",
-                                "--log", tpmdiag.log_arg("%s/swtpm-anchor.log" % self.d)],
+                                "--log", tpmdiag.log_arg(tpm_log)],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             for _ in range(100):
@@ -827,6 +828,8 @@ class OnQemu(tub.OnSwtpm):
         finally:
             tpm.terminate()
             tpm.wait(30)
+            if os.path.exists(tpm_log):
+                shutil.copyfile(tpm_log, BOOT + "/swtpm-anchor.log")   # self.d is removed after the test; the script keeps BOOT's
 
 
 if __name__ == "__main__":
