@@ -14,6 +14,19 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/cmd/regalia-unlock/membership"
 )
 
+// caseChain is a case's own "chain" when it has one (regalia-u1r: none at all, the caller's error), else the vector's.
+func caseChain(c map[string]any, chain []map[string]any) []map[string]any {
+	own, ok := c["chain"].([]any)
+	if !ok {
+		return chain
+	}
+	out := []map[string]any{}
+	for _, m := range own {
+		out = append(out, m.(map[string]any))
+	}
+	return out
+}
+
 // The vector's state_epoch_checks (deploy/baremetal/opstate.verify_state_epoch, #513): every case accepted or refused
 // alike, refused with Python's own words, and an accepted case's epoch the one applied.json is to report.
 func TestEveryStateEpochCheckIsTheSame(t *testing.T) {
@@ -42,7 +55,7 @@ func TestEveryStateEpochCheckIsTheSame(t *testing.T) {
 			}
 			store = &StoreRef{ClusterID: s[0].(string), ModRevision: revision}
 		}
-		entry, err := VerifyStateEpoch(c["key"].(string), c["value"], chain, previous, store)
+		entry, err := VerifyStateEpoch(c["key"].(string), c["value"], caseChain(c, chain), previous, store)
 		if c["accept"] == true {
 			if err != nil {
 				t.Errorf("%s: Python accepted, Go: %v", name, err)

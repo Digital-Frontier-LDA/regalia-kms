@@ -11,6 +11,13 @@
    },
    "required": 2
   },
+  "abababababababababababababababababababababababababababababababab": {
+   "approvers": {
+    "alice": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+    "bob": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
+   },
+   "required": 2
+  },
   "fdd1ebecfb19a52f5422e2f43cb737edf6731827dccee4e9927ec69ceeb5127c": {
    "approvers": {
     "alice": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394"
@@ -61,7 +68,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -196,7 +203,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -555,7 +562,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -686,7 +693,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -780,7 +787,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -911,7 +918,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -1042,7 +1049,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -1177,7 +1184,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -1308,7 +1315,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -1439,7 +1446,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -1570,7 +1577,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -1701,7 +1708,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -1824,7 +1831,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -1955,7 +1962,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
@@ -2037,7 +2044,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "fb6c1ac5e4444c5c19a4925284725072caac0fced561204ad52733de1131e4f154064d038bfff8c5abec682ca189444e85eb8ef814890eec9f88cdcea52b4c59"
+         "signature": "2d6c9220725405c4893e0143a0caba0e10607b28692434fd93baf62de5f87b2455fa2f0201caaa07ddbd7c2bc35e557f53e49de71197a2a452714ffdedc97d14"
         }
        },
        "spend": {
