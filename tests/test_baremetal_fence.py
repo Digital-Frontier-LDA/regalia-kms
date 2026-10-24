@@ -292,5 +292,28 @@ class OwnerFence(Stand):
 
 import unittest.mock  # noqa: E402,F811
 
+class OneFormat(unittest.TestCase):
+    """The node judges the fence evidence (survivor.validate_authorization, in admission) without the iLO client, which
+    is never on a node: the format lives in survivor.py and the fence takes it from there. The serial is the Redfish
+    client's rule too, held in two places, so it is pinned equal here."""
+
+    def test_the_fence_makes_what_the_node_judges(self):
+        from deploy.baremetal import redfish, survivor
+        self.assertIs(fe.EVIDENCE_KEYS, survivor.EVIDENCE_KEYS)
+        self.assertEqual(fe.REREAD_S, survivor.REREAD_S)
+        self.assertIs(fe.UUID, survivor.FENCE_UUID)
+        self.assertIs(fe.same_box, survivor.same_box)
+        self.assertEqual(survivor.FENCE_SERIAL.pattern, redfish.SERIAL.pattern)
+
+    def test_the_node_reads_an_authorization_without_the_fence(self):
+        import subprocess
+        import sys
+        code = ("import sys; from deploy.baremetal import survivor; "
+                "print(sorted(m for m in ('deploy.baremetal.fence', 'deploy.baremetal.redfish') if m in sys.modules))")
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        got = subprocess.run([sys.executable, "-Es", "-c", code], capture_output=True, text=True, check=True, cwd=root).stdout
+        self.assertEqual(got.strip(), "[]")
+
+
 if __name__ == "__main__":
     unittest.main()

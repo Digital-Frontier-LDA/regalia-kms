@@ -33,9 +33,24 @@ and the directive's commit on the majority's return. LIMITATIONS.md says so.
 import os
 import re
 
-from deploy.baremetal import fence as fence_tool, heartbeat, membership
+from deploy.baremetal import heartbeat, membership
 
 Refused, require = membership.Refused, membership.require
+
+# The redfish fence evidence's format, judged HERE: the node reads its authorization in admission (node.py), so
+# this module is on the host, and fence.py (the iLO client's policy, never on a node: image/packages.txt) takes these
+# from it. FENCE_SERIAL is the Redfish client's SERIAL, pinned equal by tests/test_baremetal_fence.py.
+EVIDENCE_KEYS = ("power_state", "read_at", "read_again_at", "serial", "uuid", "ilo_cert_sha256", "power_restore_policy")
+REREAD_S = 10
+FENCE_SERIAL = re.compile(r"[A-Za-z0-9]{4,32}")
+FENCE_UUID = re.compile(r"[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}")
+
+
+def same_box(box, seen, node_id):
+    """The evidence's serial, UUID and certificate are the inventory's (sign-survivor's check as well as the fence's)."""
+    require(seen["ilo_cert_sha256"] == box["ilo_cert_sha256"], "%s's iLO certificate is not the one pinned for it" % node_id)
+    require(seen["serial"] == box["serial"], "%s's box reports serial %r; the inventory's is %r" % (node_id, seen["serial"], box["serial"]))
+    require(seen["uuid"].lower() == box["uuid"].lower(), "%s's box reports UUID %s; the inventory's is %s" % (node_id, seen["uuid"], box["uuid"]))
 
 AUTH_SCHEMA = "regalia.survivor-authorization/v1"
 AUTH_DOMAIN = b"regalia-survivor-authorization/v1\0"
@@ -102,15 +117,15 @@ def validate_authorization(auth):
         require(isinstance(nid, str) and NODE_ID.fullmatch(nid) is not None, "the fence evidence names node IDs")
         if fence["method"] == "redfish":
             # the box bound and read Off twice (regalia-kms-05 on #432; fence.py makes it)
-            membership.exact(seen, fence_tool.EVIDENCE_KEYS, "the fence evidence for %s" % nid)
+            membership.exact(seen, EVIDENCE_KEYS, "the fence evidence for %s" % nid)
             membership.hex_field(seen["ilo_cert_sha256"], 64, "the fence evidence's ilo_cert_sha256")
-            require(isinstance(seen["serial"], str) and fence_tool.SERIAL.fullmatch(seen["serial"]) is not None
-                    and isinstance(seen["uuid"], str) and fence_tool.UUID.fullmatch(seen["uuid"]) is not None,
+            require(isinstance(seen["serial"], str) and FENCE_SERIAL.fullmatch(seen["serial"]) is not None
+                    and isinstance(seen["uuid"], str) and FENCE_UUID.fullmatch(seen["uuid"]) is not None,
                     "the fence evidence for %s names its box's serial and UUID" % nid)
             _text(seen["power_restore_policy"], "the fence evidence's power_restore_policy", 128)
             first = heartbeat.parse_time(seen["read_at"], "the fence evidence's read_at")
-            require(heartbeat.parse_time(seen["read_again_at"], "the fence evidence's read_again_at") - first >= fence_tool.REREAD_S,
-                    "the fence evidence for %s reads Off twice at least %d s apart" % (nid, fence_tool.REREAD_S))
+            require(heartbeat.parse_time(seen["read_again_at"], "the fence evidence's read_again_at") - first >= REREAD_S,
+                    "the fence evidence for %s reads Off twice at least %d s apart" % (nid, REREAD_S))
         else:
             membership.exact(seen, ("power_state", "read_at"), "the fence evidence for %s" % nid)
             heartbeat.parse_time(seen["read_at"], "the fence evidence's read_at")
@@ -216,7 +231,7 @@ def make_authorization(tip, survivor, how, now, confirm, open_signer, life_s=Non
         require(inventory, "a redfish fence is checked against the fence inventory: give it")
         for nid, seen in auth["fence"]["nodes"].items():
             require(nid in inventory, "the fence inventory has no box for %s" % nid)
-            fence_tool.same_box(inventory[nid], seen, nid)
+            same_box(inventory[nid], seen, nid)
     loose = sorted(n for n in others if nodes[n]["state"] not in membership.NOT_COUNTING)
     require(not loose, "quarantine %s first (a root- or owner-signed epoch): a survivor is authorized only once every other server "
             "has stopped counting" % ", ".join(loose))

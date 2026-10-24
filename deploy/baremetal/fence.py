@@ -52,17 +52,17 @@ shape, and sign-survivor checks it against the same inventory.
 import re
 import time
 
-from deploy.baremetal import membership, redfish
+from deploy.baremetal import membership, redfish, survivor
 
 Refused, require = membership.Refused, membership.require
 
 INVENTORY_SCHEMA = "regalia.fence-inventory/v1"
 INVENTORY_KEYS = ("ilo", "ilo_cert_sha256", "serial", "uuid")
-EVIDENCE_KEYS = ("power_state", "read_at", "read_again_at", "serial", "uuid", "ilo_cert_sha256", "power_restore_policy")
-REREAD_S = 10
+EVIDENCE_KEYS = survivor.EVIDENCE_KEYS       # the format the node judges (survivor.validate_authorization)
+REREAD_S = survivor.REREAD_S
 ALLOWED_PRIVILEGES = {"LoginPriv", "VirtualPowerAndResetPriv"}
 HOST = redfish.HOST                          # a name or IPv4 on the management network, port 443 (the client's rule)
-UUID = re.compile(r"[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}")
+UUID = survivor.FENCE_UUID
 SERIAL = redfish.SERIAL
 
 
@@ -83,11 +83,7 @@ def inventory(doc, nodes=None):
     return doc["nodes"]
 
 
-def same_box(box, seen, node_id):
-    """The evidence's serial, UUID and certificate are the inventory's (sign-survivor's check as well as the fence's)."""
-    require(seen["ilo_cert_sha256"] == box["ilo_cert_sha256"], "%s's iLO certificate is not the one pinned for it" % node_id)
-    require(seen["serial"] == box["serial"], "%s's box reports serial %r; the inventory's is %r" % (node_id, seen["serial"], box["serial"]))
-    require(seen["uuid"].lower() == box["uuid"].lower(), "%s's box reports UUID %s; the inventory's is %s" % (node_id, seen["uuid"], box["uuid"]))
+same_box = survivor.same_box      # sign-survivor's check as well as the fence's: one copy, the node's module
 
 
 def _get(transport, path, node_id):
