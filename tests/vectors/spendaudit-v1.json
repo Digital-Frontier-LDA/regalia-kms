@@ -40,14 +40,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -61,16 +61,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -96,7 +96,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -121,7 +121,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -147,7 +147,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -175,14 +175,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -196,16 +196,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -231,7 +231,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -302,7 +302,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -328,7 +328,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -365,7 +365,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -391,7 +391,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -415,25 +415,25 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
        "session": null,
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -459,7 +459,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -484,7 +484,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -510,7 +510,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -534,14 +534,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -555,7 +555,7 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
@@ -564,7 +564,7 @@
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -590,7 +590,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -615,7 +615,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -641,7 +641,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -665,14 +665,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -686,16 +686,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -721,7 +721,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -759,14 +759,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -780,16 +780,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -815,7 +815,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -840,7 +840,7 @@
      "mod_revision": 8,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -866,7 +866,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -890,14 +890,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -911,16 +911,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -946,7 +946,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -971,7 +971,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -997,7 +997,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -1021,14 +1021,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -1042,16 +1042,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -1077,7 +1077,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -1102,7 +1102,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -1128,7 +1128,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -1156,14 +1156,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -1177,16 +1177,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -1212,7 +1212,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -1237,7 +1237,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -1263,7 +1263,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -1287,14 +1287,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -1308,16 +1308,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -1343,7 +1343,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -1368,7 +1368,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -1394,7 +1394,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -1418,14 +1418,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -1439,16 +1439,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -1474,7 +1474,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -1499,7 +1499,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -1525,7 +1525,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -1549,14 +1549,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -1570,16 +1570,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -1605,7 +1605,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -1630,7 +1630,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -1656,7 +1656,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -1680,14 +1680,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -1701,16 +1701,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -1736,7 +1736,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -1760,7 +1760,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -1786,7 +1786,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -1810,7 +1810,7 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -1824,16 +1824,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -1859,7 +1859,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -1884,7 +1884,7 @@
      "mod_revision": 7,
      "value": {
       "entry": {
-       "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+       "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
        "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
        "approvers": [
         "alice",
@@ -1910,7 +1910,7 @@
         "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
         "party": "a",
         "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-        "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+        "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
        }
       ]
      }
@@ -1934,14 +1934,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -1955,16 +1955,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -1990,7 +1990,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }
@@ -2016,14 +2016,14 @@
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "Ifh6+uNyjo/shd5CFwF6yXhEwVRlD16rR43N3IWFwV/J/8tabiSK7aTn/IfbuihVoCf3jOn9K91gaIzhKrQzAA=="
+         "signature": "5DR7M8R6dTdxf7Wm5lHs57P3gpydHwC5z664S+Pwe6YQRAnD9BJB4bfR9dgGTLtm/fgtqV4MJeFxUbtL4mNsDg=="
         },
         {
          "approver_id": "bob",
          "expires_at": "2026-10-05T12:05:00Z",
          "nonce": "request-nonce-1",
          "payload_digest": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
-         "signature": "wUGhVH3qjRTx48n0u2fnWPl8uzC69P8Lkdpb1m3sMqyfLMKZXEMw8j7CaE+XmzV6DhXnxRRcZFhzEdB3/kmEDA=="
+         "signature": "Bp8zkgNo6INFRb4mJHFHTpxBRW1mDSlZ0fVCNUREgLyEEypxLxUfLlhUEwpufbKcJwkWGE7WkyujAdYm7oaVDg=="
         }
        ],
        "payload_sha256": "468cc14d8e4517c3becf8954a961a38f7031cabf2905128140e0434ce551fe26",
@@ -2037,16 +2037,16 @@
           "schema": "regalia.opstate-session/v1",
           "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
          },
-         "signature": "f6ceb2fbd9fa6121263b4a413273558f8cee5f0a6971a5691430181d5aee0e147de28d193bdc71b8c1d7596ea813dc425e26357ff8ef4d81838dad681e20f520"
+         "signature": "2417758e34bd5a3e9e9f7de46511513b85603a8cd70b9635ca1fd83a27c7c70b25d93469cfcc4307dac25ea563907bf9fa6f9267ecde8bdbd7cba2d03c42f220"
         }
        },
        "spend": {
-        "entry_sha256": "b19ea43aed64e01db504e267714e1d89ba29473ae18b1e1384af518fb75824c9",
+        "entry_sha256": "f874e5e4d6ecd24c6ff7ee4b6c99f6c3e9e8dac44c7d9519534a97ed23af4c73",
         "mod_revision": 7,
         "public": "/regalia/v1/nonces/d3e6a034dfb02da14811b63642d5b46a68aa67c4c0150059b0a4c070fcae6fb4",
         "value": {
          "entry": {
-          "approvals_sha256": "83b848a4788cd7ec78c556d81b4a4f1b4dbd5d9e60b40c647f3083986ab109f3",
+          "approvals_sha256": "445a159c591c07e00510df48b2fa3ad20767457de72705124dc6aed76aaa2d7b",
           "approver_set": "45b9f147d8be551181d248267ebb2d8f9d820bcccdb3f5fa97fbf7ad17603945",
           "approvers": [
            "alice",
@@ -2072,7 +2072,7 @@
            "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
            "party": "a",
            "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-           "sig": "0f8f15f634ba61fc440ca1d0536705a448ccf894b44807d12443469fd9c06a46ebf1c11d6aaaca0c548132369bd74878a3ecf943bc0814f58449db57e4df6803"
+           "sig": "953514039338ba3b11b4f752e3cb7e379ccc7662e3ea6b740e61e0696c8c0c625f5748a70945fd355171ebb24127b68013794da6876cd82bf79b2ebda2cbdd0b"
           }
          ]
         }

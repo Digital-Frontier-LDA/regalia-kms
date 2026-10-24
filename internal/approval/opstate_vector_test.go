@@ -32,6 +32,7 @@ func TestOpstateVectorApprovalsVerifyOverThisPackagesBinding(t *testing.T) {
 				Environment string `json:"environment"`
 				ExpiresAt   string `json:"expires_at"`
 				ApproverSet string `json:"approver_set"`
+				NodeID      string `json:"node_id"`
 			} `json:"spend"`
 			Approvals []Approval `json:"approvals"`
 		} `json:"approval_checks"`
@@ -54,7 +55,7 @@ func TestOpstateVectorApprovalsVerifyOverThisPackagesBinding(t *testing.T) {
 		}
 		for _, a := range c.Approvals {
 			binding := Binding{ObjectID: c.Spend.ObjectID, Purpose: c.Spend.Purpose, Environment: c.Spend.Environment,
-				Nonce: a.Nonce, ExpiresAt: expires, Payload: payload}
+				Nonce: a.Nonce, ExpiresAt: expires, Payload: payload, Signer: c.Spend.NodeID}
 			key, _ := hex.DecodeString(doc.ApproverSets[c.Spend.ApproverSet].Approvers[a.ApproverID])
 			sig, _ := base64.StdEncoding.DecodeString(a.Signature)
 			if len(key) != ed25519.PublicKeySize || !ed25519.Verify(ed25519.PublicKey(key), binding.CanonicalBytes(), sig) {
