@@ -90,6 +90,27 @@ class EspAdvance(EspCase):
             node.esp_advance(self.n, self.esp, lock_path=self.lock, record=lines.append)
         self.assertEqual([e["event"] for e in lines], ["esp-advance-requested"])
 
+    def test_main_records_a_successful_run_in_the_trail(self):
+        """The unit's own entry point records the run: request, then ALLOW for the epoch it anchored (#449). Without it
+        only the systemd e2e (node-units step 7) would notice a caller that stopped passing its trail."""
+        import json
+        self.sync.commit(self.e2)
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+        path = os.path.join(self.d, "esp-advance-ok.jsonl")
+        with unittest.mock.patch.object(node.trails, "where", lambda name, cfg=None: path), \
+                unittest.mock.patch.object(node.metrics, "publish", lambda *a, **k: True), \
+                unittest.mock.patch.object(node, "load", lambda p: self.cfg), \
+                unittest.mock.patch.object(node, "Node", lambda cfg: self.n):    # the fixture's software anchor, not a TPM
+            import contextlib, io
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = node.main(["--config", "x", "--esp", self.esp, "--esp-lock", self.lock, "esp-advance"])
+            self.assertEqual(rc, 0, err.getvalue())
+        with open(path) as f:
+            lines = [json.loads(l) for l in f.read().splitlines()]
+        self.assertEqual([e["event"] for e in lines], ["esp-advance-requested", "esp-advance"])
+        self.assertEqual((lines[-1]["outcome"], lines[-1]["epoch"]), ("ALLOW", 2))
+
     def test_main_records_a_refusal_in_the_trail(self):
         import json
         path = os.path.join(self.d, "esp-advance.jsonl")
