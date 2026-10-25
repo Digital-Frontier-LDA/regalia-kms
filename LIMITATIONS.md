@@ -313,9 +313,6 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     metrics to be scraped together (one job per cluster) and at least one honest peer ahead; a node retired
     or revoked lags by design and must leave the scrape.
   - Its run is in the journal and its metrics, not in a hash-chained trail (#278).
-  - An anchor read the TPM refuses says only "cannot read 8 bytes from NV index …": `HighWater._read8` drops
-    `tpm2_nvread`'s error text, so an operator diagnosing it gets no TPM reason (#450; the text is pinned by
-    `highwater-v1.json` in both languages, so its fix regenerates that vector).
   - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's. `reanchor` (#391) refuses
     while `regalia-esp-advance` (or its path unit, sync or admission) runs, by `systemctl is-active`, and holds the
     advance's lock for its whole run. On a machine with no `systemctl` it skips the unit check, and the three-node
@@ -342,12 +339,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **One transient TPM error fails an anchor read.** `HighWater` reads the anchor's NV indices with one
   `tpm2_nvread` each and refuses on any failure, with no retry inside the tool. The services' units restart
   (the ESP advance every 15 s; sync and admission on their own schedules) and the next run reads again. CI's
-  three-node fixture showed it intermittently on its shared software TPMs (#448). Since this change the tool's own
-  error text goes to the journal; if it names a transient TPM code (`TPM_RC_RETRY`, `TPM_RC_YIELDED`,
-  `TPM_RC_TESTING`, a busy socket), a small bounded retry on those codes alone is the next step. The refusal's own
-  text still carries no TPM reason (#450). One code is retried, on a software TPM only: `TPM_RC_SESSION_MEMORY`
-  (0x903). A bare swtpm has no resource manager, so a call that dies connected leaves its sessions loaded, and three
-  of them fill every slot (three-node-recovery, #512). `membership.run_tpm2` then flushes the loaded sessions and
+  three-node fixture showed it intermittently on its shared software TPMs (#448). The refusal ends with the last
+  line the tool printed, as `(TPM: …)` (#450), and the journal its last 400 characters; if that names a transient TPM code
+  (`TPM_RC_RETRY`, `TPM_RC_YIELDED`, `TPM_RC_TESTING`, a busy socket), a small bounded retry on those codes alone is
+  the next step. One code is retried, on a software TPM only: `TPM_RC_SESSION_MEMORY` (0x903).
+  A bare swtpm has no resource manager, so a call that dies connected leaves its sessions loaded, and three of them
+  fill every slot (three-node-recovery, #512). `membership.run_tpm2` then flushes the loaded sessions and
   asks once more; it logs `regalia: … (#512)` each time. Only the anchor's reads and writes and `signkey`'s policy
   sessions take it: ownerauth, enrol and attest don't. Which fixture call dies connected is not established. A host's
   `/dev/tpmrm0` is never flushed or retried.
