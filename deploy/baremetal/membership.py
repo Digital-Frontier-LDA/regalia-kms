@@ -216,14 +216,19 @@ def run_tpm2(run, argv, env, tcti=None, **kw):
 
 def _why(done, size):
     """The TPM's reason for a read of `size` bytes that `done` did not give, as a refusal's suffix: " (TPM: <the last line
-    tpm2_nvread wrote on stderr>)", or the byte count when it wrote nothing. One line, at most 200 characters, so the
-    refusal names the cause rather than leaving it to be guessed at (#450). The Go reader appends the same suffix from
-    its own TPM error (highwater.go, tpmReason), which is what keeps highwater-v1.json's reasons equal in both."""
+    tpm2_nvread wrote on stderr>)", or the byte count when it wrote nothing (#450). The line is made safe to print and
+    the same in both readers whatever the input: each run of bytes that are not UTF-8 becomes one U+FFFD, lines split
+    on "\\n" only, every C0 control, DEL and C1 control (an ESC, a "\\r") becomes a space, spaces are trimmed, and the
+    last 200 characters are kept. The Go reader (highwater.go, tpmReason) does exactly this to its own TPM error;
+    tests/vectors/tpm-reason-v1.json holds both to it. The two never see the same text in production (this reads the
+    tool's stderr, Go its library's error), so the vector is what makes "the same rule" checkable."""
     err = done.stderr or b""
     text = err if isinstance(err, str) else err.decode("utf-8", "replace")
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if lines:
-        return " (TPM: %s)" % lines[-1][-200:]
+    text = re.sub("\ufffd+", "\ufffd", text)
+    for line in reversed(text.split("\n")):
+        line = re.sub("[\x00-\x1f\x7f-\x9f]", " ", line).strip(" ")
+        if line:
+            return " (TPM: %s)" % line[-200:]
     return " (TPM: %d bytes, not %d)" % (len(done.stdout or b""), size)
 
 

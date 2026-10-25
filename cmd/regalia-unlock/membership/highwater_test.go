@@ -283,3 +283,41 @@ func TestTheRefusalNamesTheTPMsReason(t *testing.T) {
 		t.Errorf("read8 of an index the TPM does not read: %v", err)
 	}
 }
+
+// TestTheTPMReasonIsTheSameRuleInBoth replays tests/vectors/tpm-reason-v1.json, the Python's _why over raw tool
+// output: the same bytes as an error's text give the same suffix here, so neither reader prints a control character
+// the other would not, and the two cannot drift apart on input neither has seen (#450).
+func TestTheTPMReasonIsTheSameRuleInBoth(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "vectors", "tpm-reason-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Cases []struct {
+			Name      string `json:"name"`
+			Stderr    string `json:"stderr"`
+			StdoutLen int    `json:"stdout_len"`
+			Size      int    `json:"size"`
+			Suffix    string `json:"suffix"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Cases) < 10 {
+		t.Fatalf("only %d cases in tpm-reason-v1.json", len(v.Cases))
+	}
+	for _, c := range v.Cases {
+		text, err := hex.DecodeString(c.Stderr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var failure error
+		if len(text) > 0 {
+			failure = errors.New(string(text))
+		}
+		if got := tpmReason(failure, make([]byte, c.StdoutLen), c.Size); got != c.Suffix {
+			t.Errorf("%s: tpmReason = %q, the Python's _why = %q", c.Name, got, c.Suffix)
+		}
+	}
+}

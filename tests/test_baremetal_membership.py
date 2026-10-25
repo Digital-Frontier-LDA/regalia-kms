@@ -5,6 +5,7 @@ import copy
 import fcntl
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -851,6 +852,20 @@ class RecordWrites(unittest.TestCase):
         self.assertEqual(m._why(done(None, None), 48), " (TPM: 0 bytes, not 48)")
         self.assertEqual(m._why(done(b"", b"\xff" + b"x" * 300), 8), " (TPM: %s)" % ("x" * 200))
         self.assertEqual(m._why(done(b"", b"bad \xff byte"), 8), " (TPM: bad \ufffd byte)")
+
+    def test_the_tpm_reason_vector_is_what_why_decides(self):
+        """tests/vectors/tpm-reason-v1.json, which the Go reader replays too (TestTheTPMReasonIsTheSameRuleInBoth): a
+        change to _why fails here until the vector is regenerated, and then fails in Go until tpmReason follows. No
+        suffix may carry a C0 or C1 control, whatever the tool printed."""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors", "tpm-reason-v1.json")
+        with open(path, encoding="utf-8") as f:
+            cases = json.load(f)["cases"]
+        self.assertGreaterEqual(len(cases), 10)
+        for c in cases:
+            with self.subTest(c["name"]):
+                done = subprocess.CompletedProcess(["tpm2_nvread"], 1, b"\0" * c["stdout_len"], bytes.fromhex(c["stderr"]))
+                self.assertEqual(m._why(done, c["size"]), c["suffix"])
+                self.assertIsNone(re.search("[\x00-\x1f\x7f-\x9f]", c["suffix"]), c["suffix"])
 
     def test_a_read_remains_cannot_make_names_the_tpm_s_reason(self):
         """remains() (a re-anchor's read, with the owner's authorization as the fallback) refuses with the reason too."""

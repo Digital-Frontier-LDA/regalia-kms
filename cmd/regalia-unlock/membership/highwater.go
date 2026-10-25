@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -110,13 +111,22 @@ func (h highWater) public(index uint32) (uint32, int, []byte, error) {
 }
 
 // tpmReason is membership._why: the TPM's reason for a read of size bytes that did not come back, as a refusal's
-// suffix, " (TPM: <the last line of err>)", or the byte count when there is no error to name. One line, at most 200
-// characters, so the Python's refusal and this one stay equal in highwater-v1.json (#450).
+// suffix, " (TPM: <the last line of err>)", or the byte count when there is no error to name (#450). The same rule
+// as the Python's, whatever the input: each run of bytes that are not UTF-8 becomes one U+FFFD, lines split on "\n"
+// only, every C0 control, DEL and C1 control becomes a space, spaces are trimmed, and the last 200 characters are
+// kept. The two readers never see the same text in production, so tests/vectors/tpm-reason-v1.json holds both to it.
 func tpmReason(err error, data []byte, size int) string {
 	if err != nil {
-		lines := strings.Split(strings.ToValidUTF8(err.Error(), "\uFFFD"), "\n")
+		text := replacementRun.ReplaceAllString(strings.ToValidUTF8(err.Error(), "\uFFFD"), "\uFFFD")
+		lines := strings.Split(text, "\n")
 		for i := len(lines) - 1; i >= 0; i-- {
-			if line := strings.TrimSpace(lines[i]); line != "" {
+			line := strings.Trim(strings.Map(func(r rune) rune {
+				if r < 0x20 || r >= 0x7f && r <= 0x9f {
+					return ' '
+				}
+				return r
+			}, lines[i]), " ")
+			if line != "" {
 				runes := []rune(line)
 				if len(runes) > 200 {
 					runes = runes[len(runes)-200:]
@@ -127,6 +137,8 @@ func tpmReason(err error, data []byte, size int) string {
 	}
 	return fmt.Sprintf(" (TPM: %d bytes, not %d)", len(data), size)
 }
+
+var replacementRun = regexp.MustCompile("\uFFFD+")
 
 func (h highWater) read8(index uint32) (uint64, error) {
 	data, err := h.nv.Read(index, 8)
