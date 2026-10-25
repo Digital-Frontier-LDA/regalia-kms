@@ -49,6 +49,7 @@ ADM_INSTANCE = "regalia-audit-ship@admission.service"
 ADM_DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@admission.service.d")
 ENROL_INSTANCE = "regalia-audit-ship@enrol.service"
 ENROL_DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@enrol.service.d")
+ENROL_TRAIL = pathlib.Path("/var/log/regalia/enrol.jsonl")      # trails.where("enrol"); 1c asserts the registry names it
 UNITS = HERE.parent / "deploy" / "baremetal" / "units"
 METRICS = pathlib.Path("/run/regalia-metrics/audit-ship/sync.prom")      # node_exporter's textfile directory (#305)
 HEAD = pathlib.Path("/var/lib/regalia-audit-ship/sync.head.json")      # the unit's -head, for prune
@@ -227,6 +228,8 @@ def scenario(work, binaries):
               "trails.append(path, {'event': 'enrol', 'node': 'a', 'epoch': 1, 'manifest_digest': sys.argv[2], 'outcome': 'ALLOW', "
               "'record_sha256': sys.argv[2]})\nprint(path)")
     enrol_trail = pathlib.Path(sh(sys.executable, "-Es", "-c", script, str(work / "lib"), record).stdout.strip())
+    if enrol_trail != ENROL_TRAIL:                              # the path the preflight and the cleanup hold
+        ok(False, "the registry names the enrol trail at %s, not %s" % (enrol_trail, ENROL_TRAIL))
     tool_dir, info = enrol_trail.parent.stat(), enrol_trail.stat()
     ok(stat.S_IMODE(tool_dir.st_mode) == 0o2750 and grp.getgrgid(tool_dir.st_gid).gr_name == "regalia-audit" and tool_dir.st_uid == 0
        and (info.st_mode & 0o777, info.st_uid, grp.getgrgid(info.st_gid).gr_name) == (0o640, 0, "regalia-audit"),
@@ -335,7 +338,7 @@ def main():
         print("audit-ship-systemd: refused: this changes the machine (/usr/bin, a unit, /etc/regalia). It runs on a GitHub-hosted "
               "runner; on another throwaway host set REGALIA_SHIP_HOST_OK to its /etc/machine-id.")
         return 2
-    present = [str(p) for p in (BIN, ETC, ENV, INSTALLED, DROPIN, ADM_DROPIN, METRICS.parent, WORK) if p.exists()]
+    present = [str(p) for p in (BIN, ETC, ENV, INSTALLED, DROPIN, ADM_DROPIN, ENROL_DROPIN, ENROL_TRAIL, METRICS.parent, WORK) if p.exists()]
     if present:
         print("audit-ship-systemd: refused: %s exists: this looks like a host where the shipper is installed" % ", ".join(present))
         return 2
@@ -352,15 +355,16 @@ def main():
     try:
         return scenario(work, binaries)
     finally:
-        for unit in (INSTANCE, ADM_INSTANCE, COLLECTOR_UNIT):
+        for unit in (INSTANCE, ADM_INSTANCE, ENROL_INSTANCE, COLLECTOR_UNIT):
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
         for path in (DROPIN / "reader.conf", ADM_DROPIN / "reader.conf", ETC / "admission.env", ADM_HEAD, METRICS.with_name("admission.prom"),
+                     ENROL_DROPIN / "reader.conf", ETC / "enrol.env", HEAD.with_name("enrol.head.json"), METRICS.with_name("enrol.prom"), ENROL_TRAIL,
                      INSTALLED, BIN, ENV, ETC / "sync.env", ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem",
                      ETC / "collector-receipt.pub", METRICS, HEAD):
             if path.exists():
                 path.unlink()
-        for directory in (DROPIN, ADM_DROPIN, ETC, METRICS.parent):
+        for directory in (DROPIN, ADM_DROPIN, ENROL_DROPIN, ETC, METRICS.parent):
             if directory.exists():
                 directory.rmdir()
         sh("systemctl", "daemon-reload", check=False)
