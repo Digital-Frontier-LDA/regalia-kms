@@ -118,7 +118,9 @@ class EspAdvance(EspCase):
                 unittest.mock.patch.object(node.metrics, "publish", lambda *a, **k: True), \
                 unittest.mock.patch.object(node, "load", lambda p: self.cfg), \
                 unittest.mock.patch.object(node, "esp_advance", side_effect=m.Refused("ROLLBACK: below the anchor")):
-            self.assertEqual(node.main(["--config", "x", "esp-advance"]), 2)
+            # the run lock in the test's directory: main() takes it before the advance (esp_advance_settled, #471),
+            # and the unit's default under /run is root's: a non-root run would be refused there, not by ROLLBACK
+            self.assertEqual(node.main(["--config", "x", "--esp-lock", self.lock, "esp-advance"]), 2)
         with open(path) as f:
             line = json.loads(f.read().splitlines()[-1])
         self.assertEqual((line["event"], line["outcome"]), ("esp-advance", "DENY"))
