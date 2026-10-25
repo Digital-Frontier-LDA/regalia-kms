@@ -2,7 +2,9 @@
 so that no reboot finds an ESP chain below its anchor (the initrd refuses that as a ROLLBACK). Sync never anchors
 (tests/test_baremetal_store_anchors.py). The TPM is hbt.FakeTpm; the boots themselves are in
 tests/test_baremetal_unlock_boot.py (QEMU)."""
+import contextlib
 import hashlib
+import io
 import os
 import unittest
 import unittest.mock
@@ -346,8 +348,13 @@ class AnchorLag(EspCase):
         published = []
         with unittest.mock.patch.object(node.metrics, "publish", lambda writer, samples, target=None: published.append((writer, samples))), \
                 unittest.mock.patch.object(node, "load", lambda path: self.cfg), \
-                unittest.mock.patch.object(node, "esp_advance", side_effect=m.Refused("ROLLBACK: below the anchor")):
-            self.assertEqual(node.main(["--config", "x", "esp-advance"]), 2)
+                unittest.mock.patch.object(node, "esp_advance", side_effect=m.Refused("ROLLBACK: below the anchor")), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            # the run lock in the test's directory: main() takes it before the advance (esp_advance_settled, #471); at
+            # the unit's default under /run a non-root run was refused by the lock's PermissionError, which also exits 2,
+            # so this passed without ever reaching the ROLLBACK it means to test (df-grafana-b9 on #449)
+            self.assertEqual(node.main(["--config", "x", "--esp-lock", self.lock, "esp-advance"]), 2)
+        self.assertIn("ROLLBACK: below the anchor", err.getvalue())
         self.assertEqual(published[0][0], "esp-advance")
         self.assertEqual({name: value for name, _, value in published[0][1]}.get("regalia_esp_advance_ok"), 0)
 
