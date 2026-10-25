@@ -5,8 +5,9 @@ the rules' matcher differ, those rules never fire and nothing reports that they 
 series arrive, and the alerts that tell a missing writer from a node that is down are silently gone. So the name is
 read from the documentation and every `job` matcher in the rule files is held to it.
 
-Also: README's `systemctl enable --now regalia-audit-ship@{…}` line names exactly the registry's trails, so a node set
-up by the README ships every trail (one left out raises RegaliaAuditShipMetricsMissing for ever).
+Also: README's `systemctl enable --now` command names exactly the registry's trails, one instance per line and no
+brace expansion (sh would pass the braces through), so a node set up by the README ships every trail (one left out
+raises RegaliaAuditShipMetricsMissing for ever).
 """
 
 import pathlib
@@ -26,7 +27,7 @@ RULE_FILES = sorted((ROOT / "deploy" / "monitoring").glob("*.rules.yml"))
 DOCUMENTED = re.compile(r"\*\*The scrape job is `([^`]+)`\.\*\*")
 # any matcher on the job label: =, !=, =~, !~, quoted either way
 JOB_MATCHER = re.compile(r"""\bjob\s*(=~|!~|!=|=)\s*(["'])(.*?)\2""")
-ENABLE = re.compile(r"systemctl enable --now regalia-audit-ship@\{([^}]*)\}")
+ENABLE = re.compile(r"systemctl enable --now \\\n((?:    regalia-audit-ship@[a-z-]+(?: \\)?\n)+)")
 
 
 def documented_job():
@@ -73,7 +74,7 @@ class ShipperEnableList(unittest.TestCase):
     def test_the_readme_enables_every_trail(self):
         lines = ENABLE.findall(README.read_text(encoding="utf-8"))
         self.assertEqual(len(lines), 1, "README must give the enable line exactly once")
-        self.assertEqual(sorted(n.strip() for n in lines[0].split(",")), sorted(trails.TRAILS))
+        self.assertEqual(sorted(re.findall(r"regalia-audit-ship@([a-z-]+)", lines[0])), sorted(trails.TRAILS))
 
 
 if __name__ == "__main__":

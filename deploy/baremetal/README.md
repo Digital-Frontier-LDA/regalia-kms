@@ -1063,7 +1063,18 @@ audit collector by one instance of `units/regalia-audit-ship@.service` per trail
 (`cmd/regalia-audit-ship`, `internal/audit/trail.go`). Enable all of them, one per trail in the registry:
 
 ```sh
-systemctl enable --now regalia-audit-ship@{admission,enrol,esp-advances,reanchor,recount,recovery-key,recovery-reconcile,survivor,sync,time,update}
+systemctl enable --now \
+    regalia-audit-ship@admission \
+    regalia-audit-ship@enrol \
+    regalia-audit-ship@esp-advances \
+    regalia-audit-ship@reanchor \
+    regalia-audit-ship@recount \
+    regalia-audit-ship@recovery-key \
+    regalia-audit-ship@recovery-reconcile \
+    regalia-audit-ship@survivor \
+    regalia-audit-ship@sync \
+    regalia-audit-ship@time \
+    regalia-audit-ship@update
 ```
 
 A node that ships only some of them raises `RegaliaAuditShipMetricsMissing` until the rest are enabled
