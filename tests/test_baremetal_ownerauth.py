@@ -121,6 +121,58 @@ class TheValueOnStandardInput(unittest.TestCase):
                 ownerauth.read_value(io.BytesIO(bad.encode()))
 
 
+class TheDrillCheck(unittest.TestCase):
+    """`python3 -Es -m deploy.baremetal.ownerauth check` (#242, the break-glass drill's last step): the value on standard
+    input judged against the record under the pinned root, with no TPM."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.record = os.path.join(self.d, "ownerauth.record.json")
+        with open(self.record, "w") as f:
+            f.write(VECTOR["record_file"])
+
+    def check(self, node, given, root=PIN):
+        return subprocess.run([sys.executable, "-Es", "-m", "deploy.baremetal.ownerauth", "check", "--node-id", node,
+                               "--root-key", root, "--record", self.record], input=given.encode(), capture_output=True,
+                              cwd=str(ROOT), env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1"})
+
+    def test_the_node_s_value_matches(self):
+        done = self.check("a", VECTOR["values"]["a"])
+        self.assertEqual((done.returncode, done.stderr), (0, b""))
+        self.assertIn(b"the value is a's: it matches the check value of the record signed by the pinned root", done.stdout)
+        self.assertNotIn(VECTOR["values"]["a"][:16].encode(), done.stdout)
+
+    def test_another_node_s_value_another_root_or_the_wrong_form(self):
+        for node, given, root, reason in (
+                ("b", VECTOR["values"]["a"], PIN, b"the owner authorization given is not b's"),
+                ("a", VECTOR["values"]["a"], "ab" * 32, b"names another root than the pinned one"),
+                ("a", VECTOR["values"]["a"][:64], PIN, b"is not 64 lowercase hex and a newline")):
+            with self.subTest(node=node, root=root, given=len(given)):
+                done = self.check(node, given, root)
+                self.assertEqual(done.returncode, 1)
+                self.assertIn(b"REFUSED: ", done.stderr)
+                self.assertIn(reason, done.stderr)
+                self.assertNotIn(VECTOR["values"]["a"][:16].encode(), done.stderr)
+
+    def test_a_terminal_on_standard_input_or_no_record_is_refused(self):
+        """regalia-kms-ed: each its own message and exit 1 (2 is argparse's), never a traceback."""
+        import contextlib
+
+        class Terminal(io.BytesIO):
+            def isatty(self):
+                return True
+        argv = ["check", "--node-id", "a", "--root-key", PIN, "--record", self.record]
+        for label, args, stdin, reason in (
+                ("a terminal", argv, Terminal(VECTOR["values"]["a"].encode()), "REFUSED: standard input is a terminal"),
+                ("no record", argv[:-1] + [os.path.join(self.d, "absent.json")], value("a"), "REFUSED: [Errno 2] No such file or directory")):
+            with self.subTest(label):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(ownerauth.main(args, stdin=stdin), 1)
+                self.assertTrue(err.getvalue().startswith(reason), err.getvalue())
+
+
 class TheChannel(unittest.TestCase):
     def test_empty_gives_no_authorization(self):
         with ownerauth.owner_call(None) as (argv, kw):
@@ -358,7 +410,6 @@ class SetAndCheck(unittest.TestCase):
             enrol.main(["ownerauth", "--node-id", "a", "--root-key", PIN, "--record", self.record, "--value", "00" * 32])
 
 
-@unittest.skipUnless(shutil.which("swtpm") and shutil.which("tpm2_changeauth"), "needs swtpm and tpm2-tools")
 class Rotation(unittest.TestCase):
     """`enrol ownerauth --rotate-from` (regalia-kms-24's assignment): a SET value changed to a new one, both checked against
     their records first, the change in a session salted to the EK, the new value proven, a rerun idempotent."""
@@ -389,6 +440,57 @@ class Rotation(unittest.TestCase):
         stream = io.BytesIO(((first or self.current).hex() + "\n" + (second or self.new).hex() + "\n").encode())
         return enrol.set_ownerauth("a", self.pin, self.records["new"], stream, run=self.tpm, ek_name=self.tpm.ek_name.hex(),
                                    rotate_from=self.records["current"], directory=self.d)
+
+    def with_changeauth(self, answer):
+        """self.tpm, but tpm2_changeauth answered by `answer(argv)` (a CompletedProcess) instead of the fake TPM."""
+        tpm = self.tpm
+
+        def run(argv, *args, **kw):
+            return answer(argv) if argv[0] == "tpm2_changeauth" else tpm(argv, *args, **kw)
+        run.ek_name = tpm.ek_name
+        self.tpm = run
+
+    def test_a_change_the_tpm_refuses_is_said_and_the_tpm_keeps_the_current_value(self):
+        """The changeauth itself refused (the falsifier sweep on #456 found nothing here but swtpm's wrong-EK case): the
+        refusal says the TPM should still hold the current value, and the node's record is not moved."""
+        tpm = self.tpm
+        self.with_changeauth(lambda argv: subprocess.CompletedProcess(argv, 1, b"", b"ERROR: Esys_HierarchyChangeAuth TPM_RC_AUTH_FAIL"))
+        with self.assertRaisesRegex(m.Refused, "the TPM did not change the owner authorization: .*TPM_RC_AUTH_FAIL"):
+            self.rotate()
+        self.assertEqual(tpm.owner_auth, self.current)
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+
+    def test_a_change_the_tpm_reports_but_that_cannot_be_proven_is_refused_with_the_way_on(self):
+        """changeauth said 0 and the TPM still answers to the old value only: the no-stranding refusal, never 'rotated',
+        and the node keeps the current record (the falsifier sweep on #456: nothing tested this)."""
+        tpm = self.tpm
+        self.with_changeauth(lambda argv: subprocess.CompletedProcess(argv, 0, b"", b""))
+        with self.assertRaisesRegex(m.Refused, "the TPM accepted the change but the new value could not be proven"):
+            self.rotate()
+        self.assertEqual(tpm.owner_auth, self.current)
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+
+    def test_standard_input_must_be_exactly_the_two_values(self):
+        for name, data in (("one value", self.current.hex() + "\n"), ("a third line", (self.current.hex() + "\n" + self.new.hex()
+                                                                                         + "\n") * 2), ("nothing", "")):
+            with self.subTest(name), self.assertRaisesRegex(enrol.Refused, "a rotation takes, on standard input, the CURRENT value then the NEW one"):
+                enrol.set_ownerauth("a", self.pin, self.records["new"], io.BytesIO(data.encode()), run=self.tpm,
+                                    ek_name=self.tpm.ek_name.hex(), rotate_from=self.records["current"], directory=self.d)
+        self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.current, []))
+
+    def test_the_node_s_record_of_its_record_is_trusted_only_as_root_s_0600_file(self):
+        path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
+        os.chmod(path, 0o644)
+        with self.assertRaisesRegex(enrol.Refused, "cannot be trusted"):
+            enrol.ownerauth_current(self.d)
+        with self.assertRaisesRegex(enrol.Refused, "cannot be trusted"):
+            self.rotate()
+        self.assertEqual(self.tpm.owner_auth, self.current)
+        os.chmod(path, 0o600)
+        os.rename(path, path + ".real")
+        os.symlink(path + ".real", path)                                  # a link in its place is never followed
+        with self.assertRaisesRegex(enrol.Refused, "cannot be trusted"):
+            enrol.ownerauth_current(self.d)
 
     def test_rotated_in_a_salted_session_then_a_rerun_changes_nothing(self):
         self.assertIn("is rotated to a's NEW envelope value, and answers to it", self.rotate())
@@ -525,6 +627,7 @@ class Rotation(unittest.TestCase):
             self.rotate()
 
 
+@unittest.skipUnless(shutil.which("swtpm") and shutil.which("tpm2_changeauth"), "needs swtpm and tpm2-tools")
 class OnSwtpm(unittest.TestCase):
     """A real TPM: the channel's hex form, set from empty, refused when set, and the anchor only with it."""
 

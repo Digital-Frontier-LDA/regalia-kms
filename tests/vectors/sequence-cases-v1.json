@@ -1,0 +1,16 @@
+{
+ "schema": "regalia.sequence-cases/v1",
+ "rule": "A Cosmos account sequence is accepted only as the next one: COSMOS-SUPPORT.md (\"gaps and repeats refuse before hardware use\"), POLICY.md (rule sequence: \"it is not the next account sequence\"), e2e/README.md (\"a skipped or reused account sequence\").",
+ "cases": [
+  {"name": "first", "previous": null, "value": 5, "documented": "accept"},
+  {"name": "next", "previous": 7, "value": 8, "documented": "accept"},
+  {"name": "repeat", "previous": 7, "value": 7, "documented": "refuse"},
+  {"name": "lower", "previous": 7, "value": 6, "documented": "refuse"},
+  {"name": "gap", "previous": 7, "value": 9, "documented": "refuse"}
+ ],
+ "divergent": {
+  "bead": "regalia-07k",
+  "why": "EtcdState and opstate.py's transition take any HIGHER sequence; the documents and FileState take only the next. Which is right is the owner's decision (regalia-07k). Each pair listed here must STILL diverge: a test fails when one starts to match, so the fix also removes its pair.",
+  "cases": {"etcdstate": ["gap"], "opstate.py": ["gap"]}
+ }
+}

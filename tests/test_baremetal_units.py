@@ -53,7 +53,8 @@ class TrailsReachTheirShipper(unittest.TestCase):
         self.addCleanup(shutil.rmtree, d, True)
         old = os.umask(0)
         try:
-            holder = lease.Holder("a", "ab" * 32, lambda: (0, True), lambda: 0, os.path.join(d, "lease.json"))
+            import tests.test_baremetal_lease as lt                   # lease v2: the stand-in state and session key
+            holder = lease.Holder("a", "ab" * 32, lambda: (0, True), lambda: 0, os.path.join(d, "lease.json"), **lt.SOURCES)
             holder.request()                                      # the nonce, written to lease.json under its lock
             trails.append(os.path.join(d, "audit.jsonl"), {"event": "admission", "outcome": "ALLOW"})
         finally:
@@ -240,7 +241,7 @@ class Units(unittest.TestCase):
         done = subprocess.run(["systemd-analyze", "verify", "--man=no", "--recursive-errors=no"] + paths, capture_output=True, text=True)
         problems = [line for line in done.stderr.splitlines() if "chrony.service" not in line and "network-online" not in line and line.strip()]
         self.assertEqual(problems, [])
-        for name in SERVICES + ("regalia-esp-advance",):
+        for name in SERVICES + ("regalia-esp-advance", "regalia-etcd"):
             with self.subTest(name):
                 done = subprocess.run(["systemd-analyze", "security", "--offline=yes", "--no-pager", str(UNITS / (name + ".service"))],
                                       capture_output=True, text=True)
@@ -252,6 +253,46 @@ class Units(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EtcdUnit(unittest.TestCase):
+    """regalia-etcd.service (ADR-0002 D32): the operational-state store, not root, no capability, peers on the mesh only."""
+
+    def test_it_runs_upstream_s_etcd_unprivileged_from_its_rendered_configuration(self):
+        u = unit("regalia-etcd.service")
+        service = u["Service"]
+        self.assertEqual(service["ExecStart"], "/usr/bin/etcd --config-file /etc/regalia/etcd.conf.yml")
+        self.assertEqual(u["Unit"]["ConditionPathExists"], "/etc/regalia/etcd.conf.yml")      # skipped before enrolment
+        self.assertEqual(service["Type"], "notify")
+        self.assertEqual((service["User"], service["Group"]), ("regalia-etcd", "regalia-etcd"))
+        self.assertIn('u regalia-etcd - ', (UNITS / "regalia.sysusers.conf").read_text())
+        self.assertEqual((service["CapabilityBoundingSet"], service["AmbientCapabilities"]), ("", ""))
+        self.assertEqual((service["NoNewPrivileges"], service["ProtectSystem"], service["LimitCORE"]), ("yes", "strict", "0"))
+        # its data (the WAL) under /var, its own; nothing else writable
+        self.assertEqual((service["StateDirectory"], service["StateDirectoryMode"]), ("regalia-etcd", "0700"))
+        # ... and its socket's directory, the only other writable path (regalia-kms-ed on #484): setgid to the client
+        # group, so the socket (0770 under UMask=0007) admits that group alone; never a RuntimeDirectory=, which takes
+        # the unit's group
+        self.assertEqual((service["ReadWritePaths"], service["WorkingDirectory"], service["UMask"]),
+                         ("/run/regalia-etcd", "/run/regalia-etcd", "0007"))
+        self.assertNotIn("RuntimeDirectory", service)
+        self.assertIn("d /run/regalia-etcd 2750 regalia-etcd regalia-etcd-client -", (UNITS / "regalia.tmpfiles.conf").read_text())
+        self.assertIn("g regalia-etcd-client -", (UNITS / "regalia.sysusers.conf").read_text())
+        # a denied call fails, it does not kill (Go may setrlimit); a lone survivor waits for a majority, not a restart loop
+        self.assertEqual((service["SystemCallErrorNumber"], service["TimeoutStartSec"]), ("EPERM", "infinity"))
+        # peers on the mesh only; no device, no TPM (the lease key is not etcd's)
+        self.assertEqual((service["IPAddressDeny"], service["IPAddressAllow"]), ("any", "fd72:6567:6c61::/48"))
+        self.assertEqual((service["PrivateDevices"], service["DevicePolicy"]), ("yes", "closed"))
+        self.assertNotIn("SupplementaryGroups", service)
+        # the TLS keys come sealed, as credentials, never as files in its configuration's directory
+        # one: the peer key. Clients have no TLS (ignored on a unix socket, #491): the socket's group admits them
+        with open(UNITS / "regalia-etcd.service") as f:
+            self.assertEqual([line for line in f.read().splitlines() if line.startswith("LoadCredentialEncrypted=")],
+                             ["LoadCredentialEncrypted=etcd-peer.key:/etc/credstore.encrypted/regalia-etcd-peer.key"])
+
+    def test_the_image_builds_the_etcd_it_runs(self):
+        packages = (UNITS.parent / "image" / "packages.txt").read_text()
+        self.assertRegex(packages, r"(?m)^etcd \| /usr/bin/etcd ")
 
 
 class AuditShipUnit(unittest.TestCase):

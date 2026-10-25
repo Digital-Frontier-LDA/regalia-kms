@@ -13,6 +13,9 @@ import unittest.mock
 from deploy.baremetal import node, trails
 
 HERE = os.path.dirname(os.path.abspath(trails.__file__))
+# The rotation children must inherit Rotation's patched ROTATE_BYTES, which only a fork does. Python 3.14
+# made forkserver Linux's default, and its children import trails afresh and never rotate.
+FORK = multiprocessing.get_context("fork")
 
 
 def _writer(path, n, start):
@@ -377,7 +380,7 @@ class Rotation(Case):
             with self.subTest(step):
                 for name in os.listdir(self.d):
                     os.unlink(os.path.join(self.d, name))
-                child = multiprocessing.Process(target=_killed_at, args=(self.path, step, 0))
+                child = FORK.Process(target=_killed_at, args=(self.path, step, 0))
                 child.start()
                 child.join(60)
                 self.assertEqual(child.exitcode, 9, "the child did not reach a rotation")
@@ -391,7 +394,7 @@ class Rotation(Case):
                 self.assertFalse(os.path.exists(self.path + ".next") and step != "before-rename")
 
     def test_writers_waiting_on_a_rotated_file_reopen_the_new_one(self):
-        processes = [multiprocessing.Process(target=_rotating_writer, args=(self.path, 25, 100 * k)) for k in range(4)]
+        processes = [FORK.Process(target=_rotating_writer, args=(self.path, 25, 100 * k)) for k in range(4)]
         for p in processes:
             p.start()
         for p in processes:

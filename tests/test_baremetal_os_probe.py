@@ -31,7 +31,8 @@ PID_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "MainPID")
 EXEC_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "ExecStart,LoadState")
 CONFIG = "/etc/regalia-kms/config.json"
 ADMISSION = {"listen_address": "0.0.0.0:8443", "runtime_admission": "required", "runtime_admission_path": "/run/regalia/admission/admission.json",
-             "runtime_admission_owner": "regalia-admission", "node_id": "site-a", "boot_session_path": "/run/regalia/boot-session"}
+             "runtime_admission_owner": "regalia-admission", "node_id": "site-a", "boot_session_path": "/run/regalia/boot-session",
+             "membership_chain_path": "/var/lib/regalia-sync/chain.json", "membership_chain_owner": "regalia-sync"}
 # What the lease service's unit and process look like when it runs as its own user (#191; systemd 257)
 LEASE_SHOW = ("systemctl", "show", os_probe.ADMISSION_SERVICE, "-p", "User,NoNewPrivileges,CapabilityBoundingSet,MainPID,LoadState")
 LEASE_USER = ("getent", "passwd", "regalia-admission")
@@ -242,6 +243,16 @@ class OSProbeTests(unittest.TestCase):
         self.assertIn("allowed: none", results["kms_capabilities_minimal"]["why"])
         self.assertIn("'regalia-kms' in enforce mode", results["kms_apparmor_enforced"]["why"])
 
+    def test_the_profile_stacked_on_unconfined_is_the_profile(self):
+        # systemd 259 (ubuntu-26.04) labels a User= service this way; enforce still refuses what the
+        # profile denies (regalia-kms#548)
+        for label in ("regalia-kms//&unconfined (enforce)\n", "unconfined//&regalia-kms (enforce)\n"):
+            with self.subTest(label=label):
+                host = FakeHost()
+                host.files["/proc/20/attr/apparmor/current"] = label
+                results = measure_sandbox(host)
+                self.assertTrue(results["kms_apparmor_enforced"]["value"], results["kms_apparmor_enforced"]["why"])
+
     def test_each_sandbox_control_fails_on_the_one_thing_that_breaks_it(self):
         def sandbox(**changed):
             return lambda g: g.commands.__setitem__(SANDBOX_SHOW, hardened_sandbox(**changed))
@@ -285,6 +296,10 @@ class OSProbeTests(unittest.TestCase):
                 lambda g: g.files.pop("/sys/module/apparmor/parameters/enabled"),
                 label("unconfined\n"), label("regalia-kms (complain)\n"), label("regalia-kms (kill)\n"),
                 label("unconfined (enforce)\n"), label(""),
+                # in enforce mode, but not the profile: another, a stack with another, a child, a namespace's
+                label("lax (enforce)\n"), label("regalia-kms//&lax (enforce)\n"), label("lax//&unconfined (enforce)\n"),
+                label("regalia-kms//null-1 (enforce)\n"), label(":e2e:regalia-kms (enforce)\n"),
+                label("regalia-kms//&unconfined (complain)\n"), label("regalia-kms//&unconfined (mixed)\n"),
                 lambda g: g.files.pop("/proc/20/attr/apparmor/current"),
             ],
         }
@@ -326,6 +341,11 @@ class OSProbeTests(unittest.TestCase):
             ("no admission file", "requires runtime admission but lacks runtime_admission_path", config(runtime_admission_path=None)),
             ("an empty node ID", "requires runtime admission but lacks node_id", config(node_id="")),
             ("no boot session file", "requires runtime admission but lacks boot_session_path", config(boot_session_path=None)),
+            # #432 (48 on #509): a host judges every admission against regalia-sync's chain, stated, never assumed
+            ("no membership chain", "does not judge admissions against the membership chain", config(membership_chain_path=None)),
+            ("another chain", "does not judge admissions against the membership chain", config(membership_chain_path="/tmp/chain.json")),
+            ("no chain owner", "does not judge admissions against the membership chain", config(membership_chain_owner=None)),
+            ("another chain owner", "does not judge admissions against the membership chain", config(membership_chain_owner="root")),
             # #191: the lease service is its own user, as the unit says and as the kernel reports
             ("no lease service user", "requires runtime admission but lacks runtime_admission_owner", config(runtime_admission_owner=None)),
             ("the lease service as root", "runtime_admission_owner is root", config(runtime_admission_owner="root")),

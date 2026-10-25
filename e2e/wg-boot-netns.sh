@@ -366,7 +366,7 @@ x lisbon nft -f "$T/lisbon.boot.nft"
 hdr "6  the outsider"
 tcpok outsider "${IP[porto]}" "$UNLOCK" && F "the outsider reached the unlock port at the peer's address" || P "the outsider does not reach the unlock port at the peer's address"
 tcpok outsider "${TUN[porto]}" "$UNLOCK" && F "the outsider reached the peer's tunnel address from outside the tunnel" || P "the outsider does not reach the peer's tunnel address from outside the tunnel"
-x outsider ip link add wg-out type wireguard; x outsider wg set wg-out private-key "$T/outsider.key" peer "$(cat "$T/porto.service.pub")" \
+x outsider ip link add wg-out type wireguard; x outsider wg set wg-out private-key /dev/stdin < <(cat "$T/outsider.key") peer "$(cat "$T/porto.service.pub")" \
   allowed-ips "${TUN[porto]}/32" endpoint "${IP[porto]}:$WG"
 x outsider ip route del "${TUN[porto]}/32"; x outsider ip addr add 10.89.0.9/32 dev wg-out; x outsider ip link set wg-out up; x outsider ip route add "${TUN[porto]}/32" dev wg-out
 asked outsider "${TUN[porto]}" 2 && F "a key that is in no manifest got an answer" || P "a key that is in no manifest gets no answer"
@@ -386,9 +386,25 @@ asked lisbon "${TUN[porto]}" && P "(the manifest put back for the checks below: 
 hdr "8  PoC 6.4: loss and latency, an unreachable peer, a wrong key: each ends within a bound"
 timed(){ local start=$SECONDS; "$@"; local rc=$?; took=$((SECONDS - start)); return $rc; }
 x lisbon tc qdisc add dev eth0 root netem loss 20% delay 100ms || F "netem is not available: the loss and latency case did not run"
-ok=0; worst=0
-for _ in 1 2 3 4 5; do timed asked lisbon "${TUN[faro]}" 10 && ok=$((ok+1)); [ "$took" -gt "$worst" ] && worst=$took; done
-[ "$ok" -ge 4 ] && [ "$worst" -le 12 ] && P "with 20% loss and 100 ms delay: $ok of 5 requests answered, the slowest in ${worst}s" || F "with loss and delay: $ok of 5 answered, the slowest in ${worst}s"
+# regalia-6x5: two questions, kept apart.
+#  (1) Is the configured loss what is applied? Deterministic: the qdisc must read exactly loss 20% delay 100ms.
+#  (2) Do requests still succeed under it, each within a bound? Statistical, sized on MEASURED rates: under this netem,
+#      1 of 193 requests failed over three CI runs (#566, run 40069307386 attempts 1-3); the one-sided 95% upper bound
+#      is p <= 0.024, and the rule is sized on p <= 0.05 for margin. Ask at most 35 times; pass once 27 are answered
+#      (then at most 8 failed), fail at the 9th failure. By chance alone it fails with P(Bin(35, 0.05) > 8) = 4.2e-5 per
+#      run. It still catches a regression in the client's retries: at p = 0.5 it passes with 9.4e-4, at p = 0.8 with
+#      5.7e-13 (the old "4 of 5" failed by chance 2.3% of runs at p = 0.05, and passed 19% of the time at p = 0.5).
+#      Every request must end within 12 s. Each is printed (o answered, x not) so the rate can be re-measured.
+qd="$(x lisbon tc qdisc show dev eth0)"
+grep -q "netem" <<< "$qd" && grep -qw "delay 100ms" <<< "$qd" && grep -qw "loss 20%" <<< "$qd" && P "netem applies exactly what the case is sized on: $qd" || F "netem is not loss 20% delay 100ms: $qd"
+ok=0; bad=0; worst=0; seen=""
+while [ "$ok" -lt 27 ] && [ "$bad" -le 8 ]; do
+  if timed asked lisbon "${TUN[faro]}" 10; then ok=$((ok+1)); seen="${seen}o"; else bad=$((bad+1)); seen="${seen}x"; fi
+  [ "$took" -gt "$worst" ] && worst=$took
+done
+echo "  (loss and delay: attempts $seen)"
+[ "$ok" -ge 27 ] && [ "$worst" -le 12 ] && P "with 20% loss and 100 ms delay: 27 requests answered, $bad not, each ending within ${worst}s" \
+  || F "with loss and delay: $ok answered and $bad not (fails at 9), the slowest ending in ${worst}s"
 x lisbon tc qdisc del dev eth0 root
 x faro ip link set eth0 down
 timed asked lisbon "${TUN[faro]}" 3; rc=$?
@@ -396,9 +412,15 @@ timed asked lisbon "${TUN[faro]}" 3; rc=$?
 asked lisbon "${TUN[porto]}" && P "the other peer still answers" || F "the other peer does not answer"
 x faro ip link set eth0 up; x faro ip route add default dev eth0 2>/dev/null
 # what bootnet.py warns of, shown: a configuration applied without its key leaves the interface with none
-x faro wg syncconf wg-unlock "$T/faro.unlock.conf"
-[ "$(x faro wg show wg-unlock private-key)" = "(none)" ] && P "measured: wg syncconf with a file that has no PrivateKey unsets the interface's key" \
-  || F "wg syncconf without a key did not unset it: bootnet.py's warning is out of date"
+# Piped from this root shell: ubuntu-26.04's AppArmor profile for wg reads no file in $T, and a refused read
+# left the key in place, which this check took for wg's behaviour (regalia-kms#550). So the apply must succeed.
+if ! x faro wg syncconf wg-unlock /dev/stdin < <(cat "$T/faro.unlock.conf"); then
+  F "wg syncconf of the keyless configuration failed: nothing was measured"
+elif [ "$(x faro wg show wg-unlock private-key)" = "(none)" ]; then
+  P "measured: wg syncconf with a file that has no PrivateKey unsets the interface's key"
+else
+  F "wg syncconf without a key did not unset it: bootnet.py's warning is out of date"
+fi
 boot_up lisbon "$T/wrong.key"
 timed asked lisbon "${TUN[porto]}" 3; rc=$?
 [ "$rc" != 0 ] && [ "$took" -le 10 ] && P "a wrong WG-BOOT key: no answer, after ${took}s" || F "a wrong key: rc=$rc after ${took}s"

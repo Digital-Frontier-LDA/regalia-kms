@@ -141,22 +141,35 @@ class Judging(Case):
 
 
 class Asking(Case):
-    def chrony(self, reports=None, code=0):
+    def chrony(self, reports=None, code=0, has_u=True):
         reports = {"tracking": TRACKING, "sources": SOURCES, "authdata": AUTHDATA} if reports is None else reports
         calls = []
 
         def run(argv, **kw):
             calls.append(argv)
+            if "-u" in argv and not has_u:                                  # chronyc before 4.8, its own words
+                return subprocess.CompletedProcess(argv, 1, b"", b"/usr/bin/chronyc: invalid option -- 'u'\nUsage: ...\n")
             return subprocess.CompletedProcess(argv, code, reports[argv[-1]].encode(), b"")
         return run, calls
 
     def test_chrony_is_asked_three_things_numerically_over_its_socket(self):
         run, calls = self.chrony()
         judged(authtime.ask(run))
-        self.assertEqual(calls, [["chronyc", "-N", "-c", report] for report in ("tracking", "sources", "authdata")])
+        self.assertEqual(calls, [["chronyc", "-u", "root", "-N", "-c", report] for report in ("tracking", "sources", "authdata")])
         run, calls = self.chrony()
         authtime.ask(run, chronyc="/usr/bin/chronyc", socket_path="/run/chrony/chronyd.sock")
-        self.assertEqual(calls[2], ["/usr/bin/chronyc", "-h", "/run/chrony/chronyd.sock", "-N", "-c", "authdata"])
+        self.assertEqual(calls[2], ["/usr/bin/chronyc", "-u", "root", "-h", "/run/chrony/chronyd.sock", "-N", "-c", "authdata"])
+
+    def test_a_chronyc_before_4_8_is_asked_without_u_once_it_refuses_the_option(self):
+        """chronyc 4.8 drops root unless told -u root (the unit holds no CAP_SETUID); 4.6.1, Debian 13's, has no -u."""
+        run, calls = self.chrony(has_u=False)
+        judged(authtime.ask(run))
+        self.assertEqual(calls, [["chronyc", "-u", "root", "-N", "-c", "tracking"]] +
+                         [["chronyc", "-N", "-c", report] for report in ("tracking", "sources", "authdata")])   # learned once
+        # any other failure is not a reason to ask again: 4.8 without -u root is exactly the failure to refuse
+        run, calls = self.chrony(code=1)
+        self.refused("chrony could not be asked for tracking", authtime.ask, run)
+        self.assertEqual(len(calls), 1)
 
     def test_a_chrony_that_cannot_be_asked_is_a_refusal(self):
         self.refused("chrony could not be asked for tracking", authtime.ask, self.chrony(code=1)[0])
