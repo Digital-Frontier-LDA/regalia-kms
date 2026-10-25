@@ -52,6 +52,7 @@ import pathlib
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -121,10 +122,48 @@ def tpm_stop_report(pid, log, shutdown=None, proc="/proc"):
     parts = ["pid %d" % pid, "cmdline %r" % read("cmdline", 300),
              "State %s" % status.get("State", "?").strip(), "PPid %s" % status.get("PPid", "?").strip(),
              "wchan %s" % read("wchan", 100), "stack %r" % read("stack", 1200)]
+    # #592: what it was doing as it ignored SIGTERM. The signal masks (SIGTERM is bit 14), every thread's state and wait,
+    # the syscall it sits in, its open fds (a client socket still held?)
+    masks = {k: status.get(k, "").strip() for k in ("SigPnd", "ShdPnd", "SigBlk", "SigIgn", "SigCgt")}
+    parts.append(" ".join("%s %s" % (k, v or "?") for k, v in masks.items()))
+
+    def bit(mask):
+        try:
+            return bool(int(mask, 16) & (1 << (signal.SIGTERM - 1)))
+        except ValueError:
+            return None
+    if masks["SigCgt"]:
+        pending = "pending (process-wide)" if bit(masks["ShdPnd"]) else "pending (thread)" if bit(masks["SigPnd"]) else "not pending"
+        parts.append("SIGTERM %s, %s%s" % (pending, "blocked, " if bit(masks["SigBlk"]) else "",
+                                           "caught" if bit(masks["SigCgt"]) else "ignored" if bit(masks["SigIgn"]) else "not caught"))
+    threads = []
+    for task in sorted(pathlib.Path("%s/%d/task" % (proc, pid)).glob("*"), key=lambda t: int(t.name) if t.name.isdigit() else 0):
+        try:
+            state = task.joinpath("stat").read_text().rsplit(")", 1)[1].split()[0]
+            threads.append("%s:%s:%s" % (task.name, state, task.joinpath("wchan").read_text().strip() or "0"))
+        except (OSError, IndexError):
+            threads.append("%s:?" % task.name)
+    parts.append("threads %s" % (" ".join(threads) or "<none read>"))
+    parts.append("syscall %r" % read("syscall", 200))
+    fds = []
+    for fd in sorted(pathlib.Path("%s/%d/fd" % (proc, pid)).glob("*"), key=lambda f: int(f.name) if f.name.isdigit() else 0):
+        try:
+            fds.append("%s->%s" % (fd.name, os.readlink(fd)))
+        except OSError:
+            fds.append("%s->?" % fd.name)
+    parts.append("fds %s" % (" ".join(fds) or "<none read>"))
     if shutdown is not None:
         parts.append("tpm2_shutdown %d %r" % (shutdown.returncode, (shutdown.stdout + shutdown.stderr).strip()[-300:]))
     try:
-        parts.append("log %r" % pathlib.Path(log).read_text(errors="replace")[-800:])
+        lines = pathlib.Path(log).read_text(errors="replace").splitlines()
+        commands = [i for i, line in enumerate(lines) if "IsEnEnabled(" in line]
+        if commands:
+            last = re.search(r"IsEnEnabled\((0x[0-9a-fA-F]+) = '([^']+)'\)", lines[commands[-1]])
+            parts.append("last command %s (%s)" % (last.group(2), last.group(1)) if last else "last command ?")
+            after = any("Data client disconnected" in line for line in lines[commands[-1]:])
+            parts.append("client attached %s" % ("no (it disconnected after its last command)" if after
+                                                 else "yes (no disconnect after its last command)"))
+        parts.append("log tail %r" % "\n".join(lines[-30:]))       # whole lines: a slice of one misled #592's first reading
     except OSError as error:
         parts.append("log <%s>" % (error.strerror or error))
     if proc == "/proc":
@@ -134,6 +173,29 @@ def tpm_stop_report(pid, log, shutdown=None, proc="/proc"):
         except subprocess.TimeoutExpired:
             parts.append("apparmor <journalctl did not answer within 10 s>")
     return " | ".join(parts)
+
+
+def stop_tpm_process(pid, orderly_ok, report, kill=os.kill, gone=None, wait=None, say=print):
+    """End a software TPM's process, as the host's power going off does (#592). SIGTERM first. If it does not exit and its
+    orderly TPM2_Shutdown SUCCEEDED (`orderly_ok`), the TPM has nothing left to lose: SIGKILL, which is what a power
+    loss is, and the run goes on with the full report said as an anomaly, so every occurrence is kept in the job's log
+    (swtpm 0.10.1 has ignored SIGTERM there). Without an orderly shutdown it is a failure as before, and so is one that
+    SIGKILL does not end either. `report()` makes the evidence while the process still exists. Returns the report of
+    an anomaly, or None."""
+    gone = gone or (lambda: not os.path.exists("/proc/%d" % pid))
+    wait = wait or until
+    kill(pid, signal.SIGTERM)
+    if wait(gone, 10, 0.2):
+        return None
+    evidence = report()
+    if not orderly_ok:
+        raise RuntimeError("software TPM pid %d did not stop: %s" % (pid, evidence))
+    kill(pid, signal.SIGKILL)
+    if not wait(gone, 10, 0.2):
+        raise RuntimeError("software TPM pid %d did not stop, not even on SIGKILL: %s" % (pid, evidence))
+    say("TPM-STOP-ANOMALY (#592): swtpm pid %d ignored SIGTERM after an orderly Shutdown that succeeded; ended with SIGKILL, "
+        "as a power loss ends a TPM. %s" % (pid, evidence))
+    return evidence
 
 
 def until(what, seconds, interval=1.0):
@@ -469,10 +531,13 @@ class Cluster:
         n = self.member(name)
         shutdown = sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False) if orderly else None
         pid = int((n.dir / "tpm.pid").read_text())
-        os.kill(pid, 15)
-        if not until(lambda: not os.path.exists("/proc/%d" % pid), 10, 0.2):
-            # regalia-zga: still a failure, now with what the process looked like; the fix waits for this evidence
-            raise RuntimeError("%s's software TPM did not stop: %s" % (name, tpm_stop_report(pid, n.dir / "tpm.log", shutdown)))
+        try:
+            # #592 (regalia-zga's evidence): after an orderly Shutdown that succeeded, a swtpm that ignores SIGTERM is ended
+            # as a power loss would end it, and the anomaly is said in full; anything else that does not stop still fails
+            stop_tpm_process(pid, shutdown is not None and shutdown.returncode == 0,
+                             lambda: tpm_stop_report(pid, n.dir / "tpm.log", shutdown))
+        except RuntimeError as failure:
+            raise RuntimeError("%s's %s" % (name, failure)) from None
         self._tpm(n)
 
     # ---- images (#75, Phase 15's tier N) ----
