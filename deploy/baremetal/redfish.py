@@ -7,6 +7,9 @@ in a recovery. Run from the operator workstation on the management network, neve
     python3 -Es -m deploy.baremetal.redfish off|on  --ilo HOST --serial SERIAL --cert-sha256 HEX --user USER
         [--password-fd 3 3< <(gpg --decrypt ILO-CREDENTIAL.gpg) | --password-file 0600-FILE]   (else it is typed)
 
+    Behind 3< <(gpg --decrypt ...) gpg's exit status is lost: a decrypt that failed reaches the command as an empty
+    descriptor (refused as "empty" or "holds nothing"), so read gpg's stderr when it is.
+
 The mainstream reference is Pacemaker's fence_redfish: reset, then poll PowerState until it reads the target. Here:
   * DISCOVERED, NEVER ASSUMED. Each action first reads the system (/redfish/v1/Systems/1: PowerState, SerialNumber,
     Model, the Reset action's target and its ResetType@Redfish.AllowableValues) and the iLO's firmware
@@ -252,15 +255,17 @@ def read_password(path=None, fd=None):
 
 def read_password_fd(fd):
     """The password on descriptor `fd`, as `gpg --decrypt` writes it into a pipe (#520): one line of UTF-8, its one
-    trailing newline dropped. The descriptor is closed and the bytes read are zeroed, whatever happens."""
+    trailing newline dropped. The descriptor is closed and the bytes read are zeroed, whatever happens; the password
+    itself is a str from here on (and in the Basic header), which Python cannot zero, as with --password-file."""
     raw = keyfd.read(fd, "the iLO password")
     try:
         try:
-            text = bytes(raw).decode("utf-8")
+            text = raw.decode("utf-8")                    # from the bytearray itself: no second, unzeroable bytes copy
         except UnicodeDecodeError:
             raise Refused("the iLO password on descriptor %d is not UTF-8" % fd) from None
         password = text[:-1] if text.endswith("\n") else text
-        require(password, "the iLO password on descriptor %d is empty" % fd)
+        require(password, "the iLO password on descriptor %d is empty (behind 3< <(gpg --decrypt ...) that usually means gpg "
+                "failed, and its exit status is lost: read its stderr)" % fd)
         require(not any(c in password for c in "\n\r\0"), "the iLO password on descriptor %d is more than one line" % fd)
         return password
     finally:

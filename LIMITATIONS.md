@@ -60,7 +60,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       pins the current iLO 4 release. Its own command (the drills') reads the iLO password from a pipe or a sealed
       memfd (`--password-fd`, through `keyfd.read`, as the fence reads its credentials, #520), so the owner-card-encrypted
       credentials are decrypted straight into it and never to a file; a 0600 file or a typed password remain for
-      commissioning;
+      commissioning. The bytes it reads are zeroed, but the password is then a Python str (and part of the Basic
+      header), which cannot be zeroed: it stays in the process's memory until the process ends, by whichever path it
+      came;
     - the fence on real iLOs. `deploy/baremetal/fence.py` (`owner.py fence`) exists. It runs from the owner's machine
       on the management network, never a node, and does, in order:
       1. TLS pinned to each iLO's certificate before any credential is sent;
