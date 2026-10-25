@@ -184,6 +184,20 @@ SESSION_MEMORY = "out of memory for session contexts"     # TPM_RC_SESSION_MEMOR
 SESSION_MEMORY_CODE = re.compile(r"\(0x(?:00000)?903\)")  # the same, by its code as tss2 prints it: "(0x903)", "(0x00000903)"
 
 
+# a test-only switch (b9 on #596, regalia-afi): node.validate accepts a simulator TCTI (a SOCKET, which no unit's
+# DevicePolicy constrains: a software TPM with no hardware root) only under it. Only the e2e fixtures and the tests set
+# it; nothing shipped may (tests/test_baremetal_node.py holds that this is the one file under deploy/ that names it).
+# TODO(regalia-afi step 2): once the three-node fixture reaches its TPMs through the kernel (swtpm --vtpm-proxy, so
+# device:/dev/tpmrmN), refuse swtpm:/mssim: unconditionally and delete this switch and handover_env's carrying of it.
+SIMULATOR_SWITCH = "REGALIA_TCTI_ALLOW_SIMULATOR"
+
+
+def handover_env():
+    """The whole environment of a step handed to regalia-sync (`runuser … env -i …`): PATH and the C locale, nothing of
+    root's, except the test-only SIMULATOR_SWITCH when the caller has it, so a fixture's step reloads its own node.json."""
+    return ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"] + (["%s=1" % SIMULATOR_SWITCH] if os.environ.get(SIMULATOR_SWITCH) == "1" else [])
+
+
 def simulator_tcti(tcti=None):
     """A private software TPM reached with no resource manager (swtpm, mssim): only there does a call's TPM state outlive
     its process. Production's /dev/tpmrm0 cleans up after every connection (attest.node_init)."""

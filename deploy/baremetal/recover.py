@@ -251,8 +251,8 @@ def apply(config_path, peers, one_source=None, typed=None, run=subprocess.run, n
     owner = owner_record(one_source) if one_source is not None else None
 
     def hand_over(given):
-        return run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                    "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.recover", "_restore", "--config", config_path],
+        return run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", *membership.handover_env(),
+                     sys.executable, "-Es", "-m", "deploy.baremetal.recover", "_restore", "--config", config_path],
                    cwd=PACKAGE_ROOT, capture_output=True, text=True, input=json.dumps(dict(given, sources=peers, one_source=owner)))
 
     minimum = None if one_source is None else 1         # None: convergence.recover's rule, 1 while the record pins, else 2

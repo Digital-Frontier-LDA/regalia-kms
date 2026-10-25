@@ -299,9 +299,12 @@ def main():
         sh("ip", "netns", "del", NS, check=False)
         if MADE:
             shutil.rmtree(MADE[0], ignore_errors=True)
-        dropin = pathlib.Path("/etc/systemd/system/tpm2-abrmd.service.d/e2e.conf")
-        if dropin.exists():
-            dropin.unlink()
+        dropins = [pathlib.Path("/etc/systemd/system/tpm2-abrmd.service.d/e2e.conf")] + \
+                  [pathlib.Path("/etc/systemd/system/%s.d/e2e-tcti.conf" % name) for name in UNITS]
+        if any(d.exists() for d in dropins):
+            for d in dropins:
+                if d.exists():
+                    d.unlink()
             sh("systemctl", "daemon-reload", check=False)
         sh("ip", "link", "del", "e2e-b0", check=False)
         print("\nnode-units-systemd: %d passed, %d failed" % (passed, failed))
@@ -873,6 +876,16 @@ def part2(work, binaries, user, ctx, servers, status):
     ok(managed is True, "tpm2-abrmd serves a's TPM; the units use it from here",
        "%s\n%s" % (probe().stderr[-600:], journal("tpm2-abrmd.service")[-1200:]))
     cfg = dict(cfg, tcti="tabrmd:bus_type=system")
+    # tabrmd is a test fixture's TCTI to node.validate (regalia-afi, #596: the image does not ship it), accepted only under
+    # the test-only switch: this test's own drop-in gives it to the units (written under /etc at run time, never shipped),
+    # and this process, whose tools reload the node's configuration, has it too
+    for name in UNITS:
+        if name.endswith(".service"):
+            os.makedirs("/etc/systemd/system/%s.d" % name, exist_ok=True)
+            pathlib.Path("/etc/systemd/system/%s.d/e2e-tcti.conf" % name).write_text(
+                "[Service]\nEnvironment=%s=1\n" % membership.SIMULATOR_SWITCH)
+    os.environ[membership.SIMULATOR_SWITCH] = "1"
+    sh("systemctl", "daemon-reload")
     pathlib.Path("/etc/regalia/node.json").write_text(json.dumps(cfg))
     servers[1] = nts_server(work, 2)                     # both time sources again
     again = until(lambda: json.loads(status.read_text())["authenticated"], 120, 2)
