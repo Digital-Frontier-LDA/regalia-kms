@@ -81,7 +81,8 @@ class Configuration(Case):
                 ("the raw TPM device", {"tcti": "device:/dev/tpm0"}, "tcti must be device:/dev/tpmrm0"),
                 ("a raw TPM device of another number", {"tcti": "device:/dev/tpm3"}, "tcti must be device:/dev/tpmrm0"),
                 ("a resource manager by another path", {"tcti": "device:/tmp/tpmrm0"}, "tcti must be device:/dev/tpmrm0"),
-                ("tabrmd, which the image does not ship", {"tcti": "tabrmd"}, "tcti must be device:/dev/tpmrm0"),
+                ("tabrmd, which the image does not ship", {"tcti": "tabrmd"}, "refused on a node"),
+                ("tabrmd on the system bus", {"tcti": "tabrmd:bus_type=system"}, "refused on a node"),
                 ("a device TCTI with no path", {"tcti": "device"}, "tcti must be device:/dev/tpmrm0"),
                 ("an NV index of the wrong range", {"nv_epoch": "0x81000001"}, "nv_epoch must be an NV index"),
                 ("an NV index in capitals", {"nv_heartbeat": "0x0150001A"}, "nv_heartbeat must be an NV index"),
@@ -147,15 +148,15 @@ class SimulatorTcti(Case):
 
     def test_refused_without_the_switch_and_accepted_with_it(self):
         from unittest import mock
-        for tcti in ("swtpm:path=/tmp/x/tpm.sock", "mssim:host=localhost,port=2321"):
+        for tcti in ("swtpm:path=/tmp/x/tpm.sock", "mssim:host=localhost,port=2321", "tabrmd:bus_type=system", "tabrmd"):
             with self.subTest(tcti), mock.patch.dict(os.environ, {}, clear=False):
                 os.environ.pop(node.SIMULATOR_SWITCH, None)
-                with self.assertRaisesRegex(node.Refused, "a software TPM with no hardware root.*%s=1" % node.SIMULATOR_SWITCH):
+                with self.assertRaisesRegex(node.Refused, "a test fixture's TPM.*refused on a node.*%s=1" % node.SIMULATOR_SWITCH):
                     node.validate(dict(self.cfg, tcti=tcti))
                 os.environ[node.SIMULATOR_SWITCH] = "1"
                 self.assertEqual(node.validate(dict(self.cfg, tcti=tcti))["tcti"], tcti)
                 os.environ[node.SIMULATOR_SWITCH] = "yes"                      # only exactly 1
-                with self.assertRaisesRegex(node.Refused, "no hardware root"):
+                with self.assertRaisesRegex(node.Refused, "refused on a node"):
                     node.validate(dict(self.cfg, tcti=tcti))
 
     def test_nothing_shipped_sets_the_switch(self):

@@ -131,10 +131,13 @@ def validate(doc):
     # tpm2-tss's own search order decides, and an operator tool run by hand (no unit's DevicePolicy around it) could reach
     # the raw /dev/tpm0, which has no resource manager, wherever /dev/tpmrm0 is missing. Never another device.
     tcti = doc["tcti"]
-    simulator = isinstance(tcti, str) and re.fullmatch(r"(swtpm|mssim):[A-Za-z0-9/_.,=-]{1,200}", tcti) is not None
+    # a test fixture's TPM: a simulator's socket (swtpm, mssim: no hardware root), or tabrmd (the e2e's user-space
+    # resource manager in front of a CUSE device; the image does not ship it, and it can front anything). None of them
+    # is a device a unit's DevicePolicy constrains
+    simulator = isinstance(tcti, str) and re.fullmatch(r"(swtpm|mssim):[A-Za-z0-9/_.,=-]{1,200}|tabrmd(:[A-Za-z0-9/_.,=-]{1,200})?", tcti) is not None
     require(not simulator or os.environ.get(SIMULATOR_SWITCH) == "1",
-            "tcti %r is a software TPM with no hardware root, reached over a socket no unit's DevicePolicy constrains: refused "
-            "on a node (only the e2e fixtures set %s=1)" % (tcti, SIMULATOR_SWITCH))
+            "tcti %r is a test fixture's TPM (a simulator's socket, with no hardware root, or tabrmd, which the image does not "
+            "ship), which no unit's DevicePolicy constrains: refused on a node (only the e2e fixtures set %s=1)" % (tcti, SIMULATOR_SWITCH))
     require(simulator or (isinstance(tcti, str) and re.fullmatch(r"device:/dev/tpmrm[0-9]+", tcti) is not None),
             "tcti must be %s (the kernel's resource manager; /dev/tpmrm<N> on a host with several TPMs): never null, a raw "
             "/dev/tpm<N>, tabrmd or another path" % RESOURCE_MANAGER)

@@ -235,7 +235,7 @@ class CommandLine(TheHostsTpmAndChain):
         tpm.nv.pop("0x01500018")                              # the counter's index gone: unusable
         with open(os.path.join(os.path.dirname(recount.__file__), "node.example.json")) as f:
             cfg = json.load(f)
-        cfg.update(root_key=hbt.pub(hbt.ROOT), tcti=None, state_dir=self.d, nv_epoch="0x01500016", nv_heartbeat="0x01500018",
+        cfg.update(root_key=hbt.pub(hbt.ROOT), tcti="device:/dev/tpmrm0", state_dir=self.d, nv_epoch="0x01500016", nv_heartbeat="0x01500018",
                    node_id=self.m1["nodes"][0]["node_id"])         # a node the manifest lists
         with open(self.d + "/node.json", "w") as f:
             json.dump(cfg, f)
