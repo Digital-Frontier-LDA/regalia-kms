@@ -28,8 +28,11 @@ node checks, before anything is changed:
     verifies, and the statement names THIS node, THIS operation's session (the nonce `session` printed, and this
     boot's ID: no replay into another operation or boot) and expires within SESSION_TTL, by authenticated time;
   * no second node that may authorize answers over the service tunnel (else: use two nodes);
-  * the operator types the phrase naming the node, the epoch and the digest, at this console's terminal.
-Each decision is one event in the node's sync trail (recover), ALLOW or DENY with the reason.
+  * the operator types the phrase naming the node, the epoch, the digest and the source(s) ("from b and the owner"),
+    at this console's terminal.
+Each decision is one event in the node's sync trail (recover), ALLOW or DENY with the reason, written as regalia-sync: a
+refusal apply() makes as root is handed over to be recorded, as the restore is. A one-source event carries the owner's
+key and the statement's SHA-256 (`one_source`).
 """
 import argparse
 import hashlib
@@ -164,14 +167,31 @@ def last_known(path, root_key):
         return None
 
 
-def restore(node, sources, minimum, trail):
+def owner_record(signed):
+    """What the trail keeps of the owner's statement for a one-source recovery: its key and the statement's digest."""
+    return {"owner_key": signed["key"], "statement": hashlib.sha256(membership.canonical(signed["statement"])).hexdigest()}
+
+
+def handed(node, given, trail):
+    """_restore's half, as regalia-sync: `given` is what apply() hands over. A refusal apply() made as root comes as
+    `refused` and is only recorded (the trail is regalia-sync's: one writer); anything else is a restore."""
+    event = {"event": "recover", "sources": sorted(given["sources"]), "minimum": given["minimum"]}
+    if given.get("one_source"):
+        event["one_source"] = given["one_source"]
+    if given.get("refused"):
+        trail(dict(event, outcome="DENY", reason=str(given["refused"])[:240]))
+        return {"recorded": True}
+    return {"epoch": restore(node, given["sources"], given["minimum"], trail, event)}
+
+
+def restore(node, sources, minimum, trail, event=None):
     """As regalia-sync: convergence.recover through the node's Store. Returns the epoch it is at.
     It checks NO owner statement and takes `minimum` as given: every check of --one-source is apply()'s, as root,
     before the hand-over. That is no weaker than regalia-sync already is (it can call convergence.recover with any
     minimum from its own process); against a compromised regalia-sync the boundary is the TPM anchor, not this
     entry point (d9's read)."""
     from deploy.baremetal import convergence, node as node_module
-    event = {"event": "recover", "sources": sorted(sources), "minimum": minimum}
+    event = event or {"event": "recover", "sources": sorted(sources), "minimum": minimum}
     try:
         now = convergence.recover(node.store(), sources, minimum=minimum)
     except Refused as refusal:
@@ -223,28 +243,40 @@ def owner_check(node, signed, purpose, peer, now=None, boot_id=None):
 
 def apply(config_path, peers, one_source=None, typed=None, run=subprocess.run, now=None):
     """Root at the node's console: check everything, take the operator's typed phrase, then restore as regalia-sync.
-    `peers` {node: chain}; `one_source` the owner's signed statement (or None); `typed(prompt)` reads the console."""
+    `peers` {node: chain}; `one_source` the owner's signed statement (or None); `typed(prompt)` reads the console.
+    Every decision is a line in the sync trail: a refusal here is handed over to regalia-sync to record, as the
+    restore is (#387)."""
     from deploy.baremetal import keyfd, node as node_module
     node = node_module.Node(node_module.load(config_path), run)
-    root_key = node.cfg["root_key"]
-    require(peers, "at least one --peer NODE=CHAIN.json")
-    known = last_known(node.path("membership.json"), root_key)
-    tips = {name: verify_chain(chain, root_key, known) for name, chain in peers.items()}
-    if one_source is None:
-        minimum = None                                  # convergence.recover's rule: 1 while the record pins, else 2
-    else:
-        require(len(peers) == 1, "--one-source takes exactly one --peer: with two, recover from both")
-        (peer, tip), = tips.items()
-        owner_check(node, one_source, "recover", peer, now)(tip)
-        minimum = 1
-    epoch_tip = max(tips.values(), key=lambda m: m["epoch"])
-    phrase = "recover %s to epoch %d %s" % (node.node_id, epoch_tip["epoch"], membership.digest(epoch_tip)[:8])
-    said = (typed or keyfd.tty_line)("Type exactly: %s\n> " % phrase)
-    require(said.strip() == phrase, "the phrase typed is not this recovery's: nothing was changed")
-    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.recover", "_restore", "--config", config_path],
-               cwd=PACKAGE_ROOT, capture_output=True, text=True, input=json.dumps({"sources": peers, "minimum": minimum,
-                                                                                    "one_source": one_source is not None}))
+    owner = owner_record(one_source) if one_source is not None else None
+
+    def hand_over(given):
+        return run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                    "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.recover", "_restore", "--config", config_path],
+                   cwd=PACKAGE_ROOT, capture_output=True, text=True, input=json.dumps(dict(given, sources=peers, one_source=owner)))
+
+    minimum = None if one_source is None else 1         # None: convergence.recover's rule, 1 while the record pins, else 2
+    try:
+        require(peers, "at least one --peer NODE=CHAIN.json")
+        root_key = node.cfg["root_key"]
+        known = last_known(node.path("membership.json"), root_key)
+        tips = {name: verify_chain(chain, root_key, known) for name, chain in peers.items()}
+        if one_source is not None:
+            require(len(peers) == 1, "--one-source takes exactly one --peer: with two, recover from both")
+            (peer, tip), = tips.items()
+            owner_check(node, one_source, "recover", peer, now)(tip)
+        epoch_tip = max(tips.values(), key=lambda m: m["epoch"])
+        phrase = "recover %s to epoch %d %s from %s%s" % (node.node_id, epoch_tip["epoch"], membership.digest(epoch_tip)[:8],
+                                                         "+".join(sorted(peers)), " and the owner" if one_source is not None else "")
+        said = (typed or keyfd.tty_line)("Type exactly: %s\n> " % phrase)
+        require(said.strip() == phrase, "the phrase typed is not this recovery's: nothing was changed")
+    except Refused as refusal:
+        done = hand_over({"minimum": minimum, "refused": str(refusal)})
+        if done.returncode != 0:
+            raise Refused("%s; and the refusal could not be recorded in the sync trail: %s"
+                          % (refusal, (done.stderr or done.stdout).strip()[-400:])) from refusal
+        raise
+    done = hand_over({"minimum": minimum})
     require(done.returncode == 0, "the restore, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     return json.loads(done.stdout.strip().splitlines()[-1])["epoch"]
 
@@ -275,7 +307,7 @@ def main(argv=None):
             node = node_module.Node(node_module.load(args.config))
             given = membership.load(sys.stdin.read(4 * MAX_CHAIN_BYTES + 1).encode(), 4 * MAX_CHAIN_BYTES)
             trail = node_module.Trail(node.path("sync-audit.jsonl"), "sync")
-            print(json.dumps({"epoch": restore(node, given["sources"], given["minimum"], trail)}))
+            print(json.dumps(handed(node, given, trail)))
             return 0
         if os.geteuid() != 0:
             print("REFUSED: run as root, at the node's console", file=sys.stderr)

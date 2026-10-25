@@ -244,3 +244,172 @@ class Session(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+import subprocess                                                                  # noqa: E402
+import types                                                                       # noqa: E402
+import unittest.mock                                                               # noqa: E402
+
+from deploy.baremetal import convergence                                          # noqa: E402
+import tests.test_baremetal_convergence as ct                                      # noqa: E402
+import tests.test_baremetal_replacement as rt                                      # noqa: E402
+
+
+class Recovers(ct.Case):
+    """#387's acceptance: the COMMAND recovers, through apply() and its hand-over to regalia-sync, for each state
+    MEMBERSHIP-RECOVERY.md sends to it, and every decision (the root half's refusals too) is a line in the sync trail.
+    The hand-over is runuser in production; here `run` calls _restore's half in this process."""
+
+    def setUp(self):
+        super().setUp()
+        self.trail, self.handed = [], []
+        self.stores["a"] = self.store("a")
+        self.stores["a"].commit(self.e1)
+        e2 = rt.sign(self.chain(self.m1, [self.entry("a"), self.entry("b"), self.entry("c", "MAINTENANCE")]))
+        e3 = rt.sign(self.chain(e2["manifest"], [self.entry("a"), self.entry("b"), self.entry("c")]))
+        self.e2, self.e3 = e2, e3
+        for name in ("a", "b", "c"):
+            convergence.catch_up(self.stores[name], [e2, e3])
+
+    def node(self, store):
+        d = self.d
+        return types.SimpleNamespace(node_id="c", cfg={"root_key": ct.ROOT, "run_dir": d}, store=lambda: store,
+                                     path=lambda name: store.path if name == "membership.json" else os.path.join(d, name))
+
+    def runner(self, store):
+        def run(cmd, cwd=None, capture_output=None, text=None, input=None):
+            self.assertEqual(cmd[:5], ["runuser", "-u", recover.SYNC_USER, "-g", recover.SYNC_USER])
+            self.assertIn("_restore", cmd)
+            given = json.loads(input)
+            self.handed.append(given)
+            try:
+                out = recover.handed(self.node(store), given, self.trail.append)
+            except m.Refused as refusal:
+                return subprocess.CompletedProcess(cmd, 1, "", "REFUSED: %s" % refusal)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(out) + "\n", "")
+        return run
+
+    def apply(self, store, peers, one_source=None, phrase=None, answers=()):
+        """recover apply on c, typing `phrase` (default: exactly the one asked for)."""
+        asked = []
+
+        def typed(prompt):
+            asked.append(prompt.split("Type exactly: ", 1)[1].split("\n", 1)[0])
+            return asked[-1] if phrase is None else phrase
+        node = self.node(store)
+        with unittest.mock.patch("deploy.baremetal.node.Node", return_value=node), \
+                unittest.mock.patch("deploy.baremetal.node.load", return_value={}), \
+                unittest.mock.patch("deploy.baremetal.node.publish"), \
+                unittest.mock.patch.object(recover, "owner_check", side_effect=self.owner_check(answers)):
+            try:
+                return recover.apply("/etc/regalia/node.json", peers, one_source, typed=typed, run=self.runner(store))
+            finally:
+                self.asked = asked
+
+    def owner_check(self, answers):
+        # the owner check's own tests are above (OwnerCheck); here it is the gate it is in apply(): a second node answering refuses
+        def check(node, signed, purpose, peer, now=None, boot_id=None):
+            def on(tip):
+                others = [n for n in answers if n != peer]
+                if others:
+                    raise m.Refused("%s answers over the service tunnel: %s from two nodes, not with the owner" % (", ".join(others), purpose))
+                return signed["statement"]
+            return on
+        return check
+
+    def statement(self):
+        st = recover.statement("recover", "c", self.e3["manifest"], "00ff" * 8 + ":boot-1", T0 + 300)
+        return {"statement": st, "key": "11" * 32, "sig": "22" * 64}
+
+    def outcomes(self):
+        return [(e["event"], e["outcome"]) for e in self.trail]
+
+    # ---- the recoveries ----
+
+    def test_rollback_from_one_peer(self):
+        c = self.stores["c"]
+        with open(c.path, "wb") as f:
+            f.write(m.canonical([self.e1]))                                     # a restored disk: epoch 1 under a counter at 3
+        self.refused("ROLLBACK", c.load)
+        self.assertEqual(self.apply(c, {"b": self.stores["b"].envelopes()}), 3)
+        self.assertEqual(c.load()["epoch"], 3)
+        self.assertEqual(self.asked, ["recover c to epoch 3 %s from b" % m.digest(self.e3["manifest"])[:8]])
+        self.assertEqual(self.outcomes(), [("recover", "ALLOW")])
+        self.assertEqual((self.trail[0]["sources"], self.trail[0]["minimum"], self.trail[0]["epoch"]), (["b"], None, 3))
+        self.assertNotIn("one_source", self.trail[0])
+
+    def test_conflict_from_one_peer_and_a_forked_source_refused_and_recorded(self):
+        c = self.stores["c"]
+        rival2 = rt.sign(self.chain(self.m1, [self.entry("a"), self.entry("b"), self.entry("c", "DRAINING")]))
+        rival3 = rt.sign(self.chain(rival2["manifest"], [self.entry("a"), self.entry("b"), self.entry("c")]))
+        fork = [self.e1, rival2, rival3]
+        with open(c.path, "wb") as f:
+            f.write(m.canonical(fork))                                           # a substituted disk: another validly signed chain
+        self.refused("CONFLICT", c.load)
+        os.unlink(c.path)                                                        # the procedure: keep it as evidence, remove it, recover
+        self.refused("CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded", self.apply, c, {"b": fork})
+        self.assertEqual(self.outcomes(), [("recover", "DENY")])
+        self.assertIn("CONFLICT", self.trail[0]["reason"])
+        self.assertEqual(self.apply(c, {"b": self.stores["b"].envelopes()}), 3)
+        self.assertEqual(self.outcomes(), [("recover", "DENY"), ("recover", "ALLOW")])
+
+    def crash_window(self):
+        fresh = self.store("c2")                                                 # c, crashed between counter and record at epoch 3
+        convergence.catch_up(fresh, [self.e1, self.e2])
+        fresh.hw.advance(3)
+        os.unlink(fresh.path)
+        self.assertFalse(fresh.pinned())
+        return fresh
+
+    def test_the_crash_window_from_two_peers_and_one_peer_refused_and_recorded(self):
+        c = self.crash_window()
+        self.refused("recovery needs whole chains from 2 different sources that agree (1 given)", self.apply, c, {"b": self.stores["b"].envelopes()})
+        self.assertEqual(self.outcomes(), [("recover", "DENY")])
+        self.assertEqual(self.apply(c, {"a": self.stores["a"].envelopes(), "b": self.stores["b"].envelopes()}), 3)
+        self.assertEqual(self.asked[-1], "recover c to epoch 3 %s from a+b" % m.digest(self.e3["manifest"])[:8])
+        self.assertEqual(self.outcomes(), [("recover", "DENY"), ("recover", "ALLOW")])
+        self.assertEqual(self.trail[-1]["sources"], ["a", "b"])
+        self.assertTrue(c.pinned())
+
+    def test_the_crash_window_from_one_peer_and_the_owner(self):
+        c = self.crash_window()
+        signed = self.statement()
+        self.assertEqual(self.apply(c, {"b": self.stores["b"].envelopes()}, one_source=signed), 3)
+        self.assertEqual(self.asked, ["recover c to epoch 3 %s from b and the owner" % m.digest(self.e3["manifest"])[:8]])
+        self.assertEqual(self.outcomes(), [("recover", "ALLOW")])
+        self.assertEqual(self.trail[0]["minimum"], 1)
+        self.assertEqual(self.trail[0]["one_source"], {"owner_key": signed["key"],
+                                                       "statement": hashlib.sha256(m.canonical(signed["statement"])).hexdigest()})
+
+    # ---- the root half's refusals are recorded too ----
+
+    def test_a_second_node_answering_refuses_one_source_and_is_recorded(self):
+        c = self.crash_window()
+        self.refused("a answers over the service tunnel", self.apply, c, {"b": self.stores["b"].envelopes()}, one_source=self.statement(), answers=("a",))
+        self.assertEqual(self.outcomes(), [("recover", "DENY")])
+        self.assertIn("answers over the service tunnel", self.trail[0]["reason"])
+        self.assertEqual(self.trail[0]["sources"], ["b"])
+        self.assertIn("one_source", self.trail[0])
+        self.assertFalse(c.pinned())                                             # nothing was changed
+
+    def test_a_mistyped_phrase_changes_nothing_and_is_recorded(self):
+        c = self.crash_window()
+        self.refused("the phrase typed is not this recovery's", self.apply, c,
+                     {"a": self.stores["a"].envelopes(), "b": self.stores["b"].envelopes()}, phrase="recover c to epoch 3")
+        self.assertEqual(self.outcomes(), [("recover", "DENY")])
+        self.assertEqual([g.get("refused", "")[:10] for g in self.handed], ["the phrase"])
+        self.assertFalse(c.pinned())
+
+    def test_one_source_takes_exactly_one_peer_recorded(self):
+        c = self.crash_window()
+        self.refused("--one-source takes exactly one --peer", self.apply, c,
+                     {"a": self.stores["a"].envelopes(), "b": self.stores["b"].envelopes()}, one_source=self.statement())
+        self.assertEqual(self.outcomes(), [("recover", "DENY")])
+
+    def test_a_refusal_that_cannot_be_recorded_says_so(self):
+        c = self.crash_window()
+
+        def broken(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 1, "", "REFUSED: cannot write the trail")
+        with unittest.mock.patch.object(self, "runner", return_value=broken):
+            self.refused("and the refusal could not be recorded", self.apply, c, {"b": self.stores["b"].envelopes()}, phrase="wrong")
