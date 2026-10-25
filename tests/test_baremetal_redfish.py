@@ -201,6 +201,115 @@ class Refusals(unittest.TestCase):
             redfish.read_password(os.path.join(d, "link"))
 
 
+class PasswordFd(unittest.TestCase):
+    """#520: the drills' command reads the owner-card-encrypted iLO password from a pipe (3< <(gpg --decrypt ...)), as the
+    fence does, so it is never decrypted to a file. Tested through main(), the argv an operator types."""
+
+    ARGS = ["status", "--ilo", "192.0.2.10", "--serial", "CZ0001", "--cert-sha256", "00" * 32, "--user", "fence"]
+
+    def setUp(self):
+        self.given = []
+        test = self
+
+        class Transport:
+            def __init__(self, ilo, cert_sha256, user, password, **kw):
+                test.given.append(password)
+
+        class Client:
+            def __init__(self, *args):
+                pass
+
+            def discover(self):
+                return {"serial": "CZ0001"}
+
+        self.patch("PinnedHTTPS", Transport)
+        self.patch("Client", Client)
+
+    def patch(self, name, value):
+        old = getattr(redfish, name)
+        setattr(redfish, name, value)
+        self.addCleanup(setattr, redfish, name, old)
+
+    def run_main(self, *extra):
+        import contextlib
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = redfish.main(self.ARGS + list(extra))
+        return code, err.getvalue()
+
+    def pipe(self, data):
+        r, w = os.pipe()
+        os.write(w, data)
+        os.close(w)
+        return r
+
+    def closed(self, fd):
+        with self.assertRaises(OSError):
+            os.fstat(fd)
+
+    def test_a_password_on_a_pipe_reaches_the_transport_and_the_pipe_is_closed(self):
+        fd = self.pipe(b"s3cret\n")
+        self.assertEqual(self.run_main("--password-fd", str(fd)), (0, ""))
+        self.assertEqual(self.given, ["s3cret"])
+        self.closed(fd)
+
+    def test_one_line_without_its_newline_is_the_same_password(self):
+        self.assertEqual(self.run_main("--password-fd", str(self.pipe(b"s3cret")))[0], 0)
+        self.assertEqual(self.given, ["s3cret"])
+
+    def test_a_file_on_disk_is_never_read_as_the_descriptor(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(lambda: (os.unlink(os.path.join(d, "pw")), os.rmdir(d)))
+        with open(os.path.join(d, "pw"), "w") as f:
+            f.write("s3cret\n")
+        os.chmod(os.path.join(d, "pw"), 0o600)
+        fd = os.open(os.path.join(d, "pw"), os.O_RDONLY)
+        code, err = self.run_main("--password-fd", str(fd))
+        self.assertEqual(code, 1)
+        self.assertIn("not a pipe or a sealed memfd", err)
+        self.assertEqual(self.given, [])
+        self.closed(fd)
+
+    def test_what_is_not_one_password_is_refused_before_any_connection(self):
+        for data, reason in ((b"", "holds nothing"), (b"\n", "is empty"), (b"one\ntwo\n", "more than one line"),
+                             (b"cr\r\n", "more than one line"), (b"nul\0\n", "more than one line"),
+                             (b"\xff\xfe\n", "not UTF-8")):
+            with self.subTest(data=data):
+                del self.given[:]                                  # each case judged alone, never by a leak from the last
+                code, err = self.run_main("--password-fd", str(self.pipe(data)))
+                self.assertEqual(code, 1)
+                self.assertIn(reason, err)
+                self.assertNotIn("two", err)                       # a refusal never echoes the secret
+                self.assertEqual(self.given, [])
+
+    def test_a_descriptor_that_is_not_open_or_is_stdin_is_refused(self):
+        r = self.pipe(b"x")
+        os.close(r)
+        for fd, reason in ((r, "is not open"), (0, "above 2")):
+            with self.subTest(fd=fd):
+                del self.given[:]
+                code, err = self.run_main("--password-fd", str(fd))
+                self.assertEqual((code, self.given), (1, []))
+                self.assertIn(reason, err)
+
+    def test_the_descriptor_and_the_file_are_one_or_the_other(self):
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+            redfish.main(self.ARGS + ["--password-fd", "3", "--password-file", "/nonexistent"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(self.given, [])
+
+    def test_the_bytes_read_are_zeroed(self):
+        held = []
+        read = redfish.keyfd.read
+        self.patch("keyfd", type("K", (), {"read": staticmethod(lambda fd, what: held.append(read(fd, what)) or held[-1]),
+                                           "zero": staticmethod(redfish.keyfd.zero)}))
+        self.assertEqual(self.run_main("--password-fd", str(self.pipe(b"s3cret\n")))[0], 0)
+        self.assertEqual(bytes(held[0]), bytes(7))
+
+
 def self_signed():
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "ILO-STANDIN")])
