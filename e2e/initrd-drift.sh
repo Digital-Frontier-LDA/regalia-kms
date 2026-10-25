@@ -58,6 +58,11 @@ install -m 0644 deploy/baremetal/initrd/regalia-boot-render.service deploy/barem
   deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
 install -D -m 0755 deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/module-setup.sh"
 install -m 0644 deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"
+# the module's own check() first, against this tree (#330): a requirement the build does not meet stops it here in
+# check()'s own words, not at "dracut failed" with the reason forty lines up dracut's log
+echo "### the dracut module's check()"
+bash e2e/lib/dracut-module-check.sh "$ROOT" "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock" \
+  || { echo "initrd-drift: the regalia-unlock module's check() fails on this tree: dracut would stop at it"; exit 2; }
 echo "### the initrd, by its own dracut"
 KVER="$(ls "$ROOT/lib/modules" | sort -V | tail -1)"
 chroot "$ROOT" dracut --force --no-hostonly --no-hostonly-cmdline --add regalia-unlock --kver "$KVER" /boot/initrd.drift >"$W/dracut.log" 2>&1 \
