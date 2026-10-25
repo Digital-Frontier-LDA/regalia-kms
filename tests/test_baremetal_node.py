@@ -163,10 +163,27 @@ class SimulatorTcti(Case):
         import pathlib as pl
         root = pl.Path(__file__).resolve().parents[1]
         found = [str(p.relative_to(root)) for p in sorted((root / "deploy").rglob("*")) if p.is_file() and p.suffix != ".pyc"
-                 and p.name != "node.py" and node.SIMULATOR_SWITCH in p.read_text(errors="replace")]
-        self.assertEqual(found, [])
-        source = (root / "deploy" / "baremetal" / "node.py").read_text()
-        self.assertEqual(source.count(node.SIMULATOR_SWITCH), 1, "node.py names the switch once: its constant")
+                 and node.SIMULATOR_SWITCH in p.read_text(errors="replace")]
+        self.assertEqual(found, ["deploy/baremetal/membership.py"])                   # its constant, and nowhere else
+        self.assertEqual((root / "deploy" / "baremetal" / "membership.py").read_text().count(node.SIMULATOR_SWITCH), 1)
+
+    def test_a_step_handed_to_regalia_sync_carries_the_switch_only_when_it_is_set(self):
+        """`runuser … env -i` drops everything: a fixture's handed-over step reloads its swtpm node.json, so the switch
+        rides along, and only when the caller has it (never on a host, where nothing sets it)."""
+        from unittest import mock
+        from deploy.baremetal import membership as ms
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(node.SIMULATOR_SWITCH, None)
+            self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"])
+            os.environ[node.SIMULATOR_SWITCH] = "yes"
+            self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"])
+            os.environ[node.SIMULATOR_SWITCH] = "1"
+            self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", node.SIMULATOR_SWITCH + "=1"])
+        import pathlib as pl
+        root = pl.Path(__file__).resolve().parents[1]
+        literal = [str(p.relative_to(root)) for p in sorted((root / "deploy" / "baremetal").glob("*.py"))
+                   if '"env", "-i", "PATH=' in p.read_text()]
+        self.assertEqual(literal, [], "every handover to regalia-sync builds its environment with membership.handover_env()")
 
 
 class Indices(unittest.TestCase):

@@ -102,11 +102,7 @@ KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbe
         "admission_log_dir",
         "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval", "beat_interval_s")
 RESOURCE_MANAGER = "device:/dev/tpmrm0"   # the TCTI a host's node.json names (regalia-afi): the kernel's resource manager
-# a test-only switch (b9 on #596): a simulator TCTI is a SOCKET, which no unit's DevicePolicy constrains, so it binds a node to
-# a software TPM with no hardware root. Only the e2e fixtures and the tests set it; nothing shipped may (a test holds that).
-# TODO(regalia-afi step 2): once the three-node fixture reaches its TPMs through the kernel (swtpm --vtpm-proxy, so
-# device:/dev/tpmrmN), refuse swtpm:/mssim: unconditionally and delete this switch.
-SIMULATOR_SWITCH = "REGALIA_TCTI_ALLOW_SIMULATOR"
+SIMULATOR_SWITCH = membership.SIMULATOR_SWITCH   # the test-only switch for a simulator TCTI (b9 on #596; its reasons there)
 PUBLISHED = "chain.json"        # in the state directory: the verified chain, for the root services
 OLD_ADMISSION_TRAIL = "audit.jsonl"   # where admission's trail was, in admission_dir, before #349
 MAX_BYTES = 64 * 1024
