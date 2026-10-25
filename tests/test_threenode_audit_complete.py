@@ -25,6 +25,7 @@ class Subset(unittest.TestCase):
             p.mkdir()
         self.cluster = object.__new__(threenode.Cluster)
         self.cluster.nodes = {"a": node}
+        self.cluster.tool_trails = {}
         self.streams = {}
         self.cluster._ship_start = lambda name: None
         self.cluster.audit_stream = lambda name, trail: self.streams.get(trail, [])
@@ -67,6 +68,25 @@ class Subset(unittest.TestCase):
         for bad in ((), ("sync", "time"), ("nonsense",)):
             with self.subTest(bad), self.assertRaisesRegex(ValueError, "each must be one of sync, admission, esp-advances"):
                 self.complete(trails=bad)
+
+
+class ToolTrail(Subset):
+    """ship_tool_trail (#340, three-node-reanchor): an operator tool's trail on one node, shipped and judged with its own."""
+
+    def test_it_lives_in_the_node_s_log_directory_and_is_judged_for_that_node(self):
+        path = self.cluster.ship_tool_trail("a", "reanchor")
+        self.assertEqual(path, self.d / "log" / "reanchor.jsonl")
+        self.assertEqual(self.cluster._node_trails("a"), ["sync", "admission", "esp-advances", "reanchor"])
+        self.assertEqual(self.complete(trails=("sync", "esp-advances")), {("a", "reanchor"): "the trail was never written"})
+        self.write("reanchor", path)
+        self.assertEqual(self.complete(trails=("sync", "esp-advances")), {})
+        self.assertEqual(self.cluster._trail_group("reanchor"), "regalia-audit")
+        self.assertEqual(self.cluster._trail_group("sync"), "regalia-audit-sync")
+
+    def test_only_an_operator_tool_s_trail(self):
+        for bad in ("sync", "esp-advances", "time", "nonsense"):
+            with self.subTest(bad), self.assertRaisesRegex(ValueError, "not an operator tool's trail"):
+                self.cluster.ship_tool_trail("a", bad)
 
 
 if __name__ == "__main__":
