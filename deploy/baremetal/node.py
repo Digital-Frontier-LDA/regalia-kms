@@ -295,7 +295,8 @@ def esp_advance(node, esp, lock_path=ESP_LOCK, record=None):
     epoch = manifests[-1]["epoch"]
     facts = {"epoch": epoch, "manifest_digest": membership.digest(manifests[-1]), "chain_sha256": hashlib.sha256(chain).hexdigest(),
              "esp_rewritten": rewritten, "boot_renderable": unrenderable is None}
-    # THE REQUEST, before the ESP or the anchor changes (#278: never done unrecorded; regalia-kms-3e's read): a trail that
+    # THE REQUEST, before the CHAIN on the ESP or the anchor changes (#278: never done unrecorded; regalia-kms-3e's read;
+    # EspChain above may already have created the chain's empty directory on a fresh ESP, not its content): a trail that
     # cannot be written changes nothing. FAIL CLOSED, deliberately, and at a cost: while this node's trail cannot be
     # written, its anchor stays at the epoch it holds, so its rollback protection does not advance with the fleet (a boot
     # chain down to that epoch stays acceptable). RegaliaEspAdvanceFailing (15 min) and RegaliaAnchorBehindFleet (30 min)

@@ -2021,7 +2021,10 @@ class EspChain:
 
       EspChain(esp, chain)  the chain's directory made a trusted one (_ensure_trusted_dir), and the file there read,
                             a regular file never through a link, never blocking on a FIFO: `rewritten` says whether it
-                            differs from `chain`. Nothing is written.
+                            differs from `chain`. No FILE is written; the chain's directory may be CREATED
+                            here (_ensure_trusted_dir makes a missing one, 0700, on a fresh ESP), which is not
+                            chain content, so a caller's "request before the chain changes" still holds, but the
+                            ESP is not untouched until .write() (df-grafana-b9 on #574).
       .write()              when it differs, `chain` written over it (_replace_esp: a temporary file fsynced, renamed,
                             the directory fsynced), read back, and refused if it is not `chain`. Returns `rewritten`.
 
