@@ -209,24 +209,37 @@ def scenario(cluster):
     ok(renewals.get("2", 0) >= 1, "step 2's renewal of a is in its issuer's (%s) stream" % windows["2"][0], renewals)
     ok(renewals.get("3", 0) >= 1, "step 3's renewal of a, with %s down, is in %s's stream" % (issuer, windows["3"][0]), renewals)
     ok(renewals.get("5", 0) == 2, "step 5's two renewals of a, cut off from b, are both in c's stream, and no other", renewals)
-    revoked = {n: bool(cluster.audit_has(n, "sync", since=revoked_at, event="revoke-commit", epoch=2, outcome="ALLOW",
-                                         signers=lambda s: isinstance(s, list) and "b" in s and "c" in s)) for n in ("b", "c")}
-    ok(all(revoked.values()), "the revocation of a (epoch 2, signed by b and c) is in b's and in c's stream (revoke-commit)", revoked)
+    # revoke_by_nodes("b", "c", ...): b proposes, c co-signs and COMMITS, so only c writes revoke-commit (revoke.py); b
+    # takes epoch 2 by an ordinary sync round, which moved_by_sync finds in b's own stream (CI on #577 measured it)
+    revoked = {"c commits": bool(cluster.audit_has("c", "sync", since=revoked_at, event="revoke-commit", epoch=2, outcome="ALLOW",
+                                                   signers=lambda s: isinstance(s, list) and "b" in s and "c" in s)),
+               "b moved by sync": cluster.moved_by_sync("b", revoked_at, 2) is not None}
+    ok(all(revoked.values()), "the revocation of a (epoch 2, signed by b and c): c's commit in c's stream, and the sync round that "
+       "moved b to it in b's", revoked)
     by_name = cluster.audit_has("b", "sync", since=revoked_at, outcome="DENY", event=lambda e: isinstance(e, str) and e.startswith("sync"),
                                 reason=lambda r: bool(r) and "a is REVOKED_STOLEN under epoch 2" in r)
     ok(bool(by_name), "b's refusal of a's requests by name, through the tunnel forced open, is in b's stream")
     # The converse by POSITION, not time (b9 on #577): "at" is whole seconds and cannot order a lease issued in the same
-    # second as the commit, the race this check is for. Each stream is one chained sequence, so: after the node's OWN
-    # revoke-commit line (its seq), no sync-lease ALLOW for a anywhere later in that same stream.
+    # second as the commit, the race this check is for. Each stream is one chained sequence, so: after the point where
+    # the node itself HELD epoch 2, no sync-lease ALLOW for a anywhere later in that same stream. That point is c's own
+    # revoke-commit, and for b (which only proposed) its first sync event under epoch 2: before it, b still held epoch
+    # 1, under which a lease for a was right. (A sync-apply is filed under the epoch its round began from, so b's first
+    # epoch-2 line is at or one round after the move: the bound errs late by that round, never early.)
+    def held_from(p):
+        if p == "c":
+            line = next(iter(cluster.audit_has("c", "sync", since=revoked_at, event="revoke-commit", epoch=2, outcome="ALLOW")), None)
+        else:
+            line = next(iter(cluster.audit_has(p, "sync", since=revoked_at, epoch=2,
+                                               event=lambda e: e in ("sync-heartbeat", "sync-apply"))), None)
+        return line.get("seq") if line else None
     after = {}
     for p in ("b", "c"):
-        commits = cluster.audit_has(p, "sync", since=revoked_at, event="revoke-commit", epoch=2, outcome="ALLOW")
-        at_seq = commits[0].get("seq") if commits else None
+        at_seq = held_from(p)
         after[p] = None if not isinstance(at_seq, int) else [
             e for e in cluster.audit_has(p, "sync", event="sync-lease", subject="a", outcome="ALLOW",
                                          seq=lambda s, c=at_seq: isinstance(s, int) and s > c)]
     ok(all(v == [] for v in after.values()),
-       "and in b's and c's streams no lease was issued to a after each node's own revocation commit (by sequence)", after)
+       "and in b's and c's streams no lease was issued to a once each node held epoch 2 (by sequence)", after)
     stopped = cluster.audit_has("a", "admission", since=revoked_at, event="admission-serving", subject="a", outcome="DENY")
     ok(bool(stopped), "a's own change to not serving, at its last lease's end, is in a's admission stream", stopped[-1:] if stopped else None)
 
