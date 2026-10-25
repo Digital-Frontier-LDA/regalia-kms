@@ -129,6 +129,10 @@ class Script(unittest.TestCase):
         self.assertIn('-ge 2', last["run"])
         self.assertIn("::error", last["run"])
         self.assertIn("exit 1", last["run"])
+        # b9 on #599: a red that is not a regression says where to look first, on the run and in the issue
+        build = " ".join(st.get("run", "") for st in steps)
+        self.assertIn("mirror outage", last["run"])
+        self.assertEqual(build.count("archive or mirror outage"), 2)
 
     def test_the_workflow_splits_building_from_filing(self):
         import yaml
