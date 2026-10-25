@@ -74,6 +74,7 @@ class FakeTpm:
         # the owner authorization (32 bytes, #242 C), None while it is empty. Set, an owner call (-C o) must give it as
         # the real channel does (-P file:/dev/fd/N, the pipe holding "hex:<64 hex>"), else the TPM says no
         self.owner_auth, self.lockout_set = owner_auth, False
+        self.da = [0, 3, 1000]                               # counter, max, recovery s (swtpm's defaults)
         self.persistent = {"0x81000001"}                     # systemd's SRK, as systemd-tpm2-setup leaves it at boot
         # the node's EK at 0x81010001 (enrol init), by its Name; sessions salted to it (#414), and the changeauth calls
         # made through one (salted_with: the EK each changeauth's session was salted to, None for none)
@@ -106,7 +107,9 @@ class FakeTpm:
         if self.broken:
             return no
         if tool == "getcap" and index == "properties-variable":
-            return ok(("TPM2_PT_PERMANENT:\n  ownerAuthSet:              %d\n  endorsementAuthSet:        0\n  lockoutAuthSet:            %d\n"
+            # the dictionary-attack state as swtpm prints it (#456): TPM2_PT_LOCKOUT_COUNTER, _MAX_AUTH_FAIL, _RECOVERY
+            return ok(("TPM2_PT_LOCKOUT_COUNTER: 0x%x\nTPM2_PT_MAX_AUTH_FAIL: 0x%x\nTPM2_PT_LOCKOUT_RECOVERY: 0x%x\n" % tuple(self.da)
+                       + "TPM2_PT_PERMANENT:\n  ownerAuthSet:              %d\n  endorsementAuthSet:        0\n  lockoutAuthSet:            %d\n"
                        % (self.owner_auth is not None, self.lockout_set)).encode())
         if tool == "readpublic" and index == "-c" and argv[2] == "0x81010001" and "-n" in argv:
             if self.ek_name is None:
