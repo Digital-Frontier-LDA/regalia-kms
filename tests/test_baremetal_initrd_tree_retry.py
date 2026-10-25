@@ -49,8 +49,9 @@ class RetryTree(unittest.TestCase):
         open(self.ledger, "w").close()
         self.target, self.log = os.path.join(self.d, "root"), os.path.join(self.d, "mmdebstrap.log")
 
-    def run_tree(self, answers, target=None):
-        """retry_tree as build-initrd.sh calls it, under its set -euo pipefail: (exit, stderr, the attempts)."""
+    def run_tree(self, answers, target=None, base=None):
+        """retry_tree as build-initrd.sh calls it, under its set -euo pipefail, TREE_RETRY_BASE the builder's W (here
+        the test's directory): (exit, stderr, the attempts)."""
         with open(self.answers, "w") as f:
             f.write("\n".join(answers) + "\n")
         script = ('set -euo pipefail; . "$LIB"; retry_tree "$LOG" "$TARGET" "$STAND_IN" "$TARGET" '
@@ -58,7 +59,7 @@ class RetryTree(unittest.TestCase):
         done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env={
             "PATH": "/usr/bin:/bin", "LIB": LIB, "LOG": self.log, "TARGET": self.target if target is None else target,
             "STAND_IN": self.stand_in, "LEDGER": self.ledger, "ANSWERS": self.answers, "RESET": RESET,
-            "TREE_RETRY_WAITS": "0 0"})
+            "TREE_RETRY_WAITS": "0 0", "TREE_RETRY_BASE": self.d if base is None else base})
         with open(self.ledger) as f:
             return done.returncode, done.stderr, f.read().splitlines()
 
@@ -90,15 +91,37 @@ class RetryTree(unittest.TestCase):
         self.assertEqual(len(attempts), 3)                                       # bounded: never a fourth
         self.assertEqual(err.count("retry_tree: attempt"), 2)
 
-    def test_a_target_that_is_not_an_absolute_path_other_than_root_is_refused_before_anything_runs(self):
-        for target in ("", "/", "relative/root"):
+    def test_a_target_not_strictly_inside_the_builder_s_directory_is_refused_and_nothing_is_removed(self):
+        """b9 on #575: a pattern on the target alone admitted // and /. (both /) and /root (what "$W/root" is with W set but
+        empty). The target, resolved, must lie strictly inside TREE_RETRY_BASE; anything else is refused before any rm."""
+        outside = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, outside, True)
+        with open(os.path.join(outside, "keep"), "w") as f:
+            f.write("not the build's")
+        for target in ("", "/", "//", "/.", "/root", "relative/root", self.d, self.d + "/", self.d + "/root/../..",
+                       outside, os.path.join(outside, "root")):
             with self.subTest(target=target):
                 open(self.ledger, "w").close()
                 code, err, attempts = self.run_tree(["ok"], target=target)
                 self.assertEqual(code, 2, err)
-                self.assertIn("the tree's target must be an absolute path other than /", err)
+                self.assertIn("nothing is removed", err)
+                self.assertEqual(attempts, [])                                   # mmdebstrap never ran, no rm either
+        self.assertTrue(os.path.exists(os.path.join(outside, "keep")))
+        self.assertTrue(os.path.isdir(self.d))
+
+    def test_a_base_that_is_missing_or_root_is_refused(self):
+        for base in ("", "/", os.path.join(self.d, "no-such-directory")):
+            with self.subTest(base=base):
+                open(self.ledger, "w").close()
+                code, err, attempts = self.run_tree(["ok"], base=base)
+                self.assertEqual(code, 2, err)
+                self.assertIn("TREE_RETRY_BASE must name the builder's own directory", err)
                 self.assertEqual(attempts, [])
 
+    def test_a_target_written_another_way_inside_the_base_is_the_same_tree(self):
+        """realpath -m: a trailing slash or a ./ inside the base is still the base's tree, removed and rebuilt there."""
+        code, err, attempts = self.run_tree(["reset", "ok"], target=self.d + "/./root/")
+        self.assertEqual((code, attempts), (0, ["attempt 1 leftover=no", "attempt 2 leftover=no"]), err)
 
 if __name__ == "__main__":
     unittest.main()

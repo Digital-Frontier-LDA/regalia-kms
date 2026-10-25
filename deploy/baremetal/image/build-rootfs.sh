@@ -145,6 +145,7 @@ mkdir -p "$OUT"
 [ -z "$(ls -A "$OUT")" ] || die "--out $OUT must be empty"
 
 W="$(mktemp -d /var/tmp/regalia-rootfs.XXXXXX)"
+TREE_RETRY_BASE="$W"                     # every tree retry_tree removes lies inside it (tree-retry.sh)
 MOUNTED=()
 cleanup(){
   for m in "${MOUNTED[@]:-}"; do [ -n "$m" ] && umount -R "$m" 2>/dev/null; done
