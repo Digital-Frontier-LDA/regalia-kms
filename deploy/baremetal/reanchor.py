@@ -120,6 +120,14 @@ def phrase(node_id, planned):
     return "re-anchor %s at epoch %d %s" % (node_id, planned["epoch"], planned["manifest_digest"][:8])
 
 
+def refused_before_plan(node_id, sources, refusal):
+    """The DENY main() records when it refuses before reanchor() plans (#340): something else may be touching the anchor
+    (the node's units running, regalia-esp-advance holding its lock). reanchor()'s own events' shape, with no plan behind
+    it: epoch 0, no manifest, the sources the operator named."""
+    return {"event": "reanchor", "subject": convergence._printable(node_id), "peer": "operator", "epoch": 0, "manifest_digest": "",
+            "sources": sorted(map(str, sources)), "anchor_was": "", "outcome": "DENY", "reason": convergence._printable(refusal)}
+
+
 def reanchor(store, sources, node_id, typed, sink, owner=None, prepare=None, before_anchor=None):
     """Plan, record the request, check what the operator typed, re-anchor, record the outcome. Returns
     {"epoch", "manifest_digest"} of what the node now holds.
@@ -469,11 +477,21 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None, owner_check=_owner
         # nothing else may touch the anchor while it is replaced: the node's units stopped (the procedure's step 5), and
         # regalia-esp-advance's own lock held from here to the end (it writes the anchor under that lock, not the node's)
         check_esp(args.esp, args.root_key)
-        running = active()
-        require(not running, "%s %s running: stop %s first (MEMBERSHIP-RECOVERY.md, step 5), so that nothing but this "
-                "command touches the anchor" % (", ".join(running), "is" if len(running) == 1 else "are", " ".join(running)))
         extra = {} if owner_auth is None else {"owner_auth": owner_auth}
-        with esp_lock_held(args.esp_lock):
+        with contextlib.ExitStack() as held:
+            # something else may be touching the anchor: refused before any plan, and RECORDED (#340: an operator's attempt
+            # on the anchor is an audit event; three-node-reanchor found it unrecorded). A refused argument is not.
+            try:
+                running = active()
+                require(not running, "%s %s running: stop %s first (MEMBERSHIP-RECOVERY.md, step 5), so that nothing but this "
+                        "command touches the anchor" % (", ".join(running), "is" if len(running) == 1 else "are", " ".join(running)))
+                held.enter_context(esp_lock_held(args.esp_lock))
+            except Refused as contended:
+                try:
+                    record(refused_before_plan(args.node_id, sources, contended))
+                except OSError as unwritten:
+                    raise Refused("%s; and the refusal could not be recorded in the audit log: %s" % (contended, unwritten)) from contended
+                raise
             store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti, policy=policies.reader,
                                                                               define_policy=policies.define,
                                                                               lock_path=anchor_lock(args.membership), **extra))

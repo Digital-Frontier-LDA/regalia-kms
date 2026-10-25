@@ -32,10 +32,9 @@ start and b serves again. A server whose two peers are both destroyed has no suc
      nodes signed and a lease, and issues one: it serves again
   8  #340: every line of every node's sync, admission and ESP-advance trail, and b's re-anchor trail, is in the audit
      collector (the nodes' real shippers, Cluster(audit=True); the re-anchor's as regalia-audit-ship@reanchor ships it),
-     and b's re-anchor decisions are there by name in b's reanchor stream: the three refusals it records (one peer only,
-     its own chain as a peer, the phrase mistyped), the request at epoch 3 and its ALLOW, and the refusal of a run on a
-     usable anchor. (The refusal with regalia-esp-advance's lock held comes before the re-anchor plans anything, and
-     writes no trail line: step 5 holds it by its exit status and message.)
+     and b's re-anchor decisions are there by name in b's reanchor stream: every refusal of step 5 (one peer only, its
+     own chain as a peer, the phrase mistyped, regalia-esp-advance's lock held: refused before any plan, and recorded
+     since #340 found it was not), the request at epoch 3 and its ALLOW, and the refusal of a run on a usable anchor
 
 NOT SHOWN HERE (MEMBERSHIP-RECOVERY.md, "What the rehearsal does not show"):
   * a physical TPM: these are software TPMs, and power is never cut during the redefinition here;
@@ -314,13 +313,15 @@ def scenario(cluster, work):
     has = lambda r: (lambda reason: isinstance(reason, str) and r in reason)
     decided = [e for e in cluster.audit_has(b, "reanchor") if e.get("event") in ("reanchor", "reanchor-requested")]
     shape = [(e["event"], e.get("outcome")) for e in decided]
-    ok(shape == [("reanchor", "DENY"), ("reanchor", "DENY"), ("reanchor-requested", None), ("reanchor", "DENY"),
+    ok(shape == [("reanchor", "DENY"), ("reanchor", "DENY"), ("reanchor-requested", None), ("reanchor", "DENY"), ("reanchor", "DENY"),
                  ("reanchor-requested", None), ("reanchor", "ALLOW"), ("reanchor", "DENY")],
-       "b's reanchor stream holds its decisions in order: two refused plans, a request refused for the phrase, a request "
-       "and its ALLOW, then the refused run on a usable anchor", shape)
+       "b's reanchor stream holds its decisions in order: two refused plans, a request refused for the phrase, the refusal "
+       "with the ESP lock held, a request and its ALLOW, then the refused run on a usable anchor", shape)
     named = {"one peer only": bool(cluster.audit_has(b, "reanchor", event="reanchor", outcome="DENY", reason=has("at least two other nodes"))),
              "its own chain": bool(cluster.audit_has(b, "reanchor", event="reanchor", outcome="DENY", reason=has("cannot be a source for its own re-anchor"))),
              "phrase mistyped": bool(cluster.audit_has(b, "reanchor", event="reanchor", outcome="DENY", reason=has("not confirmed"))),
+             "ESP lock held": bool(cluster.audit_has(b, "reanchor", event="reanchor", outcome="DENY", epoch=0,
+                                                     reason=has("regalia-esp-advance holds the anchor's lock"))),
              "the re-anchor": bool(cluster.audit_has(b, "reanchor", event="reanchor", outcome="ALLOW", epoch=3, manifest_digest=digest)),
              "usable anchor": bool(cluster.audit_has(b, "reanchor", event="reanchor", outcome="DENY", reason=has("the TPM anchor is usable")))}
     ok(all(named.values()), "each of b's re-anchor decisions is in b's reanchor stream, by its reason", named)

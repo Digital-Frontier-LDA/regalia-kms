@@ -684,6 +684,7 @@ class Command(Case):
         self.assertEqual((rc, asked), (1, []))
         self.assertIn("regalia-esp-advance.path, regalia-sync.service are running: stop regalia-esp-advance.path regalia-sync.service first",
                       self.said.getvalue())
+        self.assert_refused_before_the_plan("regalia-esp-advance.path, regalia-sync.service are running")
         self.assertEqual(self.hw.slots(), before)
 
     def esp_lock(self):
@@ -701,6 +702,17 @@ class Command(Case):
         self.assertEqual((rc, asked), (1, []))
         self.assertIn("regalia-esp-advance holds the anchor's lock %s: it is running" % path, self.said.getvalue())
         self.assertEqual(self.hw.slots(), before)
+        self.assert_refused_before_the_plan("regalia-esp-advance holds the anchor's lock %s: it is running" % path)
+
+    def assert_refused_before_the_plan(self, reason):
+        """#340: a refusal because something else may be touching the anchor is recorded, as a DENY with no plan behind it,
+        though nothing was planned or asked: an operator's attempt is an audit event (three-node-reanchor found it unrecorded)."""
+        (line,) = self.audit()
+        self.assertEqual({k: line[k] for k in ("event", "outcome", "subject", "peer", "epoch", "manifest_digest", "sources")},
+                         {"event": "reanchor", "outcome": "DENY", "subject": "b", "peer": "operator", "epoch": 0, "manifest_digest": "",
+                          "sources": [OTHER, "c"]})
+        self.assertIn(reason, line["reason"])
+        self.assertEqual(trails.verify(self.d + "/audit.jsonl")["chained"], 1)
 
     def test_the_esp_lock_is_held_for_the_whole_run(self):
         # taken before the plan and kept until the anchor is written: an advance started meanwhile waits for it
