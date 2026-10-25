@@ -85,7 +85,7 @@ RECOVERY = b"cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuu
 MARKER = b"regalia-kms root volume marker"
 SWITCH = "e2e3-sw"
 UNIT_PREFIX = "e2e3-"
-AUDIT_TRAILS = (("sync", "state", "sync-audit.jsonl"), ("admission", "admission", "audit.jsonl"),   # each node's own (#340)
+AUDIT_TRAILS = (("sync", "state", "sync-audit.jsonl"), ("admission", "admission_log", "audit.jsonl"),   # each node's own (#340)
                 ("esp-advances", "log", "esp-advances.jsonl"))                                       # the ESP advance's (#66 B3)
 COLLECTOR_UNIT = UNIT_PREFIX + "audit-collector"
 COLLECTOR_PORT = 18443
@@ -176,6 +176,7 @@ class NodeHere:
         self.tcti = "swtpm:path=%s" % self.tpm_sock
         self.cfg_path = self.dir / "etc" / "node.json"
         self.state, self.admission, self.run = self.dir / "state", self.dir / "admission", self.dir / "run"
+        self.admission_log = self.dir / "log-admission"      # its /var/log/regalia-admission: the admission trail's (#349)
         self.log = self.dir / "log"                   # its /var/log/regalia-esp-advance: the ESP advance's trail (#66 B3)
 
     def in_ns(self, *argv, check=True, **kw):
@@ -282,7 +283,7 @@ class Cluster:
         self._owner_token()
         self._network()
         for n in self.members():
-            for d in (n.dir / "etc", n.state, n.admission, n.run):
+            for d in (n.dir / "etc", n.state, n.admission, n.run, n.admission_log):
                 d.mkdir(parents=True)
             os.chmod(n.dir, 0o711)
             self._tpm(n)
@@ -298,6 +299,7 @@ class Cluster:
             os.chmod(n.state, 0o755)
             sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
             os.chmod(n.admission, ADMISSION_DIR_MODE)
+            self._admission_log_dir(n)
         for n in self.nodes.values():
             self._state_files(n)
         writer = threading.Thread(target=self._state_writer, daemon=True)     # stopped by close() (stop_threads)
@@ -655,7 +657,7 @@ class Cluster:
         _replace(n.dir / "etc" / "site.json", json.dumps(site))            # whole, never torn: running services read them
         # no measurements.json: the document is in the node's store by digest, and later ones come by sync (#332)
         cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=n.tcti,
-                   state_dir=str(n.state), admission_dir=str(n.admission), run_dir=str(n.run),
+                   state_dir=str(n.state), admission_dir=str(n.admission), run_dir=str(n.run), admission_log_dir=str(n.admission_log),
                    wg_service_key=str(n.dir / "etc" / "wg-service.key"), measurements=str(n.dir / "etc" / "measurements.json"),
                    time_servers=["nts1.e2e3.invalid", "nts2.e2e3.invalid"], pull_interval=10,
                    beat_interval_s=heartbeat.MIN_INTERVAL_S)    # #199: the shortest the product allows (600 s)
@@ -896,7 +898,7 @@ class Cluster:
         AK), new WireGuard keys, its directories and clock. Not yet in any manifest."""
         n = NodeHere(self.work, name, max(m.index for m in self.members()) + 1)
         self.nodes[name], self.time[name], self.services[name] = n, True, ()
-        for d in (n.dir / "etc", n.state, n.admission, n.run):
+        for d in (n.dir / "etc", n.state, n.admission, n.run, n.admission_log):
             d.mkdir(parents=True)
         os.chmod(n.dir, 0o711)
         self._wire(n)
@@ -965,6 +967,7 @@ class Cluster:
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
         os.chmod(n.admission, ADMISSION_DIR_MODE)            # as the shipped unit makes it (#345)
+        self._admission_log_dir(n)
         return envelope
 
     # ---- #199: restrictive changes without the root (revoke.py), as the operators make them ----
@@ -1556,11 +1559,18 @@ class Cluster:
         if not until(lambda: sh("systemctl", "is-active", COLLECTOR_UNIT, check=False).stdout.strip() == "active", 20, 0.5):
             raise RuntimeError("the audit collector did not start")
 
+    @staticmethod
+    def _admission_log_dir(n):
+        """The admission trail's directory as regalia.tmpfiles.conf makes /var/log/regalia-admission on a host (#349):
+        regalia-admission's, read through regalia-audit-admission, 0750."""
+        sh("chown", "regalia-admission:regalia-audit-admission", str(n.admission_log))
+        os.chmod(n.admission_log, 0o750)
+
     def _trail_path(self, name, trail):
         if trail in self.tool_trails.get(name, {}):
             return self.tool_trails[name][trail]
         n = self.nodes[name]
-        return {"sync": n.state / "sync-audit.jsonl", "admission": n.admission / "audit.jsonl",
+        return {"sync": n.state / "sync-audit.jsonl", "admission": n.admission_log / "audit.jsonl",
                 "esp-advances": n.log / "esp-advances.jsonl"}[trail]
 
     def _node_trails(self, name):

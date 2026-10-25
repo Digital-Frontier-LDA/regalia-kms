@@ -36,7 +36,7 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
-        for sub in ("state", "admission", "run", "etc"):
+        for sub in ("state", "admission", "run", "etc", "log-admission"):
             os.mkdir(os.path.join(self.d, sub), 0o755)
         with open(os.path.join(self.d, "etc", "site.json"), "w") as f:
             json.dump(SITE, f)
@@ -44,6 +44,7 @@ class Case(unittest.TestCase):
             f.write(PRIVATE + "\n")
         self.cfg = {"schema": node.SCHEMA, "node_id": "a", "site": self.d + "/etc/site.json", "root_key": ROOT, "tcti": None,
                     "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "nv_signing": "0x0150001c", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
+                    "admission_log_dir": self.d + "/log-admission",
                     "wg_service_key": self.d + "/etc/wg-service.key", "measurements": self.d + "/etc/measurements.json",
                     "pcrs": [7, 11], "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
         self.tpm = hbt.FakeTpm()
@@ -76,7 +77,9 @@ class Configuration(Case):
                 ("an NV index in capitals", {"nv_heartbeat": "0x0150001A"}, "nv_heartbeat must be an NV index"),
                 ("overlapping indices", {"nv_heartbeat": "0x01500017"}, "must not overlap"),
                 ("a relative path", {"state_dir": "state"}, "state_dir must be an absolute, normalised path"),
-                ("one directory for two writers", {"admission_dir": "/x", "state_dir": "/x"}, "must be three directories"),
+                ("one directory for two writers", {"admission_dir": "/x", "state_dir": "/x"}, "must be four directories"),
+                ("the admission trail in its state directory", {"admission_log_dir": "/x", "admission_dir": "/x"}, "must be four directories"),
+                ("a relative admission log directory", {"admission_log_dir": "log"}, "admission_log_dir must be an absolute, normalised path"),
                 ("a path with ..", {"site": "/etc/regalia/../shadow"}, "site must be an absolute, normalised path"),
                 ("no PCRs", {"pcrs": []}, "pcrs must be"), ("PCRs out of order", {"pcrs": [11, 7]}, "pcrs must be"),
                 ("a PCR as true", {"pcrs": [True]}, "pcrs must be"), ("PCR 24", {"pcrs": [24]}, "pcrs must be"),
@@ -102,6 +105,29 @@ class Configuration(Case):
         self.assertEqual(sorted(n.sources(self.m1)), ["b", "c"])
         self.assertEqual(sorted(n.peers(hbt.manifest(c="REVOKED_STOLEN"))), ["b"])          # a terminal node is nobody's source
         self.refused("is not in the manifest", n.own_address, dict(self.m1, nodes=self.m1["nodes"][1:]))
+
+
+class AdmissionTrail(Case):
+    """#349: the admission trail lives in a directory of its own (admission_log_dir, /var/log/regalia-admission), so the
+    admission service's state directory can be 0700. No node has run an image yet (#61): a trail with lines still at the
+    old path (admission_dir/audit.jsonl, or its archives) is refused, never forked, since a fresh chain at the new path
+    would begin at seq 1 under a collector stream already further on, and strand the old file's unshipped lines."""
+
+    def test_the_trail_is_in_its_own_directory(self):
+        self.assertEqual(self.node().admission_trail(), self.d + "/log-admission/audit.jsonl")
+
+    def test_lines_at_the_old_path_are_refused_not_forked(self):
+        old = self.d + "/admission/audit.jsonl"
+        open(old, "w").close()                                                   # empty: nothing to strand
+        self.assertEqual(self.node().admission_trail(), self.d + "/log-admission/audit.jsonl")
+        with open(old, "w") as f:
+            f.write('{"event": "admission-serving", "seq": 1, "prev": ""}\n')
+        with self.assertRaisesRegex(node.Refused, "the admission trail still has lines at %s: move it, with its archives, to %s/log-admission" % (old, self.d)):
+            self.node().admission_trail()
+        os.unlink(old)
+        open(old + ".1", "w").close()                                            # an archive alone is a trail that was rotated
+        with self.assertRaisesRegex(node.Refused, "still has lines at"):
+            self.node().admission_trail()
 
 
 class Indices(unittest.TestCase):

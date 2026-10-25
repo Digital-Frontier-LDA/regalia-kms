@@ -99,7 +99,7 @@ MARGIN = 5                 # seconds held back from the lease's expiry: the daem
 NEVER = "1970-01-01T00:00:00Z"
 # The daemon reads this file with a limit of 4096 bytes (internal/admission/admission.go, maxFileBytes) and
 # refuses a larger one as "oversized", which would hide the reason. So the reason here is bounded well below
-# that. The full text goes to the node's admission trail (admission_dir/audit.jsonl): each renewal attempt and its
+# that. The full text goes to the node's admission trail (admission_log_dir/audit.jsonl, #349): each renewal attempt and its
 # answer (node.admission_service, "admission-renew"), and each change between serving and not serving with its reason
 # ("admission-serving", Service below).
 ADMISSION_REASON_LIMIT = 1024
