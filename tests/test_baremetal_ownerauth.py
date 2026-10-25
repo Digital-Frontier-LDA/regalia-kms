@@ -15,6 +15,7 @@ import os
 import pathlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -480,15 +481,15 @@ class Rotation(unittest.TestCase):
     def test_the_node_s_record_of_its_record_is_trusted_only_as_root_s_0600_file(self):
         path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
         os.chmod(path, 0o644)
-        with self.assertRaisesRegex(enrol.Refused, "cannot be trusted"):
+        with self.assertRaisesRegex(m.Refused, "cannot be trusted"):
             enrol.ownerauth_current(self.d)
-        with self.assertRaisesRegex(enrol.Refused, "cannot be trusted"):
+        with self.assertRaisesRegex(m.Refused, "cannot be trusted"):
             self.rotate()
         self.assertEqual(self.tpm.owner_auth, self.current)
         os.chmod(path, 0o600)
         os.rename(path, path + ".real")
         os.symlink(path + ".real", path)                                  # a link in its place is never followed
-        with self.assertRaisesRegex(enrol.Refused, "cannot be trusted"):
+        with self.assertRaisesRegex(m.Refused, "cannot be trusted"):
             enrol.ownerauth_current(self.d)
 
     def test_rotated_in_a_salted_session_then_a_rerun_changes_nothing(self):
@@ -550,6 +551,82 @@ class Rotation(unittest.TestCase):
         self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
         with self.assertRaisesRegex(enrol.Refused, "--adopt goes with --check"):
             enrol.set_ownerauth("a", self.pin, self.records["new"], io.BytesIO(b""), run=self.tpm, directory=self.d, adopt=True)
+
+    def test_a_directory_in_place_of_the_held_file_is_refused_by_name_with_nothing_recorded(self):
+        """b9 on #502: a directory there fails held()'s regular-file check, and then cannot be hard-linked aside (EPERM),
+        which escaped the adopt as a traceback. It is a named refusal, and nothing is recorded."""
+        path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
+        os.unlink(path)
+        os.mkdir(path, 0o700)
+        with self.assertRaisesRegex(m.Refused, "is not a regular file of root's"):
+            enrol.ownerauth_current(self.d)
+        with self.assertRaisesRegex(enrol.Refused, "cannot be kept aside as ownerauth.json.untrusted .*move it out of the way by hand"):
+            enrol.set_ownerauth("a", self.pin, self.records["current"], io.BytesIO((self.current.hex() + "\n").encode()),
+                                check=True, adopt=True, run=self.tpm, directory=self.d)
+        self.assertTrue(os.path.isdir(path))                               # left as it was
+        self.assertFalse(os.path.lexists(path + ".untrusted"))
+
+    def test_ninety_nine_kept_untrustworthy_files_stop_the_adopt_before_anything_is_recorded(self):
+        """The bound on the kept evidence (_ownerauth_replace): with every name from .untrusted to .untrusted.99 taken,
+        an adopt is refused and records nothing; the falsifier sweep on the adopted #502 found nothing reaching it."""
+        path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
+        for n in range(1, 100):
+            with open(os.path.join(self.d, enrol.OWNERAUTH_STATE + ".untrusted" + ("" if n == 1 else ".%d" % n)), "w") as f:
+                f.write("earlier evidence %d" % n)
+        os.chmod(path, 0o644)                                              # the held file is now untrustworthy
+        with self.assertRaisesRegex(enrol.Refused, "already keeps 99 untrustworthy owner-authorization files"):
+            enrol.set_ownerauth("a", self.pin, self.records["current"], io.BytesIO((self.current.hex() + "\n").encode()),
+                                check=True, adopt=True, run=self.tpm, directory=self.d)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o644)       # not replaced
+        with open(os.path.join(self.d, enrol.OWNERAUTH_STATE + ".untrusted.99")) as f:
+            self.assertEqual(f.read(), "earlier evidence 99")             # no earlier evidence touched
+
+    def test_an_untrustworthy_held_file_is_refused_with_its_recovery_and_the_recovery_works(self):
+        """regalia-kms-d9 on #502: no stranding by the guard itself. A held file that is not root's 0600 (or a link, or
+        malformed) is refused everywhere with the way on named, and that way on (--check --adopt, after the TPM answers)
+        replaces it, keeping the old one as .untrusted."""
+        path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
+        check = lambda record, raw, **kw: enrol.set_ownerauth("a", self.pin, self.records[record], io.BytesIO((raw.hex() + "\n").encode()),
+                                                              check=True, run=self.tpm, directory=self.d, **kw)
+
+        def malformed():
+            with open(path, "w") as f:                                     # stays 0600: only its content is wrong
+                f.write("[]")
+        recovery = "then `enrol ownerauth --check --adopt --record RECORD`"
+        for label, spoil in (("readable", lambda: os.chmod(path, 0o644)),
+                             ("a link", lambda: (os.rename(path, path + ".real"), os.symlink(path + ".real", path))),
+                             ("malformed", malformed)):
+            with self.subTest(label):
+                for leftover in (path, path + ".real", path + ".untrusted"):
+                    if os.path.lexists(leftover):
+                        os.unlink(leftover)
+                enrol._ownerauth_hold(self.d, self.digest("current"))
+                spoil()
+                with open(self.records["current"]) as f:
+                    current = json.load(f)
+                with self.assertRaisesRegex(m.Refused, recovery):                    # the tools (enrol commit, reanchor, recount)
+                    ownerauth.require_held(current, self.d)
+                with self.assertRaisesRegex(m.Refused, recovery):                    # a rotation
+                    self.rotate()
+                with self.assertRaisesRegex(m.Refused, recovery):                    # a plain check
+                    check("current", self.current)
+                with self.assertRaisesRegex(enrol.Refused, "is NOT a's envelope value"):     # the TPM must answer first
+                    check("new", self.new, adopt=True)
+                self.assertTrue(os.path.lexists(path) and not os.path.lexists(path + ".untrusted"))
+                self.assertIn("kept as ownerauth.json.untrusted", check("current", self.current, adopt=True))
+                self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+                self.assertTrue(os.path.lexists(path + ".untrusted"))
+                ownerauth.require_held(current, self.d)                              # the tools work again
+        # a second episode keeps the first one's evidence: its file goes under the next free name, both stay
+        with open(path + ".untrusted") as f:
+            first = f.read()
+        os.chmod(path, 0o644)
+        self.assertIn("kept as ownerauth.json.untrusted.2", check("current", self.current, adopt=True))
+        with open(path + ".untrusted") as f:
+            self.assertEqual(f.read(), first)
+        self.assertEqual(stat.S_IMODE(os.stat(path + ".untrusted.2").st_mode), 0o644)
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+        self.assertEqual(self.tpm.salted_with, [])
 
     def test_no_salted_changeauth_near_dictionary_attack_lockout(self):
         """regalia-kms-d9: the one strike-capable call (a changeauth in the EK-salted session) is not made unless the TPM
