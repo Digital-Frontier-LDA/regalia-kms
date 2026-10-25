@@ -95,6 +95,45 @@ class Script(unittest.TestCase):
         self.assertIn("--no-hostonly --no-hostonly-cmdline --add regalia-unlock", drift)
         self.assertIn("$SUITE-security", drift)
 
+    def test_the_drift_build_installs_every_file_the_module_requires(self):
+        """#330: dracut stops for a requested module whose check() fails, so a file the module comes to require and the
+        drift build does not install ends every daily run at dracut, exit 2, with nothing compared. f6e87f14 (#66 B3)
+        made the root key such a file and the check was dead from 2026-10-04."""
+        setup = (ROOT / "deploy" / "baremetal" / "initrd" / "dracut" / "90regalia-unlock" / "module-setup.sh").read_text()
+        drift = (ROOT / "e2e" / "initrd-drift.sh").read_text()
+        required = re.findall(r'\[ ! -[sefx] "\$\{dracutsysrootdir-\}(/[^"$]+)" \]', setup)
+        self.assertIn("/usr/lib/regalia/root-key.json", required)      # the instrument sees the file that broke it
+        for path in required:
+            with self.subTest(path):
+                self.assertRegex(drift, r'install [^\n]*"\$ROOT%s"' % re.escape(path))
+
+    def test_the_drift_build_trusts_the_boot_test_s_root(self):
+        """The root key is BOUND in the inventory (=root-key on both sides, uki.py), so any root compares equal: the
+        drift build takes the boot test's fixed TEST root, made the same way, never a deployment's."""
+        boot = (ROOT / "e2e" / "unlock-boot-qemu.sh").read_text()
+        drift = (ROOT / "e2e" / "initrd-drift.sh").read_text()
+        derive = re.search(r"^python3 -I -c '[^\n]*root_public[^\n]*' \\\n  tests/vectors/highwater-v1.json ", boot, re.M)
+        self.assertIsNotNone(derive)
+        self.assertIn(derive.group(0), drift)
+
+    def test_a_check_that_could_not_run_fails_the_run(self):
+        """#330: an exit 2 filed an issue and left the run green for three weeks. The build job now fails AFTER the
+        report is uploaded (so the filing job still says what failed), and a found drift (exit 1) does not fail it."""
+        import yaml
+        steps = yaml.safe_load((ROOT / ".github" / "workflows" / "initrd-drift.yml").read_text())["jobs"]["build"]["steps"]
+        upload = [i for i, s in enumerate(steps) if s.get("uses", "").startswith("actions/upload-artifact@")]
+        self.assertEqual(len(upload), 1)
+        last = steps[-1]
+        self.assertGreater(len(steps) - 1, upload[0])
+        self.assertIn('"$RUNNER_TEMP/drift/rc"', last["run"])
+        self.assertIn('-ge 2', last["run"])
+        self.assertIn("::error", last["run"])
+        self.assertIn("exit 1", last["run"])
+        # b9 on #599: a red that is not a regression says where to look first, on the run and in the issue
+        build = " ".join(st.get("run", "") for st in steps)
+        self.assertIn("mirror outage", last["run"])
+        self.assertEqual(build.count("archive or mirror outage"), 2)
+
     def test_the_workflow_splits_building_from_filing(self):
         import yaml
         text = (ROOT / ".github" / "workflows" / "initrd-drift.yml").read_text()
