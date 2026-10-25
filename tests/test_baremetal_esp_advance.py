@@ -111,6 +111,52 @@ class EspAdvance(EspCase):
         self.assertEqual([e["event"] for e in lines], ["esp-advance-requested", "esp-advance"])
         self.assertEqual((lines[-1]["outcome"], lines[-1]["epoch"]), ("ALLOW", 2))
 
+    def test_an_allow_line_that_cannot_be_written_is_a_gap_not_a_refusal(self):
+        """df-grafana-b9's read of #449: the ALLOW is written AFTER the anchor moved. If it fails, the advance still
+        happened: esp_advance says so (TrailIncomplete, with its result), and main() writes no DENY for it, exits 3 and
+        says it advanced. A DENY there would record as refused the one move that took place."""
+        self.sync.commit(self.e2)
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+        lines = []
+
+        def record(event):
+            if event.get("outcome") == "ALLOW":
+                raise OSError("No space left on device")
+            lines.append(event)
+        with self.assertRaises(node.TrailIncomplete) as gap:
+            node.esp_advance(self.n, self.esp, lock_path=self.lock, record=record)
+        self.assertEqual(self.n.anchor().value(), 2)                      # it moved
+        self.assertEqual(self.on_esp()[-1], self.e2)
+        self.assertEqual(gap.exception.result[0], 2)
+        self.assertIn("advanced to epoch 2", str(gap.exception))
+        self.assertEqual([e["event"] for e in lines], ["esp-advance-requested"])
+
+    def test_main_writes_no_deny_for_an_advance_whose_allow_failed(self):
+        import contextlib, io, json
+        self.sync.commit(self.e2)
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+        path = os.path.join(self.d, "esp-advance-gap.jsonl")
+        real = node.Trail.__call__
+
+        def call(trail, event):
+            if event.get("outcome") == "ALLOW":
+                raise OSError("No space left on device")
+            return real(trail, event)
+        published, err = [], io.StringIO()
+        with unittest.mock.patch.object(node.trails, "where", lambda name, cfg=None: path), \
+                unittest.mock.patch.object(node.metrics, "publish", lambda writer, samples, target=None: published.append(samples)), \
+                unittest.mock.patch.object(node, "load", lambda p: self.cfg), \
+                unittest.mock.patch.object(node, "Node", lambda cfg: self.n), \
+                unittest.mock.patch.object(node.Trail, "__call__", call), contextlib.redirect_stderr(err):
+            rc = node.main(["--config", "x", "--esp", self.esp, "--esp-lock", self.lock, "esp-advance"])
+        self.assertEqual(rc, 3, err.getvalue())
+        self.assertIn("INCOMPLETE: advanced to epoch 2", err.getvalue())
+        with open(path) as f:
+            events = [json.loads(l) for l in f.read().splitlines()]
+        self.assertEqual([(e["event"], e.get("outcome")) for e in events], [("esp-advance-requested", None)])   # no DENY
+        self.assertEqual(self.n.anchor().value(), 2)
+        self.assertEqual({n: v for n, _, v in published[-1]}.get("regalia_esp_advance_ok"), 1)
+
     def test_main_records_a_refusal_in_the_trail(self):
         import json
         path = os.path.join(self.d, "esp-advance.jsonl")

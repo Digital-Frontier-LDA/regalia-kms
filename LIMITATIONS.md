@@ -321,6 +321,17 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     DENY line is best effort (a run that cannot write its trail is still refused, and says so in the journal
     and in `regalia_esp_advance_ok`); a refusal by systemd before the unit runs (`/efi` not mounted) writes
     no line, only the unit's failure.
+  - **Fail closed on the request line, at a cost (accepted pending the owner's decision).** A request that
+    cannot be written (a full or unwritable `/var/log/regalia-esp-advance`) refuses the advance: nothing is done
+    unrecorded (#278). The cost: while it lasts, that node's TPM anchor stays at the epoch it holds, so its
+    rollback protection does not advance with the fleet, and a boot chain down to that epoch stays acceptable on
+    it. `RegaliaEspAdvanceFailing` (15 min) and `RegaliaAnchorBehindFleet` (30 min) alert. The alternative,
+    advancing and recording the missing request only in the journal, keeps rollback protection current but
+    makes an anchor move with no trail line.
+  - An ALLOW line that cannot be written AFTER the anchor moved is not a refusal: the advance happened, no
+    DENY is written for it (that would record as refused a move that took place), the run exits 3
+    ("INCOMPLETE: advanced to epoch N…") with `regalia_esp_advance_ok` 1, and the trail holds the request with
+    no outcome; the unit's next run records the state it finds.
   - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's. `reanchor` (#391) refuses
     while `regalia-esp-advance` (or its path unit, sync or admission) runs, by `systemctl is-active`, and holds the
     advance's lock for its whole run. On a machine with no `systemctl` it skips the unit check, and the three-node

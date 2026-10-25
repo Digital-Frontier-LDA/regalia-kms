@@ -85,6 +85,17 @@ from deploy.baremetal import (admission, trails, attest, authtime, beat, bootnet
 
 Refused, require = membership.Refused, membership.require
 
+
+class TrailIncomplete(Exception):
+    """The ESP advance HAPPENED (the ESP holds the chain and the TPM anchor moved), but its ALLOW line could not be
+    written (#449, df-grafana-b9's read). Not a refusal: main() writes no DENY for it, which would record as refused an
+    advance that took place. `result` is what esp_advance returned. Neither OSError nor Refused, so nothing that
+    handles a refusal takes it for one."""
+
+    def __init__(self, message, result):
+        super().__init__(message)
+        self.result = result
+
 SCHEMA = "regalia.node/v1"
 KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "nv_signing", "state_dir", "admission_dir", "run_dir",
         "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval", "beat_interval_s")
@@ -286,8 +297,12 @@ def esp_advance(node, esp, lock_path=ESP_LOCK, record=None):
     facts = {"epoch": epoch, "manifest_digest": membership.digest(manifests[-1]), "chain_sha256": hashlib.sha256(chain).hexdigest(),
              "esp_rewritten": rewritten, "boot_renderable": unrenderable is None}
     # THE REQUEST, before the ESP or the anchor changes (#278: never done unrecorded; regalia-kms-3e's read): a trail that
-    # cannot be written changes nothing. The OUTCOME after the anchor is checked: a crash in between leaves a request with
-    # no outcome, read as "may or may not have moved; the next run says", never an ALLOW for a move that did not happen
+    # cannot be written changes nothing. FAIL CLOSED, deliberately, and at a cost: while this node's trail cannot be
+    # written, its anchor stays at the epoch it holds, so its rollback protection does not advance with the fleet (a boot
+    # chain down to that epoch stays acceptable). RegaliaEspAdvanceFailing (15 min) and RegaliaAnchorBehindFleet (30 min)
+    # are what tell an operator; LIMITATIONS.md states the trade (df-grafana-b9's read of #449). The OUTCOME after the
+    # anchor is checked: a crash in between leaves a request with no outcome, read as "may or may not have moved; the next
+    # run says", never an ALLOW for a move that did not happen; a failed ALLOW is TrailIncomplete, never a refusal
     if record is not None:
         record(dict(facts, event="esp-advance-requested"))
     if rewritten:
@@ -295,9 +310,15 @@ def esp_advance(node, esp, lock_path=ESP_LOCK, record=None):
         require(_read_regular(target, len(chain) + 1) == chain, "the chain read back from %s is not the one written" % target)
     anchor.anchor(epoch, membership.Store._digests(manifests))
     anchor.check(epoch)
+    result = epoch, hashlib.sha256(chain).hexdigest(), rewritten, unrenderable
     if record is not None:
-        record(dict(facts, event="esp-advance", outcome="ALLOW"))
-    return epoch, hashlib.sha256(chain).hexdigest(), rewritten, unrenderable
+        try:
+            record(dict(facts, event="esp-advance", outcome="ALLOW"))
+        except Exception as failure:
+            # past this point the advance has happened: a failed ALLOW is a gap in the trail, never a refusal
+            raise TrailIncomplete("advanced to epoch %d (the ESP and the TPM anchor moved), but its ALLOW line could not be "
+                                  "written: %s: %s" % (epoch, type(failure).__name__, failure), result) from failure
+    return result
 
 
 ESP_SETTLE_RUNS = 5          # runs of esp_advance at most, while the published chain keeps changing under it
@@ -1116,6 +1137,12 @@ def main(argv=None):
             trail = Trail(args.esp_trail or trails.where(ESP_TRAIL), ESP_TRAIL)
             try:
                 epoch, sha, rewritten, unrenderable = esp_advance_settled(node, args.esp, lock_path=args.esp_lock, record=trail)
+            except TrailIncomplete as gap:
+                # the advance happened: its metrics say so, and no DENY line is written for it; the trail holds its
+                # request with no outcome, and the exit (3, neither success nor a refusal) fails the unit for an operator
+                esp_metrics(node, ok=True, renderable=gap.result[3] is None)
+                print("INCOMPLETE: %s" % gap, file=sys.stderr)
+                return 3
             except BaseException as failure:
                 esp_metrics(node, ok=False)
                 with contextlib.suppress(Exception):      # the refusal recorded too, best effort: it is also in the journal
