@@ -2014,6 +2014,60 @@ def _replace_esp(directory, filename, data):
         os.close(dfd)
 
 
+class EspChain:
+    """THE writer of the membership chain on the ESP (#468), for node.esp_advance and reanchor.write_esp (#391), which
+    kept two identical copies by hand. In two steps, because esp_advance records its request BETWEEN them (#449, #278):
+    the request names whether the ESP is to be rewritten, and must come before the write.
+
+      EspChain(esp, chain)  the chain's directory made a trusted one (_ensure_trusted_dir), and the file there read,
+                            a regular file never through a link, never blocking on a FIFO: `rewritten` says whether it
+                            differs from `chain`. No FILE is written; the chain's directory may be CREATED
+                            here (_ensure_trusted_dir makes a missing one, 0700, on a fresh ESP), which is not
+                            chain content, so a caller's "request before the chain changes" still holds, but the
+                            ESP is not untouched until .write() (df-grafana-b9 on #574).
+      .write()              when it differs, `chain` written over it (_replace_esp: a temporary file fsynced, renamed,
+                            the directory fsynced), read back, and refused if it is not `chain`. Returns `rewritten`.
+
+    Only the chain: the trail lines, the anchor's move and the chain's verification stay with each caller, which
+    verify against different things (the advance against the anchor; reanchor against the peers' agreed chain and the
+    pinned root). Refusals are this module's Refused; each caller turns them into its own."""
+
+    def __init__(self, esp, chain):
+        from deploy.baremetal import bootcreds
+        relative = _rendered_path(bootcreds.CHAIN_ON_ESP)
+        self.directory, self.filename = os.path.join(esp, os.path.dirname(relative)), os.path.basename(relative)
+        self.target = os.path.join(self.directory, self.filename)
+        self.chain = chain
+        _ensure_trusted_dir(self.directory)
+        self.rewritten = self._read() != chain
+
+    def _read(self):
+        try:
+            fd = os.open(self.target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        except FileNotFoundError:
+            return None
+        except OSError as error:                    # ELOOP: a link
+            raise Refused("%s cannot be read as a regular file (%s): it is not followed" % (self.target, error.strerror)) from None
+        try:
+            require(stat.S_ISREG(os.fstat(fd).st_mode), "%s is not a regular file" % self.target)
+            limit, chunks, size = len(self.chain) + 1, [], 0
+            while size < limit:
+                chunk = os.read(fd, min(1 << 20, limit - size))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+            return b"".join(chunks)
+        finally:
+            os.close(fd)
+
+    def write(self):
+        if self.rewritten:
+            _replace_esp(self.directory, self.filename, self.chain)
+            require(self._read() == self.chain, "the chain read back from %s is not the one written" % self.target)
+        return self.rewritten
+
+
 def render_credentials(journal, esp, site, chain, root_key, anchor, device=None):
     """The ESP files rendered from the anchored chain and the site (bootcreds.esp_files, #271: the ONE call enrol and
     the update path make; what it returns depends on #66's B3 stage, so its paths are taken as they come, confined

@@ -314,32 +314,13 @@ def check_esp(esp, root_key):
 def write_esp(esp, envelopes):
     """The chain being anchored written to the ESP BEFORE the anchor moves (#410's order: the initrd accepts an ESP chain
     ahead of its anchor, never one below it; regalia-kms-24 on #391), through enrolment's confined writer, as
-    regalia-esp-advance writes it (node.esp_advance): a trusted directory, a temporary file fsynced and renamed, read
-    back. Only the chain. Returns whether the ESP was rewritten."""
+    regalia-esp-advance writes it (node.esp_advance), by the same writer (enrol.EspChain, #468): a trusted directory, a
+    temporary file fsynced and renamed, read back. Only the chain. Returns whether the ESP was rewritten."""
     from deploy.baremetal import enrol
-    chain = membership.canonical(envelopes)
-    target = esp_chain_path(esp)
-    directory, filename = os.path.dirname(target), os.path.basename(target)
     try:
-        enrol._ensure_trusted_dir(directory)
+        return enrol.EspChain(esp, membership.canonical(envelopes)).write()
     except enrol.Refused as refused:
         raise Refused(str(refused)) from None
-
-    def read():
-        try:
-            fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-        except FileNotFoundError:
-            return None
-        try:
-            require(stat.S_ISREG(os.fstat(fd).st_mode), "%s is not a regular file" % target)
-            return os.read(fd, len(chain) + 1)
-        finally:
-            os.close(fd)
-    if read() == chain:
-        return False
-    enrol._replace_esp(directory, filename, chain)
-    require(read() == chain, "the chain read back from %s is not the one written" % target)
-    return True
 
 
 def node_policy(path, node_id):

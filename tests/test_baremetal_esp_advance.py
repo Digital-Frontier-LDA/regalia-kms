@@ -157,6 +157,41 @@ class EspAdvance(EspCase):
         self.assertEqual(self.n.anchor().value(), 2)
         self.assertEqual({n: v for n, _, v in published[-1]}.get("regalia_esp_advance_ok"), 1)
 
+    def test_a_chain_read_back_otherwise_refuses_before_the_anchor_moves(self):
+        """#468's one writer, through the advance: a write that does not read back as the chain is refused, and the
+        anchor stays where it was (the ESP must never be below, nor beside, what is anchored)."""
+        self.sync.commit(self.e2)
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+        real = enrol._replace_esp
+        with unittest.mock.patch.object(enrol, "_replace_esp", lambda d, f, data: real(d, f, data[:-1] + b"X")), \
+                self.assertRaisesRegex(m.Refused, "is not the one written"):
+            self.advance()
+        self.assertEqual(self.n.anchor().value(), 1)
+
+    def test_the_request_names_rewritten_before_the_write_happens(self):
+        """#449's order through #468's split: whether the ESP differs is known (and recorded in the request line)
+        before anything is written; the write follows the line."""
+        self.sync.commit(self.e2)
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+        order = []
+        write = enrol._replace_esp
+        with unittest.mock.patch.object(enrol, "_replace_esp", lambda *a: (order.append("write"), write(*a))[1]):
+            node.esp_advance(self.n, self.esp, lock_path=self.lock,
+                             record=lambda e: order.append((e["event"], e.get("esp_rewritten"))))
+        self.assertEqual(order[:2], [("esp-advance-requested", True), "write"])
+        self.assertFalse(os.path.exists(os.path.join(self.esp, bootcreds.CHAIN_ON_ESP) + ".enrol-new"))
+
+    def test_both_esp_writers_are_the_one_writer(self):
+        """#468: node.esp_advance and reanchor.write_esp kept two copies by hand. Both now go through enrol.EspChain,
+        and neither calls the low-level writer itself: a second copy creeping back is caught here."""
+        import inspect
+        from deploy.baremetal import reanchor
+        for fn in (node.esp_advance, reanchor.write_esp):
+            src = inspect.getsource(fn)
+            self.assertIn("enrol.EspChain(", src, fn.__qualname__)
+            self.assertNotIn("_replace_esp(", src.split('"""', 2)[-1], fn.__qualname__)
+            self.assertNotIn("_ensure_trusted_dir(", src.split('"""', 2)[-1], fn.__qualname__)
+
     def test_main_records_a_refusal_in_the_trail(self):
         import json
         path = os.path.join(self.d, "esp-advance.jsonl")
