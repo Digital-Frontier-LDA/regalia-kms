@@ -170,8 +170,10 @@ def recount(counter, manifest, documents, typed, sink, floor_path):
                     require(counter._owner("nvundefine", index).returncode == 0, "cannot delete NV index %s" % index)
             began.append("define")
             counter._define_at(planned["floor"])           # under the same lock; no increment loop up to the floor
-        value = counter.value()
-        require(value == planned["floor"], "the new counter reads %d, not the floor %d" % (value, planned["floor"]))
+            # read back BEFORE the lock goes to a waiting service (#244, from draft #373): after it, a legitimate advance
+            # by regalia-sync made a recovery that worked read as INCOMPLETE. value() takes no lock of its own
+            value = counter.value()
+            require(value == planned["floor"], "the new counter reads %d, not the floor %d" % (value, planned["floor"]))
     except BaseException as failure:
         if not began:
             sink(event("recount", planned, outcome="DENY", reason=str(failure)[:240] or type(failure).__name__))
