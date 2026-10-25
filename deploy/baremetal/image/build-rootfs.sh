@@ -64,7 +64,7 @@ SCHEMA="regalia.rootfs-build/v1"
 SUITE=trixie
 BUILD_PACKAGES="gcc,libc6-dev,libpcsclite-dev,pkg-config"
 PIN="deploy/baremetal/image/etcd.pin"
-REPO_FILES=("$SCRIPT" "$LIST" "$PIN" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh go.mod go.sum)
+REPO_FILES=("$SCRIPT" "$LIST" "$PIN" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh go.mod go.sum)
 die(){ echo "build-rootfs: $*" >&2; exit 2; }
 SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO" KEYRING=""
 while [ $# -gt 0 ]; do
@@ -91,6 +91,8 @@ for t in mmdebstrap git python3 gpgv curl tar; do command -v "$t" >/dev/null || 
 # the commit, clean, read as its owner (build-initrd.sh's rules, the same file)
 # shellcheck source=deploy/baremetal/initrd/repo-git.sh
 . "$REPO/deploy/baremetal/initrd/repo-git.sh"
+# shellcheck source=deploy/baremetal/initrd/tree-retry.sh
+. "$REPO/deploy/baremetal/initrd/tree-retry.sh"
 repo_git_check || die "the checkout is refused (above)"
 echo "build-rootfs: the checkout is read as uid $(repo_git_uid) (top $(stat -c %u "$REPO"), .git $(stat -c %u "$REPO/.git"))"
 COMMIT="$(repo_git rev-parse --verify HEAD)" || die "$REPO is not a git checkout"
@@ -164,10 +166,12 @@ MAIN="https://snapshot.debian.org/archive/debian/$SNAPSHOT"
 SECURITY="https://snapshot.debian.org/archive/debian-security/$SNAPSHOT"
 SOURCES=("deb [signed-by=$KEYRING] $MAIN $SUITE main" "deb [signed-by=$KEYRING] $MAIN $SUITE-updates main"
          "deb [signed-by=$KEYRING] $SECURITY $SUITE-security main")
-tree(){   # tree DIR PACKAGES: a minbase tree of Debian $SUITE at the snapshot, with PACKAGES
-  env -i PATH="$PATH" LC_ALL=C TZ=UTC SOURCE_DATE_EPOCH="$EPOCH" mmdebstrap --variant=minbase \
-    --aptopt='Acquire::Check-Valid-Until "false"' --aptopt='Acquire::Retries "5"' --aptopt='APT::Install-Recommends "false"' \
-    --include="$2" "$SUITE" "$1" "${SOURCES[@]}" >"$W/mmdebstrap-$(basename "$1").log" 2>&1 \
+tree(){   # tree DIR PACKAGES: a minbase tree of Debian $SUITE at the snapshot, with PACKAGES (a fetch that fails is
+          # tried again into a new tree, tree-retry.sh, #503)
+  retry_tree "$W/mmdebstrap-$(basename "$1").log" "$1" env -i PATH="$PATH" LC_ALL=C TZ=UTC SOURCE_DATE_EPOCH="$EPOCH" \
+    mmdebstrap --variant=minbase --aptopt='Acquire::Check-Valid-Until "false"' --aptopt='Acquire::Retries "5"' \
+    --aptopt='Acquire::Retries::Delay "true"' --aptopt='APT::Install-Recommends "false"' \
+    --include="$2" "$SUITE" "$1" "${SOURCES[@]}" \
     || { tail -40 "$W/mmdebstrap-$(basename "$1").log"; die "mmdebstrap failed for $(basename "$1")"; }
 }
 
