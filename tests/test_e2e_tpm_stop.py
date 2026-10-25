@@ -51,11 +51,12 @@ class MoreEvidence(TpmStopReport):
                          status="Name:\tswtpm\nState:\tR (running)\nPPid:\t1\nSigPnd:\t0000000000000000\n"
                                 "ShdPnd:\t0000000000004000\nSigBlk:\t0000000000000000\nSigIgn:\t0000000000001000\n"
                                 "SigCgt:\t0000000000004002\n", wchan="0", stack="")
-        for tid, state, wchan in ((4244, "R", "0"), (4250, "S", "do_sys_poll")):
+        for tid, state, wchan, blk in ((4244, "R", "0", "0000000000000000"), (4250, "S", "do_sys_poll", "0000000000004000")):
             task = self.d / "proc" / "4244" / "task" / str(tid)
             task.mkdir(parents=True)
             (task / "stat").write_text("%d (swtpm) %s 1 1 1\n" % (tid, state))
             (task / "wchan").write_text(wchan)
+            (task / "status").write_text("SigPnd:\t0000000000000000\nSigBlk:\t%s\n" % blk)
         fd = self.d / "proc" / "4244" / "fd"
         fd.mkdir()
         os.symlink("socket:[91234]", fd / "3")
@@ -66,12 +67,13 @@ class MoreEvidence(TpmStopReport):
                        "Data client disconnected\n")
         report = tn.tpm_stop_report(4244, log, None, proc=proc)
         for part in ("ShdPnd 0000000000004000", "SigCgt 0000000000004002", "SigBlk 0000000000000000",
-                     "SIGTERM pending (process-wide), caught", "threads 4244:R:0 4250:S:do_sys_poll",
+                     "SIGTERM pending (process-wide), caught (main thread's masks)", "threads 4244:R:0:term-open 4250:S:do_sys_poll:term-blocked",
                      "syscall '7 0x3 0x7ffd", "fds 3->socket:[91234] 4->/tmp/x/c/tpm.log",
                      "last command Shutdown (0x145)", "client attached no (it disconnected after its last command)"):
             self.assertIn(part, report)
         self.assertIn(" line 39", report)                          # the log's tail is whole lines, never a slice of one
-        self.assertNotIn(" line 9\n", report)
+        self.assertNotIn(" line 9\\n", report)                     # %r renders a newline as \n (CodeRabbit on #593)
+        self.assertNotIn("' line 0\\n", report)
 
     def test_sigterm_not_caught_and_a_client_still_attached(self):
         proc = self.proc(4245, status="State:\tS (sleeping)\nSigPnd:\t0000000000000000\nShdPnd:\t0000000000000000\n"
@@ -79,7 +81,7 @@ class MoreEvidence(TpmStopReport):
         log = self.d / "tpm.log"
         log.write_text("    IsEnEnabled(0x169 = 'NV_ReadPublic'): 1\n SWTPM_IO_Write: length 94\n")
         report = tn.tpm_stop_report(4245, log, None, proc=proc)
-        self.assertIn("SIGTERM not pending, blocked, not caught", report)
+        self.assertIn("SIGTERM not pending, blocked, not caught (main thread's masks)", report)
         self.assertIn("last command NV_ReadPublic (0x169)", report)
         self.assertIn("client attached yes (no disconnect after its last command)", report)
 
@@ -127,6 +129,22 @@ class StopAfterShutdown(unittest.TestCase):
         import signal
         with self.assertRaisesRegex(RuntimeError, "did not stop: REPORT"):
             self.run_stop({signal.SIGKILL}, orderly_ok=False)
+
+    def test_an_exit_while_the_report_is_made_is_a_late_stop_not_a_kill(self):
+        # CodeRabbit on #593: SIGKILL to a process that exited meanwhile raises ProcessLookupError; it stopped, late
+        import signal
+        sent = []
+
+        def kill(pid, sig):
+            sent.append(sig)
+            if sig == signal.SIGKILL:
+                raise ProcessLookupError(3, "No such process")
+        said = []
+        result = tn.stop_tpm_process(4247, True, lambda: "REPORT", kill=kill, gone=lambda: False, wait=lambda what, s, i: what(),
+                                     say=said.append, owned=lambda: True)
+        self.assertEqual((sent, result), ([signal.SIGTERM, signal.SIGKILL], None))
+        self.assertEqual(len(said), 1)
+        self.assertIn("exited while its report was made, after SIGTERM: a late stop, not killed", said[0])
 
     def test_a_process_that_is_not_this_node_s_swtpm_is_never_killed(self):
         import signal

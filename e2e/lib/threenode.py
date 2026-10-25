@@ -134,13 +134,21 @@ def tpm_stop_report(pid, log, shutdown=None, proc="/proc"):
             return None
     if masks["SigCgt"]:
         pending = "pending (process-wide)" if bit(masks["ShdPnd"]) else "pending (thread)" if bit(masks["SigPnd"]) else "not pending"
-        parts.append("SIGTERM %s, %s%s" % (pending, "blocked, " if bit(masks["SigBlk"]) else "",
-                                           "caught" if bit(masks["SigCgt"]) else "ignored" if bit(masks["SigIgn"]) else "not caught"))
+        # /proc/<pid>/status's SigPnd and SigBlk are the MAIN thread's (CodeRabbit on #593): each thread's own are below
+        parts.append("SIGTERM %s, %s%s (main thread's masks)" % (pending, "blocked, " if bit(masks["SigBlk"]) else "",
+                                                             "caught" if bit(masks["SigCgt"]) else "ignored" if bit(masks["SigIgn"]) else "not caught"))
     threads = []
     for task in sorted(pathlib.Path("%s/%d/task" % (proc, pid)).glob("*"), key=lambda t: int(t.name) if t.name.isdigit() else 0):
         try:
             state = task.joinpath("stat").read_text().rsplit(")", 1)[1].split()[0]
-            threads.append("%s:%s:%s" % (task.name, state, task.joinpath("wchan").read_text().strip() or "0"))
+            entry = "%s:%s:%s" % (task.name, state, task.joinpath("wchan").read_text().strip() or "0")
+            try:                                      # this thread's own SIGTERM: blocked, pending, or open to it
+                own = dict(line.split(":", 1) for line in task.joinpath("status").read_text().splitlines() if ":" in line)
+                entry += ":term-%s" % ("blocked" if bit(own.get("SigBlk", "").strip()) else
+                                       "pending" if bit(own.get("SigPnd", "").strip()) else "open")
+            except OSError:
+                pass
+            threads.append(entry)
         except (OSError, IndexError):
             threads.append("%s:?" % task.name)
     parts.append("threads %s" % (" ".join(threads) or "<none read>"))
@@ -215,7 +223,13 @@ def stop_tpm_process(pid, orderly_ok, report, kill=os.kill, gone=None, wait=None
         raise RuntimeError("software TPM pid %d did not stop: %s" % (pid, evidence))
     if owned is not None and not owned():
         raise RuntimeError("software TPM pid %d is not this node's swtpm any more: nothing was killed: %s" % (pid, evidence))
-    kill(pid, signal.SIGKILL)
+    try:
+        kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        # it exited while the report was made (CodeRabbit on #593): a late stop after SIGTERM, not a kill
+        say("TPM-STOP-LATE (#592): swtpm pid %d exited while its report was made, after SIGTERM: a late stop, not killed. %s"
+            % (pid, evidence))
+        return None
     if wait(gone, 10, 0.2) is not True:
         raise RuntimeError("software TPM pid %d did not stop, not even on SIGKILL: %s" % (pid, evidence))
     say("::warning title=swtpm stop (#592)::flake-absorbed: swtpm pid %d ignored SIGTERM after an orderly Shutdown; ended "
