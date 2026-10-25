@@ -412,4 +412,11 @@ class Recovers(ct.Case):
         def broken(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 1, "", "REFUSED: cannot write the trail")
         with unittest.mock.patch.object(self, "runner", return_value=broken):
-            self.refused("and the refusal could not be recorded", self.apply, c, {"b": self.stores["b"].envelopes()}, phrase="wrong")
+            with self.assertRaises(m.Refused) as caught:
+                self.apply(c, {"b": self.stores["b"].envelopes()}, phrase="wrong")
+        said = str(caught.exception)
+        self.assertTrue(said.startswith("the phrase typed is not this recovery's: nothing was changed; "), said)   # the reason first, kept whole
+        self.assertIn("and the refusal could not be recorded in the sync trail: REFUSED: cannot write the trail", said)
+        self.assertEqual(self.trail, [])
+        self.assertFalse(c.pinned())                                             # nothing was restored
+        self.assertFalse(os.path.exists(c.path))
