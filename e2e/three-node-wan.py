@@ -206,6 +206,10 @@ def scenario(cluster):
     # by ORDER, not by `back`: the stop is the admission-serving DENY after the cut and before the node serves again (its
     # next admission-serving ALLOW), however its "at" falls against the harness's heal (#588's first run: a time bound
     # missed it). The detail is every line since the cut, so a failure says what the stream held.
+    # This reads admission-serving as what admission.py writes it as: a transition or a mode change, never a periodic
+    # "still serving" (_publish_locked writes it only when `recorded` flips, or the serving mode changes; the crash path
+    # in run() writes the DENY). An ALLOW in the cut's own second (`since` is taken to its second) would end the search
+    # before the stop: a false red, never a false green (b9 on #588).
     since_cut = cluster.audit_has(issuer, "admission", since=cut)
     serving = [e for e in since_cut if e.get("event") == "admission-serving" and e.get("subject") == issuer]
     again = next((i for i, e in enumerate(serving) if e.get("outcome") == "ALLOW"), len(serving))
