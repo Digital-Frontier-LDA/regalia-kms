@@ -33,6 +33,13 @@ A scrape interval of 15 to 60 s suits both. The textfiles are written at their w
 60 s); the rules carry their own staleness checks (`RegaliaNodeMetricsStale`, `RegaliaAuditShipMetricsStale`),
 so a scrape interval does not hide a writer that stopped.
 
+**The scrape job is `regalia-node`.** Scrape the three nodes' node_exporter in one job of exactly that name
+(`job_name: regalia-node`). The rules that tell a node missing a writer from a node that is down (every
+`Regalia…Missing` alert, and `RegaliaNodeExporterDown` itself) select `up{job="regalia-node"}`: under any other
+name they never fire, and nothing reports that they cannot. The fleet comparisons (`RegaliaMembershipBehindFleet`,
+`RegaliaAnchorBehindFleet`) compare the nodes of one job, so the job holds one cluster's nodes and nothing else.
+`tests/test_scrape_job_contract.py` holds every rule's `job` matcher to the name in this paragraph.
+
 ## 3. Configuration on the node
 
 Everything comes from the node's validated site configuration (`/etc/regalia/site.json`,
