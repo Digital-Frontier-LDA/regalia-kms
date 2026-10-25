@@ -200,9 +200,13 @@ def scenario(cluster):
                for first, (start, end) in windows.items() for name in names if name != first}
     ok(len(through) == 2 * len(names) and all(through.values()),
        "every unattended unlock of step 3 is in the stream of the first node that gave it", through)
-    revoked = {n: bool(cluster.audit_has(n, "sync", since=revoked_at, event="revoke-commit", epoch=2, outcome="ALLOW",
-                                         signers=lambda s: isinstance(s, list) and "a" in s and "b" in s)) for n in ("a", "b")}
-    ok(all(revoked.values()), "the revocation of c (epoch 2, signed by a and b) is in a's and in b's stream (revoke-commit)", revoked)
+    # revoke_by_nodes("a", "b", ...): a proposes, b co-signs and COMMITS, so only b writes revoke-commit (revoke.py); a
+    # takes epoch 2 by an ordinary sync round, which moved_by_sync finds in a's own stream (CI on #576 measured it)
+    revoked = {"b commits": bool(cluster.audit_has("b", "sync", since=revoked_at, event="revoke-commit", epoch=2, outcome="ALLOW",
+                                                   signers=lambda s: isinstance(s, list) and "a" in s and "b" in s)),
+               "a moved by sync": cluster.moved_by_sync("a", revoked_at, 2) is not None}
+    ok(all(revoked.values()), "the revocation of c (epoch 2, signed by a and b): b's commit in b's stream, and the sync round that "
+       "moved a to it in a's", revoked)
     unauthenticated = lambda r: bool(r) and "time is not authenticated" in r
     refusals = {"propose": bool(cluster.audit_has("a", "sync", since=switched_time, event="beat-propose", outcome="DENY", reason=unauthenticated)),
                 "co-sign": bool(cluster.audit_has("a", "sync", since=switched_time, event="sync-beat-sign", outcome="DENY", reason=unauthenticated))}
