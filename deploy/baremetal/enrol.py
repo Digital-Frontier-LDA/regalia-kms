@@ -2187,6 +2187,11 @@ def _ownerauth_replace(directory, digest, untrusted):
                 os.link(path, os.path.join(directory, name), follow_symlinks=False)   # fails if the name exists: no overwrite
             except FileExistsError:
                 continue
+            except OSError as error:
+                # not a file a link can be made to (a directory in its place: EPERM), or no room: refused by name, with
+                # nothing recorded, never a traceback (b9 on #502)
+                raise Refused("%s cannot be kept aside as %s (%s): move it out of the way by hand, then run this again. "
+                              "Nothing was recorded" % (path, name, error.strerror)) from None
             kept = name
             break
         require(kept is not None, "%s already keeps 99 untrustworthy owner-authorization files: inspect and move them. "

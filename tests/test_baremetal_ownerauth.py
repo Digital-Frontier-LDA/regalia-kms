@@ -552,6 +552,20 @@ class Rotation(unittest.TestCase):
         with self.assertRaisesRegex(enrol.Refused, "--adopt goes with --check"):
             enrol.set_ownerauth("a", self.pin, self.records["new"], io.BytesIO(b""), run=self.tpm, directory=self.d, adopt=True)
 
+    def test_a_directory_in_place_of_the_held_file_is_refused_by_name_with_nothing_recorded(self):
+        """b9 on #502: a directory there fails held()'s regular-file check, and then cannot be hard-linked aside (EPERM),
+        which escaped the adopt as a traceback. It is a named refusal, and nothing is recorded."""
+        path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
+        os.unlink(path)
+        os.mkdir(path, 0o700)
+        with self.assertRaisesRegex(m.Refused, "is not a regular file of root's"):
+            enrol.ownerauth_current(self.d)
+        with self.assertRaisesRegex(enrol.Refused, "cannot be kept aside as ownerauth.json.untrusted .*move it out of the way by hand"):
+            enrol.set_ownerauth("a", self.pin, self.records["current"], io.BytesIO((self.current.hex() + "\n").encode()),
+                                check=True, adopt=True, run=self.tpm, directory=self.d)
+        self.assertTrue(os.path.isdir(path))                               # left as it was
+        self.assertFalse(os.path.lexists(path + ".untrusted"))
+
     def test_ninety_nine_kept_untrustworthy_files_stop_the_adopt_before_anything_is_recorded(self):
         """The bound on the kept evidence (_ownerauth_replace): with every name from .untrusted to .untrusted.99 taken,
         an adopt is refused and records nothing; the falsifier sweep on the adopted #502 found nothing reaching it."""

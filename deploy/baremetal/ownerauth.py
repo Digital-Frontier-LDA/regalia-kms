@@ -288,11 +288,14 @@ def held(directory=None):
     except OSError as error:
         raise Refused("%s cannot be opened (%s): the node's owner-authorization state cannot be trusted; %s"
                       % (path, error.strerror, recovery)) from None
+    # judged by the descriptor itself, before it is wrapped: fdopen of a directory raises IsADirectoryError, which would
+    # escape as a traceback rather than this refusal (b9 on #502)
+    st = os.fstat(fd)
+    if not (stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) & 0o077 == 0):
+        os.close(fd)
+        raise Refused("%s is not a regular file of root's that only root reads: the node's owner-authorization state "
+                      "cannot be trusted; %s" % (path, recovery))
     with os.fdopen(fd, "rb") as f:
-        st = os.fstat(f.fileno())
-        require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) & 0o077 == 0,
-                "%s is not a regular file of root's that only root reads: the node's owner-authorization state cannot be "
-                "trusted; %s" % (path, recovery))
         try:
             doc = membership.load(f.read(4096), 4096)
         except Refused:
