@@ -2167,13 +2167,17 @@ def ownerauth_current(directory):
     or adopted it (`directory`/ownerauth.json, root's 0600; regalia-kms-d9 on #456), or None when none is held (a node set
     up before this, or none set)."""
     path = os.path.join(directory, OWNERAUTH_STATE)
+    untrusted = "%s is not a regular file of root's that only root reads: the node's owner-authorization state cannot be trusted" % path
     try:
-        st = os.lstat(path)
+        # opened once, never followed, and judged by that descriptor: no window between the check and the read
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except FileNotFoundError:
         return None
-    require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) & 0o077 == 0,
-            "%s is not a regular file of root's that only root reads: the node's owner-authorization state cannot be trusted" % path)
-    with open(path, "rb") as f:
+    except OSError:
+        raise Refused(untrusted) from None                  # a link in its place (ELOOP), or unreadable
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) & 0o077 == 0, untrusted)
         doc = membership.load(f.read(4096), 4096)
     require(isinstance(doc, dict) and sorted(doc) == ["current"] and isinstance(doc["current"], str)
             and re.fullmatch(r"[0-9a-f]{64}", doc["current"]) is not None, "%s is not {\"current\": <64 hex>}" % path)
