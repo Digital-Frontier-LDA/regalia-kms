@@ -188,6 +188,9 @@ def scenario(cluster):
     ok(wrong == {}, "every node's sync, admission and ESP-advance trail is written and in the collector line for line: sequence from 1, chained from "
        "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
        {"%s.%s" % k: v for k, v in wrong.items()})
+    # The windows compare this harness's clock (time.time(): windows, revoked_at, switched_time) with the nodes' own
+    # trail "at": sound because the three nodes share this runner's clock. A fixture on separate hosts would make them
+    # skew-sensitive (b9 on #576). Each bound is taken BEFORE the action it bounds, so a late one only fails the check.
     hand = {first: bool(cluster.audit_has(first, "sync", since=start, event="owner-beat", outcome="ALLOW",
                                           at=lambda at, end=end: isinstance(at, int) and at <= int(end)))
             for first, (start, end) in windows.items()}
