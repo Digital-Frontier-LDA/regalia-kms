@@ -252,8 +252,9 @@ the owner", above, #387). Both peers gone remains a root ceremony.
   rehearsal runs `reanchor` without `--ownerauth`. The owner-authorized path (#242 step C: the value from the
   envelope on standard input, given to tpm2-tools through a memfd) is held by `tests/test_baremetal_ownerauth.py`
   and the swtpm tests of the anchor's owner calls, not by this rehearsal (as for `enrol commit`, #420).
-- **Not rehearsed:** one peer left (the owner as the second source, #387, to build) and both peers destroyed (a
-  root ceremony).
+- **Not rehearsed:** one peer left (the owner as the second source, #387: built and unit-tested in
+  `tests/test_baremetal_recover.py` and `tests/test_baremetal_reanchor.py`, not run on three nodes) and both peers
+  destroyed (a root ceremony).
 
 ## What is tested, and what is not
 
