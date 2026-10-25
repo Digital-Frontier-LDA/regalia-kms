@@ -340,7 +340,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   `tpm2_nvread` each and refuses on any failure, with no retry inside the tool. The services' units restart
   (the ESP advance every 15 s; sync and admission on their own schedules) and the next run reads again. CI's
   three-node fixture showed it intermittently on its shared software TPMs (#448). The refusal ends with the last
-  line the tool printed, as `(TPM: …)` (#450), and the journal keeps all of it; if that names a transient TPM code
+  line the tool printed, as `(TPM: …)` (#450), and the journal its last 400 characters; if that names a transient TPM code
   (`TPM_RC_RETRY`, `TPM_RC_YIELDED`, `TPM_RC_TESTING`, a busy socket), a small bounded retry on those codes alone is
   the next step. One code is retried, on a software TPM only: `TPM_RC_SESSION_MEMORY` (0x903).
   A bare swtpm has no resource manager, so a call that dies connected leaves its sessions loaded, and three of them

@@ -65,11 +65,39 @@
    "suffix": " (TPM: was � here)"
   },
   {
-   "name": "a Unicode line separator is not a newline",
-   "stderr": "61e280a862",
+   "name": "a Unicode line separator is a space, not a newline",
+   "stderr": "61e280a862e280a963",
    "stdout_len": 0,
    "size": 8,
-   "suffix": " (TPM: a b)"
+   "suffix": " (TPM: a b c)"
+  },
+  {
+   "name": "a right-to-left override (Trojan Source)",
+   "stderr": "4552524f5220e280ae524f5252455f43525f4d5054e280ac20646f6e65",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: ERROR  RORRE_CR_MPT  done)"
+  },
+  {
+   "name": "zero-width characters, LRM, an isolate and a BOM",
+   "stderr": "efbbbf7ae2808b77e2808e6ae281a669e281a921",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: z w j i !)"
+  },
+  {
+   "name": "the ends of each listed range",
+   "stderr": "3ce2808be2808fe280a8e280aee281a6e281a93e",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: <      >)"
+  },
+  {
+   "name": "just outside each range is kept",
+   "stderr": "3ce2808ae28090e280a7e280afe281a5e281aaefbbbe3e",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: < ‐‧ ⁥⁪﻾>)"
   },
   {
    "name": "more than 200 characters, multi-byte",

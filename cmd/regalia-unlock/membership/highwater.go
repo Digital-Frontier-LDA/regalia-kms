@@ -112,16 +112,16 @@ func (h highWater) public(index uint32) (uint32, int, []byte, error) {
 
 // tpmReason is membership._why: the TPM's reason for a read of size bytes that did not come back, as a refusal's
 // suffix, " (TPM: <the last line of err>)", or the byte count when there is no error to name (#450). The same rule
-// as the Python's, whatever the input: each run of bytes that are not UTF-8 becomes one U+FFFD, lines split on "\n"
-// only, every C0 control, DEL and C1 control becomes a space, spaces are trimmed, and the last 200 characters are
-// kept. The two readers never see the same text in production, so tests/vectors/tpm-reason-v1.json holds both to it.
+// as the Python's (_lines), whatever the input: each run of bytes that are not UTF-8 becomes one U+FFFD, lines split
+// on "\n" only, every unprintable character becomes a space, spaces are trimmed, and the last 200 characters of the
+// last line are kept. The two readers never see the same text in production, so tests/vectors/tpm-reason-v1.json holds both to it.
 func tpmReason(err error, data []byte, size int) string {
 	if err != nil {
 		text := replacementRun.ReplaceAllString(strings.ToValidUTF8(err.Error(), "\uFFFD"), "\uFFFD")
 		lines := strings.Split(text, "\n")
 		for i := len(lines) - 1; i >= 0; i-- {
 			line := strings.Trim(strings.Map(func(r rune) rune {
-				if r < 0x20 || r >= 0x7f && r <= 0x9f {
+				if unprintable(r) {
 					return ' '
 				}
 				return r
@@ -139,6 +139,15 @@ func tpmReason(err error, data []byte, size int) string {
 }
 
 var replacementRun = regexp.MustCompile("\uFFFD+")
+
+// unprintable is membership._UNPRINTABLE, the same fixed list (not a Unicode category, so the two readers agree
+// whatever Unicode version each was built with): every C0 control, DEL and C1 control, the zero-width characters and
+// LRM/RLM, the line and paragraph separators, the bidi embeddings and overrides (U+202E among them), the isolates and
+// the BOM. Each would reorder, hide or break the text on an operator's terminal.
+func unprintable(r rune) bool {
+	return r < 0x20 || r >= 0x7f && r <= 0x9f || r >= 0x200b && r <= 0x200f || r >= 0x2028 && r <= 0x202e ||
+		r >= 0x2066 && r <= 0x2069 || r == 0xfeff
+}
 
 func (h highWater) read8(index uint32) (uint64, error) {
 	data, err := h.nv.Read(index, 8)

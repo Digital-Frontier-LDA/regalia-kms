@@ -5,7 +5,6 @@ import copy
 import fcntl
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -850,6 +849,8 @@ class RecordWrites(unittest.TestCase):
         self.assertEqual(m._why(done(b"", "text, not bytes\n"), 8), " (TPM: text, not bytes)")
         self.assertEqual(m._why(done(b"\0" * 3, b""), 8), " (TPM: 3 bytes, not 8)")
         self.assertEqual(m._why(done(None, None), 48), " (TPM: 0 bytes, not 48)")
+        # the bytes came back and the tool still failed, saying nothing: the exit status, not "48 bytes, not 48" (#568)
+        self.assertEqual(m._why(done(b"\0" * 48, b""), 48), " (TPM: exit 1, no output)")
         self.assertEqual(m._why(done(b"", b"\xff" + b"x" * 300), 8), " (TPM: %s)" % ("x" * 200))
         self.assertEqual(m._why(done(b"", b"bad \xff byte"), 8), " (TPM: bad \ufffd byte)")
 
@@ -865,7 +866,7 @@ class RecordWrites(unittest.TestCase):
             with self.subTest(c["name"]):
                 done = subprocess.CompletedProcess(["tpm2_nvread"], 1, b"\0" * c["stdout_len"], bytes.fromhex(c["stderr"]))
                 self.assertEqual(m._why(done, c["size"]), c["suffix"])
-                self.assertIsNone(re.search("[\x00-\x1f\x7f-\x9f]", c["suffix"]), c["suffix"])
+                self.assertIsNone(m._UNPRINTABLE.search(c["suffix"]), c["suffix"])
 
     def test_a_read_remains_cannot_make_names_the_tpm_s_reason(self):
         """remains() (a re-anchor's read, with the owner's authorization as the fallback) refuses with the reason too."""
@@ -881,7 +882,7 @@ class RecordWrites(unittest.TestCase):
         hw = self.defined()
         whole = m.HighWater.slot_bytes(0, "00" * 32)
         self.fault = lambda argv: (1, whole) if argv[:2] == ["tpm2_nvread", "0x150001a"] else None
-        with self.assertRaisesRegex(m.Refused, "cannot read 48 bytes from the record index 0x150001a"):
+        with self.assertRaisesRegex(m.Refused, r"cannot read 48 bytes from the record index 0x150001a: .* \(TPM: exit 1, no output\)$"):
             hw.record()
 
     def defined(self):

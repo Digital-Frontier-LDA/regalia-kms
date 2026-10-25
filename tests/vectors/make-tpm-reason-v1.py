@@ -7,8 +7,9 @@ the suffix. cmd/regalia-unlock/membership's tpmReason must give the same suffix 
     python3 -Es tests/vectors/make-tpm-reason-v1.py > tests/vectors/tpm-reason-v1.json
 
 The inputs are the ways a tool's text can differ between the readers or reach a terminal unsafely: a line separator
-other than "\\n", an ANSI escape, a C1 control, a run of bytes that are not UTF-8, a truncated or surrogate sequence,
-a text longer than the bound, a line that is nothing but controls.
+other than "\\n", an ANSI escape, a C1 control, a bidi override or a zero-width character, a run of bytes that are
+not UTF-8, a truncated or surrogate sequence, a text longer than the bound, a line that is nothing but controls; and
+each listed range's two ends, and the characters just outside them, which must be kept.
 """
 import json
 import os
@@ -28,7 +29,11 @@ CASES = [
     ("C1 controls (NEL, CSI)", b"one\xc2\x85two\xc2\x9b3", 0, 8),
     ("a NUL and a BEL", b"nul\x00bel\x07end", 0, 48),
     ("U+FFFD already in the text, twice", b"was \xef\xbf\xbd\xef\xbf\xbd here", 0, 8),
-    ("a Unicode line separator is not a newline", b"a\xe2\x80\xa8b", 0, 8),
+    ("a Unicode line separator is a space, not a newline", b"a\xe2\x80\xa8b\xe2\x80\xa9c", 0, 8),
+    ("a right-to-left override (Trojan Source)", "ERROR \u202eRORRE_CR_MPT\u202c done".encode(), 0, 8),
+    ("zero-width characters, LRM, an isolate and a BOM", "\ufeffz\u200bw\u200ej\u2066i\u2069!".encode(), 0, 8),
+    ("the ends of each listed range", "<\u200b\u200f\u2028\u202e\u2066\u2069>".encode(), 0, 8),
+    ("just outside each range is kept", "<\u200a\u2010\u2027\u202f\u2065\u206a\ufefe>".encode(), 0, 8),
     ("more than 200 characters, multi-byte", "é".encode() * 250, 0, 8),
     ("more than 200 characters after a bad byte", b"\xff" + b"x" * 300, 0, 8),
     ("nothing but controls: the byte count", b"\x1b\x07\r\n\t\n", 3, 8),

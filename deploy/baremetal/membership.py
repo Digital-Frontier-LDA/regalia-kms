@@ -214,32 +214,47 @@ def run_tpm2(run, argv, env, tcti=None, **kw):
     return run(argv, capture_output=True, env=env, **kw)
 
 
+# What a TPM tool's text may not carry into a refusal or the journal, each mapped to a space: every C0 control, DEL and
+# C1 control (an ESC, a "\r"), and the format characters that reorder or hide text on an operator's terminal
+# (zero-width and LRM/RLM, the bidi embeddings and overrides, U+202E among them, the isolates, the BOM) and the
+# Unicode line and paragraph separators. A fixed list, not a Unicode category, so it is the same in the Go reader
+# (highwater.go, unprintable) whatever Unicode version either was built with.
+_UNPRINTABLE = re.compile("[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]")
+
+
+def _lines(text):
+    """`text` (bytes or str) as the lines _why and _said print: each run of bytes that are not UTF-8 one U+FFFD, split
+    on "\\n" only, every _UNPRINTABLE character a space, spaces trimmed, empty lines dropped."""
+    text = text if isinstance(text, str) else text.decode("utf-8", "replace")
+    text = re.sub("\ufffd+", "\ufffd", text)
+    return [line for line in (_UNPRINTABLE.sub(" ", raw).strip(" ") for raw in text.split("\n")) if line]
+
+
 def _why(done, size):
     """The TPM's reason for a read of `size` bytes that `done` did not give, as a refusal's suffix: " (TPM: <the last line
     tpm2_nvread wrote on stderr>)", or the byte count when it wrote nothing (#450). The line is made safe to print and
-    the same in both readers whatever the input: each run of bytes that are not UTF-8 becomes one U+FFFD, lines split
-    on "\\n" only, every C0 control, DEL and C1 control (an ESC, a "\\r") becomes a space, spaces are trimmed, and the
-    last 200 characters are kept. The Go reader (highwater.go, tpmReason) does exactly this to its own TPM error;
-    tests/vectors/tpm-reason-v1.json holds both to it. The two never see the same text in production (this reads the
+    the same in both readers whatever the input (_lines), and the last 200 characters of the last line are kept. A tool
+    that failed with no text at all is named by its exit status when the bytes did come back, else by the count. The
+    Go reader (highwater.go, tpmReason) does exactly this to its own TPM error; tests/vectors/tpm-reason-v1.json holds
+    both to it (Go has no exit status: an error with no text and the bytes back is a read that did not fail). The two never see the same text in production (this reads the
     tool's stderr, Go its library's error), so the vector is what makes "the same rule" checkable."""
-    err = done.stderr or b""
-    text = err if isinstance(err, str) else err.decode("utf-8", "replace")
-    text = re.sub("\ufffd+", "\ufffd", text)
-    for line in reversed(text.split("\n")):
-        line = re.sub("[\x00-\x1f\x7f-\x9f]", " ", line).strip(" ")
-        if line:
-            return " (TPM: %s)" % line[-200:]
-    return " (TPM: %d bytes, not %d)" % (len(done.stdout or b""), size)
+    lines = _lines(done.stderr or b"")
+    if lines:
+        return " (TPM: %s)" % lines[-1][-200:]
+    got = len(done.stdout or b"")
+    if got == size:
+        return " (TPM: exit %s, no output)" % done.returncode
+    return " (TPM: %d bytes, not %d)" % (got, size)
 
 
 def _said(tool, index, done):
-    """What tpm2_<tool> said when it failed on `index`, on this process's stderr (the unit's journal), in full: the
-    refusal carries only its last line (_why, #450); this keeps the rest of it for whoever reads the journal (an
+    """What tpm2_<tool> said when it failed on `index`, on this process's stderr (the unit's journal): every line, made
+    safe to print as _why's are (_lines) and joined by " | ", of which the last 400 characters are kept. The refusal
+    carries only the last line (_why, #450); this keeps the lines before it for whoever reads the journal (an
     intermittent refusal in CI, #448). Never raises."""
     try:
         import sys
-        err = done.stderr or b""
-        text = (err if isinstance(err, str) else err.decode("utf-8", "replace")).strip().replace("\n", " | ")
+        text = " | ".join(_lines(done.stderr or b""))
         print("regalia: tpm2_%s %s failed (exit %s, %d bytes out): %s" % (tool, index, done.returncode, len(done.stdout or b""), text[-400:] or "no output"),
               file=sys.stderr)
     except Exception:                                   # noqa: BLE001 - a diagnostic never changes the outcome
