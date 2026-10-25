@@ -259,7 +259,9 @@ Decisions (#77, 2026-10-02; regalia-kms-24 under the owner's delegation):
   does not serve again until it is re-anchored from its two peers' chains, with those peers opened the
   same way first. The procedure, step by step: [MEMBERSHIP-RECOVERY.md, "In a total
   outage"](deploy/baremetal/MEMBERSHIP-RECOVERY.md#in-a-total-outage-388) (#388, rehearsed by
-  `e2e/three-node-reanchor.py`). A host whose two peers are both destroyed is a root ceremony, not this.
+  `e2e/three-node-reanchor.py`). With only one peer left, the owner's signature over that peer's chain is
+  the second source (`--one-source`, the same section). A host whose two peers are both destroyed is a
+  root ceremony, not this.
 - **One per host**, so one envelope reaches one host. It is generated at the ceremony (step 0), in
   systemd's recovery-key format: 256 bits as 8 groups of 8 letters from `cbdefghijklnrtuv`, with a
   dash between groups. Those letters sit on the same keys of the common keyboard layouts, which
