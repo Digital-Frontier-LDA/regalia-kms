@@ -222,15 +222,14 @@ def scenario(cluster):
     # The converse by POSITION, not time (b9 on #577): "at" is whole seconds and cannot order a lease issued in the same
     # second as the commit, the race this check is for. Each stream is one chained sequence, so: after the point where
     # the node itself HELD epoch 2, no sync-lease ALLOW for a anywhere later in that same stream. That point is c's own
-    # revoke-commit, and for b (which only proposed) its first sync event under epoch 2: before it, b still held epoch
-    # 1, under which a lease for a was right. (A sync-apply is filed under the epoch its round began from, so b's first
-    # epoch-2 line is at or one round after the move: the bound errs late by that round, never early.)
+    # revoke-commit, and for b (which only proposed) the sync-apply whose round moved it to epoch 2 (moved_line; b9 on
+    # #577): EXACT, not the first epoch-2 line, which can be a round later and would leave that round unchecked. Before
+    # it, b still held epoch 1, under which a lease for a was right.
     def held_from(p):
         if p == "c":
             line = next(iter(cluster.audit_has("c", "sync", since=revoked_at, event="revoke-commit", epoch=2, outcome="ALLOW")), None)
         else:
-            line = next(iter(cluster.audit_has(p, "sync", since=revoked_at, epoch=2,
-                                               event=lambda e: e in ("sync-heartbeat", "sync-apply"))), None)
+            line = cluster.moved_line(p, revoked_at, 2)
         return line.get("seq") if line else None
     after = {}
     for p in ("b", "c"):

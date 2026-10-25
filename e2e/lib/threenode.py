@@ -205,6 +205,24 @@ SOFTHSM = next((c for c in ("/usr/lib/softhsm/libsofthsm2.so", "/usr/lib/x86_64-
 OWNER_PIN = "246813"                              # the SoftHSM owner token's TEST PIN
 
 
+
+def moving_line(events, epoch):
+    """Of a node's sync trail lines `events` (in stream order), the sync-apply whose round moved it to `epoch`, or None.
+    Cluster.moved_by_sync's rule, in one place: a sync-apply is filed under the epoch its round BEGAN from, so the move is
+    the LAST sync-apply before the first pull line (sync-heartbeat or sync-apply) under `epoch`, filed under epoch - 1 and
+    from the same peer; an ALLOW, or a DENY that says the round had moved the membership first. From this line's `seq` on,
+    the node held `epoch`: the first line under `epoch` can be a round later."""
+    first = next((i for i, e in enumerate(events) if e.get("epoch") == epoch and e.get("event") in ("sync-heartbeat", "sync-apply")), None)
+    if first is None:
+        return None
+    rounds = [e for e in events[:first] if e.get("event") == "sync-apply"]
+    if not rounds or rounds[-1].get("epoch") != epoch - 1 or rounds[-1].get("peer") != events[first].get("peer"):
+        return None
+    moved = rounds[-1]
+    if moved.get("outcome") == "ALLOW" or "had moved from epoch %d to %d" % (epoch - 1, epoch) in (moved.get("reason") or ""):
+        return moved
+    return None
+
 class Cluster:
     def __init__(self, work, names=NAMES, audit=False):
         self.work = pathlib.Path(work)
@@ -1708,19 +1726,17 @@ class Cluster:
         under the epoch before and from the same peer. Not merely the last ALLOW: every pull that received nothing is an
         ALLOW under the old epoch too, and must not stand in for the move. A round refused after it had moved the
         membership counts only when it says so ("had moved from epoch N-1 to N"), and the answer says it was refused."""
-        events = self.audit_has(name, "sync", since=since)
-        first = next((i for i, e in enumerate(events) if e.get("epoch") == epoch and e.get("event") in ("sync-heartbeat", "sync-apply")), None)
-        if first is None:
+        moved = moving_line(self.audit_has(name, "sync", since=since), epoch)
+        if moved is None:
             return None
-        rounds = [e for e in events[:first] if e.get("event") == "sync-apply"]
-        if not rounds or rounds[-1].get("epoch") != epoch - 1 or rounds[-1].get("peer") != events[first].get("peer"):
-            return None
-        moved = rounds[-1]
         if moved.get("outcome") == "ALLOW":
             return moved.get("peer")
-        if "had moved from epoch %d to %d" % (epoch - 1, epoch) in (moved.get("reason") or ""):
-            return "%s (refused after it moved)" % moved.get("peer")
-        return None
+        return "%s (refused after it moved)" % moved.get("peer")
+
+    def moved_line(self, name, since, epoch):
+        """The sync-apply line itself whose round moved `name` to `epoch` (moving_line, from its collector stream since
+        `since`), or None: its `seq` is the exact point from which the node held `epoch` (b9 on #577)."""
+        return moving_line(self.audit_has(name, "sync", since=since), epoch)
 
     def audit_has(self, name, trail, since=0, **fields):
         """The node's trail lines that its COLLECTOR stream holds (line i taken from the trail only where it hashes to
