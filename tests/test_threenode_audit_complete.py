@@ -20,7 +20,7 @@ class Subset(unittest.TestCase):
     def setUp(self):
         self.d = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.d, True)
-        node = types.SimpleNamespace(state=self.d / "state", admission=self.d / "admission", log=self.d / "log")
+        node = types.SimpleNamespace(dir=self.d, state=self.d / "state", admission=self.d / "admission", log=self.d / "log")
         for p in (node.state, node.admission, node.log):
             p.mkdir()
         self.cluster = object.__new__(threenode.Cluster)
@@ -75,7 +75,8 @@ class ToolTrail(Subset):
 
     def test_it_lives_in_the_node_s_log_directory_and_is_judged_for_that_node(self):
         path = self.cluster.ship_tool_trail("a", "reanchor")
-        self.assertEqual(path, self.d / "log" / "reanchor.jsonl")
+        self.assertEqual(path, self.d / "tools" / "reanchor.jsonl")              # its own directory, not the ESP advance's log
+        self.assertEqual(os.stat(path.parent).st_mode & 0o7777, 0o700)
         self.assertEqual(self.cluster._node_trails("a"), ["sync", "admission", "esp-advances", "reanchor"])
         self.assertEqual(self.complete(trails=("sync", "esp-advances")), {("a", "reanchor"): "the trail was never written"})
         self.write("reanchor", path)

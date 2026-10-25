@@ -1571,14 +1571,17 @@ class Cluster:
         """The path where the scenario runs operator tool `trail` (trails.TRAILS, read by the tools' group regalia-audit:
         reanchor, survivor, ...) for node `name`, now shipped and judged with the node's own trails: its own stream
         e2e3-<node>.<trail>, its shipper in that group only, as regalia-audit-ship@<trail> on a host. In the node's log
-        directory, which the shipper can reach. #340: an operator's decision on a node reaches the collector too.
-        On a host the tool writes under trails.TOOL_DIR, and trails.append itself gives the directory root:regalia-audit
-        2750 and every trail the group on each append (_tool_dir, _readable_by_its_shipper; tests/test_baremetal_trails.py,
-        e2e/audit-ship-systemd.py). Here the path is outside TOOL_DIR, so _trail_groups gives it the group, as for the
-        node's own trails."""
+        directory of its own, <node>/tools: the node's /var/log/regalia. #340: an operator's decision on a node reaches the
+        collector too. On a host the tool writes under trails.TOOL_DIR, and trails.append itself gives that directory
+        root:regalia-audit 2750 and every trail the group on each append (_tool_dir, _readable_by_its_shipper;
+        tests/test_baremetal_trails.py, e2e/audit-ship-systemd.py). Here the directory is outside TOOL_DIR, so the fixture
+        gives it that group (_trail_groups), and each trail too. Not the node's log directory: that is the ESP advance's,
+        which a shipper in regalia-audit cannot enter (#588's first CI run: "open .../b/log: permission denied")."""
         if trail not in trails.TRAILS or trails.TRAILS[trail][3] != trails.TOOL_GROUP:
             raise ValueError("ship_tool_trail(%r): not an operator tool's trail in trails.TRAILS" % trail)
-        path = self.nodes[name].log / ("%s.jsonl" % trail)
+        tools = self.nodes[name].dir / "tools"
+        tools.mkdir(mode=0o700, exist_ok=True)                  # root's and private until _trail_groups opens it to the group
+        path = tools / ("%s.jsonl" % trail)
         self.tool_trails.setdefault(name, {})[trail] = path
         return path
 
@@ -1593,6 +1596,9 @@ class Cluster:
         reader group only, could then read nothing (the first CI run of #355 shipped no line at all)."""
         for trail in self._node_trails(name):
             path = self._trail_path(name, trail)
+            if trail in self.tool_trails.get(name, {}):         # its directory as TOOL_DIR is on a host: root:regalia-audit 2750
+                shutil.chown(path.parent, group=trails.TOOL_GROUP)
+                os.chmod(path.parent, 0o2750)
             for f in [path] + sorted(path.parent.glob(path.name + ".*")):
                 if f.is_file() and not f.is_symlink():
                     shutil.chown(f, group=self._trail_group(trail))

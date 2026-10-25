@@ -203,8 +203,15 @@ def scenario(cluster):
                                                                                        outcome="ALLOW", at=before(cut))),
               "step 4 by %s" % other: bool(cluster.audit_has(other, "sync", since=cut, event="sync-lease", subject="a", outcome="ALLOW", at=before(back)))}
     ok(all(leases.values()), "a's renewal across the WAN is in its issuer's stream, and its failover lease in %s's" % other, leases)
-    stop = cluster.audit_has(issuer, "admission", since=cut, event="admission-serving", subject=issuer, outcome="DENY", at=before(back))
-    ok(bool(stop), "%s, cut off, stopping by itself is in its own admission stream (a DENY)" % issuer, cluster.audit_has(issuer, "admission", since=cut)[-4:])
+    # by ORDER, not by `back`: the stop is the admission-serving DENY after the cut and before the node serves again (its
+    # next admission-serving ALLOW), however its "at" falls against the harness's heal (#588's first run: a time bound
+    # missed it). The detail is every line since the cut, so a failure says what the stream held.
+    since_cut = cluster.audit_has(issuer, "admission", since=cut)
+    serving = [e for e in since_cut if e.get("event") == "admission-serving" and e.get("subject") == issuer]
+    again = next((i for i, e in enumerate(serving) if e.get("outcome") == "ALLOW"), len(serving))
+    stop = [e for e in serving[:again] if e.get("outcome") == "DENY"]
+    ok(bool(stop), "%s, cut off, stopping by itself is in its own admission stream (an admission-serving DENY before it serves again)" % issuer,
+       [(e.get("seq"), e.get("event"), e.get("outcome"), e.get("at")) for e in since_cut])
     moved = {name: cluster.moved_by_sync(name, began, manifest["epoch"]) for name in names if name != other}
     ok(all(moved.values()), "the sync round that moved each node to epoch %d across the WAN is in its own stream" % manifest["epoch"], moved)
 
