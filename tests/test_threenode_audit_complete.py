@@ -56,6 +56,13 @@ class Subset(unittest.TestCase):
         self.streams["sync"] = []
         self.assertIn("1 trail lines, 0 in the collector", self.complete(trails=("sync",))[("a", "sync")])
 
+    def test_an_iterator_is_read_once_and_still_judged(self):
+        # CodeRabbit on #587: a set() of an iterator consumed it, so nothing was judged and {} came back
+        self.streams["sync"] = []
+        self.assertIn(("a", "sync"), self.complete(trails=iter(("sync",))))
+        with self.assertRaisesRegex(ValueError, "each must be one of"):
+            self.complete(trails=iter(()))
+
     def test_an_unknown_or_empty_subset_is_refused(self):
         for bad in ((), ("sync", "time"), ("nonsense",)):
             with self.subTest(bad), self.assertRaisesRegex(ValueError, "each must be one of sync, admission, esp-advances"):

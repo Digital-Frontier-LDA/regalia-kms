@@ -1668,6 +1668,7 @@ class Cluster:
         for a scenario that runs no service writing the others (three-node-netns runs no admission): every trail it names
         must still have been written."""
         known = [t for t, _, _ in AUDIT_TRAILS]
+        trails = None if trails is None else tuple(trails)       # read once: an iterator would be spent by the check below
         if trails is not None and (not trails or set(trails) - set(known)):
             raise ValueError("audit_complete(trails=%r): each must be one of %s" % (trails, ", ".join(known)))
         judged = [t for t in known if trails is None or t in trails]
