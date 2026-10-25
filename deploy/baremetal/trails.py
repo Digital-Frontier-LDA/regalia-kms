@@ -71,6 +71,11 @@ TRAILS = {
     # #303: regalia-authtime's transitions (authenticated or not, and why) and each clear of the chrony latch;
     # both writers are root, the directory is root:regalia-audit-time 0750 (regalia.tmpfiles.conf)
     "time": ("/var/log/regalia-time/time.jsonl", "regalia-authtime.service and regalia-node time-clear, root, node", "time", "regalia-audit-time"),
+    # #66 B3: regalia-esp-advance's runs, each one before the TPM anchor moves (the chain written to the ESP, its epoch and
+    # digest) and each refusal; root, the directory root:regalia-audit-esp-advances 0750 (regalia.tmpfiles.conf)
+    # named esp-advances, not esp-advance: the shipper's metrics file is <trail>.prom, and esp-advance.prom is the unit's own
+    "esp-advances": ("/var/log/regalia-esp-advance/esp-advances.jsonl", "regalia-esp-advance.service, root, node", "esp-advances",
+                    "regalia-audit-esp-advances"),
     "reanchor": (TOOL_DIR + "/reanchor.jsonl", "reanchor.py, root, by hand", "reanchor", TOOL_GROUP),
     "recount": (TOOL_DIR + "/recount.jsonl", "recount.py, root, by hand", "recount", TOOL_GROUP),
     # #75: update.py's BootNext, promotion and removal of a boot entry, each REQUEST before the change, with the
