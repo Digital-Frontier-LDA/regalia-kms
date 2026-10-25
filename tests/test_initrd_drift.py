@@ -154,6 +154,37 @@ class ModuleCheck(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("regalia-unlock: new", out.stderr)
 
+    def test_a_binary_is_resolved_inside_the_tree_not_on_the_runner(self):
+        """b9 on #601: an absolute link in the tree points into the tree, so one whose target the tree lacks is
+        missing, even though the runner has that path (/bin/sh here)."""
+        import os
+        for target in ("/bin/sh", "../../bin/sh"):
+            with self.subTest(target):
+                root, module = self.tree()
+                (root / "usr/sbin/nft").unlink()
+                os.symlink(target, root / "usr/sbin/nft")
+                self.assertTrue(os.path.exists("/bin/sh"))
+                out = self.run_check(root, module)
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertIn("nft is not in the tree's PATH", out.stderr)
+
+    def test_links_that_resolve_inside_the_tree_are_followed(self):
+        """the other side: merged /usr (/sbin -> usr/sbin) and an alternatives chain, all inside the tree, pass."""
+        import os
+        root, module = self.tree()
+        (root / "usr/sbin/nft").rename(root / "usr/sbin/nft.real")
+        (root / "etc/alternatives").mkdir(parents=True)
+        os.symlink("/usr/sbin/nft.real", root / "etc/alternatives/nft")
+        os.symlink("/etc/alternatives/nft", root / "usr/sbin/nft")
+        out = self.run_check(root, module)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        root, module = self.tree()
+        (root / "usr/sbin/ip").rename(root / "usr/sbin/ip.moved")
+        (root / "usr/sbin/ip.moved").rename(root / "usr/bin/ip")
+        os.symlink("usr/bin", root / "bin")                      # ip only through /bin -> usr/bin
+        out = self.run_check(root, module)
+        self.assertEqual(out.returncode, 0, out.stderr)
+
     def test_hostonly_from_the_caller_does_not_leak_in(self):
         import os
         import subprocess

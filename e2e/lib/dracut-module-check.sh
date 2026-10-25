@@ -16,10 +16,29 @@ MODULE_DIR="${2:?usage: dracut-module-check.sh SYSROOT MODULE_DIR}"
 [ -f "$MODULE_DIR/module-setup.sh" ] || { echo "dracut-module-check: no module-setup.sh in $MODULE_DIR" >&2; exit 2; }
 out="$(
   derror() { echo "$*" >&2; }
+  # a path in the tree, every symlink in it resolved INSIDE the tree (b9 on #601): `[ -x "$SYSROOT/usr/bin/x" ]`
+  # follows an absolute link (x -> /etc/alternatives/x) to the RUNNER's file, so a link broken in the tree but
+  # present on the runner would read as present. Prints the resolved host path; fails on a loop or a dangling link.
+  in_tree() {
+    local todo="${1#/}" done="" part target hops=0
+    while [ -n "$todo" ]; do
+      part="${todo%%/*}"; [ "$part" = "$todo" ] && todo="" || todo="${todo#*/}"
+      case "$part" in ""|.) continue ;; ..) done="${done%/*}"; continue ;; esac
+      if [ -L "$SYSROOT$done/$part" ]; then
+        hops=$((hops + 1)); [ "$hops" -le 40 ] || return 1
+        target="$(readlink "$SYSROOT$done/$part")" || return 1
+        case "$target" in /*) done="" ;; esac
+        todo="${target#/}${todo:+/$todo}"
+      else
+        done="$done/$part"
+      fi
+    done
+    [ -e "$SYSROOT$done" ] && printf '%s\n' "$SYSROOT$done"
+  }
   require_binaries() {
-    local b d
+    local b d p
     for b in "$@"; do
-      for d in /usr/bin /usr/sbin /bin /sbin; do [ -x "$SYSROOT$d/$b" ] && continue 2; done
+      for d in /usr/bin /usr/sbin /bin /sbin; do p="$(in_tree "$d/$b")" && [ -f "$p" ] && [ -x "$p" ] && continue 2; done
       derror "dracut-module-check: $b is not in the tree's PATH (require_binaries)"
       return 1
     done
