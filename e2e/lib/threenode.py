@@ -175,24 +175,51 @@ def tpm_stop_report(pid, log, shutdown=None, proc="/proc"):
     return " | ".join(parts)
 
 
-def stop_tpm_process(pid, orderly_ok, report, kill=os.kill, gone=None, wait=None, say=print):
+def orderly_shutdown_ok(shutdown):
+    """Whether the TPM took an orderly TPM2_Shutdown: one was asked AND it succeeded. Only then may a stop be absorbed
+    (#592): a swtpm whose Shutdown failed still turns the run red, so this cannot hide a TPM-state bug."""
+    return shutdown is not None and shutdown.returncode == 0
+
+
+ABSORB_LIMIT = 1        # per run: one is swtpm 0.10.1's known flake; more is a pattern, and a pattern is a bug (b9 on #593)
+
+
+def absorbed(seen, name, evidence, summary=None):
+    """Count one absorbed stop (#592) in `seen`, say it in the job's summary (`summary`: $GITHUB_STEP_SUMMARY, when
+    set) as "flake-absorbed", and fail the run once more than ABSORB_LIMIT stops needed SIGKILL."""
+    seen.append((name, evidence))
+    if summary:
+        with open(summary, "a") as f:
+            f.write("flake-absorbed: %d swtpm stop%s needed SIGKILL after an orderly Shutdown (#592): %s\n"
+                    % (len(seen), "" if len(seen) == 1 else "s", ", ".join(n for n, _ in seen)))
+    if len(seen) > ABSORB_LIMIT:
+        raise RuntimeError("%d swtpm stops needed SIGKILL in this run: a pattern, not the known flake (#592): %s"
+                           % (len(seen), " || ".join("%s: %s" % (n, e) for n, e in seen)))
+
+
+def stop_tpm_process(pid, orderly_ok, report, kill=os.kill, gone=None, wait=None, say=print, owned=None):
     """End a software TPM's process, as the host's power going off does (#592). SIGTERM first. If it does not exit and its
     orderly TPM2_Shutdown SUCCEEDED (`orderly_ok`), the TPM has nothing left to lose: SIGKILL, which is what a power
     loss is, and the run goes on with the full report said as an anomaly, so every occurrence is kept in the job's log
     (swtpm 0.10.1 has ignored SIGTERM there). Without an orderly shutdown it is a failure as before, and so is one that
-    SIGKILL does not end either. `report()` makes the evidence while the process still exists. Returns the report of
-    an anomaly, or None."""
+    SIGKILL does not end either. `report()` makes the evidence while the process still exists. `owned()` says the pid is
+    still this node's swtpm: anything else is never killed. A check that raises is never read as "stopped" (until()
+    returns the exception, which is truthy: only True counts). Returns the report of an anomaly, or None."""
     gone = gone or (lambda: not os.path.exists("/proc/%d" % pid))
     wait = wait or until
     kill(pid, signal.SIGTERM)
-    if wait(gone, 10, 0.2):
+    if wait(gone, 10, 0.2) is True:
         return None
     evidence = report()
     if not orderly_ok:
         raise RuntimeError("software TPM pid %d did not stop: %s" % (pid, evidence))
+    if owned is not None and not owned():
+        raise RuntimeError("software TPM pid %d is not this node's swtpm any more: nothing was killed: %s" % (pid, evidence))
     kill(pid, signal.SIGKILL)
-    if not wait(gone, 10, 0.2):
+    if wait(gone, 10, 0.2) is not True:
         raise RuntimeError("software TPM pid %d did not stop, not even on SIGKILL: %s" % (pid, evidence))
+    say("::warning title=swtpm stop (#592)::flake-absorbed: swtpm pid %d ignored SIGTERM after an orderly Shutdown; ended "
+        "with SIGKILL" % pid)
     say("TPM-STOP-ANOMALY (#592): swtpm pid %d ignored SIGTERM after an orderly Shutdown that succeeded; ended with SIGKILL, "
         "as a power loss ends a TPM. %s" % (pid, evidence))
     return evidence
@@ -305,6 +332,7 @@ class Cluster:
         self.time = {n: True for n in names}          # authenticated time, per node
         self.stop_threads = False
         self.threads = []
+        self.absorbed_stops = []                      # #592: swtpm stops that needed SIGKILL after an orderly Shutdown
         self._state_lock = threading.Lock()           # _write_as_daemon: the state writer thread and the main thread
         self.state_revision = 1                       # D32: the etcd revision every node's stand-in watch has applied
         self.chain = []                               # the signed envelopes, epoch 1 first
@@ -531,11 +559,21 @@ class Cluster:
         n = self.member(name)
         shutdown = sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False) if orderly else None
         pid = int((n.dir / "tpm.pid").read_text())
+        state = "dir=%s" % (n.dir / "tpm")
+
+        def owned():                                  # still this node's swtpm: its cmdline names this node's TPM state
+            try:
+                cmdline = pathlib.Path("/proc/%d/cmdline" % pid).read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            except OSError:
+                return False
+            return cmdline.startswith("swtpm ") and state in cmdline
         try:
             # #592 (regalia-zga's evidence): after an orderly Shutdown that succeeded, a swtpm that ignores SIGTERM is ended
-            # as a power loss would end it, and the anomaly is said in full; anything else that does not stop still fails
-            stop_tpm_process(pid, shutdown is not None and shutdown.returncode == 0,
-                             lambda: tpm_stop_report(pid, n.dir / "tpm.log", shutdown))
+            # as a power loss would end it, counted, and said in full; anything else that does not stop still fails
+            evidence = stop_tpm_process(pid, orderly_shutdown_ok(shutdown), lambda: tpm_stop_report(pid, n.dir / "tpm.log", shutdown),
+                                        owned=owned)
+            if evidence is not None:
+                absorbed(self.absorbed_stops, name, evidence, summary=os.environ.get("GITHUB_STEP_SUMMARY"))
         except RuntimeError as failure:
             raise RuntimeError("%s's %s" % (name, failure)) from None
         self._tpm(n)

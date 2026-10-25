@@ -89,18 +89,23 @@ class StopAfterShutdown(unittest.TestCase):
     simply lose power: after a Shutdown that succeeded, the TPM is ended with SIGKILL and the run goes on, the full
     report printed as an anomaly. Anything else that does not stop is still a failure."""
 
-    def run_stop(self, gone_after, orderly_ok):
-        sent, alive = [], {"n": 0}
+    def run_stop(self, gone_after, orderly_ok, owned=True, gone=None):
+        sent = []
 
         def kill(pid, sig):
             sent.append(sig)
 
-        def gone():
-            alive["n"] += 1
-            return sent and sent[-1] in gone_after
+        def default_gone():
+            return bool(sent) and sent[-1] in gone_after
         said = []
-        result = tn.stop_tpm_process(4246, orderly_ok, lambda: "REPORT", kill=kill, gone=gone, wait=lambda what, s, i: what(),
-                                     say=said.append)
+
+        def wait(what, seconds, interval):        # until()'s contract: the last value, or the exception it raised
+            try:
+                return what()
+            except Exception as failure:          # noqa: BLE001
+                return failure
+        result = tn.stop_tpm_process(4246, orderly_ok, lambda: "REPORT", kill=kill, gone=gone or default_gone, wait=wait,
+                                     say=said.append, owned=lambda: owned)
         return sent, result, said
 
     def test_sigterm_enough(self):
@@ -113,18 +118,54 @@ class StopAfterShutdown(unittest.TestCase):
         sent, result, said = self.run_stop({signal.SIGKILL}, orderly_ok=True)
         self.assertEqual(sent, [signal.SIGTERM, signal.SIGKILL])
         self.assertEqual(result, "REPORT")
-        self.assertEqual(len(said), 1)
-        self.assertTrue(said[0].startswith("TPM-STOP-ANOMALY (#592): swtpm pid 4246 ignored SIGTERM after an orderly Shutdown"))
-        self.assertIn("REPORT", said[0])
+        self.assertEqual(len(said), 2)
+        self.assertTrue(said[0].startswith("::warning title=swtpm stop (#592)::flake-absorbed: swtpm pid 4246 ignored SIGTERM"))
+        self.assertTrue(said[1].startswith("TPM-STOP-ANOMALY (#592): swtpm pid 4246 ignored SIGTERM after an orderly Shutdown"))
+        self.assertIn("REPORT", said[1])
 
     def test_without_an_orderly_shutdown_it_is_still_a_failure(self):
         import signal
         with self.assertRaisesRegex(RuntimeError, "did not stop: REPORT"):
             self.run_stop({signal.SIGKILL}, orderly_ok=False)
 
+    def test_a_process_that_is_not_this_node_s_swtpm_is_never_killed(self):
+        import signal
+        with self.assertRaisesRegex(RuntimeError, "is not this node's swtpm any more: nothing was killed: REPORT"):
+            sent, _, _ = self.run_stop({signal.SIGKILL}, orderly_ok=True, owned=False)
+
+    def test_a_gone_check_that_raises_is_never_read_as_stopped(self):
+        # b9 on #593: until() returns the exception a check raised, and an exception is truthy
+        def broken():
+            raise OSError("proc unreadable")
+        with self.assertRaisesRegex(RuntimeError, "not even on SIGKILL"):
+            self.run_stop(set(), orderly_ok=True, gone=broken)
+
     def test_if_sigkill_does_not_end_it_either_it_is_a_failure(self):
         with self.assertRaisesRegex(RuntimeError, "did not stop, not even on SIGKILL: REPORT"):
             self.run_stop(set(), orderly_ok=True)
+
+
+class OrderlyAndAbsorbed(unittest.TestCase):
+    """TEAMLEAD-grafana and b9 on #593: only a Shutdown that SUCCEEDED lets a stop be absorbed, so a swtpm whose Shutdown
+    fails still turns the run red; and each absorption is counted, said in the job's summary, and a second one in the
+    same run fails it (one is the known 0.10.1 flake, a pattern is a bug)."""
+
+    def test_only_a_shutdown_that_succeeded_counts_as_orderly(self):
+        self.assertTrue(tn.orderly_shutdown_ok(subprocess.CompletedProcess([], 0, "", "")))
+        self.assertFalse(tn.orderly_shutdown_ok(subprocess.CompletedProcess([], 1, "", "ERROR: Esys_Shutdown")))
+        self.assertFalse(tn.orderly_shutdown_ok(None))                    # a cut: no Shutdown at all
+
+    def test_absorptions_are_counted_summarised_and_capped(self):
+        import tempfile as tf
+        summary = pathlib.Path(tf.mkdtemp()) / "summary.md"
+        seen = []
+        tn.absorbed(seen, "c", "EVIDENCE", summary=str(summary))
+        self.assertEqual(seen, [("c", "EVIDENCE")])
+        self.assertIn("flake-absorbed: 1 swtpm stop needed SIGKILL after an orderly Shutdown (#592): c", summary.read_text())
+        with self.assertRaisesRegex(RuntimeError, "2 swtpm stops needed SIGKILL in this run: a pattern, not the known flake"):
+            tn.absorbed(seen, "a", "EVIDENCE2", summary=str(summary))
+        self.assertIn("flake-absorbed: 2", summary.read_text())
+        tn.absorbed([], "b", "E", summary=None)                            # no summary file outside Actions: said only
 
 
 class JournalStalls(unittest.TestCase):
