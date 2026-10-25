@@ -261,9 +261,9 @@ def esp_advance(node, esp, lock_path=ESP_LOCK, record=None):
     is left as enrolment wrote it. The render the initrd will do is tried too, and a chain it would refuse (this
     node no longer in the manifest, or left with no peer) is STILL written and anchored, with a warning returned:
     the next boot then goes to the recovery prompt, which is what that manifest means for this node, whereas
-    refusing here would freeze the anchor, and rollback protection with it, at the older epoch. The write is enrolment's own (enrol._replace_esp, a
-    temporary file fsynced and renamed, the directory fsynced, under a trusted path), and is read back before the
-    anchor moves. A crash after the write and before the anchor leaves the ESP ahead, which the initrd accepts and
+    refusing here would freeze the anchor, and rollback protection with it, at the older epoch. The write is enrolment's own, the ESP's one chain writer
+    shared with reanchor (enrol.EspChain, #468: a temporary file fsynced and renamed, the directory fsynced, under a
+    trusted path), and is read back before the anchor moves. A crash after the write and before the anchor leaves the ESP ahead, which the initrd accepts and
     the next run completes. Returns (epoch, the chain's SHA-256, whether the ESP was rewritten, the render's
     refusal or None).
 
@@ -284,14 +284,13 @@ def esp_advance(node, esp, lock_path=ESP_LOCK, record=None):
         unrenderable = None
     except Refused as refused:
         unrenderable = str(refused)
-    relative = enrol._rendered_path(bootcreds.CHAIN_ON_ESP)
-    directory, filename = os.path.join(esp, os.path.dirname(relative)), os.path.basename(relative)
-    target = os.path.join(directory, filename)
+    # the ESP's ONE chain writer (#468, shared with reanchor.write_esp): whether it differs is known here, BEFORE the
+    # request line below names it; the write comes after that line
     try:
-        enrol._ensure_trusted_dir(directory)
+        on_esp = enrol.EspChain(esp, chain)
     except enrol.Refused as refused:
         raise Refused(str(refused)) from None
-    rewritten = _read_regular(target, len(chain) + 1) != chain
+    rewritten = on_esp.rewritten
     manifests = [e["manifest"] for e in envelopes]               # verified by bootcreds.anchored
     epoch = manifests[-1]["epoch"]
     facts = {"epoch": epoch, "manifest_digest": membership.digest(manifests[-1]), "chain_sha256": hashlib.sha256(chain).hexdigest(),
@@ -305,9 +304,10 @@ def esp_advance(node, esp, lock_path=ESP_LOCK, record=None):
     # run says", never an ALLOW for a move that did not happen; a failed ALLOW is TrailIncomplete, never a refusal
     if record is not None:
         record(dict(facts, event="esp-advance-requested"))
-    if rewritten:
-        enrol._replace_esp(directory, filename, chain)
-        require(_read_regular(target, len(chain) + 1) == chain, "the chain read back from %s is not the one written" % target)
+    try:
+        on_esp.write()
+    except enrol.Refused as refused:
+        raise Refused(str(refused)) from None
     anchor.anchor(epoch, membership.Store._digests(manifests))
     anchor.check(epoch)
     result = epoch, hashlib.sha256(chain).hexdigest(), rewritten, unrenderable
