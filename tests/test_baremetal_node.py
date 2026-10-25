@@ -42,7 +42,7 @@ class Case(unittest.TestCase):
             json.dump(SITE, f)
         with open(os.path.join(self.d, "etc", "wg-service.key"), "w") as f:
             f.write(PRIVATE + "\n")
-        self.cfg = {"schema": node.SCHEMA, "node_id": "a", "site": self.d + "/etc/site.json", "root_key": ROOT, "tcti": None,
+        self.cfg = {"schema": node.SCHEMA, "node_id": "a", "site": self.d + "/etc/site.json", "root_key": ROOT, "tcti": "device:/dev/tpmrm0",
                     "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "nv_signing": "0x0150001c", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
                     "admission_log_dir": self.d + "/log-admission",
                     "wg_service_key": self.d + "/etc/wg-service.key", "measurements": self.d + "/etc/measurements.json",
@@ -63,6 +63,8 @@ class Case(unittest.TestCase):
 class Configuration(Case):
     def test_the_configuration_is_exact(self):
         self.assertEqual(node.validate(dict(self.cfg)), self.cfg)
+        for tcti in ("device:/dev/tpmrm0", "swtpm:path=/tmp/x/tpm.sock", "mssim:host=localhost,port=2321"):
+            self.assertEqual(node.validate(dict(self.cfg, tcti=tcti))["tcti"], tcti)    # the kernel's RM, or a private simulator
         path = os.path.join(self.d, "etc", "node.json")
         with open(path, "w") as f:
             json.dump(self.cfg, f)
@@ -72,7 +74,14 @@ class Configuration(Case):
                 ("another schema", {"schema": "regalia.node/v2"}, "schema must be regalia.node/v1"),
                 ("a node ID in capitals", {"node_id": "A"}, "node_id is not a node ID"),
                 ("a root key in capitals", {"root_key": ROOT.upper()}, "root_key"),
-                ("a TCTI with a space", {"tcti": "swtpm:path=/x y"}, "tcti must be null"),
+                ("a TCTI with a space", {"tcti": "swtpm:path=/x y"}, "tcti must be device:/dev/tpmrm0"),
+                # regalia-afi (#592): only the kernel's resource manager, or a private simulator; never null (tpm2-tss's own
+                # search order would decide, and could reach the raw /dev/tpm0 where /dev/tpmrm0 is missing), never a raw device
+                ("a null TCTI", {"tcti": None}, "tcti must be device:/dev/tpmrm0"),
+                ("the raw TPM device", {"tcti": "device:/dev/tpm0"}, "tcti must be device:/dev/tpmrm0"),
+                ("another device", {"tcti": "device:/dev/tpmrm1"}, "tcti must be device:/dev/tpmrm0"),
+                ("tabrmd, which the image does not ship", {"tcti": "tabrmd"}, "tcti must be device:/dev/tpmrm0"),
+                ("a device TCTI with no path", {"tcti": "device"}, "tcti must be device:/dev/tpmrm0"),
                 ("an NV index of the wrong range", {"nv_epoch": "0x81000001"}, "nv_epoch must be an NV index"),
                 ("an NV index in capitals", {"nv_heartbeat": "0x0150001A"}, "nv_heartbeat must be an NV index"),
                 ("overlapping indices", {"nv_heartbeat": "0x01500017"}, "must not overlap"),
