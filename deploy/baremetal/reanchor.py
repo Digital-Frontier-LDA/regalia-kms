@@ -20,6 +20,12 @@ so it is the one an attacker would want, and it is fenced accordingly:
     else in the cluster rests on (#199: there is no authority host any more; two compromised nodes could
     already sign heartbeats and revocations, which is the accepted trade-off on #199). None may be the node
     being re-anchored.
+    ONE OTHER NODE AND THE OWNER (--one-source, #387): when only one other node is left, the owner is the
+    second source, by a statement signed off the nodes (owner.py sign-recovery --purpose reanchor) over that
+    node's tip, for this node and this operation's session, for minutes (recover.py says what is checked). The
+    TPM no longer bounds a re-anchor from below, so the owner's tool does: it refuses a tip below what the
+    owner's machine signed, or below what the audit collector saw. The chain must extend the manifest this
+    node's disk still holds, and no second node that may authorize may answer (else: use two).
   * A USABLE ANCHOR IS NEVER RESET. If the counter reads and the record is valid and in step, this refuses.
   * A TPM THAT DOES NOT ANSWER IS NOT RE-ANCHORED. "The index is not defined", said by the TPM, is an
     unusable anchor. A TPM or a tool that fails says nothing about the anchor, and this refuses.
@@ -37,16 +43,24 @@ so it is the one an attacker would want, and it is fenced accordingly:
   * RECORDED. The request, naming the epoch and manifest, is appended to the audit log before anything is
     asked or changed (without a writable log nothing is done); then the outcome: ALLOW, DENY (nothing
     changed), or INCOMPLETE (the anchor was being replaced and it did not finish: run it again).
+  * GIVEN BACK. Run as root, it writes the membership file as root; done (or INCOMPLETE), it gives that file and any
+    lock it made back to the owner of the state directory (regalia-sync's, enrol._hand_over), or the node's own sync
+    could not read its chain (#388). Its lock on the anchor is the node's own (highwater.lock in the state directory).
 
-    python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.json --root-key HEX \\
-        --tpm-index 0x1500016 --node-id b --peer a=a-chain.json --peer c=c-chain.json \\
-        --audit-log /var/log/regalia/reanchor.jsonl
+    python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia-sync/membership.json --root-key HEX \\
+        --tpm-index 0x1500016 --tcti device:/dev/tpmrm0 --node-id b --node-config /etc/regalia/node.json \\
+        --peer a=a-chain.json --peer c=c-chain.json
 
 It needs the TPM's owner authorization, as defining the anchor did at commissioning.
 """
 import argparse
+import contextlib
+import errno
+import fcntl
 import os
 import re
+import stat
+import subprocess
 import sys
 import time
 
@@ -68,36 +82,45 @@ class Unrecorded(Exception):
         self.summary = summary
 
 
-def plan(store, sources, node_id):
+def plan(store, sources, node_id, owner=None):
     """What a re-anchor would do, having verified everything that can be verified without changing anything:
     {"reason": why the anchor is unusable, "counter": the old counter's epoch or None, "records": the record
     slots that still hold a valid record, "epoch", "manifest_digest" and "manifest": the newest manifest of
     the chain to anchor, "chain": that chain (every source's), "sources": who gave one}."""
     require(isinstance(node_id, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node_id) is not None, "node_id must be a node ID")
     require(isinstance(sources, dict), "sources must map each source to the chain it gave")
-    require(len(sources) >= 2, "re-anchoring needs whole chains from at least two other nodes (%d source given)" % len(sources))
+    if owner is None:
+        require(len(sources) >= 2, "re-anchoring needs whole chains from at least two other nodes (%d source given)" % len(sources))
+    else:
+        require(len(sources) == 1, "--one-source takes exactly one other node's chain (%d given): with two, re-anchor from both" % len(sources))
     require(node_id not in sources, "%s cannot be a source for its own re-anchor: the peer's chain comes from another node" % node_id)
     reason = store.hw.unusable()             # Refused, not a reason, when the TPM does not answer
     require(reason is not None, "the TPM anchor is usable: it is not reset. A chain that is rolled back, lost or substituted is "
             "restored under the anchor it has (convergence.recover)")
     counter, records = store.hw.remains()
     floor = max([counter or 0] + [epoch for epoch, _ in records])
-    longest, newest = convergence.agreed(store.root_key, sources, 2, floor)
+    longest, newest = convergence.agreed(store.root_key, sources, 2 if owner is None else 1, floor)
     # Every source gave the same whole chain: one AHEAD of the others would have its newest epochs vouched
     # for by that node alone.
     ends = {source: len(chain) for source, chain in sources.items()}
     require(len(set(ends.values())) == 1, "the nodes' chains end at different epochs (%s): every source must give the same whole chain; "
             "fetch each node's current chain" % ", ".join("%s at %d" % (k, v) for k, v in sorted(ends.items())))
     require(node_id in membership.validate(newest), "%s is not a node of the chain being anchored" % node_id)
-    return {"reason": reason, "counter": counter, "records": records, "epoch": newest["epoch"], "manifest_digest": membership.digest(newest),
-            "manifest": newest, "chain": longest, "sources": sorted(sources)}
+    planned = {"reason": reason, "counter": counter, "records": records, "epoch": newest["epoch"], "manifest_digest": membership.digest(newest),
+               "manifest": newest, "chain": longest, "sources": sorted(sources)}
+    if owner is not None:
+        from deploy.baremetal import recover
+        recover.verify_chain(longest, store.root_key, recover.last_known(store.path, store.root_key))     # no fork of what the disk holds
+        owner(newest)
+        planned["sources"] = sorted(sources) + ["owner"]
+    return planned
 
 
 def phrase(node_id, planned):
     return "re-anchor %s at epoch %d %s" % (node_id, planned["epoch"], planned["manifest_digest"][:8])
 
 
-def reanchor(store, sources, node_id, typed, sink, prepare=None):
+def reanchor(store, sources, node_id, typed, sink, owner=None, prepare=None, before_anchor=None):
     """Plan, record the request, check what the operator typed, re-anchor, record the outcome. Returns
     {"epoch", "manifest_digest"} of what the node now holds.
 
@@ -107,7 +130,9 @@ def reanchor(store, sources, node_id, typed, sink, prepare=None):
     did not finish: Incomplete is raised, and the command is run again). `typed` is a callable given the
     plan and returning what the operator typed, so nothing is asked before the plan exists. `prepare(planned)`, if
     given, runs once the plan exists and before anything is recorded as requested, asked or changed (the define policy
-    from the manifest being anchored, NodePolicies.prepare): a refusal there is a DENY with nothing changed."""
+    from the manifest being anchored, NodePolicies.prepare): a refusal there is a DENY with nothing changed.
+    `before_anchor(planned)`, if given, runs once the phrase is confirmed and BEFORE the anchor is touched (the chain
+    written to the ESP, write_esp: #410's order, the ESP first): a failure there is a DENY with the anchor unchanged."""
     def event(kind, planned, **more):
         return dict({"event": kind, "subject": convergence._printable(node_id), "peer": "operator",
                      "epoch": planned.get("epoch", 0), "manifest_digest": planned.get("manifest_digest", ""),
@@ -115,7 +140,7 @@ def reanchor(store, sources, node_id, typed, sink, prepare=None):
                      "anchor_was": convergence._printable(planned.get("reason", ""))}, **more)
 
     try:
-        planned = plan(store, sources, node_id)
+        planned = plan(store, sources, node_id, owner)
     except Refused as refusal:
         sink(event("reanchor", {}, outcome="DENY", reason=convergence._printable(refusal)))
         raise
@@ -131,6 +156,8 @@ def reanchor(store, sources, node_id, typed, sink, prepare=None):
     store.reanchor_began = False
     try:
         require(typed(dict(planned)) == phrase(node_id, planned), "not confirmed: the phrase typed is not %r" % phrase(node_id, planned))
+        if before_anchor is not None:
+            before_anchor(planned)
         store.reanchor(planned["chain"])
     except BaseException as failure:
         began = store.reanchor_began
@@ -156,8 +183,163 @@ def _chain(path):
         return membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), limit=membership.MAX_CHAIN_BYTES)
 
 
-def _highwater(index, tcti, policy=None, define_policy=None, owner_auth=None):
-    return membership.HighWater(index, tcti=tcti, policy=policy, define_policy=define_policy, owner_auth=owner_auth)
+def _highwater(index, tcti, policy=None, define_policy=None, owner_auth=None, lock_path=None):
+    return membership.HighWater(index, tcti=tcti, policy=policy, define_policy=define_policy, owner_auth=owner_auth,
+                                lock_path=lock_path)
+
+
+def anchor_lock(membership_path):
+    """The anchor's lock, where the node's own services take it (node.Node.anchor: highwater.lock in the state directory,
+    which holds the membership file): a re-anchor and the node's sync then serialize on the same file."""
+    return os.path.join(os.path.dirname(os.path.abspath(membership_path)), "highwater.lock")
+
+
+def hand_back(membership_path, euid=os.geteuid, chown=os.fchown):
+    """The membership file and the locks a re-anchor run as root may have made, given back to the owner of the directory
+    that holds them (regalia-sync's state directory, enrol._hand_over): written by root, mkstemp's 0600 would leave the
+    node's own sync unable to read its chain (#388). Each is opened without following a link and must be a regular file
+    with one name (a hard link could name another file: regalia-sync controls the directory's entries), owned by root or
+    by the directory's owner already, never a third user's; only one whose owner is not the directory's is changed, and
+    only when root runs this and the directory is not root's. Returns the paths changed."""
+    directory = os.path.dirname(os.path.abspath(membership_path))
+    try:
+        owner = os.stat(directory)
+    except FileNotFoundError:                       # refused before anything was made: nothing to give back
+        return []
+    if euid() != 0 or owner.st_uid == 0:
+        return []
+    changed = []
+    for path in (os.path.abspath(membership_path), os.path.abspath(membership_path) + ".lock", anchor_lock(membership_path)):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except FileNotFoundError:
+            continue
+        try:
+            held = os.fstat(fd)
+            require(stat.S_ISREG(held.st_mode) and held.st_nlink == 1, "%s is not a regular file with one name: it is not given back" % path)
+            require(held.st_uid in (0, owner.st_uid), "%s belongs to uid %d, neither root nor the owner of %s: it is not given back"
+                    % (path, held.st_uid, directory))
+            if (held.st_uid, held.st_gid) != (owner.st_uid, owner.st_gid):
+                chown(fd, owner.st_uid, owner.st_gid)
+                changed.append(path)
+        finally:
+            os.close(fd)
+    return changed
+
+
+# The node's one run-time writer of the anchor (#410) and what starts it, with the services that read it: reanchor runs only
+# with all of them stopped (MEMBERSHIP-RECOVERY.md, step 5), and holds regalia-esp-advance's own lock while it runs, so the
+# two can never interleave (regalia-kms-24 on #391). node.ESP_LOCK; tests/test_baremetal_reanchor.py holds the two equal.
+ESP_LOCK = "/run/regalia-esp-advance/highwater.lock"
+ANCHOR_UNITS = ("regalia-esp-advance.path", "regalia-esp-advance.service", "regalia-sync.service", "regalia-admission.service")
+
+
+UNIT_STATES = ("active", "activating", "reloading", "refreshing", "deactivating", "inactive", "failed", "maintenance")
+
+
+def active_units(run=subprocess.run):
+    """Which of ANCHOR_UNITS systemd says are running (or starting, or stopping). No systemctl at all (a machine that is
+    not a node, as the unit tests run on): none. A systemctl that cannot answer ("Failed to connect to bus" on a
+    recovery boot, in a chroot) is a refusal, never "none running" (regalia-kms-1e on #391): exactly one known state per
+    unit, and is-active's own status (0 all active, 3 some not, 4 some not loaded at all: it still prints "inactive"
+    for those, as on a machine where they are not installed), or nothing is assumed. Status 4 is taken only when EVERY
+    unit reads inactive or failed (regalia-kms-24): a missing unit beside a running one is a refusal too."""
+    try:
+        done = run(["systemctl", "is-active"] + list(ANCHOR_UNITS), capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return []
+    states = done.stdout.split()
+    if done.returncode not in (0, 3, 4) or len(states) != len(ANCHOR_UNITS) or any(state not in UNIT_STATES for state in states) \
+            or (done.returncode == 4 and any(state not in ("inactive", "failed") for state in states)):
+        raise Refused("cannot ask systemd which of %s run (status %s: %s): stop them and run this on the booted node"
+                      % (", ".join(ANCHOR_UNITS), done.returncode, " ".join(((done.stderr or "") + " " + (done.stdout or "")).split())[:200]))
+    return [unit for unit, state in zip(ANCHOR_UNITS, states) if state in ("active", "activating", "reloading", "refreshing", "deactivating")]
+
+
+@contextlib.contextmanager
+def esp_lock_held(path):
+    """regalia-esp-advance's lock (node.ESP_LOCK), taken for the whole re-anchor, without waiting: held by a running
+    advance, the re-anchor is refused. Its directory is that unit's RuntimeDirectory, which exists only while it runs or
+    after it ran; when it does not exist, nothing is taken (and the unit check above has found it stopped). The lock is
+    opened as membership._exclusive opens one: never through a link, a regular file with one name."""
+    if not os.path.isdir(os.path.dirname(path)):
+        yield False
+        return
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as failure:
+        if failure.errno == errno.ELOOP:
+            raise Refused("regalia-esp-advance's lock %s is a symbolic link: it is not taken through one" % path) from None
+        raise
+    try:
+        held = os.fstat(fd)
+        require(stat.S_ISREG(held.st_mode) and held.st_nlink == 1, "regalia-esp-advance's lock %s is not a regular file with one name" % path)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refused("regalia-esp-advance holds the anchor's lock %s: it is running. Stop regalia-esp-advance.path and "
+                          "regalia-esp-advance, then run this again" % path) from None
+        yield True
+    finally:
+        os.close(fd)
+
+
+def esp_chain_path(esp):
+    """Where the boot chain lies on the ESP mounted at `esp` (bootcreds.CHAIN_ON_ESP, confined as enrolment confines it)."""
+    from deploy.baremetal import bootcreds, enrol
+    return os.path.join(esp, enrol._rendered_path(bootcreds.CHAIN_ON_ESP))
+
+
+def check_esp(esp, root_key):
+    """Before anything is asked: the ESP is there, as enrolment left it, and it is THIS network's. Every enrolled node
+    has a chain on it; none at `esp` is an ESP not mounted there (a write would go to the root file system, and the next
+    boot would still read the old chain below the new anchor: a ROLLBACK). What is there must verify as a chain under the
+    pinned root (regalia-kms-1e on #391): a stray file on an unmounted /efi, or another network's ESP, is refused by name."""
+    path = esp_chain_path(esp)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        raise Refused("%s holds no boot chain (%s): is the ESP mounted there? Give it with --esp" % (esp, path)) from None
+    try:
+        require(stat.S_ISREG(os.fstat(fd).st_mode), "%s is not a regular file: is the ESP mounted at %s?" % (path, esp))
+        data = os.read(fd, membership.MAX_CHAIN_BYTES + 1)
+    finally:
+        os.close(fd)
+    try:
+        membership.accept_chain(None, membership.load(data, membership.MAX_CHAIN_BYTES), root_key)
+    except (Refused, ValueError, KeyError, TypeError) as refused:
+        raise Refused("the chain on %s does not verify under --root-key (%s): not this network's ESP, or not an ESP" % (esp, refused)) from None
+
+
+def write_esp(esp, envelopes):
+    """The chain being anchored written to the ESP BEFORE the anchor moves (#410's order: the initrd accepts an ESP chain
+    ahead of its anchor, never one below it; regalia-kms-24 on #391), through enrolment's confined writer, as
+    regalia-esp-advance writes it (node.esp_advance): a trusted directory, a temporary file fsynced and renamed, read
+    back. Only the chain. Returns whether the ESP was rewritten."""
+    from deploy.baremetal import enrol
+    chain = membership.canonical(envelopes)
+    target = esp_chain_path(esp)
+    directory, filename = os.path.dirname(target), os.path.basename(target)
+    try:
+        enrol._ensure_trusted_dir(directory)
+    except enrol.Refused as refused:
+        raise Refused(str(refused)) from None
+
+    def read():
+        try:
+            fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except FileNotFoundError:
+            return None
+        try:
+            require(stat.S_ISREG(os.fstat(fd).st_mode), "%s is not a regular file" % target)
+            return os.read(fd, len(chain) + 1)
+        finally:
+            os.close(fd)
+    if read() == chain:
+        return False
+    enrol._replace_esp(directory, filename, chain)
+    require(read() == chain, "the chain read back from %s is not the one written" % target)
+    return True
 
 
 def node_policy(path, node_id):
@@ -216,9 +398,20 @@ class NodePolicies:
         return node_policy(self.path, self.node_id)()
 
 
-def main(argv=None, ask=None, highwater=_highwater, tty=None):
+def _owner_check(config_path, node_id, statement_path, peer):
+    """recover.owner_check for this node, from its node.json, and the owner's statement file."""
+    from deploy.baremetal import node, recover
+    cfg = node.load(config_path)
+    require(cfg["node_id"] == node_id, "--node-config is %s's, not %s's" % (cfg["node_id"], node_id))
+    with open(statement_path, "rb") as f:
+        signed = membership.load(f.read(65536))
+    return recover.owner_check(node.Node(cfg), signed, "reanchor", peer)
+
+
+def main(argv=None, ask=None, highwater=_highwater, tty=None, owner_check=_owner_check, active=active_units):
     """Exit status: 0 done; 1 refused, nothing changed; 2 usage; 3 INCOMPLETE, the anchor was being replaced:
-    run it again; 4 done, but the outcome could not be written to the audit log."""
+    run it again; 4 done, but the outcome could not be written to the audit log; 5 done, but the membership file could not
+    be given back to the owner of its directory (hand_back: the command to run is printed)."""
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.reanchor", description=__doc__.splitlines()[0])
     ap.add_argument("--membership", required=True, help="this node's membership file")
     ap.add_argument("--root-key", required=True, help="the pinned membership root key, 64 hex")
@@ -228,8 +421,14 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
     ap.add_argument("--audit-log", default=trails.where("reanchor"),
                     help="the audit trail (default %(default)s, its place in trails.py's registry)")
     ap.add_argument("--tcti", help="the TPM to re-anchor, as a TCTI (e.g. device:/dev/tpmrm0); default: tpm2-tools' default TPM")
+    ap.add_argument("--esp", default="/efi", help="the ESP's mount point (default %(default)s): the chain is written there "
+                    "before the anchor moves, as regalia-esp-advance does")
+    ap.add_argument("--esp-lock", default=ESP_LOCK, help="regalia-esp-advance's lock, held for the whole re-anchor "
+                    "(default %(default)s, its RuntimeDirectory's; the three-node fixture gives each node its own)")
     ap.add_argument("--node-config", help="this node's node.json: needed when its anchor is written by its approved-image policy (#242)")
     ownerauth.add_arguments(ap)
+    ap.add_argument("--one-source", action="store_true", help="ONE other node, the owner the second source (needs --owner-statement, --node-config)")
+    ap.add_argument("--owner-statement", help="the owner's statement (owner.py sign-recovery --purpose reanchor)")
     args = ap.parse_args(argv)
     # The TPM is named on the command line or is the default, never taken from the environment: a
     # TPM2TOOLS_TCTI left over in the shell would re-anchor ANOTHER TPM, which would truthfully say that the
@@ -279,26 +478,71 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
             require(sep and node_id and path, "--peer takes NODE=CHAIN.json, not %r" % item)
             require(node_id not in sources, "--peer names %s twice" % node_id)
             sources[node_id] = _chain(path)
+        owner = None
+        if args.one_source:
+            require(args.owner_statement and args.node_config, "--one-source needs --owner-statement and --node-config")
+            owner = owner_check(args.node_config, args.node_id, args.owner_statement, sorted(sources)[0] if sources else "")
         # a node configuration that cannot be loaded, or another node's, refuses here; its define policy is resolved
         # from the manifest being anchored, after the plan and before anything changes (NodePolicies.prepare)
         policies = NodePolicies(args.node_config, args.node_id)
+        # nothing else may touch the anchor while it is replaced: the node's units stopped (the procedure's step 5), and
+        # regalia-esp-advance's own lock held from here to the end (it writes the anchor under that lock, not the node's)
+        check_esp(args.esp, args.root_key)
+        running = active()
+        require(not running, "%s %s running: stop %s first (MEMBERSHIP-RECOVERY.md, step 5), so that nothing but this "
+                "command touches the anchor" % (", ".join(running), "is" if len(running) == 1 else "are", " ".join(running)))
         extra = {} if owner_auth is None else {"owner_auth": owner_auth}
-        store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti, policy=policies.reader,
-                                                                          define_policy=policies.define, **extra))
-        now_at = reanchor(store, sources, args.node_id, typed, record, prepare=policies.prepare)
+        with esp_lock_held(args.esp_lock):
+            store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti, policy=policies.reader,
+                                                                              define_policy=policies.define,
+                                                                              lock_path=anchor_lock(args.membership), **extra))
+            now_at = reanchor(store, sources, args.node_id, typed, record, owner=owner, prepare=policies.prepare,
+                              before_anchor=lambda planned: write_esp(args.esp, planned["chain"]))
     except Incomplete as failure:
         print("reanchor: INCOMPLETE: the anchor was being replaced and it did not finish: %s\nRun this command again with the same "
               "chains. Until it completes, this node's membership does not load." % failure, file=sys.stderr)
+        _give_back(args.membership)
         return 3
     except Unrecorded as failure:
         print("reanchor: DONE, but the outcome could not be written to the audit log (%s). %s now holds epoch %d, manifest %s. "
               "Record it by hand." % (failure, args.node_id, failure.summary["epoch"], failure.summary["manifest_digest"]), file=sys.stderr)
+        _give_back(args.membership)
         return 4
     except (OSError, Refused) as failure:
         print("reanchor: NOT DONE, nothing was changed: %s" % failure, file=sys.stderr)
+        # the plan took the node's anchor lock (and the store its own) as root: one that did not exist was made 0600 by
+        # root, and the node's sync could not take it (regalia-kms-1e on #391)
+        _give_back(args.membership, done=False)
         return 1
+    if not _give_back(args.membership):
+        return 5
     print("reanchor: done. %s now holds epoch %d, manifest %s, under a new anchor." % (args.node_id, now_at["epoch"], now_at["manifest_digest"]))
     return 0
+
+
+def _give_back(membership_path, done=True):
+    """hand_back, said: True when every file is its directory owner's (or nothing needed it); else False, with what to do.
+    A file refused for what it IS (a link, a second name, a third user's: Refused, or ELOOP from O_NOFOLLOW) gets no
+    command: regalia-sync controls those entries, and a chown, even with -h, is not what a planted file needs. Any other
+    failure prints the chown, with -h (never through a link) and after `--`."""
+    try:
+        for path in hand_back(membership_path):
+            print("reanchor: %s given back to the owner of its directory" % path)
+        return True
+    except (OSError, Refused) as failure:
+        directory = os.path.dirname(os.path.abspath(membership_path))
+        what = ("the anchor is written, but the membership file or a lock" if done else
+                "nothing was changed, but a lock or file this run made as root")
+        if isinstance(failure, Refused) or getattr(failure, "errno", None) == errno.ELOOP:
+            print("reanchor: %s could not be given back to the owner of %s: %s. It is not a regular file of root's or of the "
+                  "directory's owner with one name: do NOT chown it. Look at it (ls -l %s), find out what made it, remove the "
+                  "entry by name if it is not this node's, and run the command again." % (what, directory, failure, directory),
+                  file=sys.stderr)
+            return False
+        print("reanchor: %s could not be given back to the owner of %s (%s): the node's sync cannot use it until it is. "
+              "Run:  chown -h --reference=%s -- %s %s.lock %s" % (
+                  what, directory, failure, directory, membership_path, membership_path, anchor_lock(membership_path)), file=sys.stderr)
+        return False
 
 
 if __name__ == "__main__":

@@ -229,6 +229,14 @@ class MoveToV4(Case):
         beat = hbt.beat(m4, 1, key=REVOKE)
         self.refused("envelope fields mismatch: missing=['signatures'] unknown=['signature']", hb.signed, beat, m4)
 
+    def test_nothing_moves_a_chain_back_from_v4(self):
+        """#242 B3 keys the anchor's layout on the tip's schema (v4: policy only), so a v3 epoch after v4 would bring the
+        owner-written layout back: refused, even signed by the root (24)."""
+        m4 = m.accept(self.m3, sign(self.v4(), ROOT), ROOT_PUB)
+        back = manifest3(3, m.digest(m4), [{k: v for k, v in n.items() if k != "signing_key"} for n in m4["nodes"]])
+        self.refused("schema regalia.membership/v3 cannot follow regalia.membership/v4: the schema only moves forward",
+                     m.accept, m4, sign(back, ROOT), ROOT_PUB)
+
     def test_only_the_root_moves_to_v4(self):
         self.refused("only the root can change the schema (regalia.membership/v3 to regalia.membership/v4)",
                      m.accept, self.m3, sign(self.v4(), REVOKE, "revocation"), ROOT_PUB)

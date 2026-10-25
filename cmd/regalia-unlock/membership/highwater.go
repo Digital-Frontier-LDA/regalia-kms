@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -60,6 +61,9 @@ type highWater struct {
 	index, base uint32
 	slots       [2]uint32
 	policy      *lazyPolicy
+	// v4: the chain read against this anchor ends in a v4 manifest, under which the counter and the slots are written
+	// by policy only (#242 B3): an owner-written one is Unusable, which a re-anchor repairs
+	v4 bool
 }
 
 // lazyPolicy is this node's approved-image write policy, asked for only when a policy-written index is met
@@ -106,16 +110,56 @@ func (h highWater) public(index uint32) (uint32, int, []byte, error) {
 	return 0, 0, nil, refuse("cannot read NV index %s: the high-water anchor is unavailable (fail closed): the TPM lists it and did not give it", name(index))
 }
 
+// tpmReason is membership._why: the TPM's reason for a read of size bytes that did not come back, as a refusal's
+// suffix, " (TPM: <the last line of err>)", or the byte count when there is no error to name (#450). The same rule
+// as the Python's (_lines), whatever the input: each run of bytes that are not UTF-8 becomes one U+FFFD, lines split
+// on "\n" only, every unprintable character becomes a space, spaces are trimmed, and the last 200 characters of the
+// last line are kept. The two readers never see the same text in production, so tests/vectors/tpm-reason-v1.json holds both to it.
+func tpmReason(err error, data []byte, size int) string {
+	if err != nil {
+		text := replacementRun.ReplaceAllString(strings.ToValidUTF8(err.Error(), "\uFFFD"), "\uFFFD")
+		lines := strings.Split(text, "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			line := strings.Trim(strings.Map(func(r rune) rune {
+				if unprintable(r) {
+					return ' '
+				}
+				return r
+			}, lines[i]), " ")
+			if line != "" {
+				runes := []rune(line)
+				if len(runes) > 200 {
+					runes = runes[len(runes)-200:]
+				}
+				return fmt.Sprintf(" (TPM: %s)", string(runes))
+			}
+		}
+	}
+	return fmt.Sprintf(" (TPM: %d bytes, not %d)", len(data), size)
+}
+
+var replacementRun = regexp.MustCompile("\uFFFD+")
+
+// unprintable is membership._UNPRINTABLE, the same fixed list (not a Unicode category, so the two readers agree
+// whatever Unicode version each was built with): every C0 control, DEL and C1 control, the zero-width characters and
+// LRM/RLM, the line and paragraph separators, the bidi embeddings and overrides (U+202E among them), the isolates and
+// the BOM. Each would reorder, hide or break the text on an operator's terminal.
+func unprintable(r rune) bool {
+	return r < 0x20 || r >= 0x7f && r <= 0x9f || r >= 0x200b && r <= 0x200f || r >= 0x2028 && r <= 0x202e ||
+		r >= 0x2066 && r <= 0x2069 || r == 0xfeff
+}
+
 func (h highWater) read8(index uint32) (uint64, error) {
 	data, err := h.nv.Read(index, 8)
 	if err != nil || len(data) != 8 {
-		return 0, refuse("cannot read 8 bytes from NV index %s", name(index))
+		return 0, refuse("cannot read 8 bytes from NV index %s%s", name(index), tpmReason(err, data, 8))
 	}
 	return binary.BigEndian.Uint64(data), nil
 }
 
 // asDefined is HighWater._as_defined: the index's attributes are this anchor's, owner-written or, for the
-// counter and the slots, written under a policy that must be this node's approved-image policy (#242 B).
+// counter and the slots, written under a policy that must be this node's approved-image policy (#242 B). Under a
+// v4 chain tip the counter and the slots are written by policy only (#242 B3).
 func (h highWater) asDefined(index uint32, attributes uint32, authPolicy []byte, kind string) error {
 	mask := attributes &^ nvState
 	if written, ok := policyAttributes[kind]; ok && mask == written {
@@ -137,6 +181,9 @@ func (h highWater) asDefined(index uint32, attributes uint32, authPolicy []byte,
 	} else if want := anchorAttributes[kind]; mask != want {
 		return &Unusable{Reason: fmt.Sprintf("NV index %s does not have this anchor's attributes (0x%x, not 0x%x): it can be "+
 			"written or read otherwise than this software defines", name(index), mask, want)}
+	} else if _, policyKind := policyAttributes[kind]; policyKind && h.v4 {
+		return &Unusable{Reason: fmt.Sprintf("NV index %s is owner-written: under %s the anchor is written by policy only (re-anchor it)",
+			name(index), SchemaV4)}
 	}
 	if kind == "base" {
 		return requireAnchor(attributes&nvWriteLocked != 0, "base index %s is not write-locked", name(index))
@@ -235,7 +282,7 @@ func (h highWater) slot(index uint32) (*record, error) {
 	}
 	data, err := h.nv.Read(index, recordBytes)
 	if err != nil || len(data) != recordBytes {
-		return nil, refuse("cannot read %d bytes from the record index %s: the anchor is unavailable (fail closed)", recordBytes, name(index))
+		return nil, refuse("cannot read %d bytes from the record index %s: the anchor is unavailable (fail closed)%s", recordBytes, name(index), tpmReason(err, data, recordBytes))
 	}
 	held := record{binary.BigEndian.Uint64(data[:8]), hex.EncodeToString(data[8:40])}
 	if !bytes.Equal(data, SlotBytes(held.epoch, data[8:40])) {
@@ -344,6 +391,8 @@ func ReadChain(envelopes []any, root any) ([]map[string]any, error) {
 // read. Returns the high-water.
 func Anchored(nv NV, manifests []map[string]any, policy func() ([]byte, error)) (uint64, error) {
 	h := newHighWater(nv, HighWaterIndex, policy)
+	// judged by the tip of the chain read (#242 B3), as the Python Store judges by its own chain's (Store._judge_by)
+	h.v4 = len(manifests) > 0 && manifests[len(manifests)-1]["schema"] == SchemaV4
 	hw, err := h.value()
 	if err != nil {
 		return 0, err

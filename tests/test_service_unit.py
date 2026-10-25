@@ -80,6 +80,11 @@ class ServiceUnitTests(unittest.TestCase):
         self.assertIn("-config /etc/regalia-kms/config.json", service["ExecStart"])
         self.assertEqual(service["StateDirectory"], "regalia-kms")
         self.assertEqual(service["StateDirectoryMode"], "0700")
+        # D32 (#432): the session key's public half and the applied revision, readable by admission and sync,
+        # removed when the daemon stops (no RuntimeDirectoryPreserve)
+        self.assertEqual(service.get("RuntimeDirectory"), "regalia-kms regalia-state")
+        self.assertEqual(service.get("RuntimeDirectoryMode"), "0755")
+        self.assertNotIn("RuntimeDirectoryPreserve", service)
 
     def test_sidecar_socket_directory_is_private(self):
         """The socket's protection is the directory, and nothing asserted it.

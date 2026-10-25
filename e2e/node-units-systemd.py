@@ -12,7 +12,7 @@ replaces the system chrony's configuration (the system clock follows two private
 loopback), creates the user regalia-sync, installs the units, and writes /etc/regalia and /var/lib/regalia-*.
 
 THE TPM is swtpm. Where the kernel has the vTPM proxy it sits behind the kernel's resource manager, as on a
-host; GitHub's Azure kernel has none, and there it is swtpm's CUSE device, which has NO resource manager:
+host (GitHub's Azure kernel has it from the 2026-10-18 images); where it has none, swtpm's CUSE device, which has NO resource manager:
 one command buffer, no per-connection context, so two processes using it at once could receive each
 other's responses, and sessions survive between processes (on a host the kernel flushes them when a
 connection closes). Part 1 therefore lets one unit at a time use the TPM after the first one. Part 2 needs
@@ -92,6 +92,8 @@ import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "e2e" / "lib"))
+import tpmdiag                                                                       # noqa: E402  regalia-zga
 
 from deploy.baremetal import admission, attest, authtime, enrol, heartbeat, lease, measurements, membership, metrics, node, os_probe, sync, trails, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                    # noqa: E402  the root and revocation keys, and beat()
@@ -129,6 +131,44 @@ def sh(*argv, check=True, **kw):
     if check and done.returncode != 0:
         raise SystemExit("node-units-systemd: %s failed (%d): %s %s" % (" ".join(argv[:3]), done.returncode, done.stdout.strip()[-800:], done.stderr.strip()[-800:]))
     return done
+
+
+STATE_STAND_IN = ("e2e1e2e1e2e1e2e1", 0, 1)        # (cluster_id, state_epoch, revision): no etcd runs in this test
+
+
+def daemon_state_files():
+    """Lease v2 (D32, #489): what regalia-kms writes on a host whose daemon runs etcd (#490: operational_state_*), written
+    here because this test's daemon runs none: /run/regalia-kms/session-key.json once and /run/regalia-state/applied.json
+    every 3 s (a reader refuses one older than 10 s), as the daemon's user regalia-kms, 0644, temp and rename. Section 4
+    ran before these existed and checked that admission then asks for no lease at all."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    shutil.copy(ROOT / "deploy" / "systemd" / "regalia-kms.sysusers.conf", "/etc/sysusers.d/regalia-kms.conf")
+    sh("systemd-sysusers")
+    user = pwd.getpwnam(lease.DAEMON_USER)
+    for directory in (os.path.dirname(lease.APPLIED_PATH), os.path.dirname(lease.SESSION_KEY_PATH)):
+        os.makedirs(directory, exist_ok=True)
+        os.chown(directory, user.pw_uid, user.pw_gid)
+        os.chmod(directory, 0o755)
+
+    def write(path, doc):
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(doc, f)
+        os.chown(tmp, user.pw_uid, user.pw_gid)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    public = Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    write(lease.SESSION_KEY_PATH, {"boot_id": lease.this_boot(), "daemon_started": 0, "session_key": public.hex()})
+
+    def applied():
+        while True:
+            cluster_id, state_epoch, revision = STATE_STAND_IN
+            write(lease.APPLIED_PATH, {"cluster_id": cluster_id, "state_epoch": state_epoch, "revision": revision,
+                                       "boot_id": lease.this_boot(), "boottime_ns": time.clock_gettime_ns(time.CLOCK_BOOTTIME)})
+            time.sleep(3)
+    threading.Thread(target=applied, daemon=True).start()
+    until(lambda: os.path.exists(lease.APPLIED_PATH), 10, 0.2)
 
 
 def until(what, seconds, interval=1.0):
@@ -218,7 +258,7 @@ def peer_tpm(work):
     """b's TPM: swtpm on a socket of the test's own (b is the fixture here, not what is tested)."""
     (work / "b-tpm").mkdir()
     sh("swtpm", "socket", "--tpm2", "--server", "type=unixio,path=%s" % (work / "b-tpm.sock"), "--ctrl", "type=unixio,path=%s.ctrl" % (work / "b-tpm.sock"),
-       "--tpmstate", "dir=%s" % (work / "b-tpm"), "--flags", "not-need-init,startup-clear", "--daemon")
+       "--tpmstate", "dir=%s" % (work / "b-tpm"), "--flags", "not-need-init,startup-clear", "--daemon", "--log", tpmdiag.log_arg(work / "b-tpm.log"))
     until(lambda: (work / "b-tpm.sock").exists(), 10, 0.2)
     return "swtpm:path=%s" % (work / "b-tpm.sock")
 
@@ -265,27 +305,42 @@ def main():
 
 def tpm(work):
     """A software TPM as a character device the units open as a host's: /dev/tpmrm0, the tss group's, 0660.
-    The kernel's vTPM proxy where the kernel has it; else (GitHub's Azure kernel is built without it)
-    swtpm's CUSE device under that name, which needs no kernel module but FUSE's CUSE, and is a TPM
-    without the kernel's resource manager (see the module's docstring). Returns (how, whether the test
-    set the device's group and mode itself)."""
+    The kernel's vTPM proxy where the kernel has it; else (GitHub's Azure kernel was built without it
+    until the 2026-10-18 images) swtpm's CUSE device under that name, which needs no kernel module but
+    FUSE's CUSE, and is a TPM without the kernel's resource manager (see the module's docstring).
+    Returns (how, whether the test set the device's group and mode itself)."""
     state = work / "tpm"
     state.mkdir()
     shutil.chown(state, "tss", "tss")
+
+    def appeared(how):
+        if not until(lambda: os.path.exists("/dev/tpmrm0"), 10, 0.2):
+            log = work / "swtpm.log"
+            raise SystemExit("node-units-systemd: no /dev/tpmrm0 10 s after starting %s; swtpm's log: %s" %
+                             (how, log.read_text(errors="replace")[-800:] if log.exists() else "none"))
+
     if sh("modprobe", "tpm_vtpm_proxy", check=False).returncode == 0:
         done = sh("swtpm", "chardev", "--vtpm-proxy", "--tpm2", "--tpmstate", "dir=%s" % state, "--flags", "not-need-init,startup-clear",
-                  "--daemon", "--log", "file=%s" % (work / "swtpm.log"))
-        how = "the kernel's vTPM proxy (%s)" % (done.stdout + done.stderr).strip()
+                  "--daemon", "--log", tpmdiag.log_arg(work / "swtpm.log"))
+        said = (done.stdout + done.stderr).strip()
+        how = "the kernel's vTPM proxy (%s)" % said
+        # swtpm says "New TPM device: /dev/tpmN"; the kernel registers it (and tpmrmN) only once its own
+        # startup through the proxy is answered, after swtpm has daemonized, so the node comes later
+        made = re.search(r"/dev/tpm(\d+)\b", said)
+        if made and made.group(1) != "0":
+            raise SystemExit("node-units-systemd: the vTPM proxy made /dev/tpm%s; the units allow only /dev/tpmrm0 (is a TPM "
+                             "already on this host?)" % made.group(1))
+        appeared(how)
     else:
         sh("modprobe", "cuse", check=False)
         (work / "swtpm.log").touch()
         shutil.chown(work / "swtpm.log", "tss", "tss")
-        sh("swtpm", "cuse", "-n", "tpmrm0", "--tpm2", "--tpmstate", "dir=%s" % state, "--log", "file=%s" % (work / "swtpm.log"),
+        sh("swtpm", "cuse", "-n", "tpmrm0", "--tpm2", "--tpmstate", "dir=%s" % state, "--log", tpmdiag.log_arg(work / "swtpm.log"),
            "--runas", "tss")
-        until(lambda: os.path.exists("/dev/tpmrm0"), 10, 0.2)
+        how = "swtpm's CUSE device"
+        appeared(how)
         sh("swtpm_ioctl", "-i", "/dev/tpmrm0")
         sh("tpm2_startup", "-c", "-T", "device:/dev/tpmrm0")
-        how = "swtpm's CUSE device"
     sh("udevadm", "settle", check=False)
     # the distribution's rule (tpm-udev: KERNEL=="tpmrm[0-9]*", group tss, 0660) where udev applied it
     by_test = sh("stat", "-c", "%G %a", "/dev/tpmrm0", check=False).stdout.strip() != "tss 660"
@@ -423,6 +478,7 @@ def provision(work):
 
 
 def scenario(work, binaries, user):
+    print(tpmdiag.versions(), flush=True)                                            # regalia-zga: the stack it ran on
     header("0  the TPM, as a device, and the controls")
     how, by_test = tpm(work)
     rm = "/dev/tpmrm0"
@@ -476,7 +532,12 @@ def scenario(work, binaries, user):
     # SIGKILL stands in for the real trigger, which a host under test cannot be made to see: on maxchange, Debian 13's
     # chronyd 4.6.1 exits with status 1 after "exceeds the allowed maximum" (measured by regalia-kms-d9 in
     # authtime-chrony-nts.py's scenario 8), SERVICE_RESULT=exit-code, which latches the same way as this signal
-    sh("systemctl", "kill", "-s", "KILL", "chrony.service", check=False)
+    # The main PID alone, as a crash is: `systemctl kill` under systemd 259 (ubuntu-26.04) kills the unit's whole cgroup,
+    # ExecStopPost with it, and the latch writer died with chronyd ("Control process exited, code=killed"; regalia-oiq)
+    main = int(show("chrony.service", "MainPID").get("MainPID") or 0)
+    if main <= 1:                                      # 0 would be this process group, 1 init: never signal either
+        raise SystemExit("node-units-systemd: chrony.service has no main PID to kill (%d)" % main)
+    os.kill(main, 9)
     latch = pathlib.Path(authtime.LATCH)
     ok(until(lambda: show("chrony.service", "ActiveState")["ActiveState"] in ("failed", "inactive") and latch.exists(), 20) and
        json.loads(latch.read_text())["result"] == "signal",
@@ -578,8 +639,11 @@ def scenario(work, binaries, user):
     doc = until(lambda: json.loads(admission.read_text()), 60, 2)
     doc = doc if isinstance(doc, dict) else {}
     ok(doc.get("serve_until_boottime_ms") == 0 and doc.get("epoch") == 1 and doc.get("manifest_digest", "00" * 32) != "00" * 32
-       and doc.get("reason", "").startswith("renewal failed: no peer gave a lease"),
-       "not admitted, under epoch 1 verified against the TPM anchor, because no peer answered (%s)" % doc.get("reason", "")[:90],
+       and "/run/regalia-state/applied.json does not exist" in doc.get("reason", ""),
+       # lease v2 (D32, #489): no regalia-kms daemon runs on this host, so there is no etcd state to state and the node
+       # asks no peer for a lease at all: it fails closed before the network
+       "not admitted, under epoch 1 verified against the TPM anchor, because without the daemon's etcd state it asks for "
+       "no lease (%s)" % doc.get("reason", "")[:90],
        doc or journal("regalia-admission.service")[-600:])
     served = pathlib.Path(metrics.path("admission"))
     ok(until(lambda: served.exists() and "regalia_admission_serving 0" in served.read_text(), 30, 2),
@@ -695,7 +759,13 @@ class Daemon:
                 "audit_journal_path": str(state / "audit.jsonl"), "audit_sink_url": "https://127.0.0.1:%d" % sink,
                 # what this test is about: the files regalia-admission writes, as the daemon finds them on a host
                 "runtime_admission": "required", "runtime_admission_path": ADMISSION_FILE, "runtime_admission_owner": "regalia-admission",
-                "node_id": "a", "boot_session_path": "/run/regalia/boot-session"}}
+                "node_id": "a", "boot_session_path": "/run/regalia/boot-session",
+                # #432 (48 on #509): an admission is judged against the chain the real regalia-sync publishes, from the
+                # pinned root, as on a host (os_probe requires it there)
+                "membership_chain_path": "/var/lib/regalia-sync/chain.json", "membership_chain_owner": "regalia-sync",
+                "membership_root_key_path": str(etc / "root-key.json")}}
+        # the membership root the daemon pins, canonical as the image builder writes /usr/lib/regalia/root-key.json
+        (etc / "root-key.json").write_bytes(membership.canonical(hbt.pub(hbt.ROOT)))
         for name, document in documents.items():
             (etc / name).write_text(json.dumps(document, indent=1) + "\n")
         for path in etc.iterdir():
@@ -813,7 +883,13 @@ def part2(work, binaries, user, ctx, servers, status):
         state["nodes"].setdefault("a", {})["ak_public"] = ctx["ids"]["a"][2]
         save()
     events = []
-    server = sync.Server("b", store, freshness, verifier, lease.TpmSigner(b_tcti), wgsvc.key_at, events.append)
+    # lease v2 (D32, #489): b judges a's etcd state by its own (RevisionFloor). No etcd runs here: b's applied state is a
+    # stand-in, the same cluster, epoch and revision as a's (STATE_STAND_IN); its floor is fed now, so it has watched
+    # for one lease by the time a asks in section 8
+    b_floor = lease.RevisionFloor()
+    b_floor.applied(*STATE_STAND_IN)
+    server = sync.Server("b", store, freshness, verifier, lease.TpmSigner(b_tcti), wgsvc.key_at, events.append,
+                         floor=b_floor, applied=lambda: STATE_STAND_IN)
     # b's trail names a refused caller before it parses the request ("event": "sync"), so the test also
     # notes each request's operation and b's answer, to tell a's renewals from its pulls
     requests, b_handle = [], server.handle          # (not "answer": section 8 reuses that name for the daemon's reply)
@@ -883,8 +959,15 @@ def part2(work, binaries, user, ctx, servers, status):
        journal("regalia-esp-advance.service")[-800:])
     ok(on_esp.exists() and on_esp.read_bytes() == pathlib.Path("/var/lib/regalia-sync/chain.json").read_bytes(),
        "the ESP's chain is the published chain, byte for byte")
-    said = sh("journalctl", "-u", "regalia-esp-advance.service", "-o", "cat", "--no-pager", check=False).stdout
-    ok("the ESP's membership chain is epoch 2" in said, "its run said so", said[-600:])
+    # its LAST line, printed only after the anchor moved: the anchor can be read in the TPM before the run has exited and
+    # its output reached the journal (main at 4d23879 read the journal in between). Flushed, then waited for, bounded.
+    def finished():
+        sh("journalctl", "--sync", check=False)
+        text = sh("journalctl", "-u", "regalia-esp-advance.service", "-o", "cat", "--no-pager", check=False).stdout
+        return text if "the ESP's membership chain is epoch 2" in text and "and the TPM anchor with it" in text else False
+    said = until(finished, 30, 1)
+    ok(isinstance(said, str), "its run said so, at its end: the ESP's membership chain is epoch 2, and the TPM anchor with it",
+       journal("regalia-esp-advance.service")[-600:])
     sandbox = show("regalia-esp-advance.service", "User", "CapabilityBoundingSet", "PrivateNetwork", "ReadWritePaths")
     ok((sandbox.get("User"), sandbox.get("CapabilityBoundingSet"), sandbox.get("PrivateNetwork")) == ("root", "", "yes")
        and sandbox.get("ReadWritePaths") == ESP + " -/run/regalia-metrics/esp-advance /var/log/regalia-esp-advance",
@@ -905,17 +988,19 @@ def part2(work, binaries, user, ctx, servers, status):
     header("8  the KMS daemon, and a lease from b over the tunnel")
     daemon.start()
     ok(daemon.wait_for(503, 90) == 503, "regalia-kms.service is up and NOT ready (503): no admission yet", daemon.log()[-900:])
+    daemon_state_files()
     sh("systemctl", "start", "regalia-admission.service")
     admitted_doc = until(lambda: (lambda d: d["serve_until_boottime_ms"] > admission.boottime_ms() and d)(
         json.loads(pathlib.Path(ADMISSION_FILE).read_text())), 120, 2)
     admitted_doc = admitted_doc if isinstance(admitted_doc, dict) else {}
     left = (admitted_doc.get("serve_until_boottime_ms", 0) - admission.boottime_ms()) / 1000
-    ok(admitted_doc.get("epoch") == 2 and 200 < left <= lease.MAX_LIFETIME,
+    ok(admitted_doc.get("epoch") == 2 and lease.MAX_LIFETIME - admission.MARGIN - 10 < left <= lease.MAX_LIFETIME,
        "regalia-admission re-attested to b with a's TPM; b's TPM signed a lease; admitted for %.0f s under epoch 2" % left,
        admitted_doc or json.loads(pathlib.Path(ADMISSION_FILE).read_text()))
     issued = [e for e in events if e.get("event") == "sync-lease" and e.get("subject") == "a"]
     ok(issued and issued[-1].get("outcome") == "ALLOW", "b's trail: a lease for a", issued[-1:] or events[-3:])
-    ok(daemon.wait_for(200, 30) == 200, "the daemon is ready (200)", daemon.log()[-900:])
+    ok(daemon.wait_for(200, 30) == 200, "the daemon is ready (200): admitted, with the published chain at the admission's epoch (#432)",
+       daemon.log()[-900:])
     message = b"regalia-kms node units e2e " + daemon.stamp.encode()
     code, answer = daemon.sign(message)
     ok(code == 200 and daemon.verifies(message, answer), "it signs, and openssl verifies the signature against the token's key", (code, answer))
@@ -943,14 +1028,12 @@ def part2(work, binaries, user, ctx, servers, status):
     ok(bool(renewals) and all(b'"refused"' in r[2] for r in renewals) and any("REVOKED_STOLEN under epoch 3" in e.get("reason", "") for e in denied),
        "a asks b to renew (%s); b refuses the caller by name, as REVOKED_STOLEN under epoch 3 (the transport, before the lease code)"
        % (renewals[0][0] if renewals else "no request"), (renewals[-1:] if renewals else requests[-3:], denied[-1:]))
-    pulls = from_a(("pull",))
-    ok(bool(pulls) and all(b'"refused"' in r[2] for r in pulls), "a's own pulls are refused too: it is told nothing of its revocation", pulls[-2:] or requests[-3:])
     # from here nothing writes the admission file: the daemon must stop on its own CLOCK_BOOTTIME
     sh("systemctl", "stop", "regalia-admission.service")
     frozen = pathlib.Path(ADMISSION_FILE).read_bytes()
     end = json.loads(frozen)["serve_until_boottime_ms"]
     granted = [e for e in events[mark:] if e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW"]
-    ok(not granted and end - admission.boottime_ms() > 15000,
+    ok(not granted and end - admission.boottime_ms() > 6000,     # room for the probe 5 s before the end (a 30 s lease, D32)
        "b granted no lease after the revocation; regalia-admission is stopped with %.0f s of the last lease left"
        % ((end - admission.boottime_ms()) / 1000), (granted, end, admission.boottime_ms()))
     time.sleep(max(0, (end - 5000 - admission.boottime_ms()) / 1000))
@@ -961,6 +1044,9 @@ def part2(work, binaries, user, ctx, servers, status):
     ok(code == 503 and daemon.ready() == 503 and pathlib.Path(ADMISSION_FILE).read_bytes() == frozen,
        "2 s after the end it refuses (503) and is not ready, with the admission file untouched since the lease service stopped",
        (code, answer, daemon.log()[-600:]))
+    # a's sync pulls on its own cadence, slower than a 30 s lease's renewals: waited for here, after the lease's end
+    pulls = until(lambda: from_a(("pull",)), 120, 2) or []
+    ok(bool(pulls) and all(b'"refused"' in r[2] for r in pulls), "a's own pulls are refused too: it is told nothing of its revocation", pulls[-2:] or requests[-3:])
     # b's handler never failed (a failure there is swallowed by sync.serve and would look like silence)
     ok(not raised, "b's handler answered every request it received without raising (%d requests)" % len(started), raised[-1:])
 

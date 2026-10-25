@@ -11,12 +11,19 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# One run per pull request: a new push cancels its own superseded run (seven sessions' pushes starved the hosted
+# runners, 2026-10-05). Anything else (main, a schedule) is a group of its own run: GitHub cancels an older PENDING
+# run of a group even without cancel-in-progress, and every main run must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # #175: each mode's level-1 scenarios in eight shards (position modulo 8; one eighth of replace took
   # 32 minutes on 2 CPUs with level 2, so a slow runner still has room in 60), each shard running
   # level 2 from the unfinished headers its own faults left. recovery-reconcile.py is the repair.
   matrix:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -51,13 +58,13 @@ jobs:
   merge:
     needs: matrix
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: recovery-interruption-evidence-*
           path: ${{ runner.temp }}/shards

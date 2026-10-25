@@ -13,15 +13,25 @@ so it can replace this file and nothing else there. The daemon accepts the file 
 from that user (runtime_admission_owner) or root, with no group or other write, and nothing above it that
 anyone else could swap; and it accepts the boot session beside it only from root.
 
-    {"schema": "regalia.admission/v2",
+    {"schema": "regalia.admission/v4",
      "node_id": ..., "session_id": "<64 hex: this boot's attested session>",
      "boot_id": "<the kernel's boot ID>",
      "epoch": <the manifest epoch the check was made under>, "manifest_digest": "<64 hex>",
      "hsm_serials": "<this node's hsm_serials in that manifest, space-separated; "" when none>",
      "lease_issued_at": "YYYY-MM-DDTHH:MM:SSZ",
      "requested_boottime_ms": <when this node asked for the lease it holds>,
+     "cluster_id": "<16 hex>", "state_epoch": <n>, "state_revision": <n>, "session_key": "<64 hex>",
      "serve_until_boottime_ms": <the daemon may serve while its CLOCK_BOOTTIME is below this; 0 = no>,
-     "reason": "<why not, when serve_until is 0>"}
+     "mode": "lease" | "recovery" (a lone survivor under the owner's authorization: stateless operations only),
+     "reason": "<why not, when serve_until is 0; in recovery, that it is>"}
+
+THE LEASE'S OPERATIONAL STATE (v4; ADR-0002 D32, #510). cluster_id, state_epoch, state_revision and session_key
+are the held lease's own (lease.py v2): the etcd history and revision the issuer vouched this node had applied, and
+the session key of the daemon start it was asked for. The daemon's state gate serves only while its own watch is of
+that cluster and state epoch, has reached that revision, and the session key is its own (internal/opstate.StateGate).
+When no lease is held they are zeros (NO_STATE), in recovery as when nothing is served; a lease-mode document that
+serves with them zero is refused, here and by the daemon. v4 is v3's mode (#494) and these together: a v3 file, of
+either shape, is another schema to the daemon.
 
 THE DAEMON NEEDS NO WALL CLOCK. The service turns the lease's expiry, judged on authenticated time, into
 this host's CLOCK_BOOTTIME (which runs through suspend and cannot be set), less a margin. The daemon
@@ -69,16 +79,23 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 from deploy.baremetal import lease, membership
 
 Refused, require = membership.Refused, membership.require
 
-SCHEMA = "regalia.admission/v2"
+SCHEMA = "regalia.admission/v4"
 FIELDS = ("schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "hsm_serials", "lease_issued_at",
-          "requested_boottime_ms", "serve_until_boottime_ms", "reason")
-MARGIN = 10                # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
+          "requested_boottime_ms", "cluster_id", "state_epoch", "state_revision", "session_key", "serve_until_boottime_ms",
+          "mode", "reason")
+NO_STATE = {"cluster_id": "00" * 8, "state_epoch": 0, "state_revision": 0, "session_key": "00" * 32}
+# v3 (ADR-0002 D32 item 6, #432 item (e)): "lease", served under a peer's runtime lease; "recovery", a lone survivor
+# served under the owner's survivor authorization (survivor.py), stateless operations only. The daemon refuses
+# "recovery" until its stateless-only gate exists (internal/admission; ed): fail closed.
+MODES = ("lease", "recovery")
+MARGIN = 5                 # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
 NEVER = "1970-01-01T00:00:00Z"
 # The daemon reads this file with a limit of 4096 bytes (internal/admission/admission.go, maxFileBytes) and
 # refuses a larger one as "oversized", which would hide the reason. So the reason here is bounded well below
@@ -86,7 +103,11 @@ NEVER = "1970-01-01T00:00:00Z"
 # answer (node.admission_service, "admission-renew"), and each change between serving and not serving with its reason
 # ("admission-serving", Service below).
 ADMISSION_REASON_LIMIT = 1024
-RETRY_FIRST, RETRY_MAX = 5, 60     # seconds between renewal attempts while they fail: 5, 10, 20, 40, 60, 60, ...
+# seconds each connection of a renewal may take (sync's transport: connect, ask, answer). A renewal is two asks to a
+# peer (nonce, lease) and goes to the next peer on failure, so a round with both peers silent ends within
+# 2 * 2 * RENEW_TIMEOUT: inside the window between a renewal falling due and the margin (#432, 3e's #473 finding)
+RENEW_TIMEOUT = 3
+RETRY_FIRST, RETRY_MAX = 2, 10     # seconds between renewal attempts while they fail: 2, 4, 8, 10, 10, ... (within a 30 s lease)
 BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 MAX_REQUESTS = 16
 MAX_SERIALS = 16           # tokens one node may hold that the daemon will serve from (its reader's bound too)
@@ -136,9 +157,19 @@ def _printable(text, limit=membership.NAME_LIMIT):
     return membership.printable(text, limit)
 
 
+def _checked(document):
+    """What write() and read() both require beyond the fields: a known mode, and a lease that serves carries its state
+    (a real cluster ID or session key is never all zeros; 2f's read of #510, as internal/admission.Parse)."""
+    require(document["mode"] in MODES, "an admission's mode is one of %s" % ", ".join(MODES))
+    no_state = document["cluster_id"] == NO_STATE["cluster_id"] or document["session_key"] == NO_STATE["session_key"]
+    require(not (document["mode"] == "lease" and document["serve_until_boottime_ms"] and no_state),
+            "an admission that serves under a lease carries the lease's state")
+
+
 def write(path, document):
     """Replace the admission file: complete or not at all, readable by the daemon, writable by its writer only."""
     require(tuple(document) == FIELDS, "an admission document has exactly its fields, in order")
+    _checked(document)
     directory = os.path.dirname(os.path.abspath(path))
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".admission-")
     try:
@@ -159,7 +190,7 @@ class Service:
     membership.Store.load); `renew(request)` asks a peer and returns the lease envelope, or raises."""
 
     def __init__(self, holder, manifest, renew, path, boottime=boottime_ms, boot=boot_id, daemon_started=None, metrics=None,
-                 record=None, warn=None):
+                 record=None, warn=None, survivor=None):
         self.holder, self.manifest, self.renew, self.path, self.boottime = holder, manifest, renew, path, boottime
         self.metrics = metrics                    # #305: metrics(samples) after every round (metrics.publish)
         # #340: record(event) appends to the node's admission trail, raising if it cannot. Each change between serving
@@ -174,6 +205,14 @@ class Service:
         self.daemon_started = daemon_started      # () -> the daemon's start on the boot clock (ms), or None
         self.boot = boot()
         self.requests_path = path + ".requests"   # nonce -> when it was asked for; survives a restart of this service
+        # #486: the file and the trail are written under this lock, by step() and by lapse(), which the lapse watcher
+        # calls at the bound of the admission last written. A renewal round runs outside it, so a round held by a
+        # silent peer never delays "not serving" past the bound.
+        self.lock, self.written = threading.Lock(), None
+        # D32.6: `survivor(manifest)` returns the seconds an installed survivor authorization has left for this node, None
+        # when none is installed, or raises Refused when one is installed and does not hold. It is consulted ONLY when no
+        # normal lease holds (regalia-kms-d9 on #432: recovery begins with no unexpired lease, ends at the first one)
+        self.survivor, self.recorded_mode = survivor, None
 
     def _requests(self):
         try:
@@ -194,15 +233,23 @@ class Service:
             json.dump(kept, f)
         os.replace(tmp, self.requests_path)
 
-    def _document(self, manifest, envelope, serve_until, reason):
+    def _document(self, manifest, envelope, serve_until, reason, mode="lease", requested=None):
         held = envelope["lease"] if envelope else None
         return {"schema": SCHEMA, "node_id": self.holder.node_id, "session_id": self.holder.session_id, "boot_id": self.boot,
                 "epoch": manifest["epoch"] if manifest else 0,
                 "manifest_digest": membership.digest(manifest) if manifest else "00" * 32,
                 "hsm_serials": self._serials(manifest),
                 "lease_issued_at": held["issued_at"] if held and serve_until else NEVER,
-                "requested_boottime_ms": self._requests().get(held["nonce"], 0) if held and serve_until else 0,
-                "serve_until_boottime_ms": serve_until, "reason": _printable(reason, ADMISSION_REASON_LIMIT)}
+                "requested_boottime_ms": (requested if requested is not None else
+                                          self._requests().get(held["nonce"], 0) if held and serve_until else 0),
+                **({k: held[k] for k in lease.STATE_KEYS} if held and serve_until and mode == "lease" else NO_STATE),
+                "serve_until_boottime_ms": serve_until, "mode": mode, "reason": _printable(reason, ADMISSION_REASON_LIMIT)}
+
+    def _may_serve(self, manifest):
+        try:
+            return membership.may(manifest, self.holder.node_id, "serve")
+        except (Refused, KeyError, TypeError):
+            return False
 
     def _node(self, manifest):
         """This node's entry in `manifest`, or None (no manifest, one that does not validate: holder.check refuses
@@ -235,8 +282,8 @@ class Service:
         return self._requests().get(held["lease"]["nonce"], 0) <= started
 
     def step(self):
-        """One round: renew if due, check, write. Returns the document written."""
-        manifest, envelope, serve_until, reason, left = None, None, 0, "", 0
+        """One round: renew if due, then check and write (_publish). Returns the document written."""
+        manifest, reason = None, ""
         try:
             manifest = self.manifest()
             require(manifest is not None, "this node holds no manifest")
@@ -259,45 +306,143 @@ class Service:
                     reason = "renewal failed: %s" % failure
                     self.retry_wait = min(max(self.retry_wait * 2, RETRY_FIRST), RETRY_MAX)
                     self.retry_at = self.boottime() + self.retry_wait * 1000
+        except Refused as refusal:
+            return self._publish(manifest, (reason + "; " if reason else "") + str(refusal), refused=True)
+        return self._publish(manifest, reason)
+
+    def lapse(self):
+        """At the bound of the admission last written: if it has run out, write and record "not serving" now, whatever
+        a renewal round is doing (#486). Returns the document written, or None when the bound has not passed."""
+        # the bound, the manifest and the publication under ONE hold of the lock: a renewal step() publishes meanwhile
+        # can neither be overwritten nor judged by an older manifest (CodeRabbit on #485)
+        with self.lock:
+            last = self.written
+            if not last or not last["serve_until_boottime_ms"] or self.boottime() < last["serve_until_boottime_ms"]:
+                return None
+            try:
+                manifest = self.manifest()
+            except Exception:                     # noqa: BLE001 - the check below refuses a missing manifest itself
+                manifest = None
+            return self._publish_locked(manifest, "the admission ran out at its bound", False)
+
+    def publish_now(self):
+        """What this process knows, published at once, before its first renewal (which may wait on silent peers): a
+        restarted lease service replaces the previous process's file and puts its own state on the trail at its start,
+        so a restart is never silent and a file written under an older epoch does not stand while the first round
+        renews (3e's S4 on #507). Errors are the first round's to report."""
+        try:
+            manifest = self.manifest()
+        except Exception:                         # noqa: BLE001 - the first step() reports it, with its reason
+            return None
+        if manifest is None:
+            return self._publish(None, "this node holds no manifest", refused=True)
+        return self._publish(manifest, "")
+
+    def _publish(self, manifest, reason, refused=False):
+        """Check the lease held, write the document and record a change, under the lock. `refused`: the round already
+        refused (no manifest, too many tokens): nothing is checked, and the node does not serve."""
+        with self.lock:
+            return self._publish_locked(manifest, reason, refused)
+
+    def _publish_locked(self, manifest, reason, refused):
+        envelope, serve_until, left, mode, requested = None, 0, 0, "lease", None
+        if not refused:
             before = self.boottime()              # read BEFORE the check: the bound can only come out earlier
-            left = self.holder.check(manifest)
-            envelope = self.holder.held()
-            require(left > MARGIN, "the lease has %d s left, inside the %d s margin" % (left, MARGIN))
-            serve_until, reason = before + (left - MARGIN) * 1000, ""
-        except Refused as refusal:   # serve_until is still 0: it is set only by a check that passed
-            reason = (reason + "; " if reason else "") + str(refusal)
+            alive = False                         # a normal lease not yet run out, inside its margin included
+            try:
+                left = self.holder.check(manifest)
+                envelope = self.holder.held()
+                alive = left > 0
+                require(left > MARGIN, "the lease has %d s left, inside the %d s margin" % (left, MARGIN))
+                serve_until, reason = before + (left - MARGIN) * 1000, ""
+            except Refused as refusal:            # serve_until is still 0: it is set only by a check that passed
+                reason = (reason + "; " if reason else "") + str(refusal)
+                envelope = None
+                last = self.written                 # the last lease admission written, judged on the boot clock: not run out yet
+                alive = alive or bool(last and last["mode"] == "lease" and last["serve_until_boottime_ms"]
+                                      and before < last["serve_until_boottime_ms"] + MARGIN * 1000)
+                # the owner's survivor authorization only with NO unexpired normal lease, and only for a node the manifest
+                # lets serve (regalia-kms-ed on #494: never on any refusal of the normal check)
+                if self.survivor is not None and not alive and self._may_serve(manifest):
+                    try:
+                        auth_left = self.survivor(manifest)
+                    except Refused as why:
+                        auth_left, reason = None, reason + "; the survivor authorization does not hold: %s" % why
+                    if auth_left is not None:
+                        left = min(auth_left, lease.MAX_LIFETIME)       # re-checked every round, as a lease would be
+                        if left > MARGIN:
+                            # requested 0: no peer vouched, so recovery never satisfies the daemon's "a lease asked for
+                            # after this token arrived" (#72; regalia-kms-ed on #494)
+                            serve_until, mode, requested = before + (left - MARGIN) * 1000, "recovery", 0
+                            reason = ("RECOVERY: serving alone under the owner's survivor authorization (%d s left), stateless "
+                                      "operations only (ADR-0002 D32.6)" % auth_left)
+                        else:
+                            reason += "; the survivor authorization has %d s left, inside the %d s margin" % (auth_left, MARGIN)
         serving = bool(serve_until)
-        if serving and self.recorded is not True and self.record is not None:
-            try:                                  # TO serving: on the trail first, or not at all
-                self.record(self._transition(manifest, envelope, True, ""))
-                self.recorded = True
+        if serving and (self.recorded is not True or self.recorded_mode != mode) and self.record is not None:
+            try:                                  # TO serving, or to another mode: on the trail first, or not at all
+                self.record(self._transition(manifest, envelope, True, reason if mode == "recovery" else ""))
+                self.recorded, self.recorded_mode = True, mode
             except Exception as failure:          # noqa: BLE001 - any failure to record keeps the node not serving
                 serving, serve_until = False, 0
                 reason = "the change to serving could not be recorded on the admission trail: %s" % (str(failure) or type(failure).__name__)
-        document = self._document(manifest, envelope, serve_until, reason)
+        if not serving:
+            mode, requested = "lease", None
+        document = self._document(manifest, envelope, serve_until, reason, mode, requested)
         write(self.path, document)
         if not serving and self.recorded is not False and self.record is not None:
             try:                                  # TO not serving: already done (the file above); recorded after
                 self.record(self._transition(manifest, envelope, False, reason))
-                self.recorded = False
+                self.recorded, self.recorded_mode = False, None
             except Exception as failure:          # noqa: BLE001 - loud, and tried again next round; the node has stopped
                 self.warn("regalia-admission: AUDIT: this node stopped serving (%s) and the admission trail did not take it: %s"
                           % (reason, str(failure) or type(failure).__name__))
         if self.metrics is not None:
             self.metrics([("regalia_admission_serving", {}, 1 if serve_until else 0),
-                          ("regalia_admission_lease_seconds_left", {}, max(0, int(left)) if serve_until else 0)])
+                          ("regalia_admission_lease_seconds_left", {}, max(0, int(left)) if serve_until else 0),
+                          ("regalia_admission_recovery", {}, 1 if serve_until and mode == "recovery" else 0)])
+        self.written = document
         return document
 
-    def run(self, stop, interval=5):
-        """step() every `interval` seconds until `stop()` is true. An error other than a refusal (the disk,
-        the TPM) is not swallowed into a stale file: zero is written, then the error is raised."""
-        while not stop():
-            try:
-                self.step()
-            except Exception as failure:
-                write(self.path, self._document(None, None, 0, "the lease service failed: %s" % failure))
-                raise
-            time.sleep(interval)
+    def run(self, stop, interval=5, sleep=time.sleep, watch=0.5):
+        """step() every `interval` seconds until `stop()` is true, with a lapse watcher beside it: a thread that calls
+        lapse() every `watch` seconds, so the change to not serving is on file and on the trail within `watch` of the
+        bound, even while a round waits on a silent peer (#486; the daemon itself stops at serve_until on its own
+        clock either way). An error other than a refusal (the disk, the TPM) is not swallowed into a stale file:
+        zero is written, then the error is raised."""
+        done = threading.Event()
+
+        def watcher():
+            while not done.wait(watch):
+                try:
+                    self.lapse()
+                except Exception as failure:      # noqa: BLE001 - the round reports its own errors; this one says so and goes on
+                    self.warn("regalia-admission: the lapse watcher failed: %s" % (str(failure) or type(failure).__name__))
+        thread = threading.Thread(target=watcher, name="admission-lapse", daemon=True)
+        thread.start()
+        try:
+            self.publish_now()
+            while not stop():
+                try:
+                    self.step()
+                except Exception as failure:
+                    reason = "the lease service failed: %s" % (str(failure) or type(failure).__name__)
+                    with self.lock:
+                        write(self.path, self._document(None, None, 0, reason))
+                        # a crash is never silent on the trail (3e's S4 on #507): the change to not serving is recorded,
+                        # best effort, before the error is raised and the unit restarts
+                        if self.recorded is not False and self.record is not None:
+                            try:
+                                self.record(self._transition(None, None, False, reason))
+                                self.recorded, self.recorded_mode = False, None
+                            except Exception as unrecorded:      # noqa: BLE001 - the original error is what is raised
+                                self.warn("regalia-admission: AUDIT: the lease service failed (%s) and the trail did not take it: %s"
+                                          % (reason, str(unrecorded) or type(unrecorded).__name__))
+                    raise
+                sleep(interval)
+        finally:
+            done.set()
+            thread.join(timeout=5)
 
 
 def read(path):
@@ -305,6 +450,7 @@ def read(path):
     with open(path, "rb") as f:
         document = membership.load(f.read(4097))
     membership.exact(document, FIELDS, "admission")
+    _checked(document)
     return document
 
 
@@ -319,7 +465,8 @@ def main(argv=None):
         return 1
     left = (document["serve_until_boottime_ms"] - boottime_ms()) / 1000
     print(json.dumps(document, indent=2))
-    print("admitted for %.0f more seconds" % left if left > 0 else "NOT ADMITTED: %s" % (document["reason"] or "the lease ran out"))
+    print(("admitted for %.0f more seconds%s" % (left, " IN RECOVERY, alone, stateless operations only" if document["mode"] == "recovery" else ""))
+          if left > 0 else "NOT ADMITTED: %s" % (document["reason"] or "the lease ran out"))
     return 0 if left > 0 else 1
 
 

@@ -120,6 +120,58 @@ class TheValueOnStandardInput(unittest.TestCase):
                 ownerauth.read_value(io.BytesIO(bad.encode()))
 
 
+class TheDrillCheck(unittest.TestCase):
+    """`python3 -Es -m deploy.baremetal.ownerauth check` (#242, the break-glass drill's last step): the value on standard
+    input judged against the record under the pinned root, with no TPM."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.record = os.path.join(self.d, "ownerauth.record.json")
+        with open(self.record, "w") as f:
+            f.write(VECTOR["record_file"])
+
+    def check(self, node, given, root=PIN):
+        return subprocess.run([sys.executable, "-Es", "-m", "deploy.baremetal.ownerauth", "check", "--node-id", node,
+                               "--root-key", root, "--record", self.record], input=given.encode(), capture_output=True,
+                              cwd=str(ROOT), env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1"})
+
+    def test_the_node_s_value_matches(self):
+        done = self.check("a", VECTOR["values"]["a"])
+        self.assertEqual((done.returncode, done.stderr), (0, b""))
+        self.assertIn(b"the value is a's: it matches the check value of the record signed by the pinned root", done.stdout)
+        self.assertNotIn(VECTOR["values"]["a"][:16].encode(), done.stdout)
+
+    def test_another_node_s_value_another_root_or_the_wrong_form(self):
+        for node, given, root, reason in (
+                ("b", VECTOR["values"]["a"], PIN, b"the owner authorization given is not b's"),
+                ("a", VECTOR["values"]["a"], "ab" * 32, b"names another root than the pinned one"),
+                ("a", VECTOR["values"]["a"][:64], PIN, b"is not 64 lowercase hex and a newline")):
+            with self.subTest(node=node, root=root, given=len(given)):
+                done = self.check(node, given, root)
+                self.assertEqual(done.returncode, 1)
+                self.assertIn(b"REFUSED: ", done.stderr)
+                self.assertIn(reason, done.stderr)
+                self.assertNotIn(VECTOR["values"]["a"][:16].encode(), done.stderr)
+
+    def test_a_terminal_on_standard_input_or_no_record_is_refused(self):
+        """regalia-kms-ed: each its own message and exit 1 (2 is argparse's), never a traceback."""
+        import contextlib
+
+        class Terminal(io.BytesIO):
+            def isatty(self):
+                return True
+        argv = ["check", "--node-id", "a", "--root-key", PIN, "--record", self.record]
+        for label, args, stdin, reason in (
+                ("a terminal", argv, Terminal(VECTOR["values"]["a"].encode()), "REFUSED: standard input is a terminal"),
+                ("no record", argv[:-1] + [os.path.join(self.d, "absent.json")], value("a"), "REFUSED: [Errno 2] No such file or directory")):
+            with self.subTest(label):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(ownerauth.main(args, stdin=stdin), 1)
+                self.assertTrue(err.getvalue().startswith(reason), err.getvalue())
+
+
 class TheChannel(unittest.TestCase):
     def test_empty_gives_no_authorization(self):
         with ownerauth.owner_call(None) as (argv, kw):

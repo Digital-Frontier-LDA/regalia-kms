@@ -132,8 +132,13 @@ def scenario(cluster):
         ok((held, cluster.esp_epoch(name), cluster.anchored(name)) == (2, 2, 2),
            "%s holds epoch 2; regalia-esp-advance wrote it to the ESP and moved the TPM anchor to it" % name,
            (held, cluster.esp_epoch(name), cluster.anchored(name), cluster.journal(name, "esp-watch")[-400:]))
-        said = cluster.journal(name, "esp-watch", 200)
-        ok("the ESP's membership chain is epoch 2" in said, "%s's ESP advance said so in its journal" % name, said[-400:])
+        # its last line, printed after the anchor moved: flushed and waited for, as the anchor can be read before it is
+        def finished(name=name):
+            sh("journalctl", "--sync", check=False)
+            text = cluster.journal(name, "esp-watch", 200)
+            return text if "the ESP's membership chain is epoch 2" in text and "and the TPM anchor with it" in text else False
+        said = until(finished, 30, 1)
+        ok(isinstance(said, str), "%s's ESP advance said so in its journal, at its end" % name, cluster.journal(name, "esp-watch")[-400:])
     # a rollback after the advance: epoch 1's chain, as a compromised sync or a restored disk would publish it
     work = cluster.work
     old = work / "rolled-back.json"

@@ -60,7 +60,7 @@ LIMITS, stated:
   * may_reboot is a local check on the node about to reboot, on that node's own word for what it
     runs and its own verifier's record of the others. An operator who reboots without asking is not
     stopped by it, and a node that lies to itself is not either.
-  * A lease proves the peer could authorize up to five minutes ago, not that it still can when this
+  * A lease proves the peer could authorize up to one lease lifetime (30 s) ago, not that it still can when this
     node comes back. One remaining authorizer is accepted when the manifest leaves only one.
   * WHAT "ONE AT A TIME" RESTS ON, and where it stops. A peer writes its record of a node BEFORE it
     signs that node a lease (lease.issue re-attests first), and a node has one boot session per boot.
