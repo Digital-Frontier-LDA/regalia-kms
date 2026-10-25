@@ -1,18 +1,20 @@
 # regalia-afi step 2, PR 1 (#592): before the three-node fixture is moved onto the kernel's TPM resource manager (swtpm
 # --vtpm-proxy, so each node is device:/dev/tpmrmN as a host is), prove on BOTH runner images that the module loads, the
 # kernel registers /dev/tpmrmN, and a session-heavy load passes through it where the raw swtpm socket exhausts. Only the
-# kernel path counts: no CUSE fallback. It loads a kernel module, so it runs only here, and only when the probe changes.
+# kernel path counts: no CUSE fallback. It loads a kernel module, so it runs only here, and only BY HAND: on 2026-10-25 both
+# GitHub-hosted images lacked tpm_vtpm_proxy (24.04's 6.17 azure kernel has no such module; 26.04's 7.0 azure kernel has no
+# linux-modules-extra; #597). It is the re-check for a runner that has it (the owner's self-hosted runners, regalia-afi).
 name: vtpm probe
 
 on:
-  pull_request:
-    paths:
-      - e2e/vtpm-proxy-probe.sh
-      - .github/workflows/vtpm-probe.yml
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   vtpm-proxy:
