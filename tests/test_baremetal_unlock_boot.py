@@ -755,7 +755,10 @@ class OnQemu(tub.OnSwtpm):
         # before it could see root open: its own "standing down" line is never written on this path (#570's boot 8,
         # measured with no journal forwarding), so PID 1's "Stopped" status is what says it, and the test report's
         # count, written to /dev/console whatever the command line, proves no client survived into the system.
-        self.assertRegex(said, r"regalia-unlock: /dev/mapper/root is open: standing down|Stopped regalia-unlock\.service")
+        # PID 1 colours the unit's name (`Stopped \x1b[0;1;39mregalia-unlock.service`), so its status is read with the
+        # colour removed: matched raw, that branch never matched anything (measured on #570).
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", said)
+        self.assertRegex(plain, r"regalia-unlock: /dev/mapper/root is open: standing down|Stopped regalia-unlock\.service")
         self.assertIn("REGALIA-E2E-CLIENT processes=0", said)
         no_shell(self, said)
         self.assertEqual(self.events[since:], [])
