@@ -481,15 +481,15 @@ class Rotation(unittest.TestCase):
     def test_the_node_s_record_of_its_record_is_trusted_only_as_root_s_0600_file(self):
         path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
         os.chmod(path, 0o644)
-        with self.assertRaisesRegex(enrol.Refused, "cannot be trusted"):
+        with self.assertRaisesRegex(m.Refused, "cannot be trusted"):
             enrol.ownerauth_current(self.d)
-        with self.assertRaisesRegex(enrol.Refused, "cannot be trusted"):
+        with self.assertRaisesRegex(m.Refused, "cannot be trusted"):
             self.rotate()
         self.assertEqual(self.tpm.owner_auth, self.current)
         os.chmod(path, 0o600)
         os.rename(path, path + ".real")
         os.symlink(path + ".real", path)                                  # a link in its place is never followed
-        with self.assertRaisesRegex(enrol.Refused, "cannot be trusted"):
+        with self.assertRaisesRegex(m.Refused, "cannot be trusted"):
             enrol.ownerauth_current(self.d)
 
     def test_rotated_in_a_salted_session_then_a_rerun_changes_nothing(self):
@@ -551,6 +551,21 @@ class Rotation(unittest.TestCase):
         self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
         with self.assertRaisesRegex(enrol.Refused, "--adopt goes with --check"):
             enrol.set_ownerauth("a", self.pin, self.records["new"], io.BytesIO(b""), run=self.tpm, directory=self.d, adopt=True)
+
+    def test_ninety_nine_kept_untrustworthy_files_stop_the_adopt_before_anything_is_recorded(self):
+        """The bound on the kept evidence (_ownerauth_replace): with every name from .untrusted to .untrusted.99 taken,
+        an adopt is refused and records nothing; the falsifier sweep on the adopted #502 found nothing reaching it."""
+        path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
+        for n in range(1, 100):
+            with open(os.path.join(self.d, enrol.OWNERAUTH_STATE + ".untrusted" + ("" if n == 1 else ".%d" % n)), "w") as f:
+                f.write("earlier evidence %d" % n)
+        os.chmod(path, 0o644)                                              # the held file is now untrustworthy
+        with self.assertRaisesRegex(enrol.Refused, "already keeps 99 untrustworthy owner-authorization files"):
+            enrol.set_ownerauth("a", self.pin, self.records["current"], io.BytesIO((self.current.hex() + "\n").encode()),
+                                check=True, adopt=True, run=self.tpm, directory=self.d)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o644)       # not replaced
+        with open(os.path.join(self.d, enrol.OWNERAUTH_STATE + ".untrusted.99")) as f:
+            self.assertEqual(f.read(), "earlier evidence 99")             # no earlier evidence touched
 
     def test_an_untrustworthy_held_file_is_refused_with_its_recovery_and_the_recovery_works(self):
         """regalia-kms-d9 on #502: no stranding by the guard itself. A held file that is not root's 0600 (or a link, or
