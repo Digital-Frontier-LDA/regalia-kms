@@ -1571,7 +1571,11 @@ class Cluster:
         """The path where the scenario runs operator tool `trail` (trails.TRAILS, read by the tools' group regalia-audit:
         reanchor, survivor, ...) for node `name`, now shipped and judged with the node's own trails: its own stream
         e2e3-<node>.<trail>, its shipper in that group only, as regalia-audit-ship@<trail> on a host. In the node's log
-        directory, which the shipper can reach. #340: an operator's decision on a node reaches the collector too."""
+        directory, which the shipper can reach. #340: an operator's decision on a node reaches the collector too.
+        On a host the tool writes under trails.TOOL_DIR, and trails.append itself gives the directory root:regalia-audit
+        2750 and every trail the group on each append (_tool_dir, _readable_by_its_shipper; tests/test_baremetal_trails.py,
+        e2e/audit-ship-systemd.py). Here the path is outside TOOL_DIR, so _trail_groups gives it the group, as for the
+        node's own trails."""
         if trail not in trails.TRAILS or trails.TRAILS[trail][3] != trails.TOOL_GROUP:
             raise ValueError("ship_tool_trail(%r): not an operator tool's trail in trails.TRAILS" % trail)
         path = self.nodes[name].log / ("%s.jsonl" % trail)

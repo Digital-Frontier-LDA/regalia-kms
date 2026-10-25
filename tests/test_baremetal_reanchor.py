@@ -707,7 +707,10 @@ class Command(Case):
     def assert_refused_before_the_plan(self, reason):
         """#340: a refusal because something else may be touching the anchor is recorded, as a DENY with no plan behind it,
         though nothing was planned or asked: an operator's attempt is an audit event (three-node-reanchor found it unrecorded)."""
-        (line,) = self.audit()
+        self.assertTrue(os.path.exists(self.d + "/audit.jsonl"), "no trail line at all: the refusal was not recorded")
+        lines = self.audit()
+        self.assertEqual([(e["event"], e.get("outcome")) for e in lines], [("reanchor", "DENY")])
+        line = lines[0]
         self.assertEqual({k: line[k] for k in ("event", "outcome", "subject", "peer", "epoch", "manifest_digest", "sources")},
                          {"event": "reanchor", "outcome": "DENY", "subject": "b", "peer": "operator", "epoch": 0, "manifest_digest": "",
                           "sources": [OTHER, "c"]})
