@@ -154,18 +154,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - name: The software TPM, tpm2-tools, WireGuard
         run: |
           sudo apt-get update -qq
           # softhsm2, opensc and python3-pykcs11: the owner's two keys under v4 (#199), signed through Pkcs11Signer
           sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 python3-cryptography \
             softhsm2 opensc python3-pykcs11
-      - name: Three nodes, their sync and wg-apply, the service mesh, a power cut
+      - name: Build the audit trail shipper and collector (#340)
+        run: |
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: Three nodes, their sync and wg-apply, the service mesh, a power cut; every event in the audit collector
         run: |
           set -o pipefail
-          sudo --preserve-env=RUNNER_ENVIRONMENT python3 -Es e2e/three-node-netns.py | tee "$RUNNER_TEMP/three.log"
-          grep -q '^three-node-netns: 40 passed, 0 failed$' "$RUNNER_TEMP/three.log" || {
-            echo "::error::the three-node test did not pass all 40 checks" >&2; exit 1; }
+          REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_AUDIT_BIN \
+            python3 -Es e2e/three-node-netns.py | tee "$RUNNER_TEMP/three.log"
+          grep -q '^three-node-netns: 44 passed, 0 failed$' "$RUNNER_TEMP/three.log" || {
+            echo "::error::the three-node test did not pass all 44 checks" >&2; exit 1; }
       - name: Keep the software TPMs' logs (regalia-zga)
         if: failure()
         uses: ./.github/actions/tpm-diagnostics
