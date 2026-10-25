@@ -1,0 +1,39 @@
+# regalia-afi step 2, PR 1 (#592): before the three-node fixture is moved onto the kernel's TPM resource manager (swtpm
+# --vtpm-proxy, so each node is device:/dev/tpmrmN as a host is), prove on BOTH runner images that the module loads, the
+# kernel registers /dev/tpmrmN, and a session-heavy load passes through it where the raw swtpm socket exhausts. Only the
+# kernel path counts: no CUSE fallback. It loads a kernel module, so it runs only here, and only when the probe changes.
+name: vtpm probe
+
+on:
+  pull_request:
+    paths:
+      - e2e/vtpm-proxy-probe.sh
+      - .github/workflows/vtpm-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vtpm-proxy:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The software TPM, tpm2-tools, and the kernel's vTPM proxy module
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools kmod "linux-modules-extra-$(uname -r)"
+      - name: The kernel resource manager per software TPM, against the raw socket
+        run: |
+          set -o pipefail
+          sudo --preserve-env=RUNNER_ENVIRONMENT bash e2e/vtpm-proxy-probe.sh | tee "$RUNNER_TEMP/probe.log"
+          grep -q '^vtpm-proxy-probe: 8 passed, 0 failed$' "$RUNNER_TEMP/probe.log" || {
+            echo "::error::the vTPM proxy probe did not pass all 8 checks on ${{ matrix.runner }}" >&2; exit 1; }
+          grep '^RESULT ' "$RUNNER_TEMP/probe.log" >> "$GITHUB_STEP_SUMMARY"
