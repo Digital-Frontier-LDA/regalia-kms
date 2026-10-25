@@ -254,3 +254,32 @@ func TestThePolicyIsAskedForLazilyAndOnce(t *testing.T) {
 		t.Errorf("a short policy: %v", err)
 	}
 }
+
+// TestTheRefusalNamesTheTPMsReason is #450 on the Go side: tpmReason gives the same suffix membership._why does, so
+// a refused anchor read says why, and highwater-v1.json holds both readers to the same text.
+func TestTheRefusalNamesTheTPMsReason(t *testing.T) {
+	long := ""
+	for i := 0; i < 300; i++ {
+		long += "x"
+	}
+	for _, c := range []struct {
+		err  error
+		data []byte
+		size int
+		want string
+	}{
+		{errors.New("first\nERROR: TPM_RC_RETRY\n\n"), nil, 8, " (TPM: ERROR: TPM_RC_RETRY)"},
+		{errors.New("\xff" + long), nil, 8, " (TPM: " + long[:200] + ")"},
+		{errors.New("bad \xff byte"), nil, 8, " (TPM: bad � byte)"},
+		{nil, []byte{0, 0, 0}, 8, " (TPM: 3 bytes, not 8)"},
+		{nil, nil, 48, " (TPM: 0 bytes, not 48)"},
+	} {
+		if got := tpmReason(c.err, c.data, c.size); got != c.want {
+			t.Errorf("tpmReason(%q, %d bytes, %d) = %q, want %q", c.err, len(c.data), c.size, got, c.want)
+		}
+	}
+	h := highWater{nv: fakeNV{nv: map[uint32]map[string]any{}, broken: true}}
+	if _, err := h.read8(0x1500016); err == nil || err.Error() != "cannot read 8 bytes from NV index 0x1500016 (TPM: the TPM said no)" {
+		t.Errorf("read8 of an index the TPM does not read: %v", err)
+	}
+}

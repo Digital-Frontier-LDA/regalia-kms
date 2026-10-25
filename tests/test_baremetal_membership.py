@@ -814,9 +814,10 @@ class RecordWrites(unittest.TestCase):
             hw.value()
         self.assertEqual(hw.remains(), (None, [(0, "00" * 32), (0, "00" * 32)]))
 
-    def test_a_failed_read_names_the_tpm_s_reason_in_the_journal_and_the_refusal_is_unchanged(self):
-        """#448/#450: an intermittent "cannot read 8 bytes" in CI said nothing of why. What tpm2_nvread printed goes to
-        stderr (the unit's journal); the refusal's text is the shared vectors' and does not change."""
+    def test_a_failed_read_names_the_tpm_s_reason_in_the_refusal_and_the_journal(self):
+        """#448/#450: an intermittent "cannot read 8 bytes" in CI said nothing of why. The refusal now ends with the last
+        line tpm2_nvread printed; the journal keeps all of it (_said). The Go reader appends the same suffix, which is
+        what highwater-v1.json holds both to."""
         import contextlib
         import io
         hw = self.defined()
@@ -828,8 +829,9 @@ class RecordWrites(unittest.TestCase):
                 journal = io.StringIO()
                 with contextlib.redirect_stderr(journal), self.assertRaises(m.Refused) as caught:
                     hw.unusable()
-                self.assertIn(reason, str(caught.exception))
-                self.assertNotIn("TPM_RC_RETRY", str(caught.exception))        # the refusal stays the vectors'
+                self.assertTrue(str(caught.exception).startswith(reason), str(caught.exception))
+                self.assertTrue(str(caught.exception).endswith(" (TPM: ERROR: TPM_RC_RETRY)"), str(caught.exception))
+                self.assertNotIn("Received a non-TPM Error", str(caught.exception))   # the last line only
                 self.assertIn("regalia: tpm2_nvread %s failed (exit 1, 0 bytes out): " % index, journal.getvalue())
                 self.assertIn("Received a non-TPM Error | ERROR: TPM_RC_RETRY", journal.getvalue())
         self.fault = lambda argv: None
@@ -838,6 +840,27 @@ class RecordWrites(unittest.TestCase):
         with contextlib.redirect_stderr(journal):
             m._said("nvread", "0x1500016", subprocess.CompletedProcess(["tpm2_nvread"], 1, "", "ERROR: TPM_RC_YIELDED\n"))
         self.assertIn("regalia: tpm2_nvread 0x1500016 failed (exit 1, 0 bytes out): ERROR: TPM_RC_YIELDED", journal.getvalue())
+
+    def test_the_refusal_s_tpm_reason_is_one_bounded_line_or_the_byte_count(self):
+        """_why: the last non-empty line, at most 200 characters, decoded with replacement; with no text, how many bytes
+        came back. A refusal that says nothing new is what #450 was."""
+        done = lambda out, err: subprocess.CompletedProcess(["tpm2_nvread"], 1, out, err)
+        self.assertEqual(m._why(done(b"", b"first\nERROR: TPM_RC_RETRY\n\n"), 8), " (TPM: ERROR: TPM_RC_RETRY)")
+        self.assertEqual(m._why(done(b"", "text, not bytes\n"), 8), " (TPM: text, not bytes)")
+        self.assertEqual(m._why(done(b"\0" * 3, b""), 8), " (TPM: 3 bytes, not 8)")
+        self.assertEqual(m._why(done(None, None), 48), " (TPM: 0 bytes, not 48)")
+        self.assertEqual(m._why(done(b"", b"\xff" + b"x" * 300), 8), " (TPM: %s)" % ("x" * 200))
+        self.assertEqual(m._why(done(b"", b"bad \xff byte"), 8), " (TPM: bad \ufffd byte)")
+
+    def test_a_read_remains_cannot_make_names_the_tpm_s_reason(self):
+        """remains() (a re-anchor's read, with the owner's authorization as the fallback) refuses with the reason too."""
+        import contextlib
+        import io
+        hw = self.defined()
+        self.fault = lambda argv: (1, b"", b"ERROR: TPM_RC_YIELDED") if argv[:2] == ["tpm2_nvread", "0x1500016"] else None
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(m.Refused) as caught:
+            hw.remains()
+        self.assertIn("what the anchor holds cannot be known (fail closed) (TPM: ERROR: TPM_RC_YIELDED)", str(caught.exception))
 
     def test_a_record_read_that_fails_is_refused_whatever_it_printed(self):
         hw = self.defined()

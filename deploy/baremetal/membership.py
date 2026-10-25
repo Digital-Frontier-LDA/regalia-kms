@@ -214,10 +214,23 @@ def run_tpm2(run, argv, env, tcti=None, **kw):
     return run(argv, capture_output=True, env=env, **kw)
 
 
+def _why(done, size):
+    """The TPM's reason for a read of `size` bytes that `done` did not give, as a refusal's suffix: " (TPM: <the last line
+    tpm2_nvread wrote on stderr>)", or the byte count when it wrote nothing. One line, at most 200 characters, so the
+    refusal names the cause rather than leaving it to be guessed at (#450). The Go reader appends the same suffix from
+    its own TPM error (highwater.go, tpmReason), which is what keeps highwater-v1.json's reasons equal in both."""
+    err = done.stderr or b""
+    text = err if isinstance(err, str) else err.decode("utf-8", "replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if lines:
+        return " (TPM: %s)" % lines[-1][-200:]
+    return " (TPM: %d bytes, not %d)" % (len(done.stdout or b""), size)
+
+
 def _said(tool, index, done):
-    """What tpm2_<tool> said when it failed on `index`, on this process's stderr (the unit's journal): the TPM's own reason
-    for an anchor read that is then refused. The refusal's text does not change (the shared vectors pin it, #450); this
-    is so the next one is named rather than guessed at (an intermittent refusal in CI, #448). Never raises."""
+    """What tpm2_<tool> said when it failed on `index`, on this process's stderr (the unit's journal), in full: the
+    refusal carries only its last line (_why, #450); this keeps the rest of it for whoever reads the journal (an
+    intermittent refusal in CI, #448). Never raises."""
     try:
         import sys
         err = done.stderr or b""
@@ -1010,7 +1023,7 @@ class HighWater:
         r = self._tpm("nvread", index, "-C", index, "-s", "8")
         if r.returncode != 0 or len(r.stdout) != 8:
             _said("nvread", index, r)
-        require(r.returncode == 0 and len(r.stdout) == 8, "cannot read 8 bytes from NV index %s" % index)
+        require(r.returncode == 0 and len(r.stdout) == 8, "cannot read 8 bytes from NV index %s%s" % (index, _why(r, 8)))
         return int.from_bytes(r.stdout, "big")
 
     def define(self):
@@ -1215,7 +1228,7 @@ class HighWater:
         if r.returncode != 0 or len(r.stdout) != self.RECORD_BYTES:
             _said("nvread", index, r)
         require(r.returncode == 0 and len(r.stdout) == self.RECORD_BYTES, "cannot read %d bytes from the record index %s: the anchor "
-                "is unavailable (fail closed)" % (self.RECORD_BYTES, index))
+                "is unavailable (fail closed)%s" % (self.RECORD_BYTES, index, _why(r, self.RECORD_BYTES)))
         epoch, held = int.from_bytes(r.stdout[:8], "big"), r.stdout[8:40].hex()
         return (epoch, held) if r.stdout == self.slot_bytes(epoch, held) else None
 
@@ -1280,7 +1293,7 @@ class HighWater:
         if r.returncode != 0 or len(r.stdout) != size:
             _said("nvread", index, r)
         require(r.returncode == 0 and len(r.stdout) == size, "cannot read %d bytes from NV index %s: what the anchor holds cannot "
-                "be known (fail closed)" % (size, index))
+                "be known (fail closed)%s" % (size, index, _why(r, size)))
         return r.stdout
 
     def remains(self):

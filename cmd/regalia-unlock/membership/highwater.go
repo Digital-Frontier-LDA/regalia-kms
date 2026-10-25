@@ -109,10 +109,29 @@ func (h highWater) public(index uint32) (uint32, int, []byte, error) {
 	return 0, 0, nil, refuse("cannot read NV index %s: the high-water anchor is unavailable (fail closed): the TPM lists it and did not give it", name(index))
 }
 
+// tpmReason is membership._why: the TPM's reason for a read of size bytes that did not come back, as a refusal's
+// suffix, " (TPM: <the last line of err>)", or the byte count when there is no error to name. One line, at most 200
+// characters, so the Python's refusal and this one stay equal in highwater-v1.json (#450).
+func tpmReason(err error, data []byte, size int) string {
+	if err != nil {
+		lines := strings.Split(strings.ToValidUTF8(err.Error(), "\uFFFD"), "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			if line := strings.TrimSpace(lines[i]); line != "" {
+				runes := []rune(line)
+				if len(runes) > 200 {
+					runes = runes[len(runes)-200:]
+				}
+				return fmt.Sprintf(" (TPM: %s)", string(runes))
+			}
+		}
+	}
+	return fmt.Sprintf(" (TPM: %d bytes, not %d)", len(data), size)
+}
+
 func (h highWater) read8(index uint32) (uint64, error) {
 	data, err := h.nv.Read(index, 8)
 	if err != nil || len(data) != 8 {
-		return 0, refuse("cannot read 8 bytes from NV index %s", name(index))
+		return 0, refuse("cannot read 8 bytes from NV index %s%s", name(index), tpmReason(err, data, 8))
 	}
 	return binary.BigEndian.Uint64(data), nil
 }
@@ -242,7 +261,7 @@ func (h highWater) slot(index uint32) (*record, error) {
 	}
 	data, err := h.nv.Read(index, recordBytes)
 	if err != nil || len(data) != recordBytes {
-		return nil, refuse("cannot read %d bytes from the record index %s: the anchor is unavailable (fail closed)", recordBytes, name(index))
+		return nil, refuse("cannot read %d bytes from the record index %s: the anchor is unavailable (fail closed)%s", recordBytes, name(index), tpmReason(err, data, recordBytes))
 	}
 	held := record{binary.BigEndian.Uint64(data[:8]), hex.EncodeToString(data[8:40])}
 	if !bytes.Equal(data, SlotBytes(held.epoch, data[8:40])) {
