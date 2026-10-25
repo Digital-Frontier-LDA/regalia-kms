@@ -1072,7 +1072,8 @@ unit runs it before each start); `regalia-audit-ship conformance` checks a candi
   starting it by hand repeats the same check. Investigate first. Then restore the file from a backup
   (each shipped line's SHA-256 is in its event's detail, to check the copy against), and start the unit
   again.
-- **Metrics** are in `/var/lib/regalia-audit-ship/<trail>.prom`: lines, committed, backlog, tampered.
+- **Metrics** are in `/run/regalia-metrics/audit-ship/<trail>.prom` (the unit's `-metrics`, node_exporter's textfile
+  directory, #305): lines, committed, backlog, tampered.
 - **Its own user, no capability.** `regalia-audit-ship` (`units/regalia-audit-ship.sysusers.conf`) reads
   each trail through that trail's group only, given per instance by
   `units/regalia-audit-ship@<trail>.service.d/reader.conf`. Each service trail has a reader group of its own
