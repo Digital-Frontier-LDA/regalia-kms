@@ -52,6 +52,7 @@ import pathlib
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -121,10 +122,56 @@ def tpm_stop_report(pid, log, shutdown=None, proc="/proc"):
     parts = ["pid %d" % pid, "cmdline %r" % read("cmdline", 300),
              "State %s" % status.get("State", "?").strip(), "PPid %s" % status.get("PPid", "?").strip(),
              "wchan %s" % read("wchan", 100), "stack %r" % read("stack", 1200)]
+    # #592: what it was doing as it ignored SIGTERM. The signal masks (SIGTERM is bit 14), every thread's state and wait,
+    # the syscall it sits in, its open fds (a client socket still held?)
+    masks = {k: status.get(k, "").strip() for k in ("SigPnd", "ShdPnd", "SigBlk", "SigIgn", "SigCgt")}
+    parts.append(" ".join("%s %s" % (k, v or "?") for k, v in masks.items()))
+
+    def bit(mask):
+        try:
+            return bool(int(mask, 16) & (1 << (signal.SIGTERM - 1)))
+        except ValueError:
+            return None
+    if masks["SigCgt"]:
+        pending = "pending (process-wide)" if bit(masks["ShdPnd"]) else "pending (thread)" if bit(masks["SigPnd"]) else "not pending"
+        # /proc/<pid>/status's SigPnd and SigBlk are the MAIN thread's (CodeRabbit on #593): each thread's own are below
+        parts.append("SIGTERM %s, %s%s (main thread's masks)" % (pending, "blocked, " if bit(masks["SigBlk"]) else "",
+                                                             "caught" if bit(masks["SigCgt"]) else "ignored" if bit(masks["SigIgn"]) else "not caught"))
+    threads = []
+    for task in sorted(pathlib.Path("%s/%d/task" % (proc, pid)).glob("*"), key=lambda t: int(t.name) if t.name.isdigit() else 0):
+        try:
+            state = task.joinpath("stat").read_text().rsplit(")", 1)[1].split()[0]
+            entry = "%s:%s:%s" % (task.name, state, task.joinpath("wchan").read_text().strip() or "0")
+            try:                                      # this thread's own SIGTERM: blocked, pending, or open to it
+                own = dict(line.split(":", 1) for line in task.joinpath("status").read_text().splitlines() if ":" in line)
+                entry += ":term-%s" % ("blocked" if bit(own.get("SigBlk", "").strip()) else
+                                       "pending" if bit(own.get("SigPnd", "").strip()) else "open")
+            except OSError:
+                pass
+            threads.append(entry)
+        except (OSError, IndexError):
+            threads.append("%s:?" % task.name)
+    parts.append("threads %s" % (" ".join(threads) or "<none read>"))
+    parts.append("syscall %r" % read("syscall", 200))
+    fds = []
+    for fd in sorted(pathlib.Path("%s/%d/fd" % (proc, pid)).glob("*"), key=lambda f: int(f.name) if f.name.isdigit() else 0):
+        try:
+            fds.append("%s->%s" % (fd.name, os.readlink(fd)))
+        except OSError:
+            fds.append("%s->?" % fd.name)
+    parts.append("fds %s" % (" ".join(fds) or "<none read>"))
     if shutdown is not None:
         parts.append("tpm2_shutdown %d %r" % (shutdown.returncode, (shutdown.stdout + shutdown.stderr).strip()[-300:]))
     try:
-        parts.append("log %r" % pathlib.Path(log).read_text(errors="replace")[-800:])
+        lines = pathlib.Path(log).read_text(errors="replace").splitlines()
+        commands = [i for i, line in enumerate(lines) if "IsEnEnabled(" in line]
+        if commands:
+            last = re.search(r"IsEnEnabled\((0x[0-9a-fA-F]+) = '([^']+)'\)", lines[commands[-1]])
+            parts.append("last command %s (%s)" % (last.group(2), last.group(1)) if last else "last command ?")
+            after = any("Data client disconnected" in line for line in lines[commands[-1]:])
+            parts.append("client attached %s" % ("no (it disconnected after its last command)" if after
+                                                 else "yes (no disconnect after its last command)"))
+        parts.append("log tail %r" % "\n".join(lines[-30:]))       # whole lines: a slice of one misled #592's first reading
     except OSError as error:
         parts.append("log <%s>" % (error.strerror or error))
     if proc == "/proc":
@@ -134,6 +181,62 @@ def tpm_stop_report(pid, log, shutdown=None, proc="/proc"):
         except subprocess.TimeoutExpired:
             parts.append("apparmor <journalctl did not answer within 10 s>")
     return " | ".join(parts)
+
+
+def orderly_shutdown_ok(shutdown):
+    """Whether the TPM took an orderly TPM2_Shutdown: one was asked AND it succeeded. Only then may a stop be absorbed
+    (#592): a swtpm whose Shutdown failed still turns the run red, so this cannot hide a TPM-state bug."""
+    return shutdown is not None and shutdown.returncode == 0
+
+
+ABSORB_LIMIT = 1        # per run: one is swtpm 0.10.1's known flake; more is a pattern, and a pattern is a bug (b9 on #593)
+
+
+def absorbed(seen, name, evidence, summary=None):
+    """Count one absorbed stop (#592) in `seen`, say it in the job's summary (`summary`: $GITHUB_STEP_SUMMARY, when
+    set) as "flake-absorbed", and fail the run once more than ABSORB_LIMIT stops needed SIGKILL."""
+    seen.append((name, evidence))
+    if summary:
+        with open(summary, "a") as f:
+            f.write("flake-absorbed: %d swtpm stop%s needed SIGKILL after an orderly Shutdown (#592): %s\n"
+                    % (len(seen), "" if len(seen) == 1 else "s", ", ".join(n for n, _ in seen)))
+    if len(seen) > ABSORB_LIMIT:
+        raise RuntimeError("%d swtpm stops needed SIGKILL in this run: a pattern, not the known flake (#592): %s"
+                           % (len(seen), " || ".join("%s: %s" % (n, e) for n, e in seen)))
+
+
+def stop_tpm_process(pid, orderly_ok, report, kill=os.kill, gone=None, wait=None, say=print, owned=None):
+    """End a software TPM's process, as the host's power going off does (#592). SIGTERM first. If it does not exit and its
+    orderly TPM2_Shutdown SUCCEEDED (`orderly_ok`), the TPM has nothing left to lose: SIGKILL, which is what a power
+    loss is, and the run goes on with the full report said as an anomaly, so every occurrence is kept in the job's log
+    (swtpm 0.10.1 has ignored SIGTERM there). Without an orderly shutdown it is a failure as before, and so is one that
+    SIGKILL does not end either. `report()` makes the evidence while the process still exists. `owned()` says the pid is
+    still this node's swtpm: anything else is never killed. A check that raises is never read as "stopped" (until()
+    returns the exception, which is truthy: only True counts). Returns the report of an anomaly, or None."""
+    gone = gone or (lambda: not os.path.exists("/proc/%d" % pid))
+    wait = wait or until
+    kill(pid, signal.SIGTERM)
+    if wait(gone, 10, 0.2) is True:
+        return None
+    evidence = report()
+    if not orderly_ok:
+        raise RuntimeError("software TPM pid %d did not stop: %s" % (pid, evidence))
+    if owned is not None and not owned():
+        raise RuntimeError("software TPM pid %d is not this node's swtpm any more: nothing was killed: %s" % (pid, evidence))
+    try:
+        kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        # it exited while the report was made (CodeRabbit on #593): a late stop after SIGTERM, not a kill
+        say("TPM-STOP-LATE (#592): swtpm pid %d exited while its report was made, after SIGTERM: a late stop, not killed. %s"
+            % (pid, evidence))
+        return None
+    if wait(gone, 10, 0.2) is not True:
+        raise RuntimeError("software TPM pid %d did not stop, not even on SIGKILL: %s" % (pid, evidence))
+    say("::warning title=swtpm stop (#592)::flake-absorbed: swtpm pid %d ignored SIGTERM after an orderly Shutdown; ended "
+        "with SIGKILL" % pid)
+    say("TPM-STOP-ANOMALY (#592): swtpm pid %d ignored SIGTERM after an orderly Shutdown that succeeded; ended with SIGKILL, "
+        "as a power loss ends a TPM. %s" % (pid, evidence))
+    return evidence
 
 
 def until(what, seconds, interval=1.0):
@@ -244,6 +347,7 @@ class Cluster:
         self.time = {n: True for n in names}          # authenticated time, per node
         self.stop_threads = False
         self.threads = []
+        self.absorbed_stops = []                      # #592: swtpm stops that needed SIGKILL after an orderly Shutdown
         self._state_lock = threading.Lock()           # _write_as_daemon: the state writer thread and the main thread
         self.state_revision = 1                       # D32: the etcd revision every node's stand-in watch has applied
         self.chain = []                               # the signed envelopes, epoch 1 first
@@ -471,10 +575,23 @@ class Cluster:
         n = self.member(name)
         shutdown = sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False) if orderly else None
         pid = int((n.dir / "tpm.pid").read_text())
-        os.kill(pid, 15)
-        if not until(lambda: not os.path.exists("/proc/%d" % pid), 10, 0.2):
-            # regalia-zga: still a failure, now with what the process looked like; the fix waits for this evidence
-            raise RuntimeError("%s's software TPM did not stop: %s" % (name, tpm_stop_report(pid, n.dir / "tpm.log", shutdown)))
+        state = "dir=%s" % (n.dir / "tpm")
+
+        def owned():                                  # still this node's swtpm: its cmdline names this node's TPM state
+            try:
+                cmdline = pathlib.Path("/proc/%d/cmdline" % pid).read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            except OSError:
+                return False
+            return cmdline.startswith("swtpm ") and state in cmdline
+        try:
+            # #592 (regalia-zga's evidence): after an orderly Shutdown that succeeded, a swtpm that ignores SIGTERM is ended
+            # as a power loss would end it, counted, and said in full; anything else that does not stop still fails
+            evidence = stop_tpm_process(pid, orderly_shutdown_ok(shutdown), lambda: tpm_stop_report(pid, n.dir / "tpm.log", shutdown),
+                                        owned=owned)
+            if evidence is not None:
+                absorbed(self.absorbed_stops, name, evidence, summary=os.environ.get("GITHUB_STEP_SUMMARY"))
+        except RuntimeError as failure:
+            raise RuntimeError("%s's %s" % (name, failure)) from None
         self._tpm(n)
 
     # ---- images (#75, Phase 15's tier N) ----
