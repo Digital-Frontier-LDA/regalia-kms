@@ -233,7 +233,7 @@ class Registry(Case):
     def test_every_trail_is_named_once_with_where_it_is(self):
         self.assertEqual(trails.where("enrol"), "/var/log/regalia/enrol.jsonl")
         self.assertEqual(trails.where("sync", {"state_dir": "/var/lib/regalia-sync"}), "/var/lib/regalia-sync/sync-audit.jsonl")
-        self.assertEqual(trails.where("admission", {"admission_dir": "/var/lib/regalia-admission"}), "/var/lib/regalia-admission/audit.jsonl")
+        self.assertEqual(trails.where("admission", {"admission_log_dir": "/var/log/regalia-admission"}), "/var/log/regalia-admission/audit.jsonl")
         self.refused("give the configuration", trails.where, "sync")
         self.refused("no trail is called", trails.where, "nope")
         streams = [stream for _, _, stream, _ in trails.TRAILS.values()]
@@ -244,7 +244,8 @@ class Registry(Case):
     def test_the_node_s_trails_are_where_the_services_write_them(self):
         import inspect
         source = inspect.getsource(node)
-        self.assertIn('node.held("audit.jsonl")', source)                    # admission's, in admission_dir
+        self.assertIn("Trail(node.admission_trail(), \"admission\")", source)  # admission's, in admission_log_dir (#349)
+        self.assertIn('trails.where("admission", self.cfg)', source)
         self.assertIn('node.path("sync-audit.jsonl")', source)               # sync's, in state_dir
 
 
@@ -590,7 +591,7 @@ class RegistryPaths(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
         self.config = os.path.join(self.d, "node.json")
-        self.write({"state_dir": "/var/lib/regalia-sync", "admission_dir": "/var/lib/regalia-admission", "node_id": "a"})
+        self.write({"state_dir": "/var/lib/regalia-sync", "admission_log_dir": "/var/log/regalia-admission", "node_id": "a"})
 
     def write(self, doc, raw=None):
         with open(self.config, "w") as f:
@@ -602,7 +603,7 @@ class RegistryPaths(unittest.TestCase):
                 path = trails.resolve(name, self.config)
                 self.assertTrue(os.path.isabs(path), path)
         self.assertEqual(trails.resolve("sync", self.config), "/var/lib/regalia-sync/sync-audit.jsonl")
-        self.assertEqual(trails.resolve("admission", self.config), "/var/lib/regalia-admission/audit.jsonl")
+        self.assertEqual(trails.resolve("admission", self.config), "/var/log/regalia-admission/audit.jsonl")
         self.assertEqual(trails.resolve("enrol", self.config), trails.TOOL_DIR + "/enrol.jsonl")
 
     def test_a_fixed_trail_needs_no_configuration(self):
@@ -626,7 +627,7 @@ class RegistryPaths(unittest.TestCase):
             trails.exec_ship("admission", ["-collector", "https://c", "-site", "s"], self.config,
                              shipper="/usr/bin/regalia-audit-ship", execv=lambda path, argv: seen.append((path, argv)))
         self.assertEqual(seen, [("/usr/bin/regalia-audit-ship", ["/usr/bin/regalia-audit-ship", "-trail", "admission", "-path",
-                                                                 "/var/lib/regalia-admission/audit.jsonl", "-collector", "https://c", "-site", "s"])])
+                                                                 "/var/log/regalia-admission/audit.jsonl", "-collector", "https://c", "-site", "s"])])
 
     def test_exec_ship_starts_nothing_when_the_path_cannot_be_resolved(self):
         seen = []

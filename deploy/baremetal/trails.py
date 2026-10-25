@@ -60,13 +60,13 @@ MODE = 0o640                               # every trail: its writer writes, its
 OWN = ("seq", "prev")
 
 # name: (where, writer, stream at the collector, the group its shipper reads it through).
-# "state_dir", "admission_dir": the configuration's. Each service trail has a reader group of its own
+# "state_dir", "admission_log_dir": the configuration's (admission's trail in a directory of its own, #349). Each service trail has a reader group of its own
 # (#286): its writer belongs to it and gives the trail that group (append's `group`), and its shipper
 # belongs to it and to nothing of the writer's, so the shipper reads the trail and no other file the writer
 # makes. The operator tools' trails take TOOL_GROUP from their directory, which holds nothing else.
 TRAILS = {
     "sync": ("state_dir/sync-audit.jsonl", "regalia-sync.service (user regalia-sync), node", "sync", "regalia-audit-sync"),
-    "admission": ("admission_dir/audit.jsonl", "regalia-admission.service, node", "admission", "regalia-audit-admission"),
+    "admission": ("admission_log_dir/audit.jsonl", "regalia-admission.service, node", "admission", "regalia-audit-admission"),
     "enrol": (TOOL_DIR + "/enrol.jsonl", "regalia-node enrol, root, by hand, node", "enrol", TOOL_GROUP),
     # #303: regalia-authtime's transitions (authenticated or not, and why) and each clear of the chrony latch;
     # both writers are root, the directory is root:regalia-audit-time 0750 (regalia.tmpfiles.conf)
@@ -98,7 +98,7 @@ def canonical(obj):
 
 
 def where(name, cfg=None):
-    """The path of trail `name`; a configuration supplies state_dir and admission_dir."""
+    """The path of trail `name`; a configuration supplies state_dir and admission_log_dir."""
     if name not in TRAILS:
         raise Refused("no trail is called %r" % (name,))
     path = TRAILS[name][0]
@@ -117,7 +117,7 @@ SHIPPER = "/usr/bin/regalia-audit-ship"
 def resolve(name, config=NODE_CONFIG):
     """The absolute path of trail `name`, from the registry alone (#580): where every shipper and pruner finds its trail,
     so no file of its own (the old /etc/regalia/audit-ship/<trail>.env, which nothing ever wrote) can name another.
-    A trail under the configuration's state_dir or admission_dir reads ONLY those keys of `config`, each an absolute
+    A trail under the configuration's state_dir or admission_log_dir reads ONLY those keys of `config`, each an absolute
     path. FAILS CLOSED: an unknown trail, an unreadable or malformed configuration, a key missing or relative, or a
     result that is not absolute is Refused, and there is no default path to fall back to."""
     if name not in TRAILS:

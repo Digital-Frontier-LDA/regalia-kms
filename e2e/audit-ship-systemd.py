@@ -25,12 +25,12 @@ REGALIA_SHIP_HOST_OK.
      it, the collector's alarm log holds the shipper's alarm, and the metrics say tampered;
   4  a manual start repeats the refusal: it never quietly resumes.
 """
-import configparser
 import grp
 import json
 import os
 import pathlib
 import pwd
+import re
 import shutil
 import stat
 import subprocess
@@ -41,7 +41,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 UNIT = HERE.parent / "deploy" / "baremetal" / "units" / "regalia-audit-ship@.service"
 TRAILS = HERE.parent / "deploy" / "baremetal" / "trails.py"
 LIB = pathlib.Path("/usr/lib/regalia-kms")                       # the unit runs trails.py from here (exec-ship, #580)
-NODE_JSON = pathlib.Path("/etc/regalia/node.json")             # trails.NODE_CONFIG: state_dir and admission_dir are read from it
+NODE_JSON = pathlib.Path("/etc/regalia/node.json")             # trails.NODE_CONFIG: state_dir and admission_log_dir are read from it
 INSTANCE = "regalia-audit-ship@sync.service"
 COLLECTOR_UNIT = "regalia-e2e-collector.service"
 BIN = pathlib.Path("/usr/bin/regalia-audit-ship")
@@ -187,7 +187,7 @@ def scenario(work, binaries):
     sh("systemctl", "stop", INSTANCE)
     sh("systemctl", "reset-failed", INSTANCE, check=False)
     # the node's configuration, as enrol installs it (root's, 0644), with the keys the registry reads
-    NODE_JSON.write_text(json.dumps({"state_dir": str(trail_dir), "admission_dir": str(work / "regalia-admission")}) + "\n")
+    NODE_JSON.write_text(json.dumps({"state_dir": str(trail_dir), "admission_log_dir": str(work / "regalia-admission-log")}) + "\n")
     os.chmod(NODE_JSON, 0o644)
 
     print("\n### 0  its own user, no capability: outside the trail's group it reads nothing")
@@ -210,31 +210,30 @@ def scenario(work, binaries):
     sh("systemctl", "start", INSTANCE)
     ok(until(lambda: stream_lines(state) == 3, 60), "the collector's stream holds the trail's 3 lines", stream_lines(state))
 
-    print("\n### 1b  the admission trail, in regalia-admission's StateDirectory as the unit makes it (#340, #345)")
-    # the mode the shipped unit gives the directory, read from it: the e2e holds the unit, not a copy of its number
-    units = configparser.ConfigParser(strict=False, interpolation=None)
-    units.read(UNITS / "regalia-admission.service")
-    shipped = int(units["Service"]["StateDirectoryMode"], 8)
-    adm_dir = work / "regalia-admission"
+    print("\n### 1b  the admission trail, in its own directory as tmpfiles makes /var/log/regalia-admission (#340, #345, #349)")
+    # the directory's mode and owners from the shipped tmpfiles line: the e2e holds the file, not a copy of its numbers
+    made = re.search(r"^d /var/log/regalia-admission (\d+) (\S+) (\S+) -$", (UNITS / "regalia.tmpfiles.conf").read_text(), re.M)
+    shipped, owner, group = int(made.group(1), 8), made.group(2), made.group(3)
+    adm_dir = work / "regalia-admission-log"
     adm_dir.mkdir()
-    shutil.chown(adm_dir, "regalia-admission", "regalia-admission")
+    shutil.chown(adm_dir, owner, group)
     adm_trail = adm_dir / "audit.jsonl"
-    os.chmod(adm_dir, 0o755)
+    os.chmod(adm_dir, shipped)
     append_as_writer(adm_trail, 3, 0, writer="regalia-admission", trail="admission")
     adm_instance, adm_dropin = ADM_INSTANCE, ADM_DROPIN
     adm_dropin.mkdir()
     shutil.copy(UNITS / "regalia-audit-ship@admission.service.d" / "reader.conf", adm_dropin / "reader.conf")
     sh("systemctl", "daemon-reload")
-    os.chmod(adm_dir, 0o700)                                   # the directory as it was before #345: the shipper cannot pass it
+    os.chmod(adm_dir, 0o700)                                   # closed to its group too: the shipper cannot pass it
     sh("systemctl", "start", adm_instance)
     time.sleep(8)
     ok(stream_lines(state, "admission") == 0 and "permission denied" in journal(adm_instance),
-       "with regalia-admission's directory at 0700, the admission trail cannot be read: nothing ships", journal(adm_instance, 5))
+       "with the admission trail's directory at 0700, it cannot be read: nothing ships", journal(adm_instance, 5))
     sh("systemctl", "stop", adm_instance)
     os.chmod(adm_dir, shipped)
     sh("systemctl", "start", adm_instance)
     ok(until(lambda: stream_lines(state, "admission") == 3, 60),
-       "at the unit's StateDirectoryMode (%s) the admission trail ships: the collector's stream holds its 3 lines" % oct(shipped),
+       "at tmpfiles' mode (%s, %s:%s) the admission trail ships: the collector's stream holds its 3 lines" % (oct(shipped), owner, group),
        (stream_lines(state, "admission"), journal(adm_instance, 5)))
     sh("systemctl", "stop", adm_instance)
 

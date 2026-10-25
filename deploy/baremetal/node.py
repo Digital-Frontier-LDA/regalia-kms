@@ -68,6 +68,7 @@ import binascii
 import contextlib
 import errno
 import fcntl
+import glob
 import hashlib
 import json
 import os
@@ -98,8 +99,10 @@ class TrailIncomplete(Exception):
 
 SCHEMA = "regalia.node/v1"
 KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "nv_signing", "state_dir", "admission_dir", "run_dir",
+        "admission_log_dir",
         "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval", "beat_interval_s")
 PUBLISHED = "chain.json"        # in the state directory: the verified chain, for the root services
+OLD_ADMISSION_TRAIL = "audit.jsonl"   # where admission's trail was, in admission_dir, before #349
 MAX_BYTES = 64 * 1024
 
 
@@ -136,10 +139,12 @@ def validate(doc):
             require(not overlap, "%s and %s must not overlap (both take %s): %s takes %s, %s takes %s" % (
                 one, other, ", ".join("0x%x" % i for i in sorted(overlap)), one, ", ".join("0x%x" % i for i in sorted(taken[one])),
                 other, ", ".join("0x%x" % i for i in sorted(taken[other]))))
-    for key in ("site", "state_dir", "admission_dir", "run_dir", "wg_service_key", "measurements"):
+    for key in ("site", "state_dir", "admission_dir", "run_dir", "admission_log_dir", "wg_service_key", "measurements"):
         _absolute(doc[key], key)
-    # each directory has ONE writer: sync's, admission's (regalia-admission, #191), and the run directory (root)
-    require(len({doc["state_dir"], doc["admission_dir"], doc["run_dir"]}) == 3, "state_dir, admission_dir and run_dir must be three directories")
+    # each directory has ONE writer: sync's, admission's (regalia-admission, #191), the run directory (root), and admission's
+    # trail's (#349: its own, so that admission_dir lists nothing to others)
+    require(len({doc["state_dir"], doc["admission_dir"], doc["run_dir"], doc["admission_log_dir"]}) == 4,
+            "state_dir, admission_dir, run_dir and admission_log_dir must be four directories")
     pcrs = doc["pcrs"]
     require(isinstance(pcrs, list) and pcrs and all(isinstance(i, int) and not isinstance(i, bool) and 0 <= i <= 23 for i in pcrs)
             and pcrs == sorted(set(pcrs)), "pcrs must be an ascending list of PCR indices 0-23")
@@ -611,8 +616,25 @@ class Node:
         return os.path.join(self.state, name)
 
     def held(self, name):
-        """A file of the admission service's own directory (its lease and its trail)."""
+        """A file of the admission service's own directory (its lease and the lease's lock)."""
         return os.path.join(self.cfg["admission_dir"], name)
+
+    def admission_trail(self):
+        """The admission trail's path, from the registry: admission_log_dir/audit.jsonl (#349), a directory of its own, so
+        that admission_dir can be 0700. REFUSED while a trail with lines, or an archive of one, is still at the old path
+        (admission_dir/audit.jsonl): a fresh chain at the new path would begin at seq 1 under a collector stream already
+        further on, and strand the old file's unshipped lines. No node has run an image yet (#61), so this guards; it
+        does not move."""
+        old = self.held(OLD_ADMISSION_TRAIL)
+        try:
+            lines = os.lstat(old).st_size > 0
+        except FileNotFoundError:
+            lines = False
+        archived = sorted(glob.glob(glob.escape(old) + ".*"))
+        new = trails.where("admission", self.cfg)
+        require(not lines and not archived, "the admission trail still has lines at %s: move it, with its archives, to %s (#349) "
+                "before the admission service starts" % (old, os.path.dirname(new)))
+        return new
 
     # the shared view of time
     def clock(self):
@@ -804,7 +826,7 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
     """The lease holder and the admission file, asking peers in turn for a lease over the service tunnel."""
     session, public = boot_session(node.runtime, rand)
     holder = lease.Holder(node.node_id, session, node.clock(), node.tpm_clock(), node.held("lease.json"), run=node.run)
-    trail = Trail(node.held("audit.jsonl"), "admission")
+    trail = Trail(node.admission_trail(), "admission")
     quiet = QuietRefusals(trail)
 
     class Manifest:

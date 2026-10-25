@@ -10,6 +10,7 @@
   "state_dir": "/var/lib/regalia-sync",
   "admission_dir": "/var/lib/regalia-admission",
   "run_dir": "/run/regalia",
+  "admission_log_dir": "/var/log/regalia-admission",
   "wg_service_key": "/etc/regalia/wg-service.key",
   "measurements": "/etc/regalia/measurements.json",
   "pcrs": [7, 11],

@@ -20,8 +20,9 @@ class Subset(unittest.TestCase):
     def setUp(self):
         self.d = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.d, True)
-        node = types.SimpleNamespace(dir=self.d, state=self.d / "state", admission=self.d / "admission", log=self.d / "log")
-        for p in (node.state, node.admission, node.log):
+        node = types.SimpleNamespace(dir=self.d, state=self.d / "state", admission=self.d / "admission", admission_log=self.d / "log-admission",
+                                     log=self.d / "log")
+        for p in (node.state, node.admission, node.admission_log, node.log):
             p.mkdir()
         self.cluster = object.__new__(threenode.Cluster)
         self.cluster.nodes = {"a": node}

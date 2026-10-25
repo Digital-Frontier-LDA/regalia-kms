@@ -31,19 +31,37 @@ class TrailsReachTheirShipper(unittest.TestCase):
     "open .../regalia-admission: permission denied"), its trail never reached the collector."""
 
     def test_every_node_trail_s_directory_is_traversable_by_its_shipper(self):
+        """sync's trail in its StateDirectory, listable by others; admission's in a directory of its own (#349),
+        /var/log/regalia-admission, its writer's and its reader group's (tmpfiles), listable by that group only."""
         from deploy.baremetal import trails
+        tmpfiles = (UNITS / "regalia.tmpfiles.conf").read_text()
+        example = json.loads((UNITS.parent / "node.example.json").read_text())
         checked = []
         for name, entry in trails.TRAILS.items():
-            if not entry[0].startswith(("state_dir/", "admission_dir/")):      # in a service's StateDirectory (the others: root's tools)
+            base = entry[0].partition("/")[0]
+            if base not in ("state_dir", "admission_log_dir"):                  # a service's (the others: root's tools)
                 continue
             writer = re.search(r"regalia-[a-z-]+\.service", entry[1]).group(0)      # the registry names the unit that writes it
-            mode = int(unit(writer)["Service"]["StateDirectoryMode"], 8)
+            if base == "state_dir":
+                mode = int(unit(writer)["Service"]["StateDirectoryMode"], 8)
+                reaches = mode & 0o005 == 0o005                                  # as other: its group is its writer's own
+            else:
+                line = re.search(r"^d %s (\d+) (\S+) (\S+) -$" % re.escape(example[base]), tmpfiles, re.M)
+                self.assertIsNotNone(line, "no tmpfiles line makes %s" % example[base])
+                mode = int(line.group(1), 8)
+                reaches = line.group(3) == entry[3] and mode & 0o050 == 0o050    # through the trail's reader group
             with self.subTest(trail=name):
-                self.assertEqual(mode & 0o005, 0o005, "%s's StateDirectoryMode %s: regalia-audit-ship@%s cannot list and reach %s"
-                                 % (writer, oct(mode), name, entry[0]))
-            checked.append((name, writer, oct(mode)))
-        self.assertEqual(sorted(checked), [("admission", "regalia-admission.service", "0o755"), ("sync", "regalia-sync.service", "0o755")])
+                self.assertTrue(reaches, "%s (%s): regalia-audit-ship@%s cannot list and reach it" % (entry[0], oct(mode), name))
+            checked.append((name, base, oct(mode)))
+        self.assertEqual(sorted(checked), [("admission", "admission_log_dir", "0o750"), ("sync", "state_dir", "0o755")])
         self.assertEqual(unit("regalia-audit-ship@.service")["Service"]["CapabilityBoundingSet"], "")    # the reason: no way around it
+
+    def test_the_admission_state_directory_is_private(self):
+        """#349: nothing in /var/lib/regalia-admission is any other user's to list (lease.json, its lock): its trail is not
+        there. Fails if its StateDirectoryMode is ever looser than 0700."""
+        mode = int(unit("regalia-admission.service")["Service"]["StateDirectoryMode"], 8)
+        self.assertEqual(mode & 0o077, 0, "regalia-admission's StateDirectoryMode %s lets others in" % oct(mode))
+        self.assertEqual(mode, 0o700)
 
     def test_traversal_exposes_no_file_the_admission_service_writes_there(self):
         """24 on #345: 0755 lets anyone pass and list, so nothing the service keeps there may be readable by others. The files it
@@ -151,7 +169,7 @@ class Units(unittest.TestCase):
         admission = self.service("regalia-admission")
         # its own directory only, inside root's /run/regalia; the boot session beside it is not its to write
         self.assertEqual((admission["ReadWritePaths"], admission["StateDirectory"], admission["StateDirectoryMode"]),
-                         ("/run/regalia/admission -/run/regalia-metrics/admission", "regalia-admission", "0755"))   # listable by its trail's shipper (#340)
+                         ("/run/regalia/admission /var/log/regalia-admission -/run/regalia-metrics/admission", "regalia-admission", "0700"))   # its trail elsewhere (#349)
         admission_unit = unit("regalia-admission.service")["Unit"]
         self.assertEqual(admission_unit["Requires"], "regalia-boot-session.service")
         self.assertIn("regalia-boot-session.service", admission_unit["After"].split())
@@ -196,12 +214,15 @@ class Units(unittest.TestCase):
         example = node.validate(json.loads((UNITS.parent / "node.example.json").read_text()))
         self.assertEqual(example["state_dir"], "/var/lib/" + self.service("regalia-sync")["StateDirectory"])
         self.assertEqual(example["admission_dir"], "/var/lib/" + self.service("regalia-admission")["StateDirectory"])
+        self.assertEqual(example["admission_log_dir"], "/var/log/regalia-admission")                       # #349: its trail's, of its own
+        self.assertIn(example["admission_log_dir"], self.service("regalia-admission")["ReadWritePaths"].split())
         self.assertEqual(os.path.dirname(node.admission_file(example["run_dir"])), self.service("regalia-admission")["ReadWritePaths"].split()[0])
         self.assertEqual(unit("regalia-wg-apply.path")["Path"]["PathChanged"], "/var/lib/regalia-sync/" + node.PUBLISHED)
         tmpfiles = (UNITS / "regalia.tmpfiles.conf").read_text()
         self.assertIn("d /run/regalia 0755 root root -", tmpfiles)
         # #191: the lease service's directory is its user's, inside root's, and no one else can write it
         self.assertIn("d /run/regalia/admission 0755 regalia-admission regalia-admission -", tmpfiles)
+        self.assertIn("d /var/log/regalia-admission 0750 regalia-admission regalia-audit-admission -", tmpfiles)
         users = (UNITS / "regalia.sysusers.conf").read_text()
         self.assertIn("u regalia-sync - ", users)
         self.assertIn("u regalia-admission - ", users)
