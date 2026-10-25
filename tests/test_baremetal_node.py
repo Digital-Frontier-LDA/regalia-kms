@@ -42,7 +42,7 @@ class Case(unittest.TestCase):
             json.dump(SITE, f)
         with open(os.path.join(self.d, "etc", "wg-service.key"), "w") as f:
             f.write(PRIVATE + "\n")
-        self.cfg = {"schema": node.SCHEMA, "node_id": "a", "site": self.d + "/etc/site.json", "root_key": ROOT, "tcti": None,
+        self.cfg = {"schema": node.SCHEMA, "node_id": "a", "site": self.d + "/etc/site.json", "root_key": ROOT, "tcti": "device:/dev/tpmrm0",
                     "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "nv_signing": "0x0150001c", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
                     "admission_log_dir": self.d + "/log-admission",
                     "wg_service_key": self.d + "/etc/wg-service.key", "measurements": self.d + "/etc/measurements.json",
@@ -63,6 +63,8 @@ class Case(unittest.TestCase):
 class Configuration(Case):
     def test_the_configuration_is_exact(self):
         self.assertEqual(node.validate(dict(self.cfg)), self.cfg)
+        for tcti in ("device:/dev/tpmrm0", "device:/dev/tpmrm3"):                          # any kernel resource manager
+            self.assertEqual(node.validate(dict(self.cfg, tcti=tcti))["tcti"], tcti)
         path = os.path.join(self.d, "etc", "node.json")
         with open(path, "w") as f:
             json.dump(self.cfg, f)
@@ -72,7 +74,16 @@ class Configuration(Case):
                 ("another schema", {"schema": "regalia.node/v2"}, "schema must be regalia.node/v1"),
                 ("a node ID in capitals", {"node_id": "A"}, "node_id is not a node ID"),
                 ("a root key in capitals", {"root_key": ROOT.upper()}, "root_key"),
-                ("a TCTI with a space", {"tcti": "swtpm:path=/x y"}, "tcti must be null"),
+                ("a TCTI with a space", {"tcti": "swtpm:path=/x y"}, "tcti must be device:/dev/tpmrm0"),
+                # regalia-afi (#592): only the kernel's resource manager, or a private simulator; never null (tpm2-tss's own
+                # search order would decide, and could reach the raw /dev/tpm0 where /dev/tpmrm0 is missing), never a raw device
+                ("a null TCTI", {"tcti": None}, "tcti must be device:/dev/tpmrm0"),
+                ("the raw TPM device", {"tcti": "device:/dev/tpm0"}, "tcti must be device:/dev/tpmrm0"),
+                ("a raw TPM device of another number", {"tcti": "device:/dev/tpm3"}, "tcti must be device:/dev/tpmrm0"),
+                ("a resource manager by another path", {"tcti": "device:/tmp/tpmrm0"}, "tcti must be device:/dev/tpmrm0"),
+                ("tabrmd, which the image does not ship", {"tcti": "tabrmd"}, "refused on a node"),
+                ("tabrmd on the system bus", {"tcti": "tabrmd:bus_type=system"}, "refused on a node"),
+                ("a device TCTI with no path", {"tcti": "device"}, "tcti must be device:/dev/tpmrm0"),
                 ("an NV index of the wrong range", {"nv_epoch": "0x81000001"}, "nv_epoch must be an NV index"),
                 ("an NV index in capitals", {"nv_heartbeat": "0x0150001A"}, "nv_heartbeat must be an NV index"),
                 ("overlapping indices", {"nv_heartbeat": "0x01500017"}, "must not overlap"),
@@ -128,6 +139,52 @@ class AdmissionTrail(Case):
         open(old + ".1", "w").close()                                            # an archive alone is a trail that was rotated
         with self.assertRaisesRegex(node.Refused, "still has lines at"):
             self.node().admission_trail()
+
+
+class SimulatorTcti(Case):
+    """b9 on #596: a simulator TCTI is a SOCKET, which no unit's DevicePolicy constrains, so a node.json naming one binds
+    the node to a software TPM with no hardware root. It is accepted only under a test-only switch that no unit, image or
+    package sets (the e2e fixtures set it); without it, it is refused and the refusal says why."""
+
+    def test_refused_without_the_switch_and_accepted_with_it(self):
+        from unittest import mock
+        for tcti in ("swtpm:path=/tmp/x/tpm.sock", "mssim:host=localhost,port=2321", "tabrmd:bus_type=system", "tabrmd"):
+            with self.subTest(tcti), mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(node.SIMULATOR_SWITCH, None)
+                with self.assertRaisesRegex(node.Refused, "a test fixture's TPM.*refused on a node.*%s=1" % node.SIMULATOR_SWITCH):
+                    node.validate(dict(self.cfg, tcti=tcti))
+                os.environ[node.SIMULATOR_SWITCH] = "1"
+                self.assertEqual(node.validate(dict(self.cfg, tcti=tcti))["tcti"], tcti)
+                os.environ[node.SIMULATOR_SWITCH] = "yes"                      # only exactly 1
+                with self.assertRaisesRegex(node.Refused, "refused on a node"):
+                    node.validate(dict(self.cfg, tcti=tcti))
+
+    def test_nothing_shipped_sets_the_switch(self):
+        """The units, the image, the packaging and the deploy tree never mention it: only tests and e2e may."""
+        import pathlib as pl
+        root = pl.Path(__file__).resolve().parents[1]
+        found = [str(p.relative_to(root)) for p in sorted((root / "deploy").rglob("*")) if p.is_file() and p.suffix != ".pyc"
+                 and node.SIMULATOR_SWITCH in p.read_text(errors="replace")]
+        self.assertEqual(found, ["deploy/baremetal/membership.py"])                   # its constant, and nowhere else
+        self.assertEqual((root / "deploy" / "baremetal" / "membership.py").read_text().count(node.SIMULATOR_SWITCH), 1)
+
+    def test_a_step_handed_to_regalia_sync_carries_the_switch_only_when_it_is_set(self):
+        """`runuser … env -i` drops everything: a fixture's handed-over step reloads its swtpm node.json, so the switch
+        rides along, and only when the caller has it (never on a host, where nothing sets it)."""
+        from unittest import mock
+        from deploy.baremetal import membership as ms
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(node.SIMULATOR_SWITCH, None)
+            self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"])
+            os.environ[node.SIMULATOR_SWITCH] = "yes"
+            self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"])
+            os.environ[node.SIMULATOR_SWITCH] = "1"
+            self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", node.SIMULATOR_SWITCH + "=1"])
+        import pathlib as pl
+        root = pl.Path(__file__).resolve().parents[1]
+        literal = [str(p.relative_to(root)) for p in sorted((root / "deploy" / "baremetal").glob("*.py"))
+                   if '"env", "-i", "PATH=' in p.read_text()]
+        self.assertEqual(literal, [], "every handover to regalia-sync builds its environment with membership.handover_env()")
 
 
 class Indices(unittest.TestCase):

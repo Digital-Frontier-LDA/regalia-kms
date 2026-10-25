@@ -222,8 +222,8 @@ def owner_sign(proposal, manifest, open_signer, confirm, say=print):
 def _as_sync(step, config_path, run, stdin=None):
     """`python3 -m deploy.baremetal.owner <step>` as regalia-sync with the tss group (the TPM), nothing of root's
     environment, from the package root; its last line is a JSON result."""
-    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.owner", step, "--config", config_path],
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", *membership.handover_env(),
+                 sys.executable, "-Es", "-m", "deploy.baremetal.owner", step, "--config", config_path],
                cwd=PACKAGE_ROOT, capture_output=True, text=True, input=stdin if stdin is not None else "")
     require(done.returncode == 0, "the %s step, as %s, did not finish: %s" % (step, SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     return json.loads(done.stdout.strip().splitlines()[-1])

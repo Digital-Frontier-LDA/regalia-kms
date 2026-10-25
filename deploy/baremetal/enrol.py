@@ -1324,8 +1324,8 @@ def _owner_fd(owner_auth, run=subprocess.run):
 
 def run_first_heartbeat_as_sync(config_path, run=subprocess.run, bootstrap=False, owner_auth=None):
     with _owner_fd(owner_auth, run) as (extra, kw):
-        done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                    "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_first-heartbeat", "--config", config_path]
+        done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", *membership.handover_env(),
+                     sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_first-heartbeat", "--config", config_path]
                    + (["--bootstrap"] if bootstrap else []) + extra,
                    cwd=PACKAGE_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL, **kw)
     require(done.returncode == 0, "the first-heartbeat step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
@@ -1340,8 +1340,8 @@ def run_first_heartbeat_as_sync(config_path, run=subprocess.run, bootstrap=False
 
 def run_probe_as_sync(config_path, run=subprocess.run):
     """probe_heartbeats, in a process of regalia-sync (#419): (envelopes, failures), as it fetched them, unverified."""
-    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_first-heartbeat", "--config", config_path, "--probe"],
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", *membership.handover_env(),
+                 sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_first-heartbeat", "--config", config_path, "--probe"],
                cwd=PACKAGE_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     require(done.returncode == 0, "the heartbeat probe, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     m = re.search(r"^PROBE (.*)$", done.stdout, re.M)
@@ -1358,8 +1358,8 @@ def run_as_sync(config_path, chain, run=subprocess.run, owner_auth=None):
     and regalia-sync could not read a file there. The journal stays with the caller."""
     # env -i: nothing of root's environment reaches the step (the TCTI comes from node.json, not from here)
     with _owner_fd(owner_auth, run) as (extra, kw):
-        done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                    "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", "-"]
+        done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", *membership.handover_env(),
+                     sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", "-"]
                    + extra, cwd=PACKAGE_ROOT, capture_output=True, text=True, input=membership.canonical(chain).decode(), **kw)
     require(done.returncode == 0, "the anchor step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     m = re.search(r"^ANCHORED epoch (\d+) digest ([0-9a-f]{64})$", done.stdout, re.M)
@@ -1415,8 +1415,8 @@ def enrol_aks(config_path, run=subprocess.run):
 
 
 def run_aks_as_sync(config_path, run=subprocess.run):
-    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_aks", "--config", config_path],
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", *membership.handover_env(),
+                 sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_aks", "--config", config_path],
                cwd=PACKAGE_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     require(done.returncode == 0, "the AK step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     found = re.findall(r"^AK (\S+) (.*)$", done.stdout, re.M)

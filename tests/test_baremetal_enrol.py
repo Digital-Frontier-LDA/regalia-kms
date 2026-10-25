@@ -64,7 +64,8 @@ class InitOnSwtpm(unittest.TestCase):
                     raise
                 time.sleep(0.05)
         self.addCleanup(lambda: os.kill(pid, 15))
-        patcher = unittest.mock.patch.dict(os.environ, TPM2TOOLS_TCTI="swtpm:path=" + sock)
+        # a swtpm node.json is a test's only (regalia-afi, b9 on #596): the switch no shipped file sets
+        patcher = unittest.mock.patch.dict(os.environ, {"TPM2TOOLS_TCTI": "swtpm:path=" + sock, "REGALIA_TCTI_ALLOW_SIMULATOR": "1"})
         patcher.start()
         self.addCleanup(patcher.stop)
         self.dir, self.wg = self.d + "/enrol", self.d + "/etc/wg-service.key"

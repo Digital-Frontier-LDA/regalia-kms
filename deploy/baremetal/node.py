@@ -101,6 +101,8 @@ SCHEMA = "regalia.node/v1"
 KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "nv_signing", "state_dir", "admission_dir", "run_dir",
         "admission_log_dir",
         "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval", "beat_interval_s")
+RESOURCE_MANAGER = "device:/dev/tpmrm0"   # the TCTI a host's node.json names (regalia-afi): the kernel's resource manager
+SIMULATOR_SWITCH = membership.SIMULATOR_SWITCH   # the test-only switch for a simulator TCTI (b9 on #596; its reasons there)
 PUBLISHED = "chain.json"        # in the state directory: the verified chain, for the root services
 OLD_ADMISSION_TRAIL = "audit.jsonl"   # where admission's trail was, in admission_dir, before #349
 MAX_BYTES = 64 * 1024
@@ -125,8 +127,20 @@ def validate(doc):
     require(doc["schema"] == SCHEMA, "schema must be %s" % SCHEMA)
     require(isinstance(doc["node_id"], str) and re.fullmatch(sitecfg.NODE_ID, doc["node_id"]) is not None, "node_id is not a node ID")
     membership.root_entries(doc["root_key"], "root_key")
-    require(doc["tcti"] is None or (isinstance(doc["tcti"], str) and re.fullmatch(r"[a-z]+(:[A-Za-z0-9/_.,=-]{1,200})?", doc["tcti"]) is not None),
-            "tcti must be null (the kernel's resource manager) or a TCTI string")
+    # regalia-afi (#592): the kernel's resource manager, named; or a private simulator (the e2e fixtures). Never null: then
+    # tpm2-tss's own search order decides, and an operator tool run by hand (no unit's DevicePolicy around it) could reach
+    # the raw /dev/tpm0, which has no resource manager, wherever /dev/tpmrm0 is missing. Never another device.
+    tcti = doc["tcti"]
+    # a test fixture's TPM: a simulator's socket (swtpm, mssim: no hardware root), or tabrmd (the e2e's user-space
+    # resource manager in front of a CUSE device; the image does not ship it, and it can front anything). None of them
+    # is a device a unit's DevicePolicy constrains
+    simulator = isinstance(tcti, str) and re.fullmatch(r"(swtpm|mssim):[A-Za-z0-9/_.,=-]{1,200}|tabrmd(:[A-Za-z0-9/_.,=-]{1,200})?", tcti) is not None
+    require(not simulator or os.environ.get(SIMULATOR_SWITCH) == "1",
+            "tcti %r is a test fixture's TPM (a simulator's socket, with no hardware root, or tabrmd, which the image does not "
+            "ship), which no unit's DevicePolicy constrains: refused on a node (only the e2e fixtures set %s=1)" % (tcti, SIMULATOR_SWITCH))
+    require(simulator or (isinstance(tcti, str) and re.fullmatch(r"device:/dev/tpmrm[0-9]+", tcti) is not None),
+            "tcti must be %s (the kernel's resource manager; /dev/tpmrm<N> on a host with several TPMs): never null, a raw "
+            "/dev/tpm<N>, tabrmd or another path" % RESOURCE_MANAGER)
     # what each really occupies, from the classes that define them (the anchor: counter, base and two record
     # slots; the heartbeat counter and the signing counter (#199): counter and base each), never retyped here
     taken = {"nv_epoch": membership.HighWater(_index(doc["nv_epoch"], "nv_epoch")).indices(),
