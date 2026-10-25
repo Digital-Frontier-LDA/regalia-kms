@@ -73,6 +73,15 @@ jobs:
             ${{ runner.temp }}/drift/report.md
           if-no-files-found: ignore
           retention-days: 7
+      # #330: a check that could not run filed its issue and left the run green, for three weeks. Red now, after the
+      # upload, so the filing job still says what failed; a drift found (exit 1) is the issue's to say, not a failure
+      - name: Fail the run when the check itself could not run
+        run: |
+          rc="$(cat "$RUNNER_TEMP/drift/rc")"
+          if [ "$rc" -ge 2 ]; then
+            echo "::error title=initrd drift check FAILED::exit $rc: the initrd could not be built or compared, so nothing says whether today's archive moves it (see the step above and the job summary)"
+            exit 1
+          fi
 
   file:
     needs: build
