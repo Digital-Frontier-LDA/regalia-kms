@@ -12,6 +12,9 @@ REGALIA_SHIP_HOST_OK.
   0  the shipper runs as its own user with no capability: without its instance's drop-in (the trail's own
      reader group, regalia-audit-sync, #286) it cannot read the trail regalia-sync wrote, 0640, and ships nothing;
   1  with units/regalia-audit-ship@sync.service.d as shipped, it reads it through the group and ships it;
+  1c the enrol trail (#278): an `enrol` event written as enrol.py writes it, by root at the registry's own path
+     (trails.where("enrol"), /var/log/regalia, root:regalia-audit 2750), ships with
+     units/regalia-audit-ship@enrol.service.d as shipped: the collector's enrol stream holds that line;
   2  a line appended later ships on the next pass, and the collector's stream holds every line;
   2b the client certificate is rotated (#291). Swapped before the hand-over, the shipper refuses to send.
      After `regalia-audit-ship handover` (the old key signs, the new certificate presents it) and a restart,
@@ -44,6 +47,9 @@ INSTALLED = pathlib.Path("/etc/systemd/system/regalia-audit-ship@.service")
 DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@sync.service.d")
 ADM_INSTANCE = "regalia-audit-ship@admission.service"
 ADM_DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@admission.service.d")
+ENROL_INSTANCE = "regalia-audit-ship@enrol.service"
+ENROL_DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@enrol.service.d")
+ENROL_TRAIL = pathlib.Path("/var/log/regalia/enrol.jsonl")      # trails.where("enrol"); 1c asserts the registry names it
 UNITS = HERE.parent / "deploy" / "baremetal" / "units"
 METRICS = pathlib.Path("/run/regalia-metrics/audit-ship/sync.prom")      # node_exporter's textfile directory (#305)
 HEAD = pathlib.Path("/var/lib/regalia-audit-ship/sync.head.json")      # the unit's -head, for prune
@@ -213,6 +219,40 @@ def scenario(work, binaries):
        (stream_lines(state, "admission"), journal(adm_instance, 5)))
     sh("systemctl", "stop", adm_instance)
 
+    print("\n### 1c  the enrol trail (#278): root's, at the registry's own path, shipped with its drop-in as shipped")
+    # as enrol.py writes it (node.Trail(trails.where("enrol"))): root, at the one path the registry names, which
+    # trails.append makes /var/log/regalia root:regalia-audit 2750 for, so the line takes that group
+    record = "%064x" % 278
+    script = ("import sys, json; sys.path.insert(0, sys.argv[1]); import trails\n"
+              "path = trails.where('enrol')\n"
+              "trails.append(path, {'event': 'enrol', 'node': 'a', 'epoch': 1, 'manifest_digest': sys.argv[2], 'outcome': 'ALLOW', "
+              "'record_sha256': sys.argv[2]})\nprint(path)")
+    enrol_trail = pathlib.Path(sh(sys.executable, "-Es", "-c", script, str(work / "lib"), record).stdout.strip())
+    if enrol_trail != ENROL_TRAIL:                              # the path the preflight and the cleanup hold
+        ok(False, "the registry names the enrol trail at %s, not %s" % (enrol_trail, ENROL_TRAIL))
+    tool_dir, info = enrol_trail.parent.stat(), enrol_trail.stat()
+    ok(stat.S_IMODE(tool_dir.st_mode) == 0o2750 and grp.getgrgid(tool_dir.st_gid).gr_name == "regalia-audit" and tool_dir.st_uid == 0
+       and (info.st_mode & 0o777, info.st_uid, grp.getgrgid(info.st_gid).gr_name) == (0o640, 0, "regalia-audit"),
+       "the enrol trail is root's, 0640, in the operator tools' directory %s (root:regalia-audit 2750)" % enrol_trail.parent,
+       (oct(tool_dir.st_mode), oct(info.st_mode)))
+    (ETC / "enrol.env").write_text("TRAIL_PATH=%s\n" % enrol_trail)
+    ENROL_DROPIN.mkdir()
+    shutil.copy(UNITS / "regalia-audit-ship@enrol.service.d" / "reader.conf", ENROL_DROPIN / "reader.conf")
+    sh("systemctl", "daemon-reload")
+    sh("systemctl", "start", ENROL_INSTANCE)
+
+    def enrol_shipped():
+        streams = list((state / "streams").glob("*/site-sitea.enrol.jsonl"))
+        if len(streams) != 1:
+            return None
+        events = [json.loads(line) for line in streams[0].read_text().splitlines()]
+        lines = [json.loads((e.get("detail") or {}).get("line") or "{}") for e in events]
+        return lines if any(l.get("event") == "enrol" and l.get("record_sha256") == record for l in lines) else None
+    shipped_enrol = until(enrol_shipped, 60)
+    ok(bool(shipped_enrol), "with regalia-audit-ship@enrol.service.d as shipped, the enrol line reaches the collector's enrol stream, its "
+       "record's digest intact", (shipped_enrol, journal(ENROL_INSTANCE, 5)))
+    sh("systemctl", "stop", ENROL_INSTANCE)
+
     print("\n### 2  a line appended later ships on the next pass")
     append_as_writer(trail, 2, 3)
     ok(until(lambda: stream_lines(state) == 5, 75), "the stream holds 5 lines after the next pass", stream_lines(state))
@@ -298,7 +338,7 @@ def main():
         print("audit-ship-systemd: refused: this changes the machine (/usr/bin, a unit, /etc/regalia). It runs on a GitHub-hosted "
               "runner; on another throwaway host set REGALIA_SHIP_HOST_OK to its /etc/machine-id.")
         return 2
-    present = [str(p) for p in (BIN, ETC, ENV, INSTALLED, DROPIN, ADM_DROPIN, METRICS.parent, WORK) if p.exists()]
+    present = [str(p) for p in (BIN, ETC, ENV, INSTALLED, DROPIN, ADM_DROPIN, ENROL_DROPIN, ENROL_TRAIL, METRICS.parent, WORK) if p.exists()]
     if present:
         print("audit-ship-systemd: refused: %s exists: this looks like a host where the shipper is installed" % ", ".join(present))
         return 2
@@ -315,15 +355,16 @@ def main():
     try:
         return scenario(work, binaries)
     finally:
-        for unit in (INSTANCE, ADM_INSTANCE, COLLECTOR_UNIT):
+        for unit in (INSTANCE, ADM_INSTANCE, ENROL_INSTANCE, COLLECTOR_UNIT):
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
         for path in (DROPIN / "reader.conf", ADM_DROPIN / "reader.conf", ETC / "admission.env", ADM_HEAD, METRICS.with_name("admission.prom"),
+                     ENROL_DROPIN / "reader.conf", ETC / "enrol.env", HEAD.with_name("enrol.head.json"), METRICS.with_name("enrol.prom"), ENROL_TRAIL,
                      INSTALLED, BIN, ENV, ETC / "sync.env", ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem",
                      ETC / "collector-receipt.pub", METRICS, HEAD):
             if path.exists():
                 path.unlink()
-        for directory in (DROPIN, ADM_DROPIN, ETC, METRICS.parent):
+        for directory in (DROPIN, ADM_DROPIN, ENROL_DROPIN, ETC, METRICS.parent):
             if directory.exists():
                 directory.rmdir()
         sh("systemctl", "daemon-reload", check=False)
