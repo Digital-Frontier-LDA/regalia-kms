@@ -288,13 +288,15 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     fixture.hsm_serials = {"a": [serial]}   # the daemon serves only from a token the manifest lists for this node (#72 G1)
     fixture.setUp()
     world = {"manifest": fixture.m1, "peer_up": True}
-    holder = lease.Holder("a", lt.SESSION, fixture.clock, hbt.simulated_ticks(fixture, fixture.tcti["a"]), str(w / "holder.json"))
+    holder = lease.Holder("a", lt.SESSION, fixture.clock, hbt.simulated_ticks(fixture, fixture.tcti["a"]), str(w / "holder.json"),
+                          **lt.SOURCES)                     # D32: the request's etcd state and session key, as the test lease fixture's
 
     def renew(request):
         if not world["peer_up"]:
             raise ConnectionError("peer b is unreachable")
         manifest = world["manifest"]
-        return lease.issue(manifest, "b", request, fixture.attester, fixture.evidence(lt.SESSION, manifest), fixture.freshness, fixture.signer)
+        return lease.issue(manifest, "b", request, fixture.attester, fixture.evidence(lt.SESSION, manifest), fixture.freshness, fixture.signer,
+                           lt.primed_floor())
     # As on a host: the service knows when the daemon's process started, from the kernel, by its PID.
     def daemon_started():
         return admission.process_started_ms(daemon.pid)

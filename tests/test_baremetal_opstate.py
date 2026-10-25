@@ -56,7 +56,7 @@ class Vectors(unittest.TestCase):
         for c in doc["session_checks"]:
             with self.subTest(c["name"]):
                 try:
-                    _, until = opstate.verify_session(c["key"], c["value"], doc["chain"])
+                    _, until = opstate.verify_session(c["key"], c["value"], c.get("chain", doc["chain"]))
                     got, why = True, until or ""
                 except m.Refused as refused:
                     got, why = False, str(refused)
@@ -77,6 +77,16 @@ class Vectors(unittest.TestCase):
                 except m.Refused as refused:
                     got, why = False, str(refused)
                 self.assertEqual((got, why), (c["accept"], c["python_reason"]))
+        for c in doc["state_epoch_checks"]:
+            with self.subTest(c["name"]):
+                try:
+                    entry = opstate.verify_state_epoch(c["key"], c["value"], c.get("chain", doc["state_epoch_chain"]), c["previous"],
+                                                       tuple(c["store"]) if c["store"] else None)
+                    got, why = True, ""
+                    self.assertEqual(entry["state_epoch"], c["applied_state_epoch"])
+                except m.Refused as refused:
+                    got, why = False, str(refused)
+                self.assertEqual((got, why), (c["accept"], c["python_reason"]))
         for b in doc["batches"]:
             with self.subTest(b["name"]):
                 try:
@@ -91,18 +101,39 @@ class Vectors(unittest.TestCase):
 
         def steady(doc):
             """P-256 signatures (the session entries') are randomized: compared as present, verified by the replay above."""
-            for c in doc["session_checks"]:
+            for c in doc["session_checks"] + doc["state_epoch_checks"]:
                 c["value"]["signature"] = "<p-256>"
+            for c in doc["state_epoch_checks"]:
+                auth = c["value"]["entry"].get("authorization") if isinstance(c["value"]["entry"], dict) else None
+                if isinstance(auth, dict) and auth.get("signature", {}).get("party") != "owner":
+                    auth["signature"]["sig"] = "<p-256>"          # a node's key over an authorization (regalia-u1r)
             return doc
         self.assertEqual(steady(restored(json.loads(made))), steady(load()),
                          "regenerate: python3 -Es tests/vectors/make-opstate-v1.py > tests/vectors/opstate-v1.json")
 
     def test_both_outcomes_and_every_kind_are_covered(self):
         doc = load()
-        kinds = {c["value"]["entry"].get("kind") for c in doc["cases"]}
+        kinds = {c["value"]["entry"].get("kind") for c in doc["cases"] if isinstance(c["value"]["entry"], dict)}
         self.assertTrue(set(opstate.KINDS) <= kinds)
         self.assertTrue(any(c["accept"] for c in doc["cases"]) and any(not c["accept"] for c in doc["cases"]))
         self.assertTrue(any(b["accept"] for b in doc["batches"]) and any(not b["accept"] for b in doc["batches"]))
+        epochs = doc["state_epoch_checks"]
+        self.assertTrue(any(c["accept"] and c["previous"] for c in epochs) and any(not c["accept"] for c in epochs))
+
+
+class StateEpoch(unittest.TestCase):
+    """The survivor's take-over mark (#432): what the vector cannot show by itself."""
+
+    def test_the_request_life_is_one_constant_in_both_modules(self):
+        from deploy.baremetal import survivor
+        self.assertEqual(survivor.REQUEST_LIFE_S, opstate.MAX_REQUEST_LIFE_S)
+        self.assertEqual(survivor.SKEW_S, opstate.SKEW_S)
+
+    def test_the_entry_carries_the_owner_s_authorization_whole(self):
+        """A node that wiped its store and rejoined holds no authorization file: the entry alone must verify (95, ed)."""
+        c = next(c for c in load()["state_epoch_checks"] if c["accept"] and c["previous"] is None)
+        self.assertEqual(set(c["value"]["entry"]["authorization"]), {"authorization", "signature"})
+        self.assertEqual(c["value"]["entry"]["authorization"]["authorization"]["scope"], "full")
 
 
 class Format(unittest.TestCase):

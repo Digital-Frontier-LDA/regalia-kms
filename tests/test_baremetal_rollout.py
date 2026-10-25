@@ -1077,12 +1077,12 @@ class OnSwtpm(unittest.TestCase):
 
     # ---- what the nodes do ----
 
-    def evidence(self, peer, node, manifest=None):
+    def evidence(self, peer, node, manifest=None, binding=None):
         manifest = manifest or self.manifest_now
         nonce, session = self.att[peer].nonce(node), self.session[node]
         paths = ("%s/q.msg" % self.d, "%s/q.sig" % self.d)
         key = b"ephemeral key of boot " + bytes.fromhex(session)
-        self.on(node, attest.node_quote, node, manifest["epoch"], bytes.fromhex(session), key, nonce, [7, 11], *paths)
+        self.on(node, attest.node_quote, node, manifest["epoch"], bytes.fromhex(session), key, nonce, [7, 11], *paths, binding=binding)
         return {"ephemeral_public": key.hex(), "nonce": nonce.hex(), "quote": lt.slurp(paths[0]).hex(), "signature": lt.slurp(paths[1]).hex()}
 
     def unlock(self, peer, node):
@@ -1096,8 +1096,12 @@ class OnSwtpm(unittest.TestCase):
         leases once it is up, so it finishes booting first (`booted=False`: it asks from its initrd)."""
         if booted:
             self.up(node)
-        request = {"node_id": node, "session_id": self.session[node], "nonce": os.urandom(32).hex()}
-        return lease.issue(self.manifest_now, peer, request, self.att[peer], self.evidence(peer, node), self.freshness[peer], self.signer[peer])
+        # lease v2 (D32): the request states the node's etcd state and session key, its quote binds them, and the
+        # issuer judges them by its own floor (here primed: it held the same revision a lease ago)
+        request = dict({"node_id": node, "session_id": self.session[node], "nonce": os.urandom(32).hex()}, **lt.STATE)
+        return lease.issue(self.manifest_now, peer, request, self.att[peer],
+                           self.evidence(peer, node, binding=lease.request_binding(lt.STATE)), self.freshness[peer], self.signer[peer],
+                           lt.primed_floor(lt.REVISION))
 
     def state(self, peer):
         with open("%s/%s-attest.json" % (self.d, peer)) as f:

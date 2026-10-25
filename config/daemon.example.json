@@ -31,6 +31,8 @@
   "runtime_admission_owner": "regalia-admission",
   "node_id": "site-a",
   "boot_session_path": "/run/regalia/boot-session",
+  "membership_chain_path": "/var/lib/regalia-sync/chain.json",
+  "membership_chain_owner": "regalia-sync",
   "metrics_reader_principals": [
     "spiffe://regalia/operator/monitoring"
   ]

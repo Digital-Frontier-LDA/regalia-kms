@@ -199,11 +199,9 @@ def session_key_path(entry):
     require(entry["schema"] == SESSION_SCHEMA, "schema must be %s" % SESSION_SCHEMA)
     require(isinstance(entry["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", entry["node_id"]) is not None, "node_id must be a node ID")
     require(isinstance(entry["boot_id"], str) and BOOT_ID.fullmatch(entry["boot_id"]) is not None, "boot_id must be a boot UUID")
+    # 32 bytes, as Go's SessionKeyPath also takes it: Ed25519PublicKey.from_public_bytes accepts any 32 bytes, so a
+    # check on it here could never refuse (regalia-u1r); a key that is not one fails where it is used, at verify
     membership.hex_field(entry["session_key"], 64, "session_key")
-    try:
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(entry["session_key"]))
-    except ValueError:
-        raise Refused("session_key is not an Ed25519 public key") from None
     heartbeat.parse_time(entry["issued_at"], "issued_at")
     return PREFIX + "sessions/%s/%s/%s" % (entry["node_id"], entry["boot_id"], entry["session_key"])
 
@@ -243,6 +241,77 @@ def verify_session(key, value, chain):
     return entry, (later[0]["issued_at"] if later else None)
 
 
+# ---- the state epoch: which history the store holds (regalia-kms-95's key; regalia-kms-ed's rules, #432) ----
+#
+# A lone survivor under the owner's "full" authorization (survivor.py) takes etcd over with --force-new-cluster. That
+# keeps the cluster ID, the member ID and the revision (measured on etcd 3.6.15, regalia-kms-48), so neither tells
+# the survivor's history from the tail its fenced peers may hold. Its FIRST write after the take-over is this entry:
+#
+#     value = {"entry": {"schema", "state_epoch": N, "node_id", "authorization": <the owner-signed survivor
+#              authorization, whole>, "cluster_id": "<16 hex>", "revision_before": R, "issued_at"}, "signature": "<r||s>"}
+#
+# at /regalia/v1/state-epoch, signed (STATE_EPOCH_DOMAIN) by the node's manifest-pinned signing_key in force at
+# issued_at, judged by chain as sessions are. It is self-authorizing (ed): N is the authorization's quarantine epoch,
+# the authorization verifies against the manifest AT N from the chain's history (not its tip), is "full" and names
+# this node, the entry is dated inside its full scope, and as read it is bound to its store: the cluster it names and a
+# revision after the one it names (62). A transition only raises N. Once seen it is never absent:
+# a reader that has seen one refuses its deletion (the cache's rule, as key state). Leases carry the state epoch the
+# issuer holds; a node whose store holds another is refused (internal/opstate/gate.go).
+STATE_EPOCH_SCHEMA = "regalia.opstate-state-epoch/v1"
+STATE_EPOCH_DOMAIN = b"regalia-opstate-state-epoch/v1\0"
+STATE_EPOCH_KEY = PREFIX + "state-epoch"
+STATE_EPOCH_FIELDS = ("schema", "state_epoch", "node_id", "authorization", "cluster_id", "revision_before", "issued_at")
+
+
+def state_epoch_message(entry):
+    membership.exact(entry, STATE_EPOCH_FIELDS, "the state-epoch entry")
+    require(entry["schema"] == STATE_EPOCH_SCHEMA, "schema must be %s" % STATE_EPOCH_SCHEMA)
+    _count(entry["state_epoch"], "state_epoch")
+    require(entry["state_epoch"] >= 1, "state_epoch is a manifest epoch, 1 or more")
+    require(isinstance(entry["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", entry["node_id"]) is not None, "node_id must be a node ID")
+    membership.hex_field(entry["cluster_id"], 16, "cluster_id")
+    _count(entry["revision_before"], "revision_before")
+    heartbeat.parse_time(entry["issued_at"], "issued_at")
+    require(isinstance(entry["authorization"], dict), "the state-epoch entry carries the owner's survivor authorization")
+    return STATE_EPOCH_DOMAIN + membership.canonical(entry)
+
+
+def verify_state_epoch(key, value, chain, previous=None, store=None):
+    """The state-epoch entry at `key`, if it holds (above), else Refused. `chain`: the verified membership chain, oldest
+    first. `previous`: the entry it replaces (verified), or None for the first. `store`: (cluster_id, mod_revision) of
+    the etcd the entry was read from, or None before it is written (regalia-kms-62): the entry must name that cluster
+    and sit after the revision it names, so one copied into another store, or put back below its own take-over,
+    does not verify."""
+    from deploy.baremetal import survivor                   # survivor imports nothing of opstate; local, to keep it so
+    membership.exact(value, ("entry", "signature"), "the state-epoch value")
+    entry = value["entry"]
+    raw = state_epoch_message(entry)
+    require(key == STATE_EPOCH_KEY, "the state-epoch entry belongs under %s, not %s" % (STATE_EPOCH_KEY, key))
+    require(isinstance(chain, list) and chain, "a state epoch is judged against the membership chain")
+    at_n = [m for m in chain if m["epoch"] == entry["state_epoch"]]
+    require(at_n, "the chain holds no manifest at epoch %d" % entry["state_epoch"])
+    auth = survivor.verify_authorization(entry["authorization"], at_n[0], entry["node_id"])
+    require(auth["scope"] == "full", "a take-over needs the owner's \"full\" authorization; this one is %s" % auth["scope"])
+    issued = heartbeat.parse_time(entry["issued_at"], "issued_at")
+    _, expires = survivor.validate_authorization(auth)
+    require(survivor.full_from(auth) <= issued < expires, "the state epoch is dated %s, outside the authorization's full scope"
+            % entry["issued_at"])
+    at = [m for m in chain if heartbeat.parse_time(m["issued_at"], "a manifest's issued_at") <= issued]
+    in_force = _signing_key(at[-1], entry["node_id"]) if at else None
+    require(in_force is not None, "%s had no signing key when its state epoch is dated" % entry["node_id"])
+    membership.verify_revocation(*in_force, raw, value["signature"], "%s's state-epoch entry" % entry["node_id"])
+    if store is not None:
+        cluster_id, mod_revision = store
+        require(entry["cluster_id"] == cluster_id, "the state-epoch entry names cluster %s; it is stored in cluster %s"
+                % (entry["cluster_id"], cluster_id))
+        require(isinstance(mod_revision, int) and mod_revision > entry["revision_before"], "the state-epoch entry is stored at revision %r, "
+                "not after the %d its take-over named" % (mod_revision, entry["revision_before"]))
+    if previous is not None:
+        require(entry["state_epoch"] > previous["state_epoch"], "the store holds state epoch %d; %d is not above it"
+                % (previous["state_epoch"], entry["state_epoch"]))
+    return entry
+
+
 def approvals_digest(approvals):
     """What a spend names as approvals_sha256: SHA-256 of the canonical list of the approvals counted, by approver ID."""
     return hashlib.sha256(membership.canonical(sorted(approvals, key=lambda a: a.get("approver_id", "")))).hexdigest()
@@ -251,8 +320,11 @@ def approvals_digest(approvals):
 def binding_bytes(spend, nonce):
     """What every approver signed: internal/approval.Binding.CanonicalBytes for the request this spend consumed (its
     nonce in clear, from the approvals; its expiry whole seconds, as RFC 3339 writes them)."""
-    lines = ["regalia-approval-v2\n"]
-    for field in (spend["object_id"], spend["purpose"], spend["environment"], nonce, spend["expires_at"], spend["payload_sha256"]):
+    lines = ["regalia-approval-v3\n"]
+    # the seventh record is the ONE node that may spend it (#432 G3): the spend's own node, so an approval given for
+    # another node does not verify for this spend
+    for field in (spend["object_id"], spend["purpose"], spend["environment"], nonce, spend["expires_at"], spend["payload_sha256"],
+                  spend["node_id"]):
         raw = field.encode()
         lines.append("%d:" % len(raw) + field + "\n")
     return "".join(lines).encode()

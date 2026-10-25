@@ -23,14 +23,19 @@ and the KMS unit's sandbox (#61):
                               beyond ALLOWED_CAPABILITIES (nothing: an unprivileged KMS on a high
                               port needs none), and so do the bounding, permitted, effective and
                               ambient sets the kernel reports for the running process
-  kms_apparmor_enforced       AppArmor is enabled and the running KMS process is confined by a
-                              profile in enforce mode (read from /proc/<MainPID>/attr, not from the
-                              unit: AppArmorProfile=-name starts unconfined when the profile is missing)
+  kms_apparmor_enforced       AppArmor is enabled and the running KMS process is confined by
+                              PROFILE in enforce mode (read from /proc/<MainPID>/attr, not from the
+                              unit: AppArmorProfile=-name starts unconfined when the profile is missing).
+                              Any other profile is refused, however strict. So is a stack, except
+                              PROFILE stacked on unconfined: systemd 259 labels a User= service
+                              'regalia-kms//&unconfined', and that still refuses what the profile denies
+                              (regalia-kms#548)
 
 and that the daemon needs a runtime lease to serve (#74):
 
   kms_runtime_admission_required  the configuration the unit starts the daemon with (the file after
-                              -config in ExecStart) states "runtime_admission": "required" with its
+                              -config in ExecStart) judges admissions against regalia-sync's chain
+                              (membership_chain_path, #432) and states "runtime_admission": "required" with its
                               admission file, the lease service's user, this node's ID and the boot
                               session file. "disabled-for-lab" is a lab setting: a host carrying it is not
                               commissioned. And the lease service is not root (#191): regalia-admission.service
@@ -70,6 +75,7 @@ import subprocess
 import sys
 
 SERVICE = "regalia-kms.service"
+PROFILE = "regalia-kms"            # deploy/baremetal/apparmor/usr.sbin.regalia-kms, the unit's AppArmorProfile=
 MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged",
             "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced", "kms_runtime_admission_required",
             "kms_opensc_leaves_piv_cards", "kms_pcscd_access_rule")
@@ -296,6 +302,11 @@ def apparmor(host):
     profile, mode = found.groups()
     if mode != "enforce" or profile == "unconfined":
         return False, f"the running KMS (pid {pid}) is under {profile!r} in {mode} mode, not enforce"
+    # A stack is "a//&b": confined by each. unconfined adds nothing to one, so PROFILE on unconfined
+    # is PROFILE; anything else (another profile, a child "a//b", a namespace ":ns:a") is not.
+    stack = set(profile.split("//&"))
+    if PROFILE not in stack or stack - {PROFILE, "unconfined"}:
+        return False, f"the running KMS (pid {pid}) is under {profile!r}, not {PROFILE!r}"
     return True, f"pid {pid} is confined by {profile!r} in enforce mode"
 
 
@@ -324,6 +335,10 @@ def daemon_config(host):
     return config, paths[0], ""
 
 
+MEMBERSHIP_CHAIN = "/var/lib/regalia-sync/chain.json"     # node.PUBLISHED in regalia-sync's state directory
+SYNC_USER = "regalia-sync"
+
+
 def runtime_admission(host):
     """The daemon is started with a configuration that REQUIRES a runtime lease."""
     config, path, why = daemon_config(host)
@@ -339,6 +354,12 @@ def runtime_admission(host):
                if not (isinstance(config.get(k), str) and config[k])]
     if missing:
         return False, f"{paths[0]} requires runtime admission but lacks {', '.join(missing)}"
+    # AN ADMISSION IS GOOD ONLY FOR THE EPOCH IT WAS JUDGED UNDER (#432): on a host, the daemon judges it against
+    # regalia-sync's published chain. The setting is optional in the configuration (e2e and lab configs have no
+    # chain), so a host states it, never assumes it (48 on #509)
+    if config.get("membership_chain_path") != MEMBERSHIP_CHAIN or config.get("membership_chain_owner") != SYNC_USER:
+        return False, (f"{paths[0]} does not judge admissions against the membership chain: membership_chain_path must be "
+                       f"{MEMBERSHIP_CHAIN} and membership_chain_owner {SYNC_USER}")
     ok, why = lease_service_unprivileged(host, config["runtime_admission_owner"])
     if not ok:
         return False, why

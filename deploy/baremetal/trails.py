@@ -78,6 +78,9 @@ TRAILS = {
     "update": (TOOL_DIR + "/update.jsonl", "update.py, root, by hand, node", "update", TOOL_GROUP),
     "recovery-key": (TOOL_DIR + "/recovery-key.jsonl", "recovery-key.sh, root, by hand", "recovery-key", TOOL_GROUP),
     "recovery-reconcile": (TOOL_DIR + "/recovery-reconcile.jsonl", "recovery-reconcile.py, root, by hand", "recovery-reconcile", TOOL_GROUP),
+    # #432 (G6): the lone survivor's etcd take-over and the fenced servers' rejoin, each step a REQUEST before it acts,
+    # then its ALLOW (what it did: the cluster, the revisions, the state epoch, the divergent tail's digest) or DENY
+    "survivor": (TOOL_DIR + "/survivor.jsonl", "takeover.py and rejoin.py, root, by hand, node", "survivor", TOOL_GROUP),
 }
 
 

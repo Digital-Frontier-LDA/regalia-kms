@@ -20,8 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
-from deploy.baremetal import membership as m, opstate  # noqa: E402
-from tests.test_baremetal_membership_v4 import NODE_KEYS, manifest4, nodes4, p256, p256_sig, typed  # noqa: E402
+from deploy.baremetal import membership as m, opstate, survivor  # noqa: E402
+from tests.test_baremetal_fence import redfish_evidence  # noqa: E402
+from tests.test_baremetal_membership_v4 import NODE_KEYS, OWNER_KEYS, manifest4, nodes4, p256, p256_sig, typed  # noqa: E402
 
 
 def key(seed):
@@ -47,7 +48,9 @@ APPROVERS = {"alice": ALICE_PUB, "bob": BOB_PUB}
 CURRENT_SET = opstate.approver_set_digest(APPROVERS, 2)
 OLD_SET = opstate.approver_set_digest({"alice": ALICE_PUB}, 1)                 # the set before a rotation
 APPROVER_SETS = {CURRENT_SET: {"approvers": APPROVERS, "required": 2}, OLD_SET: {"approvers": {"alice": ALICE_PUB}, "required": 1},
-                 opstate.UNGATED_SET: {"approvers": {}, "required": 0}}
+                 opstate.UNGATED_SET: {"approvers": {}, "required": 0},
+                 # regalia-u1r: a verifier configured with a set held under a digest that is not that set's
+                 "ab" * 32: {"approvers": APPROVERS, "required": 2}}
 RAW_NONCE = "request-nonce-1"
 PAYLOAD = b"regalia release 1.0 manifest"                    # the request's payload: internal/approval hashes it itself
 PAYLOAD_SHA256 = __import__("hashlib").sha256(PAYLOAD).hexdigest()
@@ -59,10 +62,17 @@ def approval(entry, who, nonce=RAW_NONCE, **over):
     """internal/approval's Approval by `who` for the request `entry` spent: signed over its Binding."""
     keys = {"alice": ALICE, "bob": BOB, "mallory": STRANGER}
     out = {"approver_id": who, "nonce": nonce, "expires_at": entry["expires_at"], "payload_digest": entry["payload_sha256"]}
-    out.update({k: v for k, v in over.items() if k != "signed_as"})
+    out.update({k: v for k, v in over.items() if k not in ("signed_as", "v2")})
     signed = dict(entry, **over.get("signed_as", {}))
-    out["signature"] = base64.b64encode(keys[who].sign(opstate.binding_bytes(signed, nonce))).decode()
+    out["signature"] = base64.b64encode(keys[who].sign((v2_bytes if over.get("v2") else opstate.binding_bytes)(signed, nonce))).decode()
     return out
+
+
+def v2_bytes(spend, nonce):
+    """The v2 binding an approver's tool signed before #432 G3, written out here (six records, no signer node):
+    opstate.binding_bytes no longer makes it, and a v2 approval must not count under v3."""
+    fields = (spend["object_id"], spend["purpose"], spend["environment"], nonce, spend["expires_at"], spend["payload_sha256"])
+    return ("regalia-approval-v2\n" + "".join("%d:%s\n" % (len(f.encode()), f) for f in fields)).encode()
 
 
 def spend(approvals=("alice", "bob"), **over):
@@ -187,6 +197,25 @@ case("version 1 that names a previous", by_approvers(key_state("enabled", prev_d
 case("a key state signed by a node session", by_node(DISABLED), False)
 case("a sequence entry over a quota", by_node(sequence(9)), False, previous=quota(1))
 
+# ---- every refusal rule of opstate.validate and opstate.verify has a case (regalia-u1r) ----
+case("an entry that is not an object", by_node([1, 2]), False)
+case("a node ID that is not one", by_node(sequence(7, node_id="Node_A")), False)
+case("a boot ID that is not a UUID", by_node(sequence(7, boot_id="boot-1")), False)
+case("a name with a space in it", by_node(spend(principal="ci release")), False)
+case("a sequence value below zero", by_node(sequence(-1)), False)
+case("more approvers than an approval header holds", by_node(spend(approvals=(), approvers=sorted("a%02d" % i for i in range(opstate.MAX_APPROVERS + 1)))),
+     False)
+case("a quota date that is not YYYY-MM-DD", by_node(quota(5, utc_date="2026-10-5")), False)
+case("a key state that is not one of the three", by_approvers(key_state("frozen"), "alice", "bob"), False)
+case("a key-state version of 0", by_approvers(key_state("enabled", version=0), "alice", "bob"), False)
+case("an entry with no signature", dict(by_node(spend()), signatures=[]), False)
+case("a set held under a digest that is not its own", by_approvers(key_state("enabled", approver_set="ab" * 32), "alice", "bob"), False)
+case("a key state under the ungated set: no approvers, no threshold", by_approvers(key_state("enabled", approver_set=opstate.UNGATED_SET), "alice"),
+     False)
+case("more approvals than an approval header holds", by_approvers(ENABLED, *["alice"] * (opstate.MAX_APPROVERS + 1)), False)
+case("an entry dated in a form that is not UTC", by_node(spend(at="2026-10-05 12:00:00")), False)
+case("an entry dated on a day that does not exist", by_node(spend(at="2026-02-30T12:00:00Z")), False)
+
 CHECKS = []
 
 
@@ -209,7 +238,14 @@ check("an approval that had expired when the request was spent", S,
       [approval(S, "alice"), approval(S, "bob", expires_at="2026-10-05T11:59:00Z")], False)
 check("an approval that outlives the request", S, [approval(S, "alice"), approval(S, "bob", expires_at="2026-10-05T13:00:00Z")], False)
 check("an approval signed over another environment", S, [approval(S, "alice"), approval(S, "bob", signed_as={"environment": "staging"})], False)
+check("an approval given for another node (#432 G3)", S,
+      [approval(S, "alice"), approval(S, "bob", signed_as={"node_id": "b" if S["node_id"] != "b" else "c"})], False)
+check("an approval an approver's tool signed over the v2 binding (#432 G3)", S, [approval(S, "alice"), approval(S, "bob", v2=True)], False)
 check("the same approver twice", S, [approval(S, "alice"), approval(S, "alice")], False)
+check("a sequence handed to the approvals check (regalia-u1r)", sequence(7), [], False, matched=False)
+check("more approvals than an approval header holds (regalia-u1r)", S, [approval(S, "alice")] * (opstate.MAX_APPROVERS + 1), False,
+      matched=False)
+check("an approval naming an empty nonce (regalia-u1r)", S, [approval(S, "alice", nonce=""), approval(S, "bob")], False)
 check("approvals that are not the approvers the spend names", spend(approvals=("alice", "bob"), approvers=["alice", "carol"]),
       [approval(S, "alice"), approval(S, "bob")], False)
 T = spend(approvals=("alice",))
@@ -229,6 +265,7 @@ NOW = 1791201605                                                     # 2026-10-0
 sign_case("the lease it was committed under, unlapsed", S, NOW, "cd" * 32, "2026-10-05T12:00:20Z", True)
 sign_case("BURNED: another lease held now", S, NOW, "ef" * 32, "2026-10-05T12:00:40Z", False)
 sign_case("BURNED: the lease lapsed before the HSM", S, NOW + 15, "cd" * 32, "2026-10-05T12:00:20Z", False)
+sign_case("a sequence handed to may_sign (regalia-u1r)", sequence(7), NOW, "cd" * 32, "2026-10-05T12:00:20Z", False)
 sign_case("BURNED: the request expires within the skew", spend(expires_at="2026-10-05T12:01:00Z"), NOW, "cd" * 32, "2026-10-05T12:00:20Z", False)
 
 FRESH = []
@@ -251,12 +288,13 @@ def vouched(entry, signer="a"):
     return {"entry": entry, "signature": p256_sig(private, opstate.SESSION_DOMAIN + m.canonical(entry))}
 
 
-def session_case(name, value, accept, where=None):
+def session_case(name, value, accept, where=None, **chain):
+    """`chain`: a chain of the case's own in place of the vector's (regalia-u1r: none at all, the caller's error)."""
     try:
         where = where or opstate.session_key_path(value["entry"])
     except m.Refused:
         where = where or opstate.PREFIX + "sessions/x"
-    SESSION_CASES.append({"name": name, "key": where, "value": value, "accept": accept})
+    SESSION_CASES.append(dict({"name": name, "key": where, "value": value, "accept": accept}, **chain))
 
 
 session_case("a's session key, vouched for by the key a holds since epoch 2", vouched(session(), signer="a-new"), True)
@@ -270,6 +308,156 @@ session_case("under another node's path", vouched(session()), False, where=opsta
 session_case("a node the manifest does not hold", vouched(session(node_id="z"), signer="c"), False)
 session_case("a session key of 31 bytes", vouched(session(key="00" * 31)), False)
 session_case("a signature over the entry without its domain", {"entry": session(), "signature": p256_sig(A_NEW, m.canonical(session()))}, False)
+session_case("a session node ID that is not one (regalia-u1r)", vouched(session(node_id="Node_A")), False)
+session_case("a session boot ID that is not a UUID (regalia-u1r)", vouched(session(boot_id="boot-1")), False)
+session_case("a session judged against no chain at all (regalia-u1r)", vouched(session(), signer="a-new"), False, chain=[])
+
+# the state epoch (opstate.verify_state_epoch): a take-over at epoch 2 by a (whose key rotates at that epoch), the
+# quarantine lifted at 3, a second take-over at 4 by b
+_SE2 = nodes4(b="QUARANTINED", c="QUARANTINED")
+_SE2[0]["signing_key"] = typed(A_NEW)
+_SE4 = nodes4(a="QUARANTINED", c="QUARANTINED")
+_SE4[0]["signing_key"] = typed(A_NEW)
+_SE5 = nodes4(a="QUARANTINED", c="RETIRED")       # at 5, b survives with c retired: the fence reaches a alone (fenceable)
+_SE5[0]["signing_key"] = typed(A_NEW)
+SE_CHAIN = [_M1]
+for _epoch, _nodes, _at in ((2, _SE2, "2026-10-05T11:00:00Z"), (3, copy.deepcopy(_NODES2), "2026-10-06T00:00:00Z"),
+                            (4, _SE4, "2026-10-07T00:00:00Z"), (5, _SE5, "2026-10-08T00:00:00Z")):
+    SE_CHAIN.append(manifest4(_epoch, m.digest(SE_CHAIN[-1]), _nodes, issued_at=_at))
+STATE_EPOCH_CASES = []
+
+
+def survivor_authorization(epoch=2, who="a", scope="full", day="2026-10-05", unchecked=False, **over):
+    tip = SE_CHAIN[epoch - 1]
+    others = sorted({"a", "b", "c"} - {who})
+    auth = {"schema": survivor.AUTH_SCHEMA, "node_id": who, "quarantine_epoch": epoch, "quarantine_digest": m.digest(tip),
+            "not_before": day + "T12:00:00Z", "expires_at": "%s-%02dT12:00:00Z" % (day[:7], int(day[8:]) + 1),
+            "fenced": "%s: off at the iLO" % ", ".join(others), "scope": scope,
+            "fence": redfish_evidence(others, day)}
+    auth.update(over)
+    return {"authorization": auth, "signature": {"party": m.OWNER, "key": typed(OWNER_KEYS[0])["key"],
+                                                 # `unchecked`: the owner's key over a malformed authorization (what a
+                                                 # broken tool would sign), so the node's own form check is what refuses it
+                                                 "sig": OWNER_KEYS[0].sign(survivor.AUTH_DOMAIN + m.canonical(auth) if unchecked
+                                                                           else survivor.authorization_message(auth)).hex()}}
+
+
+def state_epoch(epoch=2, who="a", authorization=None, **over):
+    entry = {"schema": opstate.STATE_EPOCH_SCHEMA, "state_epoch": epoch, "node_id": who,
+             "authorization": authorization or survivor_authorization(epoch, who), "cluster_id": "62ff5b5c1a2e3d4f",
+             "revision_before": 4711, "issued_at": "2026-10-05T12:20:00Z"}
+    entry.update(over)
+    return entry
+
+
+def took_over(entry, signer=A_NEW, raw=None):
+    return {"entry": entry, "signature": p256_sig(signer, raw if raw is not None else opstate.STATE_EPOCH_DOMAIN + m.canonical(entry))}
+
+
+STORE = ["62ff5b5c1a2e3d4f", 4712]                  # (cluster_id, mod_revision) the entry is read from: right after its take-over
+
+
+def state_epoch_case(name, value, accept, previous=None, where=opstate.STATE_EPOCH_KEY, store=STORE, **chain):
+    """`chain`: a chain of the case's own in place of the vector's (regalia-u1r: none at all, the caller's error)."""
+    STATE_EPOCH_CASES.append(dict({"name": name, "key": where, "value": value, "previous": previous, "store": store, "accept": accept,
+                                   "applied_state_epoch": value["entry"]["state_epoch"] if accept else None}, **chain))
+
+
+SECOND = state_epoch(4, "b", survivor_authorization(4, "b", day="2026-10-07"), issued_at="2026-10-07T12:20:00Z")
+state_epoch_case("a's take-over at its quarantine epoch, signed by the key a holds since that epoch", took_over(state_epoch()), True)
+state_epoch_case("b's take-over at epoch 4 over a's at 2", took_over(SECOND, NODE_KEYS["b"]), True, previous=state_epoch())
+state_epoch_case("an epoch below the one the store holds", took_over(state_epoch()), False, previous=SECOND)
+state_epoch_case("the same epoch again", took_over(state_epoch()), False, previous=state_epoch())
+state_epoch_case("under a stateless authorization", took_over(state_epoch(authorization=survivor_authorization(scope="stateless"))), False)
+state_epoch_case("dated before the full scope begins", took_over(state_epoch(issued_at="2026-10-05T12:10:00Z")), False)
+state_epoch_case("dated after the authorization ended", took_over(state_epoch(issued_at="2026-10-06T12:00:00Z")), False)
+state_epoch_case("an epoch-2 authorization claimed for epoch 3 (judged at N, not at the tip)",
+                 took_over(state_epoch(3, authorization=survivor_authorization(2), issued_at="2026-10-06T00:20:00Z")), False)
+state_epoch_case("an epoch the chain does not hold", took_over(state_epoch(9, authorization=survivor_authorization(2))), False)
+state_epoch_case("signed by a's key replaced at the quarantine epoch", took_over(state_epoch(), NODE_KEYS["a"]), False)
+state_epoch_case("signed by b's key for a's take-over", took_over(state_epoch(), NODE_KEYS["b"]), False)
+state_epoch_case("b's authorization carried in a's entry", took_over(state_epoch(4, "a", survivor_authorization(4, "b", day="2026-10-07"),
+                                                                       issued_at="2026-10-07T12:20:00Z")), False)
+state_epoch_case("under another key", took_over(state_epoch()), False, where=opstate.PREFIX + "state-epoch/2")
+
+
+def fenced_b(**change):
+    """a's redfish evidence with b's entry changed (None drops a field): the node's check of what fence.py makes."""
+    fence = redfish_evidence(["b", "c"], "2026-10-05")
+    for k, v in change.items():
+        if v is None:
+            del fence["nodes"]["b"][k]
+        else:
+            fence["nodes"]["b"][k] = v
+    return took_over(state_epoch(authorization=survivor_authorization(fence=fence, unchecked=True)))
+
+
+state_epoch_case("a redfish fence read Off twice only 9 s apart", fenced_b(read_again_at="2026-10-05T11:59:09Z"), False)
+state_epoch_case("a redfish fence whose box names no UUID", fenced_b(uuid="not-a-uuid"), False)
+state_epoch_case("a redfish fence whose iLO certificate digest is not one", fenced_b(ilo_cert_sha256="zz" * 32), False)
+state_epoch_case("a redfish fence read before the quarantine was signed",
+                 fenced_b(read_at="2026-10-05T10:59:00Z", read_again_at="2026-10-05T10:59:10Z"), False)
+state_epoch_case("a redfish fence's second readback after the owner signed, beyond the skew",
+                 fenced_b(read_again_at="2026-10-05T12:05:01Z"), False)
+FIFTH = dict(day="2026-10-08", fence=redfish_evidence(["a"], "2026-10-08"))
+state_epoch_case("b's take-over at 5 with c retired: the fence reaches a alone",
+                 took_over(state_epoch(5, "b", survivor_authorization(5, "b", **FIFTH), issued_at="2026-10-08T12:20:00Z"), NODE_KEYS["b"]), True)
+state_epoch_case("the same take-over with the retired c named in the fence",
+                 took_over(state_epoch(5, "b", survivor_authorization(5, "b", day="2026-10-08", fence=redfish_evidence(["a", "c"], "2026-10-08")),
+                                       issued_at="2026-10-08T12:20:00Z"), NODE_KEYS["b"]), False)
+state_epoch_case("an attested-shaped entry under a redfish fence", fenced_b(read_again_at=None, serial=None, uuid=None,
+                                                                            ilo_cert_sha256=None, power_restore_policy=None), False)
+state_epoch_case("a signature over the entry without its domain", took_over(state_epoch(), raw=m.canonical(state_epoch())), False)
+state_epoch_case("an entry with a field the format does not have", took_over(dict(state_epoch(), note="x")), False)
+state_epoch_case("read before it is stored (the writer's own check): no store to bind", took_over(state_epoch()), True, store=None)
+state_epoch_case("read long after its take-over, in the same store", took_over(state_epoch()), True, store=["62ff5b5c1a2e3d4f", 990000])
+state_epoch_case("copied into another cluster", took_over(state_epoch()), False, store=["0123456789abcdef", 4712])
+state_epoch_case("stored at the very revision its take-over named", took_over(state_epoch()), False, store=["62ff5b5c1a2e3d4f", 4711])
+state_epoch_case("the manifest at N has another counting member", took_over(state_epoch(3, authorization=survivor_authorization(3))), False)
+# every refusal rule of opstate.state_epoch_message and verify_state_epoch has a case (regalia-u1r)
+state_epoch_case("a state epoch of 0", took_over(state_epoch(0, authorization=survivor_authorization())), False)
+state_epoch_case("a state-epoch node ID that is not one", took_over(state_epoch(who="Node_A", authorization=survivor_authorization())), False)
+state_epoch_case("a state-epoch entry whose authorization is not an object", took_over(state_epoch(authorization="the owner said so")), False)
+state_epoch_case("a state epoch judged against no chain at all", took_over(state_epoch()), False, chain=[])
+# signed by the owner with a not_before before the first manifest, and an attested fence (no readback to date):
+# the entry is dated before any manifest, so no signing key held then can vouch for it
+_EARLY = {"b": {"power_state": "unreachable", "read_at": "2026-10-03T00:00:00Z"},
+          "c": {"power_state": "unreachable", "read_at": "2026-10-03T00:00:00Z"}}
+state_epoch_case("a state epoch dated before the first manifest",
+                 took_over(state_epoch(authorization=survivor_authorization(not_before="2026-10-03T00:00:00Z", expires_at="2026-10-04T00:00:00Z",
+                                                                            fence={"method": "attested", "nodes": _EARLY}),
+                                       issued_at="2026-10-03T12:00:00Z")), False)
+# every refusal rule of survivor.validate_authorization and verify_authorization reached from verify_state_epoch
+# (regalia-u1r): the owner's key over each malformed authorization (`unchecked`), so the node's check is what refuses it
+
+
+def authorized(**over):
+    return took_over(state_epoch(authorization=survivor_authorization(unchecked=True, **over)))
+
+
+def fence_of(method="redfish", **nodes):
+    return {"method": method, "nodes": nodes}
+
+
+state_epoch_case("an authorization whose quarantine epoch is 0", authorized(quarantine_epoch=0), False)
+state_epoch_case("an authorization whose fenced text is blank", authorized(fenced="   "), False)
+state_epoch_case("an authorization of a scope that does not exist", authorized(scope="partial"), False)
+state_epoch_case("a fence of a method that does not exist", authorized(fence=fence_of("ipmi", **redfish_evidence(["b", "c"])["nodes"])), False)
+state_epoch_case("a fence that names no node", authorized(fence=fence_of()), False)
+state_epoch_case("a fence that names a node by something not a node ID",
+                 authorized(fence=fence_of(**{"B!": redfish_evidence(["b"])["nodes"]["b"], "c": redfish_evidence(["c"])["nodes"]["c"]})), False)
+state_epoch_case("a redfish fence that reads the box On", fenced_b(power_state="On"), False)
+state_epoch_case("a redfish fence with no power-restore policy text", fenced_b(power_restore_policy=""), False)
+state_epoch_case("an authorization that ends when it begins", authorized(expires_at="2026-10-05T12:00:00Z"), False)
+state_epoch_case("an authorization that lives longer than a week", authorized(expires_at="2026-10-12T12:00:01Z"), False)
+state_epoch_case("b's take-over at epoch 2, where b is quarantined",
+                 took_over(state_epoch(who="b", authorization=survivor_authorization(who="b")), NODE_KEYS["b"]), False)
+_BY_A = survivor_authorization()
+_BY_A["signature"] = {"party": "a", "key": typed(A_NEW)["key"],
+                      "sig": p256_sig(A_NEW, survivor.AUTH_DOMAIN + m.canonical(_BY_A["authorization"]))}
+state_epoch_case("an authorization signed by the survivor itself, not the owner", took_over(state_epoch(authorization=_BY_A)), False)
+state_epoch_case("an authorization the owner did not sign", took_over(state_epoch(authorization=dict(
+    survivor_authorization(), signature=dict(survivor_authorization()["signature"], sig="00" * 64)))), False)
 
 BATCHES = []
 
@@ -324,8 +512,16 @@ def decide_fresh(c):
 
 def decide_session(c):
     try:
-        _, until = opstate.verify_session(c["key"], c["value"], CHAIN)
+        _, until = opstate.verify_session(c["key"], c["value"], c.get("chain", CHAIN))
         return True, until or ""
+    except m.Refused as refused:
+        return False, str(refused)
+
+
+def decide_state_epoch(c):
+    try:
+        opstate.verify_state_epoch(c["key"], c["value"], c.get("chain", SE_CHAIN), c["previous"], tuple(c["store"]) if c["store"] else None)
+        return True, ""
     except m.Refused as refused:
         return False, str(refused)
 
@@ -371,7 +567,8 @@ def main():
         got, why = decide_case(c)
         assert got == c["accept"], (c["name"], why)
         c["python_reason"] = why
-    for group, decide in ((CHECKS, decide_check), (SIGNS, decide_sign), (SESSION_CASES, decide_session), (FRESH, decide_fresh)):
+    for group, decide in ((CHECKS, decide_check), (SIGNS, decide_sign), (SESSION_CASES, decide_session), (FRESH, decide_fresh),
+                          (STATE_EPOCH_CASES, decide_state_epoch)):
         for c in group:
             got, why = decide(c)
             assert got == c["accept"], (c["name"], why)
@@ -383,7 +580,8 @@ def main():
     doc = {"schema": "regalia.opstate-vectors/v1", "domain": opstate.DOMAIN.decode().rstrip("\0") + "\\0", "max_batch": opstate.MAX_BATCH,
            "sessions": SESSIONS, "approver_sets": APPROVER_SETS, "skew_s": opstate.SKEW_S, "payload_hex": PAYLOAD.hex(), "cases": CASES,
            "approval_checks": CHECKS, "sign_checks": SIGNS,
-           "chain": CHAIN, "session_checks": SESSION_CASES, "fresh_checks": FRESH, "batches": BATCHES}
+           "chain": CHAIN, "session_checks": SESSION_CASES, "fresh_checks": FRESH, "batches": BATCHES,
+           "state_epoch_chain": SE_CHAIN, "state_epoch_checks": STATE_EPOCH_CASES}
     json.dump(composed(copy.deepcopy(doc)), sys.stdout, indent=1, sort_keys=True)
     sys.stdout.write("\n")
 

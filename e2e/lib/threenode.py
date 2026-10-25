@@ -74,7 +74,9 @@ ADMISSION_DIR_MODE = _state_directory_mode("regalia-admission.service")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import tpmdiag                                                                                      # noqa: E402
+from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, lease, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
 NAMES = ("a", "b", "c")
@@ -102,6 +104,35 @@ def show_state(unit):
     out = sh("systemctl", "show", unit, "-p", "LoadState,ActiveState,Result,InvocationID", check=False).stdout
     props = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
     return props.get("LoadState"), props.get("ActiveState"), props.get("Result"), props.get("InvocationID")
+
+
+def tpm_stop_report(pid, log, shutdown=None, proc="/proc"):
+    """What a software TPM that did not stop looked like (regalia-zga): observed, never guessed, so the next failure names
+    its cause. Whether `pid` is still swtpm (a reused pid would not be), its State (a "Z" exited but was not reaped),
+    its parent, where it waits in the kernel, how the orderly TPM2_Shutdown went, the end of its log, and AppArmor."""
+    def read(name, limit=600):
+        try:
+            with open("%s/%d/%s" % (proc, pid, name), "rb") as f:
+                return f.read(limit).decode(errors="replace").replace("\0", " ").strip()
+        except OSError as error:
+            return "<%s>" % (error.strerror or error)
+    status = dict(line.split(":", 1) for line in read("status", 4096).splitlines() if ":" in line)
+    parts = ["pid %d" % pid, "cmdline %r" % read("cmdline", 300),
+             "State %s" % status.get("State", "?").strip(), "PPid %s" % status.get("PPid", "?").strip(),
+             "wchan %s" % read("wchan", 100), "stack %r" % read("stack", 1200)]
+    if shutdown is not None:
+        parts.append("tpm2_shutdown %d %r" % (shutdown.returncode, (shutdown.stdout + shutdown.stderr).strip()[-300:]))
+    try:
+        parts.append("log %r" % pathlib.Path(log).read_text(errors="replace")[-800:])
+    except OSError as error:
+        parts.append("log <%s>" % (error.strerror or error))
+    if proc == "/proc":
+        try:   # bounded: a stalled journal must never keep the stop error from being raised (CodeRabbit on #563)
+            parts.append("apparmor %r" % sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False,
+                                            timeout=10).stdout[-600:])
+        except subprocess.TimeoutExpired:
+            parts.append("apparmor <journalctl did not answer within 10 s>")
+    return " | ".join(parts)
 
 
 def until(what, seconds, interval=1.0):
@@ -175,6 +206,9 @@ OWNER_PIN = "246813"                              # the SoftHSM owner token's TE
 class Cluster:
     def __init__(self, work, names=NAMES, audit=False):
         self.work = pathlib.Path(work)
+        # regalia-zga: what a TPM failure is diagnosed from, kept in this run (e2e/lib/tpmdiag.py): which stack it ran on;
+        # each node's swtpm logs at level 20 (_tpm)
+        print(tpmdiag.versions(), flush=True)
         # #199: the cluster is v4. The nodes sign their own heartbeats with their TPM signing keys (beat.py), the owner's
         # party is two Ed25519 keys on a SoftHSM token (the two owner YubiKeys of ADR-0002 D30), and each node boots an
         # image whose PCR 11 a fixture system-phase key signed
@@ -188,6 +222,8 @@ class Cluster:
         self.time = {n: True for n in names}          # authenticated time, per node
         self.stop_threads = False
         self.threads = []
+        self._state_lock = threading.Lock()           # _write_as_daemon: the state writer thread and the main thread
+        self.state_revision = 1                       # D32: the etcd revision every node's stand-in watch has applied
         self.chain = []                               # the signed envelopes, epoch 1 first
         self.manifest = None
         self.keys = {}
@@ -210,6 +246,12 @@ class Cluster:
     def build(self):
         # the services' users and groups, from the shipped file (regalia-sync, regalia-admission, their trails' groups)
         sh("systemd-sysusers", str(ROOT / "deploy" / "baremetal" / "units" / "regalia.sysusers.conf"))
+        # D32 (#432): the daemon's user, which writes /run/regalia-state/applied.json and /run/regalia-kms/session-key.json
+        # on a host (deploy/systemd/regalia-kms.service). No daemon runs here: the fixture writes both as that user would
+        (self.work / "regalia-kms.sysusers.conf").write_text('u regalia-kms - "Regalia KMS daemon e2e" - -\n')
+        sh("systemd-sysusers", str(self.work / "regalia-kms.sysusers.conf"))
+        for mount_point in (os.path.dirname(lease.APPLIED_PATH), os.path.dirname(lease.SESSION_KEY_PATH)):
+            os.makedirs(mount_point, exist_ok=True)   # where each node's own directory is bound in its units
         os.chmod(self.work, 0o711)                    # each node's directory is reached through it, read in it only
         # the checkout may sit where the services' users cannot go (a runner's home is 0750): they run a root-owned copy
         shutil.copytree(ROOT / "deploy", self.code / "deploy", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -235,6 +277,11 @@ class Cluster:
             os.chmod(n.state, 0o755)
             sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
             os.chmod(n.admission, ADMISSION_DIR_MODE)
+        for n in self.nodes.values():
+            self._state_files(n)
+        writer = threading.Thread(target=self._state_writer, daemon=True)     # stopped by close() (stop_threads)
+        writer.start()
+        self.threads.append(writer)
         if self.audit:
             self._audit_start()
 
@@ -268,7 +315,7 @@ class Cluster:
         ctrl = "type=unixio,path=%s.ctrl,mode=0660,gid=%d" % (n.tpm_sock, tss)
         done = sh("swtpm", "socket", "--tpm2", "--server", server, "--ctrl", ctrl,
                   "--tpmstate", "dir=%s" % (n.dir / "tpm"), "--flags", "not-need-init,startup-clear", "--daemon",
-                  "--pid", "file=%s" % (n.dir / "tpm.pid"), "--log", "file=%s" % (n.dir / "tpm.log"), check=False)
+                  "--pid", "file=%s" % (n.dir / "tpm.pid"), "--log", tpmdiag.log_arg(n.dir / "tpm.log"), check=False)
         if done.returncode != 0 or not until(lambda: n.tpm_sock.exists(), 10, 0.2):
             log = (n.dir / "tpm.log").read_text()[-800:] if (n.dir / "tpm.log").exists() else ""
             denied = sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False).stdout[-800:]
@@ -399,12 +446,12 @@ class Cluster:
         their reset values, every transient object and session gone, as on a host. Without `orderly`, a cut: no
         Shutdown, which a TPM counts against its dictionary-attack limit (#57)."""
         n = self.member(name)
-        if orderly:
-            sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False)
+        shutdown = sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False) if orderly else None
         pid = int((n.dir / "tpm.pid").read_text())
         os.kill(pid, 15)
         if not until(lambda: not os.path.exists("/proc/%d" % pid), 10, 0.2):
-            raise RuntimeError("%s's software TPM did not stop" % name)
+            # regalia-zga: still a failure, now with what the process looked like; the fix waits for this evidence
+            raise RuntimeError("%s's software TPM did not stop: %s" % (name, tpm_stop_report(pid, n.dir / "tpm.log", shutdown)))
         self._tpm(n)
 
     # ---- images (#75, Phase 15's tier N) ----
@@ -520,6 +567,58 @@ class Cluster:
         """The root's envelope (the test root key, or `key`)."""
         key = key or hbt.ROOT
         return {"manifest": manifest, "signature": {"signer": "root", "key": hbt.pub(key), "sig": key.sign(membership.DOMAIN + membership.canonical(manifest)).hex()}}
+
+    # ---- D32 (#432): what the daemon writes on a host, written here ----
+
+    STATE_CLUSTER = "e2e3e2e3e2e3e2e3"
+
+    def _write_as_daemon(self, path, doc):
+        """`doc` at `path` as the daemon writes it: a temporary file renamed over, the daemon's user's, mode 0644."""
+        import pwd
+        user = pwd.getpwnam(lease.DAEMON_USER)
+        # serialized, each write its own temporary file: _state_writer's thread and the main thread (build, replace)
+        # both write applied.json, and one's replace must never pull the other's file away (CodeRabbit on #489)
+        with self._state_lock:
+            tmp = path.with_name(".%s.%d.tmp" % (path.name, threading.get_ident()))
+            tmp.write_text(json.dumps(doc))
+            os.chown(tmp, user.pw_uid, user.pw_gid)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, path)
+
+    def _state_files(self, n):
+        """The node's stand-ins for /run/regalia-state and /run/regalia-kms (bound in its units: properties, as_root),
+        the daemon's user's: its session key (one per node, as one daemon start) and its applied etcd revision."""
+        import pwd
+        user = pwd.getpwnam(lease.DAEMON_USER)
+        for d in (n.dir / "run-state", n.dir / "run-kms"):
+            d.mkdir(exist_ok=True)
+            os.chown(d, user.pw_uid, user.pw_gid)
+            os.chmod(d, 0o755)
+        key = n.dir / "run-kms" / os.path.basename(lease.SESSION_KEY_PATH)
+        if not key.exists():
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+            public = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(b"e2e3 session key " + n.name.encode()).digest()).public_key()
+            self._write_as_daemon(key, {"boot_id": lease.this_boot(), "daemon_started": 0, "session_key": public.public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()})
+        self._write_applied(n)
+
+    def _write_applied(self, n):
+        self._write_as_daemon(n.dir / "run-state" / os.path.basename(lease.APPLIED_PATH),
+                              {"cluster_id": self.STATE_CLUSTER, "state_epoch": 0, "revision": self.state_revision, "boot_id": lease.this_boot(),
+                               "boottime_ns": time.clock_gettime_ns(time.CLOCK_BOOTTIME)})
+
+    def _state_writer(self):
+        """The daemon's etcd watch stand-in: every node's applied.json rewritten every 3 s, so it is never older than a
+        renewal interval (lease.read_applied refuses past 10 s). A node whose stand-ins are not made yet is skipped."""
+        while not self.stop_threads:
+            for n in list(self.nodes.values()):
+                if (n.dir / "run-state").is_dir():
+                    try:
+                        self._write_applied(n)
+                    except OSError:
+                        pass
+            time.sleep(3)
 
     def _configure(self, n):
         example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
@@ -638,7 +737,10 @@ class Cluster:
         # where a booted host's systemd-stub puts the image's PCR signatures and its system-phase key: the node's own
         pcr = n.dir / "pcr"
         props += ["BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
+                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY),
+                  # D32: the daemon's etcd state and session key, as the node's own (the fixture writes them: _state_files)
+                  "BindReadOnlyPaths=%s:%s" % (n.dir / "run-state", os.path.dirname(lease.APPLIED_PATH)),
+                  "BindReadOnlyPaths=%s:%s" % (n.dir / "run-kms", os.path.dirname(lease.SESSION_KEY_PATH))]
         return props
 
     def start(self, name, services=("sync", "wg-apply")):
@@ -833,6 +935,7 @@ class Cluster:
         # enrolment ran on the booted system (PCR 11 in its system phase, _leave_initrd); the host reboots before its
         # initrd asks for the disk, so its quote shows the initrd phase the peers admit
         self.power_cycle(new)
+        self._state_files(n)                            # D32: its daemon's stand-in files, as every node's
         sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
@@ -1340,7 +1443,10 @@ class Cluster:
         pcr = n.dir / "pcr"
         props = ["WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1",
                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
+                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY),
+                  # D32: the daemon's etcd state and session key, as the node's own (the fixture writes them: _state_files)
+                  "BindReadOnlyPaths=%s:%s" % (n.dir / "run-state", os.path.dirname(lease.APPLIED_PATH)),
+                  "BindReadOnlyPaths=%s:%s" % (n.dir / "run-kms", os.path.dirname(lease.SESSION_KEY_PATH))]
         props += ["NetworkNamespacePath=/run/netns/" + n.ns] if in_ns else []
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
         return sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, label),
@@ -1648,6 +1754,8 @@ class Cluster:
             except (OSError, ValueError):
                 pass
             sh("ip", "netns", "del", n.ns, check=False)
+        # regalia-zga: the scripts remove the work directory after this; in CI each node's swtpm log is kept first
+        tpmdiag.keep({"%s/tpm.log" % n.name: str(n.dir / "tpm.log") for n in self.members()}, self.work.name)
         sh("ip", "netns", "del", SWITCH, check=False)
         for loop in self.loops.values():
             sh("losetup", "-d", loop, check=False)
