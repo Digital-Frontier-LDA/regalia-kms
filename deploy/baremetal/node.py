@@ -101,7 +101,12 @@ SCHEMA = "regalia.node/v1"
 KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "nv_signing", "state_dir", "admission_dir", "run_dir",
         "admission_log_dir",
         "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval", "beat_interval_s")
-RESOURCE_MANAGER = "device:/dev/tpmrm0"   # the one TCTI a host's node.json may name (regalia-afi): the kernel's resource manager
+RESOURCE_MANAGER = "device:/dev/tpmrm0"   # the TCTI a host's node.json names (regalia-afi): the kernel's resource manager
+# a test-only switch (b9 on #596): a simulator TCTI is a SOCKET, which no unit's DevicePolicy constrains, so it binds a node to
+# a software TPM with no hardware root. Only the e2e fixtures and the tests set it; nothing shipped may (a test holds that).
+# TODO(regalia-afi step 2): once the three-node fixture reaches its TPMs through the kernel (swtpm --vtpm-proxy, so
+# device:/dev/tpmrmN), refuse swtpm:/mssim: unconditionally and delete this switch.
+SIMULATOR_SWITCH = "REGALIA_TCTI_ALLOW_SIMULATOR"
 PUBLISHED = "chain.json"        # in the state directory: the verified chain, for the root services
 OLD_ADMISSION_TRAIL = "audit.jsonl"   # where admission's trail was, in admission_dir, before #349
 MAX_BYTES = 64 * 1024
@@ -130,8 +135,13 @@ def validate(doc):
     # tpm2-tss's own search order decides, and an operator tool run by hand (no unit's DevicePolicy around it) could reach
     # the raw /dev/tpm0, which has no resource manager, wherever /dev/tpmrm0 is missing. Never another device.
     tcti = doc["tcti"]
-    require(isinstance(tcti, str) and (tcti == RESOURCE_MANAGER or (re.fullmatch(r"(swtpm|mssim):[A-Za-z0-9/_.,=-]{1,200}", tcti) is not None)),
-            "tcti must be %s (the kernel's resource manager), or swtpm:/mssim: for a private simulator" % RESOURCE_MANAGER)
+    simulator = isinstance(tcti, str) and re.fullmatch(r"(swtpm|mssim):[A-Za-z0-9/_.,=-]{1,200}", tcti) is not None
+    require(not simulator or os.environ.get(SIMULATOR_SWITCH) == "1",
+            "tcti %r is a software TPM with no hardware root, reached over a socket no unit's DevicePolicy constrains: refused "
+            "on a node (only the e2e fixtures set %s=1)" % (tcti, SIMULATOR_SWITCH))
+    require(simulator or (isinstance(tcti, str) and re.fullmatch(r"device:/dev/tpmrm[0-9]+", tcti) is not None),
+            "tcti must be %s (the kernel's resource manager; /dev/tpmrm<N> on a host with several TPMs): never null, a raw "
+            "/dev/tpm<N>, tabrmd or another path" % RESOURCE_MANAGER)
     # what each really occupies, from the classes that define them (the anchor: counter, base and two record
     # slots; the heartbeat counter and the signing counter (#199): counter and base each), never retyped here
     taken = {"nv_epoch": membership.HighWater(_index(doc["nv_epoch"], "nv_epoch")).indices(),

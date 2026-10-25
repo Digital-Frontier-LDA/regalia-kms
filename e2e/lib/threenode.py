@@ -70,6 +70,11 @@ def _state_directory_mode(unit):
 
 
 ADMISSION_DIR_MODE = _state_directory_mode("regalia-admission.service")
+# the nodes' TPMs are swtpm sockets here, which node.validate accepts only under its test-only switch (regalia-afi, b9 on
+# #596): every unit the fixture starts carries it, and so does a Cluster's own process (set when one is made, never on
+# import: the unit tests import this module). TODO(regalia-afi step 2): gone once the nodes reach their TPMs through the
+# kernel (swtpm --vtpm-proxy).
+SIMULATOR_ENV = "Environment=REGALIA_TCTI_ALLOW_SIMULATOR=1"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -240,6 +245,7 @@ class Cluster:
         self.audit = audit
         self.audit_bin = pathlib.Path(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"))
         self.tool_trails = {}                         # {node: {trail: path}}: an operator tool's trail a scenario ships too (ship_tool_trail)
+        os.environ["REGALIA_TCTI_ALLOW_SIMULATOR"] = "1"   # this process loads the nodes' (swtpm) node.json too (SIMULATOR_ENV)
         self.nodes = {n: NodeHere(self.work, n, i + 1) for i, n in enumerate(names)}
         self.time = {n: True for n in names}          # authenticated time, per node
         self.stop_threads = False
@@ -754,7 +760,8 @@ class Cluster:
         """systemd-run -p for one service of one member: its namespace, the installed unit's identity, and no view
         of the other members' directories."""
         n = self.member(name)
-        props = ["NetworkNamespacePath=/run/netns/" + n.ns, "WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1"]
+        props = ["NetworkNamespacePath=/run/netns/" + n.ns, "WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1",
+                 SIMULATOR_ENV]
         props += ["%s=%s" % (key, value) for key, value in self.identity(service).items()]
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
         # where a booted host's systemd-stub puts the image's PCR signatures and its system-phase key: the node's own
@@ -1469,7 +1476,7 @@ class Cluster:
         node's network namespace. `input` goes to its standard input. Returns the completed process (not checked)."""
         n = self.member(name)
         pcr = n.dir / "pcr"
-        props = ["WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1",
+        props = ["WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1", SIMULATOR_ENV,
                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY),
                   # D32: the daemon's etcd state and session key, as the node's own (the fixture writes them: _state_files)

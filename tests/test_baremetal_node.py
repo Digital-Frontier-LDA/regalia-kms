@@ -63,8 +63,8 @@ class Case(unittest.TestCase):
 class Configuration(Case):
     def test_the_configuration_is_exact(self):
         self.assertEqual(node.validate(dict(self.cfg)), self.cfg)
-        for tcti in ("device:/dev/tpmrm0", "swtpm:path=/tmp/x/tpm.sock", "mssim:host=localhost,port=2321"):
-            self.assertEqual(node.validate(dict(self.cfg, tcti=tcti))["tcti"], tcti)    # the kernel's RM, or a private simulator
+        for tcti in ("device:/dev/tpmrm0", "device:/dev/tpmrm3"):                          # any kernel resource manager
+            self.assertEqual(node.validate(dict(self.cfg, tcti=tcti))["tcti"], tcti)
         path = os.path.join(self.d, "etc", "node.json")
         with open(path, "w") as f:
             json.dump(self.cfg, f)
@@ -79,7 +79,8 @@ class Configuration(Case):
                 # search order would decide, and could reach the raw /dev/tpm0 where /dev/tpmrm0 is missing), never a raw device
                 ("a null TCTI", {"tcti": None}, "tcti must be device:/dev/tpmrm0"),
                 ("the raw TPM device", {"tcti": "device:/dev/tpm0"}, "tcti must be device:/dev/tpmrm0"),
-                ("another device", {"tcti": "device:/dev/tpmrm1"}, "tcti must be device:/dev/tpmrm0"),
+                ("a raw TPM device of another number", {"tcti": "device:/dev/tpm3"}, "tcti must be device:/dev/tpmrm0"),
+                ("a resource manager by another path", {"tcti": "device:/tmp/tpmrm0"}, "tcti must be device:/dev/tpmrm0"),
                 ("tabrmd, which the image does not ship", {"tcti": "tabrmd"}, "tcti must be device:/dev/tpmrm0"),
                 ("a device TCTI with no path", {"tcti": "device"}, "tcti must be device:/dev/tpmrm0"),
                 ("an NV index of the wrong range", {"nv_epoch": "0x81000001"}, "nv_epoch must be an NV index"),
@@ -137,6 +138,35 @@ class AdmissionTrail(Case):
         open(old + ".1", "w").close()                                            # an archive alone is a trail that was rotated
         with self.assertRaisesRegex(node.Refused, "still has lines at"):
             self.node().admission_trail()
+
+
+class SimulatorTcti(Case):
+    """b9 on #596: a simulator TCTI is a SOCKET, which no unit's DevicePolicy constrains, so a node.json naming one binds
+    the node to a software TPM with no hardware root. It is accepted only under a test-only switch that no unit, image or
+    package sets (the e2e fixtures set it); without it, it is refused and the refusal says why."""
+
+    def test_refused_without_the_switch_and_accepted_with_it(self):
+        from unittest import mock
+        for tcti in ("swtpm:path=/tmp/x/tpm.sock", "mssim:host=localhost,port=2321"):
+            with self.subTest(tcti), mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(node.SIMULATOR_SWITCH, None)
+                with self.assertRaisesRegex(node.Refused, "a software TPM with no hardware root.*%s=1" % node.SIMULATOR_SWITCH):
+                    node.validate(dict(self.cfg, tcti=tcti))
+                os.environ[node.SIMULATOR_SWITCH] = "1"
+                self.assertEqual(node.validate(dict(self.cfg, tcti=tcti))["tcti"], tcti)
+                os.environ[node.SIMULATOR_SWITCH] = "yes"                      # only exactly 1
+                with self.assertRaisesRegex(node.Refused, "no hardware root"):
+                    node.validate(dict(self.cfg, tcti=tcti))
+
+    def test_nothing_shipped_sets_the_switch(self):
+        """The units, the image, the packaging and the deploy tree never mention it: only tests and e2e may."""
+        import pathlib as pl
+        root = pl.Path(__file__).resolve().parents[1]
+        found = [str(p.relative_to(root)) for p in sorted((root / "deploy").rglob("*")) if p.is_file() and p.suffix != ".pyc"
+                 and p.name != "node.py" and node.SIMULATOR_SWITCH in p.read_text(errors="replace")]
+        self.assertEqual(found, [])
+        source = (root / "deploy" / "baremetal" / "node.py").read_text()
+        self.assertEqual(source.count(node.SIMULATOR_SWITCH), 1, "node.py names the switch once: its constant")
 
 
 class Indices(unittest.TestCase):
