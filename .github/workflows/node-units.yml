@@ -262,15 +262,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
             python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
-      - name: Build the pre-root client
-        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
-      - name: A total outage, one node by hand, the rest through it
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: A total outage, one node by hand, the rest through it; every event in the audit collector
         run: |
           set -o pipefail
-          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-outage.py | tee "$RUNNER_TEMP/outage.log"
-          grep -q '^three-node-outage: 34 passed, 0 failed$' "$RUNNER_TEMP/outage.log" || {
-            echo "::error::the three-node outage test did not pass all 34 checks" >&2; exit 1; }
+          grep -q '^three-node-outage: 39 passed, 0 failed$' "$RUNNER_TEMP/outage.log" || {
+            echo "::error::the three-node outage test did not pass all 39 checks" >&2; exit 1; }
       - name: Keep the software TPMs' logs (regalia-zga)
         if: failure()
         uses: ./.github/actions/tpm-diagnostics
