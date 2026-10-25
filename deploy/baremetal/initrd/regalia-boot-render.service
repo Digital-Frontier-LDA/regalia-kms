@@ -34,6 +34,11 @@ Before=initrd-switch-root.target shutdown.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# Its lines on the console too, not only in the initrd's journal (#413): what it rendered, and above all why it could
+# not (a stale or forked chain, CONFLICT), are what an operator at the iLO needs when a host stops at the prompt. A
+# production command line does not forward the journal to the console. None is a secret.
+StandardOutput=journal+console
+StandardError=journal+console
 ExecStart=/usr/bin/regalia-unlock -render /run/regalia-boot
 # The one credential it reads, by fixed path, as data: the measured site document. The image's command line
 # carries systemd.import_credentials=no; nothing else is taken from the ESP but the chain, which is verified.
