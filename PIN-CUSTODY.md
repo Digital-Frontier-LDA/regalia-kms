@@ -254,6 +254,12 @@ Decisions (#77, 2026-10-02; regalia-kms-24 under the owner's delegation):
   still in the HSM, the HSM PIN is still sealed to the TPM (or typed from the PIN card), membership
   still decides whether peers accept the node, and serving still needs a lease. The recovery key
   restores a disk; it is not signing authority, membership authority or an HSM credential.
+- **After a total outage, an open disk may not be enough.** If the host's membership anchor is unusable
+  (no valid record slot, an index gone, the TPM replaced), its own sync refuses its membership, and it
+  does not serve again until it is re-anchored from its two peers' chains, with those peers opened the
+  same way first. The procedure, step by step: [MEMBERSHIP-RECOVERY.md, "In a total
+  outage"](deploy/baremetal/MEMBERSHIP-RECOVERY.md#in-a-total-outage-388) (#388, rehearsed by
+  `e2e/three-node-reanchor.py`). A host whose two peers are both destroyed is a root ceremony, not this.
 - **One per host**, so one envelope reaches one host. It is generated at the ceremony (step 0), in
   systemd's recovery-key format: 256 bits as 8 groups of 8 letters from `cbdefghijklnrtuv`, with a
   dash between groups. Those letters sit on the same keys of the common keyboard layouts, which
