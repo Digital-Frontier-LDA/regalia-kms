@@ -76,7 +76,7 @@ if str(ROOT) not in sys.path:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tpmdiag                                                                                      # noqa: E402
-from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, lease, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
+from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, lease, measurements, membership, node, signkey, sitecfg, trails, unlock, uki, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
 NAMES = ("a", "b", "c")
@@ -238,6 +238,7 @@ class Cluster:
         # so a scenario can hold every event it caused to the collector's chained stream (audit_complete)
         self.audit = audit
         self.audit_bin = pathlib.Path(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"))
+        self.tool_trails = {}                         # {node: {trail: path}}: an operator tool's trail a scenario ships too (ship_tool_trail)
         self.nodes = {n: NodeHere(self.work, n, i + 1) for i, n in enumerate(names)}
         self.time = {n: True for n in names}          # authenticated time, per node
         self.stop_threads = False
@@ -1058,7 +1059,7 @@ class Cluster:
         n = self.member(name)
         for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply")] + \
                 [self.unit(name, w) + t for w in ("wg-watch", "esp-watch") for t in (".path", ".service")] + \
-                [self.unit(name, "ship-" + trail) for trail, _, _ in AUDIT_TRAILS]:
+                [self.unit(name, "ship-" + trail) for trail in self._node_trails(name)]:
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
         self.services[name] = ()
@@ -1556,20 +1557,51 @@ class Cluster:
             raise RuntimeError("the audit collector did not start")
 
     def _trail_path(self, name, trail):
+        if trail in self.tool_trails.get(name, {}):
+            return self.tool_trails[name][trail]
         n = self.nodes[name]
         return {"sync": n.state / "sync-audit.jsonl", "admission": n.admission / "audit.jsonl",
                 "esp-advances": n.log / "esp-advances.jsonl"}[trail]
+
+    def _node_trails(self, name):
+        """The trails shipped for the node: its own (AUDIT_TRAILS), then any operator tool's a scenario added."""
+        return [t for t, _, _ in AUDIT_TRAILS] + sorted(self.tool_trails.get(name, {}))
+
+    def ship_tool_trail(self, name, trail):
+        """The path where the scenario runs operator tool `trail` (trails.TRAILS, read by the tools' group regalia-audit:
+        reanchor, survivor, ...) for node `name`, now shipped and judged with the node's own trails: its own stream
+        e2e3-<node>.<trail>, its shipper in that group only, as regalia-audit-ship@<trail> on a host. In the node's log
+        directory of its own, <node>/tools: the node's /var/log/regalia. #340: an operator's decision on a node reaches the
+        collector too. On a host the tool writes under trails.TOOL_DIR, and trails.append itself gives that directory
+        root:regalia-audit 2750 and every trail the group on each append (_tool_dir, _readable_by_its_shipper;
+        tests/test_baremetal_trails.py, e2e/audit-ship-systemd.py). Here the directory is outside TOOL_DIR, so the fixture
+        gives it that group (_trail_groups), and each trail too. Not the node's log directory: that is the ESP advance's,
+        which a shipper in regalia-audit cannot enter (#588's first CI run: "open .../b/log: permission denied")."""
+        if trail not in trails.TRAILS or trails.TRAILS[trail][3] != trails.TOOL_GROUP:
+            raise ValueError("ship_tool_trail(%r): not an operator tool's trail in trails.TRAILS" % trail)
+        tools = self.nodes[name].dir / "tools"
+        tools.mkdir(mode=0o700, exist_ok=True)                  # root's and private until _trail_groups opens it to the group
+        path = tools / ("%s.jsonl" % trail)
+        self.tool_trails.setdefault(name, {})[trail] = path
+        return path
+
+    @staticmethod
+    def _trail_group(trail):
+        return trails.TOOL_GROUP if trails.TRAILS.get(trail, (None,) * 4)[3] == trails.TOOL_GROUP else "regalia-audit-" + trail
 
     def _trail_groups(self, name):
         """Each of the node's trails (and its rotated archives) back in its reader group, 0640, as its writer keeps it on a
         host (trails.py, #286). This fixture's `chown -R <service>:<service>` of a node's directories, made where a unit's
         StateDirectory= would make the owner, also resets the GROUP, which no host does: the shipper, in the trail's
         reader group only, could then read nothing (the first CI run of #355 shipped no line at all)."""
-        for trail, _, _ in AUDIT_TRAILS:
+        for trail in self._node_trails(name):
             path = self._trail_path(name, trail)
+            if trail in self.tool_trails.get(name, {}):         # its directory as TOOL_DIR is on a host: root:regalia-audit 2750
+                shutil.chown(path.parent, group=trails.TOOL_GROUP)
+                os.chmod(path.parent, 0o2750)
             for f in [path] + sorted(path.parent.glob(path.name + ".*")):
                 if f.is_file() and not f.is_symlink():
-                    shutil.chown(f, group="regalia-audit-" + trail)
+                    shutil.chown(f, group=self._trail_group(trail))
                     os.chmod(f, 0o640)
 
     def _ship_start(self, name):
@@ -1579,12 +1611,12 @@ class Cluster:
         e2e/audit-ship-systemd.py runs the shipped unit itself.)"""
         d = self.audit_dir
         self._trail_groups(name)
-        for trail, _, _ in AUDIT_TRAILS:
+        for trail in self._node_trails(name):
             unit = self.unit(name, "ship-" + trail)
             if sh("systemctl", "is-active", unit, check=False).stdout.strip() == "active":
                 continue
             sh("systemctl", "reset-failed", unit, check=False)
-            sh("systemd-run", "--unit", unit, "--collect", "-p", "User=regalia-audit-ship", "-p", "SupplementaryGroups=regalia-audit-" + trail,
+            sh("systemd-run", "--unit", unit, "--collect", "-p", "User=regalia-audit-ship", "-p", "SupplementaryGroups=" + self._trail_group(trail),
                "-p", "CapabilityBoundingSet=", "-p", "NoNewPrivileges=yes", "-p", "ProtectSystem=strict",
                "-p", "ReadWritePaths=%s" % (d / "heads"),
                str(self.audit_bin / "regalia-audit-ship"), "-trail", trail, "-path", str(self._trail_path(name, trail)),
@@ -1672,18 +1704,21 @@ class Cluster:
         if trails is not None and (not trails or set(trails) - set(known)):
             raise ValueError("audit_complete(trails=%r): each must be one of %s" % (trails, ", ".join(known)))
         judged = [t for t in known if trails is None or t in trails]
+        # each node's operator-tool trails (ship_tool_trail) are judged with its own, always: a scenario that ships one did so
+        # to hold it, and one it names but never ran leaves "the trail was never written"
+        per_node = {name: judged + sorted(self.tool_trails.get(name, {})) for name in self.nodes}
         for name in self.nodes:
             self._ship_start(name)
 
         def read(name, trail):
             path = self._trail_path(name, trail)
             return path.read_bytes().splitlines(keepends=True) if path.exists() else []
-        snapshot = {(name, trail): read(name, trail) for name in self.nodes for trail in judged}
+        snapshot = {(name, trail): read(name, trail) for name in self.nodes for trail in per_node[name]}
 
         def problems(receipts=False):
             wrong = {}
             for name in self.nodes:
-                for trail in judged:
+                for trail in per_node[name]:
                     lines = snapshot[(name, trail)]
                     if not lines:
                         wrong[(name, trail)] = "the trail was never written"
