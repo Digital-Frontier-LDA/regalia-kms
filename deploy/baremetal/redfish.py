@@ -5,6 +5,7 @@ in a recovery. Run from the operator workstation on the management network, neve
 
     python3 -Es -m deploy.baremetal.redfish status --ilo HOST --serial SERIAL --cert-sha256 HEX --user USER
     python3 -Es -m deploy.baremetal.redfish off|on  --ilo HOST --serial SERIAL --cert-sha256 HEX --user USER
+        [--password-fd 3 3< <(gpg --decrypt ILO-CREDENTIAL.gpg) | --password-file 0600-FILE]   (else it is typed)
 
 The mainstream reference is Pacemaker's fence_redfish: reset, then poll PowerState until it reads the target. Here:
   * DISCOVERED, NEVER ASSUMED. Each action first reads the system (/redfish/v1/Systems/1: PowerState, SerialNumber,
@@ -26,7 +27,8 @@ CURRENT LIMITATIONS (also in LIMITATIONS.md):
     ResetTypes, the firmware string's form and the timing are to be measured on the first commissioning, with the
     discovery this client records.
   * HTTP Basic authentication over the pinned TLS (no Redfish session tokens). The account is a dedicated iLO user with
-    only Login and Virtual Power and Reset; its password is read from a 0600 file or typed, never an argument.
+    only Login and Virtual Power and Reset; its password is read from a pipe or a sealed memfd (--password-fd, the
+    owner-card-encrypted credentials decrypted straight into it, #520), a 0600 file or typed, never an argument.
   * MIN_FIRMWARE (iLO 4 2.30, where Redfish begins) is a floor, not the security minimum: commissioning pins the
     current iLO 4 release and raises it here.
 """
@@ -44,7 +46,7 @@ import stat
 import sys
 import time
 
-from deploy.baremetal import membership
+from deploy.baremetal import keyfd, membership
 
 Refused, require = membership.Refused, membership.require
 
@@ -227,8 +229,11 @@ def undoers(client_for):
 
 # ---- the command --------------------------------------------------------------------------------------------------
 
-def read_password(path):
-    """The iLO account's password from a 0600 file of the caller's, or typed when no file is given."""
+def read_password(path=None, fd=None):
+    """The iLO account's password: from descriptor `fd` (a pipe or a sealed memfd, keyfd.read: never a file on disk),
+    from a 0600 file of the caller's, or typed when neither is given."""
+    if fd is not None:
+        return read_password_fd(fd)
     if path is None:
         return getpass.getpass("iLO password: ")
     # opened once, never followed, and judged by that descriptor: no window between the check and the read (3e)
@@ -245,6 +250,23 @@ def read_password(path):
     return password
 
 
+def read_password_fd(fd):
+    """The password on descriptor `fd`, as `gpg --decrypt` writes it into a pipe (#520): one line of UTF-8, its one
+    trailing newline dropped. The descriptor is closed and the bytes read are zeroed, whatever happens."""
+    raw = keyfd.read(fd, "the iLO password")
+    try:
+        try:
+            text = bytes(raw).decode("utf-8")
+        except UnicodeDecodeError:
+            raise Refused("the iLO password on descriptor %d is not UTF-8" % fd) from None
+        password = text[:-1] if text.endswith("\n") else text
+        require(password, "the iLO password on descriptor %d is empty" % fd)
+        require(not any(c in password for c in "\n\r\0"), "the iLO password on descriptor %d is more than one line" % fd)
+        return password
+    finally:
+        keyfd.zero(raw)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.redfish", description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=("status", "off", "on"))
@@ -252,10 +274,13 @@ def main(argv=None):
     parser.add_argument("--serial", required=True, help="the server's serial number, which the iLO must report")
     parser.add_argument("--cert-sha256", required=True, help="the iLO certificate's SHA-256, recorded at commissioning")
     parser.add_argument("--user", required=True, help="the iLO account (Login and Virtual Power and Reset only)")
-    parser.add_argument("--password-file", help="a 0600 file holding the password (else it is typed)")
+    secret = parser.add_mutually_exclusive_group()
+    secret.add_argument("--password-fd", type=int, help="a descriptor holding the password: a pipe or a sealed memfd, as "
+                        "3< <(gpg --decrypt ...) gives (#520)")
+    secret.add_argument("--password-file", help="a 0600 file holding the password (else it is typed)")
     args = parser.parse_args(argv)
     try:
-        transport = PinnedHTTPS(args.ilo, args.cert_sha256, args.user, read_password(args.password_file))
+        transport = PinnedHTTPS(args.ilo, args.cert_sha256, args.user, read_password(args.password_file, args.password_fd))
         client = Client(transport, args.serial, args.ilo, args.cert_sha256)
         result = client.discover() if args.command == "status" else client.force_off() if args.command == "off" else client.power_on()
     except (Refused, OSError) as refusal:

@@ -57,9 +57,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       ResetTypes it expects (no GracefulRestart on iLO 4), the firmware string's form and the power timings are to be
       measured at commissioning, from the discovery it records. It uses Basic authentication over the pinned TLS, with no
       Redfish session tokens. Its firmware floor (2.30, where Redfish begins) is not the security minimum: commissioning
-      pins the current iLO 4 release. Its own command (the drills') reads the iLO password typed or from a 0600 file,
-      not from a pipe as the fence does: the owner-card-encrypted credentials would have to be decrypted to a file
-      first (#520);
+      pins the current iLO 4 release. Its own command (the drills') reads the iLO password from a pipe or a sealed
+      memfd (`--password-fd`, through `keyfd.read`, as the fence reads its credentials, #520), so the owner-card-encrypted
+      credentials are decrypted straight into it and never to a file; a 0600 file or a typed password remain for
+      commissioning;
     - the fence on real iLOs. `deploy/baremetal/fence.py` (`owner.py fence`) exists. It runs from the owner's machine
       on the management network, never a node, and does, in order:
       1. TLS pinned to each iLO's certificate before any credential is sent;
