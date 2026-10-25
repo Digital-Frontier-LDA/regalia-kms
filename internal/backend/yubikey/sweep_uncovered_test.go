@@ -258,5 +258,7 @@ func TestUnwrapRefusesAFormatOutsideTheAllowlist(t *testing.T) {
 // argument.
 //
 // Two of the old residuals survived re-measurement and are recorded there:
-// provider.go:(*Provider).Execute{session.Unwrap then err == nil} op0 (masked by the final err/len backstop) and
+// provider.go:(*Provider).Execute{session.Unwrap then err == nil} op0 (masked by the final err/len backstop)
+// (mapped by the backstop it names: only the unwrap branch falls through to Execute's final err/len check,
+// the public-key branch has its own; the release's line number was already stale at f60d679, #294) and
 // piv_driver.go:NewPIVDriver{deviceID == "" || serial == ""}[1] (masked by strconv.ParseUint). Four did not.
