@@ -17,7 +17,7 @@ BASE = os.path.join(ROOT, "deploy", "baremetal")
 LIST = os.path.join(BASE, "image", "packages.txt")
 UNIT_DIRS = (os.path.join(BASE, "units"), os.path.join(ROOT, "deploy", "systemd"))
 NOT_IMAGE_UNITS = {"regalia-sops-kms.service"}          # a workload-host sidecar, not part of the KMS host (regalia-kms-ed)
-SECTIONS = ("roots", "packages", "built", "imported-not-run", "not-on-host")
+SECTIONS = ("roots", "packages", "built", "upstream", "imported-not-run", "not-on-host")
 
 CALL = re.compile(r"""(?:\brun|\bsh|_run|subprocess\.run|subprocess\.check_output|subprocess\.Popen|self\.run|self\._run|check_output|Popen|_efibootmgr)\(\s*\[\s*["']([^"'\s]+)["']""")
 ABSOLUTE = re.compile(r"""["'](/usr/s?bin/[A-Za-z0-9_.+-]+|/s?bin/[A-Za-z0-9_.+-]+|/usr/lib/systemd/systemd-[A-Za-z0-9_-]+)["']""")
@@ -42,7 +42,7 @@ def parse(text):
         if section is None:
             raise ValueError("line %d: an entry outside any section" % number)
         fields = [f.strip() for f in line.split("|")]
-        want = 3 if section in ("roots", "packages", "built") else 2
+        want = 3 if section in ("roots", "packages", "built", "upstream") else 2
         if len(fields) != want or not all(fields[:1]) or not fields[-1]:
             raise ValueError("line %d: [%s] entries are %d fields (%s), the last a reason: %r"
                              % (number, section, want, "name | what | why" if want == 3 else "name | why", line))
@@ -150,7 +150,7 @@ class TheHostsPackages(unittest.TestCase):
         cls.roots = [name for name, _ in cls.spec["roots"]]
         cls.host, cls.third = closure(cls.roots, cls.local)
         cls.provided = set()
-        for _, (what, _why) in cls.spec["packages"] + cls.spec["built"]:
+        for _, (what, _why) in cls.spec["packages"] + cls.spec["built"] + cls.spec["upstream"]:
             cls.provided |= {w for w in what.split() if w != "-"}
         cls.not_run = {name for name, _ in cls.spec["imported-not-run"]}
 
@@ -183,6 +183,19 @@ class TheHostsPackages(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertTrue(os.path.isdir(os.path.join(ROOT, source)) and source.startswith("cmd/"), "%s is not a cmd/ program" % source)
                 self.assertTrue(path.startswith("/") and len(path.split()) == 1, "%s installs to one absolute path" % source)
+
+    def test_the_one_upstream_program_is_pinned(self):
+        """[upstream] is etcd alone (ADR-0002 D32), built from etcd.pin's commit: a tag that names a 40-hex commit and the
+        Go release upstream builds it with. build-rootfs.sh refuses a fetched tag at another commit."""
+        self.assertEqual([name for name, _ in self.spec["upstream"]], ["etcd"])
+        self.assertEqual(self.spec["upstream"][0][1][0].split(), ["/usr/bin/etcd", "/usr/bin/etcdctl", "/usr/bin/etcdutl"])
+        with open(os.path.join(BASE, "image", "etcd.pin")) as f:
+            pin = dict(line.strip().split("=", 1) for line in f if line.strip() and not line.startswith("#"))
+        self.assertEqual(set(pin), {"ETCD_REPO", "ETCD_TAG", "ETCD_COMMIT", "ETCD_GO"})
+        self.assertEqual(pin["ETCD_REPO"], "https://github.com/etcd-io/etcd")
+        self.assertRegex(pin["ETCD_TAG"], r"^v3\.[0-9]+\.[0-9]+$")
+        self.assertRegex(pin["ETCD_COMMIT"], r"^[0-9a-f]{40}$")
+        self.assertRegex(pin["ETCD_GO"], r"^go1\.[0-9]+\.[0-9]+$")
 
     def test_nothing_listed_is_stale(self):
         """An [imported-not-run] command must still be found in the host's modules: a stale exemption hides nothing."""

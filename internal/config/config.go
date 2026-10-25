@@ -94,6 +94,13 @@ type Config struct {
 	RuntimeAdmissionOwner string
 	NodeID                string
 	BootSessionPath       string
+	// MembershipChainPath is the chain regalia-sync publishes (chain.json), owned by MembershipChainOwner (a user
+	// name, resolved at start). With them set, an admission is good only for the epoch it was judged under: the
+	// chain, verified from the pinned root (MembershipRootKeyPath, the image's by default), must have the
+	// admission's epoch and manifest digest as its tip (#432). Both or neither, with runtime admission "required".
+	MembershipChainPath   string
+	MembershipChainOwner  string
+	MembershipRootKeyPath string
 
 	// The operational state (ADR-0002 D32, #432): key state, spent approvals and high-water marks, which
 	// etcd replicates across the three servers. The daemon watches it through the local member's unix
@@ -152,6 +159,9 @@ type document struct {
 	RuntimeAdmissionOwner    *string            `json:"runtime_admission_owner"`
 	NodeID                   *string            `json:"node_id"`
 	BootSessionPath          *string            `json:"boot_session_path"`
+	MembershipChainPath      *string            `json:"membership_chain_path"`
+	MembershipChainOwner     *string            `json:"membership_chain_owner"`
+	MembershipRootKeyPath    *string            `json:"membership_root_key_path"`
 	OperationalStateEndpoint *string            `json:"operational_state_endpoint"`
 	OperationalStateDir      *string            `json:"operational_state_dir"`
 	SessionKeyDir            *string            `json:"session_key_dir"`
@@ -300,6 +310,15 @@ func Decode(reader io.Reader) (Config, error) {
 	}
 	if input.BootSessionPath != nil {
 		result.BootSessionPath = *input.BootSessionPath
+	}
+	if input.MembershipChainPath != nil {
+		result.MembershipChainPath = *input.MembershipChainPath
+	}
+	if input.MembershipChainOwner != nil {
+		result.MembershipChainOwner = *input.MembershipChainOwner
+	}
+	if input.MembershipRootKeyPath != nil {
+		result.MembershipRootKeyPath = *input.MembershipRootKeyPath
 	}
 	if input.OperationalStateEndpoint != nil {
 		result.OperationalStateEndpoint = *input.OperationalStateEndpoint
@@ -543,6 +562,26 @@ func (cfg Config) Validate() error {
 	}
 	if stateFields == 3 && cfg.RuntimeAdmission != RuntimeAdmissionRequired {
 		return errors.New("the operational state needs runtime_admission \"required\": the serving lease that names its revision and the session key is admission's")
+	}
+	// THE CHAIN AN ADMISSION IS JUDGED AGAINST (#432): its path and its writer together, with runtime admission.
+	if (cfg.MembershipChainPath == "") != (cfg.MembershipChainOwner == "") {
+		return errors.New("membership_chain_path and membership_chain_owner must be configured together")
+	}
+	if cfg.MembershipRootKeyPath != "" && cfg.MembershipChainPath == "" {
+		return errors.New("membership_root_key_path is for membership_chain_path")
+	}
+	if cfg.MembershipChainPath != "" {
+		if cfg.RuntimeAdmission != RuntimeAdmissionRequired {
+			return errors.New("membership_chain_path needs runtime_admission \"required\": it is the admission that is judged against the chain")
+		}
+		if !userNamePattern.MatchString(cfg.MembershipChainOwner) {
+			return errors.New("membership_chain_owner must be the name of the user regalia-sync runs as")
+		}
+		for _, path := range []string{cfg.MembershipChainPath, cfg.MembershipRootKeyPath} {
+			if path != "" && (!filepath.IsAbs(path) || filepath.Clean(path) != path) {
+				return errors.New("membership_chain_path and membership_root_key_path must be absolute, clean paths")
+			}
+		}
 	}
 	// Metrics readers are SPIFFE identities under the trust-domain prefix the
 	// authenticator enforces. Anything else can never authenticate — accepting it

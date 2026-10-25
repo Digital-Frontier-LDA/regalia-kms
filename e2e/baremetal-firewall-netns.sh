@@ -187,7 +187,9 @@ OUT6=fd00:9::1        # an IPv6 address outside the tunnel's prefix, held by the
 # The KMS host. The peer is allowed MORE than its one derived address on purpose: this test is of the
 # firewall, so WireGuard must not be what stops the wrong addresses (wgsvc.py's read-back is tested elsewhere).
 x kms ip link add wg-svc type wireguard
-x kms wg set wg-svc listen-port 51821 private-key "$T/kms.key" \
+# Each key reaches wg through a pipe from this root shell, as bootnet hands it over: ubuntu-26.04's AppArmor
+# profile for wg reads files only under /etc/wireguard, and refuses this test's $T (regalia-kms#550).
+x kms wg set wg-svc listen-port 51821 private-key /dev/stdin < <(cat "$T/kms.key") \
   peer "$(cat "$T/peer.pub")" allowed-ips "$A_PEER/128,fd00:9::/64,$ZONE4/32" endpoint "${IP[peer]}:51821" \
   peer "$(cat "$T/stranger.pub")" allowed-ips "$A_STR/128"
 x kms ip -6 addr add "$A_KMS/128" dev wg-svc nodad; x kms ip link set wg-svc up
@@ -195,7 +197,7 @@ x kms ip -6 route add "$PREFIX" dev wg-svc; x kms ip -6 route add fd00:9::/64 de
 x kms sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.wg-svc.rp_filter=0
 for h in peer stranger; do
   x "$h" ip link add wg-svc type wireguard
-  x "$h" wg set wg-svc listen-port 51821 private-key "$T/$h.key" peer "$(cat "$T/kms.pub")" allowed-ips "$A_KMS/128,${IP[kms]}/32" endpoint "${IP[kms]}:51821"
+  x "$h" wg set wg-svc listen-port 51821 private-key /dev/stdin < <(cat "$T/$h.key") peer "$(cat "$T/kms.pub")" allowed-ips "$A_KMS/128,${IP[kms]}/32" endpoint "${IP[kms]}:51821"
   x "$h" ip link set wg-svc up
 done
 x peer ip -6 addr add "$A_PEER/128" dev wg-svc nodad; x peer ip -6 addr add "$OUT6/128" dev wg-svc nodad

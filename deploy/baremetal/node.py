@@ -654,7 +654,7 @@ class Node:
     def quote(self, session_id, ephemeral_public):
         """A `quote(nonce hex, manifest)` for sync.Client.renewer: this node's TPM quote over its boot
         session, the manifest's epoch and the peer's nonce."""
-        def evidence(nonce, manifest):
+        def evidence(nonce, manifest, binding=None):
             with tempfile.TemporaryDirectory(prefix="regalia-quote-") as d:
                 paths = (os.path.join(d, "quote"), os.path.join(d, "signature"))
                 old = os.environ.get("TPM2TOOLS_TCTI")
@@ -662,7 +662,7 @@ class Node:
                     os.environ["TPM2TOOLS_TCTI"] = self.tcti
                 try:
                     attest.node_quote(self.node_id, manifest["epoch"], bytes.fromhex(session_id), ephemeral_public, bytes.fromhex(nonce),
-                                      self.cfg["pcrs"], *paths, run=self.run)
+                                      self.cfg["pcrs"], *paths, run=self.run, binding=binding)
                 finally:
                     if self.tcti:
                         os.environ.pop("TPM2TOOLS_TCTI") if old is None else os.environ.__setitem__("TPM2TOOLS_TCTI", old)
@@ -796,10 +796,16 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
         reason = "no peer gave a lease (%d asked: %s)" % (len(failures), "; ".join(sorted(failures)))     # by peer: one kind, whatever the rotation
         quiet.deny(dict(event, peer="", outcome="DENY", reason=convergence._printable(reason, membership.REASON_LIMIT)))
         raise Refused(reason)
+    from deploy.baremetal import survivor
+    clock = node.clock()
     return admission.Service(holder, node.manifest, renew, admission_file(node.runtime),
                              daemon_started=daemon_started or admission.unit_started(),
                              metrics=lambda samples: metrics.publish("admission", samples),      # #305
-                             record=trail)                                                     # #340: serving and not, on its trail
+                             record=trail,                                                     # #340: serving and not, on its trail
+                             # D32.6: the owner's survivor authorization root installed (survivor.py install), read every
+                             # round; consulted by the service only with no unexpired normal lease (#494)
+                             survivor=lambda manifest: survivor.seconds_left(os.path.join(node.runtime, survivor.AUTH_FILE), manifest,
+                                                                             node.node_id, clock))
 
 
 class RoundLog:
@@ -853,6 +859,7 @@ class Sync:
         self.node, self.store, self.freshness = node, node.store(), node.freshness()
         self.trail = Trail(node.path("sync-audit.jsonl"), "sync")
         self.signer = lease.TpmSigner(node.tcti, node.run)
+        self.floor = lease.RevisionFloor()  # D32 (#432): fed every few seconds (observe_state); fails closed for one lease after start
         self._beat_signer = None        # beat.Signer, made at the first heartbeat signed (beat_signer())
         self.published = None
         self.rounds = RoundLog()                # #470: each pull round's outcome, in the journal
@@ -879,7 +886,34 @@ class Sync:
                                enrolpeer.tpm_identity(self.node.tcti, self.node.run), enrolpeer.tpm_activate(self.node.tcti, self.node.run))
         # attester_for itself: each request is judged under the manifest held then, by that manifest's document (#332)
         return sync.Server(self.node.node_id, self.store, self.freshness, self.node.attester_for, self.signer,
-                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents(), cosigner=self.cosign)
+                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents(), cosigner=self.cosign,
+                           floor=self.floor, applied=lease.read_applied)
+
+    FLOOR_SAMPLE_S = 5
+
+    def between_rounds(self, stop, interval, clock=time.monotonic, sleep=time.sleep):
+        """The wait until the next pull round (`interval` s, or until `stop()`), feeding the RevisionFloor every
+        FLOOR_SAMPLE_S meanwhile. The floor issues only once it holds a sample a lease old, so sampling once a pull round
+        (60 s on a host) could keep a restarted issuer closed for up to a pull interval past "serving + one lease",
+        which the runbook's wait (KERNEL-UPDATE 3.5) and the drills rely on (62's read of c4's #504). Sampled every few
+        seconds, its warm-up ends at most FLOOR_SAMPLE_S after one lease from its watch's first fresh applied.json,
+        and the node serves only after that file is fresh (its own lease request carries it)."""
+        deadline, sample = clock() + interval, clock() + self.FLOOR_SAMPLE_S
+        while not stop() and clock() < deadline:
+            sleep(1)
+            if clock() >= sample:
+                self.observe_state()
+                sample = clock() + self.FLOOR_SAMPLE_S
+
+    def observe_state(self):
+        """D32 (#432): this issuer's RevisionFloor fed from its etcd watch's file, each round and every FLOOR_SAMPLE_S. A refusal here (a stale,
+        absent or regressed file: a revision or state epoch gone back) records nothing; it is not lost, because each
+        lease request reads the file again (sync.Server.observe_state) and that read refuses the lease (fail closed;
+        regalia-kms-48)."""
+        try:
+            self.floor.applied(*lease.read_applied())
+        except (Refused, OSError):          # an I/O error too (an EIO, /proc): a missed sample, never the end of Sync.run (c4)
+            pass
 
     # ---- heartbeats signed by the nodes (#199, beat.py) ----
 
@@ -980,6 +1014,7 @@ class Sync:
         self.refusals.flush()                   # its zeros from the start, then every round (refusals only count)
         try:
             while not stop():
+                self.observe_state()
                 self.pull_round()
                 # #199: under v4 the nodes sign the heartbeats; this node proposes when it is its turn (beat.Proposer).
                 # A refusal before any proposal (no authenticated time, not a UKI boot: no PCR key to sign under) is
@@ -998,9 +1033,7 @@ class Sync:
                     watch.step()
                 self.refusals.flush()
                 self.membership_metrics()
-                deadline = time.monotonic() + self.node.cfg["pull_interval"]
-                while not stop() and time.monotonic() < deadline:
-                    time.sleep(1)
+                self.between_rounds(stop, self.node.cfg["pull_interval"])
         finally:
             for listener in listeners:
                 listener.close()

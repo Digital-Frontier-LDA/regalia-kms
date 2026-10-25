@@ -24,22 +24,27 @@ type fakeSource struct {
 	progErr   error
 	listCalls int
 	cluster   uint64
+	mods      map[string]int64 // a listed key's mod_revision; the list's revision when not set
 }
 
 func newFakeSource() *fakeSource {
 	return &fakeSource{values: map[string][]byte{}, streams: make(chan chan Update, 8)}
 }
 
-func (f *fakeSource) List(ctx context.Context, prefix string) (map[string][]byte, uint64, int64, error) {
+func (f *fakeSource) List(ctx context.Context, prefix string) (map[string]Stored, uint64, int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listCalls++
 	if f.listErr != nil {
 		return nil, 0, 0, f.listErr
 	}
-	out := map[string][]byte{}
+	out := map[string]Stored{}
 	for k, v := range f.values {
-		out[k] = v
+		mod, set := f.mods[k]
+		if !set {
+			mod = f.revision
+		}
+		out[k] = Stored{Value: v, ModRevision: mod}
 	}
 	cluster := f.cluster
 	if cluster == 0 {
@@ -96,7 +101,11 @@ func start(t *testing.T, verify func(string, []byte) error, seed map[string][]by
 		r.source.values[k] = v
 	}
 	r.source.revision = revision
-	cache, err := New(Options{Source: r.source, Prefix: "/regalia/v1/", Verify: verify, Boottime: r.clock.read,
+	var judge func(string, []byte, any, Origin) (any, error)
+	if verify != nil {
+		judge = func(key string, value []byte, _ any, _ Origin) (any, error) { return string(value), verify(key, value) }
+	}
+	cache, err := New(Options{Source: r.source, Prefix: "/regalia/v1/", Verify: judge, Boottime: r.clock.read,
 		ProgressEvery: 10 * time.Millisecond, Retry: 10 * time.Millisecond,
 		OnState: func(live bool, reason string) {
 			if live {
@@ -365,5 +374,26 @@ func TestThePublisherWritesTheAppliedRevisionWhileLive(t *testing.T) {
 		if _, err := NewPublisher(bad.dir, bad.boot, time.Second); err == nil {
 			t.Errorf("publisher %v taken", bad)
 		}
+	}
+}
+
+// Keys collected while the watch was down (neither listed again nor tombstoned) leave the judged baseline at the
+// relist, as a watched delete does: memory stays bounded by the store (48 on #508).
+func TestARelistForgetsWhatWasCollected(t *testing.T) {
+	r := start(t, func(string, []byte) error { return nil }, map[string][]byte{"/regalia/v1/nonces/a": []byte("x"), "/regalia/v1/keys/k/state": []byte("y")}, 3)
+	s := r.stream(t)
+	r.waitFor(t, func(_ int64, _ time.Duration, live bool) bool { return live })
+	r.source.mu.Lock()
+	r.source.values = map[string][]byte{}
+	r.source.revision = 9
+	r.source.mu.Unlock()
+	s <- Update{Err: errors.New("member restarted")}
+	r.stream(t)
+	r.waitFor(t, func(rev int64, _ time.Duration, live bool) bool { return live && rev == 9 })
+	if _, seen := r.cache.good["/regalia/v1/nonces/a"]; seen {
+		t.Fatal("a collected nonce stayed in the baseline")
+	}
+	if _, ok, _ := r.cache.Value("/regalia/v1/nonces/a"); ok {
+		t.Fatal("a collected nonce is still served")
 	}
 }

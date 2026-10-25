@@ -6,9 +6,17 @@
 // fact, the admission file; this package reads it. That is the kubelet shape: the agent renews,
 // the server reads the outcome.
 //
-//	{"schema": "regalia.admission/v2", "node_id": ..., "session_id": ..., "boot_id": ...,
+//	{"schema": "regalia.admission/v4", "node_id": ..., "session_id": ..., "boot_id": ...,
 //	 "epoch": ..., "manifest_digest": ..., "hsm_serials": ..., "lease_issued_at": ...,
-//	 "requested_boottime_ms": ..., "serve_until_boottime_ms": ..., "reason": ...}
+//	 "requested_boottime_ms": ..., "cluster_id": ..., "state_epoch": ..., "state_revision": ...,
+//	 "session_key": ..., "serve_until_boottime_ms": ..., "mode": "lease" or "recovery", "reason": ...}
+//
+// THE LEASE'S OPERATIONAL STATE (v4; ADR-0002 D32, #510). cluster_id, state_epoch, state_revision and
+// session_key are the held lease's own (lease.py v2): what the issuer vouched this node's etcd watch
+// had applied, and the session key of the daemon start the lease was asked for. They reach the
+// daemon's state gate (internal/opstate.StateGate) as its LeaseFacts; this package only carries them.
+// Zeros when no lease is held, in recovery as when nothing is served. v4 is v3's mode (#494) and
+// these together; a v3 file, of either shape, is another schema.
 //
 // NO WALL CLOCK. serve_until_boottime_ms is in this host's CLOCK_BOOTTIME, which runs through
 // suspend and cannot be set. The node is admitted while the daemon's own CLOCK_BOOTTIME is below
@@ -46,10 +54,15 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/Digital-Frontier-LDA/regalia-kms/cmd/regalia-unlock/membership"
 )
 
 const (
-	Schema = "regalia.admission/v2"
+	Schema = "regalia.admission/v4"
+	// MaxReasonBytes is admission.ADMISSION_REASON_LIMIT: the writer cuts its reason there, so a longer
+	// limit here would never be used and a shorter one would hide the reason behind "too long".
+	MaxReasonBytes = 1024
 	// MaxSerials is admission.MAX_SERIALS: the hardware tokens one node may list.
 	MaxSerials = 16
 	// MaxAheadMilliseconds is one lease lifetime (lease.MAX_LIFETIME, 30 s; ADR-0002 D32). The writer
@@ -66,10 +79,11 @@ var ErrNotAdmitted = errors.New("KMS node is not admitted: it holds no runtime l
 var (
 	nodeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 	hex64Pattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	hex16Pattern  = regexp.MustCompile(`^[0-9a-f]{16}$`)
 	bootIDPattern = regexp.MustCompile(`^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$`)
 	serialPattern = regexp.MustCompile(`^[A-Za-z0-9]{1,32}$`)
 	fields        = []string{"schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "hsm_serials", "lease_issued_at",
-		"requested_boottime_ms", "serve_until_boottime_ms", "reason"}
+		"requested_boottime_ms", "cluster_id", "state_epoch", "state_revision", "session_key", "serve_until_boottime_ms", "mode", "reason"}
 )
 
 // Document is the admission file, validated.
@@ -82,9 +96,33 @@ type Document struct {
 	HSMSerials           []string
 	LeaseIssuedAt        time.Time
 	RequestedBoottimeMs  int64
+	State                LeaseState
 	ServeUntilBoottimeMs int64
-	Reason               string
+	// Mode is ModeLease (a peer's runtime lease) or ModeRecovery (a lone survivor under the owner's authorization).
+	Mode   string
+	Reason string
 }
+
+// LeaseState is the held lease's operational state (v4): zeros when no lease is held.
+type LeaseState struct {
+	// ClusterID is the etcd cluster's ID, 16 lowercase hex.
+	ClusterID     string
+	StateEpoch    uint64
+	StateRevision int64
+	// SessionKey is the daemon's session key the lease was asked for, 64 lowercase hex.
+	SessionKey string
+}
+
+// none is the writer's "no lease state" (admission.NO_STATE): a real cluster ID or session key is never all zeros.
+func (state LeaseState) none() bool {
+	return state.ClusterID == strings.Repeat("0", 16) || state.SessionKey == strings.Repeat("0", 64)
+}
+
+// The admission's modes (admission.MODES, schema v3 and on; ADR-0002 D32.6).
+const (
+	ModeLease    = "lease"
+	ModeRecovery = "recovery"
+)
 
 // Status is what the gate last decided.
 type Status struct {
@@ -97,6 +135,8 @@ type Status struct {
 	RequestedBoottimeMs int64
 	// HSMSerials are this node's hardware tokens in the manifest, empty when not admitted.
 	HSMSerials []string
+	// State is the held lease's operational state, zero when not admitted.
+	State LeaseState
 }
 
 // Options configure a Gate. Boottime, BootID and OwnerUID have production defaults; tests set them.
@@ -117,6 +157,12 @@ type Options struct {
 	BootID func() (string, error)
 	// OnTransition is called each time the answer changes, and for the first answer.
 	OnTransition func(Status)
+	// ChainPath is the membership chain regalia-sync publishes (chain.json). When it is set, an admission is
+	// good only for the epoch it was judged under: the chain, verified from Root, must have the admission's
+	// epoch and manifest digest as its tip (48 on #432). ChainOwnerUID is who may write it (regalia-sync).
+	ChainPath     string
+	ChainOwnerUID uint32
+	Root          any // the pinned membership root (membership.LoadRoot)
 }
 
 // Gate answers whether this node may serve right now.
@@ -127,6 +173,68 @@ type Gate struct {
 	mutex   sync.Mutex
 	decided bool
 	last    Status
+
+	// the chain's verified tip, cached on the file's identity: read again only when the file changes
+	chainMutex sync.Mutex
+	chainID    fileIdentity
+	chainKnown bool
+	tipEpoch   uint64
+	tipDigest  string
+	tipErr     error
+}
+
+// fileIdentity names one version of a file: any write, chmod, chown or replacement changes it.
+type fileIdentity struct {
+	dev, ino     uint64
+	size         int64
+	mtime, ctime unix.Timespec
+}
+
+func identityOf(stat unix.Stat_t) fileIdentity {
+	return fileIdentity{dev: stat.Dev, ino: stat.Ino, size: stat.Size, mtime: stat.Mtim, ctime: stat.Ctim}
+}
+
+// MaxChainBytes is membership.MAX_CHAIN_BYTES.
+const MaxChainBytes = 64 << 20
+
+// chainTip is the published chain's tip, verified from the pinned root: read again only when the file is
+// another one or has changed.
+func (gate *Gate) chainTip() (uint64, string, error) {
+	gate.chainMutex.Lock()
+	defer gate.chainMutex.Unlock()
+	var stat unix.Stat_t
+	if err := unix.Lstat(gate.options.ChainPath, &stat); err == nil && gate.chainKnown && identityOf(stat) == gate.chainID {
+		return gate.tipEpoch, gate.tipDigest, gate.tipErr
+	}
+	raw, opened, err := readTrustedStat(gate.options.ChainPath, gate.options.ChainOwnerUID, MaxChainBytes)
+	if err != nil {
+		gate.chainKnown = false
+		return 0, "", err
+	}
+	gate.chainID, gate.chainKnown = identityOf(opened), true
+	gate.tipEpoch, gate.tipDigest, gate.tipErr = verifyChain(raw, gate.options.Root)
+	return gate.tipEpoch, gate.tipDigest, gate.tipErr
+}
+
+func verifyChain(raw []byte, root any) (uint64, string, error) {
+	document, err := membership.Load(raw, MaxChainBytes)
+	if err != nil {
+		return 0, "", fmt.Errorf("it is not JSON: %w", err)
+	}
+	envelopes, ok := document.([]any)
+	if !ok {
+		return 0, "", errors.New("it is not a list of envelopes")
+	}
+	manifests, err := membership.ReadChain(envelopes, root)
+	if err != nil {
+		return 0, "", err
+	}
+	tip := manifests[len(manifests)-1]
+	epoch, err := strconv.ParseUint(fmt.Sprint(tip["epoch"]), 10, 64)
+	if err != nil {
+		return 0, "", errors.New("its tip has no epoch")
+	}
+	return epoch, membership.Digest(tip), nil
 }
 
 // Open prepares a gate. It does not need the admission file to exist: until the lease service
@@ -145,6 +253,14 @@ func Open(options Options) (*Gate, error) {
 	}
 	if !nodeIDPattern.MatchString(options.NodeID) {
 		return nil, errors.New("admission needs this node's ID as the membership manifest spells it")
+	}
+	if options.ChainPath != "" {
+		if !filepath.IsAbs(options.ChainPath) || filepath.Clean(options.ChainPath) != options.ChainPath {
+			return nil, errors.New("the membership chain's path must be absolute and clean")
+		}
+		if _, err := membership.RootEntries(options.Root, "the membership root"); err != nil {
+			return nil, fmt.Errorf("the membership chain needs the pinned root: %w", err)
+		}
 	}
 	if options.Boottime == nil {
 		options.Boottime = Boottime
@@ -292,6 +408,12 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 	if err != nil {
 		return refuse("CLOCK_BOOTTIME cannot be read")
 	}
+	if document.ServeUntilBoottimeMs != 0 && document.Mode == ModeRecovery {
+		// ADR-0002 D32.6: a lone survivor serves stateless operations only. Until the daemon can refuse every stateful
+		// operation (a Reserve) and every key a directive disabled, it serves nothing in recovery: fail closed (#432)
+		return refuse("the node is in recovery (a lone survivor under the owner's authorization), and this daemon has no " +
+			"stateless-only gate yet: it serves nothing")
+	}
 	if document.ServeUntilBoottimeMs == 0 {
 		reason := document.Reason
 		if reason == "" {
@@ -308,7 +430,23 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 	if document.RequestedBoottimeMs > now {
 		return refuse("the admission names a request made in the future")
 	}
-	return Status{Admitted: true, Epoch: document.Epoch, RequestedBoottimeMs: document.RequestedBoottimeMs, HSMSerials: document.HSMSerials}
+	// AN ADMISSION IS GOOD ONLY FOR THE EPOCH IT WAS JUDGED UNDER (48 on #432): once the chain has moved, a file
+	// the lease service wrote under the previous epoch (a lease from a now-quarantined issuer, say) is refused,
+	// not served until it expires. A chain briefly ahead of the admission refuses too, until the next round.
+	if gate.options.ChainPath != "" {
+		epoch, digest, err := gate.chainTip()
+		if err != nil {
+			return refuse("the membership chain: " + err.Error())
+		}
+		if epoch != document.Epoch {
+			return refuse(fmt.Sprintf("the admission is for epoch %d; the chain is at %d", document.Epoch, epoch))
+		}
+		if digest != document.ManifestDigest {
+			return refuse(fmt.Sprintf("the admission is for another manifest at epoch %d than the chain's", epoch))
+		}
+	}
+	return Status{Admitted: true, Epoch: document.Epoch, RequestedBoottimeMs: document.RequestedBoottimeMs, HSMSerials: document.HSMSerials,
+		State: document.State}
 }
 
 func (gate *Gate) read() (Document, error) {
@@ -327,41 +465,49 @@ func (gate *Gate) read() (Document, error) {
 // nobody else can rename it away. The file's own checks run on the opened descriptor, so the file that
 // is checked is the file that is read.
 func readTrusted(path string, ownerUID uint32) ([]byte, error) {
+	contents, _, err := readTrustedStat(path, ownerUID, maxFileBytes)
+	return contents, err
+}
+
+// readTrustedStat is readTrusted for a file of up to `limit` bytes, with the opened file's own status (the file
+// that was checked is the file that was read, and its identity is the one cached).
+func readTrustedStat(path string, ownerUID uint32, limit int) ([]byte, unix.Stat_t, error) {
+	var none unix.Stat_t
 	trusted := func(uid uint32) bool { return uid == ownerUID || uid == 0 }
 	var directory unix.Stat_t
 	if err := unix.Lstat(filepath.Dir(path), &directory); err != nil {
-		return nil, errors.New("its directory cannot be examined")
+		return nil, none, errors.New("its directory cannot be examined")
 	}
 	if directory.Mode&unix.S_IFMT != unix.S_IFDIR || !trusted(directory.Uid) || directory.Mode&0o022 != 0 {
-		return nil, errors.New("its directory is not one only its owner or root can write")
+		return nil, none, errors.New("its directory is not one only its owner or root can write")
 	}
 	if err := ancestorsTrusted(filepath.Dir(path), directory.Uid, trusted); err != nil {
-		return nil, err
+		return nil, none, err
 	}
 	descriptor, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, errors.New("it cannot be opened")
+		return nil, none, errors.New("it cannot be opened")
 	}
 	file := os.NewFile(uintptr(descriptor), filepath.Base(path))
 	defer file.Close()
 	var stat unix.Stat_t
 	if err := unix.Fstat(descriptor, &stat); err != nil {
-		return nil, errors.New("it cannot be examined")
+		return nil, none, errors.New("it cannot be examined")
 	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
-		return nil, errors.New("it is not a regular file")
+		return nil, none, errors.New("it is not a regular file")
 	}
 	if !trusted(stat.Uid) || stat.Mode&0o022 != 0 {
-		return nil, errors.New("it is not a file only its owner or root can write")
+		return nil, none, errors.New("it is not a file only its owner or root can write")
 	}
-	contents, err := io.ReadAll(io.LimitReader(file, maxFileBytes+1))
+	contents, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {
-		return nil, errors.New("it cannot be read")
+		return nil, none, errors.New("it cannot be read")
 	}
-	if len(contents) > maxFileBytes {
-		return nil, errors.New("it is oversized")
+	if len(contents) > limit {
+		return nil, none, errors.New("it is oversized")
 	}
-	return contents, nil
+	return contents, stat, nil
 }
 
 // ancestorsTrusted walks from directory's parent up to "/". childUID is the owner of the component
@@ -481,13 +627,44 @@ func Parse(contents []byte) (Document, error) {
 	if document.RequestedBoottimeMs, err = count("requested_boottime_ms"); err != nil {
 		return Document{}, err
 	}
+	if document.State.ClusterID, err = text("cluster_id"); err != nil {
+		return Document{}, err
+	}
+	if !hex16Pattern.MatchString(document.State.ClusterID) {
+		return Document{}, errors.New("the admission file's cluster_id is not 16 lowercase hex")
+	}
+	stateEpoch, err := count("state_epoch")
+	if err != nil {
+		return Document{}, err
+	}
+	document.State.StateEpoch = uint64(stateEpoch)
+	if document.State.StateRevision, err = count("state_revision"); err != nil {
+		return Document{}, err
+	}
+	if document.State.SessionKey, err = text("session_key"); err != nil {
+		return Document{}, err
+	}
+	if !hex64Pattern.MatchString(document.State.SessionKey) {
+		return Document{}, errors.New("the admission file's session_key is not 64 lowercase hex")
+	}
 	if document.ServeUntilBoottimeMs, err = count("serve_until_boottime_ms"); err != nil {
 		return Document{}, err
+	}
+	if document.Mode, err = text("mode"); err != nil {
+		return Document{}, err
+	}
+	if document.Mode != ModeLease && document.Mode != ModeRecovery {
+		return Document{}, errors.New("the admission file's mode is neither lease nor recovery")
+	}
+	// A lease serves only with the lease's state: a lease-mode file that serves with none would hand the state
+	// gate nothing to check (2f's read of #510, adopted)
+	if document.Mode == ModeLease && document.ServeUntilBoottimeMs > 0 && document.State.none() {
+		return Document{}, errors.New("the admission file serves under a lease but carries no lease state")
 	}
 	if document.Reason, err = text("reason"); err != nil {
 		return Document{}, err
 	}
-	if len(document.Reason) > 240 {
+	if len(document.Reason) > MaxReasonBytes {
 		return Document{}, errors.New("the admission file's reason is too long")
 	}
 	for _, character := range document.Reason {

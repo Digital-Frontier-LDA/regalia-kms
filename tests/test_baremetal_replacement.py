@@ -214,13 +214,14 @@ class Decisions(Case):
                 json.dump({"schema": attest.STATE_SCHEMA, "nonces": {},
                            "nodes": {n: {"ak_public": self.keys[n].ak_public.hex()} for n in ("a2", "c")}}, f)
             self.peers[name]["attester"] = attester
-        self.new_holder = lease.Holder("a2", SESSION, self.clock, lambda: self.ticks, os.path.join(self.d, "a2-lease.json"))
+        self.new_holder = lease.Holder("a2", SESSION, self.clock, lambda: self.ticks, os.path.join(self.d, "a2-lease.json"), **lt.SOURCES)
 
-    def quote(self, attester, node_id, signed_by, session=SESSION, ek_of=None):
+    def quote(self, attester, node_id, signed_by, session=SESSION, ek_of=None, binding=None):
+        """`binding`: a lease request's (D32: lease.request_binding); an unlock's quote binds none."""
         nonce = attester.nonce(node_id)
         key = b"ephemeral key of boot " + bytes.fromhex(session)
         signed = self.keys[signed_by].signer(ek_name=self.keys[ek_of or signed_by].ek_name)(
-            attest.qualifying_data(node_id, self.m2["epoch"], bytes.fromhex(session), key, nonce))
+            attest.qualifying_data(node_id, self.m2["epoch"], bytes.fromhex(session), key, nonce, binding=binding))
         return {"ephemeral_public": key.hex(), "nonce": nonce.hex(), "quote": signed["quote"], "signature": signed["sig"]}
 
     def test_the_attestation_policy_is_the_manifest_s(self):
@@ -242,7 +243,8 @@ class Decisions(Case):
         b = self.peers["b"]
         self.assertGreater(replacement.may_unlock(self.m2, "b", "a2", SESSION, self.quote(b["attester"], "a2", "a2"), b["attester"], b["freshness"]), 0)
         request = self.new_holder.request()
-        envelope = lease.issue(self.m2, "b", request, b["attester"], self.quote(b["attester"], "a2", "a2"), b["freshness"], b["signer"])
+        envelope = lease.issue(self.m2, "b", request, b["attester"], self.quote(b["attester"], "a2", "a2", binding=lease.request_binding(lt.STATE)), b["freshness"], b["signer"],
+                               lt.primed_floor())
         self.assertEqual(self.new_holder.install(envelope, self.m2), lease.MAX_LIFETIME)
         self.assertEqual(self.new_holder.check(self.m2), lease.MAX_LIFETIME)
         self.assertTrue(m.may(self.m2, "a2", "authorize"))
@@ -277,10 +279,10 @@ class Decisions(Case):
             self.refused("attestation is refused: the quote's signer is not the enrolled AK under the recorded EK", replacement.may_unlock,
                          manifest, "b", "a2", SESSION, self.quote(attester, "a2", "a2", ek_of="a"), attester, freshness)
             # leases: none issued to it, none it holds still stands, none it signs counts
-            self.refused("a may not serve under epoch %d: no lease" % epoch, lease.issue, manifest, "b", self.old_holder.request(), attester, None, freshness, b["signer"])
-            as_new = {"node_id": "a2", "session_id": SESSION, "nonce": "33" * 32}
+            self.refused("a may not serve under epoch %d: no lease" % epoch, lease.issue, manifest, "b", self.old_holder.request(), attester, None, freshness, b["signer"], lt.primed_floor())
+            as_new = {"node_id": "a2", "session_id": SESSION, "nonce": "33" * 32, **lt.STATE}
             self.refused("attestation is refused: the quote's signature does not verify", lease.issue, manifest, "b", as_new, attester,
-                         self.quote(attester, "a2", "a"), freshness, b["signer"])
+                         self.quote(attester, "a2", "a", binding=lease.request_binding(lt.STATE)), freshness, b["signer"], lt.primed_floor())
         finally:
             self.m2 = saved
         self.refused("a may not serve under epoch %d" % epoch, self.old_holder.check, manifest)
@@ -373,9 +375,9 @@ class OnSwtpm(unittest.TestCase):
             self.pids.append(int(f.read()))
         return "swtpm:path=" + sock
 
-    def on(self, tpm, fn, *args):
+    def on(self, tpm, fn, *args, **kw):
         with unittest.mock.patch.dict(os.environ, TPM2TOOLS_TCTI=self.tcti[tpm]):
-            return fn(*args)
+            return fn(*args, **kw)
 
     def entry(self, name, n, state="ACTIVE", node_id=None):
         return {"node_id": node_id or name, "state": state, "ek_name": self.names[name]["ek"], "ak_name": self.names[name]["ak"],
@@ -389,11 +391,11 @@ class OnSwtpm(unittest.TestCase):
         self.sequence += 1
         self.freshness.accept(hbt.beat(manifest, self.sequence, issued=self.now), manifest)
 
-    def quote(self, tpm, node_id, session, nonce, epoch):
-        """The TPM `tpm` quotes as `node_id`: its own name, or the one it pretends to."""
+    def quote(self, tpm, node_id, session, nonce, epoch, binding=None):
+        """The TPM `tpm` quotes as `node_id`: its own name, or the one it pretends to (`binding`: a lease request's)."""
         paths = (self.d + "/q.msg", self.d + "/q.sig")
         self.on(tpm, attest.node_quote, node_id, epoch, bytes.fromhex(session), b"ephemeral key of boot " + bytes.fromhex(session),
-                bytes.fromhex(nonce), [7], *paths)
+                bytes.fromhex(nonce), [7], *paths, binding=binding)
         return tuple(lt.slurp(p) for p in paths)
 
     def attester(self, manifest, tag):
@@ -409,9 +411,9 @@ class OnSwtpm(unittest.TestCase):
         self.on(tpm, attest.node_activate, cred, secret)
         return attester.enroll(node_id, lt.slurp(secret))
 
-    def evidence(self, attester, tpm, node_id, session, manifest):
+    def evidence(self, attester, tpm, node_id, session, manifest, binding=None):
         nonce = attester.nonce(node_id)
-        quote, signature = self.quote(tpm, node_id, session, nonce.hex(), manifest["epoch"])
+        quote, signature = self.quote(tpm, node_id, session, nonce.hex(), manifest["epoch"], binding)
         return {"ephemeral_public": (b"ephemeral key of boot " + bytes.fromhex(session)).hex(), "nonce": nonce.hex(),
                 "quote": quote.hex(), "signature": signature.hex()}
 
@@ -426,8 +428,9 @@ class OnSwtpm(unittest.TestCase):
         before = self.attester(self.m1, "m1")
         self.enroll(before, "a", "a")
         self.assertGreater(replacement.may_unlock(self.m1, "b", "a", OLD_SESSION, self.evidence(before, "a", "a", OLD_SESSION, self.m1), before, self.freshness), 0)
-        old_holder = lease.Holder("a", OLD_SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/a-lease.json")
-        old_lease = lease.issue(self.m1, "b", old_holder.request(), before, self.evidence(before, "a", "a", OLD_SESSION, self.m1), self.freshness, self.signer)
+        old_holder = lease.Holder("a", OLD_SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/a-lease.json", **lt.SOURCES)
+        old_lease = lease.issue(self.m1, "b", old_holder.request(), before, self.evidence(before, "a", "a", OLD_SESSION, self.m1, lease.request_binding(lt.STATE)),
+                                self.freshness, self.signer, lt.primed_floor())
         old_holder.install(old_lease, self.m1)
 
         # 16.1-16.4: one root-signed manifest retires a and enrolls a2, a new TPM
@@ -440,8 +443,9 @@ class OnSwtpm(unittest.TestCase):
         # 16.3: a2 enrolls its AK under its EK, is unlocked, and holds a lease signed by b's TPM
         self.assertEqual(self.enroll(after, "a2", "a2").hex(), self.names["a2"]["ak"])
         self.assertGreater(replacement.may_unlock(m2, "b", "a2", SESSION, self.evidence(after, "a2", "a2", SESSION, m2), after, self.freshness), 0)
-        holder = lease.Holder("a2", SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a2"]), self.d + "/a2-lease.json")
-        envelope = lease.issue(m2, "b", holder.request(), after, self.evidence(after, "a2", "a2", SESSION, m2), self.freshness, self.signer)
+        holder = lease.Holder("a2", SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a2"]), self.d + "/a2-lease.json", **lt.SOURCES)
+        envelope = lease.issue(m2, "b", holder.request(), after, self.evidence(after, "a2", "a2", SESSION, m2, lease.request_binding(lt.STATE)), self.freshness, self.signer,
+                               lt.primed_floor())
         self.assertEqual(holder.install(envelope, m2), lease.MAX_LIFETIME)
 
         # 16.5: old a, hardware intact, historical credentials valid
@@ -456,10 +460,10 @@ class OnSwtpm(unittest.TestCase):
         self.refused("attestation is refused: the quote's signature does not verify", replacement.may_unlock, m2, "b", "a2", SESSION,
                      self.evidence(after, "a", "a2", SESSION, m2), after, self.freshness)                      # a quote from the old TPM, as a2
         self.refused("a may not be unlocked under epoch 2", replacement.may_unlock, m2, "b", "a", OLD_SESSION, None, after, self.freshness)
-        self.refused("a may not serve under epoch 2: no lease", lease.issue, m2, "b", old_holder.request(), after, None, self.freshness, self.signer)
+        self.refused("a may not serve under epoch 2: no lease", lease.issue, m2, "b", old_holder.request(), after, None, self.freshness, self.signer, lt.primed_floor())
         self.refused("a may not serve under epoch 2", old_holder.check, m2)
         self.refused("a may not serve under epoch 2", lease.verify, old_lease, m2, self.now)
-        vouching = {"schema": lease.SCHEMA, "node_id": "a2", "ak_name": self.names["a2"]["ak"], "issuer": "a", "epoch": 2,
+        vouching = {"schema": lease.SCHEMA, "node_id": "a2", "ak_name": self.names["a2"]["ak"], "issuer": "a", "epoch": 2, **lt.STATE,
                     "manifest_digest": m.digest(m2), "session_id": SESSION, "nonce": "44" * 32,
                     "issued_at": hbt.stamp(self.now), "expires_at": hbt.stamp(self.now + lease.MAX_LIFETIME)}
         old_tpm = lease.TpmSigner(tcti=self.tcti["a"])

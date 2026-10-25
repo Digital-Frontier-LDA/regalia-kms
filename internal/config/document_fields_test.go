@@ -92,6 +92,8 @@ func documentFieldRows() []documentFieldRow {
 	yubikeyDocument := "{" + yubikeyTriple + "," + registryAndSite + "," + policyPair + `,"rbac_policy_path":"/etc/regalia/rbac.json"` + lab + `}`
 	stateDocument := `{"operational_state_endpoint":"/run/regalia-etcd/client.sock:0","operational_state_dir":"/run/regalia-state","session_key_dir":"/run/regalia-kms",` +
 		`"runtime_admission":"required","runtime_admission_path":"/run/regalia/admission/admission.json","runtime_admission_owner":"regalia-admission","node_id":"site-a","boot_session_path":"/run/regalia/boot-session"}`
+	chainDocument := `{"membership_chain_path":"/var/lib/regalia-sync/chain.json","membership_chain_owner":"regalia-sync","membership_root_key_path":"/usr/lib/regalia/root-key.json",` +
+		`"runtime_admission":"required","runtime_admission_path":"/run/regalia/admission/admission.json","runtime_admission_owner":"regalia-admission","node_id":"site-a","boot_session_path":"/run/regalia/boot-session"}`
 	admissionDocument := `{"runtime_admission":"required","runtime_admission_path":"/run/regalia/admission/admission.json","runtime_admission_owner":"regalia-admission","node_id":"site-a","boot_session_path":"/run/regalia/boot-session"}`
 	fencingDocument := "{" + fencingTriple + "," + registryAndSite + "}"
 
@@ -178,6 +180,14 @@ func documentFieldRows() []documentFieldRow {
 			func(c Config) string { return c.NodeID }, "site-a"},
 		{"boot_session_path", admissionDocument,
 			func(c Config) string { return c.BootSessionPath }, "/run/regalia/boot-session"},
+
+		// the chain an admission is judged against (#432), with runtime admission "required"
+		{"membership_chain_path", chainDocument,
+			func(c Config) string { return c.MembershipChainPath }, "/var/lib/regalia-sync/chain.json"},
+		{"membership_chain_owner", chainDocument,
+			func(c Config) string { return c.MembershipChainOwner }, "regalia-sync"},
+		{"membership_root_key_path", chainDocument,
+			func(c Config) string { return c.MembershipRootKeyPath }, "/usr/lib/regalia/root-key.json"},
 
 		// the operational state (D32) needs runtime admission "required"
 		{"operational_state_endpoint", stateDocument,

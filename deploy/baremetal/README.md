@@ -1,7 +1,8 @@
 # Bare-metal KMS host commissioning (HPE ProLiant DL360 Gen9)
 
 ADR-0002 D21: the KMS runs on **dedicated bare metal with a discrete TPM 2.0**, not as a Proxmox
-guest. Three DL360 Gen9 with the HPE TPM 2.0 module: Lisbon, Porto, and a spare (regalia#46).
+guest. Three DL360 Gen9 with the HPE TPM 2.0 module, one per site, all three active (D32): Lisbon, Porto and
+Coimbra (regalia#46).
 
 Commissioning has two halves:
 - **Firmware and hardware** (below): BIOS/RBSU and iLO settings the operating system cannot read.
@@ -457,14 +458,17 @@ An update is three documents:
 3. **One node at a time.** On each node, in the order of the node IDs, `rollout.may_reboot(...)` must
    pass before the reboot: an update is approved for this node and it is not yet on NEXT; every node
    before it has been seen back on NEXT by this node's own verifier; and every peer that will have to
-   unlock it holds the new manifest and has vouched for it, in its current boot, in the last five
-   minutes (a runtime lease for this boot session). With every record current, one node can pass at
+   unlock it holds the new manifest and has vouched for it, in its current boot, within one lease
+   lifetime (30 s: a runtime lease for this boot session). With every record current, one node can pass at
    a time: the first, in order, that is not on NEXT. **The limit:** a node judges "the one before me is
    back" from its own last re-attestation of that node, which it repeats only at the next lease
    renewal. If the earlier node falls back or goes down just after, the next node may still pass for up
    to the lease lifetime (30 s), and two nodes can then be down together. Three cannot. So
-   wait for a node to be back and serving before starting the next, and do not treat `may_reboot` alone
-   as the interlock. A node that is down
+   wait for a node to be back and serving, **and then one lease more (30 s, plus a few seconds)**, before starting the next, and
+   do not treat `may_reboot` alone as the interlock. A host that has just restarted issues no lease for one
+   lease (lease v2, #489), so while the next node is down the third may get no renewal and stop serving.
+   **The same wait applies to every planned restart of a host**, not only an update: a maintenance reboot, a
+   burn-in drill, a hardware swap (KERNEL-UPDATE.md, step 3.5). A node that is down
    and must not hold the others up is taken out by a signed manifest (QUARANTINED); there is no
    unsigned way to skip it.
 4. **If the new image fails**, the node boots CURRENT again and is unlocked as before: both sets are
@@ -474,7 +478,7 @@ An update is three documents:
    the document that gives NEXT up instead), the root signs manifest N+2 for the NEXT-only document.
    From then on a node booted
    into the old image gets no unlock and no lease. A lease issued just before the retirement runs out
-   within five minutes.
+   within one lease lifetime (30 s).
 
 Both manifests can be signed in one root-key session and the second released later; if a revocation
 is published in between, the second no longer chains and is signed again.
@@ -647,8 +651,10 @@ the client are on the console with no kernel argument. It is not secret. When a 
   client read: the boot configuration (`unlock.boot_config`), the WireGuard configuration, the ruleset and
   boot.env, byte for byte what **`deploy/baremetal/bootcreds.py`**'s `render(manifest, site, device)` gives
   (`cmd/regalia-unlock/bootcfg`, held to it by a shared vector). So **a membership change does not move PCR
-  12**: only a change to the site does. Any refusal ends the render with one line; the boot mesh and the
-  client do not start, no peer is asked, and the console's prompt takes the recovery key. `esp_files(site,
+  12**: only a change to the site does. Any refusal ends the render with one line, on the console as well as
+  the initrd's journal (the unit's `StandardOutput=`/`StandardError=journal+console`, #413: a production command
+  line does not forward the journal); the boot mesh and the client do not start, no peer is asked, and the
+  console's prompt takes the recovery key. `esp_files(site,
   envelopes, root_key, device, anchor)` is the one call enrolment and the update path make: it verifies the
   chain the same way, renders what the initrd will render (refusing, e.g., a host left with no peer), and
   writes the site document and the chain, and removes the four files an earlier stage rendered onto the ESP.
@@ -865,7 +871,7 @@ Six systemd units in `deploy/baremetal/units/`, all run from one configuration, 
 | `regalia-authtime` | root | none, no network | asks chrony every 15 s whether time is authenticated; writes `/run/regalia/authtime.json` |
 | `regalia-wg-apply` (+ `.path`) | root | `CAP_NET_ADMIN` | makes `wg-svc` and `wg-unlock` what the current manifest says, reads them back, brings them up only then; re-run whenever the published chain changes |
 | `regalia-boot-session` | root | none, no network, no device; a oneshot | on a boot where the unlock client presented no session (recovery key), makes one and writes the pair in `/run/regalia` |
-| `regalia-admission` | `regalia-admission` (#191) | none; the TPM through `tss`; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission/admission.json`, its own directory and nothing else. Its trail (`admission_dir/audit.jsonl`, #340) holds each renewal (`admission-renew`: the issuing peer; a refusal whole the first time of its kind, then counted, one line a minute at most, so a node cut off writes tens of lines a day; attempts back off from 5 s to 60 s while they fail) and each change between serving and not (`admission-serving`, with the reason): it serves only once that change is recorded, and stops serving at once, recording after (a failed record is logged loudly and tried again) |
+| `regalia-admission` | `regalia-admission` (#191) | none; the TPM through `tss`; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission/admission.json`, its own directory and nothing else. Its trail (`admission_dir/audit.jsonl`, #340) holds each renewal (`admission-renew`: the issuing peer; a refusal whole the first time of its kind, then counted, one line a minute at most, so a node cut off writes tens of lines a day; attempts back off from 2 s doubling to 10 s while they fail (`admission.RETRY_FIRST`, `RETRY_MAX`)) and each change between serving and not (`admission-serving`, with the reason): it serves only once that change is recorded, and stops serving at once, recording after (a failed record is logged loudly and tried again) |
 | `regalia-sync` | `regalia-sync` | none; the TPM through `tss` | answers peers and booting nodes, pulls manifests and heartbeats, keeps the membership store (never moving the TPM anchor), runs the heartbeat watch |
 | `regalia-esp-advance` (+ `.path`) | root | none, no network; the TPM through `tss`; writes `/efi` only | on each new published chain: writes it to the ESP (`EFI/regalia/membership.json`), then moves the TPM anchor to it (§7, #66 B3) |
 
@@ -1122,7 +1128,7 @@ the reason itself goes to the time trail.
 |---|---|---|
 | `regalia-authtime` | `/run/regalia-metrics/authtime/authtime.prom` | `regalia_time_authenticated{cause}`, `regalia_chrony_latch_set` |
 | `regalia-sync` | `/run/regalia-metrics/sync/heartbeat.prom`, `unlock.prom` | the heartbeat watch's `regalia_heartbeat_*`; the unlock listener's `regalia_unlock_refused_total{cause=rate\|connections}`, each refusal counted (the trail records the first of a window) |
-| `regalia-admission` | `/run/regalia-metrics/admission/lease.prom` | `regalia_admission_serving`, `regalia_admission_lease_seconds_left` |
+| `regalia-admission` | `/run/regalia-metrics/admission/lease.prom` | `regalia_admission_serving`, `regalia_admission_lease_seconds_left`, `regalia_admission_recovery` |
 | `regalia-audit-ship@<trail>` | `/run/regalia-metrics/audit-ship/<trail>.prom` | `regalia_audit_trail_*{trail}` |
 
 - **Who can read the files.** Each directory is its writer's, group `regalia-metrics`, setgid, 2750

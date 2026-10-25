@@ -1,0 +1,131 @@
+{
+ "about": "The suffix a refused anchor read carries, \" (TPM: …)\", decided by the Python (membership._why) for raw tool output:\neach case is the bytes a TPM tool wrote on stderr (hex), how many bytes came back on stdout, the size asked for, and\nthe suffix. cmd/regalia-unlock/membership's tpmReason must give the same suffix for the same bytes as its error text\n(TestTheTPMReasonIsTheSameRuleInBoth), so a reason is made safe to print the same way in both readers (#450).",
+ "cases": [
+  {
+   "name": "the last line, not the first",
+   "stderr": "5741524e494e473a657379733a2061206e6f6e2d54504d204572726f720a4552524f523a2054504d5f52435f52455452590a0a",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: ERROR: TPM_RC_RETRY)"
+  },
+  {
+   "name": "an ANSI colour escape",
+   "stderr": "1b5b33316d4552524f521b5b306d3a2054504d5f52435f5245545259",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: [31mERROR [0m: TPM_RC_RETRY)"
+  },
+  {
+   "name": "a carriage return inside the line",
+   "stderr": "70726f6772657373203130250d4552524f523a2054504d5f52435f5949454c4445440d0a",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: progress 10% ERROR: TPM_RC_YIELDED)"
+  },
+  {
+   "name": "a run of bytes that are not UTF-8",
+   "stderr": "62616420fffefd2062797465",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: bad � byte)"
+  },
+  {
+   "name": "a truncated sequence",
+   "stderr": "63757420e28220656e64",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: cut � end)"
+  },
+  {
+   "name": "an encoded surrogate",
+   "stderr": "68616c6620eda0802070616972",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: half � pair)"
+  },
+  {
+   "name": "C1 controls (NEL, CSI)",
+   "stderr": "6f6e65c28574776fc29b33",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: one two 3)"
+  },
+  {
+   "name": "a NUL and a BEL",
+   "stderr": "6e756c0062656c07656e64",
+   "stdout_len": 0,
+   "size": 48,
+   "suffix": " (TPM: nul bel end)"
+  },
+  {
+   "name": "U+FFFD already in the text, twice",
+   "stderr": "77617320efbfbdefbfbd2068657265",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: was � here)"
+  },
+  {
+   "name": "a Unicode line separator is a space, not a newline",
+   "stderr": "61e280a862e280a963",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: a b c)"
+  },
+  {
+   "name": "a right-to-left override (Trojan Source)",
+   "stderr": "4552524f5220e280ae524f5252455f43525f4d5054e280ac20646f6e65",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: ERROR  RORRE_CR_MPT  done)"
+  },
+  {
+   "name": "zero-width characters, LRM, an isolate and a BOM",
+   "stderr": "efbbbf7ae2808b77e2808e6ae281a669e281a921",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: z w j i !)"
+  },
+  {
+   "name": "the ends of each listed range",
+   "stderr": "3ce2808be2808fe280a8e280aee281a6e281a93e",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: <      >)"
+  },
+  {
+   "name": "just outside each range is kept",
+   "stderr": "3ce2808ae28090e280a7e280afe281a5e281aaefbbbe3e",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: < ‐‧ ⁥⁪﻾>)"
+  },
+  {
+   "name": "more than 200 characters, multi-byte",
+   "stderr": "c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé)"
+  },
+  {
+   "name": "more than 200 characters after a bad byte",
+   "stderr": "ff787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+   "stdout_len": 0,
+   "size": 8,
+   "suffix": " (TPM: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)"
+  },
+  {
+   "name": "nothing but controls: the byte count",
+   "stderr": "1b070d0a090a",
+   "stdout_len": 3,
+   "size": 8,
+   "suffix": " (TPM: 3 bytes, not 8)"
+  },
+  {
+   "name": "no text at all: the byte count",
+   "stderr": "",
+   "stdout_len": 0,
+   "size": 48,
+   "suffix": " (TPM: 0 bytes, not 48)"
+  }
+ ]
+}

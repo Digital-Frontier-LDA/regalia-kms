@@ -87,6 +87,8 @@ METRICS = {
     "regalia_admission_serving": ("gauge", "1 while this node holds a runtime lease that lets the KMS daemon serve, else 0.",
                                   {}, "admission"),
     "regalia_admission_lease_seconds_left": ("gauge", "Seconds left on the runtime lease held; 0 with none.", {}, "admission"),
+    "regalia_admission_recovery": ("gauge", "1 while this node serves ALONE under the owner's survivor authorization (ADR-0002 "
+                                   "D32.6: stateless operations only), else 0.", {}, "admission"),
     # cmd/regalia-audit-ship's writeMetrics (regalia-kms-48; a test holds the Go source to these names). Its `trail`
     # label never passes through render(): it is the unit instance's name (%i), one of trails.TRAILS
     "regalia_audit_trail_lines": ("gauge", "Complete lines in the trail file.", {"trail": None}, "audit-ship"),
