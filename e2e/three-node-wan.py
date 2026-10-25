@@ -196,7 +196,8 @@ def scenario(cluster):
        "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
        {"%s.%s" % k: v for k, v in wrong.items()})
     # The windows compare this harness's clock with the nodes' own trail "at": sound because the three nodes share this
-    # runner's clock (b9 on #576). Each bound is taken BEFORE the action it bounds, so a late one only fails the check.
+    # runner's clock (b9 on #576). `asked` and `began` are taken before the action they bound; `cut` and `back` just after
+    # their netem call, which only widens a window by that call's time, and a line it admits is still that node's decision.
     before = lambda end: (lambda at: isinstance(at, int) and at <= int(end))
     leases = {"step 3 by %s" % renewed_by: bool(renewed_by) and bool(cluster.audit_has(renewed_by, "sync", since=asked, event="sync-lease", subject="a",
                                                                                        outcome="ALLOW", at=before(cut))),
