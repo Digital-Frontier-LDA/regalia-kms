@@ -448,7 +448,7 @@ jobs:
           set -o pipefail
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
             python3 -Es e2e/three-node-wan.py | tee "$RUNNER_TEMP/wan.log"
-          grep -q '^three-node-wan: 29 passed, 0 failed$' "$RUNNER_TEMP/wan.log" || {
+          grep -q '^three-node-wan: 33 passed, 0 failed$' "$RUNNER_TEMP/wan.log" || {
             echo "::error::the three-node WAN test did not pass all 29 checks" >&2; exit 1; }
       - name: Keep the software TPMs' logs (regalia-zga)
         if: failure()

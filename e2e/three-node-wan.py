@@ -17,6 +17,10 @@ dm-crypt mappings, transient units), so it runs only on a GitHub-hosted runner, 
      peer with no gap in serving (sampled every 0.5 s); the cut-off node stops serving by itself at its lease's end
   5  heal: the cut-off node rejoins and is leased again
   6  a new epoch across the WAN: every node takes it and the nodes sign its heartbeat (the stateful path today)
+  7  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector (the nodes' real
+     shippers, Cluster(audit=True)), and this scenario's own decisions are there by name, each in the stream of the node
+     that made it: a's renewal (step 3) in its issuer's, the failover renewal in the other peer's, the cut-off node's
+     stop in its own admission stream, and the sync round that moved each other node to the new epoch
 
 Each step prints a MEASURED line. Today's runtime lease is lease.MAX_LIFETIME (300 s), renewed at a third of its life;
 the multi-active design's short leases and majority commits (#432) are measured here once they exist. The
@@ -139,6 +143,7 @@ def scenario(cluster):
     first, _ = held(cluster, "a")
     asked = time.time()
     got = until(lambda: renewed(cluster, "a", first), renewal + 60, 3)
+    renewed_by = got and got[1]
     ok(bool(got), "a's lease renewed (issued %s, then %s, by %s)" % (first, got and got[0], got and got[1]), held(cluster, "a"))
     print("  MEASURED: a's renewal seen %.0f s after the wait began (due at a third of %d s)" % (time.time() - asked, lease.MAX_LIFETIME))
 
@@ -184,6 +189,24 @@ def scenario(cluster):
     wan_holds(cluster, "at the end")
     print("  MEASURED: epoch %d delivered on %s -> every node holds it and its heartbeat: %.0f s" % (manifest["epoch"], other, time.time() - began))
 
+    header("7  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector, for the node that recorded it")
+    wrong = cluster.audit_complete()
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t, _, _ in threenode.AUDIT_TRAILS}
+    ok(wrong == {}, "every node's sync, admission and ESP-advance trail is written and in the collector line for line: sequence from 1, chained from "
+       "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
+       {"%s.%s" % k: v for k, v in wrong.items()})
+    # The windows compare this harness's clock with the nodes' own trail "at": sound because the three nodes share this
+    # runner's clock (b9 on #576). Each bound is taken BEFORE the action it bounds, so a late one only fails the check.
+    before = lambda end: (lambda at: isinstance(at, int) and at <= int(end))
+    leases = {"step 3 by %s" % renewed_by: bool(renewed_by) and bool(cluster.audit_has(renewed_by, "sync", since=asked, event="sync-lease", subject="a",
+                                                                                       outcome="ALLOW", at=before(cut))),
+              "step 4 by %s" % other: bool(cluster.audit_has(other, "sync", since=cut, event="sync-lease", subject="a", outcome="ALLOW", at=before(back)))}
+    ok(all(leases.values()), "a's renewal across the WAN is in its issuer's stream, and its failover lease in %s's" % other, leases)
+    stop = cluster.audit_has(issuer, "admission", since=cut, event="admission-serving", subject=issuer, outcome="DENY", at=before(back))
+    ok(bool(stop), "%s, cut off, stopping by itself is in its own admission stream (a DENY)" % issuer, cluster.audit_has(issuer, "admission", since=cut)[-4:])
+    moved = {name: cluster.moved_by_sync(name, began, manifest["epoch"]) for name in names if name != other}
+    ok(all(moved.values()), "the sync round that moved each node to epoch %d across the WAN is in its own stream" % manifest["epoch"], moved)
+
 
 def main():
     try:
@@ -205,7 +228,7 @@ def main():
         print("three-node-wan: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work)
+    cluster = threenode.Cluster(work, audit=True)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once
