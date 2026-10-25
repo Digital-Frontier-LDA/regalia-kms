@@ -11,7 +11,8 @@
 #
 # Configuration, one file per instance plus one for the host:
 #   /etc/regalia/audit-ship.env       COLLECTOR=https://collector.example:8443  SITE=sitea
-#   /etc/regalia/audit-ship/%i.env    TRAIL_PATH=/var/lib/regalia-sync/sync-audit.jsonl
+#   (no per-trail file: the trail's path comes from deploy/baremetal/trails.py's registry, resolved by
+#   `trails.py exec-ship %i`, which execs the shipper with it and refuses an unknown trail or an unresolved path, #580)
 #   (the path is trails.where(%i, the node's configuration))
 #   /etc/regalia/audit-ship/client.crt, client.key (0640 root:regalia-audit-ship), collector-ca.pem,
 #   collector-receipt.pub (the external collector's pinned receipt keys; deploy/baremetal/AUDIT-COLLECTOR.md)
@@ -32,11 +33,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/regalia/audit-ship.env
-EnvironmentFile=/etc/regalia/audit-ship/%i.env
 ExecStartPre=/usr/bin/regalia-audit-ship check -collector ${COLLECTOR} -site ${SITE} \
     -tls-cert /etc/regalia/audit-ship/client.crt -tls-key /etc/regalia/audit-ship/client.key \
     -server-ca /etc/regalia/audit-ship/collector-ca.pem -receipt-keys /etc/regalia/audit-ship/collector-receipt.pub
-ExecStart=/usr/bin/regalia-audit-ship -trail %i -path ${TRAIL_PATH} -collector ${COLLECTOR} -site ${SITE} \
+# the trail's path from the registry (trails.py resolve), the shipper exec'd in this process with it: nothing else names it
+ExecStart=/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py exec-ship %i -- -collector ${COLLECTOR} -site ${SITE} \
     -tls-cert /etc/regalia/audit-ship/client.crt -tls-key /etc/regalia/audit-ship/client.key \
     -server-ca /etc/regalia/audit-ship/collector-ca.pem -metrics /run/regalia-metrics/audit-ship/%i.prom \
     -head /var/lib/regalia-audit-ship/%i.head.json

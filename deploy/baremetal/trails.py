@@ -110,6 +110,47 @@ def where(name, cfg=None):
     return os.path.join(cfg[base], rest)
 
 
+NODE_CONFIG = "/etc/regalia/node.json"         # 0644 root's (enrol.py _install): the shipper's user reads it
+SHIPPER = "/usr/bin/regalia-audit-ship"
+
+
+def resolve(name, config=NODE_CONFIG):
+    """The absolute path of trail `name`, from the registry alone (#580): where every shipper and pruner finds its trail,
+    so no file of its own (the old /etc/regalia/audit-ship/<trail>.env, which nothing ever wrote) can name another.
+    A trail under the configuration's state_dir or admission_dir reads ONLY those keys of `config`, each an absolute
+    path. FAILS CLOSED: an unknown trail, an unreadable or malformed configuration, a key missing or relative, or a
+    result that is not absolute is Refused, and there is no default path to fall back to."""
+    if name not in TRAILS:
+        raise Refused("no trail is called %r: nothing is resolved" % (name,))
+    location = TRAILS[name][0]
+    cfg = None
+    if not location.startswith("/"):
+        base = location.partition("/")[0]
+        try:
+            with open(config, "rb") as f:
+                doc = json.loads(f.read(1024 * 1024 + 1))
+        except (OSError, ValueError) as failure:
+            raise Refused("the trail %s is under the configuration's %s, and %s cannot be read: %s" % (name, base, config, failure)) from None
+        value = doc.get(base) if isinstance(doc, dict) else None
+        if not isinstance(value, str) or not os.path.isabs(value):
+            raise Refused("the trail %s is under the configuration's %s, and %s does not give it as an absolute path" % (name, base, config))
+        cfg = {base: value}
+    path = where(name, cfg)
+    if not os.path.isabs(path):
+        raise Refused("the trail %s resolves to %r, not an absolute path" % (name, path))
+    return os.path.normpath(path)
+
+
+def exec_ship(name, args, config=NODE_CONFIG, shipper=SHIPPER, execv=None):
+    """regalia-audit-ship@<name>'s ExecStart (#580): the shipper exec'd in this same process with the trail's path from
+    the registry (resolve), so nothing between the unit and the shipper can supply another. Never returns: Refused if
+    the path cannot be resolved, and the exec replaces this process."""
+    path = resolve(name, config)
+    argv = [shipper, "-trail", name, "-path", path] + list(args)
+    (execv or os.execv)(shipper, argv)
+    raise Refused("the shipper did not start")                # reached only with a stand-in execv that returns
+
+
 def _last_line(fd):
     """The file's last line, newline included, or b"" for an empty file; and whether it ended with one."""
     size = os.fstat(fd).st_size
@@ -655,6 +696,28 @@ def main(argv):
         except (Refused, OSError, ValueError) as failure:
             print("REFUSED: %s" % failure, file=sys.stderr)
             return 1
+    if len(argv) >= 2 and argv[0] == "exec-ship":
+        # exec-ship <trail> [--config <node.json>] -- <the shipper's other flags>: regalia-audit-ship@'s ExecStart (#580)
+        rest = argv[2:]
+        config = NODE_CONFIG
+        if rest[:1] == ["--config"] and len(rest) >= 2:
+            config, rest = rest[1], rest[2:]
+        if rest[:1] != ["--"]:
+            print("REFUSED: exec-ship <trail> [--config <path>] -- <shipper flags>", file=sys.stderr)
+            return 2
+        try:
+            exec_ship(argv[1], rest[1:], config)
+        except (Refused, OSError) as failure:
+            print("REFUSED: %s" % failure, file=sys.stderr)
+            return 2
+    if len(argv) == 10 and argv[0] == "prune" and argv[2::2] == ["--trail", "--site", "--client-cert", "--receipt-keys"]:
+        # prune <shipper head file> --trail <name> ...: the trail's path from the registry (#580), as exec-ship finds it
+        try:
+            print(prune(resolve(argv[3]), argv[1], argv[3], argv[5], client_identity(argv[7]), receipt_keys(argv[9])))
+            return 0
+        except (Refused, OSError, ValueError) as failure:
+            print("REFUSED: %s" % failure, file=sys.stderr)
+            return 2
     if len(argv) == 11 and argv[0] == "prune" and argv[3::2] == ["--trail", "--site", "--client-cert", "--receipt-keys"]:
         try:
             print(prune(argv[1], argv[2], argv[4], argv[6], client_identity(argv[8]), receipt_keys(argv[10])))
@@ -663,7 +726,8 @@ def main(argv):
             print("REFUSED: %s" % failure, file=sys.stderr)
             return 1
     print("usage: trails.py append <trail> < event.json | verify <path> [<expected head>] | unanswered <trail> [key=value ...]"
-          " | prune <path> <shipper head file> --trail <name> --site <site> --client-cert <pem> --receipt-keys <file>", file=sys.stderr)
+          " | prune [<path>] <shipper head file> --trail <name> --site <site> --client-cert <pem> --receipt-keys <file>"
+          " | exec-ship <trail> [--config <node.json>] -- <shipper flags>", file=sys.stderr)
     return 2
 
 

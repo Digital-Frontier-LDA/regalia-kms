@@ -1,6 +1,7 @@
 """deploy/baremetal/units (#80, step 3b): what each unit may do, pinned. The processes are node.py's; a run
 of the units under a real systemd is the end-to-end step that follows."""
 import configparser
+import json
 import os
 import pathlib
 import re
@@ -304,7 +305,9 @@ class AuditShipUnit(unittest.TestCase):
 
     def test_a_tampered_trail_stays_stopped_and_it_holds_no_capability(self):
         service = unit("regalia-audit-ship@.service")["Service"]
-        self.assertTrue(service["ExecStart"].startswith("/usr/bin/regalia-audit-ship -trail %i -path ${TRAIL_PATH} "))
+        # the trail's path from the registry, the shipper exec'd with it (#580): no per-trail env file, which nothing writes
+        self.assertTrue(service["ExecStart"].startswith("/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py exec-ship %i -- "))
+        self.assertNotIn("TRAIL_PATH", service["ExecStart"])
         self.assertEqual((service["Restart"], service["RestartPreventExitStatus"]), ("on-failure", "3"))   # cmd/regalia-audit-ship exitTampered
         self.assertEqual((service["User"], service["Group"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
                          ("regalia-audit-ship", "regalia-audit-ship", "", "", "yes"))
@@ -359,6 +362,16 @@ class AuditShipUnit(unittest.TestCase):
             self.assertLessEqual(score, 3.0)
 
 
+class AuditTrailPaths(unittest.TestCase):
+    """#580: a shipper and a pruner find their trail from the registry alone. The old per-trail
+    /etc/regalia/audit-ship/<trail>.env was named by both units and written by nothing, so no node started any."""
+
+    def test_no_unit_names_a_per_trail_environment_file(self):
+        offenders = [p.name for p in UNITS.rglob("*") if p.is_file()
+                     and re.search(r"/etc/regalia/audit-ship/[^ \n]*\.env|TRAIL_PATH", p.read_text(errors="replace"))]
+        self.assertEqual(offenders, [])
+
+
 class AuditPruneUnit(unittest.TestCase):
     """regalia-audit-prune@.service and .timer: archives removed only behind the collector (#278)."""
 
@@ -366,22 +379,25 @@ class AuditPruneUnit(unittest.TestCase):
         service = unit("regalia-audit-prune@.service")["Service"]
         ship = unit("regalia-audit-ship@.service")["Service"]
         self.assertEqual(" ".join(service["ExecStart"].replace("\\\n", " ").split()),
-                         "/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune ${TRAIL_PATH} "
+                         "/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune "
                          "/var/lib/regalia-audit-ship/%i.head.json --trail %i --site ${SITE} --client-cert "
                          "/etc/regalia/audit-ship/client.crt --receipt-keys /etc/regalia/audit-ship/collector-receipt.pub")
         self.assertIn("-head /var/lib/regalia-audit-ship/%i.head.json", ship["ExecStart"])   # the file the shipper writes
-        self.assertIn("/etc/regalia/audit-ship/%i.env", open(UNITS / "regalia-audit-prune@.service").read())  # TRAIL_PATH
+        self.assertNotIn("/etc/regalia/audit-ship/%i.env", open(UNITS / "regalia-audit-prune@.service").read())  # #580: the registry's
         self.assertIn("EnvironmentFile=/etc/regalia/audit-ship.env", open(UNITS / "regalia-audit-prune@.service").read())  # SITE
         self.assertEqual((service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]), ("", "", "yes"))
         self.assertNotIn("User", service)                                          # each instance's owner, from its drop-in
         self.assertEqual((service["ProtectSystem"], service["PrivateNetwork"]), ("strict", "yes"))
         from deploy.baremetal import trails
         writable = service["ReadWritePaths"].split()
-        for name, (where, _, _, _) in trails.TRAILS.items():                   # every trail's directory, and nothing else
-            base = where.partition("/")[0]
-            directory = os.path.dirname(where) if where.startswith("/") else {"state_dir": None, "admission_dir": "/run/regalia/admission"}[base]
-            if directory:
-                self.assertIn("-" + directory, writable, name)
+        # every trail's directory as a node has it: the configuration-relative ones from the shipped example node.json,
+        # which enrolment installs (#580: the old map skipped sync's and named /run/regalia/admission, which is the
+        # admission FILE's directory, not its trail's, so the admission archives could never be pruned)
+        example = json.loads((UNITS.parent / "node.example.json").read_text())
+        for name, (where, _, _, _) in trails.TRAILS.items():
+            base, _, rest = where.partition("/")
+            directory = os.path.dirname(where) if where.startswith("/") else os.path.dirname(os.path.join(example[base], rest))
+            self.assertIn("-" + directory, writable, name)
         self.assertEqual(unit("regalia-audit-prune@.timer")["Timer"]["OnCalendar"], "daily")
 
     def test_each_trail_s_prune_runs_as_its_directory_s_owner(self):
