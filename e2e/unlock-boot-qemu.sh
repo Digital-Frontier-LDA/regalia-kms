@@ -250,8 +250,9 @@ chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki bui
 # #75 TIER Q, Q1: AN IMAGE WHOSE KERNEL DIFFERS. The same kernel with bytes appended after its PE image, which the
 # loader ignores (it boots identically) and systemd-stub measures with the whole .linux section into PCR 11: only the
 # measurement differs, the property under test (regalia-kms-d9). A real second kernel would not do: the initrd's
-# modules are built for this one. Its command line has no systemd.journald.forward_to_console=1, as no boot's here
-# has since #413 (nor a production image's): the sed below keeps that true of an override of REGALIA_BOOT_CMDLINE.
+# modules are built for this one. Its command line has no systemd.journald.forward_to_console=1, as the default
+# REGALIA_BOOT_CMDLINE has none since #413 (nor a production image's); the sed below strips it from this image's
+# command line even when an override of REGALIA_BOOT_CMDLINE adds it back. The other boots take an override as given.
 { cat "$ROOT/boot/vmlinuz-$KVER"; head -c 4096 /dev/zero | tr '\0' 'R'; } > "$ROOT/tmp/uki/vmlinuz-k2"
 sed 's/ systemd\.journald\.forward_to_console=1//' "$ROOT/tmp/uki/cmdline" > "$ROOT/tmp/uki/cmdline-k2"
 IN_K2="${IN/--linux \/boot\/vmlinuz-$KVER /--linux /tmp/uki/vmlinuz-k2 }"

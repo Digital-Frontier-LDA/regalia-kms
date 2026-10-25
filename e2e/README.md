@@ -126,9 +126,11 @@ why overlapping reader names are refused, and why `ignored_readers = " "` ignore
 
 ## The boot test's console (`unlock-boot-qemu.sh`)
 
-The boot test reads the guest's serial console. Its images' command line has no `systemd.journald.forward_to_console=1`,
-as a production image's has none (#413, which lists every grep and whose line it is), so a line the test greps is on the
-console because its unit put it there: what a production console (the iLO's) would show. The unlock client's unit and
+The boot test reads the guest's serial console. Its default command line (`REGALIA_BOOT_CMDLINE` unset) has no
+`systemd.journald.forward_to_console=1`, as a production image's has none (#413, which lists every grep and whose line
+it is), so a line the test greps is on the console because its unit put it there: what a production console (the
+iLO's) would show. An override that adds the flag back is taken as given, except by the tier Q K2 image, which strips
+it, so only a default run proves that. The unlock client's unit and
 the render step's write their lines to the console as well as the journal (#412, #417), and the test report's
 `REGALIA-E2E-*` lines go to /dev/console directly (a test-only unit). The test's console filter also prints
 `cryptsetup[` lines; with no forwarding, only what a unit writes to the console itself can appear there, and nothing
