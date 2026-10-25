@@ -12,6 +12,9 @@ REGALIA_SHIP_HOST_OK.
   0  the shipper runs as its own user with no capability: without its instance's drop-in (the trail's own
      reader group, regalia-audit-sync, #286) it cannot read the trail regalia-sync wrote, 0640, and ships nothing;
   1  with units/regalia-audit-ship@sync.service.d as shipped, it reads it through the group and ships it;
+  1c the enrol trail (#278): an `enrol` event written as enrol.py writes it, by root at the registry's own path
+     (trails.where("enrol"), /var/log/regalia, root:regalia-audit 2750), ships with
+     units/regalia-audit-ship@enrol.service.d as shipped: the collector's enrol stream holds that line;
   2  a line appended later ships on the next pass, and the collector's stream holds every line;
   2b the client certificate is rotated (#291). Swapped before the hand-over, the shipper refuses to send.
      After `regalia-audit-ship handover` (the old key signs, the new certificate presents it) and a restart,
@@ -44,6 +47,8 @@ INSTALLED = pathlib.Path("/etc/systemd/system/regalia-audit-ship@.service")
 DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@sync.service.d")
 ADM_INSTANCE = "regalia-audit-ship@admission.service"
 ADM_DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@admission.service.d")
+ENROL_INSTANCE = "regalia-audit-ship@enrol.service"
+ENROL_DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@enrol.service.d")
 UNITS = HERE.parent / "deploy" / "baremetal" / "units"
 METRICS = pathlib.Path("/run/regalia-metrics/audit-ship/sync.prom")      # node_exporter's textfile directory (#305)
 HEAD = pathlib.Path("/var/lib/regalia-audit-ship/sync.head.json")      # the unit's -head, for prune
@@ -212,6 +217,38 @@ def scenario(work, binaries):
        "at the unit's StateDirectoryMode (%s) the admission trail ships: the collector's stream holds its 3 lines" % oct(shipped),
        (stream_lines(state, "admission"), journal(adm_instance, 5)))
     sh("systemctl", "stop", adm_instance)
+
+    print("\n### 1c  the enrol trail (#278): root's, at the registry's own path, shipped with its drop-in as shipped")
+    # as enrol.py writes it (node.Trail(trails.where("enrol"))): root, at the one path the registry names, which
+    # trails.append makes /var/log/regalia root:regalia-audit 2750 for, so the line takes that group
+    record = "%064x" % 278
+    script = ("import sys, json; sys.path.insert(0, sys.argv[1]); import trails\n"
+              "path = trails.where('enrol')\n"
+              "trails.append(path, {'event': 'enrol', 'node': 'a', 'epoch': 1, 'manifest_digest': sys.argv[2], 'outcome': 'ALLOW', "
+              "'record_sha256': sys.argv[2]})\nprint(path)")
+    enrol_trail = pathlib.Path(sh(sys.executable, "-Es", "-c", script, str(work / "lib"), record).stdout.strip())
+    tool_dir, info = enrol_trail.parent.stat(), enrol_trail.stat()
+    ok(stat.S_IMODE(tool_dir.st_mode) == 0o2750 and grp.getgrgid(tool_dir.st_gid).gr_name == "regalia-audit" and tool_dir.st_uid == 0
+       and (info.st_mode & 0o777, info.st_uid, grp.getgrgid(info.st_gid).gr_name) == (0o640, 0, "regalia-audit"),
+       "the enrol trail is root's, 0640, in the operator tools' directory %s (root:regalia-audit 2750)" % enrol_trail.parent,
+       (oct(tool_dir.st_mode), oct(info.st_mode)))
+    (ETC / "enrol.env").write_text("TRAIL_PATH=%s\n" % enrol_trail)
+    ENROL_DROPIN.mkdir()
+    shutil.copy(UNITS / "regalia-audit-ship@enrol.service.d" / "reader.conf", ENROL_DROPIN / "reader.conf")
+    sh("systemctl", "daemon-reload")
+    sh("systemctl", "start", ENROL_INSTANCE)
+
+    def enrol_shipped():
+        streams = list((state / "streams").glob("*/site-sitea.enrol.jsonl"))
+        if len(streams) != 1:
+            return None
+        events = [json.loads(line) for line in streams[0].read_text().splitlines()]
+        lines = [json.loads((e.get("detail") or {}).get("line") or "{}") for e in events]
+        return lines if any(l.get("event") == "enrol" and l.get("record_sha256") == record for l in lines) else None
+    shipped_enrol = until(enrol_shipped, 60)
+    ok(bool(shipped_enrol), "with regalia-audit-ship@enrol.service.d as shipped, the enrol line reaches the collector's enrol stream, its "
+       "record's digest intact", (shipped_enrol, journal(ENROL_INSTANCE, 5)))
+    sh("systemctl", "stop", ENROL_INSTANCE)
 
     print("\n### 2  a line appended later ships on the next pass")
     append_as_writer(trail, 2, 3)
