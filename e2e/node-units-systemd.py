@@ -12,7 +12,11 @@ replaces the system chrony's configuration (the system clock follows two private
 loopback), creates the user regalia-sync, installs the units, and writes /etc/regalia and /var/lib/regalia-*.
 
 THE TPM is swtpm. Where the kernel has the vTPM proxy it sits behind the kernel's resource manager, as on a
-host (GitHub's Azure kernel has it from the 2026-10-18 images); where it has none, swtpm's CUSE device, which has NO resource manager:
+host; where it has none, swtpm's CUSE device, which has NO resource manager. MEASURED 2026-10-25 (#597, the vTPM probe):
+NEITHER GitHub-hosted image has the module (ubuntu-24.04's 6.17.0-1022-azure kernel: not in linux-modules-extra;
+ubuntu-26.04's 7.0.0-1017-azure: no linux-modules-extra package), so on GitHub this test is ALWAYS on the CUSE path and its
+"/dev/tpmrm0" is a raw TPM under the resource manager's name: production's RM path (session swapping, per-connection
+cleanup) is NOT exercised here, and the PASS line and the job summary say so. CUSE:
 one command buffer, no per-connection context, so two processes using it at once could receive each
 other's responses, and sessions survive between processes (on a host the kernel flushes them when a
 connection closes). Part 1 therefore lets one unit at a time use the TPM after the first one. Part 2 needs
@@ -308,10 +312,11 @@ def main():
 
 def tpm(work):
     """A software TPM as a character device the units open as a host's: /dev/tpmrm0, the tss group's, 0660.
-    The kernel's vTPM proxy where the kernel has it; else (GitHub's Azure kernel was built without it
-    until the 2026-10-18 images) swtpm's CUSE device under that name, which needs no kernel module but
-    FUSE's CUSE, and is a TPM without the kernel's resource manager (see the module's docstring).
-    Returns (how, whether the test set the device's group and mode itself)."""
+    The kernel's vTPM proxy where the kernel has it; else (no GitHub-hosted image has it: #597, measured 2026-10-25)
+    swtpm's CUSE device under that name, which needs no kernel module but FUSE's CUSE, and is a TPM WITHOUT the
+    kernel's resource manager (see the module's docstring). REGALIA_NODE_UNITS_REQUIRE_RM=1 refuses the CUSE path, for a
+    runner that has the module (regalia-afi). Returns (how, whether the test set the device's group and mode itself,
+    whether the kernel's resource manager is in front of it)."""
     state = work / "tpm"
     state.mkdir()
     shutil.chown(state, "tss", "tss")
@@ -335,6 +340,9 @@ def tpm(work):
                              "already on this host?)" % made.group(1))
         appeared(how)
     else:
+        if os.environ.get("REGALIA_NODE_UNITS_REQUIRE_RM") == "1":
+            raise SystemExit("node-units-systemd: REGALIA_NODE_UNITS_REQUIRE_RM=1 and this kernel has no tpm_vtpm_proxy: the "
+                             "CUSE device has no resource manager, so the RM path cannot be tested here (regalia-afi, #597)")
         sh("modprobe", "cuse", check=False)
         (work / "swtpm.log").touch()
         shutil.chown(work / "swtpm.log", "tss", "tss")
@@ -350,7 +358,7 @@ def tpm(work):
     if by_test:
         shutil.chown("/dev/tpmrm0", "root", "tss")
         os.chmod("/dev/tpmrm0", 0o660)
-    return how, by_test
+    return how, by_test, how.startswith("the kernel's vTPM proxy")
 
 
 def nts_server(work, n):
@@ -483,10 +491,19 @@ def provision(work):
 def scenario(work, binaries, user):
     print(tpmdiag.versions(), flush=True)                                            # regalia-zga: the stack it ran on
     header("0  the TPM, as a device, and the controls")
-    how, by_test = tpm(work)
+    how, by_test, behind_rm = tpm(work)
     rm = "/dev/tpmrm0"
+    path = ("RESOURCE MANAGER: the kernel's, as on a host" if behind_rm else
+            "NO RESOURCE MANAGER: CUSE (one command buffer; sessions outlive processes): production's RM path is NOT "
+            "exercised here (#597, regalia-afi)")
     ok(os.path.exists(rm) and sh("tpm2_getrandom", "--hex", "-T", "device:" + rm, "8", check=False).returncode == 0,
-       "a software TPM answers at /dev/tpmrm0, the device the units allow: %s" % how)
+       "a software TPM answers at /dev/tpmrm0, the device the units allow: %s; %s" % (how, path))
+    if not behind_rm:                                  # said where a reader of the run looks, not only in the log
+        print("::warning title=node-units TPM path::/dev/tpmrm0 is swtpm's CUSE device here, with NO resource manager: "
+              "the units' RM path is not exercised (#597)", flush=True)
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+                f.write("node-units-systemd TPM path: CUSE, no resource manager (the kernel has no tpm_vtpm_proxy; #597)\n")
     info = os.stat(rm) if os.path.exists(rm) else None
     ok(info is not None and oct(info.st_mode & 0o777) == "0o660" and sh("stat", "-c", "%G", rm).stdout.strip() == "tss",
        "the device is the tss group's, 0660, as on a host (%s)" % ("SET BY THE TEST: udev did not apply the rule to this device" if by_test

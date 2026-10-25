@@ -940,9 +940,15 @@ def unseal_local(sealed, signature=None, tpm2_device=None, run=subprocess.run):
     if tpm2_device:
         args.append("--tpm2-device=" + tpm2_device)
     done = run([*args, "-", "-"], input=sealed.encode(), capture_output=True)
-    require(done.returncode == 0 and len(done.stdout) == SECRET_BYTES,
-            "the TPM does not release the local contribution: another TPM, or a boot its policy does not accept")
-    return done.stdout
+    if done.returncode == 0 and len(done.stdout) == SECRET_BYTES:
+        return done.stdout
+    # what systemd-creds said travels with the refusal (#592: a TPM out of session slots read as "a boot its policy does
+    # not accept"): its exit status and stderr, bounded and printable only; never stdout, the secret's own channel
+    said = (done.stderr or b"").decode("utf-8", "replace") if isinstance(done.stderr, bytes) else str(done.stderr or "")
+    said = " | ".join(line.strip() for line in "".join(c if c.isprintable() or c == "\n" else " " for c in said).splitlines()
+                      if line.strip())
+    raise Refused("the TPM does not release the local contribution: another TPM, a boot its policy does not accept, or a "
+                  "TPM error (systemd-creds exit %d%s)" % (done.returncode, (": " + said[-400:]) if said else ""))
 
 
 def unlock(device, session, pins, transports, quote, unseal, name=None, run=subprocess.run):
