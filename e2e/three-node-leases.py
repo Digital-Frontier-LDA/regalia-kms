@@ -3,7 +3,8 @@
 heartbeats; no authority host): the real regalia-admission asking the real peers' sync, leases of at most lease.MAX_LIFETIME (30 s)
 (lease.MAX_LIFETIME) renewed at a third of their life, and a running node revoked by two nodes (revoke.py).
 
-    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-leases.py
+    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> REGALIA_AUDIT_BIN=<dir with regalia-audit-ship, regalia-audit-collector> \
+        sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN python3 -Es e2e/three-node-leases.py
 
 IT CHANGES THE MACHINE (namespaces, interfaces, loop devices, dm-crypt mappings, transient units; an nftables table
 inside one node's namespace, never the host's), so it runs only on a GitHub-hosted runner, or on a throwaway host
@@ -16,6 +17,10 @@ whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
   5  a cut off from one peer (its service mesh): it renews through the other
   6  14.3: running a revoked by b and c, each at its own console (revoke.py); both peers refuse its renewals (it is off their service tunnels; by name through a
      tunnel forced open), and a's admission stops serving by itself when its lease ends (measured against lease.MAX_LIFETIME)
+  7  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector (the nodes' real
+     shippers, Cluster(audit=True)), and this scenario's decisions are there by name, each in the stream of the node that
+     made it, within its step: steps 2, 3 and 5's renewals by their issuers, the revocation by b and c, b's refusal of a by
+     name, no lease issued to a after the revocation, and a's own change to not serving
 
 The KMS daemon's own refusal at the lease's end and on revocation is e2e/runtime-admission.py's (two nodes, the
 real daemon: steps 1, 3 and 6); the three-node daemon waits with 14.4. Clock skew is not here: the namespaces share
@@ -100,14 +105,17 @@ def scenario(cluster):
     header("2  14.1: a's lease is renewed")
     first, issuer, _ = held(cluster, "a")
     since = time.time()
+    windows = {}                                     # step -> (issuer, start, end), for step 7
     got = until(lambda: renewed(cluster, "a", first), renewal + 60, 3)
     ok(bool(got) and any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
                          for e in cluster.trail(got[1] if got else issuer)),
        "a's lease is renewed (issued %s, then %s, by %s), and its issuer's trail holds the ALLOW" % (first, got and got[0], got and got[1]), got)
+    windows["2"] = (got[1] if got else issuer, since, time.time())
 
     header("3  14.2: a's issuer crashes; the other peer renews, and a never stops serving")
     current, issuer, _ = held(cluster, "a")
     other = next(n for n in ("b", "c") if n != issuer)
+    crashed_at = time.time()
     cluster.stop(issuer, power=None)
     # one loop, the whole window that matters: from the issuer's crash until the other peer's lease is in, a sampled
     # every 2 s (regalia-kms-3e)
@@ -119,6 +127,7 @@ def scenario(cluster):
         time.sleep(2)
     ok(bool(got), "with %s down, a's next lease is %s's (%s)" % (issuer, other, got and got[0]), held(cluster, "a"))
     ok(not gaps, "and a served at every sample from %s's crash until %s's lease came" % (issuer, other), gaps)
+    windows["3"] = (other, crashed_at, time.time())
     cluster.start(issuer, SERVICES)
     until(lambda: cluster.lease(issuer), 150, 3)
 
@@ -131,6 +140,7 @@ def scenario(cluster):
        {n: held(cluster, n) for n in names})
 
     header("5  a cut off from b: it renews through c")
+    cut_at = time.time()
     cluster.partition("a", ["b"])
     # the holder starts each round at the next peer in turn (node.admission_service), so over two rounds a asks b
     # first at least once; both leases coming from c shows that ask failed and c answered (regalia-kms-3e)
@@ -139,6 +149,7 @@ def scenario(cluster):
     second = first and until(lambda: renewed(cluster, "a", first[0], by="c"), renewal + 90, 3)
     ok(bool(first) and bool(second), "a, cut off from b, renewed twice, both times by c (%s, %s): the round that began at b fell to c"
        % (first and first[0], second and second[0]), held(cluster, "a"))
+    windows["5"] = ("c", cut_at, time.time())
     cluster.heal("a")
 
     header("6  14.3: running a revoked; nobody renews it, and it stops serving by itself")
@@ -184,6 +195,31 @@ def scenario(cluster):
     ok(not any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) > committed_at
                for p in ("b", "c") for e in cluster.trail(p)), "and nobody issued a a lease after the revocation was committed")
 
+    header("7  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector, for the node that recorded it")
+    # The windows compare this harness's clock with the nodes' own trail "at": sound because the namespaces share one
+    # kernel clock (this file's docstring). Each bound is taken BEFORE the action it bounds, so a late one only fails.
+    wrong = cluster.audit_complete()
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t, _, _ in threenode.AUDIT_TRAILS}
+    ok(wrong == {}, "every node's sync, admission and ESP-advance trail is written and in the collector line for line: sequence from 1, chained from "
+       "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
+       {"%s.%s" % k: v for k, v in wrong.items()})
+    within = lambda end: (lambda at: isinstance(at, int) and at <= int(end))
+    renewals = {step: len(cluster.audit_has(by, "sync", since=start, event="sync-lease", subject="a", outcome="ALLOW", at=within(end)))
+                for step, (by, start, end) in windows.items()}
+    ok(renewals.get("2", 0) >= 1, "step 2's renewal of a is in its issuer's (%s) stream" % windows["2"][0], renewals)
+    ok(renewals.get("3", 0) >= 1, "step 3's renewal of a, with %s down, is in %s's stream" % (issuer, windows["3"][0]), renewals)
+    ok(renewals.get("5", 0) >= 2, "step 5's two renewals of a, cut off from b, are both in c's stream", renewals)
+    revoked = {n: bool(cluster.audit_has(n, "sync", since=revoked_at, event="revoke-commit", epoch=2, outcome="ALLOW",
+                                         signers=lambda s: isinstance(s, list) and "b" in s and "c" in s)) for n in ("b", "c")}
+    ok(all(revoked.values()), "the revocation of a (epoch 2, signed by b and c) is in b's and in c's stream (revoke-commit)", revoked)
+    by_name = cluster.audit_has("b", "sync", since=revoked_at, outcome="DENY", event=lambda e: isinstance(e, str) and e.startswith("sync"),
+                                reason=lambda r: bool(r) and "a is REVOKED_STOLEN under epoch 2" in r)
+    ok(bool(by_name), "b's refusal of a's requests by name, through the tunnel forced open, is in b's stream")
+    late = [e for p in ("b", "c") for e in cluster.audit_has(p, "sync", since=committed_at + 1, event="sync-lease", subject="a", outcome="ALLOW")]
+    ok(not late, "and the collector holds no lease issued to a after the revocation was committed", late)
+    stopped = cluster.audit_has("a", "admission", since=revoked_at, event="admission-serving", subject="a", outcome="DENY")
+    ok(bool(stopped), "a's own change to not serving, at its last lease's end, is in a's admission stream", stopped[-1:] if stopped else None)
+
 
 def main():
     try:
@@ -205,7 +241,7 @@ def main():
         print("three-node-leases: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work)
+    cluster = threenode.Cluster(work, audit=True)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once
