@@ -1060,7 +1060,25 @@ removing only what it can prove it made.
 
 Every trail in `deploy/baremetal/trails.py`'s registry is hash-chained line by line and shipped to the
 audit collector by one instance of `units/regalia-audit-ship@.service` per trail
-(`systemctl enable --now regalia-audit-ship@sync`; `cmd/regalia-audit-ship`, `internal/audit/trail.go`).
+(`cmd/regalia-audit-ship`, `internal/audit/trail.go`). Enable all of them, one per trail in the registry:
+
+```sh
+systemctl enable --now \
+    regalia-audit-ship@admission \
+    regalia-audit-ship@enrol \
+    regalia-audit-ship@esp-advances \
+    regalia-audit-ship@reanchor \
+    regalia-audit-ship@recount \
+    regalia-audit-ship@recovery-key \
+    regalia-audit-ship@recovery-reconcile \
+    regalia-audit-ship@survivor \
+    regalia-audit-ship@sync \
+    regalia-audit-ship@time \
+    regalia-audit-ship@update
+```
+
+A node that ships only some of them raises `RegaliaAuditShipMetricsMissing` until the rest are enabled
+(`tests/test_scrape_job_contract.py` holds this list to the registry).
 Each line becomes one audit event on the stream `<site>.<trail>`.
 
 The collector is an **external service** the owner chooses (#351). `AUDIT-COLLECTOR.md` is the contract it must
