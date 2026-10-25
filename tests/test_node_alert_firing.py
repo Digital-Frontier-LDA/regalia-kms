@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from deploy.baremetal import metrics
+from deploy.baremetal import metrics, trails
 from tests.test_alert_firing import REQUIRE_PROMTOOL, render, series
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,10 +30,25 @@ LEASE = "/run/regalia-metrics/admission/lease.prom"
 MEMBERSHIP = "/run/regalia-metrics/sync/membership.prom"
 ESP_ADVANCE = "/run/regalia-metrics/esp-advance/esp-advance.prom"
 SHIP = "/run/regalia-metrics/audit-ship/sync.prom"
+SHIPPED = sorted(trails.TRAILS)                                 # one shipper, and one .prom, per registry trail (#580)
+
+
+def ship_files(node, names=SHIPPED):
+    return [("node_textfile_mtime_seconds", dict(node, file="/run/regalia-metrics/audit-ship/%s.prom" % n), "0+30x10") for n in names]
+
+
 NODE_A, NODE_B = {"instance": "a:9100", "job": "regalia-node"}, {"instance": "b:9100", "job": "regalia-node"}
 
 # Cases a single fault/healthy pair cannot show, each with exactly the alerts expected (labels beyond the rule's).
 EXTRA = [
+    # one shipper missing on one node: that node alone, and every other trail's file does not hide it
+    ("RegaliaAuditShipMetricsMissing", "two nodes: only the one without the sync shipper's file", 420,
+     [("up", NODE_A, "1+0x10"), ("up", NODE_B, "1+0x10")] + ship_files(NODE_A)
+     + ship_files(NODE_B, [n for n in SHIPPED if n != "sync"]),
+     [NODE_B]),
+    # every trail's file but one (the last in the registry's order): the one missing shipper is enough to alert
+    ("RegaliaAuditShipMetricsMissing", "every shipper's file but %s's" % SHIPPED[-1], 420,
+     [("up", NODE_A, "1+0x10")] + ship_files(NODE_A, SHIPPED[:-1]), [NODE_A]),
     # two nodes with trails of the same name: each node's backlog is judged by ITS last success, never another's
     ("RegaliaAuditTrailBehind", "two nodes: only the one behind", 1200,
      [("regalia_audit_trail_backlog", dict(NODE_A, trail="sync"), "3+0x20"),
@@ -186,6 +201,10 @@ SCENARIOS = {
     "RegaliaLeaseMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=LEASE), "0+60x10")], "at": 420},
+    # no shipper has ever written (as #580 left every node): alerts; every trail's file there: silent
+    "RegaliaAuditShipMetricsMissing": {
+        "fault": [("up", NODE_A, "1+0x10")],
+        "healthy": [("up", NODE_A, "1+0x10")] + ship_files(NODE_A), "at": 420},
     "RegaliaNodeTextfileUnreadable": {        # a malformed file: node_exporter drops its series and says so
         "fault": [("node_textfile_scrape_error", NODE_A, "1+0x5")],
         "healthy": [("node_textfile_scrape_error", NODE_A, "0+0x5")], "at": 120},
@@ -216,6 +235,16 @@ class Structure(unittest.TestCase):
         for name, rule in found.items():
             self.assertIn(rule["labels"]["severity"], ("critical", "warning"))
             self.assertTrue(rule["annotations"]["summary"])
+
+
+class ShipperCoverage(unittest.TestCase):
+    def test_the_missing_shipper_rule_names_exactly_the_registry_trails(self):
+        # a trail added to the registry without its shipper's file in the rule would be one no alert sees go silent
+        expr = rules()["RegaliaAuditShipMetricsMissing"]["expr"]
+        listed = re.search(r"audit-ship/\(([^)]*)\)", expr)
+        self.assertIsNotNone(listed, expr)
+        self.assertEqual(sorted(listed.group(1).split("|")), SHIPPED)
+        self.assertIn("== %d)" % len(SHIPPED), expr)
 
 
 class Firing(unittest.TestCase):

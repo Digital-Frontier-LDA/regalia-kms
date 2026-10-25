@@ -60,7 +60,8 @@ Everything comes from the node's validated site configuration (`/etc/regalia/sit
   `RegaliaAuditShipMetricsStale` (5 minutes for a shipper's).
 - **A writer that never wrote** (after a boot, `/run` is empty) leaves no series at all, which no value rule
   can see: `RegaliaAuthtimeMetricsMissing`, `RegaliaHeartbeatMetricsMissing` and `RegaliaLeaseMetricsMissing`
-  fire when a scraped node has no such file for 5 minutes.
+  fire when a scraped node has no such file for 5 minutes; `RegaliaAuditShipMetricsMissing` when it lacks the
+  shipper's file of any trail in `trails.py`'s registry (an instance never enabled, or refused its trail's path).
 - **A file node_exporter cannot read** drops its series: `RegaliaNodeTextfileUnreadable`.
 - **Silence is not health.** The rules above make a missing signal an alert; the one thing they cannot see is
   the service itself having stopped (section 1).

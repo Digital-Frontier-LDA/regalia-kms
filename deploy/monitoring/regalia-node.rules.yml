@@ -163,6 +163,16 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.file }} has not been written for five minutes: that trail's shipper has stopped or is wedged."
+      # every trail in deploy/baremetal/trails.py's registry has its shipper, and a shipper writes its .prom on every pass,
+      # success or not: a file missing means that instance never ran (not enabled, or exec-ship refused its path, #580),
+      # which RegaliaAuditShipMetricsStale cannot see (no file, no mtime). The list is the registry's (Structure holds it).
+      - alert: RegaliaAuditShipMetricsMissing
+        expr: up{job="regalia-node"} == 1 unless on(instance) (count by (instance) (node_textfile_mtime_seconds{file=~"(.*/)?audit-ship/(admission|enrol|esp-advances|reanchor|recount|recovery-key|recovery-reconcile|survivor|sync|time|update)\\.prom"}) == 11)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but lacks a shipper's metrics for at least one of the 11 trails: that trail is not shipping (ls /run/regalia-metrics/audit-ship; journalctl -u 'regalia-audit-ship@*')."
       - alert: RegaliaAuthtimeMetricsMissing
         expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?authtime\\.prom"}
         for: 5m
