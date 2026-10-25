@@ -208,7 +208,7 @@ git -C "$ROOT/tmp/uki/src" checkout --quiet --detach FETCH_HEAD
 cp -r "$W/keys" "$ROOT/tmp/uki/"
 cp "$W/initrd-build/initrd-build.json" "$ROOT/tmp/uki/initrd-build.json"      # the initrd's build record, an input (#248)
 cp "$W/root-key.json" "$ROOT/tmp/uki/root-key.json"                           # the membership root it trusts, an input (#156)
-printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0}" > "$ROOT/tmp/uki/cmdline"
+printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0}" > "$ROOT/tmp/uki/cmdline"
 IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmdline --os-release /usr/lib/os-release --uname $KVER"
 IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub --initrd-build /tmp/uki/initrd-build.json --root-key /tmp/uki/root-key.json"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"
@@ -250,8 +250,8 @@ chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki bui
 # #75 TIER Q, Q1: AN IMAGE WHOSE KERNEL DIFFERS. The same kernel with bytes appended after its PE image, which the
 # loader ignores (it boots identically) and systemd-stub measures with the whole .linux section into PCR 11: only the
 # measurement differs, the property under test (regalia-kms-d9). A real second kernel would not do: the initrd's
-# modules are built for this one. Its command line has NO systemd.journald.forward_to_console=1 (a production
-# image's has none either, #413): what its console shows is what the units themselves put there.
+# modules are built for this one. Its command line has no systemd.journald.forward_to_console=1, as no boot's here
+# has since #413 (nor a production image's): the sed below keeps that true of an override of REGALIA_BOOT_CMDLINE.
 { cat "$ROOT/boot/vmlinuz-$KVER"; head -c 4096 /dev/zero | tr '\0' 'R'; } > "$ROOT/tmp/uki/vmlinuz-k2"
 sed 's/ systemd\.journald\.forward_to_console=1//' "$ROOT/tmp/uki/cmdline" > "$ROOT/tmp/uki/cmdline-k2"
 IN_K2="${IN/--linux \/boot\/vmlinuz-$KVER /--linux /tmp/uki/vmlinuz-k2 }"

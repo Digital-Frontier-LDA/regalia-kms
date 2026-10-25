@@ -519,7 +519,8 @@ class OnQemu(tub.OnSwtpm):
         print("boot 2: %s" % meminit.strip(), file=sys.stderr)
         self.assertRegex(meminit, r"heap alloc:on")
         self.assertRegex(meminit, r"heap free:on")
-        self.assertRegex(said, r"regalia-unlock: /dev/mapper/root is open: standing down|Stopped regalia-unlock\.service")
+        # the client's own line (#412), not PID 1's "Stopped" status, which a `quiet` command line hides (#413)
+        self.assertIn("regalia-unlock: /dev/mapper/root is open: standing down", said)
         # PCR 12 is what espcreds computes from the ESP's files, and nothing moved it after the initrd
         booted = booted_pcrs(said)
         self.assertIsNotNone(booted)
@@ -750,7 +751,8 @@ class OnQemu(tub.OnSwtpm):
             if n + 1 in attempts:                                # and it did pause that long: no hot loop
                 self.assertGreaterEqual(attempts[n + 1][0] - arrived, pause - 2, "attempt %d came early" % (n + 1))
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
-        self.assertRegex(said, r"regalia-unlock: /dev/mapper/root is open: standing down|Stopped regalia-unlock\.service")
+        # the client's own line (#412), not PID 1's "Stopped" status, which a `quiet` command line hides (#413)
+        self.assertIn("regalia-unlock: /dev/mapper/root is open: standing down", said)
         no_shell(self, said)
         self.assertEqual(self.events[since:], [])
 
