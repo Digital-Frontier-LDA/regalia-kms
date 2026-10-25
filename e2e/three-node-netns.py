@@ -20,6 +20,10 @@ IT CHANGES THE MACHINE (namespaces, interfaces, transient units), so it runs onl
   7  a new epoch (#66 B3): sync takes it and never moves the TPM anchor; each node's regalia-esp-advance writes
      it to the node's ESP, then anchors it. After that, a published chain rolled back to epoch 1 is refused
      (ROLLBACK) by the root services' check and by the ESP advance itself
+  8  #340: every line of every node's sync and ESP-advance trail is in the audit collector (the nodes' real shippers,
+     Cluster(audit=True); this scenario runs no admission), and its decisions are there by name, each in the stream of
+     the node that made it: every pull answered (step 4), each ESP advance to epoch 2 (step 7), and a's ESP advance
+     refusing the rolled-back chain (ROLLBACK)
 """
 import os
 import pathlib
@@ -153,6 +157,7 @@ def scenario(cluster):
     a = cluster.nodes["a"]
     copy = work / "a-published.json"
     copy.write_bytes((a.state / node.PUBLISHED).read_bytes())
+    rolled = time.time()
     os.replace(old, a.state / node.PUBLISHED)       # under a's ESP advance: it must refuse, and leave its ESP and anchor
     shutil.chown(a.state / node.PUBLISHED, "regalia-sync", "regalia-sync")
     os.chmod(a.state / node.PUBLISHED, 0o644)
@@ -162,6 +167,25 @@ def scenario(cluster):
        (cluster.esp_epoch("a"), cluster.anchored("a")))
     os.replace(copy, a.state / node.PUBLISHED)      # what sync publishes again at its next change
     shutil.chown(a.state / node.PUBLISHED, "regalia-sync", "regalia-sync")
+
+    header("8  #340: every line of every node's sync and ESP-advance trail is in the audit collector, for the node that recorded it")
+    judged = ("sync", "esp-advances")
+    wrong = cluster.audit_complete(trails=judged)
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t in judged}
+    ok(wrong == {}, "every node's sync and ESP-advance trail is written and in the collector line for line: sequence from 1, chained from "
+       "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
+       {"%s.%s" % k: v for k, v in wrong.items()})
+    pulls = {"%s<-%s" % (server, caller): bool(cluster.audit_has(server, "sync", event="sync-pull", subject=caller, outcome="ALLOW"))
+             for server in names for caller in names if caller != server}
+    ok(all(pulls.values()), "every pull answered in step 4 is in the answering node's stream", pulls)
+    advanced = {name: bool(cluster.audit_has(name, "esp-advances", event="esp-advance", epoch=2, outcome="ALLOW",
+                                             manifest_digest=membership.digest(manifest)))
+                for name in names}
+    ok(all(advanced.values()), "each node's ESP advance to epoch 2 (step 7) is in its own stream, naming epoch 2's manifest", advanced)
+    refusal = cluster.audit_has("a", "esp-advances", since=rolled, event="esp-advance", outcome="DENY",
+                                reason=lambda r: isinstance(r, str) and "ROLLBACK" in r)
+    ok(bool(refusal), "a's ESP advance refusing the rolled-back chain is in a's stream, a DENY naming ROLLBACK",
+       cluster.audit_has("a", "esp-advances", since=rolled)[-3:])
 
 
 def main():
@@ -182,7 +206,7 @@ def main():
         print("three-node-netns: run as root")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work)
+    cluster = threenode.Cluster(work, audit=True)
     try:
         scenario(cluster)
     except Exception as failure:          # noqa: BLE001 - a fixture that failed to build is a failure, said once

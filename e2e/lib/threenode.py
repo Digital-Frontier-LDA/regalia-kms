@@ -1651,7 +1651,7 @@ class Cluster:
                 head.get("committed"), n, len(stream))
         return None
 
-    def audit_complete(self, timeout=180):
+    def audit_complete(self, timeout=180, trails=None):
         """{(node, trail): what is wrong} for every node trail (sync, admission, esp-advances) the collector does not hold, line for
         line, UP TO A SNAPSHOT of the trail taken when this is called. The trails go on growing while it waits (the
         services run): judged against the trail as re-read at each look, a line written after the shipper's last pass
@@ -1664,19 +1664,26 @@ class Cluster:
             (newline included), each DENY still a deny;
           - at the snapshot's end, the signed receipt and the shipper's head file say so.
         Empty when complete. Waits up to `timeout` for the shippers' passes. A node stopped by the scenario ships what its
-        trail holds once it runs again: its shippers are started here."""
+        trail holds once it runs again: its shippers are started here. `trails` (names in AUDIT_TRAILS) judges only those,
+        for a scenario that runs no service writing the others (three-node-netns runs no admission): every trail it names
+        must still have been written."""
+        known = [t for t, _, _ in AUDIT_TRAILS]
+        trails = None if trails is None else tuple(trails)       # read once: an iterator would be spent by the check below
+        if trails is not None and (not trails or set(trails) - set(known)):
+            raise ValueError("audit_complete(trails=%r): each must be one of %s" % (trails, ", ".join(known)))
+        judged = [t for t in known if trails is None or t in trails]
         for name in self.nodes:
             self._ship_start(name)
 
         def read(name, trail):
             path = self._trail_path(name, trail)
             return path.read_bytes().splitlines(keepends=True) if path.exists() else []
-        snapshot = {(name, trail): read(name, trail) for name in self.nodes for trail, _, _ in AUDIT_TRAILS}
+        snapshot = {(name, trail): read(name, trail) for name in self.nodes for trail in judged}
 
         def problems(receipts=False):
             wrong = {}
             for name in self.nodes:
-                for trail, _, _ in AUDIT_TRAILS:
+                for trail in judged:
                     lines = snapshot[(name, trail)]
                     if not lines:
                         wrong[(name, trail)] = "the trail was never written"
