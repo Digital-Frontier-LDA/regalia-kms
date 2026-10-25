@@ -147,17 +147,20 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	u := &unlocker{config: config, o: o, paths: paths, local: local, boot: boot, dial: tcpTransport, quote: quote, sleep: time.Sleep,
 		out: out, diagnostics: diagnostics}
 	// systemd stops the unit with SIGTERM before the root filesystem takes over. What this process held
-	// is zeroed first, and it does not wait for an attempt in progress: the boot is not held up.
+	// is zeroed first, and it does not wait for an attempt in progress: the boot is not held up. It says
+	// one line on the way out (stoppedLine, #572), after the zeroing: the line holds nothing secret.
+	env := realAgentEnv(o.volume)
 	stopped := make(chan os.Signal, 1)
 	signal.Notify(stopped, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(stopped)
 	go func() {
-		<-stopped
+		sig := <-stopped
 		u.forget()
+		fmt.Fprintln(u.out, stoppedLine(o.volume, sig, env.opened))
 		os.Exit(0)
 	}()
 	defer u.forget()
-	return u.agent(realAgentEnv(o.volume))
+	return u.agent(env)
 }
 
 // unlocker is what ONE BOOT holds, in one process, for as long as the initrd lasts: the local half, the

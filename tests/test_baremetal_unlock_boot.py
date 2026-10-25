@@ -752,13 +752,10 @@ class OnQemu(tub.OnSwtpm):
                 self.assertGreaterEqual(attempts[n + 1][0] - arrived, pause - 2, "attempt %d came early" % (n + 1))
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
         # Here the recovery key opened root while the client sat in its backoff, and systemd stopped it at switch-root
-        # before it could see root open: its own "standing down" line is never written on this path (#570's boot 8,
-        # measured with no journal forwarding), so PID 1's "Stopped" status is what says it, and the test report's
-        # count, written to /dev/console whatever the command line, proves no client survived into the system.
-        # PID 1 colours the unit's name (`Stopped \x1b[0;1;39mregalia-unlock.service`), so its status is read with the
-        # colour removed: matched raw, that branch never matched anything (measured on #570).
-        plain = re.sub(r"\x1b\[[0-9;]*m", "", said)
-        self.assertRegex(plain, r"regalia-unlock: /dev/mapper/root is open: standing down|Stopped regalia-unlock\.service")
+        # between two of its looks: the stop handler says the client's own line on the way out (#572), as the loop does
+        # when it sees root open itself. The test report's count, written to /dev/console whatever the command line,
+        # proves independently that no client survived into the system.
+        self.assertIn("regalia-unlock: /dev/mapper/root is open: standing down", said)
         self.assertIn("REGALIA-E2E-CLIENT processes=0", said)
         no_shell(self, said)
         self.assertEqual(self.events[since:], [])
