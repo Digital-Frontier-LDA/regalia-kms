@@ -233,6 +233,9 @@ INVENTORY=deploy/baremetal/initrd/initrd-inventory.txt
 python3 -BEs -m deploy.baremetal.uki initrd-inventory --initrd "$W/stage/initrd.img" --root "$ROOT" > "$W/inventory.txt" \
   || die "the initrd's inventory could not be written"
 if ! grep -v '^#' "$INVENTORY" | cmp -s - "$W/inventory.txt"; then
+  # the whole built inventory, for a snapshot move to read and review (KERNEL-UPDATE.md; #330): the diff below
+  # shows only 60 lines, and a kernel move changes every module path. Only this text leaves a failed build.
+  cp "$W/inventory.txt" "$OUT/initrd-inventory.built.txt"
   diff <(grep -v '^#' "$INVENTORY") "$W/inventory.txt" | head -60 || true
   die "this initrd's inventory is not $INVENTORY (the lines above: < committed, > built)"
 fi
