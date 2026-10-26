@@ -1,0 +1,8 @@
+# One occurrence in one commit, by fingerprint (.gitleaks.toml forbids path allowlists).
+#
+# 7d1ee0e4 (regalia-kms#475): a test built a fork manifest's quarantine_digest as a two-character hex string
+# repeated 32 times, in a keyword argument; generic-api-key read the assignment's shape as a key. It is a
+# made-up digest, not a credential. The next commit composes it from hashlib instead, and this branch cannot
+# be rewritten (an adopted PR, no force-push), so the range scan still reads the old commit. main is
+# squash-only: this commit never reaches it, and the entry then matches nothing.
+7d1ee0e447ff440ef57c4e85330a8a38111ad4ed:tests/test_baremetal_activation.py:generic-api-key:456

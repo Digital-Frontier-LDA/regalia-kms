@@ -3,6 +3,7 @@ share a node, whose grant record refuses an overlap); the owner only on the reco
 parties stopped in the current manifest, never alone; each node's grant record counted on its TPM, standing only
 while it matches, and busy for the recovery wait after a start without it."""
 import contextlib
+import hashlib
 import os
 import pathlib
 import re
@@ -70,6 +71,8 @@ class Format(Case):
         for reason, over in cases:
             with self.subTest(reason):
                 self.refused(reason, act.validate, lease(self.m1, **over))
+        # the bound through verify() too, so make-activation-v2.py records it for the Go Gate (its signatures never count)
+        self.refused("lives at most 600", act.verify, {"lease": lease(self.m1, expires_at=stamp(T0 + 601)), "signatures": []}, self.m1)
 
 
 class Quorum(Case):
@@ -437,6 +440,28 @@ class RecoveryPath(Record):
         body = good["lease"]
         by_a = {"lease": body, "signatures": [{"party": "a", "key": pub(NODE_KEYS["a"]), "sig": p256_sig(NODE_KEYS["a"], act.message(body))}]}
         self.refused("is signed by the survivor c", act.verify, by_a, self.m2)
+        # each authorization refused above, and those the schema refuses, through verify() as well, in a lease c signs:
+        # make-activation-v2.py records verify()'s calls only, and the Go Gate is held to that file
+        def carrying(recovery):
+            body = dict(body_c, recovery=recovery)
+            return {"lease": body, "signatures": [{"party": "c", "key": pub(NODE_KEYS["c"]),
+                                                   "sig": p256_sig(NODE_KEYS["c"], act.DOMAIN + m.canonical(body))}]}
+
+        def by_owner(authorization):
+            return {"authorization": authorization, "signature": {"party": m.OWNER, "key": pub(OWNER_KEYS[0]),
+                                                                  "sig": OWNER_KEYS[0].sign(act.AUTH_DOMAIN + m.canonical(authorization)).hex()}}
+        body_c = {k: v for k, v in good["lease"].items() if k != "recovery"}
+        self.assertEqual(act.verify(carrying(signed), self.m2)["node_id"], "c")     # the frame itself accepts
+        self.refused("is not the owner's", act.verify, carrying(by_node), self.m2)
+        self.refused("more than the manifest's recovery_authorization_max_s", act.verify, carrying(too_long), self.m2)
+        forked = by_owner(dict(auth, quarantine_digest=hashlib.sha256(b"another manifest").hexdigest()))  # epoch 2, a fork
+        self.refused("a new epoch ends it", act.verify, carrying(forked), self.m2)
+        for text in ("off at the PDU\x07", "off at the PDU\u00a0", "off\u2028at the PDU"):
+            with self.subTest(text=text):
+                self.refused("fenced must be printable", act.verify, carrying(by_owner(dict(auth, fenced=text))), self.m2)
+        # printable beyond ASCII is accepted; canonical() escapes it, and the Go Gate must verify over the same bytes
+        beyond = carrying(by_owner(dict(auth, fenced="desligado no PDU \u2014 Lisboa, sala t\u00e9cnica")))
+        self.assertEqual(act.verify(beyond, self.m2)["node_id"], "c")
 
     def test_the_owner_s_record_closes_an_epoch_and_names_every_issue(self):
         """d9: once an epoch after the recovery stated recovery_ends_by, the owner's tool issues nothing for it again."""
