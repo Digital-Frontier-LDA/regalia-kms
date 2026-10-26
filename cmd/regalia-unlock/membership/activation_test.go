@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -51,7 +52,7 @@ func TestEveryActivationDecisionIsTheSame(t *testing.T) {
 			t.Errorf("%s: refused for another reason:\nPython: %s\nGo:     %v", c["name"], c["refused"], err)
 		}
 	}
-	if len(cases) < 41 || accepted < 22 || refused < 19 || recovery < 10 {
+	if len(cases) < 50 || accepted < 24 || refused < 26 || recovery < 25 {
 		t.Fatalf("%d cases (%d accepted, %d refused, %d recovery): the file is not the one this test was written for", len(cases), accepted, refused, recovery)
 	}
 	t.Logf("%d accepted and %d refused (%d recovery leases), as the Python decided", accepted, refused, recovery)
@@ -73,7 +74,7 @@ func damaged(value any, odd []any, emit func(label string, changed any)) {
 			damaged(v[i], odd, func(label string, changed any) {
 				out := append([]any(nil), v...)
 				out[i] = changed
-				emit("["+string(rune('0'+i))+"]."+label, out)
+				emit("["+strconv.Itoa(i)+"]."+label, out)
 			})
 		}
 	}
