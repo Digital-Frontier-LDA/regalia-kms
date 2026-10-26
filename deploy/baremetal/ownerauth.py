@@ -15,6 +15,23 @@ An operator decrypts the envelope with the owner's card (`gpg --decrypt owneraut
 comes on STANDARD INPUT as 64 lowercase hex and one newline (read_value), is checked against the record verified
 under the node's PINNED root (verify, check) BEFORE the TPM is touched, and lives only in the process that uses it.
 
+CUSTODY (owner, 2026-10-05, recorded on #242 by regalia-kms-24). Two independent paths, so neither strands a node:
+  * day to day, the .yk.gpg envelope, to the OWNER pair's decryption keys (ADR-0002 D30.7, regalia#568; the record
+    still calls its recipients yk_recipients), as above;
+  * BREAK-GLASS, a SOPS file per node (ownerauth-<node>.bg.sops) encrypted to the "ownerauth-recovery" age identity, a
+    post-quantum key (age1pq1, an mlkem768x25519 stanza: measured with the ceremony's sops 3.13.1 and age 1.3.2) sealed in
+    offline-keys' ADR-0002 D28 key map under the same SLIP-39 shares as the root and K_A, never held whole (24, rc#111);
+    it replaces the per-node .bg.age envelope. A binary SOPS file (`--input-type binary`) holds "<64 hex>\n" and `sops decrypt` gives
+    it back byte for byte, read_value's form; a YAML value given by `--extract` comes WITHOUT the newline (measured with
+    the ceremony's sops 3.13.1), which read_value refuses: one binary file per node, not a map. Nothing on a server
+    holds either the value or that key.
+  * THE DRILL (the ceremony rehearsal): offline-keys opens the identity from k shares into a RAM file, one node's
+    value is decrypted and checked against the root-signed record WITHOUT a TPM (`python3 -Es -m
+    deploy.baremetal.ownerauth check`, main), and the identity file is shredded. The file is on a tmpfs (the ceremony's
+    RAM-only qube), mode 0600, removed there by its exact path: on a disk, removing a file does not destroy it. `--root-key` is the network's PINNED root, from the ceremony's own record of it (a
+    node's node.json root_key, the root card's printed fingerprint), NEVER read from the owner-authorization record or
+    the folder it came in: a record checked under a root it names itself proves nothing (regalia-kms-ed).
+
 THE CHANNEL. tpm2-tools takes an authorization as `-P <auth>`; on argv it would be in /proc for every local user.
 Every owner call here passes `-P file:/dev/fd/N`, N an anonymous memory file (memfd) holding "hex:<64 hex>"
 (owner_call): never on a disk nor on a command line; while the call runs it is readable through /proc/<pid>/fd by
@@ -40,17 +57,18 @@ CURRENT LIMITATIONS (#242):
     epoch and digest) cross in clear, none of them secret;
   * the value is a Python object (bytes, and the 64-hex text it was read from): it cannot be zeroed, and lives in the
     process's memory until it exits, as the offline keys' do;
-  * the break-glass envelope (.bg.age) is decrypted by the operator with age, and the value reaches these tools on
-    standard input in the same form; nothing here reads either envelope file or checks its SHA-256 (the record's
-    yk_sha256/bg_sha256 are for the ceremony's own proof);
+  * the break-glass path is decrypted by the operator (today's ceremony writes .bg.age, for age; the decided SOPS file
+    replaces it with rc#111), and the value reaches these tools on standard input in the same form; nothing here reads
+    any envelope file or checks its SHA-256 (the record's yk_sha256/bg_sha256 are for the ceremony's own proof). The
+    record's field for the break-glass envelope follows rc#111 when it changes: bg_sha256 until then;
   * set() takes the owner authorization from EMPTY only. A TPM whose owner authorization is already set is refused,
     with the way on (its value is this envelope's: nothing to do, `check` proves it; otherwise the TPM's owner
-    hierarchy must be cleared by its owner first). Changing a set value to a new one (a rotation) is not built;
-  * a child process (enrolment's steps as regalia-sync) takes the value from its root parent through an inherited
-    memfd (child_fd, --ownerauth-fd) and does not re-verify the record: the parent verified it. While that child runs,
-    the OWNER authorization is held by a process of uid regalia-sync, the network-facing sync daemon's user: enrolment
-    refuses to hand it over while any other process of that uid exists (enrol._no_sync_process), and moving the owner
-    calls into the root parent is #419;
+    hierarchy must be cleared by its owner first). Changing a set value to a new one is rotate_owner's (`enrol ownerauth
+    --rotate-from OLD_RECORD`): the current value authorizes, the new one is sent encrypted, both checked first;
+  * under v4, enrolment's owner calls are all its root parent's (#419, enrol.define_anchors, define_first_counter):
+    the value never enters a process of regalia-sync. With a lab chain (v1-v3, owner-written) the regalia-sync steps
+    still take it from the parent through an inherited memfd (child_fd, --ownerauth-fd), refused while another process
+    of that uid exists (enrol._no_sync_process), without re-verifying the record: the parent verified it;
   * enrol commit reads the value (standard input) before the operator types the root's fingerprint (at the terminal),
     and checks it against the record (confirm) only once that fingerprint has confirmed the root key;
 """
@@ -59,6 +77,7 @@ import hashlib
 import hmac
 import os
 import re
+import stat
 import subprocess
 
 from deploy.baremetal import membership
@@ -80,6 +99,8 @@ HEX64 = re.compile(r"[0-9a-f]{64}")
 OPENPGP_FPR = re.compile(r"[0-9A-F]{40}")
 NODE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 OWNER = ("-C", "o")                    # the one place this argument pair is written (see the module text)
+HELD_DIR = "/var/lib/regalia-enrol"    # enrol.ENROL_DIR: where `enrol ownerauth` keeps the record the TPM answers to
+HELD_FILE = "ownerauth.json"
 
 
 class Auth:
@@ -248,11 +269,65 @@ def read_arguments(args, stream=None):
     return read_value(stream), envelope
 
 
-def from_arguments(args, root, node_id, stream=None):
-    """The node's Auth from --ownerauth and standard input, judged against the record under the pinned root; None
-    without --ownerauth (the owner authorization is empty)."""
+def record_digest(envelope):
+    """What the node holds of a record: the SHA-256 of its canonical envelope."""
+    return hashlib.sha256(membership.canonical(envelope)).hexdigest()
+
+
+def held(directory=None):
+    """The SHA-256 of the owner-authorization record this node's TPM answers to, as `enrol ownerauth` last set, rotated
+    or adopted it (`directory`/ownerauth.json, default HELD_DIR; root's, 0600; regalia-kms-d9 on #456), or None when none
+    is held (a node set up before #456, or none set)."""
+    path = os.path.join(HELD_DIR if directory is None else directory, HELD_FILE)
+    recovery = ("inspect it; then `enrol ownerauth --check --adopt --record RECORD` (the value on standard input) proves "
+                "the record the TPM answers to and records it, keeping this file as %s.untrusted. Nothing was changed" % HELD_FILE)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)    # no link followed; judged by what was opened
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise Refused("%s cannot be opened (%s): the node's owner-authorization state cannot be trusted; %s"
+                      % (path, error.strerror, recovery)) from None
+    # judged by the descriptor itself, before it is wrapped: fdopen of a directory raises IsADirectoryError, which would
+    # escape as a traceback rather than this refusal (b9 on #502)
+    st = os.fstat(fd)
+    if not (stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) & 0o077 == 0):
+        os.close(fd)
+        raise Refused("%s is not a regular file of root's that only root reads: the node's owner-authorization state "
+                      "cannot be trusted; %s" % (path, recovery))
+    with os.fdopen(fd, "rb") as f:
+        try:
+            doc = membership.load(f.read(4096), 4096)
+        except Refused:
+            doc = None
+    require(isinstance(doc, dict) and sorted(doc) == ["current"] and isinstance(doc["current"], str)
+            and HEX64.fullmatch(doc["current"]) is not None, "%s is not {\"current\": <64 hex>}: %s" % (path, recovery))
+    return doc["current"]
+
+
+def require_held(envelope, directory=None):
+    """Refused unless `envelope` is the record this node holds (#460, agreed by regalia-kms-d9 and 95 on #456): every
+    owner-authorized tool (enrol commit, reanchor, recount) checks it before the TPM, so a record left over from before a
+    rotation is refused by name, not by an authorization failure. With none held, the way on is the one-time adopt."""
+    path = os.path.join(HELD_DIR if directory is None else directory, HELD_FILE)
+    current = held(directory)
+    require(current is not None, "this node holds no record of which owner-authorization record its TPM answers to (%s): "
+            "prove it once with `enrol ownerauth --check --adopt --record RECORD` (its value on standard input). Nothing "
+            "was changed" % path)
+    given = record_digest(envelope)
+    require(given == current, "the --ownerauth record is not the one this node is on (%s..., the node holds %s...): after "
+            "a rotation every owner-authorized tool takes the new record. Nothing was changed" % (given[:16], current[:16]))
+
+
+def from_arguments(args, root, node_id, stream=None, directory=None):
+    """The node's Auth from --ownerauth and standard input, judged against the record under the pinned root, and the
+    record the one the node holds (require_held, `directory` default HELD_DIR); None without --ownerauth (the owner
+    authorization is empty)."""
     pending = read_arguments(args, stream)
-    return None if pending is None else confirm(pending[0], pending[1], root, node_id)
+    if pending is None:
+        return None
+    require_held(pending[1], directory)
+    return confirm(pending[0], pending[1], root, node_id)
 
 
 def console(prompt, tty="/dev/tty"):
@@ -453,6 +528,79 @@ def set_owner(auth, ek_name, tcti=None, run=subprocess.run):
             "menu, and set it again" % why)
 
 
+def dictionary_attack(tcti=None, run=subprocess.run):
+    """(counter, max, recovery seconds): TPM_PT_LOCKOUT_COUNTER, TPM_PT_MAX_AUTH_FAIL and TPM_PT_LOCKOUT_RECOVERY, as
+    `tpm2_getcap properties-variable` prints them ("TPM2_PT_LOCKOUT_COUNTER: 0x0", one hex value a line; measured on swtpm).
+    Unreadable is a refusal, never a guess."""
+    r = run(["tpm2_getcap", "properties-variable"], capture_output=True, env=_env(tcti))
+    require(r.returncode == 0, "cannot read the TPM's properties (tpm2_getcap properties-variable)")
+    text = r.stdout.decode("utf-8", "replace") if isinstance(r.stdout, bytes) else r.stdout
+    found = []
+    for name in ("TPM2_PT_LOCKOUT_COUNTER", "TPM2_PT_MAX_AUTH_FAIL", "TPM2_PT_LOCKOUT_RECOVERY"):
+        m = re.search(r"(?m)^\s*%s:\s*0x([0-9a-fA-F]+)\s*$" % name, text)
+        require(m is not None, "the TPM's properties do not say %s: its dictionary-attack state cannot be judged" % name)
+        found.append(int(m.group(1), 16))
+    return tuple(found)
+
+
+def require_da_budget(tcti=None, run=subprocess.run):
+    """Refused unless the TPM can take a failed authorization without coming near lockout: MAX - COUNTER at least
+    min(3, MAX) (regalia-kms-d9; swtpm's MAX is 3, so there the counter must be 0). Before the ONE call here that a wrong
+    value makes a dictionary-attack strike: a changeauth in the EK-salted session (measured: TPM_RC_AUTH_FAIL, the counter
+    raised; holds' unsalted session answers TPM_RC_BAD_AUTH and raises nothing). At the max, every DA-protected object on
+    the node (its keys) is locked out until LOCKOUT_RECOVERY passes or the lockout authorization resets it."""
+    counter, most, recovery = dictionary_attack(tcti, run)
+    require(most - counter >= min(3, most), "the TPM's dictionary-attack counter is %d of %d: a rotation could lock the node's "
+            "keys out, so it is not attempted. Wait for it to fall (one per %d s without failures) or reset it with the "
+            "lockout authorization (tpm2_dictionarylockout -c, #57). Nothing was changed" % (counter, most, recovery))
+
+
+def rotate_owner(old, new, ek_name, tcti=None, run=subprocess.run):
+    """The TPM's owner authorization changed from `old` (the value it holds) to `new` (#242, regalia-kms-24): one
+    tpm2_changeauth in a session salted to the node's EK with parameter encryption (salted_session, #414), `old` as that
+    session's authorization (`-p session:<ctx>+file:/dev/fd/N`: never sent, only an HMAC keyed by it) and `new` its
+    encrypted parameter, each through its own sealed memfd; then `new` proven (holds). Measured on swtpm: A to B, a wrong
+    `old` refused with the TPM unchanged, B back to A.
+    The CALLER checks both values against their records first. DICTIONARY ATTACK (measured on swtpm, tpm2-tools 5.7): a
+    wrong owner value through holds (tpm2-tools' own UNSALTED HMAC session) is TPM_RC_BAD_AUTH, "without DA implications",
+    and the counter does not move; a wrong value as the authorization of the EK-SALTED session in changeauth is
+    TPM_RC_AUTH_FAIL and raises it. So `old` is proven by holds BEFORE the changeauth, the changeauth never runs on an
+    unproven value, and require_da_budget guards it. Resumable: a TPM that no longer answers to `old` but answers to
+    `new` (a run that stopped after the change) is left as it is, at no strike. Returns True if it changed the TPM, False
+    if it already held `new`."""
+    require(isinstance(old, Auth) and isinstance(new, Auth), "the owner authorizations are not ownerauth.Auth values")
+    require(not hmac.compare_digest(old._raw, new._raw), "the new owner authorization is the current one: nothing to rotate. "
+            "Nothing was changed")
+    measured_once()
+    require(posture(tcti, run)["owner"], "the TPM's owner authorization is empty: there is nothing to rotate. Set it with "
+            "`enrol ownerauth` (without --rotate-from). Nothing was changed")
+    if not holds(old, tcti, run):
+        require(holds(new, tcti, run), "the TPM's owner authorization is neither the current value given nor the new one: "
+                "this TPM was provisioned otherwise, or the records are another node's. Nothing was changed")
+        return False
+    require_da_budget(tcti, run)
+    with salted_session(ek_name, tcti, run) as session:
+        fds = (_value_fd(old), _value_fd(new))
+        try:
+            done = run(["tpm2_changeauth", "-c", "o", "-p", "session:%s+file:/dev/fd/%d" % (session, fds[0]),
+                        "file:/dev/fd/%d" % fds[1]], capture_output=True, env=_env(tcti), pass_fds=fds)
+        finally:
+            for fd in fds:
+                os.close(fd)
+    require(done.returncode == 0, "the TPM did not change the owner authorization: %s. It should still be the current "
+            "value; `enrol ownerauth --check` with the current record tells" % _tail(done.stderr))
+    try:
+        proven, why = holds(new, tcti, run), "it does not answer to it"
+    except Refused as refused:
+        proven, why = False, str(refused)
+    # no-stranding: the TPM said it changed the authorization, and the change cannot be proven
+    require(proven, "the TPM accepted the change but the new value could not be proven (%s): the owner authorization is "
+            "the new value or, if the change did not take, still the current one. `enrol ownerauth --check` with each "
+            "record tells; if neither answers, clear the owner hierarchy with the lockout authorization (tpm2_clear -c l, "
+            "#57) or from the firmware's TPM menu, and set it again" % why)
+    return True
+
+
 AUTH_FAILURE = re.compile(r"\(0x0*9(?:a2|8e)\)", re.IGNORECASE)   # TPM_RC_BAD_AUTH / TPM_RC_AUTH_FAIL, session 1
 
 
@@ -486,3 +634,38 @@ def holds(auth, tcti=None, run=subprocess.run):
     require(AUTH_FAILURE.search(_tail(done.stderr)) is not None,
             "could not ask the TPM whether its owner authorization is this value: %s" % _tail(done.stderr))
     return False
+
+
+def main(argv=None, stdin=None):
+    """`python3 -Es -m deploy.baremetal.ownerauth check --node-id X --root-key ROOT --record ownerauth.record.json`, the
+    value on standard input: whether it is node X's, by the check value of the record verified under the pinned root.
+    Touches no TPM and writes nothing: the break-glass drill's last step (the module text), and a way to tell which
+    node a decrypted value is for before going to that node. Exit 0: it is; 1: refused (not this node's, the record,
+    the form); 2 is argparse's own (a usage error), so a script can tell them apart (regalia-kms-d9)."""
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.ownerauth",
+                                     description="the TPM owner authorization, without a TPM (#242)")
+    sub = parser.add_subparsers(dest="command", required=True)
+    c = sub.add_parser("check", help="is the value on standard input this node's? (the record's check value; no TPM)")
+    c.add_argument("--node-id", required=True)
+    c.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex: the record is verified under it")
+    c.add_argument("--record", required=True, help="the ceremony's ownerauth.record.json")
+    args = parser.parse_args(argv)
+    stream = stdin or sys.stdin.buffer
+    try:
+        require(not (hasattr(stream, "isatty") and stream.isatty()), "standard input is a terminal: it carries the decrypted "
+                "value (sops decrypt ... | or gpg --decrypt ... |), which is never typed")
+        with open(args.record, "rb") as f:
+            envelope = membership.load(f.read(membership.MAX_BYTES + 1), membership.MAX_BYTES)
+        from_envelope(stream, envelope, args.root_key, args.node_id)
+    except (OSError, Refused) as failure:
+        print("REFUSED: %s" % failure, file=sys.stderr)
+        return 1
+    print("the value is %s's: it matches the check value of the record signed by the pinned root (no TPM touched, "
+          "nothing written)" % args.node_id)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

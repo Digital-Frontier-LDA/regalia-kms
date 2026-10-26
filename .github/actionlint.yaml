@@ -1,0 +1,6 @@
+# actionlint's list of GitHub-hosted runner labels predates ubuntu-26.04, so it reports the label as
+# unknown. It is GitHub-hosted (the jobs ran on it: "Image: ubuntu-26.04"); declared here so that
+# finding stops recurring on every change to a workflow.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

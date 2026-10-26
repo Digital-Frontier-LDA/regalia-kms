@@ -1,0 +1,31 @@
+# regalia-zga, regalia-a0y: a failing software-TPM job keeps what its TPM said, so the cause is read from the run that
+# hit it, never re-created on an experiment branch. Used under `if: failure()`. It collects each swtpm's log (level 20,
+# e2e/lib/tpmdiag.py), the QEMU consoles, and what e2e/unlock-boot-qemu.sh copied out of its removed work directory.
+# Test TPMs only: these logs hold test keys and test sessions, never a production secret. Kept 7 days.
+name: tpm-diagnostics
+description: Upload a failing job's software-TPM logs and consoles
+inputs:
+  name:
+    description: the artifact's suffix (the job's name)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Collect the TPM logs
+      shell: bash
+      run: |
+        out="$RUNNER_TEMP/tpm-diagnostics"
+        mkdir -p "$out"
+        # the harnesses' work directories live under /tmp (swtpm's AppArmor profile lets it write there), as root
+        sudo find /tmp -maxdepth 4 -type f \( -name 'tpm.log' -o -name 'swtpm*.log' -o -name 'b-tpm.log' -o -name 'console-*.log' \) \
+          -exec cp --parents -t "$out" {} + 2>/dev/null || true
+        [ -d "$RUNNER_TEMP/unlock-diag" ] && sudo cp -r "$RUNNER_TEMP/unlock-diag" "$out/" || true
+        sudo chown -R "$(id -u):$(id -g)" "$out"
+        echo "kept $(find "$out" -type f | wc -l) file(s), $(du -sh "$out" | cut -f1)"
+    - name: Upload them
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: tpm-diagnostics-${{ inputs.name }}
+        path: ${{ runner.temp }}/tpm-diagnostics
+        if-no-files-found: ignore
+        retention-days: 7

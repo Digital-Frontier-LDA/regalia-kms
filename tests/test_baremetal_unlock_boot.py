@@ -28,6 +28,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from deploy.baremetal import attest, bootcreds, bootnet, espcreds, firewall, membership, sitecfg, uki, unlock
 import tests.test_baremetal_unlock as tub
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "e2e", "lib"))
+import tpmdiag  # noqa: E402  regalia-zga, regalia-a0y: what a TPM failure is diagnosed from
+
 BOOT = os.environ.get("REGALIA_BOOT_DIR", "")
 UNDERLAY = {"a": "192.0.2.10", "b": "198.51.100.7", "c": "198.51.100.9"}
 TUNNEL = {"a": "10.89.0.1", "b": "10.89.0.2", "c": "10.89.0.3"}
@@ -39,6 +42,16 @@ GUEST_MAC = "52:54:00:ab:cd:02"
 # ("recovery key" when that is the only kind of keyslot it knows of, "passphrase or recovery key" otherwise)
 PROMPT = re.compile(rb"Please enter (?:passphrase or )?(?:recovery key|passphrase) for disk (?:root|regalia-root \(root\))")
 OVMF = os.environ.get("REGALIA_OVMF", "/usr/share/OVMF")
+# regalia-a0y: on ubuntu-26.04's QEMU 10.2.1 + swtpm 0.10.1 the FIRMWARE fails to extend a PCR about one boot in
+# fifteen: swtpm answers the PCR_Extend at once, QEMU cancels it (CMD_CANCEL_TPM_CMD) and systemd-stub logs
+# EFI_DEVICE_ERROR. The host's emulation, never the product: a boot that says so fails as exactly that, by name.
+HOST_TPM_FAULT = re.compile(r"Failed to measure data for event \d+: 0x8000000000000007")
+
+
+def host_tpm_fault(console):
+    """The firmware's own line when the host's TPM emulation dropped a measurement (regalia-a0y), or None."""
+    found = HOST_TPM_FAULT.search(console)
+    return found.group(0) if found else None
 run = tub.run
 
 
@@ -83,6 +96,18 @@ def unattended(test, said):
     test.assertRegex(said, PROMPT.pattern.decode())
     test.assertIn("regalia-unlock: gave the key of ", said)
     test.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+
+
+class HostTpmFault(unittest.TestCase):
+    """regalia-a0y's signature, judged without a guest: the firmware's line from runs 39919392188 and 39922567279."""
+
+    def test_the_firmware_s_measurement_failure_is_named(self):
+        console = "EFI stub: WARNING: Failed to measure data for event 1: 0x8000000000000007\r\nLoading Linux ...\n"
+        self.assertEqual(host_tpm_fault(console), "Failed to measure data for event 1: 0x8000000000000007")
+
+    def test_a_good_boot_and_another_error_are_not_it(self):
+        self.assertIsNone(host_tpm_fault("EFI stub: Measured initrd data into PCR 9.\nWelcome to Debian\n"))
+        self.assertIsNone(host_tpm_fault("Failed to measure data for event 1: 0x8000000000000002\n"))   # another status
 
 
 @unittest.skipUnless(os.environ.get("REGALIA_EXPECT_QEMU") == "1", "needs a guest built by e2e/unlock-boot-qemu.sh")
@@ -277,7 +302,11 @@ class OnQemu(tub.OnSwtpm):
         ctrl = self.d + "/a.ctrl"
         if os.path.exists(ctrl):
             os.unlink(ctrl)
-        tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--ctrl", "type=unixio,path=" + ctrl],
+        # regalia-a0y's cause was in this swtpm's log at level 20 (an answered PCR_Extend, then CMD_CANCEL_TPM_CMD): written in
+        # self.d (under /tmp, where swtpm's AppArmor profile lets it write), then kept beside the boot's console
+        tpm_log = "%s/swtpm-%s.log" % (self.d, label)
+        tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--ctrl", "type=unixio,path=" + ctrl,
+                                "--log", tpmdiag.log_arg(tpm_log)],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.processes.append(tpm)
         for _ in range(100):
@@ -288,7 +317,9 @@ class OnQemu(tub.OnSwtpm):
                 "-cpu", "host" if kvm else "max", "-m", "1536", "-smp", "2", "-display", "none", "-no-reboot", "-serial", "stdio",
                 "-drive", "if=pflash,format=raw,unit=0,readonly=on,file=%s/OVMF_CODE_4M.fd" % OVMF,
                 "-drive", "if=pflash,format=raw,unit=1,file=" + variables,
-                "-drive", "file=%s,format=raw,if=virtio" % self.image,
+                # The guest's disk is the first boot option, whatever OVMF would order: ubuntu-26.04's (fresh variables, a
+                # virtio NIC) tried PXE and HTTP boot first, about 60 s each, and boot 1 asked after 158 s (regalia-oiq)
+                "-drive", "file=%s,format=raw,if=none,id=boot" % self.image, "-device", "virtio-blk-pci,drive=boot,bootindex=0",
                 "-netdev", "tap,id=n0,ifname=tap0,script=no,downscript=no", "-device", "virtio-net-pci,netdev=n0,mac=%s" % GUEST_MAC,
                 "-chardev", "socket,id=chrtpm,path=" + ctrl, "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-tis,tpmdev=tpm0"]
         if enrol_disk:
@@ -339,7 +370,17 @@ class OnQemu(tub.OnSwtpm):
         qemu.wait(30)
         tpm.terminate()
         tpm.wait(30)
+        if os.path.exists(tpm_log):
+            shutil.copyfile(tpm_log, "%s/swtpm-%s.log" % (BOOT, label))      # e2e/unlock-boot-qemu.sh keeps it on a failure
         text = said.decode(errors="replace")
+        fault = host_tpm_fault(text)
+        if fault:
+            # a distinct outcome, never retried in silence: the boots share one TPM and one disk, so a boot run again
+            # is not the same boot; the shell runner counts these and says so (e2e/unlock-boot-qemu.sh)
+            print("\nHOST TPM EMULATION FAULT (regalia-a0y) in boot %s: %s" % (label, fault), file=sys.stderr)
+            self.fail("boot %s: HOST TPM EMULATION FAULT (regalia-a0y): the firmware could not measure (%s); the host's "
+                      "QEMU/swtpm, not the product. The job runs on ubuntu-24.04 for this reason (.github/workflows/ci.yml)"
+                      % (label, fault))
         print("\n----- boot %s (%s): %d lines of console; the lines that matter:" % (label, "KVM" if kvm else "TCG", text.count("\n")), file=sys.stderr)
         for line in text.splitlines():
             if re.search(r"REGALIA-E2E|regalia-unlock|wg-boot|Please enter|time limit|cryptsetup\[", line):
@@ -478,7 +519,8 @@ class OnQemu(tub.OnSwtpm):
         print("boot 2: %s" % meminit.strip(), file=sys.stderr)
         self.assertRegex(meminit, r"heap alloc:on")
         self.assertRegex(meminit, r"heap free:on")
-        self.assertRegex(said, r"regalia-unlock: /dev/mapper/root is open: standing down|Stopped regalia-unlock\.service")
+        # the client's own line (#412), not PID 1's "Stopped" status, which a `quiet` command line hides (#413)
+        self.assertIn("regalia-unlock: /dev/mapper/root is open: standing down", said)
         # PCR 12 is what espcreds computes from the ESP's files, and nothing moved it after the initrd
         booted = booted_pcrs(said)
         self.assertIsNotNone(booted)
@@ -709,7 +751,12 @@ class OnQemu(tub.OnSwtpm):
             if n + 1 in attempts:                                # and it did pause that long: no hot loop
                 self.assertGreaterEqual(attempts[n + 1][0] - arrived, pause - 2, "attempt %d came early" % (n + 1))
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
-        self.assertRegex(said, r"regalia-unlock: /dev/mapper/root is open: standing down|Stopped regalia-unlock\.service")
+        # Here the recovery key opened root while the client sat in its backoff, and systemd stopped it at switch-root
+        # between two of its looks: the stop handler says the client's own line on the way out (#572), as the loop does
+        # when it sees root open itself. The test report's count, written to /dev/console whatever the command line,
+        # proves independently that no client survived into the system.
+        self.assertIn("regalia-unlock: /dev/mapper/root is open: standing down", said)
+        self.assertIn("REGALIA-E2E-CLIENT processes=0", said)
         no_shell(self, said)
         self.assertEqual(self.events[since:], [])
 
@@ -767,8 +814,10 @@ class OnQemu(tub.OnSwtpm):
         """The guest's TPM anchor moved to the tip of `envelopes` while the guest is off (what regalia-esp-advance
         does on a running host, after the ESP holds the chain: node.esp_advance)."""
         sock = self.d + "/a-off.sock"
+        tpm_log = self.d + "/swtpm-anchor.log"
         tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--server", "type=unixio,path=" + sock,
-                                "--ctrl", "type=unixio,path=%s.ctrl" % sock, "--flags", "not-need-init,startup-clear"],
+                                "--ctrl", "type=unixio,path=%s.ctrl" % sock, "--flags", "not-need-init,startup-clear",
+                                "--log", tpmdiag.log_arg(tpm_log)],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             for _ in range(100):
@@ -785,6 +834,8 @@ class OnQemu(tub.OnSwtpm):
         finally:
             tpm.terminate()
             tpm.wait(30)
+            if os.path.exists(tpm_log):
+                shutil.copyfile(tpm_log, BOOT + "/swtpm-anchor.log")   # self.d is removed after the test; the script keeps BOOT's
 
 
 if __name__ == "__main__":

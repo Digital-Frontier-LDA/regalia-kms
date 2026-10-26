@@ -47,11 +47,22 @@ chroot "$ROOT" apt-get install -y -qq --no-install-recommends 'libtss2-tcti-devi
   || { tail -20 "$W/apt.log"; echo "initrd-drift: the TPM library did not install"; exit 2; }
 # what a KMS host has installed, as e2e/unlock-boot-qemu.sh installs it
 install -D -m 0755 "$BIN" "$ROOT/usr/bin/regalia-unlock"
+# the membership root the initrd trusts (#156), which 90regalia-unlock's check() requires (#330: without it dracut
+# stops at the module and nothing is compared). The boot test's fixed TEST root, made as it makes it: the inventory
+# binds this entry to the build's input (=root-key on both sides, uki.py), so any root compares equal
+python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))["root_public"]; open(sys.argv[2],"wb").write(json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode())' \
+  tests/vectors/highwater-v1.json "$W/root-key.json"
+install -D -m 0644 "$W/root-key.json" "$ROOT/usr/lib/regalia/root-key.json"
 install -D -m 0755 deploy/baremetal/initrd/wg-boot "$ROOT/usr/lib/regalia/wg-boot"
 install -m 0644 deploy/baremetal/initrd/regalia-boot-render.service deploy/baremetal/initrd/regalia-unlock.service \
   deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
 install -D -m 0755 deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/module-setup.sh"
 install -m 0644 deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"
+# the module's own check() first, against this tree (#330): a requirement the build does not meet stops it here in
+# check()'s own words, not at "dracut failed" with the reason forty lines up dracut's log
+echo "### the dracut module's check()"
+bash e2e/lib/dracut-module-check.sh "$ROOT" "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock" \
+  || { echo "initrd-drift: the regalia-unlock module's check() fails on this tree: dracut would stop at it"; exit 2; }
 echo "### the initrd, by its own dracut"
 KVER="$(ls "$ROOT/lib/modules" | sort -V | tail -1)"
 chroot "$ROOT" dracut --force --no-hostonly --no-hostonly-cmdline --add regalia-unlock --kver "$KVER" /boot/initrd.drift >"$W/dracut.log" 2>&1 \

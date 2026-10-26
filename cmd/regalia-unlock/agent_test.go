@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -406,5 +407,20 @@ func TestTheCommandLine(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(directory, localName), bytes.Repeat([]byte{7}, 32), 0o600)
 	if local, err := localContribution(directory); err != nil || len(local) != 32 {
 		t.Fatal(err)
+	}
+}
+
+// TestAStoppedClientSaysWhyOnTheWayOut is #572: systemd stops the unit at switch-root, and on the recovery-key path
+// that comes between two of pause's looks, so the loop never says "standing down". The stop handler's line does: the
+// loop's own when the volume is open, else that the system stopped it first. Nothing a peer said is in it.
+func TestAStoppedClientSaysWhyOnTheWayOut(t *testing.T) {
+	open := func() bool { return true }
+	shut := func() bool { return false }
+	if got, want := stoppedLine("/dev/mapper/root", syscall.SIGTERM, open), "regalia-unlock: /dev/mapper/root is open: standing down"; got != want {
+		t.Errorf("volume open: %q, want %q (the loop's own line, which the boot test asserts)", got, want)
+	}
+	if got, want := stoppedLine("/dev/mapper/root", syscall.SIGTERM, shut),
+		"regalia-unlock: stopped by the system (terminated) before /dev/mapper/root opened: standing down"; got != want {
+		t.Errorf("volume shut: %q, want %q", got, want)
 	}
 }

@@ -40,7 +40,7 @@ One device serving every cryptographic role a small company actually has:
   bearer tokens, no shared secrets — and a declarative registry decides who may do what, to which
   object, for which purpose. ([`IDENTITY.md`](IDENTITY.md), [`POLICY.md`](POLICY.md), [`config/REGISTRY.md`](config/REGISTRY.md))
 - **Tamper-evident audit** — a hash-chained journal, shippable off-host. ([`AUDIT.md`](AUDIT.md))
-- **Single-signer fencing** — never two active signers across sites. ([`FENCING.md`](FENCING.md))
+- **Serving by majority lease** (decided, ADR-0002 D32, not built): every server serves while it holds its own lease, which 2 of the 3 servers co-sign. Stateful operations commit on a majority before the HSM is used. Today's code still runs the superseded single-signer fence. ([`FENCING.md`](FENCING.md))
 - **SOPS sidecar** — a local Unix-socket adapter makes Regalia the decryption authority; clients
   hold no age/PGP identities. ([`SOPS-TRANSPORT.md`](SOPS-TRANSPORT.md))
 

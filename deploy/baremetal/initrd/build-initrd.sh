@@ -49,7 +49,10 @@
 # CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
 #   * NETWORK. A build needs snapshot.debian.org (the archive at --snapshot) and the Go module proxy and checksum
 #     database (the toolchain go.mod names). There is no offline build: the air-gapped ceremony laptop does not run
-#     this; the builders do, and the laptop signs what two of them agree on.
+#     this; the builders do, and the laptop signs what two of them agree on. debverify tries a package fetch that
+#     failed TRANSIENTLY (a dropped connection, TLS cut off, a timeout, HTTP 5xx) again, 4 attempts in all with
+#     backoff (#425); a 404 and every hash or signature mismatch still refuse at once. mmdebstrap's own downloads are
+#     not retried by this script.
 #   * TRUST ROOTS it does not check further: Debian's archive keyring (pinned by hash), snapshot.debian.org serving
 #     the archive as it was, and Go's checksum database (sum.golang.org) for the toolchain.
 #   * MEASURED ONLY WHERE STATED: byte-identical on GitHub's runners and a Debian 13 container, for snapshot
@@ -77,7 +80,7 @@ SCRIPT="deploy/baremetal/initrd/build-initrd.sh"
 SCHEMA="regalia.initrd-build/v1"
 SUITE=trixie
 PACKAGES="systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,libtss2-tcti-device0t64"
-REPO_FILES=("$SCRIPT" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh deploy/baremetal/uki.py go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
+REPO_FILES=("$SCRIPT" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh deploy/baremetal/uki.py go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
             deploy/baremetal/initrd/regalia-boot-render.service
             deploy/baremetal/initrd/regalia-wg-boot.service deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh
             deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab)
@@ -114,6 +117,8 @@ python3 -I -c 'import cryptography' 2>/dev/null || die "python3-cryptography is 
 # from the same clone is still clean
 # shellcheck source=deploy/baremetal/initrd/repo-git.sh
 . "$REPO/deploy/baremetal/initrd/repo-git.sh"
+# shellcheck source=deploy/baremetal/initrd/tree-retry.sh
+. "$REPO/deploy/baremetal/initrd/tree-retry.sh"
 repo_git_check || die "the checkout is refused (above)"
 echo "build-initrd: the checkout is read as uid $(repo_git_uid) (top $(stat -c %u "$REPO"), .git $(stat -c %u "$REPO/.git"))"
 COMMIT="$(repo_git rev-parse --verify HEAD)" || die "$REPO is not a git checkout"
@@ -137,6 +142,7 @@ mkdir -p "$OUT"
 [ -z "$(ls -A "$OUT")" ] || die "--out $OUT must be empty"
 
 W="$(mktemp -d /var/tmp/regalia-initrd.XXXXXX)"
+TREE_RETRY_BASE="$W"                     # every tree retry_tree removes lies inside it (tree-retry.sh)
 MOUNTED=()
 cleanup(){
   for m in "${MOUNTED[@]:-}"; do [ -n "$m" ] && umount -R "$m" 2>/dev/null; done
@@ -170,9 +176,10 @@ SOURCES=("deb [signed-by=$KEYRING] $MAIN $SUITE main" "deb [signed-by=$KEYRING] 
          "deb [signed-by=$KEYRING] $SECURITY $SUITE-security main")
 echo "### the root tree: Debian $SUITE (main, updates, security) as of $SNAPSHOT"
 # a snapshot's Release file is past its Valid-Until, which only a snapshot may be
-env -i PATH="$PATH" LC_ALL=C TZ=UTC SOURCE_DATE_EPOCH="$EPOCH" mmdebstrap --variant=minbase \
-  --aptopt='Acquire::Check-Valid-Until "false"' --aptopt='Acquire::Retries "5"' --include="$PACKAGES" \
-  "$SUITE" "$ROOT" "${SOURCES[@]}" >"$W/mmdebstrap.log" 2>&1 || { tail -40 "$W/mmdebstrap.log"; die "mmdebstrap failed"; }
+# a fetch that fails (a TLS reset apt does not retry, #503) is tried again into a new tree: tree-retry.sh
+retry_tree "$W/mmdebstrap.log" "$ROOT" env -i PATH="$PATH" LC_ALL=C TZ=UTC SOURCE_DATE_EPOCH="$EPOCH" mmdebstrap --variant=minbase \
+  --aptopt='Acquire::Check-Valid-Until "false"' --aptopt='Acquire::Retries "5"' --aptopt='Acquire::Retries::Delay "true"' \
+  --include="$PACKAGES" "$SUITE" "$ROOT" "${SOURCES[@]}" || { tail -40 "$W/mmdebstrap.log"; die "mmdebstrap failed"; }
 
 install -D -m 0755 "$W/regalia-unlock" "$ROOT/usr/bin/regalia-unlock"
 install -D -m 0755 deploy/baremetal/initrd/wg-boot "$ROOT/usr/lib/regalia/wg-boot"
@@ -226,6 +233,9 @@ INVENTORY=deploy/baremetal/initrd/initrd-inventory.txt
 python3 -BEs -m deploy.baremetal.uki initrd-inventory --initrd "$W/stage/initrd.img" --root "$ROOT" > "$W/inventory.txt" \
   || die "the initrd's inventory could not be written"
 if ! grep -v '^#' "$INVENTORY" | cmp -s - "$W/inventory.txt"; then
+  # the whole built inventory, for a snapshot move to read and review (KERNEL-UPDATE.md; #330): the diff below
+  # shows only 60 lines, and a kernel move changes every module path. Only this text leaves a failed build.
+  cp "$W/inventory.txt" "$OUT/initrd-inventory.built.txt"
   diff <(grep -v '^#' "$INVENTORY") "$W/inventory.txt" | head -60 || true
   die "this initrd's inventory is not $INVENTORY (the lines above: < committed, > built)"
 fi

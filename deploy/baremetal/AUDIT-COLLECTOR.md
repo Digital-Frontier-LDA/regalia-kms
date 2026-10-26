@@ -96,6 +96,8 @@ All of it lives under `/etc/regalia/audit-ship/` and `/etc/regalia/audit-ship.en
   - `RegaliaAuditTrailNeverShipped`: a backlog that has never shipped.
   - `RegaliaAuditTrailTampered`: a trail that no longer holds what was committed. This pages.
   - `RegaliaAuditShipMetricsStale`: the shipper itself not running.
+  - `RegaliaAuditShipMetricsMissing`: a trail of the registry whose shipper never wrote its metrics (not enabled,
+    or `trails.py exec-ship` refused its path, #580): the trail is not shipping at all.
 - **No receipt, no prune.** An archive is removed only with the collector's signed receipt for its last line,
   verified against the pinned key(s), for this node's identity and stream, and with the line chain recomputed
   over the archive (`trails.py prune`). A collector that is down or does not sign means trails grow; nothing is

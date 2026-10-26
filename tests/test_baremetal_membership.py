@@ -100,6 +100,23 @@ class Manifests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(m.Refused):
                 m.load(raw)
 
+    def test_nesting_is_bounded_before_parsing_on_every_python(self):
+        """Python 3.14's json parses 100000 levels where 3.12 raised RecursionError, so the bound is the loader's."""
+        deepest = "[" * m.MAX_DEPTH + "]" * m.MAX_DEPTH
+        self.assertEqual(m._depth(deepest), m.MAX_DEPTH)
+        m.load(deepest)                                                          # the bound itself is accepted
+        for raw in ("[" * (m.MAX_DEPTH + 1) + "]" * (m.MAX_DEPTH + 1), '{"a":' * (m.MAX_DEPTH + 1) + "1" + "}" * (m.MAX_DEPTH + 1),
+                    b"[" * 100000 + b"]" * 100000):
+            with self.subTest(depth=len(raw) // 2), self.assertRaisesRegex(m.Refused, "nested too deeply"):
+                m.load(raw)
+        # brackets inside strings, escaped quotes included, are not nesting; in every encoding json.loads takes
+        for encoding in ("utf-8", "utf-16", "utf-16-be", "utf-32"):
+            with self.subTest(encoding=encoding):
+                self.assertEqual(m.load(json.dumps(['"' + "[" * (m.MAX_DEPTH + 1)]).encode(encoding)), ['"' + "[" * (m.MAX_DEPTH + 1)])
+                with self.assertRaisesRegex(m.Refused, "nested too deeply"):
+                    m.load(("[" * (m.MAX_DEPTH + 1) + "]" * (m.MAX_DEPTH + 1)).encode(encoding))
+        self.assertEqual(m.load('{"a": "%s\\" [[[", "b": ["]]]"]}' % ("[" * 500)), {"a": "[" * 500 + '" [[[', "b": ["]]]"]})
+
     def test_hostile_input_is_a_refusal_never_another_exception(self):
         """48's findings: both are reachable with an unsigned envelope, before any signature is checked."""
         with self.assertRaisesRegex(m.Refused, "not valid JSON: nested too deeply"):
@@ -654,8 +671,8 @@ class RecordWrites(unittest.TestCase):
         verdict = self.fault(argv)
         if isinstance(verdict, bytes):                       # the tool succeeds and prints this
             return subprocess.CompletedProcess(argv, 0, verdict, b"")
-        if isinstance(verdict, tuple):                       # the tool FAILS and still prints this
-            return subprocess.CompletedProcess(argv, verdict[0], verdict[1], b"")
+        if isinstance(verdict, tuple):                       # the tool FAILS and still prints this (and, third, says this)
+            return subprocess.CompletedProcess(argv, verdict[0], verdict[1], verdict[2] if len(verdict) > 2 else b"")
         if verdict is not None:
             return subprocess.CompletedProcess(argv, verdict, b"", b"")
         return self.tpm(argv, **kw)
@@ -797,11 +814,75 @@ class RecordWrites(unittest.TestCase):
             hw.value()
         self.assertEqual(hw.remains(), (None, [(0, "00" * 32), (0, "00" * 32)]))
 
+    def test_a_failed_read_names_the_tpm_s_reason_in_the_refusal_and_the_journal(self):
+        """#448/#450: an intermittent "cannot read 8 bytes" in CI said nothing of why. The refusal now ends with the last
+        line tpm2_nvread printed; the journal keeps all of it (_said). The Go reader appends the same suffix, which is
+        what highwater-v1.json holds both to."""
+        import contextlib
+        import io
+        hw = self.defined()
+        said = b"WARNING:esys:src/tss2-esys/api/Esys_NV_Read.c:311:Esys_NV_Read_Finish() Received a non-TPM Error\nERROR: TPM_RC_RETRY"
+        for index, reason in (("0x1500016", "cannot read 8 bytes from NV index 0x1500016"),
+                              ("0x150001b", "cannot read 48 bytes from the record index 0x150001b")):
+            with self.subTest(index):
+                self.fault = lambda argv, index=index: (1, b"", said) if argv[:2] == ["tpm2_nvread", index] else None
+                journal = io.StringIO()
+                with contextlib.redirect_stderr(journal), self.assertRaises(m.Refused) as caught:
+                    hw.unusable()
+                self.assertTrue(str(caught.exception).startswith(reason), str(caught.exception))
+                self.assertTrue(str(caught.exception).endswith(" (TPM: ERROR: TPM_RC_RETRY)"), str(caught.exception))
+                self.assertNotIn("Received a non-TPM Error", str(caught.exception))   # the last line only
+                self.assertIn("regalia: tpm2_nvread %s failed (exit 1, 0 bytes out): " % index, journal.getvalue())
+                self.assertIn("Received a non-TPM Error | ERROR: TPM_RC_RETRY", journal.getvalue())
+        self.fault = lambda argv: None
+        # a run that gives text, not bytes (text=True, a fake), is named all the same (95's read)
+        journal = io.StringIO()
+        with contextlib.redirect_stderr(journal):
+            m._said("nvread", "0x1500016", subprocess.CompletedProcess(["tpm2_nvread"], 1, "", "ERROR: TPM_RC_YIELDED\n"))
+        self.assertIn("regalia: tpm2_nvread 0x1500016 failed (exit 1, 0 bytes out): ERROR: TPM_RC_YIELDED", journal.getvalue())
+
+    def test_the_refusal_s_tpm_reason_is_one_bounded_line_or_the_byte_count(self):
+        """_why: the last non-empty line, at most 200 characters, decoded with replacement; with no text, how many bytes
+        came back. A refusal that says nothing new is what #450 was."""
+        done = lambda out, err: subprocess.CompletedProcess(["tpm2_nvread"], 1, out, err)
+        self.assertEqual(m._why(done(b"", b"first\nERROR: TPM_RC_RETRY\n\n"), 8), " (TPM: ERROR: TPM_RC_RETRY)")
+        self.assertEqual(m._why(done(b"", "text, not bytes\n"), 8), " (TPM: text, not bytes)")
+        self.assertEqual(m._why(done(b"\0" * 3, b""), 8), " (TPM: 3 bytes, not 8)")
+        self.assertEqual(m._why(done(None, None), 48), " (TPM: 0 bytes, not 48)")
+        # the bytes came back and the tool still failed, saying nothing: the exit status, not "48 bytes, not 48" (#568)
+        self.assertEqual(m._why(done(b"\0" * 48, b""), 48), " (TPM: exit 1, no output)")
+        self.assertEqual(m._why(done(b"", b"\xff" + b"x" * 300), 8), " (TPM: %s)" % ("x" * 200))
+        self.assertEqual(m._why(done(b"", b"bad \xff byte"), 8), " (TPM: bad \ufffd byte)")
+
+    def test_the_tpm_reason_vector_is_what_why_decides(self):
+        """tests/vectors/tpm-reason-v1.json, which the Go reader replays too (TestTheTPMReasonIsTheSameRuleInBoth): a
+        change to _why fails here until the vector is regenerated, and then fails in Go until tpmReason follows. No
+        suffix may carry a C0 or C1 control, whatever the tool printed."""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors", "tpm-reason-v1.json")
+        with open(path, encoding="utf-8") as f:
+            cases = json.load(f)["cases"]
+        self.assertGreaterEqual(len(cases), 10)
+        for c in cases:
+            with self.subTest(c["name"]):
+                done = subprocess.CompletedProcess(["tpm2_nvread"], 1, b"\0" * c["stdout_len"], bytes.fromhex(c["stderr"]))
+                self.assertEqual(m._why(done, c["size"]), c["suffix"])
+                self.assertIsNone(m._UNPRINTABLE.search(c["suffix"]), c["suffix"])
+
+    def test_a_read_remains_cannot_make_names_the_tpm_s_reason(self):
+        """remains() (a re-anchor's read, with the owner's authorization as the fallback) refuses with the reason too."""
+        import contextlib
+        import io
+        hw = self.defined()
+        self.fault = lambda argv: (1, b"", b"ERROR: TPM_RC_YIELDED") if argv[:2] == ["tpm2_nvread", "0x1500016"] else None
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(m.Refused) as caught:
+            hw.remains()
+        self.assertIn("what the anchor holds cannot be known (fail closed) (TPM: ERROR: TPM_RC_YIELDED)", str(caught.exception))
+
     def test_a_record_read_that_fails_is_refused_whatever_it_printed(self):
         hw = self.defined()
         whole = m.HighWater.slot_bytes(0, "00" * 32)
         self.fault = lambda argv: (1, whole) if argv[:2] == ["tpm2_nvread", "0x150001a"] else None
-        with self.assertRaisesRegex(m.Refused, "cannot read 48 bytes from the record index 0x150001a"):
+        with self.assertRaisesRegex(m.Refused, r"cannot read 48 bytes from the record index 0x150001a: .* \(TPM: exit 1, no output\)$"):
             hw.record()
 
     def defined(self):

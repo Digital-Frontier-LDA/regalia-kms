@@ -39,6 +39,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 from deploy.baremetal import beat, heartbeat, keyfd, membership
 
@@ -110,6 +111,66 @@ def sign_manifest(current, proposal, open_signer, confirm, say=print):
     return envelope
 
 
+# ---- the owner as the second source of a recovery (#387; recover.py): off the nodes ----
+
+def sign_recovery(peer_chain, root_key, record_lines, purpose, node_id, session, open_signer, confirm, now,
+                  witnesses=None, counter_epoch=None, say=print, issued=None):
+    """The owner's statement over ONE peer's chain, for recover.py --one-source (or reanchor's), after the owner has judged
+    its tip (regalia-kms-d9's conditions, adopted on #387). The counter does not protect a re-anchor, so this does:
+      * the tip is not below the highest epoch this machine's manifest signing record (`record_lines`, manifest.py's
+        signing-record.jsonl) holds a verified signature for, and the chain holds THAT manifest's exact digest there;
+      * where the node's counter is still readable (`counter_epoch`), the tip is not below it;
+      * every epoch above that record is SHOWN with its changes (the restrictive ones the nodes made since);
+      * the external audit collector (#365) witnesses each node's highest epoch (`witnesses`: a list of
+        (export, receipt, keys, identity, stream) for recover.witness_epoch): an epoch above the tip refuses; with no
+        witness the operator must type "no collector" as part of the line, and the statement says so to the record;
+      * the operator types the line naming the purpose, node, epoch and digest (and "no collector"), after reading
+        that the record is a lower bound and being asked for any later revocation they know of.
+    The statement expires SESSION_TTL - 60 s after the session was `issued` (the node's authenticated time, which
+    `recover session` prints), not by this machine's clock, which an offline laptop may have wrong (d9's read).
+    Returns {"statement", "key", "sig"} for the node."""
+    from deploy.baremetal import manifest as manifest_tool, recover
+    require(purpose in recover.PURPOSES, "the purpose is one of %s" % ", ".join(recover.PURPOSES))
+    tip = recover.verify_chain(peer_chain, root_key)
+    signed = [line for line in record_lines if isinstance(line, dict) and line.get("verified") is True and isinstance(line.get("epoch"), int)]
+    require(signed, "this machine's signing record holds no verified signature: there is no floor to judge the tip by")
+    floor = max(signed, key=lambda line: line["epoch"])
+    require(tip["epoch"] >= floor["epoch"], "the peer's tip (epoch %d) is below what this machine signed (epoch %d): refused, an old chain"
+            % (tip["epoch"], floor["epoch"]))
+    by_epoch = {e["manifest"]["epoch"]: e["manifest"] for e in peer_chain}       # verify_chain held each epoch once, in order
+    require(floor["epoch"] in by_epoch and membership.digest(by_epoch[floor["epoch"]]) == floor["digest"],
+            "the peer's chain does not hold, at epoch %d, the manifest this machine signed (%s...): another chain" % (floor["epoch"], floor["digest"][:16]))
+    if counter_epoch is not None:
+        require(tip["epoch"] >= counter_epoch, "the peer's tip (epoch %d) is below the node's counter (%d)" % (tip["epoch"], counter_epoch))
+    seen = None
+    if witnesses:
+        seen = max(recover.witness_epoch(*w) for w in witnesses)
+        require(seen <= tip["epoch"], "the audit collector saw epoch %d, above the peer's tip (epoch %d): a revocation withheld" % (seen, tip["epoch"]))
+    lines = ["A %s of node %s from ONE peer, the owner the second source:" % (purpose.upper(), node_id),
+             "  the peer's tip       epoch %d, %s" % (tip["epoch"], membership.digest(tip)),
+             "  this machine signed  up to epoch %d (%s), a LOWER BOUND: the nodes may have made restrictive changes since" % (floor["epoch"], floor["digest"]),
+             "  the audit collector  %s" % ("saw at most epoch %d" % seen if seen is not None else "NOT CONSULTED: type 'no collector' below to go on"),
+             "  epochs above what this machine signed:"]
+    for i in range(floor["epoch"], tip["epoch"]):
+        lines.append("    epoch %d: %s" % (i + 1, "; ".join(manifest_tool.diff(by_epoch[i], by_epoch[i + 1]))))
+    if tip["epoch"] == floor["epoch"]:
+        lines.append("    none")
+    if seen is None:
+        lines.append("  WITHOUT THE COLLECTOR, a revocation two nodes signed after epoch %d is invisible here: the root never signs it,"
+                     % floor["epoch"])
+        lines.append("  so it is in no record this machine holds; the peer's tip may be from before it")
+    lines.append("  Do you know of any later revocation? If so, stop here.")
+    want = "%s %s %d %s%s" % (purpose, node_id, tip["epoch"], membership.digest(tip)[:8], "" if seen is not None else " no collector")
+    require((confirm("\n".join(lines) + "\nType exactly: %s\n> " % want) or "").strip() == want,
+            "the line typed is not this %s's: nothing is signed" % purpose)
+    owners = [e["key"] for e in tip.get("owner_keys", []) if e["alg"] == "ed25519"]
+    signer = open_signer()
+    require(signer.public() in owners, "the token's key is not one of the tip manifest's owner_keys: nothing is signed")
+    st = recover.statement(purpose, node_id, tip, session, (now if issued is None else issued) + recover.SESSION_TTL - 60)
+    say("Touch the key now (it signs when touched).")
+    return {"statement": st, "key": signer.public(), "sig": signer.sign(recover.message(st)).hex()}
+
+
 # The marks of a KMS node: its configuration and its installed services. The owner's revocation signature is made off
 # the nodes, so that no node's root can watch the token session (regalia-kms-24, 51's read).
 NODE_MARKS = ("/etc/regalia/node.json", "/usr/lib/systemd/system/regalia-sync.service", "/etc/systemd/system/regalia-sync.service")
@@ -161,8 +222,8 @@ def owner_sign(proposal, manifest, open_signer, confirm, say=print):
 def _as_sync(step, config_path, run, stdin=None):
     """`python3 -m deploy.baremetal.owner <step>` as regalia-sync with the tss group (the TPM), nothing of root's
     environment, from the package root; its last line is a JSON result."""
-    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.owner", step, "--config", config_path],
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", *membership.handover_env(),
+                 sys.executable, "-Es", "-m", "deploy.baremetal.owner", step, "--config", config_path],
                cwd=PACKAGE_ROOT, capture_output=True, text=True, input=stdin if stdin is not None else "")
     require(done.returncode == 0, "the %s step, as %s, did not finish: %s" % (step, SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     return json.loads(done.stdout.strip().splitlines()[-1])
@@ -200,22 +261,66 @@ def main(argv=None):
     for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
                      ("--opensc-conf", {}), ("--pin-env", {})):
         k.add_argument(flag, **kw)                  # the same token options as `beat`
-    v = sub.add_parser("sign-activation", help="(off the nodes) the owner's RECOVERY AUTHORIZATION (#432): one node left activates "
+    act = sub.add_parser("sign-activation", help="(off the nodes) the owner's RECOVERY AUTHORIZATION (#432): one node left activates "
                        "itself, renewing its own leases, until it expires or any new epoch")
-    v.add_argument("--chain", required=True, help="the surviving node's signed chain (a JSON list of envelopes)")
-    v.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
-    v.add_argument("--survivor", required=True, help="the node to activate")
-    v.add_argument("--site", required=True, help="its registry site")
-    v.add_argument("--registry-digest", required=True, help="sha256:<64 hex>, the registry's digest")
-    v.add_argument("--record", required=True, help="the survivor's grant record, exported from it (activation-grant.json)")
-    v.add_argument("--life-s", type=int, help="the authorization's life, at most (and by default) the manifest's recovery_authorization_max_s")
-    v.add_argument("--witness-latest", type=int, help="the latest activation expiry the audit collector holds, when consulted")
-    v.add_argument("--state-dir", required=True, help="this machine's state directory: the record of every authorization the owner "
+    act.add_argument("--chain", required=True, help="the surviving node's signed chain (a JSON list of envelopes)")
+    act.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
+    act.add_argument("--survivor", required=True, help="the node to activate")
+    act.add_argument("--site", required=True, help="its registry site")
+    act.add_argument("--registry-digest", required=True, help="sha256:<64 hex>, the registry's digest")
+    act.add_argument("--record", required=True, help="the survivor's grant record, exported from it (activation-grant.json)")
+    act.add_argument("--life-s", type=int, help="the authorization's life, at most (and by default) the manifest's recovery_authorization_max_s")
+    act.add_argument("--witness-latest", type=int, help="the latest activation expiry the audit collector holds, when consulted")
+    act.add_argument("--state-dir", required=True, help="this machine's state directory: the record of every authorization the owner "
                    "issued (activation-authorizations.jsonl), which manifest.py reads when an epoch ends a recovery")
+    act.add_argument("--out", required=True)
+    for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
+                     ("--opensc-conf", {}), ("--pin-env", {})):
+        act.add_argument(flag, **kw)
+    v = sub.add_parser("sign-recovery", help="(off the nodes) the owner as the second source of a one-peer recovery or re-anchor (#387)")
+    v.add_argument("--chain", required=True, help="the ONE peer's signed chain, as the node exported it")
+    v.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
+    v.add_argument("--record", required=True, help="this machine's manifest signing record (manifest.py's signing-record.jsonl)")
+    v.add_argument("--purpose", required=True, choices=("recover", "reanchor"))
+    v.add_argument("--node-id", required=True, help="the node being recovered")
+    v.add_argument("--session", required=True, help="the session the node printed (`recover session`)")
+    v.add_argument("--session-issued", type=int, required=True, help="the ISSUED time `recover session` printed (the node's authenticated time)")
+    v.add_argument("--counter-epoch", type=int, help="the node's counter, where it is still readable")
+    v.add_argument("--witness", action="append", default=[], metavar="EXPORT.json:RECEIPT.json",
+                   help="the audit collector's export of a node's sync stream and its signed receipt")
+    v.add_argument("--receipt-keys", help="the collector's pinned receipt keys (a JSON list of hex Ed25519 keys)")
+    v.add_argument("--collector-identity", help="the collector's identity the receipts name")
+    v.add_argument("--stream", action="append", default=[], help="the stream each --witness is of, in order (site-<node>.sync)")
     v.add_argument("--out", required=True)
     for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
                      ("--opensc-conf", {}), ("--pin-env", {})):
         v.add_argument(flag, **kw)
+    w = sub.add_parser("sign-survivor", help="(off the nodes) the owner's ONE authorization for a lone survivor (D32.6, survivor.py)")
+    w.add_argument("--chain", required=True, help="the survivor's signed chain; its tip is the quarantine epoch")
+    w.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
+    w.add_argument("--node-id", required=True, help="the survivor")
+    w.add_argument("--how", required=True, help="how the other servers are fenced (powered off, cut off), as the attestation says it")
+    w.add_argument("--life-s", type=int, help="at most, and by default, %d s" % 604800)
+    w.add_argument("--scope", choices=("stateless", "full"), default="stateless",
+                   help="full: stateful operations too, after the wait (the owner's one-server decision, #432)")
+    w.add_argument("--fence-evidence", help="the fence step's power readback (JSON, owner.py fence); without it the fence is the typed fallback")
+    w.add_argument("--inventory", help="the fence inventory the evidence is checked against (with --fence-evidence)")
+    f = sub.add_parser("fence", help="(off the nodes, on the management network) power the fenced servers off through their iLOs (G1, fence.py)")
+    f.add_argument("--inventory", required=True, help="the fence inventory: each node's iLO, pinned certificate, serial and UUID")
+    f.add_argument("--node", action="append", required=True, help="a node to fence (repeat)")
+    f.add_argument("--credentials-fd", type=int, required=True, help="the decrypted fence-only credentials, on a pipe (gpg --decrypt)")
+    f.add_argument("--out", required=True)
+    w.add_argument("--out", required=True)
+    d = sub.add_parser("sign-directive", help="(off the nodes) the owner's disable-only directive during a survivor recovery")
+    d.add_argument("--chain", required=True, help="the survivor's signed chain; its tip is the quarantine epoch")
+    d.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
+    d.add_argument("--object-id", required=True)
+    d.add_argument("--reason", required=True)
+    d.add_argument("--out", required=True)
+    for parser_ in (w, d):
+        for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
+                         ("--opensc-conf", {}), ("--pin-env", {})):
+            parser_.add_argument(flag, **kw)
     for name in ("_propose", "_accept"):
         s = sub.add_parser(name)
         s.add_argument("--config", required=True)
@@ -229,6 +334,31 @@ def main(argv=None):
             else:
                 envelope = membership.load(sys.stdin.read(heartbeat.MAX_BYTES + 1).encode(), heartbeat.MAX_BYTES)
                 print(json.dumps({"left": int(accept(node, envelope, trail))}))
+            return 0
+        if args.op == "fence":
+            off_the_nodes()
+            from deploy.baremetal import fence as fence_tool, manifest as manifest_tool
+            boxes = fence_tool.inventory(manifest_tool.read_json(args.inventory, 65536), args.node)
+            raw = keyfd.read(args.credentials_fd, "the fence credentials")
+            try:
+                credentials = json.loads(bytes(raw))
+            finally:
+                keyfd.zero(raw)
+            # the evidence file is reserved BEFORE any server is powered off: an existing path, a missing directory or no
+            # permission refuses here, never after the fence ran (CodeRabbit on #516). A fence that refuses leaves no file.
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            with os.fdopen(fd, "w") as out:
+                try:
+                    evidence = fence_tool.fence(boxes, args.node, credentials)
+                except BaseException:
+                    os.unlink(args.out)
+                    raise
+                json.dump(evidence, out, sort_keys=True)
+            for nid, seen in sorted(evidence["nodes"].items()):
+                print("FENCED: %s Off at %s and again at %s (serial %s, power restore %s)" % (nid, seen["read_at"], seen["read_again_at"],
+                                                                                        seen["serial"], seen["power_restore_policy"]))
+            print("WRITTEN: %s; carry it to the offline laptop: sign-survivor --fence-evidence %s --inventory <the same inventory>"
+                  % (args.out, args.out))
             return 0
         if args.op == "beat" and os.geteuid() != 0:
             print("REFUSED: run as root, at the node's console", file=sys.stderr)
@@ -263,9 +393,60 @@ def main(argv=None):
                 json.dump(envelope, f, sort_keys=True)
             print("WRITTEN: %s, signed by the owner; import it on a node (revoke.py import)" % args.out)
             return 0
+        if args.op == "sign-recovery":
+            off_the_nodes()
+            from deploy.baremetal import manifest as manifest_tool
+            witnesses = []
+            require(len(args.stream) == len(args.witness), "one --stream for each --witness")
+            if args.witness:
+                require(args.receipt_keys and args.collector_identity, "--witness needs --receipt-keys and --collector-identity")
+                keys = manifest_tool.read_json(args.receipt_keys, 65536)
+                for pair, stream in zip(args.witness, args.stream):
+                    export, _, receipt = pair.partition(":")
+                    witnesses.append((manifest_tool.read_json(export, 64 * 1024 * 1024), manifest_tool.read_json(receipt, 65536),
+                                      keys, args.collector_identity, stream))
+            with open(args.record, "rb") as f:
+                record = [json.loads(line) for line in f.read(16 * 1024 * 1024).splitlines() if line.strip()]
+
+            def confirm_line(text):
+                print(text)
+                return keyfd.tty_line("> ")                 # the console's terminal, never standard input
+            signed = sign_recovery(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), manifest_tool.root_key(args.root_key), record,
+                                   args.purpose, args.node_id, args.session, open_signer, confirm_line, int(time.time()),
+                                   witnesses=witnesses, counter_epoch=args.counter_epoch, issued=args.session_issued)
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            with os.fdopen(fd, "w") as f:
+                json.dump(signed, f, sort_keys=True)
+            print("WRITTEN: %s, valid until %d; give it to the node (recover apply --one-source --owner-statement)"
+                  % (args.out, signed["statement"]["expires"]))
+            return 0
+        if args.op in ("sign-survivor", "sign-directive"):
+            off_the_nodes()
+            from deploy.baremetal import manifest as manifest_tool, survivor
+
+            def confirm_line(text):
+                print(text)
+                return keyfd.tty_line("> ")                 # the console's terminal, never standard input
+            tip = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), manifest_tool.root_key(args.root_key))
+            if args.op == "sign-survivor":
+                fence = manifest_tool.read_json(args.fence_evidence, 65536) if args.fence_evidence else None
+                boxes = None
+                if args.inventory:
+                    from deploy.baremetal import fence as fence_tool
+                    boxes = fence_tool.inventory(manifest_tool.read_json(args.inventory, 65536))
+                signed = survivor.make_authorization(tip, args.node_id, args.how, int(time.time()), confirm_line, open_signer, life_s=args.life_s,
+                                                     scope=args.scope, fence=fence, inventory=boxes)
+                note = "valid until %s or any new epoch; install it on %s" % (signed["authorization"]["expires_at"], args.node_id)
+            else:
+                signed = survivor.make_directive(tip, args.object_id, args.reason, int(time.time()), confirm_line, open_signer)
+                note = "disabled %s; keep it, give it to the survivor, and to the majority when it returns" % args.object_id
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            with os.fdopen(fd, "w") as f:
+                json.dump(signed, f, sort_keys=True)
+            print("WRITTEN: %s, %s" % (args.out, note))
+            return 0
         if args.op == "sign-activation":
             off_the_nodes()
-            import time
             from deploy.baremetal import activation, manifest as manifest_tool
             root = manifest_tool.root_key(args.root_key)
             tip = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), root)

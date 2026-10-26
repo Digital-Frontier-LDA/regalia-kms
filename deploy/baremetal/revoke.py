@@ -122,8 +122,8 @@ def cosign(current, envelope, node_id, key, sign, confirm):
 
 def commit_as_sync(config_path, envelope, run=subprocess.run):
     """Store.commit of the full envelope as regalia-sync, and the chain republished. Returns the new epoch."""
-    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.revoke", "_commit", "--config", config_path],
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", *membership.handover_env(),
+                 sys.executable, "-Es", "-m", "deploy.baremetal.revoke", "_commit", "--config", config_path],
                cwd=PACKAGE_ROOT, capture_output=True, text=True, input=json.dumps({"manifest": envelope["manifest"], "signatures": envelope["signatures"]}))
     require(done.returncode == 0, "the commit, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     return json.loads(done.stdout.strip().splitlines()[-1])["epoch"]

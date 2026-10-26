@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """#74 (Phase 14), tier N: runtime leases on three nodes (e2e/lib/threenode.py, v4 since #199: the nodes sign their own
-heartbeats; no authority host): the real regalia-admission asking the real peers' sync, leases of at most 300 s
+heartbeats; no authority host): the real regalia-admission asking the real peers' sync, leases of at most lease.MAX_LIFETIME (30 s)
 (lease.MAX_LIFETIME) renewed at a third of their life, and a running node revoked by two nodes (revoke.py).
 
-    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-leases.py
+    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> REGALIA_AUDIT_BIN=<dir with regalia-audit-ship, regalia-audit-collector> \
+        sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN python3 -Es e2e/three-node-leases.py
 
 IT CHANGES THE MACHINE (namespaces, interfaces, loop devices, dm-crypt mappings, transient units; an nftables table
 inside one node's namespace, never the host's), so it runs only on a GitHub-hosted runner, or on a throwaway host
@@ -15,7 +16,11 @@ whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
   4  renewals go on, on the heartbeats the nodes sign themselves
   5  a cut off from one peer (its service mesh): it renews through the other
   6  14.3: running a revoked by b and c, each at its own console (revoke.py); both peers refuse its renewals (it is off their service tunnels; by name through a
-     tunnel forced open), and a's admission stops serving by itself when its lease ends (measured against 300 s)
+     tunnel forced open), and a's admission stops serving by itself when its lease ends (measured against lease.MAX_LIFETIME)
+  7  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector (the nodes' real
+     shippers, Cluster(audit=True)), and this scenario's decisions are there by name, each in the stream of the node that
+     made it, within its step: steps 2, 3 and 5's renewals by their issuers, the revocation by b and c, b's refusal of a by
+     name, no lease issued to a after the revocation, and a's own change to not serving
 
 The KMS daemon's own refusal at the lease's end and on revocation is e2e/runtime-admission.py's (two nodes, the
 real daemon: steps 1, 3 and 6); the three-node daemon waits with 14.4. Clock skew is not here: the namespaces share
@@ -100,14 +105,17 @@ def scenario(cluster):
     header("2  14.1: a's lease is renewed")
     first, issuer, _ = held(cluster, "a")
     since = time.time()
+    windows = {}                                     # step -> (issuer, start, end), for step 7
     got = until(lambda: renewed(cluster, "a", first), renewal + 60, 3)
     ok(bool(got) and any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
                          for e in cluster.trail(got[1] if got else issuer)),
        "a's lease is renewed (issued %s, then %s, by %s), and its issuer's trail holds the ALLOW" % (first, got and got[0], got and got[1]), got)
+    windows["2"] = (got[1] if got else issuer, since, time.time())
 
     header("3  14.2: a's issuer crashes; the other peer renews, and a never stops serving")
     current, issuer, _ = held(cluster, "a")
     other = next(n for n in ("b", "c") if n != issuer)
+    crashed_at = time.time()
     cluster.stop(issuer, power=None)
     # one loop, the whole window that matters: from the issuer's crash until the other peer's lease is in, a sampled
     # every 2 s (regalia-kms-3e)
@@ -119,6 +127,7 @@ def scenario(cluster):
         time.sleep(2)
     ok(bool(got), "with %s down, a's next lease is %s's (%s)" % (issuer, other, got and got[0]), held(cluster, "a"))
     ok(not gaps, "and a served at every sample from %s's crash until %s's lease came" % (issuer, other), gaps)
+    windows["3"] = (other, crashed_at, time.time())
     cluster.start(issuer, SERVICES)
     until(lambda: cluster.lease(issuer), 150, 3)
 
@@ -131,6 +140,7 @@ def scenario(cluster):
        {n: held(cluster, n) for n in names})
 
     header("5  a cut off from b: it renews through c")
+    cut_at = time.time()
     cluster.partition("a", ["b"])
     # the holder starts each round at the next peer in turn (node.admission_service), so over two rounds a asks b
     # first at least once; both leases coming from c shows that ask failed and c answered (regalia-kms-3e)
@@ -139,13 +149,31 @@ def scenario(cluster):
     second = first and until(lambda: renewed(cluster, "a", first[0], by="c"), renewal + 90, 3)
     ok(bool(first) and bool(second), "a, cut off from b, renewed twice, both times by c (%s, %s): the round that began at b fell to c"
        % (first and first[0], second and second[0]), held(cluster, "a"))
+    windows["5"] = ("c", cut_at, time.time())
     cluster.heal("a")
 
     header("6  14.3: running a revoked; nobody renews it, and it stops serving by itself")
     service_a = base64.b64encode(bytes.fromhex(cluster.keys["a"]["service"][1])).decode()
+    # watched from the revocation on, beside the checks below: a 30 s lease (D32) runs out while they run, and a watch
+    # begun after them would see the stop late (regalia-kms-48, #485's CI)
+    import threading
+    expiry, stop = [lease_expiry(cluster, "a")], [None]
+
+    def watch():
+        while stop[0] is None and time.time() < revoked_at + lease.MAX_LIFETIME + admission.MARGIN + 120:
+            if cluster.lease("a"):
+                expiry[0] = lease_expiry(cluster, "a") or expiry[0]
+            else:
+                stop[0] = time.time()
+            time.sleep(0.5)
     revoked_at = time.time()
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
     # #199: by two nodes, each at its own console (revoke.py propose on b, cosign on c, which commits it)
     cluster.revoke_by_nodes("b", "c", "a", "REVOKED_STOLEN", "e2e: revoked while running")
+    # committed and spread to b and c from here: a renewal every 10 s (D32) can land while the two-node flow above runs, so
+    # "no lease after" and the lease's bound are judged from here, not from before the flow began (#485's CI)
+    committed_at = time.time()
     off = until(lambda: all(service_a not in cluster.wg_peers(p, "wg-svc") for p in ("b", "c")), 90, 2)
     ok(off is True, "b's and c's service tunnels drop a: its renewals cannot reach them")
     a_address = threenode.wgsvc.address(cluster.keys["a"]["service"][1])
@@ -154,25 +182,65 @@ def scenario(cluster):
     named = until(lambda: [e.get("reason") for e in cluster.trail("b") if e.get("event", "").startswith("sync") and e.get("outcome") == "DENY"
                            and "a is REVOKED_STOLEN under epoch 2" in e.get("reason", "") and e.get("at", 0) >= revoked_at], 150, 3)
     ok(bool(named), "through a tunnel forced open on b, b's sync refuses a's requests by name", named)
-    expiry = [lease_expiry(cluster, "a")]
-
-    def stopped():                                    # the expiry of the last lease a held, read while it still served
-        if cluster.lease("a"):
-            expiry[0] = lease_expiry(cluster, "a") or expiry[0]
-            return False
-        return True
-    done = until(stopped, lease.MAX_LIFETIME + admission.MARGIN + 60, 2)
-    stop_at = time.time()
+    watcher.join(lease.MAX_LIFETIME + admission.MARGIN + 130)
+    done, stop_at = stop[0] is not None, stop[0] or time.time()
     took = stop_at - revoked_at
     due = (expiry[0] - admission.MARGIN) if expiry[0] else None
-    ok(done is True and due is not None and expiry[0] - revoked_at <= lease.MAX_LIFETIME and abs(stop_at - due) <= 10,
+    ok(done is True and due is not None and expiry[0] - committed_at <= lease.MAX_LIFETIME and abs(stop_at - due) <= 3,
        "a's admission stopped serving by itself %.0f s after the revocation: at its last lease's end less the %d s margin "
        "(expected %.0f s; that lease had at most %d s left)" % (took, admission.MARGIN, (due or 0) - revoked_at, lease.MAX_LIFETIME),
        {"stop_minus_due": round(stop_at - due, 1) if due else None, "held": held(cluster, "a")})
     print("  MEASURED: running a revoked -> it stops serving: %.0f s (its last lease's end less the margin; MAX_LIFETIME %d s)"
           % (took, lease.MAX_LIFETIME))
-    ok(not any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= revoked_at
-               for p in ("b", "c") for e in cluster.trail(p)), "and nobody issued a a lease after the revocation")
+    ok(not any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) > committed_at
+               for p in ("b", "c") for e in cluster.trail(p)), "and nobody issued a a lease after the revocation was committed")
+
+    header("7  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector, for the node that recorded it")
+    # The windows compare this harness's clock with the nodes' own trail "at": sound because the namespaces share one
+    # kernel clock (this file's docstring). Each bound is taken BEFORE the action it bounds, so a late one only fails.
+    wrong = cluster.audit_complete()
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t, _, _ in threenode.AUDIT_TRAILS}
+    ok(wrong == {}, "every node's sync, admission and ESP-advance trail is written and in the collector line for line: sequence from 1, chained from "
+       "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
+       {"%s.%s" % k: v for k, v in wrong.items()})
+    within = lambda end: (lambda at: isinstance(at, int) and at <= int(end))
+    renewals = {step: len(cluster.audit_has(by, "sync", since=start, event="sync-lease", subject="a", outcome="ALLOW", at=within(end)))
+                for step, (by, start, end) in windows.items()}
+    ok(renewals.get("2", 0) >= 1, "step 2's renewal of a is in its issuer's (%s) stream" % windows["2"][0], renewals)
+    ok(renewals.get("3", 0) >= 1, "step 3's renewal of a, with %s down, is in %s's stream" % (issuer, windows["3"][0]), renewals)
+    ok(renewals.get("5", 0) == 2, "step 5's two renewals of a, cut off from b, are both in c's stream, and no other", renewals)
+    # revoke_by_nodes("b", "c", ...): b proposes, c co-signs and COMMITS, so only c writes revoke-commit (revoke.py); b
+    # takes epoch 2 by an ordinary sync round, which moved_by_sync finds in b's own stream (CI on #577 measured it)
+    revoked = {"c commits": bool(cluster.audit_has("c", "sync", since=revoked_at, event="revoke-commit", epoch=2, outcome="ALLOW",
+                                                   signers=lambda s: isinstance(s, list) and "b" in s and "c" in s)),
+               "b moved by sync": cluster.moved_by_sync("b", revoked_at, 2) is not None}
+    ok(all(revoked.values()), "the revocation of a (epoch 2, signed by b and c): c's commit in c's stream, and the sync round that "
+       "moved b to it in b's", revoked)
+    by_name = cluster.audit_has("b", "sync", since=revoked_at, outcome="DENY", event=lambda e: isinstance(e, str) and e.startswith("sync"),
+                                reason=lambda r: bool(r) and "a is REVOKED_STOLEN under epoch 2" in r)
+    ok(bool(by_name), "b's refusal of a's requests by name, through the tunnel forced open, is in b's stream")
+    # The converse by POSITION, not time (b9 on #577): "at" is whole seconds and cannot order a lease issued in the same
+    # second as the commit, the race this check is for. Each stream is one chained sequence, so: after the point where
+    # the node itself HELD epoch 2, no sync-lease ALLOW for a anywhere later in that same stream. That point is c's own
+    # revoke-commit, and for b (which only proposed) the sync-apply whose round moved it to epoch 2 (moved_line; b9 on
+    # #577): EXACT, not the first epoch-2 line, which can be a round later and would leave that round unchecked. Before
+    # it, b still held epoch 1, under which a lease for a was right.
+    def held_from(p):
+        if p == "c":
+            line = next(iter(cluster.audit_has("c", "sync", since=revoked_at, event="revoke-commit", epoch=2, outcome="ALLOW")), None)
+        else:
+            line = cluster.moved_line(p, revoked_at, 2)
+        return line.get("seq") if line else None
+    after = {}
+    for p in ("b", "c"):
+        at_seq = held_from(p)
+        after[p] = None if not isinstance(at_seq, int) else [
+            e for e in cluster.audit_has(p, "sync", event="sync-lease", subject="a", outcome="ALLOW",
+                                         seq=lambda s, c=at_seq: isinstance(s, int) and s > c)]
+    ok(all(v == [] for v in after.values()),
+       "and in b's and c's streams no lease was issued to a once each node held epoch 2 (by sequence)", after)
+    stopped = cluster.audit_has("a", "admission", since=revoked_at, event="admission-serving", subject="a", outcome="DENY")
+    ok(bool(stopped), "a's own change to not serving, at its last lease's end, is in a's admission stream", stopped[-1:] if stopped else None)
 
 
 def main():
@@ -195,7 +263,7 @@ def main():
         print("three-node-leases: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work)
+    cluster = threenode.Cluster(work, audit=True)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once

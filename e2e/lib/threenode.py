@@ -52,6 +52,7 @@ import pathlib
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -70,11 +71,18 @@ def _state_directory_mode(unit):
 
 
 ADMISSION_DIR_MODE = _state_directory_mode("regalia-admission.service")
+# the nodes' TPMs are swtpm sockets here, which node.validate accepts only under its test-only switch (regalia-afi, b9 on
+# #596): every unit the fixture starts carries it, and so does a Cluster's own process (set when one is made, never on
+# import: the unit tests import this module). TODO(regalia-afi step 2): gone once the nodes reach their TPMs through the
+# kernel (swtpm --vtpm-proxy).
+SIMULATOR_ENV = "Environment=REGALIA_TCTI_ALLOW_SIMULATOR=1"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import tpmdiag                                                                                      # noqa: E402
+from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, lease, measurements, membership, node, signkey, sitecfg, trails, unlock, uki, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
 NAMES = ("a", "b", "c")
@@ -83,7 +91,8 @@ RECOVERY = b"cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuu
 MARKER = b"regalia-kms root volume marker"
 SWITCH = "e2e3-sw"
 UNIT_PREFIX = "e2e3-"
-AUDIT_TRAILS = (("sync", "state", "sync-audit.jsonl"), ("admission", "admission", "audit.jsonl"))   # each node's own (#340)
+AUDIT_TRAILS = (("sync", "state", "sync-audit.jsonl"), ("admission", "admission_log", "audit.jsonl"),   # each node's own (#340)
+                ("esp-advances", "log", "esp-advances.jsonl"))                                       # the ESP advance's (#66 B3)
 COLLECTOR_UNIT = UNIT_PREFIX + "audit-collector"
 COLLECTOR_PORT = 18443
 
@@ -93,6 +102,146 @@ def sh(*argv, check=True, **kw):
     if check and done.returncode != 0:
         raise RuntimeError("%s failed (%d): %s %s" % (" ".join(argv[:4]), done.returncode, done.stdout.strip()[-600:], done.stderr.strip()[-600:]))
     return done
+
+
+def show_state(unit):
+    """(LoadState, ActiveState, Result, InvocationID) of a unit. A oneshot that ran to success is loaded, inactive, success;
+    a unit that is NOT loaded also reads inactive/success (systemd's defaults), hence LoadState (regalia-kms-48), and a run
+    is told from an earlier one by its InvocationID."""
+    out = sh("systemctl", "show", unit, "-p", "LoadState,ActiveState,Result,InvocationID", check=False).stdout
+    props = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    return props.get("LoadState"), props.get("ActiveState"), props.get("Result"), props.get("InvocationID")
+
+
+def tpm_stop_report(pid, log, shutdown=None, proc="/proc"):
+    """What a software TPM that did not stop looked like (regalia-zga): observed, never guessed, so the next failure names
+    its cause. Whether `pid` is still swtpm (a reused pid would not be), its State (a "Z" exited but was not reaped),
+    its parent, where it waits in the kernel, how the orderly TPM2_Shutdown went, the end of its log, and AppArmor."""
+    def read(name, limit=600):
+        try:
+            with open("%s/%d/%s" % (proc, pid, name), "rb") as f:
+                return f.read(limit).decode(errors="replace").replace("\0", " ").strip()
+        except OSError as error:
+            return "<%s>" % (error.strerror or error)
+    status = dict(line.split(":", 1) for line in read("status", 4096).splitlines() if ":" in line)
+    parts = ["pid %d" % pid, "cmdline %r" % read("cmdline", 300),
+             "State %s" % status.get("State", "?").strip(), "PPid %s" % status.get("PPid", "?").strip(),
+             "wchan %s" % read("wchan", 100), "stack %r" % read("stack", 1200)]
+    # #592: what it was doing as it ignored SIGTERM. The signal masks (SIGTERM is bit 14), every thread's state and wait,
+    # the syscall it sits in, its open fds (a client socket still held?)
+    masks = {k: status.get(k, "").strip() for k in ("SigPnd", "ShdPnd", "SigBlk", "SigIgn", "SigCgt")}
+    parts.append(" ".join("%s %s" % (k, v or "?") for k, v in masks.items()))
+
+    def bit(mask):
+        try:
+            return bool(int(mask, 16) & (1 << (signal.SIGTERM - 1)))
+        except ValueError:
+            return None
+    if masks["SigCgt"]:
+        pending = "pending (process-wide)" if bit(masks["ShdPnd"]) else "pending (thread)" if bit(masks["SigPnd"]) else "not pending"
+        # /proc/<pid>/status's SigPnd and SigBlk are the MAIN thread's (CodeRabbit on #593): each thread's own are below
+        parts.append("SIGTERM %s, %s%s (main thread's masks)" % (pending, "blocked, " if bit(masks["SigBlk"]) else "",
+                                                             "caught" if bit(masks["SigCgt"]) else "ignored" if bit(masks["SigIgn"]) else "not caught"))
+    threads = []
+    for task in sorted(pathlib.Path("%s/%d/task" % (proc, pid)).glob("*"), key=lambda t: int(t.name) if t.name.isdigit() else 0):
+        try:
+            state = task.joinpath("stat").read_text().rsplit(")", 1)[1].split()[0]
+            entry = "%s:%s:%s" % (task.name, state, task.joinpath("wchan").read_text().strip() or "0")
+            try:                                      # this thread's own SIGTERM: blocked, pending, or open to it
+                own = dict(line.split(":", 1) for line in task.joinpath("status").read_text().splitlines() if ":" in line)
+                entry += ":term-%s" % ("blocked" if bit(own.get("SigBlk", "").strip()) else
+                                       "pending" if bit(own.get("SigPnd", "").strip()) else "open")
+            except OSError:
+                pass
+            threads.append(entry)
+        except (OSError, IndexError):
+            threads.append("%s:?" % task.name)
+    parts.append("threads %s" % (" ".join(threads) or "<none read>"))
+    parts.append("syscall %r" % read("syscall", 200))
+    fds = []
+    for fd in sorted(pathlib.Path("%s/%d/fd" % (proc, pid)).glob("*"), key=lambda f: int(f.name) if f.name.isdigit() else 0):
+        try:
+            fds.append("%s->%s" % (fd.name, os.readlink(fd)))
+        except OSError:
+            fds.append("%s->?" % fd.name)
+    parts.append("fds %s" % (" ".join(fds) or "<none read>"))
+    if shutdown is not None:
+        parts.append("tpm2_shutdown %d %r" % (shutdown.returncode, (shutdown.stdout + shutdown.stderr).strip()[-300:]))
+    try:
+        lines = pathlib.Path(log).read_text(errors="replace").splitlines()
+        commands = [i for i, line in enumerate(lines) if "IsEnEnabled(" in line]
+        if commands:
+            last = re.search(r"IsEnEnabled\((0x[0-9a-fA-F]+) = '([^']+)'\)", lines[commands[-1]])
+            parts.append("last command %s (%s)" % (last.group(2), last.group(1)) if last else "last command ?")
+            after = any("Data client disconnected" in line for line in lines[commands[-1]:])
+            parts.append("client attached %s" % ("no (it disconnected after its last command)" if after
+                                                 else "yes (no disconnect after its last command)"))
+        parts.append("log tail %r" % "\n".join(lines[-30:]))       # whole lines: a slice of one misled #592's first reading
+    except OSError as error:
+        parts.append("log <%s>" % (error.strerror or error))
+    if proc == "/proc":
+        try:   # bounded: a stalled journal must never keep the stop error from being raised (CodeRabbit on #563)
+            parts.append("apparmor %r" % sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False,
+                                            timeout=10).stdout[-600:])
+        except subprocess.TimeoutExpired:
+            parts.append("apparmor <journalctl did not answer within 10 s>")
+    return " | ".join(parts)
+
+
+def orderly_shutdown_ok(shutdown):
+    """Whether the TPM took an orderly TPM2_Shutdown: one was asked AND it succeeded. Only then may a stop be absorbed
+    (#592): a swtpm whose Shutdown failed still turns the run red, so this cannot hide a TPM-state bug."""
+    return shutdown is not None and shutdown.returncode == 0
+
+
+ABSORB_LIMIT = 1        # per run: one is swtpm 0.10.1's known flake; more is a pattern, and a pattern is a bug (b9 on #593)
+
+
+def absorbed(seen, name, evidence, summary=None):
+    """Count one absorbed stop (#592) in `seen`, say it in the job's summary (`summary`: $GITHUB_STEP_SUMMARY, when
+    set) as "flake-absorbed", and fail the run once more than ABSORB_LIMIT stops needed SIGKILL."""
+    seen.append((name, evidence))
+    if summary:
+        with open(summary, "a") as f:
+            f.write("flake-absorbed: %d swtpm stop%s needed SIGKILL after an orderly Shutdown (#592): %s\n"
+                    % (len(seen), "" if len(seen) == 1 else "s", ", ".join(n for n, _ in seen)))
+    if len(seen) > ABSORB_LIMIT:
+        raise RuntimeError("%d swtpm stops needed SIGKILL in this run: a pattern, not the known flake (#592): %s"
+                           % (len(seen), " || ".join("%s: %s" % (n, e) for n, e in seen)))
+
+
+def stop_tpm_process(pid, orderly_ok, report, kill=os.kill, gone=None, wait=None, say=print, owned=None):
+    """End a software TPM's process, as the host's power going off does (#592). SIGTERM first. If it does not exit and its
+    orderly TPM2_Shutdown SUCCEEDED (`orderly_ok`), the TPM has nothing left to lose: SIGKILL, which is what a power
+    loss is, and the run goes on with the full report said as an anomaly, so every occurrence is kept in the job's log
+    (swtpm 0.10.1 has ignored SIGTERM there). Without an orderly shutdown it is a failure as before, and so is one that
+    SIGKILL does not end either. `report()` makes the evidence while the process still exists. `owned()` says the pid is
+    still this node's swtpm: anything else is never killed. A check that raises is never read as "stopped" (until()
+    returns the exception, which is truthy: only True counts). Returns the report of an anomaly, or None."""
+    gone = gone or (lambda: not os.path.exists("/proc/%d" % pid))
+    wait = wait or until
+    kill(pid, signal.SIGTERM)
+    if wait(gone, 10, 0.2) is True:
+        return None
+    evidence = report()
+    if not orderly_ok:
+        raise RuntimeError("software TPM pid %d did not stop: %s" % (pid, evidence))
+    if owned is not None and not owned():
+        raise RuntimeError("software TPM pid %d is not this node's swtpm any more: nothing was killed: %s" % (pid, evidence))
+    try:
+        kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        # it exited while the report was made (CodeRabbit on #593): a late stop after SIGTERM, not a kill
+        say("TPM-STOP-LATE (#592): swtpm pid %d exited while its report was made, after SIGTERM: a late stop, not killed. %s"
+            % (pid, evidence))
+        return None
+    if wait(gone, 10, 0.2) is not True:
+        raise RuntimeError("software TPM pid %d did not stop, not even on SIGKILL: %s" % (pid, evidence))
+    say("::warning title=swtpm stop (#592)::flake-absorbed: swtpm pid %d ignored SIGTERM after an orderly Shutdown; ended "
+        "with SIGKILL" % pid)
+    say("TPM-STOP-ANOMALY (#592): swtpm pid %d ignored SIGTERM after an orderly Shutdown that succeeded; ended with SIGKILL, "
+        "as a power loss ends a TPM. %s" % (pid, evidence))
+    return evidence
 
 
 def until(what, seconds, interval=1.0):
@@ -135,6 +284,8 @@ class NodeHere:
         self.tcti = "swtpm:path=%s" % self.tpm_sock
         self.cfg_path = self.dir / "etc" / "node.json"
         self.state, self.admission, self.run = self.dir / "state", self.dir / "admission", self.dir / "run"
+        self.admission_log = self.dir / "log-admission"      # its /var/log/regalia-admission: the admission trail's (#349)
+        self.log = self.dir / "log"                   # its /var/log/regalia-esp-advance: the ESP advance's trail (#66 B3)
 
     def in_ns(self, *argv, check=True, **kw):
         return sh("ip", "netns", "exec", self.ns, *argv, check=check, **kw)
@@ -163,9 +314,30 @@ SOFTHSM = next((c for c in ("/usr/lib/softhsm/libsofthsm2.so", "/usr/lib/x86_64-
 OWNER_PIN = "246813"                              # the SoftHSM owner token's TEST PIN
 
 
+
+def moving_line(events, epoch):
+    """Of a node's sync trail lines `events` (in stream order), the sync-apply whose round moved it to `epoch`, or None.
+    Cluster.moved_by_sync's rule, in one place: a sync-apply is filed under the epoch its round BEGAN from, so the move is
+    the LAST sync-apply before the first pull line (sync-heartbeat or sync-apply) under `epoch`, filed under epoch - 1 and
+    from the same peer; an ALLOW, or a DENY that says the round had moved the membership first. From this line's `seq` on,
+    the node held `epoch`: the first line under `epoch` can be a round later."""
+    first = next((i for i, e in enumerate(events) if e.get("epoch") == epoch and e.get("event") in ("sync-heartbeat", "sync-apply")), None)
+    if first is None:
+        return None
+    rounds = [e for e in events[:first] if e.get("event") == "sync-apply"]
+    if not rounds or rounds[-1].get("epoch") != epoch - 1 or rounds[-1].get("peer") != events[first].get("peer"):
+        return None
+    moved = rounds[-1]
+    if moved.get("outcome") == "ALLOW" or "had moved from epoch %d to %d" % (epoch - 1, epoch) in (moved.get("reason") or ""):
+        return moved
+    return None
+
 class Cluster:
     def __init__(self, work, names=NAMES, audit=False):
         self.work = pathlib.Path(work)
+        # regalia-zga: what a TPM failure is diagnosed from, kept in this run (e2e/lib/tpmdiag.py): which stack it ran on;
+        # each node's swtpm logs at level 20 (_tpm)
+        print(tpmdiag.versions(), flush=True)
         # #199: the cluster is v4. The nodes sign their own heartbeats with their TPM signing keys (beat.py), the owner's
         # party is two Ed25519 keys on a SoftHSM token (the two owner YubiKeys of ADR-0002 D30), and each node boots an
         # image whose PCR 11 a fixture system-phase key signed
@@ -175,10 +347,15 @@ class Cluster:
         # so a scenario can hold every event it caused to the collector's chained stream (audit_complete)
         self.audit = audit
         self.audit_bin = pathlib.Path(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"))
+        self.tool_trails = {}                         # {node: {trail: path}}: an operator tool's trail a scenario ships too (ship_tool_trail)
+        os.environ["REGALIA_TCTI_ALLOW_SIMULATOR"] = "1"   # this process loads the nodes' (swtpm) node.json too (SIMULATOR_ENV)
         self.nodes = {n: NodeHere(self.work, n, i + 1) for i, n in enumerate(names)}
         self.time = {n: True for n in names}          # authenticated time, per node
         self.stop_threads = False
         self.threads = []
+        self.absorbed_stops = []                      # #592: swtpm stops that needed SIGKILL after an orderly Shutdown
+        self._state_lock = threading.Lock()           # _write_as_daemon: the state writer thread and the main thread
+        self.state_revision = 1                       # D32: the etcd revision every node's stand-in watch has applied
         self.chain = []                               # the signed envelopes, epoch 1 first
         self.manifest = None
         self.keys = {}
@@ -201,6 +378,12 @@ class Cluster:
     def build(self):
         # the services' users and groups, from the shipped file (regalia-sync, regalia-admission, their trails' groups)
         sh("systemd-sysusers", str(ROOT / "deploy" / "baremetal" / "units" / "regalia.sysusers.conf"))
+        # D32 (#432): the daemon's user, which writes /run/regalia-state/applied.json and /run/regalia-kms/session-key.json
+        # on a host (deploy/systemd/regalia-kms.service). No daemon runs here: the fixture writes both as that user would
+        (self.work / "regalia-kms.sysusers.conf").write_text('u regalia-kms - "Regalia KMS daemon e2e" - -\n')
+        sh("systemd-sysusers", str(self.work / "regalia-kms.sysusers.conf"))
+        for mount_point in (os.path.dirname(lease.APPLIED_PATH), os.path.dirname(lease.SESSION_KEY_PATH)):
+            os.makedirs(mount_point, exist_ok=True)   # where each node's own directory is bound in its units
         os.chmod(self.work, 0o711)                    # each node's directory is reached through it, read in it only
         # the checkout may sit where the services' users cannot go (a runner's home is 0750): they run a root-owned copy
         shutil.copytree(ROOT / "deploy", self.code / "deploy", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -210,7 +393,7 @@ class Cluster:
         self._owner_token()
         self._network()
         for n in self.members():
-            for d in (n.dir / "etc", n.state, n.admission, n.run):
+            for d in (n.dir / "etc", n.state, n.admission, n.run, n.admission_log):
                 d.mkdir(parents=True)
             os.chmod(n.dir, 0o711)
             self._tpm(n)
@@ -226,6 +409,12 @@ class Cluster:
             os.chmod(n.state, 0o755)
             sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
             os.chmod(n.admission, ADMISSION_DIR_MODE)
+            self._admission_log_dir(n)
+        for n in self.nodes.values():
+            self._state_files(n)
+        writer = threading.Thread(target=self._state_writer, daemon=True)     # stopped by close() (stop_threads)
+        writer.start()
+        self.threads.append(writer)
         if self.audit:
             self._audit_start()
 
@@ -259,7 +448,7 @@ class Cluster:
         ctrl = "type=unixio,path=%s.ctrl,mode=0660,gid=%d" % (n.tpm_sock, tss)
         done = sh("swtpm", "socket", "--tpm2", "--server", server, "--ctrl", ctrl,
                   "--tpmstate", "dir=%s" % (n.dir / "tpm"), "--flags", "not-need-init,startup-clear", "--daemon",
-                  "--pid", "file=%s" % (n.dir / "tpm.pid"), "--log", "file=%s" % (n.dir / "tpm.log"), check=False)
+                  "--pid", "file=%s" % (n.dir / "tpm.pid"), "--log", tpmdiag.log_arg(n.dir / "tpm.log"), check=False)
         if done.returncode != 0 or not until(lambda: n.tpm_sock.exists(), 10, 0.2):
             log = (n.dir / "tpm.log").read_text()[-800:] if (n.dir / "tpm.log").exists() else ""
             denied = sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False).stdout[-800:]
@@ -390,12 +579,25 @@ class Cluster:
         their reset values, every transient object and session gone, as on a host. Without `orderly`, a cut: no
         Shutdown, which a TPM counts against its dictionary-attack limit (#57)."""
         n = self.member(name)
-        if orderly:
-            sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False)
+        shutdown = sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False) if orderly else None
         pid = int((n.dir / "tpm.pid").read_text())
-        os.kill(pid, 15)
-        if not until(lambda: not os.path.exists("/proc/%d" % pid), 10, 0.2):
-            raise RuntimeError("%s's software TPM did not stop" % name)
+        state = "dir=%s" % (n.dir / "tpm")
+
+        def owned():                                  # still this node's swtpm: its cmdline names this node's TPM state
+            try:
+                cmdline = pathlib.Path("/proc/%d/cmdline" % pid).read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            except OSError:
+                return False
+            return cmdline.startswith("swtpm ") and state in cmdline
+        try:
+            # #592 (regalia-zga's evidence): after an orderly Shutdown that succeeded, a swtpm that ignores SIGTERM is ended
+            # as a power loss would end it, counted, and said in full; anything else that does not stop still fails
+            evidence = stop_tpm_process(pid, orderly_shutdown_ok(shutdown), lambda: tpm_stop_report(pid, n.dir / "tpm.log", shutdown),
+                                        owned=owned)
+            if evidence is not None:
+                absorbed(self.absorbed_stops, name, evidence, summary=os.environ.get("GITHUB_STEP_SUMMARY"))
+        except RuntimeError as failure:
+            raise RuntimeError("%s's %s" % (name, failure)) from None
         self._tpm(n)
 
     # ---- images (#75, Phase 15's tier N) ----
@@ -518,6 +720,58 @@ class Cluster:
         key = key or hbt.ROOT
         return {"manifest": manifest, "signature": {"signer": "root", "key": hbt.pub(key), "sig": key.sign(membership.DOMAIN + membership.canonical(manifest)).hex()}}
 
+    # ---- D32 (#432): what the daemon writes on a host, written here ----
+
+    STATE_CLUSTER = "e2e3e2e3e2e3e2e3"
+
+    def _write_as_daemon(self, path, doc):
+        """`doc` at `path` as the daemon writes it: a temporary file renamed over, the daemon's user's, mode 0644."""
+        import pwd
+        user = pwd.getpwnam(lease.DAEMON_USER)
+        # serialized, each write its own temporary file: _state_writer's thread and the main thread (build, replace)
+        # both write applied.json, and one's replace must never pull the other's file away (CodeRabbit on #489)
+        with self._state_lock:
+            tmp = path.with_name(".%s.%d.tmp" % (path.name, threading.get_ident()))
+            tmp.write_text(json.dumps(doc))
+            os.chown(tmp, user.pw_uid, user.pw_gid)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, path)
+
+    def _state_files(self, n):
+        """The node's stand-ins for /run/regalia-state and /run/regalia-kms (bound in its units: properties, as_root),
+        the daemon's user's: its session key (one per node, as one daemon start) and its applied etcd revision."""
+        import pwd
+        user = pwd.getpwnam(lease.DAEMON_USER)
+        for d in (n.dir / "run-state", n.dir / "run-kms"):
+            d.mkdir(exist_ok=True)
+            os.chown(d, user.pw_uid, user.pw_gid)
+            os.chmod(d, 0o755)
+        key = n.dir / "run-kms" / os.path.basename(lease.SESSION_KEY_PATH)
+        if not key.exists():
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+            public = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(b"e2e3 session key " + n.name.encode()).digest()).public_key()
+            self._write_as_daemon(key, {"boot_id": lease.this_boot(), "daemon_started": 0, "session_key": public.public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()})
+        self._write_applied(n)
+
+    def _write_applied(self, n):
+        self._write_as_daemon(n.dir / "run-state" / os.path.basename(lease.APPLIED_PATH),
+                              {"cluster_id": self.STATE_CLUSTER, "state_epoch": 0, "revision": self.state_revision, "boot_id": lease.this_boot(),
+                               "boottime_ns": time.clock_gettime_ns(time.CLOCK_BOOTTIME)})
+
+    def _state_writer(self):
+        """The daemon's etcd watch stand-in: every node's applied.json rewritten every 3 s, so it is never older than a
+        renewal interval (lease.read_applied refuses past 10 s). A node whose stand-ins are not made yet is skipped."""
+        while not self.stop_threads:
+            for n in list(self.nodes.values()):
+                if (n.dir / "run-state").is_dir():
+                    try:
+                        self._write_applied(n)
+                    except OSError:
+                        pass
+            time.sleep(3)
+
     def _configure(self, n):
         example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
         others = [o for o in self.nodes.values() if o is not n]
@@ -532,7 +786,7 @@ class Cluster:
         _replace(n.dir / "etc" / "site.json", json.dumps(site))            # whole, never torn: running services read them
         # no measurements.json: the document is in the node's store by digest, and later ones come by sync (#332)
         cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=n.tcti,
-                   state_dir=str(n.state), admission_dir=str(n.admission), run_dir=str(n.run),
+                   state_dir=str(n.state), admission_dir=str(n.admission), run_dir=str(n.run), admission_log_dir=str(n.admission_log),
                    wg_service_key=str(n.dir / "etc" / "wg-service.key"), measurements=str(n.dir / "etc" / "measurements.json"),
                    time_servers=["nts1.e2e3.invalid", "nts2.e2e3.invalid"], pull_interval=10,
                    beat_interval_s=heartbeat.MIN_INTERVAL_S)    # #199: the shortest the product allows (600 s)
@@ -629,13 +883,17 @@ class Cluster:
         """systemd-run -p for one service of one member: its namespace, the installed unit's identity, and no view
         of the other members' directories."""
         n = self.member(name)
-        props = ["NetworkNamespacePath=/run/netns/" + n.ns, "WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1"]
+        props = ["NetworkNamespacePath=/run/netns/" + n.ns, "WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1",
+                 SIMULATOR_ENV]
         props += ["%s=%s" % (key, value) for key, value in self.identity(service).items()]
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
         # where a booted host's systemd-stub puts the image's PCR signatures and its system-phase key: the node's own
         pcr = n.dir / "pcr"
         props += ["BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
+                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY),
+                  # D32: the daemon's etcd state and session key, as the node's own (the fixture writes them: _state_files)
+                  "BindReadOnlyPaths=%s:%s" % (n.dir / "run-state", os.path.dirname(lease.APPLIED_PATH)),
+                  "BindReadOnlyPaths=%s:%s" % (n.dir / "run-kms", os.path.dirname(lease.SESSION_KEY_PATH))]
         return props
 
     def start(self, name, services=("sync", "wg-apply")):
@@ -708,13 +966,21 @@ class Cluster:
         if not esp.exists():
             esp.mkdir(mode=0o755)
             os.chmod(esp, 0o755)
-        return ("--esp", str(esp), "--esp-lock", str(n.run / "esp-advance.lock"))
+        if not n.log.exists():                        # as regalia.tmpfiles.conf makes /var/log/regalia-esp-advance on a host
+            n.log.mkdir(mode=0o750)
+            shutil.chown(n.log, "root", "regalia-audit-esp-advances")
+            os.chmod(n.log, 0o750)
+        return ("--esp", str(esp), "--esp-lock", str(n.run / "esp-advance.lock"), "--esp-trail", str(n.log / "esp-advances.jsonl"))
 
     def _esp_watch(self, n):
         """#66 B3: regalia-esp-advance.path's stand-in, at every new published chain: the chain to the node's ESP, then
         the TPM anchor. A run that fails is in its journal; anchored() says where the anchor is."""
+        # retried on failure as the installed unit is (Restart=on-failure, StartLimitIntervalSec=0): a transient TPM error on
+        # the shared software TPM must not leave the anchor behind until the next chain, as it would not on a host. 2 s
+        # here, where the unit waits 15 s, so the fixture's 60 s wait for the anchor holds several retries
         self._run(n, "esp-advance", unit=self.unit(n.name, "esp-watch"), args=self._esp_args(n),
-                  extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
+                  extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot",
+                         "-p", "Restart=on-failure", "-p", "RestartSec=2s", "-p", "StartLimitIntervalSec=0"])
 
     def _esp_advance(self, n):
         """regalia-esp-advance's run at start (its unit is WantedBy=multi-user.target), once sync has published: the path
@@ -722,8 +988,18 @@ class Cluster:
         if not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
             raise RuntimeError("%s's sync published no chain" % n.name)
         unit = self.unit(n.name, "esp-watch") + ".service"
-        if sh("systemctl", "start", unit, check=False).returncode != 0:
-            raise RuntimeError("%s's regalia-esp-advance failed at start: %s" % (n.name, self.journal(n.name, "esp-watch")[-1500:]))
+        # a failed start is restarted by the unit itself (Restart=on-failure): what is waited for is a run that succeeded,
+        # within the bound, not the first attempt (main's three-node-recovery once read "cannot read 8 bytes from NV index"
+        # on the shared software TPM, and the fixture gave up where the host's unit would have tried again)
+        before = show_state(unit)[3]
+        started = sh("systemctl", "start", unit, check=False).returncode == 0
+
+        def succeeded():
+            load, active, result, invocation = show_state(unit)
+            return load == "loaded" and active == "inactive" and result == "success" and invocation not in ("", before)
+        if not started and until(succeeded, 60, 1) is not True:
+            raise RuntimeError("%s's regalia-esp-advance failed at start and on its retries: %s"
+                               % (n.name, self.journal(n.name, "esp-watch")[-1500:]))
 
     def anchored(self, name):
         """The node's TPM anchor epoch (read as root)."""
@@ -752,7 +1028,7 @@ class Cluster:
         AK), new WireGuard keys, its directories and clock. Not yet in any manifest."""
         n = NodeHere(self.work, name, max(m.index for m in self.members()) + 1)
         self.nodes[name], self.time[name], self.services[name] = n, True, ()
-        for d in (n.dir / "etc", n.state, n.admission, n.run):
+        for d in (n.dir / "etc", n.state, n.admission, n.run, n.admission_log):
             d.mkdir(parents=True)
         os.chmod(n.dir, 0o711)
         self._wire(n)
@@ -816,10 +1092,12 @@ class Cluster:
         # enrolment ran on the booted system (PCR 11 in its system phase, _leave_initrd); the host reboots before its
         # initrd asks for the disk, so its quote shows the initrd phase the peers admit
         self.power_cycle(new)
+        self._state_files(n)                            # D32: its daemon's stand-in files, as every node's
         sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
         os.chmod(n.admission, ADMISSION_DIR_MODE)            # as the shipped unit makes it (#345)
+        self._admission_log_dir(n)
         return envelope
 
     # ---- #199: restrictive changes without the root (revoke.py), as the operators make them ----
@@ -914,7 +1192,7 @@ class Cluster:
         n = self.member(name)
         for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply")] + \
                 [self.unit(name, w) + t for w in ("wg-watch", "esp-watch") for t in (".path", ".service")] + \
-                [self.unit(name, "ship-" + trail) for trail, _, _ in AUDIT_TRAILS]:
+                [self.unit(name, "ship-" + trail) for trail in self._node_trails(name)]:
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
         self.services[name] = ()
@@ -1277,7 +1555,11 @@ class Cluster:
             self.start(seed, services)
         for name in running:
             if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
-                raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], seed))
+                try:
+                    why = self._why_not_taken(name, seed, since)
+                except Exception as failure:              # noqa: BLE001 - the diagnostic never hides the failure it explains
+                    why = "diagnostic unavailable: %s: %s" % (type(failure).__name__, failure)
+                raise RuntimeError("%s did not take epoch %d from %s | %s" % (name, manifest["epoch"], seed, why))
         # #66 B3: neither deliver nor sync moves the anchor; each running node's regalia-esp-advance writes the epoch to its
         # ESP and then anchors it. Checked at every advance, so tier N keeps the anchor's progression (regalia-kms-24)
         for name in [seed] + running:
@@ -1317,9 +1599,12 @@ class Cluster:
         node's network namespace. `input` goes to its standard input. Returns the completed process (not checked)."""
         n = self.member(name)
         pcr = n.dir / "pcr"
-        props = ["WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1",
+        props = ["WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1", SIMULATOR_ENV,
                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
-                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY)]
+                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", RUN_PCR_KEY),
+                  # D32: the daemon's etcd state and session key, as the node's own (the fixture writes them: _state_files)
+                  "BindReadOnlyPaths=%s:%s" % (n.dir / "run-state", os.path.dirname(lease.APPLIED_PATH)),
+                  "BindReadOnlyPaths=%s:%s" % (n.dir / "run-kms", os.path.dirname(lease.SESSION_KEY_PATH))]
         props += ["NetworkNamespacePath=/run/netns/" + n.ns] if in_ns else []
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
         return sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, label),
@@ -1328,6 +1613,21 @@ class Cluster:
 
     def journal(self, name, service, lines=40):
         return sh("journalctl", "-u", self.unit(name, service), "-n", str(lines), "--no-pager", "-o", "cat", check=False).stdout
+
+    def _why_not_taken(self, name, seed, since):
+        """What a node that did not take an epoch says about it (regalia-kms-24: main's recovery failed with "c did not take
+        epoch 2 from b" and nothing else, c's journal holding only systemd's lines): the epoch the seed publishes, whether
+        each one's sync runs, and the puller's sync trail since the epoch was given (its pulls, applies and refusals)."""
+        def published(n):
+            try:
+                return membership.load((self.nodes[n].state / node.PUBLISHED).read_bytes(), membership.MAX_CHAIN_BYTES)[-1]["manifest"]["epoch"]
+            except (OSError, ValueError, KeyError, IndexError) as error:
+                return "unreadable (%s)" % error
+        lines = [{k: e.get(k) for k in ("at", "event", "outcome", "peer", "subject", "epoch", "reason") if e.get(k) not in (None, "")}
+                 for e in self.trail(name) if e.get("at", 0) >= int(since)]   # whole seconds, as audit_has takes them
+        return "%s publishes epoch %s, its sync %s; %s's sync %s, its trail since: %s" % (
+            seed, published(seed), "runs" if self.running(seed) else "does NOT run", name,
+            "runs" if self.running(name) else "does NOT run", lines[-12:])
 
     def trail(self, name):
         """The node's sync trail, parsed."""
@@ -1389,20 +1689,59 @@ class Cluster:
         if not until(lambda: sh("systemctl", "is-active", COLLECTOR_UNIT, check=False).stdout.strip() == "active", 20, 0.5):
             raise RuntimeError("the audit collector did not start")
 
+    @staticmethod
+    def _admission_log_dir(n):
+        """The admission trail's directory as regalia.tmpfiles.conf makes /var/log/regalia-admission on a host (#349):
+        regalia-admission's, read through regalia-audit-admission, 0750."""
+        sh("chown", "regalia-admission:regalia-audit-admission", str(n.admission_log))
+        os.chmod(n.admission_log, 0o750)
+
     def _trail_path(self, name, trail):
+        if trail in self.tool_trails.get(name, {}):
+            return self.tool_trails[name][trail]
         n = self.nodes[name]
-        return {"sync": n.state / "sync-audit.jsonl", "admission": n.admission / "audit.jsonl"}[trail]
+        return {"sync": n.state / "sync-audit.jsonl", "admission": n.admission_log / "audit.jsonl",
+                "esp-advances": n.log / "esp-advances.jsonl"}[trail]
+
+    def _node_trails(self, name):
+        """The trails shipped for the node: its own (AUDIT_TRAILS), then any operator tool's a scenario added."""
+        return [t for t, _, _ in AUDIT_TRAILS] + sorted(self.tool_trails.get(name, {}))
+
+    def ship_tool_trail(self, name, trail):
+        """The path where the scenario runs operator tool `trail` (trails.TRAILS, read by the tools' group regalia-audit:
+        reanchor, survivor, ...) for node `name`, now shipped and judged with the node's own trails: its own stream
+        e2e3-<node>.<trail>, its shipper in that group only, as regalia-audit-ship@<trail> on a host. In the node's log
+        directory of its own, <node>/tools: the node's /var/log/regalia. #340: an operator's decision on a node reaches the
+        collector too. On a host the tool writes under trails.TOOL_DIR, and trails.append itself gives that directory
+        root:regalia-audit 2750 and every trail the group on each append (_tool_dir, _readable_by_its_shipper;
+        tests/test_baremetal_trails.py, e2e/audit-ship-systemd.py). Here the directory is outside TOOL_DIR, so the fixture
+        gives it that group (_trail_groups), and each trail too. Not the node's log directory: that is the ESP advance's,
+        which a shipper in regalia-audit cannot enter (#588's first CI run: "open .../b/log: permission denied")."""
+        if trail not in trails.TRAILS or trails.TRAILS[trail][3] != trails.TOOL_GROUP:
+            raise ValueError("ship_tool_trail(%r): not an operator tool's trail in trails.TRAILS" % trail)
+        tools = self.nodes[name].dir / "tools"
+        tools.mkdir(mode=0o700, exist_ok=True)                  # root's and private until _trail_groups opens it to the group
+        path = tools / ("%s.jsonl" % trail)
+        self.tool_trails.setdefault(name, {})[trail] = path
+        return path
+
+    @staticmethod
+    def _trail_group(trail):
+        return trails.TOOL_GROUP if trails.TRAILS.get(trail, (None,) * 4)[3] == trails.TOOL_GROUP else "regalia-audit-" + trail
 
     def _trail_groups(self, name):
         """Each of the node's trails (and its rotated archives) back in its reader group, 0640, as its writer keeps it on a
         host (trails.py, #286). This fixture's `chown -R <service>:<service>` of a node's directories, made where a unit's
         StateDirectory= would make the owner, also resets the GROUP, which no host does: the shipper, in the trail's
         reader group only, could then read nothing (the first CI run of #355 shipped no line at all)."""
-        for trail, _, _ in AUDIT_TRAILS:
+        for trail in self._node_trails(name):
             path = self._trail_path(name, trail)
+            if trail in self.tool_trails.get(name, {}):         # its directory as TOOL_DIR is on a host: root:regalia-audit 2750
+                shutil.chown(path.parent, group=trails.TOOL_GROUP)
+                os.chmod(path.parent, 0o2750)
             for f in [path] + sorted(path.parent.glob(path.name + ".*")):
                 if f.is_file() and not f.is_symlink():
-                    shutil.chown(f, group="regalia-audit-" + trail)
+                    shutil.chown(f, group=self._trail_group(trail))
                     os.chmod(f, 0o640)
 
     def _ship_start(self, name):
@@ -1412,12 +1751,12 @@ class Cluster:
         e2e/audit-ship-systemd.py runs the shipped unit itself.)"""
         d = self.audit_dir
         self._trail_groups(name)
-        for trail, _, _ in AUDIT_TRAILS:
+        for trail in self._node_trails(name):
             unit = self.unit(name, "ship-" + trail)
             if sh("systemctl", "is-active", unit, check=False).stdout.strip() == "active":
                 continue
             sh("systemctl", "reset-failed", unit, check=False)
-            sh("systemd-run", "--unit", unit, "--collect", "-p", "User=regalia-audit-ship", "-p", "SupplementaryGroups=regalia-audit-" + trail,
+            sh("systemd-run", "--unit", unit, "--collect", "-p", "User=regalia-audit-ship", "-p", "SupplementaryGroups=" + self._trail_group(trail),
                "-p", "CapabilityBoundingSet=", "-p", "NoNewPrivileges=yes", "-p", "ProtectSystem=strict",
                "-p", "ReadWritePaths=%s" % (d / "heads"),
                str(self.audit_bin / "regalia-audit-ship"), "-trail", trail, "-path", str(self._trail_path(name, trail)),
@@ -1484,8 +1823,8 @@ class Cluster:
                 head.get("committed"), n, len(stream))
         return None
 
-    def audit_complete(self, timeout=180):
-        """{(node, trail): what is wrong} for every node trail (sync, admission) the collector does not hold, line for
+    def audit_complete(self, timeout=180, trails=None):
+        """{(node, trail): what is wrong} for every node trail (sync, admission, esp-advances) the collector does not hold, line for
         line, UP TO A SNAPSHOT of the trail taken when this is called. The trails go on growing while it waits (the
         services run): judged against the trail as re-read at each look, a line written after the shipper's last pass
         failed it (regalia-kms#409, d9: 400 trail lines, 399 in the collector). So the snapshot, taken first, is the
@@ -1497,19 +1836,29 @@ class Cluster:
             (newline included), each DENY still a deny;
           - at the snapshot's end, the signed receipt and the shipper's head file say so.
         Empty when complete. Waits up to `timeout` for the shippers' passes. A node stopped by the scenario ships what its
-        trail holds once it runs again: its shippers are started here."""
+        trail holds once it runs again: its shippers are started here. `trails` (names in AUDIT_TRAILS) judges only those,
+        for a scenario that runs no service writing the others (three-node-netns runs no admission): every trail it names
+        must still have been written."""
+        known = [t for t, _, _ in AUDIT_TRAILS]
+        trails = None if trails is None else tuple(trails)       # read once: an iterator would be spent by the check below
+        if trails is not None and (not trails or set(trails) - set(known)):
+            raise ValueError("audit_complete(trails=%r): each must be one of %s" % (trails, ", ".join(known)))
+        judged = [t for t in known if trails is None or t in trails]
+        # each node's operator-tool trails (ship_tool_trail) are judged with its own, always: a scenario that ships one did so
+        # to hold it, and one it names but never ran leaves "the trail was never written"
+        per_node = {name: judged + sorted(self.tool_trails.get(name, {})) for name in self.nodes}
         for name in self.nodes:
             self._ship_start(name)
 
         def read(name, trail):
             path = self._trail_path(name, trail)
             return path.read_bytes().splitlines(keepends=True) if path.exists() else []
-        snapshot = {(name, trail): read(name, trail) for name in self.nodes for trail, _, _ in AUDIT_TRAILS}
+        snapshot = {(name, trail): read(name, trail) for name in self.nodes for trail in per_node[name]}
 
         def problems(receipts=False):
             wrong = {}
             for name in self.nodes:
-                for trail, _, _ in AUDIT_TRAILS:
+                for trail in per_node[name]:
                     lines = snapshot[(name, trail)]
                     if not lines:
                         wrong[(name, trail)] = "the trail was never written"
@@ -1559,19 +1908,17 @@ class Cluster:
         under the epoch before and from the same peer. Not merely the last ALLOW: every pull that received nothing is an
         ALLOW under the old epoch too, and must not stand in for the move. A round refused after it had moved the
         membership counts only when it says so ("had moved from epoch N-1 to N"), and the answer says it was refused."""
-        events = self.audit_has(name, "sync", since=since)
-        first = next((i for i, e in enumerate(events) if e.get("epoch") == epoch and e.get("event") in ("sync-heartbeat", "sync-apply")), None)
-        if first is None:
+        moved = moving_line(self.audit_has(name, "sync", since=since), epoch)
+        if moved is None:
             return None
-        rounds = [e for e in events[:first] if e.get("event") == "sync-apply"]
-        if not rounds or rounds[-1].get("epoch") != epoch - 1 or rounds[-1].get("peer") != events[first].get("peer"):
-            return None
-        moved = rounds[-1]
         if moved.get("outcome") == "ALLOW":
             return moved.get("peer")
-        if "had moved from epoch %d to %d" % (epoch - 1, epoch) in (moved.get("reason") or ""):
-            return "%s (refused after it moved)" % moved.get("peer")
-        return None
+        return "%s (refused after it moved)" % moved.get("peer")
+
+    def moved_line(self, name, since, epoch):
+        """The sync-apply line itself whose round moved `name` to `epoch` (moving_line, from its collector stream since
+        `since`), or None: its `seq` is the exact point from which the node held `epoch` (b9 on #577)."""
+        return moving_line(self.audit_has(name, "sync", since=since), epoch)
 
     def audit_has(self, name, trail, since=0, **fields):
         """The node's trail lines that its COLLECTOR stream holds (line i taken from the trail only where it hashes to
@@ -1612,6 +1959,8 @@ class Cluster:
             except (OSError, ValueError):
                 pass
             sh("ip", "netns", "del", n.ns, check=False)
+        # regalia-zga: the scripts remove the work directory after this; in CI each node's swtpm log is kept first
+        tpmdiag.keep({"%s/tpm.log" % n.name: str(n.dir / "tpm.log") for n in self.members()}, self.work.name)
         sh("ip", "netns", "del", SWITCH, check=False)
         for loop in self.loops.values():
             sh("losetup", "-d", loop, check=False)

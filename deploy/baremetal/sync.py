@@ -137,7 +137,10 @@ ANSWER_FIELDS = {"pull": ("v", "ok", "summary", "bundle"),
 ENROL_OPS = ("ak-challenge", "ak-enroll", "ak-public", "ak-activate", "path-nonce", "path")
 REFUSAL_FIELDS = ("v", "ok", "refused")
 EVIDENCE_FIELDS = ("ephemeral_public", "nonce", "quote", "signature")
-RATE = {"address": (30, 60), "any": (20, 60), "lease": (6, 60), "beat": (6, 60), "activate": (6, 60), "enrol": (12, 60), "drop": (1, 60), "listener": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
+# class -> (requests, per seconds); the bucket holds that many. "lease" is sized for D32's 30 s lease renewed every 10 s
+# (#485): two asks a renewal (nonce, lease) at one peer when the other is down is 12 a minute, and 6 for retries; it
+# stays within "any" (every request spends that too), which also carries a pull a minute and the heartbeat rounds
+RATE = {"address": (30, 60), "any": (20, 60), "lease": (18, 60), "beat": (6, 60), "activate": (6, 60), "enrol": (12, 60), "drop": (1, 60), "listener": (1, 60)}
 OPEN = ("address", "drop")       # the classes keyed by a source address: anybody who can connect makes a key
 MAX_BUCKETS = 4096               # address-keyed buckets remembered at once; idle ones are forgotten first
 EVERYBODY = "*"                  # the one key the "too many callers" refusal is counted under
@@ -292,7 +295,7 @@ class Server:
     that has already expired."""
 
     def __init__(self, node_id, store, freshness, attester, signer, identify, sink, buckets=None, clock=time.time, enrol=None,
-                 documents=None, cosigner=None, activator=None):
+                 documents=None, cosigner=None, floor=None, applied=None, activator=None):
         """`enrol`: an enrolpeer.Peer, for the enrolment operations (None: they are refused).
         `cosigner(manifest, caller, heartbeat, signature)`: this node's co-signature of a proposed heartbeat (beat.cosign,
         #199), or None: beat-sign is refused.
@@ -301,6 +304,9 @@ class Server:
         self.node_id, self.store, self.freshness, self.attester, self.signer = node_id, store, freshness, attester, signer
         self.documents = documents        # measurements.Documents: what a `measurements` request is answered from (#332)
         self.cosigner, self.activator = cosigner, activator
+        # D32 (#432): the issuer's RevisionFloor, fed from its own fresh reads of the etcd watch's file (`applied()`,
+        # lease.read_applied): without both this node issues no lease
+        self.floor, self.applied = floor, applied
         self.enrol, self._offered, self._offered_lock = enrol, {}, threading.Lock()   # ak-public given: caller -> when
         self.identify, self.sink, self.buckets, self.clock = identify, sink, buckets or Buckets(), clock
         self._seen = None       # the manifest of the last request that read the store: see _is_a_node
@@ -515,7 +521,15 @@ class Server:
         require(request["node_id"] == caller, "the request names %s; the tunnel is %s's" % (request["node_id"], caller))
         membership.exact(evidence, EVIDENCE_FIELDS, "evidence")
         self._spend(view.late, caller, "lease")
-        return {"lease": lease.issue(manifest, self.node_id, request, self._verifier(manifest), evidence, self.freshness, self.signer)}
+        return {"lease": lease.issue(manifest, self.node_id, request, self._verifier(manifest), evidence, self.freshness, self.signer,
+                                     self.observe_state())}
+
+    def observe_state(self):
+        """This issuer's RevisionFloor after a fresh read of its own etcd watch's file (D32): every lease request, and
+        each round of the service (node.Sync), feed it. A stale or absent file is a refusal, and records nothing."""
+        require(self.floor is not None and self.applied is not None, "this node issues no lease: it has no etcd state to judge by (D32)")
+        self.floor.applied(*self.applied())
+        return self.floor
 
 
     def _measurements(self, view, manifest, caller, message):
@@ -773,7 +787,8 @@ class Client:
             def asked():
                 nonce = self._ask(source, "lease-nonce", node_id=self.node_id)["nonce"]
                 membership.hex_field(nonce, 64, "nonce")
-                evidence = quote(nonce, self.store.load())
+                # D32: the quote binds the request's state and session key (lease.request_binding)
+                evidence = quote(nonce, self.store.load(), lease.request_binding(request))
                 return self._ask(source, "lease", request=request, evidence=evidence)["lease"]
             return self._safely(asked, "the lease could not be asked for")()
         return renew

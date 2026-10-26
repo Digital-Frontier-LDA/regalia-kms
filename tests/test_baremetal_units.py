@@ -1,6 +1,7 @@
 """deploy/baremetal/units (#80, step 3b): what each unit may do, pinned. The processes are node.py's; a run
 of the units under a real systemd is the end-to-end step that follows."""
 import configparser
+import json
 import os
 import pathlib
 import re
@@ -30,19 +31,37 @@ class TrailsReachTheirShipper(unittest.TestCase):
     "open .../regalia-admission: permission denied"), its trail never reached the collector."""
 
     def test_every_node_trail_s_directory_is_traversable_by_its_shipper(self):
+        """sync's trail in its StateDirectory, listable by others; admission's in a directory of its own (#349),
+        /var/log/regalia-admission, its writer's and its reader group's (tmpfiles), listable by that group only."""
         from deploy.baremetal import trails
+        tmpfiles = (UNITS / "regalia.tmpfiles.conf").read_text()
+        example = json.loads((UNITS.parent / "node.example.json").read_text())
         checked = []
         for name, entry in trails.TRAILS.items():
-            if not entry[0].startswith(("state_dir/", "admission_dir/")):      # in a service's StateDirectory (the others: root's tools)
+            base = entry[0].partition("/")[0]
+            if base not in ("state_dir", "admission_log_dir"):                  # a service's (the others: root's tools)
                 continue
             writer = re.search(r"regalia-[a-z-]+\.service", entry[1]).group(0)      # the registry names the unit that writes it
-            mode = int(unit(writer)["Service"]["StateDirectoryMode"], 8)
+            if base == "state_dir":
+                mode = int(unit(writer)["Service"]["StateDirectoryMode"], 8)
+                reaches = mode & 0o005 == 0o005                                  # as other: its group is its writer's own
+            else:
+                line = re.search(r"^d %s (\d+) (\S+) (\S+) -$" % re.escape(example[base]), tmpfiles, re.M)
+                self.assertIsNotNone(line, "no tmpfiles line makes %s" % example[base])
+                mode = int(line.group(1), 8)
+                reaches = line.group(3) == entry[3] and mode & 0o050 == 0o050    # through the trail's reader group
             with self.subTest(trail=name):
-                self.assertEqual(mode & 0o005, 0o005, "%s's StateDirectoryMode %s: regalia-audit-ship@%s cannot list and reach %s"
-                                 % (writer, oct(mode), name, entry[0]))
-            checked.append((name, writer, oct(mode)))
-        self.assertEqual(sorted(checked), [("admission", "regalia-admission.service", "0o755"), ("sync", "regalia-sync.service", "0o755")])
+                self.assertTrue(reaches, "%s (%s): regalia-audit-ship@%s cannot list and reach it" % (entry[0], oct(mode), name))
+            checked.append((name, base, oct(mode)))
+        self.assertEqual(sorted(checked), [("admission", "admission_log_dir", "0o750"), ("sync", "state_dir", "0o755")])
         self.assertEqual(unit("regalia-audit-ship@.service")["Service"]["CapabilityBoundingSet"], "")    # the reason: no way around it
+
+    def test_the_admission_state_directory_is_private(self):
+        """#349: nothing in /var/lib/regalia-admission is any other user's to list (lease.json, its lock): its trail is not
+        there. Fails if its StateDirectoryMode is ever looser than 0700."""
+        mode = int(unit("regalia-admission.service")["Service"]["StateDirectoryMode"], 8)
+        self.assertEqual(mode & 0o077, 0, "regalia-admission's StateDirectoryMode %s lets others in" % oct(mode))
+        self.assertEqual(mode, 0o700)
 
     def test_traversal_exposes_no_file_the_admission_service_writes_there(self):
         """24 on #345: 0755 lets anyone pass and list, so nothing the service keeps there may be readable by others. The files it
@@ -53,7 +72,8 @@ class TrailsReachTheirShipper(unittest.TestCase):
         self.addCleanup(shutil.rmtree, d, True)
         old = os.umask(0)
         try:
-            holder = lease.Holder("a", "ab" * 32, lambda: (0, True), lambda: 0, os.path.join(d, "lease.json"))
+            import tests.test_baremetal_lease as lt                   # lease v2: the stand-in state and session key
+            holder = lease.Holder("a", "ab" * 32, lambda: (0, True), lambda: 0, os.path.join(d, "lease.json"), **lt.SOURCES)
             holder.request()                                      # the nonce, written to lease.json under its lock
             trails.append(os.path.join(d, "audit.jsonl"), {"event": "admission", "outcome": "ALLOW"})
         finally:
@@ -149,7 +169,7 @@ class Units(unittest.TestCase):
         admission = self.service("regalia-admission")
         # its own directory only, inside root's /run/regalia; the boot session beside it is not its to write
         self.assertEqual((admission["ReadWritePaths"], admission["StateDirectory"], admission["StateDirectoryMode"]),
-                         ("/run/regalia/admission -/run/regalia-metrics/admission", "regalia-admission", "0755"))   # listable by its trail's shipper (#340)
+                         ("/run/regalia/admission /var/log/regalia-admission -/run/regalia-metrics/admission", "regalia-admission", "0700"))   # its trail elsewhere (#349)
         admission_unit = unit("regalia-admission.service")["Unit"]
         self.assertEqual(admission_unit["Requires"], "regalia-boot-session.service")
         self.assertIn("regalia-boot-session.service", admission_unit["After"].split())
@@ -194,12 +214,15 @@ class Units(unittest.TestCase):
         example = node.validate(json.loads((UNITS.parent / "node.example.json").read_text()))
         self.assertEqual(example["state_dir"], "/var/lib/" + self.service("regalia-sync")["StateDirectory"])
         self.assertEqual(example["admission_dir"], "/var/lib/" + self.service("regalia-admission")["StateDirectory"])
+        self.assertEqual(example["admission_log_dir"], "/var/log/regalia-admission")                       # #349: its trail's, of its own
+        self.assertIn(example["admission_log_dir"], self.service("regalia-admission")["ReadWritePaths"].split())
         self.assertEqual(os.path.dirname(node.admission_file(example["run_dir"])), self.service("regalia-admission")["ReadWritePaths"].split()[0])
         self.assertEqual(unit("regalia-wg-apply.path")["Path"]["PathChanged"], "/var/lib/regalia-sync/" + node.PUBLISHED)
         tmpfiles = (UNITS / "regalia.tmpfiles.conf").read_text()
         self.assertIn("d /run/regalia 0755 root root -", tmpfiles)
         # #191: the lease service's directory is its user's, inside root's, and no one else can write it
         self.assertIn("d /run/regalia/admission 0755 regalia-admission regalia-admission -", tmpfiles)
+        self.assertIn("d /var/log/regalia-admission 0750 regalia-admission regalia-audit-admission -", tmpfiles)
         users = (UNITS / "regalia.sysusers.conf").read_text()
         self.assertIn("u regalia-sync - ", users)
         self.assertIn("u regalia-admission - ", users)
@@ -214,8 +237,12 @@ class Units(unittest.TestCase):
         self.assertEqual((service["User"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
                          ("root", "", "", "yes"))
         self.assertEqual((service["ProtectSystem"], service["ReadWritePaths"], service["PrivateNetwork"], service["RestrictAddressFamilies"]),
-                         ("strict", "/efi -/run/regalia-metrics/esp-advance", "yes", "AF_UNIX"))
-        self.assertEqual((service["DevicePolicy"], service["DeviceAllow"], service["SupplementaryGroups"]), ("closed", "/dev/tpmrm0 rw", "tss"))
+                         ("strict", "/efi -/run/regalia-metrics/esp-advance /var/log/regalia-esp-advance", "yes", "AF_UNIX"))
+        # the TPM through tss; its trail's reader group, so the file it writes takes it (#286)
+        self.assertEqual((service["DevicePolicy"], service["DeviceAllow"], service["SupplementaryGroups"]),
+                         ("closed", "/dev/tpmrm0 rw", "tss regalia-audit-esp-advances"))
+        from deploy.baremetal import trails
+        self.assertEqual(os.path.dirname(trails.where(node.ESP_TRAIL)), service["ReadWritePaths"].split()[-1])
         # the anchor's writer lock, its own (node.ESP_LOCK)
         self.assertEqual("/run/%s/highwater.lock" % service["RuntimeDirectory"], node.ESP_LOCK)
         self.assertEqual((service["Restart"], service["TimeoutStartSec"], service["LimitCORE"]), ("on-failure", "60", "0"))
@@ -240,7 +267,7 @@ class Units(unittest.TestCase):
         done = subprocess.run(["systemd-analyze", "verify", "--man=no", "--recursive-errors=no"] + paths, capture_output=True, text=True)
         problems = [line for line in done.stderr.splitlines() if "chrony.service" not in line and "network-online" not in line and line.strip()]
         self.assertEqual(problems, [])
-        for name in SERVICES + ("regalia-esp-advance",):
+        for name in SERVICES + ("regalia-esp-advance", "regalia-etcd"):
             with self.subTest(name):
                 done = subprocess.run(["systemd-analyze", "security", "--offline=yes", "--no-pager", str(UNITS / (name + ".service"))],
                                       capture_output=True, text=True)
@@ -254,12 +281,54 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class EtcdUnit(unittest.TestCase):
+    """regalia-etcd.service (ADR-0002 D32): the operational-state store, not root, no capability, peers on the mesh only."""
+
+    def test_it_runs_upstream_s_etcd_unprivileged_from_its_rendered_configuration(self):
+        u = unit("regalia-etcd.service")
+        service = u["Service"]
+        self.assertEqual(service["ExecStart"], "/usr/bin/etcd --config-file /etc/regalia/etcd.conf.yml")
+        self.assertEqual(u["Unit"]["ConditionPathExists"], "/etc/regalia/etcd.conf.yml")      # skipped before enrolment
+        self.assertEqual(service["Type"], "notify")
+        self.assertEqual((service["User"], service["Group"]), ("regalia-etcd", "regalia-etcd"))
+        self.assertIn('u regalia-etcd - ', (UNITS / "regalia.sysusers.conf").read_text())
+        self.assertEqual((service["CapabilityBoundingSet"], service["AmbientCapabilities"]), ("", ""))
+        self.assertEqual((service["NoNewPrivileges"], service["ProtectSystem"], service["LimitCORE"]), ("yes", "strict", "0"))
+        # its data (the WAL) under /var, its own; nothing else writable
+        self.assertEqual((service["StateDirectory"], service["StateDirectoryMode"]), ("regalia-etcd", "0700"))
+        # ... and its socket's directory, the only other writable path (regalia-kms-ed on #484): setgid to the client
+        # group, so the socket (0770 under UMask=0007) admits that group alone; never a RuntimeDirectory=, which takes
+        # the unit's group
+        self.assertEqual((service["ReadWritePaths"], service["WorkingDirectory"], service["UMask"]),
+                         ("/run/regalia-etcd", "/run/regalia-etcd", "0007"))
+        self.assertNotIn("RuntimeDirectory", service)
+        self.assertIn("d /run/regalia-etcd 2750 regalia-etcd regalia-etcd-client -", (UNITS / "regalia.tmpfiles.conf").read_text())
+        self.assertIn("g regalia-etcd-client -", (UNITS / "regalia.sysusers.conf").read_text())
+        # a denied call fails, it does not kill (Go may setrlimit); a lone survivor waits for a majority, not a restart loop
+        self.assertEqual((service["SystemCallErrorNumber"], service["TimeoutStartSec"]), ("EPERM", "infinity"))
+        # peers on the mesh only; no device, no TPM (the lease key is not etcd's)
+        self.assertEqual((service["IPAddressDeny"], service["IPAddressAllow"]), ("any", "fd72:6567:6c61::/48"))
+        self.assertEqual((service["PrivateDevices"], service["DevicePolicy"]), ("yes", "closed"))
+        self.assertNotIn("SupplementaryGroups", service)
+        # the TLS keys come sealed, as credentials, never as files in its configuration's directory
+        # one: the peer key. Clients have no TLS (ignored on a unix socket, #491): the socket's group admits them
+        with open(UNITS / "regalia-etcd.service") as f:
+            self.assertEqual([line for line in f.read().splitlines() if line.startswith("LoadCredentialEncrypted=")],
+                             ["LoadCredentialEncrypted=etcd-peer.key:/etc/credstore.encrypted/regalia-etcd-peer.key"])
+
+    def test_the_image_builds_the_etcd_it_runs(self):
+        packages = (UNITS.parent / "image" / "packages.txt").read_text()
+        self.assertRegex(packages, r"(?m)^etcd \| /usr/bin/etcd ")
+
+
 class AuditShipUnit(unittest.TestCase):
     """regalia-audit-ship@.service, one instance a trail (#278)."""
 
     def test_a_tampered_trail_stays_stopped_and_it_holds_no_capability(self):
         service = unit("regalia-audit-ship@.service")["Service"]
-        self.assertTrue(service["ExecStart"].startswith("/usr/bin/regalia-audit-ship -trail %i -path ${TRAIL_PATH} "))
+        # the trail's path from the registry, the shipper exec'd with it (#580): no per-trail env file, which nothing writes
+        self.assertTrue(service["ExecStart"].startswith("/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py exec-ship %i -- "))
+        self.assertNotIn("TRAIL_PATH", service["ExecStart"])
         self.assertEqual((service["Restart"], service["RestartPreventExitStatus"]), ("on-failure", "3"))   # cmd/regalia-audit-ship exitTampered
         self.assertEqual((service["User"], service["Group"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
                          ("regalia-audit-ship", "regalia-audit-ship", "", "", "yes"))
@@ -275,7 +344,8 @@ class AuditShipUnit(unittest.TestCase):
         give the file that group) and the sysusers file of the writer's host creates it; the shipper's drop-in
         names it, and no other unit does, so the shipper reads the trail and nothing else of the writer's."""
         from deploy.baremetal import trails
-        writers = {"sync": ("regalia-sync.service", "regalia.sysusers.conf"), "admission": ("regalia-admission.service", "regalia.sysusers.conf")}
+        writers = {"sync": ("regalia-sync.service", "regalia.sysusers.conf"), "admission": ("regalia-admission.service", "regalia.sysusers.conf"),
+                   "esp-advances": ("regalia-esp-advance.service", "regalia.sysusers.conf")}
         for name, (unit_file, sysusers) in writers.items():
             with self.subTest(name):
                 group = trails.TRAILS[name][3]
@@ -313,6 +383,16 @@ class AuditShipUnit(unittest.TestCase):
             self.assertLessEqual(score, 3.0)
 
 
+class AuditTrailPaths(unittest.TestCase):
+    """#580: a shipper and a pruner find their trail from the registry alone. The old per-trail
+    /etc/regalia/audit-ship/<trail>.env was named by both units and written by nothing, so no node started any."""
+
+    def test_no_unit_names_a_per_trail_environment_file(self):
+        offenders = [p.name for p in UNITS.rglob("*") if p.is_file()
+                     and re.search(r"/etc/regalia/audit-ship/[^ \n]*\.env|TRAIL_PATH", p.read_text(errors="replace"))]
+        self.assertEqual(offenders, [])
+
+
 class AuditPruneUnit(unittest.TestCase):
     """regalia-audit-prune@.service and .timer: archives removed only behind the collector (#278)."""
 
@@ -320,22 +400,25 @@ class AuditPruneUnit(unittest.TestCase):
         service = unit("regalia-audit-prune@.service")["Service"]
         ship = unit("regalia-audit-ship@.service")["Service"]
         self.assertEqual(" ".join(service["ExecStart"].replace("\\\n", " ").split()),
-                         "/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune ${TRAIL_PATH} "
+                         "/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune "
                          "/var/lib/regalia-audit-ship/%i.head.json --trail %i --site ${SITE} --client-cert "
                          "/etc/regalia/audit-ship/client.crt --receipt-keys /etc/regalia/audit-ship/collector-receipt.pub")
         self.assertIn("-head /var/lib/regalia-audit-ship/%i.head.json", ship["ExecStart"])   # the file the shipper writes
-        self.assertIn("/etc/regalia/audit-ship/%i.env", open(UNITS / "regalia-audit-prune@.service").read())  # TRAIL_PATH
+        self.assertNotIn("/etc/regalia/audit-ship/%i.env", open(UNITS / "regalia-audit-prune@.service").read())  # #580: the registry's
         self.assertIn("EnvironmentFile=/etc/regalia/audit-ship.env", open(UNITS / "regalia-audit-prune@.service").read())  # SITE
         self.assertEqual((service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]), ("", "", "yes"))
         self.assertNotIn("User", service)                                          # each instance's owner, from its drop-in
         self.assertEqual((service["ProtectSystem"], service["PrivateNetwork"]), ("strict", "yes"))
         from deploy.baremetal import trails
         writable = service["ReadWritePaths"].split()
-        for name, (where, _, _, _) in trails.TRAILS.items():                   # every trail's directory, and nothing else
-            base = where.partition("/")[0]
-            directory = os.path.dirname(where) if where.startswith("/") else {"state_dir": None, "admission_dir": "/run/regalia/admission"}[base]
-            if directory:
-                self.assertIn("-" + directory, writable, name)
+        # every trail's directory as a node has it: the configuration-relative ones from the shipped example node.json,
+        # which enrolment installs (#580: the old map skipped sync's and named /run/regalia/admission, which is the
+        # admission FILE's directory, not its trail's, so the admission archives could never be pruned)
+        example = json.loads((UNITS.parent / "node.example.json").read_text())
+        for name, (where, _, _, _) in trails.TRAILS.items():
+            base, _, rest = where.partition("/")
+            directory = os.path.dirname(where) if where.startswith("/") else os.path.dirname(os.path.join(example[base], rest))
+            self.assertIn("-" + directory, writable, name)
         self.assertEqual(unit("regalia-audit-prune@.timer")["Timer"]["OnCalendar"], "daily")
 
     def test_each_trail_s_prune_runs_as_its_directory_s_owner(self):

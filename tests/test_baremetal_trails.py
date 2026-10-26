@@ -13,6 +13,9 @@ import unittest.mock
 from deploy.baremetal import node, trails
 
 HERE = os.path.dirname(os.path.abspath(trails.__file__))
+# The rotation children must inherit Rotation's patched ROTATE_BYTES, which only a fork does. Python 3.14
+# made forkserver Linux's default, and its children import trails afresh and never rotate.
+FORK = multiprocessing.get_context("fork")
 
 
 def _writer(path, n, start):
@@ -230,7 +233,7 @@ class Registry(Case):
     def test_every_trail_is_named_once_with_where_it_is(self):
         self.assertEqual(trails.where("enrol"), "/var/log/regalia/enrol.jsonl")
         self.assertEqual(trails.where("sync", {"state_dir": "/var/lib/regalia-sync"}), "/var/lib/regalia-sync/sync-audit.jsonl")
-        self.assertEqual(trails.where("admission", {"admission_dir": "/var/lib/regalia-admission"}), "/var/lib/regalia-admission/audit.jsonl")
+        self.assertEqual(trails.where("admission", {"admission_log_dir": "/var/log/regalia-admission"}), "/var/log/regalia-admission/audit.jsonl")
         self.refused("give the configuration", trails.where, "sync")
         self.refused("no trail is called", trails.where, "nope")
         streams = [stream for _, _, stream, _ in trails.TRAILS.values()]
@@ -241,7 +244,8 @@ class Registry(Case):
     def test_the_node_s_trails_are_where_the_services_write_them(self):
         import inspect
         source = inspect.getsource(node)
-        self.assertIn('node.held("audit.jsonl")', source)                    # admission's, in admission_dir
+        self.assertIn("Trail(node.admission_trail(), \"admission\")", source)  # admission's, in admission_log_dir (#349)
+        self.assertIn('trails.where("admission", self.cfg)', source)
         self.assertIn('node.path("sync-audit.jsonl")', source)               # sync's, in state_dir
 
 
@@ -377,7 +381,7 @@ class Rotation(Case):
             with self.subTest(step):
                 for name in os.listdir(self.d):
                     os.unlink(os.path.join(self.d, name))
-                child = multiprocessing.Process(target=_killed_at, args=(self.path, step, 0))
+                child = FORK.Process(target=_killed_at, args=(self.path, step, 0))
                 child.start()
                 child.join(60)
                 self.assertEqual(child.exitcode, 9, "the child did not reach a rotation")
@@ -391,7 +395,7 @@ class Rotation(Case):
                 self.assertFalse(os.path.exists(self.path + ".next") and step != "before-rename")
 
     def test_writers_waiting_on_a_rotated_file_reopen_the_new_one(self):
-        processes = [multiprocessing.Process(target=_rotating_writer, args=(self.path, 25, 100 * k)) for k in range(4)]
+        processes = [FORK.Process(target=_rotating_writer, args=(self.path, 25, 100 * k)) for k in range(4)]
         for p in processes:
             p.start()
         for p in processes:
@@ -577,3 +581,68 @@ class Rotation(Case):
         self.assertEqual(self.archives(), archives[1:])
         self.assertEqual(trails.verify_trail(self.path)["chained"], 16 - entries[0]["seq"])
         os.unlink(head)
+
+
+class RegistryPaths(unittest.TestCase):
+    """#580: every shipper and pruner finds its trail by trails.resolve, the registry alone, and refuses to start rather
+    than fall back to any default path: the old per-trail env file was named by the units and written by nothing."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.config = os.path.join(self.d, "node.json")
+        self.write({"state_dir": "/var/lib/regalia-sync", "admission_log_dir": "/var/log/regalia-admission", "node_id": "a"})
+
+    def write(self, doc, raw=None):
+        with open(self.config, "w") as f:
+            f.write(raw if raw is not None else json.dumps(doc))
+
+    def test_every_registry_trail_resolves_to_an_absolute_path(self):
+        for name in trails.TRAILS:
+            with self.subTest(name):
+                path = trails.resolve(name, self.config)
+                self.assertTrue(os.path.isabs(path), path)
+        self.assertEqual(trails.resolve("sync", self.config), "/var/lib/regalia-sync/sync-audit.jsonl")
+        self.assertEqual(trails.resolve("admission", self.config), "/var/log/regalia-admission/audit.jsonl")
+        self.assertEqual(trails.resolve("enrol", self.config), trails.TOOL_DIR + "/enrol.jsonl")
+
+    def test_a_fixed_trail_needs_no_configuration(self):
+        self.assertEqual(trails.resolve("enrol", os.path.join(self.d, "absent.json")), trails.TOOL_DIR + "/enrol.jsonl")
+
+    def test_it_fails_closed_never_falling_back_to_a_default(self):
+        with self.assertRaisesRegex(trails.Refused, "no trail is called 'nope'"):
+            trails.resolve("nope", self.config)
+        with self.assertRaisesRegex(trails.Refused, "cannot be read"):
+            trails.resolve("sync", os.path.join(self.d, "absent.json"))
+        for label, doc, raw in (("malformed", None, "{not json"), ("not an object", None, "[]"), ("key missing", {"admission_dir": "/x"}, None),
+                                ("relative", {"state_dir": "var/lib/regalia-sync"}, None), ("not a string", {"state_dir": 7}, None)):
+            with self.subTest(label):
+                self.write(doc, raw)
+                with self.assertRaises(trails.Refused):
+                    trails.resolve("sync", self.config)
+
+    def test_exec_ship_execs_the_shipper_with_the_resolved_path_and_the_rest_of_its_flags(self):
+        seen = []
+        with self.assertRaisesRegex(trails.Refused, "did not start"):          # a stand-in execv that returns
+            trails.exec_ship("admission", ["-collector", "https://c", "-site", "s"], self.config,
+                             shipper="/usr/bin/regalia-audit-ship", execv=lambda path, argv: seen.append((path, argv)))
+        self.assertEqual(seen, [("/usr/bin/regalia-audit-ship", ["/usr/bin/regalia-audit-ship", "-trail", "admission", "-path",
+                                                                 "/var/log/regalia-admission/audit.jsonl", "-collector", "https://c", "-site", "s"])])
+
+    def test_exec_ship_starts_nothing_when_the_path_cannot_be_resolved(self):
+        seen = []
+        self.write({"admission_dir": "/x"})
+        with self.assertRaisesRegex(trails.Refused, "state_dir"):
+            trails.exec_ship("sync", [], self.config, execv=lambda path, argv: seen.append(argv))
+        self.assertEqual(seen, [])
+
+    def test_the_command_line_refuses_with_a_non_zero_status(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        script = os.path.join(root, "deploy", "baremetal", "trails.py")
+        for argv, said in ((["exec-ship", "nope", "--config", self.config, "--", "-x"], "no trail is called"),
+                           (["exec-ship", "sync", "--config", os.path.join(self.d, "absent.json"), "--"], "cannot be read"),
+                           (["exec-ship", "sync", "--config", self.config], "exec-ship <trail>")):
+            with self.subTest(argv=argv):
+                done = subprocess.run([sys.executable, "-Es", script] + argv, capture_output=True, text=True)
+                self.assertEqual(done.returncode, 2, done.stderr)
+                self.assertIn(said, done.stderr)
