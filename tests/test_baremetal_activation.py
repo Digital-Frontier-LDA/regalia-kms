@@ -478,6 +478,32 @@ class RecoveryPath(Record):
         c.record.record(lease(self.m1, activation_epoch=60, not_before=stamp(self.now - 100), expires_at=stamp(self.now + 300)), self.now + 300)
         self.refused("OVERLAP", act.self_renew, "c", self.m2, self.clock(self.now), c, signed, lambda e: None)
 
+    def test_self_renewal_without_an_install_still_waits_the_recovery_wait(self):
+        """regalia-qio (b9 on #453): install_authorization persists nothing, so the wait is the grant record's. A caller that
+        never installs, renewing from the authorization on disk, is held RECOVERY_WAIT_S past c's last grant to another
+        site, not only the skew margin an ordinary lease needs."""
+        signed = self.authorize()
+        c = self.survivor()
+        until = self.now + 300
+        c.record.record(lease(self.m1, activation_epoch=60, not_before=stamp(self.now - 100), expires_at=stamp(until)), until)
+        for at in (until + act.SKEW_S, until + act.RECOVERY_WAIT_S - 1):           # an ordinary lease would pass the first
+            self.refused("the %d s recovery wait" % act.RECOVERY_WAIT_S, act.self_renew, "c", self.m2, self.clock(at), c, signed,
+                         lambda e: None)
+        done = act.self_renew("c", self.m2, self.clock(until + act.RECOVERY_WAIT_S), c, signed, lambda e: None)
+        self.assertEqual(done["signatures"][0]["party"], "c")
+        # and its own renewal after that is a renewal (the same site on the same node): it may overlap
+        act.self_renew("c", self.m2, self.clock(until + act.RECOVERY_WAIT_S + 60), c, signed, lambda e: None)
+
+    def test_an_ordinary_lease_keeps_the_skew_margin(self):
+        """The recovery wait is for recovery leases only: a co-signed lease for another site needs only the skew margin."""
+        c = self.survivor()
+        until = self.now + 300
+        c.record.record(lease(self.m1, activation_epoch=60, not_before=stamp(self.now - 100), expires_at=stamp(until)), until)
+        at = until + act.SKEW_S
+        nxt = lease(self.m1, site="site-c", node_id="b", activation_epoch=61, not_before=stamp(at), expires_at=stamp(at + 300))
+        self.assertEqual(c.record.check(nxt, at), (at, at + 300))
+        self.refused("the %d s skew margin" % act.SKEW_S, c.record.check, dict(nxt, not_before=stamp(at - 1)), at - 1)
+
 
 class OwnerCommand(unittest.TestCase):
     def test_sign_activation_runs_off_the_nodes_and_takes_no_attestation_on_its_command_line(self):

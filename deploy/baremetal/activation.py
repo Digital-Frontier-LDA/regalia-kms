@@ -250,11 +250,15 @@ class GrantRecord:
                     "an epoch is granted once" % (lease["activation_epoch"], last["activation_epoch"]))
             # only a renewal (the same site on the same node) may overlap: the same site on ANOTHER node is two signers
             # for one key, the double signing fencing exists to stop (d9). Past the skew margin, since the old site's
-            # Gate judges its expiry by its own clock and the new one's not_before by another (d9)
+            # Gate judges its expiry by its own clock and the new one's not_before by another (d9). A recovery lease
+            # waits RECOVERY_WAIT_S instead: no other node co-signs it, so nothing else stops it overlapping runtime
+            # leases the old site still holds. Held HERE, under the grant lock and on the record, so self_renew keeps
+            # the wait whether or not install_authorization ran first (regalia-qio)
             if (last["site"], last.get("node_id")) != (lease["site"], lease["node_id"]):
-                require(start >= last["expires_at"] + SKEW_S, "OVERLAP: this node granted site %s on %s until %d; a lease for site %s on %s "
-                        "may not begin before that, and the %d s skew margin" % (last["site"], last.get("node_id"), last["expires_at"],
-                                                                                lease["site"], lease["node_id"], SKEW_S))
+                margin, why = (RECOVERY_WAIT_S, "recovery wait") if "recovery" in lease else (SKEW_S, "skew margin")
+                require(start >= last["expires_at"] + margin, "OVERLAP: this node granted site %s on %s until %d; a lease for site %s on %s "
+                        "may not begin before that, and the %d s %s" % (last["site"], last.get("node_id"), last["expires_at"],
+                                                                       lease["site"], lease["node_id"], margin, why))
         return start, expires
 
     def record(self, lease, expires):
