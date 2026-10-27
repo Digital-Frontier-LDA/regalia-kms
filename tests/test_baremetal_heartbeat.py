@@ -3,10 +3,13 @@ its current manifest, judged against authenticated time, with the sequence in a 
 
 The first classes run with the TPM faked at the tpm2-tools boundary (so Counter's own code runs); the last
 runs the same rollback and replay cases on swtpm."""
+import calendar
 import contextlib
 import copy
+import datetime
 import json
 import os
+import random
 import shutil
 import subprocess
 import tempfile
@@ -1080,6 +1083,61 @@ class OnSwtpm(unittest.TestCase):
         self.refused("the clock went backwards", self.f.check, self.m1)
         self.refused("the TPM clock cannot be read", hb.TpmClock(tcti="swtpm:path=" + self.d + "/absent"))
         self.refused("fail closed", hb.Counter("0x1500018", lock_path=self.d + "/lock", tcti="swtpm:path=" + self.d + "/absent").value)
+
+
+class ParseTime(unittest.TestCase):
+    """heartbeat.parse_time, which every product timestamp passes (regalia-78j): one string per second, and the same set
+    the Go readers take (time.Parse "2006-01-02T15:04:05Z", internal/admission). strptime's %S took 60 and 61, so
+    "23:59:60Z" read as the next day's midnight under a second name, where Go refuses it."""
+
+    def refused(self, text, why="is not a real date"):
+        with self.assertRaisesRegex(hb.Refused, "^t " + why):
+            hb.parse_time(text, "t")
+
+    def test_seconds_60_and_61_are_refused(self):
+        for text in ("2026-12-31T23:59:60Z", "2026-12-31T23:59:61Z", "2026-06-30T23:59:60Z", "2026-10-03T12:00:60Z"):
+            with self.subTest(text=text):
+                self.refused(text)
+        self.assertEqual(hb.parse_time("2027-01-01T00:00:00Z", "t") - hb.parse_time("2026-12-31T23:59:59Z", "t"), 1)
+
+    def test_what_was_taken_before_still_is(self):
+        self.assertEqual(hb.parse_time("1970-01-01T00:00:00Z", "t"), 0)
+        self.assertEqual(hb.parse_time("2024-02-29T00:00:00Z", "t"), 1709164800)
+        self.assertEqual(hb.parse_time("0001-01-01T00:00:00Z", "t"), -62135596800)   # padded by hand, not by strftime
+        self.assertEqual(hb.parse_time("9999-12-31T23:59:59Z", "t"), 253402300799)
+
+    def test_every_second_reads_back_as_itself(self):
+        """A property, over seeded random seconds from year 1 to 9999: stamp then parse is the identity."""
+        rng = random.Random(78)
+        for _ in range(20000):
+            t = rng.randrange(-62135596800, 253402300800)
+            with self.subTest(t=t):
+                # this file's stamp() is strftime, which glibc does not pad below year 1000: formatted by hand here
+                self.assertEqual(hb.parse_time("%04d-%02d-%02dT%02d:%02d:%02dZ" % time.gmtime(t)[:6], "t"), t)
+
+    def test_a_string_of_the_right_shape_is_taken_exactly_when_it_is_a_real_instant(self):
+        """A property, over seeded random fields in and around their ranges: parse_time takes a string exactly when
+        datetime (the Go reader's rule: second 0..59, a real day) does, and then names that instant. Year 0 is
+        refused by both Pythons and taken by Go: fail closed, and out of the range here."""
+        rng = random.Random(7860)
+        fields = (lambda: rng.randrange(1, 10000), lambda: rng.choice(range(14)), lambda: rng.choice(range(33)),
+                  lambda: rng.choice(range(26)), lambda: rng.choice(range(62)), lambda: rng.choice(range(63)))
+        taken = refused = 0
+        for _ in range(20000):
+            y, mo, d, h, mi, sec = (f() for f in fields)
+            text = "%04d-%02d-%02dT%02d:%02d:%02dZ" % (y, mo, d, h, mi, sec)
+            try:
+                want = calendar.timegm(datetime.datetime(y, mo, d, h, mi, sec, tzinfo=datetime.timezone.utc).timetuple())
+            except ValueError:
+                want = None
+            with self.subTest(text=text):
+                if want is None:
+                    self.assertRaises(hb.Refused, hb.parse_time, text, "t")
+                    refused += 1
+                else:
+                    self.assertEqual(hb.parse_time(text, "t"), want)
+                    taken += 1
+        self.assertGreater(min(taken, refused), 1000)              # both sides exercised, not one
 
 
 if __name__ == "__main__":
