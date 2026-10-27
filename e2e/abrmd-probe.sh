@@ -13,6 +13,12 @@
 #   6  a power cycle (TPM2_Shutdown(CLEAR) through tpm2-abrmd, swtpm stopped and started on the same state), with that
 #      node's tpm2-abrmd restarted after it: the node answers again, resetCount one higher, PCR 11 back at its reset value
 #   7  tpm2-abrmd stops on SIGTERM
+# and, on a private bus per node (the fixture's design; systemd units, so the runner only):
+#   8  a unit reaches its node's tpm2-abrmd over that node's bus, and each bus reaches its own TPM
+#   9  THE ONE THAT COUNTS: a unit given node q's bus address, with q's directory hidden (InaccessiblePaths=, as the
+#      fixture hides the other nodes'), does not reach q; its control, nothing hidden, does
+#  10  NO FALLBACK: a unit with no address and /run/dbus hidden fails closed; its control, the real bus visible, reaches
+#      a decoy tpm2-abrmd there under the default name (without one, "unreachable" would prove nothing)
 # MEASURED, not judged (the fixture's design depends on it): whether a tpm2-abrmd left running across the swtpm restart
 # still answers, or exits; printed as a MEASURE line and in RESULT.
 #
@@ -173,6 +179,83 @@ for _ in $(seq 1 50); do [ -e "/proc/$apid" ] || break; sleep 0.2; done
 ok "$([ "$was" = yes ] && [ ! -e "/proc/$apid" ] && echo 0 || echo 1)" "tpm2-abrmd, running and answering, stops on SIGTERM" \
    "running and answering before: $was; pid $apid $([ -e "/proc/$apid" ] && echo "still there after 10 s" || echo gone)"
 
-echo "RESULT socket_ok=$(wc -l < "$W/sock.ok" | tr -d ' ') socket_exhausted=$sock_mem abrmd_ok=${rm_ok:-?} abrmd_exhausted=${rm_mem:-?} socket_timeouts=${sock_to:-?} abrmd_timeouts=${rm_to:-?} of=$((CLIENTS * ROUNDS)) abrmd_survives_swtpm_restart=$survived abrmd_alive_after=$alive raw_beside_abrmd=${shared:-?} runner=$(. /etc/os-release; echo "$VERSION_ID")"
+echo "### a private bus per node (the fixture's design: the other nodes' buses hidden as their sockets are)"
+# Each node: its own dbus-daemon, a system-style bus listening under the node's directory, and its tpm2-abrmd on it under
+# the DEFAULT name. Clients reach it by DBUS_SYSTEM_BUS_ADDRESS (GDBus honours it for bus_type=system), so every node's
+# tcti is the same "tabrmd:bus_type=system", and InaccessiblePaths= on the node's directory hides its bus with its socket.
+# Each negative check counts only beside its positive control: the same unit, the same route, nothing hidden, reaches it.
+sysstate="$(systemctl is-system-running 2>&1)"
+if ! command -v systemd-run >/dev/null || ! [[ "$sysstate" =~ ^(running|degraded)$ ]]; then
+  if [ "${REGALIA_ABRMD_PROBE_CONTAINER:-}" = 1 ]; then
+    echo "  SKIP no systemd here (a container): the private-bus checks run on the runner only"; private=skipped
+  else
+    ok 1 "systemd runs here, for the private-bus checks' units" "$sysstate"; private=no
+  fi
+else
+  private=run
+fi
+PRIV=com.intel.tss2.Tabrmd
+bus_up(){ # $1 node: its private system-style bus, under its own directory
+  mkdir -p "$W/$1/dbus"; chmod 0755 "$W/$1" "$W/$1/dbus"
+  cat > "$W/$1/bus.conf" <<EOF
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>system</type>
+  <listen>unix:path=$W/$1/dbus/system_bus_socket</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default"><allow user="*"/><allow send_destination="$PRIV"/><allow receive_sender="$PRIV"/></policy>
+  <policy user="tss"><allow own="$PRIV"/></policy>
+</busconfig>
+EOF
+  dbus-daemon --config-file="$W/$1/bus.conf" --fork --print-pid > "$W/$1.bus.pid" 2> "$W/$1.bus.log"
+  for _ in $(seq 1 25); do [ -S "$W/$1/dbus/system_bus_socket" ] && chmod 0666 "$W/$1/dbus/system_bus_socket" && return 0; sleep 0.2; done
+  return 1
+}
+priv_abrmd_up(){ # $1 node: its tpm2-abrmd on its own bus, under the default name
+  runuser -u tss -- env DBUS_SYSTEM_BUS_ADDRESS="unix:path=$W/$1/dbus/system_bus_socket" \
+    tpm2-abrmd --tcti="swtpm:path=$W/$1/tpm.sock" > "$W/$1.abrmd.log" 2>&1 &
+  echo $! > "$W/$1.abrmd.pid"
+  for _ in $(seq 1 50); do
+    DBUS_SYSTEM_BUS_ADDRESS="unix:path=$W/$1/dbus/system_bus_socket" tpm2_getrandom -T tabrmd:bus_type=system --hex 8 >/dev/null 2>&1 && return 0
+    sleep 0.2
+  done; return 1
+}
+unit(){ # a transient unit, as the fixture's are, running tpm2_getrandom over tabrmd:bus_type=system with properties "$@"
+  timeout 30 systemd-run --quiet --wait --pipe --collect "$@" tpm2_getrandom -T tabrmd:bus_type=system --hex 8 2>&1
+}
+hexok(){ [[ "$1" =~ ^[0-9a-f]{16}$ ]]; }
+if [ "$private" = run ]; then
+  pu=0; for n in p q; do swtpm_up "$n" && bus_up "$n" && priv_abrmd_up "$n" || { pu=1; echo "    $n: $(tail -3 "$W/$n.bus.log" "$W/$n.abrmd.log" 2>/dev/null | tr '\n' ' ')"; }; done
+  addr(){ echo "DBUS_SYSTEM_BUS_ADDRESS=unix:path=$W/$1/dbus/system_bus_socket"; }
+  pp="$(unit -p "Environment=$(addr p)")"
+  tpm2_pcrextend -T "swtpm:path=$W/q/tpm.sock" "16:sha256=$(printf '%064d' 2)" >/dev/null 2>&1   # q's own mark, raw, before
+  p16="$(env "$(addr p)" tpm2_pcrread -T tabrmd:bus_type=system sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
+  q16="$(env "$(addr q)" tpm2_pcrread -T tabrmd:bus_type=system sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
+  ok "$([ "$pu" = 0 ] && hexok "$pp" && [ -n "$p16" ] && [ -n "$q16" ] && [ "$p16" != "$q16" ] && echo 0 || echo 1)" \
+     "a unit reaches its node's tpm2-abrmd over that node's private bus, and each bus reaches its own TPM (PCR 16: p ${p16:0:12}…, q ${q16:0:12}…)" \
+     "up $pu, unit: $(echo "$pp" | tr '\n' ' ' | cut -c1-200), p16=$p16 q16=$q16"
+  # THE ONE THAT COUNTS (TEAMLEAD-grafana): a unit given q's bus address but with q's directory hidden, as the fixture hides
+  # the other nodes' directories, does not reach q. Beside its control: the same unit, nothing hidden, does
+  qc="$(unit -p "Environment=$(addr q)")"
+  qh="$(unit -p "Environment=$(addr q)" -p "InaccessiblePaths=$W/q")"
+  ok "$(hexok "$qc" && ! hexok "$qh" && echo 0 || echo 1)" \
+     "node q's bus, its directory hidden: refused ($(echo "$qh" | tr '\n' ' ' | cut -c1-120)); control, nothing hidden: reached" \
+     "control: $(echo "$qc" | tr '\n' ' ' | cut -c1-150) | hidden: $(echo "$qh" | tr '\n' ' ' | cut -c1-150)"
+  # NO FALLBACK: a unit whose address is missing must not land on the runner's real system bus. A DECOY there under the
+  # default name makes it falsifiable: the control, the real bus visible, reaches the decoy; hidden, it fails closed
+  swtpm_up d
+  runuser -u tss -- tpm2-abrmd --tcti="swtpm:path=$W/d/tpm.sock" > "$W/d.abrmd.log" 2>&1 &
+  echo $! > "$W/d.abrmd.pid"
+  for _ in $(seq 1 50); do tpm2_getrandom -T tabrmd:bus_type=system --hex 8 >/dev/null 2>&1 && break; sleep 0.2; done
+  dc="$(unit -p "UnsetEnvironment=DBUS_SYSTEM_BUS_ADDRESS")"
+  dh="$(unit -p "UnsetEnvironment=DBUS_SYSTEM_BUS_ADDRESS" -p "InaccessiblePaths=/run/dbus")"
+  ok "$(hexok "$dc" && ! hexok "$dh" && echo 0 || echo 1)" \
+     "no address and the real system bus hidden: fails closed ($(echo "$dh" | tr '\n' ' ' | cut -c1-120)); control, the real bus visible: the decoy answered" \
+     "control: $(echo "$dc" | tr '\n' ' ' | cut -c1-150) | hidden: $(echo "$dh" | tr '\n' ' ' | cut -c1-150) | decoy: $(tail -2 "$W/d.abrmd.log" | tr '\n' ' ')"
+  kill -TERM "$(cat "$W/d.abrmd.pid")" 2>/dev/null
+fi
+
+echo "RESULT private_bus=$private socket_ok=$(wc -l < "$W/sock.ok" | tr -d ' ') socket_exhausted=$sock_mem abrmd_ok=${rm_ok:-?} abrmd_exhausted=${rm_mem:-?} socket_timeouts=${sock_to:-?} abrmd_timeouts=${rm_to:-?} of=$((CLIENTS * ROUNDS)) abrmd_survives_swtpm_restart=$survived abrmd_alive_after=$alive raw_beside_abrmd=${shared:-?} runner=$(. /etc/os-release; echo "$VERSION_ID")"
 echo "abrmd-probe: $pass passed, $fail failed"
 [ "$fail" = 0 ]
