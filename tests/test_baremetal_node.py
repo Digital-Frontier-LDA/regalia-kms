@@ -195,6 +195,12 @@ class SimulatorTcti(Case):
             self.assertEqual(ms.handover_env(), base)                  # a host: never, whatever root's session has
             os.environ[node.SIMULATOR_SWITCH] = "1"
             self.assertEqual(ms.handover_env(), base + [node.SIMULATOR_SWITCH + "=1", "DBUS_SESSION_BUS_ADDRESS=" + bus])
+            # env -i still strips everything else: of a caller's whole environment, the bus is the one extra variable
+            os.environ.update({"TPM2TOOLS_TCTI": "swtpm:path=/x", "HOME": "/root", "LD_PRELOAD": "/x.so", "XDG_RUNTIME_DIR": "/run/user/0",
+                               "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/x", "PYTHONPATH": "/x", "DBUS_SESSION_BUS_ADDRESS": bus})
+            carried = ms.handover_env()
+            self.assertEqual(carried, base + [node.SIMULATOR_SWITCH + "=1", "DBUS_SESSION_BUS_ADDRESS=" + bus])
+            self.assertEqual([v.split("=", 1)[0] for v in carried], ["PATH", "LC_ALL", node.SIMULATOR_SWITCH, "DBUS_SESSION_BUS_ADDRESS"])
             for other in ("unix:abstract=/x", "tcp:host=127.0.0.1,port=1", "unix:path=relative/bus", "unix:path=/a,guid=1",
                           "unix:path=/a;unix:path=/b", "unix:path=/a b", ""):
                 with self.subTest(address=other):
