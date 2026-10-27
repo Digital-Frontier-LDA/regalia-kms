@@ -377,6 +377,70 @@ def esp_advance_settled(node, esp, lock_path=ESP_LOCK, advance=None, record=None
                   % ESP_SETTLE_RUNS)
 
 
+SITE_TRAIL = ESP_TRAIL                                     # the ESP's writes share one trail: esp-advances
+
+
+def site_advance(node, esp, site_path, lock_path=ESP_LOCK, record=None):
+    """Write this node's NEW site document to the ESP (#615, the writer), only when the root has already approved the
+    boot it gives: the measurement document of the manifest anchored in this node's TPM must list, for this node, the
+    set it booted on with only PCR 12 replaced by what the ESP will then measure (siteadvance.target). The new site is
+    the operator's file at `site_path`, sitecfg-validated, this node's own (its boot_mesh names this node). Nothing is
+    resealed: the sealed files are bound to PCR 7 and 11, not 12 (enrol.seal_credentials).
+
+    The booted set is the accepted set whose PCR 12 is the ESP's credentials as they are now: a node runs only after
+    its peers accepted that measurement. The rootfs site configuration is NOT changed here: at the old site it would
+    move the live tunnels. regalia-site-check refuses a boot whose rootfs file disagrees with the ESP's document, so
+    replacing it at the move is checked (README §7).
+
+    Under the ESP advance's lock (one writer of the ESP at a time, beside esp-advance and reanchor), written by
+    enrolment's rendered-file writer (enrol.EspChain: a temporary file fsynced and renamed, the directory fsynced, read
+    back), with a request line in the esp-advances trail before the write and ALLOW after. Returns (the label of the
+    set the next boot matches, the document's SHA-256, whether the ESP was rewritten)."""
+    from deploy.baremetal import bootcreds, enrol, espcreds, siteadvance, uki
+    site_on_esp = "%s/regalia.site.cred" % bootcreds.CREDENTIALS_DIR      # what systemd-stub measures into PCR 12
+    new = sitecfg.load(site_path)
+    require(new["boot_mesh"] is not None and new["boot_mesh"]["node_id"] == node.node_id,
+            "the site configuration %s is not this node's (%s): its boot_mesh names %s" % (
+                site_path, node.node_id, (new["boot_mesh"] or {}).get("node_id")))
+    document = bootcreds.site_document(new, ESP_RENDER_DEVICE)
+    with _one_run(lock_path):
+        envelopes = read_published(node.path(PUBLISHED))
+        require(isinstance(envelopes, list) and envelopes, "the membership chain must be a non-empty list of envelopes")
+        tip = membership.accept_chain(None, envelopes, node.cfg["root_key"])
+        manifest = bootcreds.anchored(envelopes, node.cfg["root_key"], node.anchor(lock_path=lock_path + ".anchor", schema=tip["schema"]))
+        sets = measurements.held(node.documents(), manifest)["nodes"].get(node.node_id, {}).get("accepted")
+        require(sets, "the anchored manifest's measurement document lists no accepted set for %s" % node.node_id)
+        files = uki.credential_files(esp)
+        now = espcreds.pcr12(files)
+        booted = [entry["label"] for entry in sets if entry["pcrs"].get(siteadvance.SITE_PCR) == now]
+        require(booted, "no accepted set has the PCR 12 the ESP measures now (%s): this node's boot is not one the root "
+                "approved, so a site change cannot be judged from it" % now)
+        name = os.path.basename(site_on_esp)
+        predicted = espcreds.pcr12(dict(files, **{name: document}))
+        label = siteadvance.target(sets, booted[0], predicted)
+        try:
+            on_esp = enrol.EspChain(esp, document, relative=site_on_esp)
+        except enrol.Refused as refused:
+            raise Refused(str(refused)) from None
+        facts = {"epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "booted_set": booted[0],
+                 "next_set": label, "pcr12": predicted, "site_sha256": hashlib.sha256(document).hexdigest(),
+                 "esp_rewritten": on_esp.rewritten}
+        if record is not None:
+            record(dict(facts, event="site-advance-requested"))
+        try:
+            on_esp.write()
+        except enrol.Refused as refused:
+            raise Refused(str(refused)) from None
+        result = label, facts["site_sha256"], on_esp.rewritten
+        if record is not None:
+            try:
+                record(dict(facts, event="site-advance", outcome="ALLOW"))
+            except Exception as failure:
+                raise TrailIncomplete("the site document is written (the next boot matches %s), but its ALLOW line could not "
+                                      "be written: %s: %s" % (label, type(failure).__name__, failure), result) from failure
+        return result
+
+
 @contextlib.contextmanager
 def _one_run(path):
     """One ESP advance at a time, across the WHOLE run (every rerun: the ESP's write and the anchor's move), on
@@ -1137,8 +1201,10 @@ def authtime_service(cfg):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", default="/etc/regalia/node.json")
-    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check", "time-clear", "esp-advance"))
-    parser.add_argument("--esp", default="/efi", help="esp-advance only: the ESP's mount point")
+    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check", "time-clear", "esp-advance", "site-advance"))
+    parser.add_argument("--esp", default="/efi", help="esp-advance and site-advance: the ESP's mount point")
+    parser.add_argument("--site", help="site-advance only: the NEW site configuration (sitecfg), this node's, from the move "
+                        "sheet. Run only after the root's epoch lists this node's new PCR 12 (README §7, the move)")
     parser.add_argument("--esp-trail", help="esp-advance only: its trail (default: the registry's, %s; the three-node fixture "
                         "gives each node its own)" % "trails.where(%r)" % ESP_TRAIL)
     parser.add_argument("--esp-lock", default=ESP_LOCK, help="esp-advance only: the anchor's writer lock (default: the unit's "
@@ -1191,6 +1257,21 @@ def main(argv=None):
             if unrenderable:
                 print("WARNING: the initrd cannot render a boot configuration under epoch %d (%s): the next boot asks for "
                       "the recovery key" % (epoch, unrenderable), file=sys.stderr)
+        elif args.service == "site-advance":
+            require(args.site, "site-advance takes --site: the new site configuration")
+            trail = Trail(args.esp_trail or trails.where(ESP_TRAIL), ESP_TRAIL)
+            try:
+                label, sha, rewritten = site_advance(node, args.esp, args.site, lock_path=args.esp_lock, record=trail)
+            except TrailIncomplete as gap:
+                print("INCOMPLETE: %s" % gap, file=sys.stderr)
+                return 3
+            except BaseException as failure:
+                with contextlib.suppress(Exception):      # best effort: it is also in the journal
+                    trail({"event": "site-advance", "outcome": "DENY", "reason": ("%s: %s" % (type(failure).__name__, failure))[:240]})
+                raise
+            print("the ESP's site document is %s (sha256 %s%s): the next boot matches the accepted set %r. Replace the rootfs "
+                  "site configuration at the move; regalia-site-check refuses a boot where the two differ"
+                  % (args.site, sha, ", written now" if rewritten else ", already there", label))
         elif args.service == "admission":
             admission_service(node).run(lambda: False)
         else:
