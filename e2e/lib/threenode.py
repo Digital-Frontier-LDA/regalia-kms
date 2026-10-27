@@ -73,9 +73,89 @@ def _state_directory_mode(unit):
 ADMISSION_DIR_MODE = _state_directory_mode("regalia-admission.service")
 # the nodes' TPMs are swtpm sockets here, which node.validate accepts only under its test-only switch (regalia-afi, b9 on
 # #596): every unit the fixture starts carries it, and so does a Cluster's own process (set when one is made, never on
-# import: the unit tests import this module). TODO(regalia-afi step 2): gone once the nodes reach their TPMs through the
-# kernel (swtpm --vtpm-proxy).
+# import: the unit tests import this module). It stays with REGALIA_E2E_TPM=abrmd too: node.validate's switch is what
+# accepts tabrmd (the kernel's resource manager, swtpm --vtpm-proxy, is out of reach on GitHub's runners: #597)
 SIMULATOR_ENV = "Environment=REGALIA_TCTI_ALLOW_SIMULATOR=1"
+
+# regalia-afi (#592): how the nodes reach their TPMs. "socket", the default: the raw swtpm socket, every client straight to
+# it, as before. "abrmd": through one tpm2-abrmd per node, as a host's services reach /dev/tpmrm0 (the raw socket
+# exhausts its three session slots under the services' concurrent clients, and a resource manager does not: #605's probe,
+# on both runner images). Each node's tpm2-abrmd is on a dbus-daemon of the node's own, listening under its directory, as
+# its services' SESSION bus, under a name of the node's own (abrmd_tcti): so their system bus stays the host's (admission's
+# `systemctl show`, as its own user, needs it), and InaccessiblePaths= on the other nodes' directories hides their buses
+# with the rest. The units have their own node's raw socket hidden too (unit_tpm_properties), and this process's own TPM
+# calls take the same route (Cluster.tpm_of). The one raw client left is the pre-root unlock client (cmd/regalia-unlock
+# speaks to a socket or a device, never tabrmd), run only while none of the node's units does (Cluster._initrd_only).
+TPM_MODES = ("socket", "abrmd")
+# what close() keeps of each node for a failing CI job: .github/actions/tpm-diagnostics finds them by these names, and
+# tests/test_tpm_diagnostics_action.py holds the two together (a name the action does not find is not uploaded)
+KEPT_LOGS = ("tpm.log", "abrmd.log", "dbus.log")
+ABRMD_NAME = "com.intel.tss2.Tabrmd"
+
+
+def abrmd_name(node_id):
+    """Node `node_id`'s tpm2-abrmd's name on its bus: the default name, then the node. Its tcti names it, so every object
+    made from the node's configuration carries its node: under ANOTHER node's bus the name has no owner and a call fails
+    closed, whichever object makes it (TEAMLEAD-grafana: the gap a lock cannot see, closed by construction)."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,31}", node_id) is None:
+        raise RuntimeError("node %r cannot name a D-Bus name element" % node_id)
+    return "%s.%s" % (ABRMD_NAME, node_id)
+
+
+def abrmd_tcti(node_id):
+    """The tcti of node `node_id`'s services and of this process's calls for it, in abrmd mode."""
+    return "tabrmd:bus_name=%s,bus_type=session" % abrmd_name(node_id)
+
+
+def tpm_mode(environ=os.environ):
+    """REGALIA_E2E_TPM: "socket" (unset) or "abrmd"; anything else refused, never read as the default."""
+    mode = environ.get("REGALIA_E2E_TPM", "socket")
+    if mode not in TPM_MODES:
+        raise RuntimeError("REGALIA_E2E_TPM=%r: it is one of %s" % (mode, ", ".join(TPM_MODES)))
+    return mode
+
+
+def bus_config(socket_path, name):
+    """A node's own dbus-daemon: listening on `socket_path` only, with the stock system bus's default policy (a bus with
+    no receive rules denies every receive, its own replies too, and then every client hangs on its first call: #605's
+    run 40449316347), sends to tpm2-abrmd allowed, and its name owned by tss alone."""
+    return """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>system</type>
+  <listen>unix:path=%(socket)s</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow user="*"/>
+    <deny own="*"/>
+    <deny send_type="method_call"/>
+    <allow send_type="signal"/>
+    <allow send_requested_reply="true" send_type="method_return"/>
+    <allow send_requested_reply="true" send_type="error"/>
+    <allow receive_type="method_call"/>
+    <allow receive_type="method_return"/>
+    <allow receive_type="error"/>
+    <allow receive_type="signal"/>
+    <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus"/>
+    <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus.Introspectable"/>
+    <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus.Properties"/>
+    <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus.Peer"/>
+    <allow send_destination="%(name)s"/>
+  </policy>
+  <policy user="tss"><allow own="%(name)s"/></policy>
+</busconfig>
+""" % {"socket": socket_path, "name": name}
+
+
+def unit_tpm_properties(mode, n):
+    """What a unit of node `n` is given to reach its TPM, as systemd-run -p values: nothing in socket mode (node.json names
+    the raw socket); in abrmd mode its node's bus as its session bus, and its node's raw TPM endpoints hidden, so no
+    service gets around tpm2-abrmd (#605's check 14). The other nodes' buses are under their directories, which every
+    unit already has hidden."""
+    if mode == "socket":
+        return []
+    return ["Environment=DBUS_SESSION_BUS_ADDRESS=" + n.bus_address,
+            "InaccessiblePaths=-%s" % n.tpm_sock, "InaccessiblePaths=-%s.ctrl" % n.tpm_sock]
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -271,6 +351,32 @@ def _replace(path, text):
     os.replace(tmp, path)
 
 
+class Through:
+    """A deploy.baremetal object of node `name`'s, seen from this process in abrmd mode (Cluster.node): every method call is
+    made inside cluster.tpm_of(name), and what it returns, while it is another of deploy.baremetal's objects (its store,
+    its anchor, an attester), is seen the same way. So a scenario's `cluster.node(n).store().load()` reaches n's TPM
+    through n's tpm2-abrmd, without the scenario naming the route (regalia-afi: three-node-recovery's step 7 read a
+    store outside it, and failed closed, as tpm_of means it to). Attributes that are not methods (cfg, tcti) are as they are."""
+
+    def __init__(self, cluster, name, target):
+        self._cluster, self._name, self._target = cluster, name, target
+
+    def __getattr__(self, attr):
+        value = getattr(self._target, attr)
+        if not callable(value):
+            return value
+
+        def call(*args, **kwargs):
+            with self._cluster.tpm_of(self._name):
+                return through(self._cluster, self._name, value(*args, **kwargs))
+        return call
+
+
+def through(cluster, name, value):
+    """`value` as Through sees it: wrapped when it is one of deploy.baremetal's objects, else as it is."""
+    return Through(cluster, name, value) if (type(value).__module__ or "").startswith("deploy.baremetal.") else value
+
+
 class NodeHere:
     """One node's paths, keys and identity."""
 
@@ -281,11 +387,22 @@ class NodeHere:
         self.underlay = "192.0.2.%d" % (10 * index)
         self.boot_address = "10.89.0.%d" % index
         self.tpm_sock = self.dir / "tpm.sock"
-        self.tcti = "swtpm:path=%s" % self.tpm_sock
+        self.raw_tcti = "swtpm:path=%s" % self.tpm_sock
+        self.bus = self.dir / "dbus" / "bus"          # abrmd mode: its own dbus-daemon's socket (bus_config)
+        self.dbus = self.abrmd = None                 # ...and the two processes, while they run
         self.cfg_path = self.dir / "etc" / "node.json"
         self.state, self.admission, self.run = self.dir / "state", self.dir / "admission", self.dir / "run"
         self.admission_log = self.dir / "log-admission"      # its /var/log/regalia-admission: the admission trail's (#349)
         self.log = self.dir / "log"                   # its /var/log/regalia-esp-advance: the ESP advance's trail (#66 B3)
+
+    @property
+    def tcti(self):
+        """The tcti a client of this node's TPM uses now: through its tpm2-abrmd while one runs, else the raw socket."""
+        return abrmd_tcti(self.name) if self.abrmd is not None else self.raw_tcti
+
+    @property
+    def bus_address(self):
+        return "unix:path=%s" % self.bus
 
     def in_ns(self, *argv, check=True, **kw):
         return sh("ip", "netns", "exec", self.ns, *argv, check=check, **kw)
@@ -377,6 +494,10 @@ class Cluster:
         self.audit_bin = pathlib.Path(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"))
         self.tool_trails = {}                         # {node: {trail: path}}: an operator tool's trail a scenario ships too (ship_tool_trail)
         os.environ["REGALIA_TCTI_ALLOW_SIMULATOR"] = "1"   # this process loads the nodes' (swtpm) node.json too (SIMULATOR_ENV)
+        self.tpm = tpm_mode()                         # regalia-afi: "socket" or "abrmd" (REGALIA_E2E_TPM)
+        self._tpm_lock = threading.RLock()            # tpm_of: this process's TPM calls, one node's at a time
+        os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)   # none but tpm_of's: a call outside it fails closed
+        print("e2e3: the nodes reach their TPMs through %s" % ("one tpm2-abrmd each" if self.tpm == "abrmd" else "the raw socket"), flush=True)
         self.nodes = {n: NodeHere(self.work, n, i + 1) for i, n in enumerate(names)}
         self.time = {n: True for n in names}          # authenticated time, per node
         self.stop_threads = False
@@ -483,7 +604,119 @@ class Cluster:
             raise RuntimeError("%s's software TPM did not start (%d): %s %s | log: %s | apparmor: %s"
                                % (n.name, done.returncode, done.stdout.strip(), done.stderr.strip(), log, denied))
         self.left_initrd.discard(n.name)              # a TPM start: PCR 11 at its reset value, the node in its initrd again
+        if self.tpm == "abrmd":                       # for as long as its TPM runs: a stopped node's TPM is reached too (deliver)
+            self._abrmd_up(n)
         self._booted(n)
+
+    # ---- regalia-afi: one tpm2-abrmd per node (REGALIA_E2E_TPM=abrmd) ----
+
+    @contextlib.contextmanager
+    def tpm_of(self, name):
+        """This process's TPM calls for node `name`, made inside: one node's at a time (a process-wide lock), and while that
+        node's tpm2-abrmd runs, with its bus as this process's session bus, so `n.tcti` reaches it there. Outside, no
+        session bus is set: a call this fixture made without it finds none and fails closed (#605's check 10), never
+        another node's TPM. With no tpm2-abrmd (socket mode, or between a TPM's stop and start) `n.tcti` is the raw socket."""
+        n = self.nodes[name]
+        with self._tpm_lock:
+            # re-entry for the SAME node is allowed (a Through call inside held_epoch, say); another node's, inside, is
+            # refused: under one bus at a time it would either reach the wrong TPM or need the outer call to wait
+            # (TEAMLEAD-grafana on a0dfa53d). Nothing in the fixture nests two nodes, so one that does is a mistake.
+            holders = self.__dict__.setdefault("_tpm_holders", [])
+            if holders and holders[-1] != name:
+                raise RuntimeError("a TPM call for node %s inside one for node %s: one node's at a time" % (name, holders[-1]))
+            started = None if holders else time.monotonic()   # the outermost call is the one timed
+            holders.append(name)
+            os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
+            if n.abrmd is not None:
+                os.environ["DBUS_SESSION_BUS_ADDRESS"] = n.bus_address
+            try:
+                yield n
+            finally:
+                holders.pop()
+                if not holders:                       # the outermost: no session bus again, and how long it held the lock
+                    os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
+                    held = time.monotonic() - started
+                    longest = self.__dict__.setdefault("tpm_longest_hold", (0.0, None))
+                    if held > longest[0]:
+                        self.tpm_longest_hold = (held, name)
+
+    def _abrmd_up(self, n):
+        """The node's own bus (started once, kept across its TPM's restarts), then its tpm2-abrmd on it, as tss (as its
+        packaged unit runs it), in front of its raw socket; waited for until it answers."""
+        bus_dir = n.bus.parent
+        if n.dbus is None or n.dbus.poll() is not None:
+            bus_dir.mkdir(exist_ok=True)
+            os.chmod(bus_dir, 0o755)
+            with contextlib.suppress(FileNotFoundError):
+                n.bus.unlink()
+            (bus_dir / "bus.conf").write_text(bus_config(n.bus, abrmd_name(n.name)))
+            with open(n.dir / "dbus.log", "ab") as log:
+                n.dbus = subprocess.Popen(["dbus-daemon", "--config-file=%s" % (bus_dir / "bus.conf"), "--nofork", "--nopidfile"],
+                                          stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+            if until(lambda: n.bus.exists(), 10, 0.2) is not True:      # until() returns an exception it ended on: truthy
+                raise RuntimeError("%s's dbus-daemon made no socket: %s" % (n.name, self._tail(n.dir / "dbus.log")))
+            os.chmod(n.bus, 0o666)                    # every service user of THIS node: the others' have its directory hidden
+        with open(n.dir / "abrmd.log", "ab") as log:
+            n.abrmd = subprocess.Popen(["tpm2-abrmd", "--session", "--dbus-name=" + abrmd_name(n.name), "--tcti=" + n.raw_tcti], user="tss", group="tss", extra_groups=[],
+                                       env=dict(os.environ, DBUS_SESSION_BUS_ADDRESS=n.bus_address),
+                                       stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+        if until(lambda: self.abrmd_answers(n.name, check=False), 15, 0.5) is not True:
+            raise RuntimeError("%s's tpm2-abrmd does not answer (%s) | its log: %s | its bus: %s"
+                               % (n.name, "running" if n.abrmd.poll() is None else "exited %s" % n.abrmd.returncode,
+                                  self._tail(n.dir / "abrmd.log"), self._tail(n.dir / "dbus.log")))
+
+    def _abrmd_down(self, n, bus=False):
+        """The node's tpm2-abrmd stopped (before its TPM is), and with `bus` its dbus-daemon too (close)."""
+        for attr in ("abrmd", "dbus") if bus else ("abrmd",):
+            proc = getattr(n, attr)
+            setattr(n, attr, None)                    # n.tcti is the raw socket from here
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+
+    def abrmd_answers(self, name, check=True):
+        """Whether node `name`'s tpm2-abrmd answers a TPM command (TPM2_GetRandom), within 5 s. With `check`, an answer
+        that does not come is a failure, said with its log: after the raw unlock client ran beside it (unlock, enrol),
+        a TPM it cannot serve shows there, not three tests later (TEAMLEAD-grafana)."""
+        n = self.nodes[name]
+        if n.abrmd is None:
+            return True                               # socket mode: no resource manager to ask
+        with self.tpm_of(name):
+            try:
+                done = sh("tpm2_getrandom", "-T", abrmd_tcti(name), "--hex", "8", check=False, timeout=5)
+                ok, said = done.returncode == 0 and re.fullmatch(r"[0-9a-f]{16}", done.stdout.strip()) is not None, done.stderr.strip()[-400:]
+            except subprocess.TimeoutExpired:
+                ok, said = False, "no answer in 5 s"
+        if check and not ok:
+            raise RuntimeError("%s's tpm2-abrmd does not answer after the raw unlock client: %s | its log: %s"
+                               % (name, said, self._tail(n.dir / "abrmd.log")))
+        return ok
+
+    def _initrd_only(self, name, what):
+        """The raw unlock client (`what`) beside node `name`'s tpm2-abrmd: only while none of the node's units runs, as in
+        an initrd, so no service's abrmd session is ever concurrent with it. A unit that still runs is a failure."""
+        if self.tpm != "abrmd":
+            return
+        if self.services.get(name):
+            raise RuntimeError("%s on %s while its services run (%s): the raw TPM client runs only with none of its units"
+                               % (what, name, ", ".join(self.services[name])))
+        active = sh("systemctl", "list-units", "--plain", "--no-legend", "--state=active,activating,deactivating",
+                    "%s%s-*" % (UNIT_PREFIX, name), check=False).stdout.split()
+        units = [u for u in active if u.startswith(UNIT_PREFIX + name + "-")]
+        if units:
+            raise RuntimeError("%s on %s while its units run (%s): the raw TPM client runs only with none of them"
+                               % (what, name, ", ".join(units)))
+
+    @staticmethod
+    def _tail(path, limit=800):
+        try:
+            return pathlib.Path(path).read_text(errors="replace")[-limit:]
+        except OSError:
+            return "(none)"
 
     # ---- v4 (#199): the booted image's signed PCR 11, and the owner's two keys ----
 
@@ -520,7 +753,8 @@ class Cluster:
 
     def _pcr11(self, n):
         out = n.dir / "pcr11.bin"
-        sh("tpm2_pcrread", "-T", n.tcti, "sha256:11", "-o", str(out))
+        with self.tpm_of(n.name):
+            sh("tpm2_pcrread", "-T", n.tcti, "sha256:11", "-o", str(out))
         return out.read_bytes().hex()
 
     def _booted(self, n):
@@ -528,14 +762,16 @@ class Cluster:
         (the INITRD phase's), and the value it takes when the node leaves its initrd (start) signed by the system-phase
         key in the node's tpm2-pcr-signature.json (properties() binds it, and the key's PEM, where systemd puts them:
         /run/systemd)."""
-        sh("tpm2_pcrextend", "-T", n.tcti, "11:sha256=" + hashlib.sha256(BOOTED).hexdigest())
+        with self.tpm_of(n.name):
+            sh("tpm2_pcrextend", "-T", n.tcti, "11:sha256=" + hashlib.sha256(BOOTED).hexdigest())
         self._sign_pcr11(n.name, extended(self._pcr11(n), LEAVE_INITRD))
 
     def _leave_initrd(self, name):
         """v4: the node's PCR 11 into its system phase, ONCE per boot (systemd-pcrphase's leave-initrd): a service
         restarted without a TPM start finds it there already."""
         if name in self.nodes and name not in self.left_initrd:
-            sh("tpm2_pcrextend", "-T", self.nodes[name].tcti, "11:sha256=" + hashlib.sha256(LEAVE_INITRD).hexdigest())
+            with self.tpm_of(name) as n:
+                sh("tpm2_pcrextend", "-T", n.tcti, "11:sha256=" + hashlib.sha256(LEAVE_INITRD).hexdigest())
             self.left_initrd.add(name)
 
     @contextlib.contextmanager
@@ -607,7 +843,9 @@ class Cluster:
         their reset values, every transient object and session gone, as on a host. Without `orderly`, a cut: no
         Shutdown, which a TPM counts against its dictionary-attack limit (#57)."""
         n = self.member(name)
-        shutdown = sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False) if orderly else None
+        self._abrmd_down(n)                           # before its TPM: the Shutdown below is then the last command it sees
+        with self.tpm_of(name):
+            shutdown = sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False) if orderly else None
         pid = int((n.dir / "tpm.pid").read_text())
         state = "dir=%s" % (n.dir / "tpm")
 
@@ -637,7 +875,8 @@ class Cluster:
     def boot(self, name, image=None):
         """`name` boots `image` (None: CURRENT, nothing to extend). Call after power_cycle (or stop) and before unlock."""
         if image is not None:
-            sh("tpm2_pcrextend", "-T", self.member(name).tcti, "11:sha256=" + hashlib.sha256(image.encode()).hexdigest())
+            with self.tpm_of(self.member(name).name) as n:
+                sh("tpm2_pcrextend", "-T", n.tcti, "11:sha256=" + hashlib.sha256(image.encode()).hexdigest())
 
     def image_set(self, name, image=None):
         """The measurement set `name` is accepted in when it boots `image` (None: its CURRENT set, as built)."""
@@ -662,7 +901,8 @@ class Cluster:
 
     def reset_count(self, name):
         """The TPM's resetCount (TPM2_ReadClock): one higher after each power cycle."""
-        out = sh("tpm2_readclock", "-T", self.member(name).tcti).stdout
+        with self.tpm_of(self.member(name).name) as n:
+            out = sh("tpm2_readclock", "-T", n.tcti).stdout
         return int(next(line.split(":", 1)[1] for line in out.splitlines() if "reset_count" in line))
 
     def _wg_keys(self, n):
@@ -681,28 +921,30 @@ class Cluster:
         """An EK and a persistent AK, as attest.node_init makes them: (EK name, AK name, AK public area hex)."""
         out = n.dir / "ids"
         out.mkdir()
-        before = os.environ.get("TPM2TOOLS_TCTI")
-        os.environ["TPM2TOOLS_TCTI"] = n.tcti
-        try:
-            attest.node_init(str(out))
-            sh("tpm2_flushcontext", "-t", check=False)
-        finally:
-            os.environ.pop("TPM2TOOLS_TCTI") if before is None else os.environ.__setitem__("TPM2TOOLS_TCTI", before)
-        ek, ak = (out / "ek.pub").read_bytes(), (out / "ak.pub").read_bytes()
-        ek_name = attest.name_of(attest.public_area(ek, "the EK public area")).hex()
-        # #199: the signing key, made in the node's TPM and certified by its AK, accepted as `enrol entry` accepts it
-        blob = signkey.create(self.pcr_pem, tcti=n.tcti)
-        info, sig = signkey.certify(tcti=n.tcti)
+        with self.tpm_of(n.name):
+            before = os.environ.get("TPM2TOOLS_TCTI")
+            os.environ["TPM2TOOLS_TCTI"] = n.tcti
+            try:
+                attest.node_init(str(out))
+                sh("tpm2_flushcontext", "-t", check=False)
+            finally:
+                os.environ.pop("TPM2TOOLS_TCTI") if before is None else os.environ.__setitem__("TPM2TOOLS_TCTI", before)
+            ek, ak = (out / "ek.pub").read_bytes(), (out / "ak.pub").read_bytes()
+            ek_name = attest.name_of(attest.public_area(ek, "the EK public area")).hex()
+            # #199: the signing key, made in the node's TPM and certified by its AK, accepted as `enrol entry` accepts it
+            blob = signkey.create(self.pcr_pem, tcti=n.tcti)
+            info, sig = signkey.certify(tcti=n.tcti)
         self.signing[n.name] = signkey.verify_certification(blob, info, sig, ak, ek_name, self.pcr_pem)
         return ek_name, attest.ak_identity(ak)[0].hex(), ak.hex()
 
     def _reference(self, n, pcrs):
         """The node's accepted measurement set, read from its TPM, as pcr_survey.py records it on a host."""
-        sh("tpm2_pcrread", "-T", n.tcti, "sha256:" + ",".join(str(i) for i in pcrs), "-o", str(n.dir / "pcrs.bin"))
+        with self.tpm_of(n.name):
+            sh("tpm2_pcrread", "-T", n.tcti, "sha256:" + ",".join(str(i) for i in pcrs), "-o", str(n.dir / "pcrs.bin"))
+            sh("tpm2_quote", "-T", n.tcti, "-c", attest.AK_HANDLE, "-g", "sha256", "-l", "sha256:%d" % pcrs[0], "-q", "00" * 32,
+               "-m", str(n.dir / "ref.quote"), "-s", str(n.dir / "ref.sig"), "-f", "plain")
+            sh("tpm2_flushcontext", "-T", n.tcti, "-t", check=False)
         raw = (n.dir / "pcrs.bin").read_bytes()
-        sh("tpm2_quote", "-T", n.tcti, "-c", attest.AK_HANDLE, "-g", "sha256", "-l", "sha256:%d" % pcrs[0], "-q", "00" * 32,
-           "-m", str(n.dir / "ref.quote"), "-s", str(n.dir / "ref.sig"), "-f", "plain")
-        sh("tpm2_flushcontext", "-T", n.tcti, "-t", check=False)
         entry = {"label": "e2e-image", "tpm_firmware_version": attest.parse_quote((n.dir / "ref.quote").read_bytes())["firmware_version"],
                  "pcrs": {str(i): raw[32 * k:32 * (k + 1)].hex() for k, i in enumerate(pcrs)}}
         # a signed UKI's set (#199, #242): PCR 11 per phase, read here in the initrd phase (before start), and the keys
@@ -807,7 +1049,7 @@ class Cluster:
                 "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444}}
         _replace(n.dir / "etc" / "site.json", json.dumps(site))            # whole, never torn: running services read them
         # no measurements.json: the document is in the node's store by digest, and later ones come by sync (#332)
-        cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=n.tcti,
+        cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=abrmd_tcti(n.name) if self.tpm == "abrmd" else n.raw_tcti,
                    state_dir=str(n.state), admission_dir=str(n.admission), run_dir=str(n.run), admission_log_dir=str(n.admission_log),
                    wg_service_key=str(n.dir / "etc" / "wg-service.key"), measurements=str(n.dir / "etc" / "measurements.json"),
                    time_servers=["nts1.e2e3.invalid", "nts2.e2e3.invalid"], pull_interval=10,
@@ -815,12 +1057,14 @@ class Cluster:
         _replace(n.cfg_path, json.dumps(cfg))
 
     def node(self, name):
-        """The node as its services see it (deploy/baremetal/node.Node), from its configuration."""
-        return node.Node(node.load(str(self.nodes[name].cfg_path)))
+        """The node as its services see it (deploy/baremetal/node.Node), from its configuration. In abrmd mode seen
+        Through tpm_of: its TPM is reached through its tpm2-abrmd, whoever calls it."""
+        here = node.Node(node.load(str(self.nodes[name].cfg_path)))
+        return here if self.tpm == "socket" else Through(self, name, here)
 
     def _anchor_and_store(self, n):
-        here = self.node(n.name)
-        here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
+        with self.tpm_of(n.name):
+            self.node(n.name).documents().put(self.document)   # as enrol commit does, before the first commit (#332)
         self._enrolled(n.name, self.chain)            # the chain is v4: the anchor written by policy only (#242 B3)
 
     def _enrolled(self, name, chain):
@@ -831,7 +1075,7 @@ class Cluster:
         system value (_leave_initrd, which start() then does not repeat)."""
         here = self.node(name)
         self._leave_initrd(name)
-        with self._as_booted(name):
+        with self._as_booted(name), self.tpm_of(name):
             enrol.anchor_and_store(str(self.nodes[name].cfg_path), chain)
             node.heartbeat_counter(here.cfg).define()
 
@@ -909,6 +1153,7 @@ class Cluster:
                  SIMULATOR_ENV]
         props += ["%s=%s" % (key, value) for key, value in self.identity(service).items()]
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
+        props += unit_tpm_properties(self.tpm, n)
         # where a booted host's systemd-stub puts the image's PCR signatures and its system-phase key: the node's own
         pcr = n.dir / "pcr"
         props += ["BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
@@ -959,7 +1204,7 @@ class Cluster:
         refuse it, and the scenario says what it finds). A store that does not load (a rolled-back disk) is the
         scenario's own: its sync recovers it, or not."""
         try:
-            held = self.node(name).store().load()["epoch"]
+            held = self.held_epoch(name)
         except membership.Refused:
             return
         if held >= self.manifest["epoch"] or not membership.may(self.manifest, name, "authorize"):
@@ -968,7 +1213,7 @@ class Cluster:
             return
         def epoch():
             try:
-                return self.node(name).store().load()["epoch"]
+                return self.held_epoch(name)
             except membership.Refused:                # a read during its own restore: asked again (3e's read)
                 return None
         if not until(lambda: epoch() == self.manifest["epoch"], 180, 2):
@@ -1025,7 +1270,13 @@ class Cluster:
 
     def anchored(self, name):
         """The node's TPM anchor epoch (read as root)."""
-        return self.node(name).anchor().value()
+        with self.tpm_of(name):
+            return self.node(name).anchor().value()
+
+    def held_epoch(self, name):
+        """The epoch of the chain the node's store holds (its load checks it against the TPM anchor)."""
+        with self.tpm_of(name):
+            return self.node(name).store().load()["epoch"]
 
     def esp_epoch(self, name):
         """The epoch of the chain on the node's ESP stand-in, or None."""
@@ -1108,8 +1359,8 @@ class Cluster:
         self.advance(seed, candidate=candidate, document=document)
         envelope = self.chain[-1]
         n = self.nodes[new]
-        here = self.node(new)
-        here.documents().put(document)
+        with self.tpm_of(new):
+            self.node(new).documents().put(document)
         self._enrolled(new, self.chain)                 # as at build: the whole chain, by its policy (#242 B3)
         # enrolment ran on the booted system (PCR 11 in its system phase, _leave_initrd); the host reboots before its
         # initrd asks for the disk, so its quote shows the initrd phase the peers admit
@@ -1178,7 +1429,7 @@ class Cluster:
         if pull is None:
             pull = [n for n in self.nodes if n != committer and self.running(n) and membership.may(manifest, n, "authorize")]
         for name in pull:
-            if not until(lambda name=name: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
+            if not until(lambda name=name: self.held_epoch(name) == manifest["epoch"], 120, 2):
                 raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], committer))
         if beat:
             self._beaten(manifest, owner_recovery)
@@ -1263,37 +1514,43 @@ class Cluster:
         credential challenge, activated by the node's TPM). Run while neither the node's nor the peers' services
         run (the fixture writes the peers' stores)."""
         n, loop = self.nodes[name], self.loops[name]
+        self._initrd_only(name, "enrol")
         held = [t for _, t in unlock.path_tokens(unlock.luks_meta(loop))]
-        if held:                                          # the client unseals one local half for every path
-            sealed = held[0]["local"]
-            local = unlock.unseal_local(sealed, tpm2_device=n.tcti)
-        else:
-            local = os.urandom(32)
-            sealed = unlock.seal_local(local, pcrs="7", tpm2_device=n.tcti)
+        with self.tpm_of(name):
+            if held:                                      # the client unseals one local half for every path
+                sealed = held[0]["local"]
+                local = unlock.unseal_local(sealed, tpm2_device=n.tcti)
+            else:
+                local = os.urandom(32)
+                sealed = unlock.seal_local(local, pcrs="7", tpm2_device=n.tcti)
         ek, ak = (n.dir / "ids" / "ek.pub").read_bytes(), (n.dir / "ids" / "ak.pub").read_bytes()
         if peers is None:
             peers = [p for p in self.nodes if p != name and membership.may(self.manifest, p, "authorize")]
         for peer in peers:
-            here = self.node(peer)
-            enrolment = unlock.Enrolment(name)
-            wrapped = unlock.contribute(unlock.Contributions(here.path("contributions.json")), self.manifest, peer, name, enrolment.public, enrolment.fingerprint)
-            epoch, secret = enrolment.open(wrapped, peer)
-            unlock.enrol_path(loop, name, peer, epoch, local, sealed, secret, RECOVERY)
-            attester = here.attester_for(self.manifest)
-            credential, activated = n.dir / ("cred-" + peer), n.dir / ("secret-" + peer)
-            credential.write_bytes(attester.challenge(name, ek, ak))
-            before = os.environ.get("TPM2TOOLS_TCTI")
-            os.environ["TPM2TOOLS_TCTI"] = n.tcti
-            try:
-                attest.node_activate(str(credential), str(activated))
-                sh("tpm2_flushcontext", "-t", check=False)
-            finally:
-                os.environ.pop("TPM2TOOLS_TCTI") if before is None else os.environ.__setitem__("TPM2TOOLS_TCTI", before)
-            attester.enroll(name, activated.read_bytes())
+            with self.tpm_of(peer):
+                here = self.node(peer)
+                enrolment = unlock.Enrolment(name)
+                wrapped = unlock.contribute(unlock.Contributions(here.path("contributions.json")), self.manifest, peer, name, enrolment.public, enrolment.fingerprint)
+                epoch, secret = enrolment.open(wrapped, peer)
+                unlock.enrol_path(loop, name, peer, epoch, local, sealed, secret, RECOVERY)
+                attester = here.attester_for(self.manifest)
+                credential, activated = n.dir / ("cred-" + peer), n.dir / ("secret-" + peer)
+                credential.write_bytes(attester.challenge(name, ek, ak))
+            with self.tpm_of(name):
+                before = os.environ.get("TPM2TOOLS_TCTI")
+                os.environ["TPM2TOOLS_TCTI"] = n.tcti
+                try:
+                    attest.node_activate(str(credential), str(activated))
+                    sh("tpm2_flushcontext", "-t", check=False)
+                finally:
+                    os.environ.pop("TPM2TOOLS_TCTI") if before is None else os.environ.__setitem__("TPM2TOOLS_TCTI", before)
+            with self.tpm_of(peer):
+                attester.enroll(name, activated.read_bytes())
             for leftover in (credential, activated):
                 leftover.unlink()
             sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[peer].state))
         del local, secret
+        self.abrmd_answers(name)
 
     def recover(self, name):
         """#71's manual recovery: the node's volume opened by hand with its recovery key (the systemd-recovery
@@ -1337,7 +1594,9 @@ class Cluster:
         opened it, `marker` whether the filesystem reads back; rc "timeout" when it was still asking. rc 0 with
         no peer is NOT an unlock: an earlier session of this boot was on record, and the client asked nobody."""
         n, loop, mapped = self.nodes[name], self.loops[name], "e2e3-" + name
-        manifest = self.node(name).store().load()          # the chain the node holds: its initrd's credentials say the same
+        self._initrd_only(name, "unlock")
+        with self.tpm_of(name):
+            manifest = self.node(name).store().load()      # the chain the node holds: its initrd's credentials say the same
         site = sitecfg.load(str(n.dir / "etc" / "site.json"))
         n.in_ns("ip", "link", "add", "wg-boot", "type", "wireguard")
         n.in_ns("wg", "setconf", "wg-boot", "/dev/stdin", input=bootnet.with_key(bootnet.boot_wg_conf(site, manifest), self.keys[name]["boot"][0]))
@@ -1350,7 +1609,8 @@ class Cluster:
         shutil.rmtree(creds, True)
         creds.mkdir(mode=0o700)
         tokens = [t for _, t in unlock.path_tokens(unlock.luks_meta(loop))]
-        local = unlock.unseal_local(tokens[0]["local"], tpm2_device=n.tcti)
+        with self.tpm_of(name):
+            local = unlock.unseal_local(tokens[0]["local"], tpm2_device=n.tcti)
         with open(os.open(str(creds / unlock.LOCAL_NAME), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400), "wb") as f:
             f.write(local)
         del local
@@ -1413,6 +1673,7 @@ class Cluster:
             shutil.rmtree(asks, True)
             shutil.rmtree(creds, True)
             n.in_ns("ip", "link", "del", "wg-boot", check=False)
+        self.abrmd_answers(name)                      # the raw client ran beside it: tpm2-abrmd still serves the TPM
         return result
 
     def lease(self, name):
@@ -1451,7 +1712,8 @@ class Cluster:
     def heartbeat_left(self, name):
         """Seconds until the heartbeat the node holds expires (its freshness state, read as root), or None."""
         import calendar
-        held = self.node(name).freshness().held()
+        with self.tpm_of(name):
+            held = self.node(name).freshness().held()
         if not held:
             return None
         return calendar.timegm(time.strptime(held["heartbeat"]["expires_at"], "%Y-%m-%dT%H:%M:%SZ")) - time.time()
@@ -1520,12 +1782,14 @@ class Cluster:
 
     def heartbeat_signers(self, name):
         """The parties that signed the heartbeat the node holds (its freshness state, read as root): [] for none."""
-        held = self.node(name).freshness().held()
+        with self.tpm_of(name):
+            held = self.node(name).freshness().held()
         return [s.get("party") for s in (held or {}).get("signatures", [])]
 
     def holds_heartbeat(self, name, epoch):
         """Whether the node holds a heartbeat for `epoch` (its freshness state, read as root)."""
-        held = self.node(name).freshness().held()
+        with self.tpm_of(name):
+            held = self.node(name).freshness().held()
         return bool(held) and held["heartbeat"]["epoch"] == epoch
 
     def advance(self, seed, signer="root", document=None, owner_recovery=False, candidate=None, **states):
@@ -1564,9 +1828,11 @@ class Cluster:
             self.document = document
         if not delivered:                             # the seed only: every other node's store is its own sync's
             if document is not None:                  # by digest, beside the documents it holds: nothing is replaced (#332)
-                self.node(seed).documents().put(document)
+                with self.tpm_of(seed):
+                    self.node(seed).documents().put(document)
             with self._as_booted(seed):               # its booted system's key: it stopped in the same boot, in its system phase
-                self.node(seed).store().commit(envelope)
+                with self.tpm_of(seed):
+                    self.node(seed).store().commit(envelope)
             sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[seed].state))
         self.chain.append(envelope)
         self.manifest = manifest
@@ -1576,7 +1842,7 @@ class Cluster:
         else:
             self.start(seed, services)
         for name in running:
-            if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
+            if not until(lambda: self.held_epoch(name) == manifest["epoch"], 120, 2):
                 try:
                     why = self._why_not_taken(name, seed, since)
                 except Exception as failure:              # noqa: BLE001 - the diagnostic never hides the failure it explains
@@ -1629,6 +1895,7 @@ class Cluster:
                   "BindReadOnlyPaths=%s:%s" % (n.dir / "run-kms", os.path.dirname(lease.SESSION_KEY_PATH))]
         props += ["NetworkNamespacePath=/run/netns/" + n.ns] if in_ns else []
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
+        props += unit_tpm_properties(self.tpm, n)
         return sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, label),
                   *[a for p in props for a in ("-p", p)], *args, check=False,
                   **({"input": input} if input is not None else {"stdin": subprocess.DEVNULL}))
@@ -1968,12 +2235,17 @@ class Cluster:
 
     def close(self):
         self.stop_threads = True
+        held, by = getattr(self, "tpm_longest_hold", (0.0, None))
+        # MEASURED: how long this process ever held tpm_of's lock at once (its TPM calls are serialised by it, the services'
+        # are not): a long one would serialise what a scenario means to run at once (TEAMLEAD-grafana)
+        print("e2e3: this process's longest TPM call held tpm_of %.2f s (node %s)" % (held, by), flush=True)
         for n in self.members():
             self.stop(n.name, power=None)
         if self.audit:
             sh("systemctl", "stop", COLLECTOR_UNIT, check=False)
             sh("systemctl", "reset-failed", COLLECTOR_UNIT, check=False)
         for n in self.members():
+            self._abrmd_down(n, bus=True)             # before its TPM, as power_cycle stops it
             try:
                 pid = int((n.dir / "tpm.pid").read_text())
                 os.kill(pid, 15)
@@ -1982,7 +2254,8 @@ class Cluster:
                 pass
             sh("ip", "netns", "del", n.ns, check=False)
         # regalia-zga: the scripts remove the work directory after this; in CI each node's swtpm log is kept first
-        tpmdiag.keep({"%s/tpm.log" % n.name: str(n.dir / "tpm.log") for n in self.members()}, self.work.name)
+        tpmdiag.keep({"%s/%s" % (n.name, log): str(n.dir / log) for n in self.members() for log in KEPT_LOGS},
+                     self.work.name)
         sh("ip", "netns", "del", SWITCH, check=False)
         for loop in self.loops.values():
             sh("losetup", "-d", loop, check=False)

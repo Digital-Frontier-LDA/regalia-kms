@@ -188,14 +188,38 @@ SESSION_MEMORY_CODE = re.compile(r"\(0x(?:00000)?903\)")  # the same, by its cod
 # DevicePolicy constrains: a software TPM with no hardware root) only under it. Only the e2e fixtures and the tests set
 # it; nothing shipped may (tests/test_baremetal_node.py holds that this is the one file under deploy/ that names it).
 # TODO(regalia-afi step 2): once the three-node fixture reaches its TPMs through the kernel (swtpm --vtpm-proxy, so
-# device:/dev/tpmrmN), refuse swtpm:/mssim: unconditionally and delete this switch and handover_env's carrying of it.
+# device:/dev/tpmrmN), refuse swtpm:/mssim: unconditionally and delete this switch and handover_env's carrying of it
+# (and of the session-bus address it carries for the tpm2-abrmd route).
 SIMULATOR_SWITCH = "REGALIA_TCTI_ALLOW_SIMULATOR"
 
 
 def handover_env():
     """The whole environment of a step handed to regalia-sync (`runuser … env -i …`): PATH and the C locale, nothing of
-    root's, except the test-only SIMULATOR_SWITCH when the caller has it, so a fixture's step reloads its own node.json."""
-    return ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"] + (["%s=1" % SIMULATOR_SWITCH] if os.environ.get(SIMULATOR_SWITCH) == "1" else [])
+    root's, except, only under the test-only SIMULATOR_SWITCH when the caller has it: the switch, so a fixture's step
+    reloads its own node.json, and the caller's session-bus address when it is a unix socket path, so a fixture node's
+    `tabrmd:…,bus_type=session` tcti reaches that node's tpm2-abrmd from the step too (regalia-afi: its TCTI names no
+    address, and without one every TPM call of a handed-over step failed closed, #605's run 40456967936). On a host
+    nothing sets the switch, and the step's TPM is /dev/tpmrm0, which needs no environment."""
+    env = ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"]
+    if os.environ.get(SIMULATOR_SWITCH) != "1":
+        return env
+    env.append("%s=1" % SIMULATOR_SWITCH)
+    bus = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
+    if re.fullmatch(r"unix:path=/[^,;=\s]+", bus):
+        env.append("DBUS_SESSION_BUS_ADDRESS=" + bus)
+    return env
+
+
+def session_bus_hint(tcti):
+    """What to add to a TPM call's failure when its tcti is a tabrmd one on the SESSION bus (the e2e fixture's,
+    regalia-afi) and this process has no DBUS_SESSION_BUS_ADDRESS: that this is why. handover_env carries only a
+    unix:path= address, under the simulator switch; any other was dropped, and run 40456967936 chased a bare "the TPM
+    does not answer" (TEAMLEAD-grafana on #605). Empty otherwise, so every other refusal stays the one the Go reader
+    gives too (tests/vectors/highwater-v1.json holds both to it): that reader never takes a tabrmd tcti."""
+    if (tcti or "").startswith("tabrmd:") and "bus_type=session" in tcti and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        return (" | this process has no DBUS_SESSION_BUS_ADDRESS, which its tcti %s needs: a step handed to regalia-sync "
+                "carries one only under %s and only as unix:path=/… (handover_env), any other is dropped" % (tcti, SIMULATOR_SWITCH))
+    return ""
 
 
 def simulator_tcti(tcti=None):
@@ -968,7 +992,7 @@ class HighWater:
         about the anchor, and that is neither "usable" nor "unusable"."""
         r = self._tpm("getcap", "handles-nv-index")
         require(r.returncode == 0, "the TPM does not answer (tpm2_getcap handles-nv-index failed): the high-water anchor is "
-                "unavailable (fail closed)")
+                "unavailable (fail closed)%s" % session_bus_hint((self.env or {}).get("TPM2TOOLS_TCTI")))
         return {int(found, 16) for found in re.findall(rb"0x[0-9A-Fa-f]+", r.stdout)}
 
     def _public(self, index):

@@ -179,7 +179,61 @@ class SimulatorTcti(Case):
             os.environ[node.SIMULATOR_SWITCH] = "yes"
             self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"])
             os.environ[node.SIMULATOR_SWITCH] = "1"
+            os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
             self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", node.SIMULATOR_SWITCH + "=1"])
+
+    def test_a_tpm_that_does_not_answer_says_when_the_session_bus_is_missing(self):
+        """TEAMLEAD-grafana on #605: a dropped address fails closed at the first TPM call, and that failure names it."""
+        from unittest import mock
+        from deploy.baremetal import membership as ms
+        tcti = "tabrmd:bus_name=com.intel.tss2.Tabrmd.b,bus_type=session"
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
+            hint = ms.session_bus_hint(tcti)
+            self.assertIn("no DBUS_SESSION_BUS_ADDRESS", hint)
+            self.assertIn(tcti, hint)
+            self.assertIn(node.SIMULATOR_SWITCH, hint)
+            hw = ms.HighWater("0x1500016", run=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, b"", b"no bus"), tcti=tcti)
+            with self.assertRaisesRegex(ms.Refused, r"^the TPM does not answer \(tpm2_getcap handles-nv-index failed\): the high-water anchor is unavailable \(fail closed\) \| this process has no DBUS_SESSION_BUS_ADDRESS"):
+                hw._defined()
+            # not said when it is not the cause: a bus set, a system-bus or device tcti
+            os.environ["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/x"
+            self.assertEqual(ms.session_bus_hint(tcti), "")
+            os.environ.pop("DBUS_SESSION_BUS_ADDRESS")
+            for other in ("tabrmd:bus_type=system", "device:/dev/tpmrm0", "swtpm:path=/x", None):
+                with self.subTest(tcti=other):
+                    self.assertEqual(ms.session_bus_hint(other), "")
+            # the vector's refusal (no tcti: the Go reader's too) is byte-for-byte what it was
+            hw = ms.HighWater("0x1500016", run=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, b"", b"no bus"))
+            with self.assertRaises(ms.Refused) as caught:
+                hw._defined()
+            self.assertEqual(str(caught.exception), "the TPM does not answer (tpm2_getcap handles-nv-index failed): the high-water anchor is "
+                             "unavailable (fail closed)")
+
+    def test_the_session_bus_rides_along_only_under_the_switch_and_only_as_a_socket_path(self):
+        """regalia-afi (#605's run 40456967936): a fixture node's tabrmd tcti names no bus address, so a handed-over step
+        (deliver, enrol, owner, recover, revoke) reached its tpm2-abrmd only if the address rode along. Only under the
+        switch, which nothing on a host sets, and only a unix socket path: nothing else of root's environment."""
+        from unittest import mock
+        from deploy.baremetal import membership as ms
+        base = ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"]
+        bus = "unix:path=/tmp/three-node-x/b/dbus/bus"
+        with mock.patch.dict(os.environ, {"DBUS_SESSION_BUS_ADDRESS": bus}, clear=False):
+            os.environ.pop(node.SIMULATOR_SWITCH, None)
+            self.assertEqual(ms.handover_env(), base)                  # a host: never, whatever root's session has
+            os.environ[node.SIMULATOR_SWITCH] = "1"
+            self.assertEqual(ms.handover_env(), base + [node.SIMULATOR_SWITCH + "=1", "DBUS_SESSION_BUS_ADDRESS=" + bus])
+            # env -i still strips everything else: of a caller's whole environment, the bus is the one extra variable
+            os.environ.update({"TPM2TOOLS_TCTI": "swtpm:path=/x", "HOME": "/root", "LD_PRELOAD": "/x.so", "XDG_RUNTIME_DIR": "/run/user/0",
+                               "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/x", "PYTHONPATH": "/x", "DBUS_SESSION_BUS_ADDRESS": bus})
+            carried = ms.handover_env()
+            self.assertEqual(carried, base + [node.SIMULATOR_SWITCH + "=1", "DBUS_SESSION_BUS_ADDRESS=" + bus])
+            self.assertEqual([v.split("=", 1)[0] for v in carried], ["PATH", "LC_ALL", node.SIMULATOR_SWITCH, "DBUS_SESSION_BUS_ADDRESS"])
+            for other in ("unix:abstract=/x", "tcp:host=127.0.0.1,port=1", "unix:path=relative/bus", "unix:path=/a,guid=1",
+                          "unix:path=/a;unix:path=/b", "unix:path=/a b", ""):
+                with self.subTest(address=other):
+                    os.environ["DBUS_SESSION_BUS_ADDRESS"] = other
+                    self.assertEqual(ms.handover_env(), base + [node.SIMULATOR_SWITCH + "=1"])
         import pathlib as pl
         root = pl.Path(__file__).resolve().parents[1]
         literal = [str(p.relative_to(root)) for p in sorted((root / "deploy" / "baremetal").glob("*.py"))
