@@ -95,11 +95,11 @@ abrmd_up(){ # $1 node: tpm2-abrmd as tss (as its packaged unit runs it) on the n
   runuser -u tss -- tpm2-abrmd --tcti="swtpm:path=$W/$1/tpm.sock" --dbus-name="$NAME$1" > "$W/$1.abrmd.log" 2>&1 &
   echo $! > "$W/$1.abrmd.pid"
   for _ in $(seq 1 50); do
-    tpm2_getrandom -T "tabrmd:bus_name=$NAME$1,bus_type=system" --hex 8 >/dev/null 2>&1 && return 0; sleep 0.2
+    timeout 5 tpm2_getrandom -T "tabrmd:bus_name=$NAME$1,bus_type=system" --hex 8 >/dev/null 2>&1 && return 0; sleep 0.2
   done; return 1
 }
 tc(){ echo "tabrmd:bus_name=$NAME$1,bus_type=system"; }
-resets(){ tpm2_readclock -T "$1" 2>/dev/null | sed -n 's/.*reset_count: *\([0-9]*\).*/\1/p'; }
+resets(){ t tpm2_readclock -T "$1" 2>/dev/null | sed -n 's/.*reset_count: *\([0-9]*\).*/\1/p'; }
 
 echo "### the D-Bus policy for the per-node names"
 cat > "$POLICY" <<'EOF'
@@ -119,11 +119,11 @@ up=0
 for n in a b; do
   swtpm_up "$n" && abrmd_up "$n" || { up=1; echo "    $n: $(tail -5 "$W/$n.abrmd.log" 2>/dev/null | tr '\n' ' ')"; }
 done
-ra="$(tpm2_getrandom -T "$(tc a)" --hex 8 2>&1)"; rb="$(tpm2_getrandom -T "$(tc b)" --hex 8 2>&1)"
+ra="$(t tpm2_getrandom -T "$(tc a)" --hex 8 2>&1)"; rb="$(t tpm2_getrandom -T "$(tc b)" --hex 8 2>&1)"
 ok "$([ "$up" = 0 ] && [[ "$ra" =~ ^[0-9a-f]{16}$ ]] && [[ "$rb" =~ ^[0-9a-f]{16}$ ]] && echo 0 || echo 1)" \
    "both answer through their own names (a: $ra, b: $rb)" "a: $ra | b: $rb"
-pcr(){ tpm2_pcrread -T "$1" sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p'; }
-b0="$(pcr "$(tc b)")"; tpm2_pcrextend -T "$(tc a)" "16:sha256=$(printf '%064d' 1)"; a1="$(pcr "$(tc a)")"; b1="$(pcr "$(tc b)")"
+pcr(){ t tpm2_pcrread -T "$1" sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p'; }
+b0="$(pcr "$(tc b)")"; t tpm2_pcrextend -T "$(tc a)" "16:sha256=$(printf '%064d' 1)"; a1="$(pcr "$(tc a)")"; b1="$(pcr "$(tc b)")"
 ok "$([ -n "$a1" ] && [ "$a1" != "$b0" ] && [ "$b1" = "$b0" ] && echo 0 || echo 1)" \
    "each reaches its own TPM (PCR 16 extended through a: a ${a1:0:12}…, b unchanged ${b1:0:12}…)" "a=$a1 b before=$b0 after=$b1"
 
@@ -133,7 +133,7 @@ ok "$([ -n "$a1" ] && [ "$a1" != "$b0" ] && [ "$b1" = "$b0" ] && echo 0 || echo 
 raw="$(timeout 5 tpm2_getrandom -T "swtpm:path=$W/a/tpm.sock" --hex 8 2>&1)"; rrc=$?
 shared="$([ "$rrc" = 0 ] && [[ "$raw" =~ ^[0-9a-f]{16}$ ]] && echo yes || { [ "$rrc" = 124 ] && echo waits || echo refused; })"
 echo "  MEASURE a raw client on a's socket while a's tpm2-abrmd holds it: $shared (rc $rrc: $(echo "$raw" | tr '\n' ' ' | cut -c1-200))"
-after_raw="$(tpm2_getrandom -T "$(tc a)" --hex 8 2>&1)"
+after_raw="$(t tpm2_getrandom -T "$(tc a)" --hex 8 2>&1)"
 echo "  MEASURE a's tpm2-abrmd after that raw client: $([[ "$after_raw" =~ ^[0-9a-f]{16}$ ]] && echo answers || echo "fails: $(echo "$after_raw" | tr '\n' ' ' | cut -c1-200)")"
 
 echo "### the control: the raw socket (node c, no resource manager)"
@@ -155,17 +155,17 @@ evidence rm a
 
 echo "### a power cycle of node b's TPM"
 before="$(resets "$(tc b)")"
-tpm2_shutdown -c -T "$(tc b)" 2>"$W/b.shutdown.err"; sd=$?
+t tpm2_shutdown -c -T "$(tc b)" 2>"$W/b.shutdown.err"; sd=$?
 spid="$(cat "$W/b.swtpm.pid")"; kill -TERM "$spid"
 for _ in $(seq 1 50); do [ -e "/proc/$spid" ] || break; sleep 0.2; done
 swtpm_up b; sleep 1
 apid="$(cat "$W/b.abrmd.pid")"
-kept="$(tpm2_getrandom -T "$(tc b)" --hex 8 2>&1)"; alive="$([ -e "/proc/$apid" ] && echo yes || echo no)"
+kept="$(t tpm2_getrandom -T "$(tc b)" --hex 8 2>&1)"; alive="$([ -e "/proc/$apid" ] && echo yes || echo no)"
 survived="$([[ "$kept" =~ ^[0-9a-f]{16}$ ]] && echo yes || echo no)"
 echo "  MEASURE tpm2-abrmd left running across the swtpm restart: process alive=$alive, answers=$survived ($(echo "$kept" | tr '\n' ' ' | cut -c1-200)); its log: $(tail -3 "$W/b.abrmd.log" | tr '\n' ' ' | cut -c1-300)"
 kill -TERM "$apid" 2>/dev/null; for _ in $(seq 1 50); do [ -e "/proc/$apid" ] || break; sleep 0.2; done
 abrmd_up b; r=$?
-after="$(resets "$(tc b)")"; p11="$(tpm2_pcrread -T "$(tc b)" sha256:11 2>/dev/null | sed -n 's/.*11 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
+after="$(resets "$(tc b)")"; p11="$(t tpm2_pcrread -T "$(tc b)" sha256:11 2>/dev/null | sed -n 's/.*11 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
 ok "$([ "$sd" = 0 ] && [ "$r" = 0 ] && [ -n "$before" ] && [ "$after" = $((before + 1)) ] && [ "$p11" = "$(printf '%064d' 0)" ] && echo 0 || echo 1)" \
    "after the cycle, with its tpm2-abrmd restarted: it answers, resetCount $before -> $after, PCR 11 at reset" \
    "shutdown $sd ($(tr '\n' ' ' < "$W/b.shutdown.err")), abrmd up $r, resetCount $before -> $after, PCR 11 $p11"
@@ -173,7 +173,7 @@ ok "$([ "$sd" = 0 ] && [ "$r" = 0 ] && [ -n "$before" ] && [ "$after" = $((befor
 echo "### tpm2-abrmd stops on SIGTERM"
 apid="$(cat "$W/a.abrmd.pid")"
 # POSITIVE: it was running and answering before the signal; a tpm2-abrmd that never started "stops" too
-was="$([ -e "/proc/$apid" ] && [[ "$(tpm2_getrandom -T "$(tc a)" --hex 8 2>&1)" =~ ^[0-9a-f]{16}$ ]] && echo yes || echo no)"
+was="$([ -e "/proc/$apid" ] && [[ "$(t tpm2_getrandom -T "$(tc a)" --hex 8 2>&1)" =~ ^[0-9a-f]{16}$ ]] && echo yes || echo no)"
 kill -TERM "$apid" 2>/dev/null
 for _ in $(seq 1 50); do [ -e "/proc/$apid" ] || break; sleep 0.2; done
 ok "$([ "$was" = yes ] && [ ! -e "/proc/$apid" ] && echo 0 || echo 1)" "tpm2-abrmd, running and answering, stops on SIGTERM" \
@@ -184,7 +184,9 @@ echo "### a private bus per node (the fixture's design: the other nodes' buses h
 # the DEFAULT name. Clients reach it by DBUS_SYSTEM_BUS_ADDRESS (GDBus honours it for bus_type=system), so every node's
 # tcti is the same "tabrmd:bus_type=system", and InaccessiblePaths= on the node's directory hides its bus with its socket.
 # Each negative check counts only beside its positive control: the same unit, the same route, nothing hidden, reaches it.
-sysstate="$(systemctl is-system-running 2>&1)"
+# Every call below is bounded and each step leaves a breadcrumb: its first run hung here, silently, for 18 minutes
+step(){ echo "    $(date -u +%H:%M:%S) $*"; }
+sysstate="$(timeout 10 systemctl is-system-running 2>&1)"
 if ! command -v systemd-run >/dev/null || ! [[ "$sysstate" =~ ^(running|degraded)$ ]]; then
   if [ "${REGALIA_ABRMD_PROBE_CONTAINER:-}" = 1 ]; then
     echo "  SKIP no systemd here (a container): the private-bus checks run on the runner only"; private=skipped
@@ -208,35 +210,40 @@ bus_up(){ # $1 node: its private system-style bus, under its own directory
   <policy user="tss"><allow own="$PRIV"/></policy>
 </busconfig>
 EOF
-  dbus-daemon --config-file="$W/$1/bus.conf" --fork --print-pid > "$W/$1.bus.pid" 2> "$W/$1.bus.log"
+  step "$1: its dbus-daemon"
+  timeout 10 dbus-daemon --config-file="$W/$1/bus.conf" --fork --print-pid > "$W/$1.bus.pid" 2> "$W/$1.bus.log" || return 1
   for _ in $(seq 1 25); do [ -S "$W/$1/dbus/system_bus_socket" ] && chmod 0666 "$W/$1/dbus/system_bus_socket" && return 0; sleep 0.2; done
   return 1
 }
 priv_abrmd_up(){ # $1 node: its tpm2-abrmd on its own bus, under the default name
+  step "$1: its tpm2-abrmd on its bus"
   runuser -u tss -- env DBUS_SYSTEM_BUS_ADDRESS="unix:path=$W/$1/dbus/system_bus_socket" \
     tpm2-abrmd --tcti="swtpm:path=$W/$1/tpm.sock" > "$W/$1.abrmd.log" 2>&1 &
   echo $! > "$W/$1.abrmd.pid"
   for _ in $(seq 1 50); do
-    DBUS_SYSTEM_BUS_ADDRESS="unix:path=$W/$1/dbus/system_bus_socket" tpm2_getrandom -T tabrmd:bus_type=system --hex 8 >/dev/null 2>&1 && return 0
+    DBUS_SYSTEM_BUS_ADDRESS="unix:path=$W/$1/dbus/system_bus_socket" timeout 5 tpm2_getrandom -T tabrmd:bus_type=system --hex 8 >/dev/null 2>&1 && return 0
     sleep 0.2
   done; return 1
 }
 unit(){ # a transient unit, as the fixture's are, running tpm2_getrandom over tabrmd:bus_type=system with properties "$@"
-  timeout 30 systemd-run --quiet --wait --pipe --collect "$@" tpm2_getrandom -T tabrmd:bus_type=system --hex 8 2>&1
+  timeout 30 systemd-run --quiet --wait --pipe --collect "$@" t tpm2_getrandom -T tabrmd:bus_type=system --hex 8 2>&1
 }
 hexok(){ [[ "$1" =~ ^[0-9a-f]{16}$ ]]; }
 if [ "$private" = run ]; then
   pu=0; for n in p q; do swtpm_up "$n" && bus_up "$n" && priv_abrmd_up "$n" || { pu=1; echo "    $n: $(tail -3 "$W/$n.bus.log" "$W/$n.abrmd.log" 2>/dev/null | tr '\n' ' ')"; }; done
   addr(){ echo "DBUS_SYSTEM_BUS_ADDRESS=unix:path=$W/$1/dbus/system_bus_socket"; }
+  step "a unit on p's bus"
   pp="$(unit -p "Environment=$(addr p)")"
-  tpm2_pcrextend -T "swtpm:path=$W/q/tpm.sock" "16:sha256=$(printf '%064d' 2)" >/dev/null 2>&1   # q's own mark, raw, before
-  p16="$(env "$(addr p)" tpm2_pcrread -T tabrmd:bus_type=system sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
-  q16="$(env "$(addr q)" tpm2_pcrread -T tabrmd:bus_type=system sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
+  timeout 5 tpm2_pcrextend -T "swtpm:path=$W/q/tpm.sock" "16:sha256=$(printf '%064d' 2)" >/dev/null 2>&1   # q's own mark, raw, before
+  step "PCR 16 through each bus"
+  p16="$(env "$(addr p)" timeout 5 tpm2_pcrread -T tabrmd:bus_type=system sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
+  q16="$(env "$(addr q)" timeout 5 tpm2_pcrread -T tabrmd:bus_type=system sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
   ok "$([ "$pu" = 0 ] && hexok "$pp" && [ -n "$p16" ] && [ -n "$q16" ] && [ "$p16" != "$q16" ] && echo 0 || echo 1)" \
      "a unit reaches its node's tpm2-abrmd over that node's private bus, and each bus reaches its own TPM (PCR 16: p ${p16:0:12}…, q ${q16:0:12}…)" \
      "up $pu, unit: $(echo "$pp" | tr '\n' ' ' | cut -c1-200), p16=$p16 q16=$q16"
   # THE ONE THAT COUNTS (TEAMLEAD-grafana): a unit given q's bus address but with q's directory hidden, as the fixture hides
   # the other nodes' directories, does not reach q. Beside its control: the same unit, nothing hidden, does
+  step "q's bus: control, then hidden"
   qc="$(unit -p "Environment=$(addr q)")"
   qh="$(unit -p "Environment=$(addr q)" -p "InaccessiblePaths=$W/q")"
   ok "$(hexok "$qc" && ! hexok "$qh" && echo 0 || echo 1)" \
@@ -247,7 +254,9 @@ if [ "$private" = run ]; then
   swtpm_up d
   runuser -u tss -- tpm2-abrmd --tcti="swtpm:path=$W/d/tpm.sock" > "$W/d.abrmd.log" 2>&1 &
   echo $! > "$W/d.abrmd.pid"
-  for _ in $(seq 1 50); do tpm2_getrandom -T tabrmd:bus_type=system --hex 8 >/dev/null 2>&1 && break; sleep 0.2; done
+  step "the decoy on the real system bus"
+  for _ in $(seq 1 50); do timeout 5 tpm2_getrandom -T tabrmd:bus_type=system --hex 8 >/dev/null 2>&1 && break; sleep 0.2; done
+  step "no address: control, then the real bus hidden"
   dc="$(unit -p "UnsetEnvironment=DBUS_SYSTEM_BUS_ADDRESS")"
   dh="$(unit -p "UnsetEnvironment=DBUS_SYSTEM_BUS_ADDRESS" -p "InaccessiblePaths=/run/dbus")"
   ok "$(hexok "$dc" && ! hexok "$dh" && echo 0 || echo 1)" \

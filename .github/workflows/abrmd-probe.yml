@@ -42,7 +42,7 @@ jobs:
       - name: One tpm2-abrmd per software TPM, against the raw socket
         run: |
           set -o pipefail
-          sudo --preserve-env=RUNNER_ENVIRONMENT bash e2e/abrmd-probe.sh | tee "$RUNNER_TEMP/probe.log"
+          sudo --preserve-env=RUNNER_ENVIRONMENT timeout 900 bash e2e/abrmd-probe.sh | tee "$RUNNER_TEMP/probe.log"
           grep -q '^abrmd-probe: 10 passed, 0 failed$' "$RUNNER_TEMP/probe.log" || {
             echo "::error::the tpm2-abrmd probe did not pass all 10 checks on ${{ matrix.runner }}" >&2; exit 1; }
       - name: The result, in the job summary
