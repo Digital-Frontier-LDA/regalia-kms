@@ -713,6 +713,25 @@ the client are on the console with no kernel argument. It is not secret. When a 
     by QEMU boots of the three ESP/anchor orders (boots 10-12). Those boots write the ESP with the test's own
     code, not with the service, and no physical host has run it.
 
+  **The rootfs site configuration must be this boot's site** (`regalia-site-check`, #615). The initrd builds
+  the boot tunnel from the measured site document on the ESP (`loader/credentials/regalia.site.cred`, PCR 12);
+  `regalia-wg-apply` builds the tunnels from `/etc/regalia`'s site configuration (node.json's `site`). A node's
+  move rewrites only the ESP's document, so a rootfs file left from the old site would bring up the old site's
+  tunnels. `regalia-site-check.service`, a oneshot at boot that `regalia-wg-apply` `Requires=` and starts
+  `After=`, compares every key the two hold (`node.site_compared()`: `host_ipv4` and `boot_mesh` today) and
+  refuses on any difference, and when the document is missing or unreadable (bound with no `-`, so a missing
+  one fails the unit at setup). Either way the tunnels stay down.
+  - Seen as `RegaliaSiteMismatch` (`regalia_site_check_ok == 0`: it ran and refused) or
+    `RegaliaSiteCheckMetricsMissing` (no `site-check.prom` since boot: it never ran). Both are `warning` for now.
+  - **Recovering a refused node**, at its console or over SSH (the tunnels are down, the host is not):
+    `journalctl -u regalia-site-check` names the differing keys and both files. After a move, the ESP's
+    document is the new site's: replace `/etc/regalia`'s site configuration with the new site's (the move
+    sheet's), then `systemctl restart regalia-site-check regalia-wg-apply`. Never edit the ESP's document to
+    match instead: it is measured, and the peers accept only a PCR 12 the root has approved.
+  - Proven by unit tests (`tests/test_baremetal_site_check.py`) and under a real systemd
+    (`e2e/node-units-systemd.py` section 3b: accept, refuse, a missing document at setup, and the recovery).
+    No physical host has run it.
+
   **Nothing in the initrd acts on a credential by name.** The image's command line (signed, in PCR 11)
   carries `systemd.import_credentials=no`: systemd imports no credential from any source, not the ESP,
   not SMBIOS type 11 or QEMU's fw_cfg (which nothing the peers attest measures), not the command line.

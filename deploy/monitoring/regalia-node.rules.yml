@@ -145,6 +145,17 @@ groups:
           severity: warning
         annotations:
           summary: "regalia-esp-advance's last run failed fifteen minutes ago and has not succeeded since: the TPM anchor is not following the chain. README §7."
+      # regalia-site-check (#615): the rootfs site configuration against the measured site document. wg-apply Requires= it, so
+      # either alert means the tunnels are DOWN on that node. No `for:` on a refusal: a check that ran and refused will
+      # not pass until someone replaces a file. warning, not critical: whether a node's tunnels down at boot PAGES is the
+      # owner's choice (a new page), not this change's.
+      - alert: RegaliaSiteMismatch
+        expr: regalia_site_check_ok == 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }}'s site configuration does not match the site document it booted with (or that document cannot be read): its tunnels are not brought up."
+          description: "`journalctl -u regalia-site-check` names the differing keys and both files. After a move, replace /etc/regalia's site configuration with the new site's, then `systemctl restart regalia-site-check regalia-wg-apply`."
       - alert: RegaliaNextBootNeedsRecoveryKey
         expr: regalia_esp_boot_renderable == 0
         labels:
@@ -210,6 +221,16 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.instance }} is scraped but exports no regalia_esp_anchor_epoch: its TPM anchor could not be read at regalia-esp-advance's last run, and the fleet cannot compare it."
+      # a unit that failed at setup (the ESP not mounted, the bound document missing) never runs and writes no file. Under
+      # /run (a tmpfs) no earlier boot's file survives, so this fires; `for: 5m` is chosen to match
+      # RegaliaEspAdvanceMetricsMissing: the tunnels are down for those five minutes before the page.
+      - alert: RegaliaSiteCheckMetricsMissing
+        expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?site-check\\.prom"}
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but has no site-check.prom: regalia-site-check has not run since boot (its unit failed at setup?), so its tunnels are down."
       - alert: RegaliaLeaseMetricsMissing
         expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?lease\\.prom"}
         for: 5m
