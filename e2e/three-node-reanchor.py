@@ -168,7 +168,8 @@ def scenario(cluster, work):
     header("3  b's anchor unusable: its epoch counter gone from its TPM")
     cfg = cluster.node(b).cfg
     index = "0x%x" % int(str(cfg["nv_epoch"]), 0)
-    gone = sh("tpm2_nvundefine", "-T", cluster.nodes[b].tcti, "-C", "o", index, check=False)
+    with cluster.tpm_of(b) as n:                       # its route, socket or tpm2-abrmd (regalia-afi): never the raw socket by hand
+        gone = sh("tpm2_nvundefine", "-T", n.tcti, "-C", "o", index, check=False)
     said = refusal(lambda: cluster.node(b).store().load())
     ok(gone.returncode == 0 and said is not None,
        "b's epoch counter %s undefined in its TPM: b's own membership no longer loads (%s)" % (index, (said or "it loads")[:120]),
@@ -223,8 +224,13 @@ def scenario(cluster, work):
 
     def snapshot():
         """What a refusal must leave as it was: b's membership file (its bytes) and locks (their metadata), the NV indices
-        its TPM holds and their public areas, and what each index of its anchor holds (read with the owner's authorization)."""
-        tcti = cluster.nodes[b].tcti
+        its TPM holds and their public areas, and what each index of its anchor holds (read with the owner's authorization).
+        Its TPM reads go through b's route (tpm_of): in abrmd mode the raw socket is the daemon's, and its bus is set only
+        inside (regalia-afi, #605's follow-up)."""
+        with cluster.tpm_of(b) as n:
+            return _snapshot(n.tcti)
+
+    def _snapshot(tcti):
         files = {}
         for name in ("membership.json", "membership.json.lock", "highwater.lock"):
             path = cluster.node(b).path(name)

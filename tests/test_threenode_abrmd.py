@@ -5,6 +5,7 @@ client only while none of the node's units runs. Unit tests on a Cluster with no
 here and not only by a scenario that needs a runner."""
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -354,6 +355,27 @@ class AbrmdAnswers(unittest.TestCase):
         with unittest.mock.patch.object(threenode, "sh", side_effect=subprocess.TimeoutExpired("tpm2_getrandom", 5)):
             with self.assertRaisesRegex(RuntimeError, "no answer in 5 s"):
                 self.c.abrmd_answers("a")
+
+
+
+class ScenariosUseTheRoute(unittest.TestCase):
+    """#605's follow-up: a scenario's own tpm2-tools call on a node's tcti, taken straight from cluster.nodes[x], skips
+    tpm_of. In abrmd mode it has no bus and fails closed (three-node-reanchor's step 3 and snapshot did). A tcti handed to
+    a unit's command line (--tcti) is the unit's, which carries its bus: that is not this."""
+    DIRECT = re.compile(r'"-T",\s*cluster\.nodes\[|=\s*cluster\.nodes\[[^]]+\]\.(raw_)?tcti\b')   # a call, or a tcti kept for one
+
+    def test_no_scenario_calls_a_tpm_on_a_tcti_taken_around_tpm_of(self):
+        e2e = pathlib.Path(__file__).resolve().parents[1] / "e2e"
+        scenarios = sorted(e2e.glob("*.py"))
+        self.assertGreater(len(scenarios), 5)                       # the glob reads the scenarios, not nothing
+        found = ["%s:%d" % (p.name, i) for p in scenarios for i, line in enumerate(p.read_text().splitlines(), 1)
+                 if self.DIRECT.search(line)]
+        self.assertEqual(found, [], "use `with cluster.tpm_of(name) as n:` and n.tcti")
+
+    def test_the_control_the_form_reanchor_had_is_found(self):
+        self.assertIsNotNone(self.DIRECT.search('    gone = sh("tpm2_nvundefine", "-T", cluster.nodes[b].tcti, "-C", "o", index)'))
+        self.assertIsNotNone(self.DIRECT.search('        tcti = cluster.nodes[b].tcti'))       # its snapshot's, kept for "-T", tcti
+        self.assertIsNone(self.DIRECT.search('"--tpm-index", index, "--tcti", cluster.nodes[b].tcti, "--node-id", b,'))
 
 
 if __name__ == "__main__":

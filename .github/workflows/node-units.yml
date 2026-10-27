@@ -369,6 +369,48 @@ jobs:
         with:
           name: three-node-reanchor
 
+  # regalia-afi, #605's follow-up: the re-anchor scenario through one tpm2-abrmd per node as well. Its own TPM calls (b's
+  # anchor undefined, the refusal's snapshot) go through Cluster.tpm_of, and the re-anchor tool at b's console reaches its
+  # TPM through the unit's bus; held to the same 29 checks as the socket job, and to the log line that names the route.
+  three-node-reanchor-abrmd:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # libtss2-tcti-tabrmd0 is the client side of tabrmd, only a Recommends of tpm2-abrmd (#605); dbus-daemon runs each
+      # node's own bus
+      - name: The software TPM, tpm2-abrmd and its client TCTI, tpm2-tools, WireGuard, cryptsetup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11 \
+            tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: A total outage and one node re-anchored, through one tpm2-abrmd per node
+        run: |
+          set -o pipefail
+          REGALIA_E2E_TPM=abrmd REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_TPM,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
+            python3 -Es e2e/three-node-reanchor.py | tee "$RUNNER_TEMP/reanchor.log"
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/reanchor.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route" >&2; exit 1; }
+          grep -q '^three-node-reanchor: 29 passed, 0 failed$' "$RUNNER_TEMP/reanchor.log" || {
+            echo "::error::the three-node re-anchor test through tpm2-abrmd did not pass all 29 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' and tpm2-abrmd's logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-reanchor-abrmd
+
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.
   three-node-replace:
