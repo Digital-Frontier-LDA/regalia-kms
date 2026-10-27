@@ -335,6 +335,32 @@ def _replace(path, text):
     os.replace(tmp, path)
 
 
+class Through:
+    """A deploy.baremetal object of node `name`'s, seen from this process in abrmd mode (Cluster.node): every method call is
+    made inside cluster.tpm_of(name), and what it returns, while it is another of deploy.baremetal's objects (its store,
+    its anchor, an attester), is seen the same way. So a scenario's `cluster.node(n).store().load()` reaches n's TPM
+    through n's tpm2-abrmd, without the scenario naming the route (regalia-afi: three-node-recovery's step 7 read a
+    store outside it, and failed closed, as tpm_of means it to). Attributes that are not methods (cfg, tcti) are as they are."""
+
+    def __init__(self, cluster, name, target):
+        self._cluster, self._name, self._target = cluster, name, target
+
+    def __getattr__(self, attr):
+        value = getattr(self._target, attr)
+        if not callable(value):
+            return value
+
+        def call(*args, **kwargs):
+            with self._cluster.tpm_of(self._name):
+                return through(self._cluster, self._name, value(*args, **kwargs))
+        return call
+
+
+def through(cluster, name, value):
+    """`value` as Through sees it: wrapped when it is one of deploy.baremetal's objects, else as it is."""
+    return Through(cluster, name, value) if (type(value).__module__ or "").startswith("deploy.baremetal.") else value
+
+
 class NodeHere:
     """One node's paths, keys and identity."""
 
@@ -975,8 +1001,10 @@ class Cluster:
         _replace(n.cfg_path, json.dumps(cfg))
 
     def node(self, name):
-        """The node as its services see it (deploy/baremetal/node.Node), from its configuration."""
-        return node.Node(node.load(str(self.nodes[name].cfg_path)))
+        """The node as its services see it (deploy/baremetal/node.Node), from its configuration. In abrmd mode seen
+        Through tpm_of: its TPM is reached through its tpm2-abrmd, whoever calls it."""
+        here = node.Node(node.load(str(self.nodes[name].cfg_path)))
+        return here if self.tpm == "socket" else Through(self, name, here)
 
     def _anchor_and_store(self, n):
         with self.tpm_of(n.name):

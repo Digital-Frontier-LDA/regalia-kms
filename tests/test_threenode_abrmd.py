@@ -144,6 +144,60 @@ class TpmOf(unittest.TestCase):
         self.assertEqual(other, [self.c.nodes["b"].bus_address])
 
 
+class NodeThrough(unittest.TestCase):
+    """A scenario's own `cluster.node(n).store().load()` (three-node-recovery's step 7 read one outside tpm_of, and failed
+    closed): in abrmd mode every call down the chain is made inside n's tpm_of, its bus set; in socket mode the Node itself."""
+    def setUp(self):
+        self.work = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.work, True)
+        self.seen = []
+        seen = self.seen
+
+        def bus():
+            return os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+        Store = type("Store", (), {"__module__": "deploy.baremetal.membership", "load": lambda self: seen.append(("load", bus())) or {"epoch": 3}})
+
+        class Node:
+            def __init__(self, cfg):
+                self.cfg = cfg
+
+            def store(self):
+                seen.append(("store", bus()))
+                return Store()
+        Node.__module__ = "deploy.baremetal.node"
+        for target, value in ((threenode.node, "Node"), (threenode.node, "load")):
+            patch = unittest.mock.patch.object(target, value, Node if value == "Node" else (lambda path: {"tcti": threenode.ABRMD_TCTI}))
+            patch.start()
+            self.addCleanup(patch.stop)
+        env = unittest.mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
+
+    def test_abrmd_mode_every_call_down_the_chain_is_inside_its_bus(self):
+        c = cluster(self.work)
+        c.nodes["a"].abrmd = object()
+        here = c.node("a")
+        self.assertEqual(here.cfg, {"tcti": threenode.ABRMD_TCTI})            # an attribute, as it is
+        self.assertEqual(here.store().load()["epoch"], 3)
+        bus = c.nodes["a"].bus_address
+        self.assertEqual(self.seen, [("store", bus), ("load", bus)])
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", os.environ)
+
+    def test_what_is_not_deploy_baremetals_comes_back_as_it_is(self):
+        c = cluster(self.work)
+        self.assertEqual(threenode.through(c, "a", {"epoch": 3}), {"epoch": 3})
+        self.assertIsInstance(threenode.through(c, "a", type("X", (), {"__module__": "deploy.baremetal.lease"})()), threenode.Through)
+        self.assertNotIsInstance(threenode.through(c, "a", type("Y", (), {"__module__": "deploy.baremetalx"})()), threenode.Through)
+
+    def test_socket_mode_is_the_node_itself(self):
+        c = cluster(self.work, "socket")
+        here = c.node("a")
+        self.assertNotIsInstance(here, threenode.Through)
+        here.store().load()
+        self.assertEqual(self.seen, [("store", None), ("load", None)])
+
+
 class InitrdOnly(unittest.TestCase):
     def setUp(self):
         self.work = pathlib.Path(tempfile.mkdtemp())
