@@ -3,9 +3,9 @@ and with "abrmd" each node's units reach theirs only through their own node's tp
 this process's TPM calls only inside tpm_of (outside, no session bus: a forgotten one fails closed), and the raw unlock
 client only while none of the node's units runs. Unit tests on a Cluster with no machine behind it, so the rules are held
 here and not only by a scenario that needs a runner."""
+import ast
 import os
 import pathlib
-import re
 import shutil
 import subprocess
 import sys
@@ -358,24 +358,125 @@ class AbrmdAnswers(unittest.TestCase):
 
 
 
-class ScenariosUseTheRoute(unittest.TestCase):
-    """#605's follow-up: a scenario's own tpm2-tools call on a node's tcti, taken straight from cluster.nodes[x], skips
-    tpm_of. In abrmd mode it has no bus and fails closed (three-node-reanchor's step 3 and snapshot did). A tcti handed to
-    a unit's command line (--tcti) is the unit's, which carries its bus: that is not this."""
-    DIRECT = re.compile(r'"-T",\s*cluster\.nodes\[|=\s*cluster\.nodes\[[^]]+\]\.(raw_)?tcti\b')   # a call, or a tcti kept for one
+# the units a scenario starts whose own command line takes a node's tcti (with its bus, which the unit carries): only a
+# "--tcti" in a sequence that names one of these is the unit's. tpm2-tools take --tcti too (the long -T), so the flag
+# alone says nothing (df-grafana-7e on #608)
+UNITS_TAKING_A_TCTI = ("deploy.baremetal.reanchor",)          # three-node-reanchor's re-anchor tool at b's console
 
-    def test_no_scenario_calls_a_tpm_on_a_tcti_taken_around_tpm_of(self):
+
+def around_the_route(source):
+    """The lines of `source` that read a node's tcti anywhere but inside the route, read from the parse and not a line
+    pattern (df-grafana-7e on #607 and #608, regalia-u90). Reported:
+    - `.tcti` / `.raw_tcti` read off anything but the name a `with ….tpm_of(…) as n:` binds, lexically inside that block,
+      so a node kept under another name (`node = cluster.nodes[b]`, then `node.tcti`) is found too;
+    - that name rebound inside its block (`n = cluster.nodes[c]`, `for n in …`), after which `n.tcti` is another node's;
+    - `getattr(…, "tcti")` and `attrgetter("tcti")`, whatever they are read from.
+    One exception: the value right after a "--tcti" in a call's arguments or a list that also names a unit in
+    UNITS_TAKING_A_TCTI, which is that unit's own command line. Lexical: a function defined inside the block and called
+    after it reads as inside; the abrmd jobs still fail that closed at run time, with no bus outside tpm_of."""
+    found = []
+    attrs = ("tcti", "raw_tcti")
+
+    def unit_args(seq):
+        if not any(isinstance(e, ast.Constant) and e.value in UNITS_TAKING_A_TCTI for e in seq):
+            return set()
+        return {id(seq[i]) for i in range(1, len(seq)) if isinstance(seq[i - 1], ast.Constant) and seq[i - 1].value == "--tcti"}
+
+    def visit(node, bound):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            inner = set(bound)
+            for item in node.items:
+                visit(item.context_expr, bound)
+                call = item.context_expr
+                if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "tpm_of"
+                        and isinstance(item.optional_vars, ast.Name)):
+                    inner.add(item.optional_vars.id)
+                elif item.optional_vars is not None:          # another manager's `as n` rebinds a route name: reported
+                    visit(item.optional_vars, inner)
+                    inner -= {t.id for t in ast.walk(item.optional_vars) if isinstance(t, ast.Name)}
+            for statement in node.body:
+                visit(statement, inner)
+            return
+        if (isinstance(node, ast.Attribute) and node.attr in attrs
+                and not (isinstance(node.value, ast.Name) and node.value.id in bound)):
+            found.append(node.lineno)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id in bound:
+            found.append(node.lineno)
+        if (isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", None)) in ("getattr", "attrgetter")
+                and any(isinstance(a, ast.Constant) and a.value in attrs for a in node.args)):
+            found.append(node.lineno)
+        skip = unit_args(node.args) if isinstance(node, ast.Call) else unit_args(node.elts) if isinstance(node, (ast.List, ast.Tuple)) else set()
+        for child in ast.iter_child_nodes(node):
+            if id(child) not in skip:
+                visit(child, bound)
+
+    visit(ast.parse(source), frozenset())
+    return found
+
+
+class ScenariosUseTheRoute(unittest.TestCase):
+    """#605's follow-up: a scenario's own TPM call on a node's tcti read anywhere but inside `cluster.tpm_of` skips the
+    route. In abrmd mode it has no bus and fails closed at run time (three-node-reanchor's step 3 and snapshot did); this
+    finds it before a runner does. It reads the scenarios that use the three-node fixture."""
+
+    def test_no_scenario_reads_a_tcti_around_tpm_of(self):
         e2e = pathlib.Path(__file__).resolve().parents[1] / "e2e"
-        scenarios = sorted(e2e.glob("*.py"))
+        scenarios = sorted(p for p in e2e.glob("*.py") if "threenode" in p.read_text())
         self.assertGreater(len(scenarios), 5)                       # the glob reads the scenarios, not nothing
-        found = ["%s:%d" % (p.name, i) for p in scenarios for i, line in enumerate(p.read_text().splitlines(), 1)
-                 if self.DIRECT.search(line)]
+        found = ["%s:%d" % (p.name, line) for p in scenarios for line in around_the_route(p.read_text())]
         self.assertEqual(found, [], "use `with cluster.tpm_of(name) as n:` and n.tcti")
 
-    def test_the_control_the_form_reanchor_had_is_found(self):
-        self.assertIsNotNone(self.DIRECT.search('    gone = sh("tpm2_nvundefine", "-T", cluster.nodes[b].tcti, "-C", "o", index)'))
-        self.assertIsNotNone(self.DIRECT.search('        tcti = cluster.nodes[b].tcti'))       # its snapshot's, kept for "-T", tcti
-        self.assertIsNone(self.DIRECT.search('"--tpm-index", index, "--tcti", cluster.nodes[b].tcti, "--node-id", b,'))
+    def test_the_control_the_forms_reanchor_had_are_found(self):
+        self.assertEqual(around_the_route('gone = sh("tpm2_nvundefine", "-T", cluster.nodes[b].tcti, "-C", "o", index)\n'), [1])
+        self.assertEqual(around_the_route("tcti = cluster.nodes[b].tcti\n"), [1])        # its snapshot's, kept for "-T", tcti
+
+    def test_a_node_kept_under_another_name_is_found(self):
+        self.assertEqual(around_the_route('node = cluster.nodes[b]\nsh("tpm2_nvread", "-T", node.tcti)\n'), [2])
+        self.assertEqual(around_the_route('n = cluster.node(b)\nsh("tpm2_getcap", "-T", n.raw_tcti)\n'), [2])
+
+    def test_inside_the_route_is_not(self):
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    sh("tpm2_nvundefine", "-T", n.tcti)\n'), [])
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    return _snapshot(n.tcti)\n'), [])
+
+    def test_the_routes_name_after_its_block_is_found(self):
+        """`n` is still bound once the block ends, but the bus is gone: lexical, not by name."""
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    pass\nsh("-T", n.tcti)\n'), [3])
+
+    def test_a_tcti_in_a_with_items_own_expression_is_found(self):
+        self.assertEqual(around_the_route('with session(cluster.nodes[b].tcti) as h:\n    pass\n'), [1])
+
+    def test_another_context_managers_name_is_not_the_route(self):
+        self.assertEqual(around_the_route('with open(p) as n:\n    sh("-T", n.tcti)\n'), [2])
+
+    def test_a_units_own_tcti_is_not(self):
+        self.assertEqual(around_the_route('argv = ["-m", "deploy.baremetal.reanchor", "--tcti", cluster.nodes[b].tcti, "--node-id", b]\n'), [])
+        self.assertEqual(around_the_route('run("-m", "deploy.baremetal.reanchor", "--tcti", cluster.nodes[b].tcti)\n'), [])
+
+    def test_a_tpm2_tools_long_tcti_is_found(self):
+        """7e on #608: tpm2-tools take --tcti as the long -T, so the flag alone is no unit's."""
+        self.assertEqual(around_the_route('sh("tpm2_nvread", "--tcti", cluster.nodes[b].tcti, index)\n'), [1])
+        self.assertEqual(around_the_route('argv = ["--tpm-index", index, "--tcti", cluster.nodes[b].tcti]\n'), [1])
+
+    def test_the_route_name_rebound_inside_its_block_is_found(self):
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    n = cluster.nodes[c]\n    sh("-T", n.tcti)\n'), [2])
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    for n in cluster.nodes.values():\n        sh("-T", n.tcti)\n'), [2])
+
+    def test_the_route_name_rebound_by_another_with_is_found(self):
+        """7e on bb526069: an inner `with open(p) as n:` rebinds the route's n, and its n.tcti is not the route's."""
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    with open(p) as n:\n        sh("-T", n.tcti)\n'),
+                         [2, 3])
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n, open(p) as n:\n    sh("-T", n.tcti)\n'), [1, 2])
+
+    def test_the_same_nodes_route_re_entered_is_not(self):
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    with cluster.tpm_of(b) as n:\n        sh("-T", n.tcti)\n'), [])
+
+    def test_a_tcti_read_by_getattr_is_found(self):
+        self.assertEqual(around_the_route('t = getattr(cluster.nodes[b], "tcti")\n'), [1])
+        self.assertEqual(around_the_route('t = operator.attrgetter("raw_tcti")(cluster.nodes[b])\n'), [1])
+
+    def test_a_tcti_after_another_flag_is_found(self):
+        self.assertEqual(around_the_route('argv = ["--node-id", cluster.nodes[b].tcti]\n'), [1])
+        self.assertEqual(around_the_route('argv = ["-m", "deploy.baremetal.reanchor", "--node-id", cluster.nodes[b].tcti]\n'), [1])
 
 
 if __name__ == "__main__":
