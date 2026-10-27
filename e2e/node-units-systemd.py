@@ -99,14 +99,17 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "e2e" / "lib"))
 import tpmdiag                                                                       # noqa: E402  regalia-zga
 
-from deploy.baremetal import admission, attest, authtime, enrol, heartbeat, lease, measurements, membership, metrics, node, os_probe, sync, trails, wgsvc   # noqa: E402
+from deploy.baremetal import admission, attest, authtime, bootcreds, enrol, heartbeat, lease, measurements, membership, metrics, node, os_probe, sitecfg, sync, trails, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                    # noqa: E402  the root and revocation keys, and beat()
 
 PREFIX = "/usr/lib/regalia-kms"
 UNITS = ("regalia-authtime.service", "regalia-wg-apply.service", "regalia-wg-apply.path", "regalia-boot-session.service",
-         "regalia-admission.service", "regalia-sync.service", "regalia-esp-advance.service", "regalia-esp-advance.path")
+         "regalia-admission.service", "regalia-sync.service", "regalia-esp-advance.service", "regalia-esp-advance.path",
+         "regalia-site-check.service")
 ESP = "/efi"                     # the unit's ESP; made by the test where the runner has none, and removed after (MADE)
 MADE = []
+SITE_CRED = pathlib.Path(ESP) / node.SITE_ON_ESP     # the measured site document regalia-site-check binds (#615)
+SITE_PROM = pathlib.Path(metrics.RUN_DIR) / "site-check" / "site-check.prom"
 ADMISSION_FILE = "/run/regalia/admission/admission.json"
 DAEMON_UNITS = ("regalia-kms.service", "regalia-audit-collector.service")
 NS, A_TCTI = "regalia-e2e-b", "device:/dev/tpmrm0"
@@ -299,6 +302,8 @@ def main():
         sh("ip", "netns", "del", NS, check=False)
         if MADE:
             shutil.rmtree(MADE[0], ignore_errors=True)
+        elif SITE_CRED.exists():                     # a runner's own /efi: only what this test wrote is removed
+            SITE_CRED.unlink()
         dropins = [pathlib.Path("/etc/systemd/system/tpm2-abrmd.service.d/e2e.conf")] + \
                   [pathlib.Path("/etc/systemd/system/%s.d/e2e-tcti.conf" % name) for name in UNITS]
         if any(d.exists() for d in dropins):
@@ -468,6 +473,13 @@ def provision(work):
                                     {"node_id": "c", "underlay": "192.0.2.30", "address": "10.89.0.3"}]},
             "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444}}
     pathlib.Path("/etc/regalia/site.json").write_text(json.dumps(site))
+    # the ESP's measured site document, rendered from the same site as enrolment renders it: regalia-wg-apply Requires=
+    # regalia-site-check, which compares the two (#615). Section 3b moves it.
+    if not os.path.exists(ESP):
+        os.mkdir(ESP, 0o755)
+        MADE.append(ESP)
+    SITE_CRED.parent.mkdir(parents=True, exist_ok=True)
+    SITE_CRED.write_bytes(bootcreds.site_document(sitecfg.validate(site), "/dev/disk/by-partlabel/regalia-root"))
     pathlib.Path("/etc/regalia/node.json").write_text(json.dumps(cfg))
     # the modes the units' StateDirectoryMode gives them; the store must be regalia-sync's (#190: an
     # enrolment run as root would leave files sync cannot open)
@@ -633,6 +645,43 @@ def scenario(work, binaries, user):
     sync_after = show("regalia-sync.service", "NRestarts", "InvocationID", "ActiveState")
     ok(sync_after["ActiveState"] == "active" and (sync_after["NRestarts"], sync_after["InvocationID"]) == (sync_before["NRestarts"], sync_before["InvocationID"]),
        "regalia-sync stays up, the same process, through that and ten seconds more", (sync_before, sync_after))
+
+    header("3b  regalia-site-check: the rootfs site against the measured site document (#615)")
+    checked = show("regalia-site-check.service", "ActiveState", "Result")
+    ok(checked == {"ActiveState": "active", "Result": "success"} and "agrees with the measured site document in host_ipv4, boot_mesh"
+       in journal("regalia-site-check.service"), "ACCEPT: wg-apply pulled in regalia-site-check, which found site.json and the ESP's "
+       "document in agreement, and the tunnels came up (section 3)", (checked, journal("regalia-site-check.service")[-400:]))
+    ok(SITE_PROM.exists() and "regalia_site_check_ok 1" in SITE_PROM.read_text(), "site-check.prom says 1",
+       SITE_PROM.read_text() if SITE_PROM.exists() else "no file")
+    sh("systemctl", "stop", "regalia-wg-apply.path")
+    agreed = SITE_CRED.read_bytes()
+    moved = sitecfg.validate(json.loads(pathlib.Path("/etc/regalia/site.json").read_text()))
+    moved["host_ipv4"] = "192.0.2.77"                  # the ESP now the new site's; site.json still the old one's
+    SITE_CRED.write_bytes(bootcreds.site_document(moved, "/dev/disk/by-partlabel/regalia-root"))
+    refused = sh("systemctl", "restart", "regalia-site-check.service", check=False)
+    ok(refused.returncode != 0 and show("regalia-site-check.service", "ExecMainStatus")["ExecMainStatus"] == "2"
+       and "differ in host_ipv4" in journal("regalia-site-check.service"),
+       "REFUSE: a moved ESP document beside the old site.json fails the check, naming the key", journal("regalia-site-check.service")[-400:])
+    ok("regalia_site_check_ok 0" in SITE_PROM.read_text(), "site-check.prom says 0", SITE_PROM.read_text())
+    before = show("regalia-wg-apply.service", "InvocationID")["InvocationID"]
+    started = sh("systemctl", "start", "regalia-wg-apply.service", check=False)
+    ok(started.returncode != 0 and show("regalia-wg-apply.service", "InvocationID")["InvocationID"] == before,
+       "regalia-wg-apply does not start on a failed check (Requires=, After=): its process never runs",
+       (started.stderr[-300:], journal("regalia-wg-apply.service")[-300:]))
+    # a unit that fails at SETUP (the bound document missing) never runs, so it writes no file; the file a run left is
+    # removed first, as a new boot's /run has none
+    SITE_CRED.unlink()
+    SITE_PROM.unlink()
+    sh("systemctl", "reset-failed", "regalia-site-check.service", check=False)
+    setup = sh("systemctl", "restart", "regalia-site-check.service", check=False)
+    # 226/NAMESPACE: systemd could not set the unit up, so node.py never ran (its own refusal exits 2)
+    result = show("regalia-site-check.service", "ExecMainStatus")["ExecMainStatus"]
+    ok(setup.returncode != 0 and result == "226" and not SITE_PROM.exists(),
+       "a missing document fails the unit at setup (BindReadOnlyPaths, no '-'): no site-check.prom, so nothing says 1", (result, SITE_PROM.exists()))
+    SITE_CRED.write_bytes(agreed)
+    sh("systemctl", "reset-failed", "regalia-site-check.service", check=False)
+    ok(sh("systemctl", "restart", "regalia-site-check.service", check=False).returncode == 0,
+       "the recovery: the two in agreement again, the check passes", journal("regalia-site-check.service")[-300:])
 
     header("4  regalia-admission")
     # the CUSE TPM has no resource manager: one unit at a time from here (see the docstring)

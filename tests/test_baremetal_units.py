@@ -456,6 +456,7 @@ class NodeMetricsDirectories(unittest.TestCase):
     OWNERS = {"authtime": ("regalia-authtime.service", "root"), "sync": ("regalia-sync.service", "regalia-sync"),
               "admission": ("regalia-admission.service", "regalia-admission"),
               "esp-advance": ("regalia-esp-advance.service", "root"),
+              "site-check": ("regalia-site-check.service", "root"),
               "audit-ship": ("regalia-audit-ship@.service", "regalia-audit-ship")}
 
     def test_each_writer_s_directory_is_its_own_and_its_unit_may_write_there(self):

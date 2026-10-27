@@ -128,6 +128,12 @@ class Writes(SiteAdvanceCase):
             self.advance(record=allow_fails)
         self.assertEqual(self.on_esp(), self.new_doc)
 
+    def test_it_writes_where_systemd_stub_reads_and_site_check_checks(self):
+        # one path: the literal site-check binds in its unit, and the credentials directory systemd-stub measures
+        self.assertEqual(node.SITE_ON_ESP, bootcreds.CREDENTIALS_DIR + "/regalia.site.cred")
+        self.advance()
+        self.assertEqual(open(os.path.join(self.esp, node.SITE_ON_ESP), "rb").read(), self.new_doc)
+
     def test_it_runs_under_the_esp_advance_lock(self):
         os.makedirs(os.path.dirname(self.lock))
         fd = os.open(self.lock, os.O_RDWR | os.O_CREAT, 0o600)
