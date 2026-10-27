@@ -181,8 +181,10 @@ ok "$([ "$was" = yes ] && [ ! -e "/proc/$apid" ] && echo 0 || echo 1)" "tpm2-abr
 
 echo "### a private bus per node (the fixture's design: the other nodes' buses hidden as their sockets are)"
 # Each node: its own dbus-daemon, a system-style bus listening under the node's directory, and its tpm2-abrmd on it under
-# the DEFAULT name. Clients reach it by DBUS_SYSTEM_BUS_ADDRESS (GDBus honours it for bus_type=system), so every node's
-# tcti is the same "tabrmd:bus_type=system", and InaccessiblePaths= on the node's directory hides its bus with its socket.
+# the DEFAULT name, as the node's services' SESSION bus: clients reach it by DBUS_SESSION_BUS_ADDRESS, so every node's tcti
+# is the same "tabrmd:bus_type=session", their system bus stays the host's (check 12), and InaccessiblePaths= on the
+# node's directory hides its bus with its socket. (Its first form, the node's bus as the SYSTEM bus with /run/dbus
+# hidden, passed checks 8-11 in run 40450749785, but it takes systemd away from the services: check 12's MEASURE.)
 # Each negative check counts only beside its positive control: the same unit, the same route, nothing hidden, reaches it.
 # Every call below is bounded and each step leaves a breadcrumb: its first run hung here, silently, for 18 minutes
 step(){ echo "    $(date -u +%H:%M:%S) $*"; }
@@ -238,38 +240,40 @@ EOF
 priv_abrmd_up(){ # $1 node: its tpm2-abrmd on its own bus, under the default name
   step "$1: its tpm2-abrmd on its bus"
   local a="unix:path=$W/$1/dbus/system_bus_socket"
-  runuser -u tss -- env DBUS_SYSTEM_BUS_ADDRESS="$a" G_MESSAGES_DEBUG=all \
-    tpm2-abrmd --tcti="swtpm:path=$W/$1/tpm.sock" > "$W/$1.abrmd.log" 2>&1 &
+  # --session: the node's bus is its services' SESSION bus, so their system bus stays the host's (admission's `systemctl
+  # show`, run as its own user, needs that one: check 12)
+  runuser -u tss -- env DBUS_SESSION_BUS_ADDRESS="$a" G_MESSAGES_DEBUG=all \
+    tpm2-abrmd --session --tcti="swtpm:path=$W/$1/tpm.sock" > "$W/$1.abrmd.log" 2>&1 &
   echo $! > "$W/$1.abrmd.pid"
   for _ in $(seq 1 10); do
-    DBUS_SYSTEM_BUS_ADDRESS="$a" timeout 3 tpm2_getrandom -T tabrmd:bus_type=system --hex 8 >/dev/null 2>&1 && return 0
+    DBUS_SESSION_BUS_ADDRESS="$a" timeout 3 tpm2_getrandom -T tabrmd:bus_type=session --hex 8 >/dev/null 2>&1 && return 0
     sleep 0.5
   done
   # NOT up: what a stall leaves, in full, into the log (the runner keeps nothing else)
   step "$1: NOT up; the evidence"
   echo "    --- names on $1's bus:"; timeout 5 busctl --address="$a" list --no-pager 2>&1 | head -20 | sed 's/^/    /'
   echo "    --- one client attempt, GLib debug on:"
-  DBUS_SYSTEM_BUS_ADDRESS="$a" G_MESSAGES_DEBUG=all timeout 5 tpm2_getrandom -T tabrmd:bus_type=system --hex 8 2>&1 | tail -15 | sed 's/^/    /'
+  DBUS_SESSION_BUS_ADDRESS="$a" G_MESSAGES_DEBUG=all timeout 5 tpm2_getrandom -T tabrmd:bus_type=session --hex 8 2>&1 | tail -15 | sed 's/^/    /'
   echo "    --- its tpm2-abrmd (pid $(cat "$W/$1.abrmd.pid"), $([ -e "/proc/$(cat "$W/$1.abrmd.pid")" ] && echo alive || echo gone)):"
   tail -25 "$W/$1.abrmd.log" | sed 's/^/    /'
   echo "    --- its dbus-daemon:"; tail -15 "$W/$1.bus.log" | sed 's/^/    /'
   echo "    --- the processes:"; ps -eo pid,user,stat,args | grep -E 'dbus-daemon|tpm2-abrmd|swtpm' | grep -v grep | sed 's/^/    /'
   return 1
 }
-unit(){ # a transient unit, as the fixture's are, running tpm2_getrandom over tabrmd:bus_type=system with properties "$@"
+unit(){ # a transient unit, as the fixture's are, running tpm2_getrandom over tabrmd:bus_type=session with properties "$@"
   # tpm2_getrandom itself, not the probe's `t` (a shell function: systemd-run runs executables); bounded by the timeout
-  timeout 30 systemd-run --quiet --wait --pipe --collect "$@" tpm2_getrandom -T tabrmd:bus_type=system --hex 8 2>&1
+  timeout 30 systemd-run --quiet --wait --pipe --collect "$@" tpm2_getrandom -T tabrmd:bus_type=session --hex 8 2>&1
 }
 hexok(){ [[ "$1" =~ ^[0-9a-f]{16}$ ]]; }
 if [ "$private" = run ]; then
   pu=0; for n in p q; do swtpm_up "$n" && bus_up "$n" && priv_abrmd_up "$n" || { pu=1; echo "    $n: $(tail -3 "$W/$n.bus.log" "$W/$n.abrmd.log" 2>/dev/null | tr '\n' ' ')"; }; done
-  addr(){ echo "DBUS_SYSTEM_BUS_ADDRESS=unix:path=$W/$1/dbus/system_bus_socket"; }
+  addr(){ echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$W/$1/dbus/system_bus_socket"; }
   step "a unit on p's bus"
   pp="$(unit -p "Environment=$(addr p)")"
   timeout 5 tpm2_pcrextend -T "swtpm:path=$W/q/tpm.sock" "16:sha256=$(printf '%064d' 2)" >/dev/null 2>&1   # q's own mark, raw, before
   step "PCR 16 through each bus"
-  p16="$(env "$(addr p)" timeout 5 tpm2_pcrread -T tabrmd:bus_type=system sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
-  q16="$(env "$(addr q)" timeout 5 tpm2_pcrread -T tabrmd:bus_type=system sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
+  p16="$(env "$(addr p)" timeout 5 tpm2_pcrread -T tabrmd:bus_type=session sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
+  q16="$(env "$(addr q)" timeout 5 tpm2_pcrread -T tabrmd:bus_type=session sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
   ok "$([ "$pu" = 0 ] && hexok "$pp" && [ -n "$p16" ] && [ -n "$q16" ] && [ "$p16" != "$q16" ] && echo 0 || echo 1)" \
      "a unit reaches its node's tpm2-abrmd over that node's private bus, and each bus reaches its own TPM (PCR 16: p ${p16:0:12}…, q ${q16:0:12}…)" \
      "up $pu, unit: $(echo "$pp" | tr '\n' ' ' | cut -c1-200), p16=$p16 q16=$q16"
@@ -281,19 +285,21 @@ if [ "$private" = run ]; then
   ok "$(hexok "$qc" && ! hexok "$qh" && echo 0 || echo 1)" \
      "node q's bus, its directory hidden: refused ($(echo "$qh" | tr '\n' ' ' | cut -c1-120)); control, nothing hidden: reached" \
      "control: $(echo "$qc" | tr '\n' ' ' | cut -c1-150) | hidden: $(echo "$qh" | tr '\n' ' ' | cut -c1-150)"
-  # NO FALLBACK: a unit whose address is missing must not land on the runner's real system bus. A DECOY there under the
-  # default name makes it falsifiable: the control, the real bus visible, reaches the decoy; hidden, it fails closed
+  # NO FALLBACK: a unit whose session address is missing must not find a bus some other way. GLib's only other place for a
+  # session bus in a system unit is $XDG_RUNTIME_DIR/bus: the control puts p's bus there and reaches p; without either,
+  # it fails closed (no autolaunch from a unit). The decoy on the runner's REAL system bus is check 11's control
   swtpm_up d
   runuser -u tss -- tpm2-abrmd --tcti="swtpm:path=$W/d/tpm.sock" > "$W/d.abrmd.log" 2>&1 &
   echo $! > "$W/d.abrmd.pid"
   step "the decoy on the real system bus"
   for _ in $(seq 1 50); do timeout 5 tpm2_getrandom -T tabrmd:bus_type=system --hex 8 >/dev/null 2>&1 && break; sleep 0.2; done
-  step "no address: control, then the real bus hidden"
-  dc="$(unit -p "UnsetEnvironment=DBUS_SYSTEM_BUS_ADDRESS")"
-  dh="$(unit -p "UnsetEnvironment=DBUS_SYSTEM_BUS_ADDRESS" -p "InaccessiblePaths=/run/dbus")"
+  step "no session address: control (XDG_RUNTIME_DIR/bus is p's), then none"
+  mkdir -p "$W/xdg"; chmod 0755 "$W/xdg"; ln -sf "$W/p/dbus/system_bus_socket" "$W/xdg/bus"
+  dc="$(unit -p "UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS" -p "Environment=XDG_RUNTIME_DIR=$W/xdg")"
+  dh="$(unit -p "UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR")"
   ok "$(hexok "$dc" && ! hexok "$dh" && echo 0 || echo 1)" \
-     "no address and the real system bus hidden: fails closed ($(echo "$dh" | tr '\n' ' ' | cut -c1-120)); control, the real bus visible: the decoy answered" \
-     "control: $(echo "$dc" | tr '\n' ' ' | cut -c1-150) | hidden: $(echo "$dh" | tr '\n' ' ' | cut -c1-150) | decoy: $(tail -2 "$W/d.abrmd.log" | tr '\n' ' ')"
+     "no session address: fails closed ($(echo "$dh" | tr '\n' ' ' | cut -c1-120)); control, XDG_RUNTIME_DIR/bus the node's: reached" \
+     "control: $(echo "$dc" | tr '\n' ' ' | cut -c1-150) | none: $(echo "$dh" | tr '\n' ' ' | cut -c1-150)"
   # NOT ON THE SHARED BUS (TEAMLEAD-grafana): the nodes' tpm2-abrmd own nothing on the runner's real system bus, so a unit
   # that reaches that bus still cannot reach a node's TPM through it. Its control: the decoy's own name IS there, owned
   step "who owns what on the real system bus"
@@ -306,6 +312,18 @@ if [ "$private" = run ]; then
   ok "$([ -n "$decoy_owns" ] && [ -z "$node_owns" ] && [ -n "$ppid_" ] && [ -n "$qpid" ] && echo 0 || echo 1)" \
      "on the real system bus the nodes' tpm2-abrmd own nothing; control: the decoy owns $(echo "$decoy_owns" | awk '{print $1}' | head -1)" \
      "decoy owns: [$decoy_owns] | p/q own: [$node_owns] | p pid $ppid_, q pid $qpid | $(echo "$owners" | grep -i tabrmd | head -5 | tr '\n' ' ')"
+  # THE SERVICES' OTHER D-BUS USE: admission.unit_started runs `systemctl show` as its own (non-root) user, over the SYSTEM
+  # bus. With the node's bus as the session bus, a unit reaches both its TPM and systemd. MEASURED beside it: the design
+  # first agreed (the node's bus as the SYSTEM bus, /run/dbus hidden) loses systemd
+  step "a non-root unit with the node's bus: its TPM and systemctl show"
+  sc(){ timeout 30 systemd-run --quiet --wait --pipe --collect -p User=nobody "$@" systemctl show --property=MainPID --value dbus.service 2>&1; }
+  st="$(unit -p User=nobody -p "Environment=$(addr p)")"
+  ss="$(sc -p "Environment=$(addr p)")"
+  ok "$(hexok "$st" && [[ "$ss" =~ ^[1-9][0-9]*$ ]] && echo 0 || echo 1)" \
+     "a non-root unit with its node's bus as session bus reaches its TPM ($st) and systemd (dbus.service MainPID $ss)" \
+     "tpm: $(echo "$st" | tr '\n' ' ' | cut -c1-150) | systemctl: $(echo "$ss" | tr '\n' ' ' | cut -c1-150)"
+  sy="$(sc -p "Environment=DBUS_SYSTEM_BUS_ADDRESS=unix:path=$W/p/dbus/system_bus_socket" -p "InaccessiblePaths=/run/dbus")"
+  echo "  MEASURE the node's bus as the SYSTEM bus, /run/dbus hidden: systemctl show as non-root -> $(echo "$sy" | tr '\n' ' ' | cut -c1-160)"
   kill -TERM "$dpid" 2>/dev/null
 fi
 

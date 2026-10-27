@@ -43,8 +43,8 @@ jobs:
         run: |
           set -o pipefail
           sudo --preserve-env=RUNNER_ENVIRONMENT timeout 900 bash e2e/abrmd-probe.sh | tee "$RUNNER_TEMP/probe.log"
-          grep -q '^abrmd-probe: 11 passed, 0 failed$' "$RUNNER_TEMP/probe.log" || {
-            echo "::error::the tpm2-abrmd probe did not pass all 11 checks on ${{ matrix.runner }}" >&2; exit 1; }
+          grep -q '^abrmd-probe: 12 passed, 0 failed$' "$RUNNER_TEMP/probe.log" || {
+            echo "::error::the tpm2-abrmd probe did not pass all 12 checks on ${{ matrix.runner }}" >&2; exit 1; }
       - name: The result, in the job summary
         if: always()
         run: grep -E '^(RESULT|  MEASURE) ' "$RUNNER_TEMP/probe.log" >> "$GITHUB_STEP_SUMMARY" || true
