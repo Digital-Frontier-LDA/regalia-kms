@@ -32,9 +32,15 @@ def job_findings(doc):
     for step in runners:
         if " ".join(str(step.get("run", "")).split()) != RUN:
             found.append("the step %r runs %r, not exactly %r" % (step.get("name"), " ".join(str(step["run"]).split()), RUN))
-        for key in ("if", "shell"):
+        for key in ("if", "shell", "working-directory"):
             if key in step:
                 found.append("the step %r has %s: %r" % (step.get("name"), key, step[key]))
+        # a default replaces the shell or the directory as surely as the step's own key (df-grafana-7e, regalia-yuh)
+        for where, defaults in (("the workflow", doc.get("defaults")), ("the job", job.get("defaults"))):
+            run = (defaults or {}).get("run") if isinstance(defaults, dict) else None
+            for key in ("shell", "working-directory"):
+                if isinstance(run, dict) and key in run:
+                    found.append("%s's defaults.run sets %s: %r" % (where, key, run[key]))
         env = dict(job.get("env") or {}, **(step.get("env") or {}))
         if str(env.get("REGALIA_EXPECT_DEBIAN13_RULES")) != "1":
             found.append("the step %r does not set REGALIA_EXPECT_DEBIAN13_RULES to 1" % step.get("name"))
@@ -67,6 +73,13 @@ class KnownPolkitRulesJob(unittest.TestCase):
             "the job made conditional": (broken("  %s:\n" % JOB, "  %s:\n    if: false\n" % JOB), "the job runs only if"),
             "the step made conditional": (broken(STEP, STEP + "        if: false\n"), "has if: False"),
             "the step's shell replaced": (broken(STEP, STEP + "        shell: sh -c 'exit 0' {0}\n"), "has shell:"),
+            "the step's directory moved": (broken(STEP, STEP + "        working-directory: /tmp\n"), "has working-directory:"),
+            "the job's default shell": (broken("  %s:\n" % JOB, "  %s:\n    defaults:\n      run:\n        shell: sh -c 'exit 0' {0}\n" % JOB),
+                                        "the job's defaults.run sets shell:"),
+            "the workflow's default shell": (broken("\njobs:\n", "\ndefaults:\n  run:\n    shell: sh -c 'exit 0' {0}\njobs:\n"),
+                                             "the workflow's defaults.run sets shell:"),
+            "the job's default directory": (broken("  %s:\n" % JOB, "  %s:\n    defaults:\n      run:\n        working-directory: /tmp\n" % JOB),
+                                            "the job's defaults.run sets working-directory:"),
             "a failure swallowed": (broken("tests.test_baremetal_os_probe.KnownRulesCheck\n", "tests.test_baremetal_os_probe.KnownRulesCheck || true\n"), "not exactly"),
             "an exit 0 after": (broken("tests.test_baremetal_os_probe.KnownRulesCheck\n", "tests.test_baremetal_os_probe.KnownRulesCheck; exit 0\n"), "not exactly"),
             "the names echoed": (broken("python3 -Es -m unittest -v tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd", "echo tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd"), "not exactly"),
