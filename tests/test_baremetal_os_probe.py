@@ -720,16 +720,38 @@ class OnlyTheKMSReachesPcscd(unittest.TestCase):
 
 
     def test_a_flipped_known_digest_fails_on_this_machine_s_files(self):
-        """The control for the check above, on the same real files: with one known digest changed, it fails. Run where
-        CI expects Debian 13's files (REGALIA_EXPECT_DEBIAN13_RULES=1); elsewhere there are no real files to flip."""
-        if os.environ.get("REGALIA_EXPECT_DEBIAN13_RULES") != "1":
-            self.skipTest("REGALIA_EXPECT_DEBIAN13_RULES is not 1: CI's job known-polkit-rules-debian13 runs this control")
-        for path in sorted(REAL_KNOWN_RULES_FILES):
-            with self.subTest(path=path):
-                known = dict(REAL_KNOWN_RULES_FILES, **{path: "0" * 64})
-                status, why = known_rules_check(known, os_release(), lambda p: Path(p).read_bytes(), True)
-                self.assertEqual(status, "fail", why)
-                self.assertIn(path, why)
+        """The control for the check above, on the same real files: with a known digest changed, it fails. It runs
+        wherever Debian 13 has any of the files, so CI's job known-polkit-rules-debian13 cannot pass it by a skip even
+        without REGALIA_EXPECT_DEBIAN13_RULES (tests/test_known_polkit_rules_job.py holds the job to setting it)."""
+        status, why, flipped = flipped_digest_control(REAL_KNOWN_RULES_FILES, os_release(), lambda path: Path(path).read_bytes(),
+                                                      os.environ.get("REGALIA_EXPECT_DEBIAN13_RULES") == "1")
+        if status == "skip":
+            self.skipTest(why)
+        self.assertEqual(status, "ok", why)
+        self.assertTrue(flipped)
+
+
+def flipped_digest_control(known, release, read, expect):
+    """known_rules_check with each known digest that this machine has a file for changed in turn: every one must fail,
+    naming its path. As ("ok" | "fail" | "skip", why, the paths flipped); it skips where known_rules_check would, and fails
+    where the unchanged check already does."""
+    status, why = known_rules_check(known, release, read, expect)
+    if status != "ok":
+        # a skip where the check skips; a check that already fails has nothing to control
+        return status, why, []
+    present = []
+    for path in sorted(known):
+        try:
+            read(path)
+        except OSError:
+            continue
+        present.append(path)
+    for path in present:
+        flipped_status, flipped_why = known_rules_check(dict(known, **{path: "0" * 64}), release, read, expect)
+        if flipped_status != "fail" or path not in flipped_why:
+            return "fail", "with %s's digest changed the check still says %s: %s" % (path, flipped_status, flipped_why), present
+    return "ok", "each of %d flipped digests fails" % len(present), present
+
 
 def os_release(path="/etc/os-release"):
     """(ID, VERSION_ID) from os-release, or (None, None) when it cannot be read."""
@@ -822,6 +844,33 @@ class KnownRulesCheck(unittest.TestCase):
         self.assertEqual(known_rules_check(self.KNOWN, ("debian", "13"), self.read({"/usr/share/polkit-1/rules.d/a.rules": b"a"}), False),
                          ("ok", "1 of 2 known files agree"))
         self.assertEqual(known_rules_check(self.KNOWN, ("debian", "13"), self.read({}), False)[0], "skip")
+
+    def test_the_control_runs_on_debian_13_without_the_variable(self):
+        """regalia-9qj review: a control that skips reads as success; without the variable it still runs on Debian 13."""
+        status, why, flipped = flipped_digest_control(self.KNOWN, ("debian", "13"), self.read(self.FILES), False)
+        self.assertEqual((status, flipped), ("ok", sorted(self.FILES)), why)
+        status, _, flipped = flipped_digest_control(self.KNOWN, ("debian", "13"), self.read({"/usr/share/polkit-1/rules.d/a.rules": b"a"}), False)
+        self.assertEqual((status, flipped), ("ok", ["/usr/share/polkit-1/rules.d/a.rules"]))
+
+    def test_the_control_fails_when_a_flip_is_not_seen(self):
+        blind = lambda known, release, read, expect: ("ok", "blind")
+        original = globals()["known_rules_check"]
+        globals()["known_rules_check"] = lambda known, release, read, expect: (
+            original(known, release, read, expect) if known == self.KNOWN else blind(known, release, read, expect))
+        try:
+            status, why, _ = flipped_digest_control(self.KNOWN, ("debian", "13"), self.read(self.FILES), False)
+        finally:
+            globals()["known_rules_check"] = original
+        self.assertEqual(status, "fail")
+        self.assertIn("still says ok", why)
+
+    def test_the_control_skips_only_where_the_check_does(self):
+        self.assertEqual(flipped_digest_control(self.KNOWN, ("ubuntu", "26.04"), self.read(self.FILES), False)[0], "skip")
+        self.assertEqual(flipped_digest_control(self.KNOWN, ("ubuntu", "26.04"), self.read(self.FILES), True)[0], "fail")
+        self.assertEqual(flipped_digest_control(self.KNOWN, ("debian", "13"), self.read({}), False)[0], "skip")
+        self.assertEqual(flipped_digest_control(self.KNOWN, ("debian", "13"), self.read({}), True)[0], "fail")
+        changed = dict(self.FILES, **{"/usr/share/polkit-1/rules.d/b.rules": b"B"})
+        self.assertEqual(flipped_digest_control(self.KNOWN, ("debian", "13"), self.read(changed), False)[0], "fail")
 
     def test_os_release_is_read_quoted_or_not(self):
         with tempfile.TemporaryDirectory() as d:

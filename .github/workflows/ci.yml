@@ -252,13 +252,22 @@ jobs:
           # the only package fetched over http
           apt-get install -y --no-install-recommends ca-certificates
           sed -i 's|http://deb.debian.org/|https://deb.debian.org/|g' /etc/apt/sources.list.d/debian.sources
-          # a live deb822 URIs line that is still http; the image's comments name http URLs and are not sources
-          live_http() { grep -nE '^[[:space:]]*URIs:.*http://' "$1"; }
-          printf 'Types: deb\nURIs: http://deb.debian.org/debian\n' > "$RUNNER_TEMP/live.sources"
-          printf '# http://snapshot.debian.org/\nURIs: https://deb.debian.org/debian\n' > "$RUNNER_TEMP/commented.sources"
-          live_http "$RUNNER_TEMP/live.sources" >/dev/null || { echo "the guard misses a live http URIs line" >&2; exit 1; }
-          if live_http "$RUNNER_TEMP/commented.sources"; then echo "the guard reads a comment as a source" >&2; exit 1; fi
-          if live_http /etc/apt/sources.list.d/debian.sources; then echo "an http source is left" >&2; exit 1; fi
+          # An http source left anywhere apt reads: a deb822 URIs line or a one-line `deb http://…` entry, in
+          # sources.list or any *.list / *.sources, with comments cut (the image's own name snapshot http URLs).
+          live_http() {
+            find "$1" \( -name sources.list -o -name '*.list' -o -name '*.sources' \) -type f -exec sed -e 's|#.*||' {} + |
+              grep -nE '^[[:space:]]*URIs:.*http://|^[[:space:]]*deb(-src)?[[:space:]]+(\[[^]]*\][[:space:]]+)?http://'
+          }
+          for case in live.sources one-line.list commented; do mkdir -p "$RUNNER_TEMP/apt-$case/sources.list.d"; done
+          printf 'Types: deb\nURIs: http://deb.debian.org/debian\n' > "$RUNNER_TEMP/apt-live.sources/sources.list.d/a.sources"
+          printf 'deb [arch=amd64] http://deb.debian.org/debian trixie main\n' > "$RUNNER_TEMP/apt-one-line.list/sources.list"
+          printf '# http://snapshot.debian.org/\nURIs: https://deb.debian.org/debian\n# deb http://x/ trixie main\n' \
+            > "$RUNNER_TEMP/apt-commented/sources.list.d/b.sources"
+          for case in live.sources one-line.list; do
+            live_http "$RUNNER_TEMP/apt-$case" >/dev/null || { echo "the guard misses a live http source ($case)" >&2; exit 1; }
+          done
+          if live_http "$RUNNER_TEMP/apt-commented"; then echo "the guard reads a comment as a source" >&2; exit 1; fi
+          if live_http /etc/apt; then echo "an http source is left" >&2; exit 1; fi
           rm -rf /var/lib/apt/lists/*
           if insecure_apt /etc/apt; then echo "apt is set to accept an unverified archive" >&2; exit 1; fi
           apt-get update
