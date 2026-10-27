@@ -391,6 +391,9 @@ def around_the_route(source):
                 if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "tpm_of"
                         and isinstance(item.optional_vars, ast.Name)):
                     inner.add(item.optional_vars.id)
+                elif item.optional_vars is not None:          # another manager's `as n` rebinds a route name: reported
+                    visit(item.optional_vars, inner)
+                    inner -= {t.id for t in ast.walk(item.optional_vars) if isinstance(t, ast.Name)}
             for statement in node.body:
                 visit(statement, inner)
             return
@@ -457,6 +460,15 @@ class ScenariosUseTheRoute(unittest.TestCase):
     def test_the_route_name_rebound_inside_its_block_is_found(self):
         self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    n = cluster.nodes[c]\n    sh("-T", n.tcti)\n'), [2])
         self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    for n in cluster.nodes.values():\n        sh("-T", n.tcti)\n'), [2])
+
+    def test_the_route_name_rebound_by_another_with_is_found(self):
+        """7e on bb526069: an inner `with open(p) as n:` rebinds the route's n, and its n.tcti is not the route's."""
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    with open(p) as n:\n        sh("-T", n.tcti)\n'),
+                         [2, 3])
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n, open(p) as n:\n    sh("-T", n.tcti)\n'), [1, 2])
+
+    def test_the_same_nodes_route_re_entered_is_not(self):
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    with cluster.tpm_of(b) as n:\n        sh("-T", n.tcti)\n'), [])
 
     def test_a_tcti_read_by_getattr_is_found(self):
         self.assertEqual(around_the_route('t = getattr(cluster.nodes[b], "tcti")\n'), [1])
