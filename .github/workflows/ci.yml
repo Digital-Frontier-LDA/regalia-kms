@@ -205,6 +205,78 @@ jobs:
           "$RUNNER_TEMP/bench/bin/python" -I -m pip install --quiet --require-hashes -r tools/bench/requirements.txt
           "$RUNNER_TEMP/bench/bin/python" -Es tools/bench/test_hsm_bench.py
 
+  known-polkit-rules-debian13:
+    # os_probe.KNOWN_RULES_FILES are the only polkit rules files a KMS host may carry beside the KMS rule, known by
+    # sha256 as Debian 13 ships them. build-test's runner is Ubuntu, whose files are not those (regalia-9qj), so the
+    # digests are held here to Debian 13 itself: the packages os_probe names, at the versions it names, installed from
+    # deb.debian.org with apt checking the archive's signature against the image's own keyring.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    container:
+      # debian:13.6 by digest: created 2026-08-24, past the 7-day floor. Its apt sources are trixie's, so what is
+      # installed is today's trixie, held to the versions below.
+      image: debian:13.6@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+    env:
+      # The versions os_probe's KNOWN_RULES_FILES comment names. apt installing any other version is a failure: a
+      # Debian update that moves one of these files must renew the digest, not pass on a newer package.
+      POLKITD: "126-2"
+      SYSTEMD: "257.13-1~deb13u1"
+      NETWORK_MANAGER: "1.52.1-1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install the named packages from deb.debian.org
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -eu
+          # The image has no CA certificates, so the first update is over the image's own http sources. apt
+          # refuses any index whose InRelease signature the image's keyring does not verify, and every .deb is
+          # checked against the signed index, so this fetch is authenticated without TLS. ca-certificates comes
+          # from it; every later fetch is over https.
+          # No apt setting may accept an unsigned or unverified archive (TEAMLEAD-grafana's condition for the http
+          # bootstrap): checked in every live, uncommented line of apt's configuration and sources, before each fetch.
+          # Comments (# and apt.conf's //) are cut first; a URL's // goes with them, which no setting here sits after.
+          insecure_apt() {
+            find "$1" -type f -exec sed -e 's|#.*||' -e 's|//.*||' {} + |
+              grep -niE 'AllowInsecureRepositories|AllowDowngradeToInsecureRepositories|AllowUnauthenticated|allow-unauthenticated|trusted=yes|^[[:space:]]*Trusted:[[:space:]]*yes'
+          }
+          mkdir -p "$RUNNER_TEMP/apt-insecure" "$RUNNER_TEMP/apt-commented"
+          printf 'APT::Get::AllowUnauthenticated "true";\nAcquire::AllowInsecureRepositories "true";\n' > "$RUNNER_TEMP/apt-insecure/99insecure"
+          printf '// Acquire::AllowInsecureRepositories is not set\n# Types: deb [trusted=yes]\n' > "$RUNNER_TEMP/apt-commented/x.sources"
+          insecure_apt "$RUNNER_TEMP/apt-insecure" >/dev/null || { echo "the guard misses an insecure apt setting" >&2; exit 1; }
+          if insecure_apt "$RUNNER_TEMP/apt-commented"; then echo "the guard reads a comment as a setting" >&2; exit 1; fi
+          if insecure_apt /etc/apt; then echo "apt is set to accept an unverified archive" >&2; exit 1; fi
+          apt-get update
+          # the only package fetched over http
+          apt-get install -y --no-install-recommends ca-certificates
+          sed -i 's|http://deb.debian.org/|https://deb.debian.org/|g' /etc/apt/sources.list.d/debian.sources
+          # a live deb822 URIs line that is still http; the image's comments name http URLs and are not sources
+          live_http() { grep -nE '^[[:space:]]*URIs:.*http://' "$1"; }
+          printf 'Types: deb\nURIs: http://deb.debian.org/debian\n' > "$RUNNER_TEMP/live.sources"
+          printf '# http://snapshot.debian.org/\nURIs: https://deb.debian.org/debian\n' > "$RUNNER_TEMP/commented.sources"
+          live_http "$RUNNER_TEMP/live.sources" >/dev/null || { echo "the guard misses a live http URIs line" >&2; exit 1; }
+          if live_http "$RUNNER_TEMP/commented.sources"; then echo "the guard reads a comment as a source" >&2; exit 1; fi
+          if live_http /etc/apt/sources.list.d/debian.sources; then echo "an http source is left" >&2; exit 1; fi
+          rm -rf /var/lib/apt/lists/*
+          if insecure_apt /etc/apt; then echo "apt is set to accept an unverified archive" >&2; exit 1; fi
+          apt-get update
+          apt-get install -y --no-install-recommends python3 \
+            "polkitd=$POLKITD" "systemd=$SYSTEMD" "network-manager=$NETWORK_MANAGER"
+          # what was measured: the version of each package the digests are compared with
+          dpkg-query -W -f '${Package} ${Version}\n' polkitd systemd network-manager | tee "$RUNNER_TEMP/measured.txt"
+          for want in "polkitd $POLKITD" "systemd $SYSTEMD" "network-manager $NETWORK_MANAGER"; do
+            grep -qxF "$want" "$RUNNER_TEMP/measured.txt" || { echo "installed is not $want" >&2; exit 1; }
+          done
+          sha256sum /usr/share/polkit-1/rules.d/*.rules
+      - name: the probe's known digests are these files
+        env:
+          # here the check never skips, and a known file that is missing fails it
+          REGALIA_EXPECT_DEBIAN13_RULES: "1"
+        run: |
+          python3 -Es -m unittest -v tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd.test_the_known_digests_are_debian_13_s_files tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd.test_a_flipped_known_digest_fails_on_this_machine_s_files tests.test_baremetal_os_probe.KnownRulesCheck
+
   govulncheck:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
