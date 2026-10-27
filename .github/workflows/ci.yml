@@ -275,18 +275,7 @@ jobs:
           # here the check never skips, and a known file that is missing fails it
           REGALIA_EXPECT_DEBIAN13_RULES: "1"
         run: |
-          python3 -Es -m unittest -v tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd.test_the_known_digests_are_debian_13_s_files tests.test_baremetal_os_probe.KnownRulesCheck
-          # the control, on these real files: with one known digest changed, the same check fails
-          python3 -Es - <<'PY'
-          from pathlib import Path
-          from tests.test_baremetal_os_probe import REAL_KNOWN_RULES_FILES, known_rules_check, os_release
-          known = dict(REAL_KNOWN_RULES_FILES)
-          path = sorted(known)[0]
-          known[path] = "0" * 64
-          status, why = known_rules_check(known, os_release(), lambda p: Path(p).read_bytes(), True)
-          assert status == "fail" and path in why, (status, why)
-          print("control: a flipped digest for", path, "fails:", why)
-          PY
+          python3 -Es -m unittest -v tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd.test_the_known_digests_are_debian_13_s_files tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd.test_a_flipped_known_digest_fails_on_this_machine_s_files tests.test_baremetal_os_probe.KnownRulesCheck
 
   govulncheck:
     runs-on: ubuntu-26.04

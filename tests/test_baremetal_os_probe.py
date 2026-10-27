@@ -719,6 +719,18 @@ class OnlyTheKMSReachesPcscd(unittest.TestCase):
         self.assertEqual(status, "ok", why)
 
 
+    def test_a_flipped_known_digest_fails_on_this_machine_s_files(self):
+        """The control for the check above, on the same real files: with one known digest changed, it fails. Run where
+        CI expects Debian 13's files (REGALIA_EXPECT_DEBIAN13_RULES=1); elsewhere there are no real files to flip."""
+        if os.environ.get("REGALIA_EXPECT_DEBIAN13_RULES") != "1":
+            self.skipTest("REGALIA_EXPECT_DEBIAN13_RULES is not 1: CI's job known-polkit-rules-debian13 runs this control")
+        for path in sorted(REAL_KNOWN_RULES_FILES):
+            with self.subTest(path=path):
+                known = dict(REAL_KNOWN_RULES_FILES, **{path: "0" * 64})
+                status, why = known_rules_check(known, os_release(), lambda p: Path(p).read_bytes(), True)
+                self.assertEqual(status, "fail", why)
+                self.assertIn(path, why)
+
 def os_release(path="/etc/os-release"):
     """(ID, VERSION_ID) from os-release, or (None, None) when it cannot be read."""
     fields = {}
