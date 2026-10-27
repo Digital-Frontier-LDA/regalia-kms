@@ -80,8 +80,8 @@ evidence(){ # $1 tag, $2 node: what a stall leaves, in full, into the log (the r
 }
 swtpm_up(){ # $1 node: its socket, tss's 0660 as the fixture makes it
   local tss; tss="$(getent group tss | cut -d: -f3)"; mkdir -p "$W/$1"; chown tss: "$W/$1"
-  swtpm socket --tpm2 --server type=unixio,path="$W/$1/tpm.sock",mode=0660,gid="$tss" \
-    --ctrl type=unixio,path="$W/$1/tpm.sock.ctrl",mode=0660,gid="$tss" --tpmstate dir="$W/$1" \
+  swtpm socket --tpm2 --server "type=unixio,path=$W/$1/tpm.sock,mode=0660,gid=$tss" \
+    --ctrl "type=unixio,path=$W/$1/tpm.sock.ctrl,mode=0660,gid=$tss" --tpmstate dir="$W/$1" \
     --flags not-need-init,startup-clear --daemon --pid file="$W/$1.swtpm.pid" --log file="$W/$1.swtpm.log",level=2 "${extra[@]}"
   for _ in $(seq 1 50); do [ -S "$W/$1/tpm.sock" ] && return 0; sleep 0.2; done; return 1
 }
@@ -120,6 +120,15 @@ pcr(){ tpm2_pcrread -T "$1" sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A
 b0="$(pcr "$(tc b)")"; tpm2_pcrextend -T "$(tc a)" "16:sha256=$(printf '%064d' 1)"; a1="$(pcr "$(tc a)")"; b1="$(pcr "$(tc b)")"
 ok "$([ -n "$a1" ] && [ "$a1" != "$b0" ] && [ "$b1" = "$b0" ] && echo 0 || echo 1)" \
    "each reaches its own TPM (PCR 16 extended through a: a ${a1:0:12}…, b unchanged ${b1:0:12}…)" "a=$a1 b before=$b0 after=$b1"
+
+# MEASURED, not judged: while node a's tpm2-abrmd holds its connection, does swtpm's socket serve a SECOND, raw client
+# (the fixture's Go unlock client speaks only unix:<socket>, never tabrmd)? If it waits, the fixture runs tpm2-abrmd
+# only while a node's services run (start() to stop()), and its initrd steps reach the socket with no daemon on it
+raw="$(timeout 5 tpm2_getrandom -T "swtpm:path=$W/a/tpm.sock" --hex 8 2>&1)"; rrc=$?
+shared="$([ "$rrc" = 0 ] && [[ "$raw" =~ ^[0-9a-f]{16}$ ]] && echo yes || { [ "$rrc" = 124 ] && echo waits || echo refused; })"
+echo "  MEASURE a raw client on a's socket while a's tpm2-abrmd holds it: $shared (rc $rrc: $(echo "$raw" | tr '\n' ' ' | cut -c1-200))"
+after_raw="$(tpm2_getrandom -T "$(tc a)" --hex 8 2>&1)"
+echo "  MEASURE a's tpm2-abrmd after that raw client: $([[ "$after_raw" =~ ^[0-9a-f]{16}$ ]] && echo answers || echo "fails: $(echo "$after_raw" | tr '\n' ' ' | cut -c1-200)")"
 
 echo "### the control: the raw socket (node c, no resource manager)"
 swtpm_up c
@@ -164,6 +173,6 @@ for _ in $(seq 1 50); do [ -e "/proc/$apid" ] || break; sleep 0.2; done
 ok "$([ "$was" = yes ] && [ ! -e "/proc/$apid" ] && echo 0 || echo 1)" "tpm2-abrmd, running and answering, stops on SIGTERM" \
    "running and answering before: $was; pid $apid $([ -e "/proc/$apid" ] && echo "still there after 10 s" || echo gone)"
 
-echo "RESULT socket_ok=$(wc -l < "$W/sock.ok" | tr -d ' ') socket_exhausted=$sock_mem abrmd_ok=${rm_ok:-?} abrmd_exhausted=${rm_mem:-?} socket_timeouts=${sock_to:-?} abrmd_timeouts=${rm_to:-?} of=$((CLIENTS * ROUNDS)) abrmd_survives_swtpm_restart=$survived abrmd_alive_after=$alive runner=$(. /etc/os-release; echo "$VERSION_ID")"
+echo "RESULT socket_ok=$(wc -l < "$W/sock.ok" | tr -d ' ') socket_exhausted=$sock_mem abrmd_ok=${rm_ok:-?} abrmd_exhausted=${rm_mem:-?} socket_timeouts=${sock_to:-?} abrmd_timeouts=${rm_to:-?} of=$((CLIENTS * ROUNDS)) abrmd_survives_swtpm_restart=$survived abrmd_alive_after=$alive raw_beside_abrmd=${shared:-?} runner=$(. /etc/os-release; echo "$VERSION_ID")"
 echo "abrmd-probe: $pass passed, $fail failed"
 [ "$fail" = 0 ]
