@@ -211,22 +211,35 @@ bus_up(){ # $1 node: its private system-style bus, under its own directory
 </busconfig>
 EOF
   step "$1: its dbus-daemon"
-  timeout 10 dbus-daemon --config-file="$W/$1/bus.conf" --fork --print-pid > "$W/$1.bus.pid" 2> "$W/$1.bus.log" || return 1
+  # in the foreground, backgrounded: with --fork it closes its stderr, and its refusals are the evidence wanted here
+  dbus-daemon --config-file="$W/$1/bus.conf" --nofork --nopidfile --print-pid > "$W/$1.bus.pid" 2> "$W/$1.bus.log" &
   for _ in $(seq 1 25); do [ -S "$W/$1/dbus/system_bus_socket" ] && chmod 0666 "$W/$1/dbus/system_bus_socket" && return 0; sleep 0.2; done
   return 1
 }
 priv_abrmd_up(){ # $1 node: its tpm2-abrmd on its own bus, under the default name
   step "$1: its tpm2-abrmd on its bus"
-  runuser -u tss -- env DBUS_SYSTEM_BUS_ADDRESS="unix:path=$W/$1/dbus/system_bus_socket" \
+  local a="unix:path=$W/$1/dbus/system_bus_socket"
+  runuser -u tss -- env DBUS_SYSTEM_BUS_ADDRESS="$a" G_MESSAGES_DEBUG=all \
     tpm2-abrmd --tcti="swtpm:path=$W/$1/tpm.sock" > "$W/$1.abrmd.log" 2>&1 &
   echo $! > "$W/$1.abrmd.pid"
-  for _ in $(seq 1 50); do
-    DBUS_SYSTEM_BUS_ADDRESS="unix:path=$W/$1/dbus/system_bus_socket" timeout 5 tpm2_getrandom -T tabrmd:bus_type=system --hex 8 >/dev/null 2>&1 && return 0
-    sleep 0.2
-  done; return 1
+  for _ in $(seq 1 10); do
+    DBUS_SYSTEM_BUS_ADDRESS="$a" timeout 3 tpm2_getrandom -T tabrmd:bus_type=system --hex 8 >/dev/null 2>&1 && return 0
+    sleep 0.5
+  done
+  # NOT up: what a stall leaves, in full, into the log (the runner keeps nothing else)
+  step "$1: NOT up; the evidence"
+  echo "    --- names on $1's bus:"; timeout 5 busctl --address="$a" list --no-pager 2>&1 | head -20 | sed 's/^/    /'
+  echo "    --- one client attempt, GLib debug on:"
+  DBUS_SYSTEM_BUS_ADDRESS="$a" G_MESSAGES_DEBUG=all timeout 5 tpm2_getrandom -T tabrmd:bus_type=system --hex 8 2>&1 | tail -15 | sed 's/^/    /'
+  echo "    --- its tpm2-abrmd (pid $(cat "$W/$1.abrmd.pid"), $([ -e "/proc/$(cat "$W/$1.abrmd.pid")" ] && echo alive || echo gone)):"
+  tail -25 "$W/$1.abrmd.log" | sed 's/^/    /'
+  echo "    --- its dbus-daemon:"; tail -15 "$W/$1.bus.log" | sed 's/^/    /'
+  echo "    --- the processes:"; ps -eo pid,user,stat,args | grep -E 'dbus-daemon|tpm2-abrmd|swtpm' | grep -v grep | sed 's/^/    /'
+  return 1
 }
 unit(){ # a transient unit, as the fixture's are, running tpm2_getrandom over tabrmd:bus_type=system with properties "$@"
-  timeout 30 systemd-run --quiet --wait --pipe --collect "$@" t tpm2_getrandom -T tabrmd:bus_type=system --hex 8 2>&1
+  # tpm2_getrandom itself, not the probe's `t` (a shell function: systemd-run runs executables); bounded by the timeout
+  timeout 30 systemd-run --quiet --wait --pipe --collect "$@" tpm2_getrandom -T tabrmd:bus_type=system --hex 8 2>&1
 }
 hexok(){ [[ "$1" =~ ^[0-9a-f]{16}$ ]]; }
 if [ "$private" = run ]; then
