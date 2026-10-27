@@ -7,6 +7,7 @@
   "nv_epoch": "0x01500016",
   "nv_heartbeat": "0x01500018",
   "nv_signing": "0x0150001c",
+  "nv_activation": "0x0150001e",
   "state_dir": "/var/lib/regalia-sync",
   "admission_dir": "/var/lib/regalia-admission",
   "run_dir": "/run/regalia",

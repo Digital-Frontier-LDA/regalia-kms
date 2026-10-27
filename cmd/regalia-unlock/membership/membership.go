@@ -478,6 +478,9 @@ func restrictive(current, candidate map[string]any, signer string) error {
 	}
 	names := map[string]string{"policy_version": "the policy version", "revocation_keys": "the revocation keys"}
 	for _, k := range rootFields {
+		if k == "recovery_ends_by" && candidate[k] == nil {
+			continue // clearing it is not a widening: a recovery's end is stated again by the root
+		}
 		if !equal(candidate[k], current[k]) {
 			name := names[k]
 			if name == "" {
@@ -637,8 +640,26 @@ func Accept(current map[string]any, envelope any, root any) (map[string]any, err
 	if err := tombstones(current, candidate); err != nil {
 		return nil, err
 	}
+	bothV4 := current["schema"] == SchemaV4 && candidate["schema"] == SchemaV4
+	// K_A is named by every node's TPM objects (#361): no signer changes it; a new K_A is a new genesis. (v3 -> v4,
+	// root-signed, is where it is first set.)
+	if bothV4 && !equal(candidate["anchor_policy_key"], current["anchor_policy_key"]) {
+		return nil, refuse("anchor_policy_key is set at genesis and never changes, for any signer: every node's TPM objects " +
+			"are defined under it (a new one is a new genesis)")
+	}
+	if bothV4 && !belowQuorum(current) && belowQuorum(candidate) && candidate["recovery_ends_by"] != nil {
+		return nil, refuse("this epoch drops the counting nodes below the activation threshold: recovery_ends_by must be " +
+			"null (an earlier recovery's end does not carry over)")
+	}
 	if signer != "root" {
 		if err := restrictive(current, candidate, signer); err != nil {
+			return nil, err
+		}
+	} else if bothV4 {
+		if err := cardRecordRules(current, candidate); err != nil {
+			return nil, err
+		}
+		if err := recoveryEndRules(current, candidate); err != nil {
 			return nil, err
 		}
 	}

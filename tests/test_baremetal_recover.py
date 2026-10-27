@@ -84,7 +84,12 @@ class Statement(Case):
         self.assertEqual(recover.verify_chain(self.chain, ROOT_PUB, self.m2)["epoch"], 3)
         fork2 = manifest4(2, m.digest(self.m1), nodes4(b="QUARANTINED"), issued_at="2026-10-04T10:00:00Z")
         self.refused("does not extend this node's last known manifest", recover.verify_chain, self.chain, ROOT_PUB, fork2)
-        rotated = manifest4(4, m.digest(self.m3), nodes4(c="QUARANTINED"), owner_keys=[{"alg": "ed25519", "key": pub(OWNER_KEYS[2])}])
+        # owner_keys change only with a later card ceremony's record, which names them (#361 B, #405)
+        unrecorded = manifest4(4, m.digest(self.m3), nodes4(c="QUARANTINED"), owner_keys=[{"alg": "ed25519", "key": pub(OWNER_KEYS[2])}])
+        self.refused("owner_keys change only with a new card_record", recover.verify_chain, self.chain + [sign(unrecorded, ROOT)], ROOT_PUB, self.m2)
+        record = {"sequence": self.m3["card_record"]["sequence"] + 1, "digest": hashlib.sha256(b"the next card ceremony").hexdigest()}
+        rotated = manifest4(4, m.digest(self.m3), nodes4(c="QUARANTINED"), owner_keys=[{"alg": "ed25519", "key": pub(OWNER_KEYS[2])}],
+                            card_record=record)
         self.assertEqual(recover.verify_chain(self.chain + [sign(rotated, ROOT)], ROOT_PUB, self.m2)["owner_keys"][0]["key"], pub(OWNER_KEYS[2]))
 
 

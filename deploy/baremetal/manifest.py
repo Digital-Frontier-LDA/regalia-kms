@@ -137,9 +137,34 @@ def utc_now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def propose_states(current, changes, issued_at):
+AUTHORIZATIONS = "activation-authorizations.jsonl"     # in the laptop's state directory: the owner's recovery authorizations
+
+
+def recovery_ends_by(current, candidate, given, record_lines):
+    """recovery_ends_by for `candidate` (#432 amendment 5, d9): null unless it brings the counting node parties back to the
+    activation threshold from below it (membership._recovery_end_rules), and then the latest expires_at of the owner's recovery authorizations: taken from
+    the record of what the owner's tool issued (`record_lines`, owner.py's AUTHORIZATIONS lines) when present, or `given`;
+    a `given` value earlier than any expiry the record holds is refused. Returns (the value, the closing record line or None)."""
+    if current.get("schema") != membership.SCHEMA_V4 or not (membership.below_quorum(current) and not membership.below_quorum(candidate)):
+        require(given is None, "--recovery-ends-by is for an epoch that ends a recovery, and this one does not")
+        return None, None
+    issued = [line["expires_at"] for line in record_lines if line.get("event") == "issued" and line.get("quarantine_epoch", 0) <= current["epoch"]]
+    latest = max(issued) if issued else None
+    if given is None:
+        require(record_lines or latest is not None, "this epoch ends a recovery: give --recovery-ends-by (the latest expiry of the "
+                "owner's recovery authorizations, 0 when none was issued), or --state-dir with the owner's %s" % AUTHORIZATIONS)
+        value = latest if latest is not None else 0      # a record that shows none issued: nothing to wait out
+    else:
+        require(latest is None or given >= latest, "--recovery-ends-by %d is earlier than an authorization the record holds (until %d)"
+                % (given, latest))
+        value = given
+    return value, {"event": "closed", "through_epoch": current["epoch"], "recovery_ends_by": value}
+
+
+def propose_states(current, changes, issued_at, ends_by=None):
     """The next manifest: `current` with the nodes' states changed ({node_id: state}), the epoch moved on and
-    chained to it. Validated; whether a signer may make the change is transition()'s, at `sign`."""
+    chained to it, and recovery_ends_by `ends_by` (null unless it ends a recovery: recovery_ends_by()). Validated;
+    whether a signer may make the change is transition()'s, at `sign`."""
     require(changes, "no change given")
     candidate = json.loads(json.dumps(current))
     nodes = {n["node_id"]: n for n in candidate["nodes"]}
@@ -149,6 +174,8 @@ def propose_states(current, changes, issued_at):
         require(nodes[nid]["state"] != state, "%s is already %s" % (nid, state))
         nodes[nid]["state"] = state
     candidate.update(epoch=current["epoch"] + 1, prev_digest=membership.digest(current), issued_at=issued_at)
+    if "recovery_ends_by" in candidate:
+        candidate["recovery_ends_by"] = ends_by
     membership.validate(candidate)
     return candidate
 
@@ -160,7 +187,8 @@ def propose_states(current, changes, issued_at):
 # --owner-heartbeat-lifetime-s); membership.validate still refuses a value below its floors. The owner is ONE party,
 # so "2 of {a, b, c, owner}" already means at least one node signs every heartbeat and activation lease. The proposed
 # D31 director party (not decided) would make that floor explicit; there is deliberately no director field here.
-GENESIS_POLICY = {"heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600}
+GENESIS_POLICY = {"heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "recovery_authorization_max_s": 604800,
+                  "recovery_ends_by": None}
 OWNER_PARTY = membership.OWNER
 # what `enrol entry` prints for a node (#358, #371 and its ssh_host_pub): the v4 entry is these and state ACTIVE
 ENTRY_FIELDS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key", "hsm_serials", "ssh_host_pub")
@@ -216,9 +244,76 @@ def judge_enrolled(document, enrolled):
     return judged
 
 
-def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None):
+# regalia-ceremony's offline-keys generation record (rc#129, offline-keys.record.json): signed by the ROOT, in the very session
+# that generated and sealed K_A beside it, after every key signed a fresh challenge that verified under its published public
+# key ("operation_proof"). K_A is taken from it and nowhere else (regalia-kms-95 on #438): never typed, never a loose file.
+OFFLINE_KEYS_SCHEMA = "regalia.offline-keys-record/v1"
+OFFLINE_KEYS_FIELDS = ("schema", "event", "threshold", "shares", "slip39_identifier", "master_id", "publics", "root_entry",
+                       "anchor_policy_entry", "root_fingerprint", "files", "operation_proof", "tool", "at")
+
+
+def offline_keys_record(envelope, root):
+    """K_A (#361) as the manifest's typed entry, from the offline-keys generation record verified under the PINNED root
+    (as card_record_keys takes the owner's keys from the card record): exactly {record, signature}; schema
+    OFFLINE_KEYS_SCHEMA, event "generate", every top-level field by name; root_entry the pinned Ed25519 root and
+    root_fingerprint its SHA-256; the root's signature over cardrecord.RECORD_DOMAIN + canonical(record); then
+    anchor_policy_entry a P-256 key equal to the published "anchor-policy" public key, whose generation proof is
+    "verified". That binds K_A to this ceremony's sealed set and shows its private half signed when it was sealed; a
+    wrong entry (a rehearsal's, another set's) or one never sealed is refused here, not found at the first rotation.
+    Returns (the typed entry, the record)."""
+    import base64
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    entries = membership.root_entries(root)
+    require(len(entries) == 1 and entries[0][0] == "ed25519", "the genesis root is one Ed25519 key (D28): the offline-keys record is "
+            "verified under that key only")
+    root_key = entries[0][1]
+    require(isinstance(envelope, dict), "the offline-keys record is not an object")
+    membership.exact(envelope, ("record", "signature"), "the offline-keys record")
+    record, signature = envelope["record"], envelope["signature"]
+    require(isinstance(signature, str) and re.fullmatch(r"[0-9a-f]{128}", signature) is not None, "the offline-keys record's signature is not 128 hex")
+    require(isinstance(record, dict), "the offline-keys record's record is not an object")
+    membership.exact(record, OFFLINE_KEYS_FIELDS, "the offline-keys record")
+    require(record["root_entry"] == {"alg": "ed25519", "key": root_key},
+            "the offline-keys record names another root than the pinned one: it is not this network's sealed set")
+    require(record["root_fingerprint"] == hashlib.sha256(bytes.fromhex(root_key)).hexdigest(), "the offline-keys record's root_fingerprint is not the root's")
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(root_key)).verify(bytes.fromhex(signature),
+                                                                           cardrecord.RECORD_DOMAIN + membership.canonical(record))
+    except (InvalidSignature, ValueError):
+        raise Refused("the offline-keys record's signature is not the pinned root's") from None
+    # the ceremony's records (card, ownerauth, generation) share RECORD_DOMAIN: THIS check is what tells their kinds apart
+    # under it (regalia-kms-95), never redundant with the signature
+    require(record["schema"] == OFFLINE_KEYS_SCHEMA and record["event"] == "generate",
+            "the offline-keys record is not a %s generation record" % OFFLINE_KEYS_SCHEMA)
+    require(all(type(record[k]) is int for k in ("threshold", "shares")) and 1 <= record["threshold"] <= record["shares"],
+            "the offline-keys record's threshold and shares are not counts with threshold <= shares")
+    require(isinstance(record["at"], str) and isinstance(record["master_id"], str),
+            "the offline-keys record's at and master_id are not strings")
+    alg, key = membership.typed_key(record["anchor_policy_entry"], "the offline-keys record's anchor_policy_entry", membership.ANCHOR_POLICY_KEY_ALGS)
+    published = record["publics"].get("anchor-policy") if isinstance(record["publics"], dict) else None
+    require(isinstance(published, dict) and published.get("alg") == "ecdsa-p256" and isinstance(published.get("spki"), str),
+            "the offline-keys record publishes no ecdsa-p256 anchor-policy key")
+    try:
+        point = serialization.load_der_public_key(base64.b64decode(published["spki"], validate=True))
+        require(isinstance(point, ec.EllipticCurvePublicKey) and isinstance(point.curve, ec.SECP256R1), "")
+        point = point.public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()
+    except (ValueError, TypeError, Refused):
+        raise Refused("the offline-keys record's published anchor-policy key is not a P-256 public key") from None
+    require(point == key, "the offline-keys record's anchor_policy_entry is not its published anchor-policy key")
+    proof = record["operation_proof"]
+    require(isinstance(proof, dict) and proof.get("anchor-policy") == "verified",
+            "the offline-keys record shows no generation proof for K_A (operation_proof[\"anchor-policy\"] is not \"verified\")")
+    return {"alg": alg, "key": key}, record
+
+
+def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None, anchor_policy=None, card_record=None):
     """Epoch 1 (v4), unsigned: every node from its `enrol entry` output (state ACTIVE), the measurements `document` it
-    commits to, the owner's two keys, and GENESIS_POLICY (with `policy` overrides). Refused unless it is a manifest a
+    commits to, the owner's two keys, K_A (`anchor_policy`, offline_keys_record's typed entry), the card record that names the
+    owner's keys (`card_record`, {"sequence", "digest"} from card_record_keys), and GENESIS_POLICY (with `policy`
+    overrides). Refused unless it is a manifest a
     node would accept from the root at genesis (validate, transition(None, ..., "root"), measurements.bind), and unless
     the release card's key, the root's and every node's signing key are each other than the owner keys. `owners`
     ({card serial: key}) and `release_key` come from the card record (card_record_keys); checked here again, as a
@@ -244,7 +339,11 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
     nodes.sort(key=lambda n: n["node_id"])
     release_key = _raw_ed25519(release_key, "the release key")
     require(release_key not in owners.values(), "the release key is one of the owner keys: the release card is never an owner key")
+    require(isinstance(anchor_policy, dict) and isinstance(card_record, dict),
+            "a v4 genesis names K_A (the anchor-policy key) and the card record (#361, #405)")
     roots = {key for _, key in membership.root_entries(root)}
+    require(anchor_policy.get("key") not in roots and anchor_policy.get("key") != release_key,
+            "the anchor-policy key is the pinned root's or the release card's: K_A is its own key (D28)")
     for name, key in [("owner card %s" % s, k) for s, k in sorted(owners.items())] + [("release card", release_key)]:
         require(key not in roots, "the %s's key is the pinned root's" % name)
         for node in nodes:
@@ -257,6 +356,7 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
         "heartbeat_signers": {"threshold": 2, "parties": ids + [OWNER_PARTY]},
         "activation_signers": {"threshold": 2, "parties": ids + [OWNER_PARTY]},
         "revocation_signers": [{"threshold": 2, "parties": ids}, {"threshold": 1, "parties": [OWNER_PARTY]}],
+        "anchor_policy_key": anchor_policy, "card_record": {"sequence": card_record.get("sequence"), "digest": card_record.get("digest")},
         "nodes": nodes})
     membership.validate(candidate)
     membership.transition(None, candidate, "root")
@@ -555,6 +655,8 @@ def _propose_genesis(args, root, confirm=None, say=print):
     require(args.measurements and args.card_record and args.state_dir,
             "--genesis needs --measurements, --card-record and --state-dir (the laptop's root signing record, #403)")
     require(args.node and args.system_pub, "--genesis needs --node BUNDLE KEEP ACTIVATION for each node, and --system-pub (#399)")
+    require(args.offline_keys_record, "--genesis needs --offline-keys-record (offline-keys.record.json, signed by the pinned root: "
+            "K_A is taken from it, #361)")
     cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root, args.state_dir)
     owners, release_key = cards["owners"], cards["release_key"]
     with open(args.system_pub, "rb") as f:
@@ -569,8 +671,10 @@ def _propose_genesis(args, root, confirm=None, say=print):
     document = measurements.load(_raw(args.measurements, measurements.MAX_BYTES))
     pcr7_judged = judge_enrolled(document, enrolled)
     policy = {k: v for k, v in (("heartbeat_max_lifetime_s", args.heartbeat_max_lifetime_s),
-                                ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s)) if v is not None}
-    candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy)
+                                ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s),
+                                ("recovery_authorization_max_s", args.recovery_authorization_max_s)) if v is not None}
+    anchor_policy, generated = offline_keys_record(read_json(args.offline_keys_record, membership.MAX_BYTES), root)
+    candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy, anchor_policy, cards)
     require(not os.path.lexists(args.out), "%s exists: nothing is overwritten" % args.out)
     for line in diff({"nodes": []}, candidate):
         say("  " + line)
@@ -588,6 +692,10 @@ def _propose_genesis(args, root, confirm=None, say=print):
         say("owner card %s (%s): key %s, SHA-256 %s" % (serial, roles[serial], owners[serial],
                                                         hashlib.sha256(bytes.fromhex(owners[serial])).hexdigest()))
     say("release card key (not in the manifest; refused as an owner, root or node key): %s" % release_key)
+    say("anchor-policy key K_A (#361; fixed for the life of this genesis: a new one is a new genesis): %s, SHA-256 %s"
+        % (anchor_policy["key"], hashlib.sha256(bytes.fromhex(anchor_policy["key"])).hexdigest()))
+    say("K_A is from the offline-keys generation record of %s (sealed set %s, %d of %d shares), signed by the pinned root; its "
+        "private half signed a challenge when it was sealed" % (generated["at"], generated["master_id"], generated["threshold"], generated["shares"]))
     typed = (confirm or keyfd.tty_line)("type the two owner cards' serials, as printed ON THE CARDS, in the order above: ").split()
     require(typed == order, "the serials typed are not the owner cards above: nothing was written")
     _write_new(args.out, json.dumps(candidate, indent=2, sort_keys=True).encode() + b"\n")
@@ -615,6 +723,17 @@ def _step(args):
 def _raw(path, limit):
     with open(path, "rb") as f:
         return f.read(limit + 1)
+
+
+def _authorization_lines(state_dir):
+    """The owner's recovery-authorization record in the laptop's state directory (owner.py sign-activation), or []."""
+    if not state_dir:
+        return []
+    try:
+        with open(os.path.join(state_dir, AUTHORIZATIONS)) as f:
+            return [json.loads(line) for line in f if line.strip()]
+    except FileNotFoundError:
+        return []
 
 
 def _states(pairs):
@@ -674,10 +793,17 @@ def main(argv=None):
                         "root: the owner's two keys and the release card's, from it and never typed")
     c.add_argument("--state-dir", metavar="DIR", help="--genesis: the ceremony laptop's state directory (its root signing record "
                    "and regalia-signing-state.json): the card record must be the newest the root signed (#403)")
+    c.add_argument("--offline-keys-record", metavar="RECORD.json", help="--genesis: regalia-ceremony's offline-keys.record.json "
+                   "(the generation record, signed by the pinned root): K_A (#361) is taken from it and pinned in epoch 1 for the "
+                   "life of the genesis")
     c.add_argument("--heartbeat-max-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["heartbeat_max_lifetime_s"])
     c.add_argument("--owner-heartbeat-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["owner_heartbeat_lifetime_s"])
+    c.add_argument("--recovery-authorization-max-s", type=int, help="--genesis: the owner's recovery authorization's longest life "
+                   "(#432), override the default %d (7 days; 3600 at least)" % GENESIS_POLICY["recovery_authorization_max_s"])
     c.add_argument("--from-rollout", metavar="R.json", help="the output of `rollout propose --json`")
     c.add_argument("--set-state", action="append", default=[], metavar="NODE=STATE", help="change a node's state; repeat")
+    c.add_argument("--recovery-ends-by", type=int, metavar="UNIX_SECONDS", help="an epoch ending a recovery (#432): the latest "
+                   "expiry of the owner's recovery authorizations; taken from --state-dir's %s when that is present" % AUTHORIZATIONS)
     c.add_argument("--issued-at", metavar="YYYY-MM-DDTHH:MM:SSZ")
     c.add_argument("--out", required=True)
     step_args(c, acknowledge=False)
@@ -718,9 +844,10 @@ def main(argv=None):
             return _propose_genesis(args, root)
         if args.command == "propose":
             require(args.chain is not None, "give --chain (or --genesis)")
-            require(not (args.node or args.system_pub or args.measurements or args.card_record or args.state_dir or args.heartbeat_max_lifetime_s
-                         or args.owner_heartbeat_lifetime_s), "--node, --system-pub, --measurements, --card-record, --state-dir and the "
-                    "lifetimes are for --genesis only")
+            require(not (args.node or args.system_pub or args.measurements or args.card_record or args.state_dir or args.offline_keys_record
+                         or args.heartbeat_max_lifetime_s
+                         or args.owner_heartbeat_lifetime_s or args.recovery_authorization_max_s), "--node, --system-pub, --measurements, --card-record, --state-dir, "
+                    "--offline-keys-record and the lifetimes are for --genesis only")
         if args.command == "sign" and args.genesis:
             # the first ceremony: no chain at all, the offline root only (see GENESIS above)
             require(args.chain is None and args.expected_epoch is None, "--genesis takes no --chain and no --expected-epoch")
@@ -738,13 +865,25 @@ def main(argv=None):
         current = verify_chain(chain_doc, root)
         if args.command == "verify":
             print("chain verified: %d envelopes, epoch %d, digest %s" % (len(chain_doc), current["epoch"], membership.digest(current)))
+            if "card_record" in current:
+                # the verified tip's pin of the card ceremony's record (#405, #406): one line for regalia-ceremony's readers
+                # (--pin SEQ:DIGEST), who accept only this record after genesis. A chain before v4 has no pin: no line.
+                print("CARD-RECORD-PIN %d %s" % (current["card_record"]["sequence"], current["card_record"]["digest"]))
             return 0
         if args.command == "propose":
             require(bool(args.from_rollout) != bool(args.set_state), "give --from-rollout or --set-state, not both")
             if args.from_rollout:
                 candidate = propose_from_rollout(current, read_json(args.from_rollout, membership.MAX_BYTES), _step(args))
             else:
-                candidate = propose_states(current, _states(args.set_state), args.issued_at or utc_now())
+                changes = _states(args.set_state)
+                trial = propose_states(current, changes, args.issued_at or utc_now(), None)
+                lines = _authorization_lines(args.state_dir)
+                ends, closing = recovery_ends_by(current, trial, args.recovery_ends_by, lines)
+                candidate = propose_states(current, changes, args.issued_at or utc_now(), ends)
+                if closing is not None and args.state_dir:
+                    # the record closes the epochs before: the owner's tool issues no authorization for them again (d9)
+                    with open(os.path.join(args.state_dir, AUTHORIZATIONS), "a") as f:
+                        f.write(json.dumps(closing, sort_keys=True) + "\n")
             _write_new(args.out, json.dumps(candidate, indent=2, sort_keys=True).encode() + b"\n")
             print("\n".join(diff(current, candidate)))
             print("UNSIGNED epoch %d written to %s" % (candidate["epoch"], args.out))

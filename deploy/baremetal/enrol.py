@@ -1044,6 +1044,10 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     # policy as the anchor, since a node that has signed nothing starts there
     signing = heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=n.path("signing-counter.lock"), define_policy=policy,
                                 image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth)
+    # the activation counter (#432: how many activation leases this node has signed): the same, at 0
+    activation_counter = heartbeat.Counter(cfg["nv_activation"], cfg["tcti"], run, lock_path=n.path("activation-counter.lock"),
+                                           define_policy=policy, image_key=lambda: node_module.image_key(cfg, manifest=tip),
+                                           owner_auth=owner_auth)
 
     def defined(owner, indices):
         return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]
@@ -1061,6 +1065,10 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     require(not signing_present or (len(signing_present) == 2 and signing.value() == 0),
             "the TPM already holds the signing counter's indices (%s), not as an enrolment leaves them (both, at 0): "
             "enrolment does not take them over" % ", ".join(signing_present))
+    activation_present = defined(activation_counter, (activation_counter.index, activation_counter.base_index))
+    require(not activation_present or (len(activation_present) == 2 and activation_counter.value() == 0),
+            "the TPM already holds the activation counter's indices (%s), not as an enrolment leaves them (both, at 0): "
+            "enrolment does not take them over" % ", ".join(activation_present))
     already = 0
     if os.path.exists(store.path):
         store.load()                                   # refuses a store the TPM anchor does not vouch for
@@ -1087,6 +1095,8 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
         store.commit(envelope, final=index == len(rest) - 1)
     if not signing_present:
         signing.define()                              # at 0, under the anchor's policy; written by policy from then on
+    if not activation_present:
+        activation_counter.define()                   # at 0: a node that has granted nothing (#432); busy for the wait at first
     manifest = store.load()
     return manifest["epoch"], membership.digest(manifest)
 
@@ -1181,7 +1191,7 @@ def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bo
 def define_anchors(config_path, chain, directory, owner_auth, run=subprocess.run):
     """#419, as ROOT (enrol commit's parent), under v4: every owner-authorized definition of enrolment, so the owner
     authorization never enters a process of regalia-sync. The membership anchor (at epoch 0, the zero record) and the
-    signing counter (at 0), both under the node's define policy from the chain's tip (node.define_policy: the system key
+    signing counter and the activation counter (each at 0), all under the node's define policy from the chain's tip (node.define_policy: the system key
     its measurements name). Then anchor_and_store, as regalia-sync, finds them "as define leaves them" (its resumable
     state) and commits the chain by policy sessions, with no owner authorization. Locks are root's, in the enrolment
     directory: nothing else writes these indices during enrolment, and a lock file root made in regalia-sync's state
@@ -1198,8 +1208,13 @@ def define_anchors(config_path, chain, directory, owner_auth, run=subprocess.run
                               define_policy=policy, image_key=image_key, owner_auth=owner_auth)
     signing = heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=os.path.join(directory, "define-signing.lock"),
                                 define_policy=policy, image_key=image_key, owner_auth=owner_auth)
+    # the activation counter (#432, at 0) is owner-authorized like the signing counter, so it is defined here too:
+    # anchor_and_store, as regalia-sync under v4, holds no owner authorization to define it with
+    activation = heartbeat.Counter(cfg["nv_activation"], cfg["tcti"], run, lock_path=os.path.join(directory, "define-activation.lock"),
+                                   define_policy=policy, image_key=image_key, owner_auth=owner_auth)
     defined = []
-    for name, held, indices in (("anchor", hw, hw._indices()), ("signing counter", signing, (signing.index, signing.base_index))):
+    for name, held, indices in (("anchor", hw, hw._indices()), ("signing counter", signing, (signing.index, signing.base_index)),
+                                ("activation counter", activation, (activation.index, activation.base_index))):
         present = [i for i in indices if held._tpm("nvreadpublic", i).returncode == 0]
         if len(present) == len(indices):
             # a resumed commit: adopted only as this definer lays it down (HighWater._as_defined: the attributes, and an

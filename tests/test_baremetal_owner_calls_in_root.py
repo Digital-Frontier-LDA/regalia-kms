@@ -1,7 +1,7 @@
 """#419: under v4 every owner-authorized step of enrolment is the ROOT parent's, so the TPM owner authorization never
 enters a process of regalia-sync (enrol.define_anchors, enrol.define_first_counter; enrol.commit wires them in).
 
-  * define_anchors defines the anchor and the signing counter, through the owner channel, and leaves a resumed
+  * define_anchors defines the anchor, the signing counter and the activation counter (#432), through the owner channel, and leaves a resumed
     enrolment's as they are; a half-defined pair is refused;
   * define_first_counter starts the heartbeat counter from heartbeats the root parent VERIFIES ITSELF (regalia-kms-24):
     at max(sequence - 1, 0); at 0 only at a bootstrap; otherwise refused, nothing defined. A forged or withheld
@@ -128,11 +128,13 @@ class NoSyncProcess(unittest.TestCase):
 class TheAnchors(Case):
     def test_defined_by_the_root_parent_and_left_on_a_resume(self):
         chain = self.chain
-        self.assertEqual(enrol.define_anchors(self.config, chain, self.d, self.auth, run=self.tpm), ["anchor", "signing counter"])
+        self.assertEqual(enrol.define_anchors(self.config, chain, self.d, self.auth, run=self.tpm), ["anchor", "signing counter", "activation counter"])
         from deploy.baremetal import heartbeat
         anchor = m.HighWater(self.cfg["nv_epoch"])._indices()
         signing = heartbeat.Counter(self.cfg["nv_signing"])
-        self.assertEqual(self.present(*anchor, signing.index, signing.base_index), list(anchor) + [signing.index, signing.base_index])
+        activation = heartbeat.Counter(self.cfg["nv_activation"])
+        self.assertEqual(self.present(*anchor, signing.index, signing.base_index, activation.index, activation.base_index),
+                         list(anchor) + [signing.index, signing.base_index, activation.index, activation.base_index])
         self.assertEqual(enrol.define_anchors(self.config, chain, self.d, self.auth, run=self.tpm), [])
 
     def test_only_with_the_owner_authorization(self):

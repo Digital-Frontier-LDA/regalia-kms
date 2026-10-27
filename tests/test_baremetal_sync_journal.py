@@ -83,6 +83,7 @@ class FakeClient:
 
     def __init__(self, node_id, store, freshness, transports, sink, documents=None):
         self.sink, self.store = sink, store
+        self.peer_epochs = {}       # sync.Client's: what each source said it holds (#453)
 
     def pull(self, source):
         outcome = self.script[source]
@@ -115,6 +116,7 @@ class PullRound(unittest.TestCase):
         s.manifest = s.store.load
         s.publish = lambda: False
         s.rounds = nodemod.RoundLog(clock=Clock(), out=self.lines.append)
+        s.pulled, s.boot_epoch, s.peer_epochs = set(), None, {}     # Sync.__init__'s, as #453 added them (d9's boot rule)
         self.sync = s
 
     def test_one_line_per_source(self):
