@@ -535,10 +535,11 @@ jobs:
         with:
           go-version-file: go.mod
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup, netem
+        # linux-modules-extra only when the running kernel lacks sch_netem: the runner's kernel can be ahead of the
+        # archive's (7.0.0-1017-azure, run 40506387532), the step ci.yml's wg-boot-netns shares (regalia-1ur).
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 iputils-ping \
-            python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11 "linux-modules-extra-$(uname -r)"
+          bash e2e/lib/apt-install-netem.sh swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 iputils-ping \
+            python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11
       - name: Build the pre-root client, and the audit trail shipper and collector (#340)
         run: |
           CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
