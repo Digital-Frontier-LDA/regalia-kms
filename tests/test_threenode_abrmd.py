@@ -45,8 +45,22 @@ class Node(unittest.TestCase):
 
     def test_its_tcti_is_tabrmd_while_its_abrmd_runs(self):
         self.n.abrmd = object()
-        self.assertEqual(self.n.tcti, threenode.ABRMD_TCTI)
-        self.assertEqual(threenode.ABRMD_TCTI, "tabrmd:bus_type=session")
+        self.assertEqual(self.n.tcti, "tabrmd:bus_name=com.intel.tss2.Tabrmd.a,bus_type=session")
+
+    def test_each_nodes_tcti_names_its_own_abrmd(self):
+        """TEAMLEAD-grafana: closed by construction. Every object made from a node's configuration carries its node's
+        name, so under another node's bus it finds no owner and fails closed, whichever object makes the call."""
+        tctis = {node: threenode.abrmd_tcti(node) for node in ("a", "b", "c", "d")}
+        self.assertEqual(len(set(tctis.values())), 4)
+        for node, tcti in tctis.items():
+            with self.subTest(node):
+                self.assertEqual(tcti, "tabrmd:bus_name=%s,bus_type=session" % threenode.abrmd_name(node))
+                self.assertTrue(threenode.abrmd_name(node).endswith("." + node))
+
+    def test_a_node_id_that_cannot_be_a_dbus_name_element_is_refused(self):
+        for node in ("", "1a", "a-b", "a.b", "x" * 33):
+            with self.subTest(node=node), self.assertRaisesRegex(RuntimeError, "D-Bus name element"):
+                threenode.abrmd_name(node)
 
     def test_its_bus_is_under_its_own_directory(self):
         self.assertEqual(self.n.bus_address, "unix:path=%s" % (self.work / "a" / "dbus" / "bus"))
@@ -63,16 +77,17 @@ class Node(unittest.TestCase):
 
 class BusConfig(unittest.TestCase):
     def test_it_listens_on_the_node_socket_only_and_tss_alone_owns_the_name(self):
-        root = ET.fromstring(threenode.bus_config("/w/a/dbus/bus").split("\n", 2)[2])
+        name = threenode.abrmd_name("a")
+        root = ET.fromstring(threenode.bus_config("/w/a/dbus/bus", name).split("\n", 2)[2])
         self.assertEqual([e.text for e in root.iter("listen")], ["unix:path=/w/a/dbus/bus"])
         owners = [(p.get("user"), p.get("context"), a.get("own")) for p in root.iter("policy") for a in p if a.get("own")]
-        self.assertEqual(sorted(owners, key=str), sorted([(None, "default", "*"), ("tss", None, threenode.ABRMD_NAME)], key=str))
+        self.assertEqual(sorted(owners, key=str), sorted([(None, "default", "*"), ("tss", None, name)], key=str))
         denied = [a.get("own") for p in root.iter("policy") for a in p if a.tag == "deny" and a.get("own")]
         self.assertEqual(denied, ["*"])
 
     def test_it_lets_the_bus_replies_through(self):
         """#605 run 40449316347: a bus with no receive rules denied its own replies, and every client hung."""
-        root = ET.fromstring(threenode.bus_config("/w/a/dbus/bus").split("\n", 2)[2])
+        root = ET.fromstring(threenode.bus_config("/w/a/dbus/bus", threenode.abrmd_name("a")).split("\n", 2)[2])
         received = {a.get("receive_type") for p in root.iter("policy") for a in p if a.tag == "allow" and a.get("receive_type")}
         self.assertEqual(received, {"method_call", "method_return", "error", "signal"})
 
@@ -189,7 +204,7 @@ class NodeThrough(unittest.TestCase):
                 return Store()
         Node.__module__ = "deploy.baremetal.node"
         for target, value in ((threenode.node, "Node"), (threenode.node, "load")):
-            patch = unittest.mock.patch.object(target, value, Node if value == "Node" else (lambda path: {"tcti": threenode.ABRMD_TCTI}))
+            patch = unittest.mock.patch.object(target, value, Node if value == "Node" else (lambda path: {"tcti": threenode.abrmd_tcti("a")}))
             patch.start()
             self.addCleanup(patch.stop)
         env = unittest.mock.patch.dict(os.environ)
@@ -201,7 +216,7 @@ class NodeThrough(unittest.TestCase):
         c = cluster(self.work)
         c.nodes["a"].abrmd = object()
         here = c.node("a")
-        self.assertEqual(here.cfg, {"tcti": threenode.ABRMD_TCTI})            # an attribute, as it is
+        self.assertEqual(here.cfg, {"tcti": threenode.abrmd_tcti("a")})            # an attribute, as it is
         self.assertEqual(here.store().load()["epoch"], 3)
         bus = c.nodes["a"].bus_address
         self.assertEqual(self.seen, [("store", bus), ("load", bus)])
@@ -323,7 +338,7 @@ class AbrmdAnswers(unittest.TestCase):
         self.c.nodes["a"].abrmd = object()
         with self.answer(stdout="0123456789abcdef\n") as sh:
             self.assertIs(self.c.abrmd_answers("a"), True)
-        self.assertEqual(sh.call_args[0][:3], ("tpm2_getrandom", "-T", threenode.ABRMD_TCTI))
+        self.assertEqual(sh.call_args[0][:3], ("tpm2_getrandom", "-T", threenode.abrmd_tcti("a")))
         self.assertEqual(sh.call_args[1]["timeout"], 5)
 
     def test_no_answer_fails_with_its_log(self):

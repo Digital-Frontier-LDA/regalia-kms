@@ -182,7 +182,8 @@ ok "$([ "$was" = yes ] && [ ! -e "/proc/$apid" ] && echo 0 || echo 1)" "tpm2-abr
 echo "### a private bus per node (the fixture's design: the other nodes' buses hidden as their sockets are)"
 # Each node: its own dbus-daemon, a system-style bus listening under the node's directory, and its tpm2-abrmd on it under
 # the DEFAULT name, as the node's services' SESSION bus: clients reach it by DBUS_SESSION_BUS_ADDRESS, so every node's tcti
-# is the same "tabrmd:bus_type=session", their system bus stays the host's (check 12), and InaccessiblePaths= on the
+# names its own daemon ("tabrmd:bus_name=com.intel.tss2.Tabrmd.<node>,bus_type=session": under another node's bus that
+# name has no owner, check 15), their system bus stays the host's (check 12), and InaccessiblePaths= on the
 # node's directory hides its bus with its socket. (Its first form, the node's bus as the SYSTEM bus with /run/dbus
 # hidden, passed checks 8-11 in run 40450749785, but it takes systemd away from the services: check 12's MEASURE.)
 # Each negative check counts only beside its positive control: the same unit, the same route, nothing hidden, reaches it.
@@ -199,6 +200,7 @@ else
   private=run
 fi
 PRIV=com.intel.tss2.Tabrmd
+ptc(){ echo "tabrmd:bus_name=$PRIV.$1,bus_type=session"; }   # node $1's tcti, as the fixture's abrmd_tcti
 bus_up(){ # $1 node: its private system-style bus, under its own directory
   mkdir -p "$W/$1/dbus"; chmod 0755 "$W/$1" "$W/$1/dbus"
   cat > "$W/$1/bus.conf" <<EOF
@@ -226,9 +228,9 @@ bus_up(){ # $1 node: its private system-style bus, under its own directory
     <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus.Introspectable"/>
     <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus.Properties"/>
     <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus.Peer"/>
-    <allow send_destination="$PRIV"/>
+    <allow send_destination="$PRIV.$1"/>
   </policy>
-  <policy user="tss"><allow own="$PRIV"/></policy>
+  <policy user="tss"><allow own="$PRIV.$1"/></policy>
 </busconfig>
 EOF
   step "$1: its dbus-daemon"
@@ -243,45 +245,46 @@ priv_abrmd_up(){ # $1 node: its tpm2-abrmd on its own bus, under the default nam
   # --session: the node's bus is its services' SESSION bus, so their system bus stays the host's (admission's `systemctl
   # show`, run as its own user, needs that one: check 12)
   runuser -u tss -- env DBUS_SESSION_BUS_ADDRESS="$a" G_MESSAGES_DEBUG=all \
-    tpm2-abrmd --session --tcti="swtpm:path=$W/$1/tpm.sock" > "$W/$1.abrmd.log" 2>&1 &
+    tpm2-abrmd --session --dbus-name="$PRIV.$1" --tcti="swtpm:path=$W/$1/tpm.sock" > "$W/$1.abrmd.log" 2>&1 &
   echo $! > "$W/$1.abrmd.pid"
   for _ in $(seq 1 10); do
-    DBUS_SESSION_BUS_ADDRESS="$a" timeout 3 tpm2_getrandom -T tabrmd:bus_type=session --hex 8 >/dev/null 2>&1 && return 0
+    DBUS_SESSION_BUS_ADDRESS="$a" timeout 3 tpm2_getrandom -T "$(ptc "$1")" --hex 8 >/dev/null 2>&1 && return 0
     sleep 0.5
   done
   # NOT up: what a stall leaves, in full, into the log (the runner keeps nothing else)
   step "$1: NOT up; the evidence"
   echo "    --- names on $1's bus:"; timeout 5 busctl --address="$a" list --no-pager 2>&1 | head -20 | sed 's/^/    /'
   echo "    --- one client attempt, GLib debug on:"
-  DBUS_SESSION_BUS_ADDRESS="$a" G_MESSAGES_DEBUG=all timeout 5 tpm2_getrandom -T tabrmd:bus_type=session --hex 8 2>&1 | tail -15 | sed 's/^/    /'
+  DBUS_SESSION_BUS_ADDRESS="$a" G_MESSAGES_DEBUG=all timeout 5 tpm2_getrandom -T "$(ptc "$1")" --hex 8 2>&1 | tail -15 | sed 's/^/    /'
   echo "    --- its tpm2-abrmd (pid $(cat "$W/$1.abrmd.pid"), $([ -e "/proc/$(cat "$W/$1.abrmd.pid")" ] && echo alive || echo gone)):"
   tail -25 "$W/$1.abrmd.log" | sed 's/^/    /'
   echo "    --- its dbus-daemon:"; tail -15 "$W/$1.bus.log" | sed 's/^/    /'
   echo "    --- the processes:"; ps -eo pid,user,stat,args | grep -E 'dbus-daemon|tpm2-abrmd|swtpm' | grep -v grep | sed 's/^/    /'
   return 1
 }
-unit(){ # a transient unit, as the fixture's are, running tpm2_getrandom over tabrmd:bus_type=session with properties "$@"
+unit(){ # $1 node: a transient unit, as the fixture's are, running tpm2_getrandom on that node's tcti, with properties "${@:2}"
   # tpm2_getrandom itself, not the probe's `t` (a shell function: systemd-run runs executables); bounded by the timeout
-  timeout 30 systemd-run --quiet --wait --pipe --collect "$@" tpm2_getrandom -T tabrmd:bus_type=session --hex 8 2>&1
+  local tc_; tc_="$(ptc "$1")"; shift
+  timeout 30 systemd-run --quiet --wait --pipe --collect "$@" tpm2_getrandom -T "$tc_" --hex 8 2>&1
 }
 hexok(){ [[ "$1" =~ ^[0-9a-f]{16}$ ]]; }
 if [ "$private" = run ]; then
   pu=0; for n in p q; do swtpm_up "$n" && bus_up "$n" && priv_abrmd_up "$n" || { pu=1; echo "    $n: $(tail -3 "$W/$n.bus.log" "$W/$n.abrmd.log" 2>/dev/null | tr '\n' ' ')"; }; done
   addr(){ echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$W/$1/dbus/system_bus_socket"; }
   step "a unit on p's bus"
-  pp="$(unit -p "Environment=$(addr p)")"
+  pp="$(unit p -p "Environment=$(addr p)")"
   timeout 5 tpm2_pcrextend -T "swtpm:path=$W/q/tpm.sock" "16:sha256=$(printf '%064d' 2)" >/dev/null 2>&1   # q's own mark, raw, before
   step "PCR 16 through each bus"
-  p16="$(env "$(addr p)" timeout 5 tpm2_pcrread -T tabrmd:bus_type=session sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
-  q16="$(env "$(addr q)" timeout 5 tpm2_pcrread -T tabrmd:bus_type=session sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
+  p16="$(env "$(addr p)" timeout 5 tpm2_pcrread -T "$(ptc p)" sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
+  q16="$(env "$(addr q)" timeout 5 tpm2_pcrread -T "$(ptc q)" sha256:16 2>/dev/null | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p')"
   ok "$([ "$pu" = 0 ] && hexok "$pp" && [ -n "$p16" ] && [ -n "$q16" ] && [ "$p16" != "$q16" ] && echo 0 || echo 1)" \
      "a unit reaches its node's tpm2-abrmd over that node's private bus, and each bus reaches its own TPM (PCR 16: p ${p16:0:12}…, q ${q16:0:12}…)" \
      "up $pu, unit: $(echo "$pp" | tr '\n' ' ' | cut -c1-200), p16=$p16 q16=$q16"
   # THE ONE THAT COUNTS (TEAMLEAD-grafana): a unit given q's bus address but with q's directory hidden, as the fixture hides
   # the other nodes' directories, does not reach q. Beside its control: the same unit, nothing hidden, does
   step "q's bus: control, then hidden"
-  qc="$(unit -p "Environment=$(addr q)")"
-  qh="$(unit -p "Environment=$(addr q)" -p "InaccessiblePaths=$W/q")"
+  qc="$(unit q -p "Environment=$(addr q)")"
+  qh="$(unit q -p "Environment=$(addr q)" -p "InaccessiblePaths=$W/q")"
   ok "$(hexok "$qc" && ! hexok "$qh" && echo 0 || echo 1)" \
      "node q's bus, its directory hidden: refused ($(echo "$qh" | tr '\n' ' ' | cut -c1-120)); control, nothing hidden: reached" \
      "control: $(echo "$qc" | tr '\n' ' ' | cut -c1-150) | hidden: $(echo "$qh" | tr '\n' ' ' | cut -c1-150)"
@@ -295,8 +298,8 @@ if [ "$private" = run ]; then
   for _ in $(seq 1 50); do timeout 5 tpm2_getrandom -T tabrmd:bus_type=system --hex 8 >/dev/null 2>&1 && break; sleep 0.2; done
   step "no session address: control (XDG_RUNTIME_DIR/bus is p's), then none"
   mkdir -p "$W/xdg"; chmod 0755 "$W/xdg"; ln -sf "$W/p/dbus/system_bus_socket" "$W/xdg/bus"
-  dc="$(unit -p "UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS" -p "Environment=XDG_RUNTIME_DIR=$W/xdg")"
-  dh="$(unit -p "UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR")"
+  dc="$(unit p -p "UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS" -p "Environment=XDG_RUNTIME_DIR=$W/xdg")"
+  dh="$(unit p -p "UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR")"
   ok "$(hexok "$dc" && ! hexok "$dh" && echo 0 || echo 1)" \
      "no session address: fails closed ($(echo "$dh" | tr '\n' ' ' | cut -c1-120)); control, XDG_RUNTIME_DIR/bus the node's: reached" \
      "control: $(echo "$dc" | tr '\n' ' ' | cut -c1-150) | none: $(echo "$dh" | tr '\n' ' ' | cut -c1-150)"
@@ -317,11 +320,11 @@ if [ "$private" = run ]; then
   # control: not hidden, it reaches q); and with its own node's address set, the address wins: it reaches p's TPM, not q's
   step "XDG_RUNTIME_DIR naming q's bus: hidden, control, and beside p's own address"
   mkdir -p "$W/xdgq"; chmod 0755 "$W/xdgq"; ln -sf "$W/q/dbus/system_bus_socket" "$W/xdgq/bus"
-  pcr16u(){ timeout 30 systemd-run --quiet --wait --pipe --collect "$@" tpm2_pcrread -T tabrmd:bus_type=session sha256:16 2>&1 \
+  pcr16u(){ local tc_; tc_="$(ptc "$1")"; shift; timeout 30 systemd-run --quiet --wait --pipe --collect "$@" tpm2_pcrread -T "$tc_" sha256:16 2>&1 \
             | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p'; }
-  xc="$(unit -p "UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS" -p "Environment=XDG_RUNTIME_DIR=$W/xdgq")"
-  xh="$(unit -p "UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS" -p "Environment=XDG_RUNTIME_DIR=$W/xdgq" -p "InaccessiblePaths=$W/q")"
-  xp="$(pcr16u -p "Environment=$(addr p)" -p "Environment=XDG_RUNTIME_DIR=$W/xdgq" -p "InaccessiblePaths=$W/q")"
+  xc="$(unit q -p "UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS" -p "Environment=XDG_RUNTIME_DIR=$W/xdgq")"
+  xh="$(unit q -p "UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS" -p "Environment=XDG_RUNTIME_DIR=$W/xdgq" -p "InaccessiblePaths=$W/q")"
+  xp="$(pcr16u p -p "Environment=$(addr p)" -p "Environment=XDG_RUNTIME_DIR=$W/xdgq" -p "InaccessiblePaths=$W/q")"
   ok "$(hexok "$xc" && ! hexok "$xh" && [ -n "$xp" ] && [ "$xp" = "$p16" ] && [ "$xp" != "$q16" ] && echo 0 || echo 1)" \
      "a shared XDG_RUNTIME_DIR naming q's bus: q hidden, refused; control, reached q; beside p's own address, p's TPM (PCR 16 ${xp:0:12}…)" \
      "control: $(echo "$xc" | tr '\n' ' ' | cut -c1-120) | hidden: $(echo "$xh" | tr '\n' ' ' | cut -c1-120) | with p's address: [$xp] p16=$p16 q16=$q16"
@@ -331,7 +334,7 @@ if [ "$private" = run ]; then
   step "the raw TPM socket hidden: raw refused, tpm2-abrmd still reached; control"
   rawu(){ timeout 30 systemd-run --quiet --wait --pipe --collect "$@" tpm2_getrandom -T "swtpm:path=$W/p/tpm.sock" --hex 8 2>&1; }
   hide=(-p "InaccessiblePaths=-$W/p/tpm.sock" -p "InaccessiblePaths=-$W/p/tpm.sock.ctrl")
-  rc_="$(rawu)"; rh="$(rawu "${hide[@]}")"; ra="$(unit -p "Environment=$(addr p)" "${hide[@]}")"
+  rc_="$(rawu)"; rh="$(rawu "${hide[@]}")"; ra="$(unit p -p "Environment=$(addr p)" "${hide[@]}")"
   ok "$(hexok "$rc_" && ! hexok "$rh" && hexok "$ra" && echo 0 || echo 1)" \
      "a unit with its node's raw TPM socket hidden: raw refused ($(echo "$rh" | tr '\n' ' ' | cut -c1-100)), through tpm2-abrmd reached; control, raw opened" \
      "control raw: $(echo "$rc_" | tr '\n' ' ' | cut -c1-120) | hidden raw: $(echo "$rh" | tr '\n' ' ' | cut -c1-120) | hidden, abrmd: $(echo "$ra" | tr '\n' ' ' | cut -c1-120)"
@@ -340,13 +343,20 @@ if [ "$private" = run ]; then
   # first agreed (the node's bus as the SYSTEM bus, /run/dbus hidden) loses systemd
   step "a non-root unit with the node's bus: its TPM and systemctl show"
   sc(){ timeout 30 systemd-run --quiet --wait --pipe --collect -p User=nobody "$@" systemctl show --property=MainPID --value dbus.service 2>&1; }
-  st="$(unit -p User=nobody -p "Environment=$(addr p)")"
+  st="$(unit p -p User=nobody -p "Environment=$(addr p)")"
   ss="$(sc -p "Environment=$(addr p)")"
   ok "$(hexok "$st" && [[ "$ss" =~ ^[1-9][0-9]*$ ]] && echo 0 || echo 1)" \
      "a non-root unit with its node's bus as session bus reaches its TPM ($st) and systemd (dbus.service MainPID $ss)" \
      "tpm: $(echo "$st" | tr '\n' ' ' | cut -c1-150) | systemctl: $(echo "$ss" | tr '\n' ' ' | cut -c1-150)"
   sy="$(sc -p "Environment=DBUS_SYSTEM_BUS_ADDRESS=unix:path=$W/p/dbus/system_bus_socket" -p "InaccessiblePaths=/run/dbus")"
   echo "  MEASURE the node's bus as the SYSTEM bus, /run/dbus hidden: systemctl show as non-root -> $(echo "$sy" | tr '\n' ' ' | cut -c1-160)"
+  # ANOTHER NODE'S NAME, ON THIS NODE'S BUS (TEAMLEAD-grafana): what a call made with q's tcti (an object of q's) reaches
+  # under p's bus: q's name has no owner there, so it is refused. Its control, p's own tcti on p's bus, reached p (check 8)
+  step "q's tcti on p's bus"
+  wq="$(unit q -p "Environment=$(addr p)")"
+  ok "$(hexok "$pp" && ! hexok "$wq" && echo 0 || echo 1)" \
+     "a call with q's tcti under p's bus finds no owner: refused ($(echo "$wq" | tr '\n' ' ' | cut -c1-110)); control, p's own tcti, reached" \
+     "control: $(echo "$pp" | tr '\n' ' ' | cut -c1-120) | q's tcti on p's bus: $(echo "$wq" | tr '\n' ' ' | cut -c1-150)"
   kill -TERM "$dpid" 2>/dev/null
 fi
 

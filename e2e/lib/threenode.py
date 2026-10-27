@@ -81,14 +81,27 @@ SIMULATOR_ENV = "Environment=REGALIA_TCTI_ALLOW_SIMULATOR=1"
 # it, as before. "abrmd": through one tpm2-abrmd per node, as a host's services reach /dev/tpmrm0 (the raw socket
 # exhausts its three session slots under the services' concurrent clients, and a resource manager does not: #605's probe,
 # on both runner images). Each node's tpm2-abrmd is on a dbus-daemon of the node's own, listening under its directory, as
-# its services' SESSION bus: so every node's tcti is the same ABRMD_TCTI, their system bus stays the host's (admission's
+# its services' SESSION bus, under a name of the node's own (abrmd_tcti): so their system bus stays the host's (admission's
 # `systemctl show`, as its own user, needs it), and InaccessiblePaths= on the other nodes' directories hides their buses
 # with the rest. The units have their own node's raw socket hidden too (unit_tpm_properties), and this process's own TPM
 # calls take the same route (Cluster.tpm_of). The one raw client left is the pre-root unlock client (cmd/regalia-unlock
 # speaks to a socket or a device, never tabrmd), run only while none of the node's units does (Cluster._initrd_only).
 TPM_MODES = ("socket", "abrmd")
-ABRMD_TCTI = "tabrmd:bus_type=session"
 ABRMD_NAME = "com.intel.tss2.Tabrmd"
+
+
+def abrmd_name(node_id):
+    """Node `node_id`'s tpm2-abrmd's name on its bus: the default name, then the node. Its tcti names it, so every object
+    made from the node's configuration carries its node: under ANOTHER node's bus the name has no owner and a call fails
+    closed, whichever object makes it (TEAMLEAD-grafana: the gap a lock cannot see, closed by construction)."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,31}", node_id) is None:
+        raise RuntimeError("node %r cannot name a D-Bus name element" % node_id)
+    return "%s.%s" % (ABRMD_NAME, node_id)
+
+
+def abrmd_tcti(node_id):
+    """The tcti of node `node_id`'s services and of this process's calls for it, in abrmd mode."""
+    return "tabrmd:bus_name=%s,bus_type=session" % abrmd_name(node_id)
 
 
 def tpm_mode(environ=os.environ):
@@ -99,7 +112,7 @@ def tpm_mode(environ=os.environ):
     return mode
 
 
-def bus_config(socket_path):
+def bus_config(socket_path, name):
     """A node's own dbus-daemon: listening on `socket_path` only, with the stock system bus's default policy (a bus with
     no receive rules denies every receive, its own replies too, and then every client hangs on its first call: #605's
     run 40449316347), sends to tpm2-abrmd allowed, and its name owned by tss alone."""
@@ -128,7 +141,7 @@ def bus_config(socket_path):
   </policy>
   <policy user="tss"><allow own="%(name)s"/></policy>
 </busconfig>
-""" % {"socket": socket_path, "name": ABRMD_NAME}
+""" % {"socket": socket_path, "name": name}
 
 
 def unit_tpm_properties(mode, n):
@@ -382,7 +395,7 @@ class NodeHere:
     @property
     def tcti(self):
         """The tcti a client of this node's TPM uses now: through its tpm2-abrmd while one runs, else the raw socket."""
-        return ABRMD_TCTI if self.abrmd is not None else self.raw_tcti
+        return abrmd_tcti(self.name) if self.abrmd is not None else self.raw_tcti
 
     @property
     def bus_address(self):
@@ -605,7 +618,7 @@ class Cluster:
             os.chmod(bus_dir, 0o755)
             with contextlib.suppress(FileNotFoundError):
                 n.bus.unlink()
-            (bus_dir / "bus.conf").write_text(bus_config(n.bus))
+            (bus_dir / "bus.conf").write_text(bus_config(n.bus, abrmd_name(n.name)))
             with open(n.dir / "dbus.log", "ab") as log:
                 n.dbus = subprocess.Popen(["dbus-daemon", "--config-file=%s" % (bus_dir / "bus.conf"), "--nofork", "--nopidfile"],
                                           stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
@@ -613,7 +626,7 @@ class Cluster:
                 raise RuntimeError("%s's dbus-daemon made no socket: %s" % (n.name, self._tail(n.dir / "dbus.log")))
             os.chmod(n.bus, 0o666)                    # every service user of THIS node: the others' have its directory hidden
         with open(n.dir / "abrmd.log", "ab") as log:
-            n.abrmd = subprocess.Popen(["tpm2-abrmd", "--session", "--tcti=" + n.raw_tcti], user="tss", group="tss", extra_groups=[],
+            n.abrmd = subprocess.Popen(["tpm2-abrmd", "--session", "--dbus-name=" + abrmd_name(n.name), "--tcti=" + n.raw_tcti], user="tss", group="tss", extra_groups=[],
                                        env=dict(os.environ, DBUS_SESSION_BUS_ADDRESS=n.bus_address),
                                        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         if until(lambda: self.abrmd_answers(n.name, check=False), 15, 0.5) is not True:
@@ -643,7 +656,7 @@ class Cluster:
             return True                               # socket mode: no resource manager to ask
         with self.tpm_of(name):
             try:
-                done = sh("tpm2_getrandom", "-T", ABRMD_TCTI, "--hex", "8", check=False, timeout=5)
+                done = sh("tpm2_getrandom", "-T", abrmd_tcti(name), "--hex", "8", check=False, timeout=5)
                 ok, said = done.returncode == 0 and re.fullmatch(r"[0-9a-f]{16}", done.stdout.strip()) is not None, done.stderr.strip()[-400:]
             except subprocess.TimeoutExpired:
                 ok, said = False, "no answer in 5 s"
@@ -1005,7 +1018,7 @@ class Cluster:
                 "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444}}
         _replace(n.dir / "etc" / "site.json", json.dumps(site))            # whole, never torn: running services read them
         # no measurements.json: the document is in the node's store by digest, and later ones come by sync (#332)
-        cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=ABRMD_TCTI if self.tpm == "abrmd" else n.raw_tcti,
+        cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=abrmd_tcti(n.name) if self.tpm == "abrmd" else n.raw_tcti,
                    state_dir=str(n.state), admission_dir=str(n.admission), run_dir=str(n.run), admission_log_dir=str(n.admission_log),
                    wg_service_key=str(n.dir / "etc" / "wg-service.key"), measurements=str(n.dir / "etc" / "measurements.json"),
                    time_servers=["nts1.e2e3.invalid", "nts2.e2e3.invalid"], pull_interval=10,
