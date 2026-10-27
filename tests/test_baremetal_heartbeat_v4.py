@@ -124,7 +124,7 @@ def restored(document):
 class Vectors(unittest.TestCase):
     def test_the_shared_vectors_are_what_this_python_decides(self):
         """tests/vectors/heartbeat-v4.json replayed here: a vector the Python no longer decides the same way fails, so
-        the file cannot drift from the code. No Go code reads it yet: Go has no heartbeat verifier (regalia-93e)."""
+        the file cannot drift from the code. No Go code reads it yet: Go has no heartbeat verifier (regalia-6j4)."""
         cases = json.loads(VECTORS.read_text())["cases"]
         seen = {"accepted": 0, "refused": 0}
         for case in cases:

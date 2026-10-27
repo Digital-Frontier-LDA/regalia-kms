@@ -5,7 +5,7 @@ heartbeat_signers, a party twice, a key not the party's, a node that does not co
 refused under v4, the manifest's lifetime bound, the owner's shorter one (the lifetime is the heartbeat's own
 expires_at - issued_at, both in the case), and a leap second in either time. The Python test replays this file,
 so it cannot drift from the code. It is written for a Go port to be held to the same rules, but Go has no
-heartbeat verifier yet and no Go code reads it (regalia-93e).
+heartbeat verifier yet and no Go code reads it (regalia-6j4).
 
     python3 -Es tests/vectors/make-heartbeat-v4.py > tests/vectors/heartbeat-v4.json
 
