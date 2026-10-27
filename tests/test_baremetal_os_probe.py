@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pathlib
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -708,19 +709,114 @@ class OnlyTheKMSReachesPcscd(unittest.TestCase):
         self.assertTrue(value, why)
         self.assertIn("the only other rules files are the distribution's", why)
 
-    def test_the_known_digests_are_this_machine_s_files_where_it_has_them(self):
-        """The digests were measured on Debian 13; where this machine has the files, they must agree."""
-        checked = 0
-        for path, digest in REAL_KNOWN_RULES_FILES.items():
-            try:
-                data = Path(path).read_bytes()
-            except OSError:
-                continue
-            checked += 1
-            self.assertEqual(hashlib.sha256(data).hexdigest(), digest, f"{path} on this machine is not the file the probe knows")
-        if not checked:
-            self.skipTest("no distribution polkit rules file is readable here")
+    def test_the_known_digests_are_debian_13_s_files(self):
+        """The real check, on this machine: see known_rules_check. CI's job known-polkit-rules-debian13 runs it in a
+        debian:13 container with the named packages and REGALIA_EXPECT_DEBIAN13_RULES=1."""
+        status, why = known_rules_check(REAL_KNOWN_RULES_FILES, os_release(), lambda path: Path(path).read_bytes(),
+                                        os.environ.get("REGALIA_EXPECT_DEBIAN13_RULES") == "1")
+        if status == "skip":
+            self.skipTest(why)
+        self.assertEqual(status, "ok", why)
 
+
+def os_release(path="/etc/os-release"):
+    """(ID, VERSION_ID) from os-release, or (None, None) when it cannot be read."""
+    fields = {}
+    try:
+        for line in Path(path).read_text().splitlines():
+            key, sep, value = line.partition("=")
+            if sep:
+                fields[key] = value.strip().strip('"')
+    except OSError:
+        return None, None
+    return fields.get("ID"), fields.get("VERSION_ID")
+
+
+def known_rules_check(known, release, read, expect):
+    """Whether this machine's polkit rules files are the ones os_probe knows, as ("ok" | "fail" | "skip", why).
+
+    os_probe.KNOWN_RULES_FILES are Debian 13's (its comment names the packages), and a KMS host is Debian 13. On any
+    other system the files say nothing about them: build-test's runner is Ubuntu, whose systemd 259.9-0ubuntu0.1 ships
+    another systemd-networkd.rules (682272c7…, regalia-9qj), and adding that digest would let a KMS host carry it. So
+    it compares only on Debian 13 and otherwise skips, naming the system. With `expect` (CI's job
+    known-polkit-rules-debian13, the named packages installed) it never skips and every file must be present."""
+    if release != ("debian", "13"):
+        system = " ".join(part for part in release if part) or "of unknown kind (no /etc/os-release)"
+        why = ("this machine is %s, not Debian 13: its polkit rules files say nothing about the Debian 13 files "
+               "os_probe knows; CI's job known-polkit-rules-debian13 checks those" % system)
+        return ("fail" if expect else "skip"), why
+    wrong, missing = [], []
+    for path, digest in sorted(known.items()):
+        try:
+            data = read(path)
+        except OSError:
+            missing.append(path)
+            continue
+        if hashlib.sha256(data).hexdigest() != digest:
+            wrong.append("%s is %s on this machine, not the %s the probe knows" % (path, hashlib.sha256(data).hexdigest(), digest))
+    if expect and missing:
+        wrong += ["%s is missing, which the named packages install" % path for path in missing]
+    if wrong:
+        return "fail", "; ".join(wrong)
+    if len(missing) == len(known):
+        return "skip", "Debian 13, but no polkit rules file the probe knows is readable here"
+    return "ok", "%d of %d known files agree" % (len(known) - len(missing), len(known))
+
+
+class KnownRulesCheck(unittest.TestCase):
+    """known_rules_check, with a stand-in os-release and files: it compares on Debian 13, says so loudly elsewhere,
+    and fails closed where CI expects the files (regalia-9qj)."""
+
+    KNOWN = {"/usr/share/polkit-1/rules.d/a.rules": hashlib.sha256(b"a").hexdigest(),
+             "/usr/share/polkit-1/rules.d/b.rules": hashlib.sha256(b"b").hexdigest()}
+    FILES = {"/usr/share/polkit-1/rules.d/a.rules": b"a", "/usr/share/polkit-1/rules.d/b.rules": b"b"}
+
+    def read(self, files):
+        def read(path):
+            if path not in files:
+                raise FileNotFoundError(path)
+            return files[path]
+        return read
+
+    def test_on_debian_13_it_compares(self):
+        self.assertEqual(known_rules_check(self.KNOWN, ("debian", "13"), self.read(self.FILES), False)[0], "ok")
+        status, why = known_rules_check(self.KNOWN, ("debian", "13"), self.read(dict(self.FILES, **{"/usr/share/polkit-1/rules.d/b.rules": b"B"})), False)
+        self.assertEqual(status, "fail")
+        self.assertIn("b.rules is %s on this machine" % hashlib.sha256(b"B").hexdigest(), why)
+
+    def test_a_flipped_known_digest_fails(self):
+        """The mutant TEAMLEAD-grafana asked for: one digest the probe knows, changed, is red where the files are real."""
+        known = dict(self.KNOWN, **{"/usr/share/polkit-1/rules.d/a.rules": "0" * 64})
+        self.assertEqual(known_rules_check(known, ("debian", "13"), self.read(self.FILES), True)[0], "fail")
+
+    def test_elsewhere_it_skips_naming_the_system_and_the_job(self):
+        status, why = known_rules_check(self.KNOWN, ("ubuntu", "26.04"), self.read(self.FILES), False)
+        self.assertEqual(status, "skip")
+        self.assertIn("ubuntu 26.04, not Debian 13", why)
+        self.assertIn("known-polkit-rules-debian13", why)
+        self.assertEqual(known_rules_check(self.KNOWN, ("debian", "12"), self.read(self.FILES), False)[0], "skip")
+        status, why = known_rules_check(self.KNOWN, (None, None), self.read(self.FILES), False)
+        self.assertEqual(status, "skip")
+        self.assertIn("of unknown kind (no /etc/os-release), not Debian 13", why)
+
+    def test_where_ci_expects_the_files_it_never_skips(self):
+        self.assertEqual(known_rules_check(self.KNOWN, ("ubuntu", "26.04"), self.read(self.FILES), True)[0], "fail")
+        status, why = known_rules_check(self.KNOWN, ("debian", "13"), self.read({"/usr/share/polkit-1/rules.d/a.rules": b"a"}), True)
+        self.assertEqual(status, "fail")
+        self.assertIn("b.rules is missing", why)
+        self.assertEqual(known_rules_check(self.KNOWN, ("debian", "13"), self.read({}), True)[0], "fail")
+
+    def test_without_ci_a_missing_file_is_left_out_and_none_is_a_skip(self):
+        self.assertEqual(known_rules_check(self.KNOWN, ("debian", "13"), self.read({"/usr/share/polkit-1/rules.d/a.rules": b"a"}), False),
+                         ("ok", "1 of 2 known files agree"))
+        self.assertEqual(known_rules_check(self.KNOWN, ("debian", "13"), self.read({}), False)[0], "skip")
+
+    def test_os_release_is_read_quoted_or_not(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "os-release")
+            Path(path).write_text('PRETTY_NAME="Debian GNU/Linux 13 (trixie)"\nID=debian\nVERSION_ID="13"\n')
+            self.assertEqual(os_release(path), ("debian", "13"))
+            self.assertEqual(os_release(os.path.join(d, "absent")), (None, None))
 
 if __name__ == "__main__":
     unittest.main()
