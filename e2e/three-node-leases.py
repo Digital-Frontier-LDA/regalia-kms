@@ -149,7 +149,15 @@ def scenario(cluster):
     second = first and until(lambda: renewed(cluster, "a", first[0], by="c"), renewal + 90, 3)
     ok(bool(first) and bool(second), "a, cut off from b, renewed twice, both times by c (%s, %s): the round that began at b fell to c"
        % (first and first[0], second and second[0]), held(cluster, "a"))
-    windows["5"] = ("c", cut_at, time.time())
+    # the window opens after the lease a held at the cut, not at the cut: a trail's "at" is whole seconds and audit_has
+    # takes `since` to its second, so a lease c issued in the cut's second, or between the cut and the read of `current`,
+    # counted here: three where two were (regalia-rlj: run 40453195050 on #605, where step 4's last renewal of a was at
+    # 05:06:25Z and step 5 cut at 05:06:25.6, its issuer not printed). Renewals are 10 s apart (D32), so 2 s after the
+    # held lease's issue holds no other lease, and its own ALLOW, written
+    # in that second or the next, is outside
+    import calendar
+    after_current = calendar.timegm(time.strptime(current, "%Y-%m-%dT%H:%M:%SZ")) + 2 if current else cut_at
+    windows["5"] = ("c", max(cut_at, after_current), time.time())
     cluster.heal("a")
 
     header("6  14.3: running a revoked; nobody renews it, and it stops serving by itself")
