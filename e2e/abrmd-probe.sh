@@ -312,6 +312,29 @@ if [ "$private" = run ]; then
   ok "$([ -n "$decoy_owns" ] && [ -z "$node_owns" ] && [ -n "$ppid_" ] && [ -n "$qpid" ] && echo 0 || echo 1)" \
      "on the real system bus the nodes' tpm2-abrmd own nothing; control: the decoy owns $(echo "$decoy_owns" | awk '{print $1}' | head -1)" \
      "decoy owns: [$decoy_owns] | p/q own: [$node_owns] | p pid $ppid_, q pid $qpid | $(echo "$owners" | grep -i tabrmd | head -5 | tr '\n' ' ')"
+  # NO OTHER NODE BY XDG_RUNTIME_DIR (TEAMLEAD-grafana): GLib's other route to a session bus is $XDG_RUNTIME_DIR/bus (check
+  # 10's control). A unit handed a SHARED runtime dir whose bus is q's: with q's directory hidden, refused (beside its
+  # control: not hidden, it reaches q); and with its own node's address set, the address wins: it reaches p's TPM, not q's
+  step "XDG_RUNTIME_DIR naming q's bus: hidden, control, and beside p's own address"
+  mkdir -p "$W/xdgq"; chmod 0755 "$W/xdgq"; ln -sf "$W/q/dbus/system_bus_socket" "$W/xdgq/bus"
+  pcr16u(){ timeout 30 systemd-run --quiet --wait --pipe --collect "$@" tpm2_pcrread -T tabrmd:bus_type=session sha256:16 2>&1 \
+            | sed -n 's/.*16 *: *0x\([0-9A-Fa-f]*\).*/\1/p'; }
+  xc="$(unit -p "UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS" -p "Environment=XDG_RUNTIME_DIR=$W/xdgq")"
+  xh="$(unit -p "UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS" -p "Environment=XDG_RUNTIME_DIR=$W/xdgq" -p "InaccessiblePaths=$W/q")"
+  xp="$(pcr16u -p "Environment=$(addr p)" -p "Environment=XDG_RUNTIME_DIR=$W/xdgq" -p "InaccessiblePaths=$W/q")"
+  ok "$(hexok "$xc" && ! hexok "$xh" && [ -n "$xp" ] && [ "$xp" = "$p16" ] && [ "$xp" != "$q16" ] && echo 0 || echo 1)" \
+     "a shared XDG_RUNTIME_DIR naming q's bus: q hidden, refused; control, reached q; beside p's own address, p's TPM (PCR 16 ${xp:0:12}…)" \
+     "control: $(echo "$xc" | tr '\n' ' ' | cut -c1-120) | hidden: $(echo "$xh" | tr '\n' ' ' | cut -c1-120) | with p's address: [$xp] p16=$p16 q16=$q16"
+  # NO WAY AROUND tpm2-abrmd (TEAMLEAD-grafana): a node's units have its raw TPM endpoints (the socket and its control socket)
+  # in InaccessiblePaths. Hidden, a raw client is refused, while the same unit still reaches its TPM through tpm2-abrmd
+  # (which runs outside it); its control, nothing hidden, opens the raw socket. Root, so file modes decide nothing here
+  step "the raw TPM socket hidden: raw refused, tpm2-abrmd still reached; control"
+  rawu(){ timeout 30 systemd-run --quiet --wait --pipe --collect "$@" tpm2_getrandom -T "swtpm:path=$W/p/tpm.sock" --hex 8 2>&1; }
+  hide=(-p "InaccessiblePaths=-$W/p/tpm.sock" -p "InaccessiblePaths=-$W/p/tpm.sock.ctrl")
+  rc_="$(rawu)"; rh="$(rawu "${hide[@]}")"; ra="$(unit -p "Environment=$(addr p)" "${hide[@]}")"
+  ok "$(hexok "$rc_" && ! hexok "$rh" && hexok "$ra" && echo 0 || echo 1)" \
+     "a unit with its node's raw TPM socket hidden: raw refused ($(echo "$rh" | tr '\n' ' ' | cut -c1-100)), through tpm2-abrmd reached; control, raw opened" \
+     "control raw: $(echo "$rc_" | tr '\n' ' ' | cut -c1-120) | hidden raw: $(echo "$rh" | tr '\n' ' ' | cut -c1-120) | hidden, abrmd: $(echo "$ra" | tr '\n' ' ' | cut -c1-120)"
   # THE SERVICES' OTHER D-BUS USE: admission.unit_started runs `systemctl show` as its own (non-root) user, over the SYSTEM
   # bus. With the node's bus as the session bus, a unit reaches both its TPM and systemd. MEASURED beside it: the design
   # first agreed (the node's bus as the SYSTEM bus, /run/dbus hidden) loses systemd
