@@ -208,10 +208,18 @@ def scenario(cluster):
     within = lambda end: (lambda at: isinstance(at, int) and at <= int(end))
     # regalia-rlj: the window opens at the cut, and the lease a held there is left out by itself, never by padding the
     # window (threenode.renewals_beyond): step 5 counts exactly the renewals made after the cut
-    renewals = {step: len(threenode.renewals_beyond(
-                    cluster.audit_has(by, "sync", since=start, event="sync-lease", subject="a", outcome="ALLOW", at=within(end)),
-                    *held_at_cut.get(step, (None, None)), by=by))
-                for step, (by, start, end) in windows.items()}
+    def leases(by, since, end):
+        return cluster.audit_has(by, "sync", since=since, event="sync-lease", subject="a", outcome="ALLOW", at=within(end))
+
+    def issue_second(issued):                       # the held lease's issue second, where its issuer's stream is read from
+        import calendar
+        return calendar.timegm(time.strptime(issued, "%Y-%m-%dT%H:%M:%SZ")) if issued else None
+
+    renewals = {}
+    for step, (by, start, end) in windows.items():
+        issued, issuer = held_at_cut.get(step, (None, None))
+        stream = leases(by, issue_second(issued), end) if issued else []
+        renewals[step] = len(threenode.renewals_beyond(leases(by, start, end), issued, issuer, by=by, stream=stream))
     ok(renewals.get("2", 0) >= 1, "step 2's renewal of a is in its issuer's (%s) stream" % windows["2"][0], renewals)
     ok(renewals.get("3", 0) >= 1, "step 3's renewal of a, with %s down, is in %s's stream" % (issuer, windows["3"][0]), renewals)
     ok(renewals.get("5", 0) == 2, "step 5's two renewals of a, cut off from b, are both in c's stream, and no other", renewals)
