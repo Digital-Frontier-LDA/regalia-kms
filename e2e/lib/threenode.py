@@ -315,6 +315,25 @@ OWNER_PIN = "246813"                              # the SoftHSM owner token's TE
 
 
 
+def renewals_beyond(lines, held_issued, held_by, by):
+    """Of `by`'s ALLOW lines for a node's lease (sync-lease, in stream order) in a window opened at a cut, those that are
+    not the lease the node already held at the cut (regalia-rlj). A trail's "at" is whole seconds and audit_has takes
+    `since` to its second, so the held lease's own ALLOW can fall in the window. Exactly that one line is left out, and
+    only when `by` issued it: the line at the held lease's issue second, or failing that the next second (an ALLOW
+    written as the second turned). Every other line counts, a real extra renewal a second after the cut included
+    (TEAMLEAD-grafana on #606: a padded window would have hidden it)."""
+    import calendar
+    out = list(lines)
+    if held_by != by or not held_issued:
+        return out
+    issued = calendar.timegm(time.strptime(held_issued, "%Y-%m-%dT%H:%M:%SZ"))
+    for second in (issued, issued + 1):
+        for i, line in enumerate(out):
+            if line.get("at") == second:
+                return out[:i] + out[i + 1:]
+    return out
+
+
 def moving_line(events, epoch):
     """Of a node's sync trail lines `events` (in stream order), the sync-apply whose round moved it to `epoch`, or None.
     Cluster.moved_by_sync's rule, in one place: a sync-apply is filed under the epoch its round BEGAN from, so the move is

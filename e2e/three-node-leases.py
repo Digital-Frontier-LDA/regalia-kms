@@ -106,6 +106,7 @@ def scenario(cluster):
     first, issuer, _ = held(cluster, "a")
     since = time.time()
     windows = {}                                     # step -> (issuer, start, end), for step 7
+    held_at_cut = {}                                 # step -> (issued_at, issuer) of the lease a held as its window opened
     got = until(lambda: renewed(cluster, "a", first), renewal + 60, 3)
     ok(bool(got) and any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
                          for e in cluster.trail(got[1] if got else issuer)),
@@ -144,20 +145,13 @@ def scenario(cluster):
     cluster.partition("a", ["b"])
     # the holder starts each round at the next peer in turn (node.admission_service), so over two rounds a asks b
     # first at least once; both leases coming from c shows that ask failed and c answered (regalia-kms-3e)
-    current, _, _ = held(cluster, "a")
+    current, current_by, _ = held(cluster, "a")      # the lease a holds at the cut: step 7 leaves its own ALLOW out
     first = until(lambda: renewed(cluster, "a", current, by="c"), renewal + 90, 3)
     second = first and until(lambda: renewed(cluster, "a", first[0], by="c"), renewal + 90, 3)
     ok(bool(first) and bool(second), "a, cut off from b, renewed twice, both times by c (%s, %s): the round that began at b fell to c"
        % (first and first[0], second and second[0]), held(cluster, "a"))
-    # the window opens after the lease a held at the cut, not at the cut: a trail's "at" is whole seconds and audit_has
-    # takes `since` to its second, so a lease c issued in the cut's second, or between the cut and the read of `current`,
-    # counted here: three where two were (regalia-rlj: run 40453195050 on #605, where step 4's last renewal of a was at
-    # 05:06:25Z and step 5 cut at 05:06:25.6, its issuer not printed). Renewals are 10 s apart (D32), so 2 s after the
-    # held lease's issue holds no other lease, and its own ALLOW, written
-    # in that second or the next, is outside
-    import calendar
-    after_current = calendar.timegm(time.strptime(current, "%Y-%m-%dT%H:%M:%SZ")) + 2 if current else cut_at
-    windows["5"] = ("c", max(cut_at, after_current), time.time())
+    windows["5"] = ("c", cut_at, time.time())
+    held_at_cut["5"] = (current, current_by)
     cluster.heal("a")
 
     header("6  14.3: running a revoked; nobody renews it, and it stops serving by itself")
@@ -212,7 +206,11 @@ def scenario(cluster):
        "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
        {"%s.%s" % k: v for k, v in wrong.items()})
     within = lambda end: (lambda at: isinstance(at, int) and at <= int(end))
-    renewals = {step: len(cluster.audit_has(by, "sync", since=start, event="sync-lease", subject="a", outcome="ALLOW", at=within(end)))
+    # regalia-rlj: the window opens at the cut, and the lease a held there is left out by itself, never by padding the
+    # window (threenode.renewals_beyond): step 5 counts exactly the renewals made after the cut
+    renewals = {step: len(threenode.renewals_beyond(
+                    cluster.audit_has(by, "sync", since=start, event="sync-lease", subject="a", outcome="ALLOW", at=within(end)),
+                    *held_at_cut.get(step, (None, None)), by=by))
                 for step, (by, start, end) in windows.items()}
     ok(renewals.get("2", 0) >= 1, "step 2's renewal of a is in its issuer's (%s) stream" % windows["2"][0], renewals)
     ok(renewals.get("3", 0) >= 1, "step 3's renewal of a, with %s down, is in %s's stream" % (issuer, windows["3"][0]), renewals)
