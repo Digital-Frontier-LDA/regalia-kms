@@ -574,15 +574,27 @@ class Cluster:
         another node's TPM. With no tpm2-abrmd (socket mode, or between a TPM's stop and start) `n.tcti` is the raw socket."""
         n = self.nodes[name]
         with self._tpm_lock:
-            before = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+            # re-entry for the SAME node is allowed (a Through call inside held_epoch, say); another node's, inside, is
+            # refused: under one bus at a time it would either reach the wrong TPM or need the outer call to wait
+            # (TEAMLEAD-grafana on a0dfa53d). Nothing in the fixture nests two nodes, so one that does is a mistake.
+            holders = self.__dict__.setdefault("_tpm_holders", [])
+            if holders and holders[-1] != name:
+                raise RuntimeError("a TPM call for node %s inside one for node %s: one node's at a time" % (name, holders[-1]))
+            started = None if holders else time.monotonic()   # the outermost call is the one timed
+            holders.append(name)
+            os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
             if n.abrmd is not None:
                 os.environ["DBUS_SESSION_BUS_ADDRESS"] = n.bus_address
-            else:
-                os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
             try:
                 yield n
             finally:
-                os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None) if before is None else os.environ.__setitem__("DBUS_SESSION_BUS_ADDRESS", before)
+                holders.pop()
+                if not holders:                       # the outermost: no session bus again, and how long it held the lock
+                    os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
+                    held = time.monotonic() - started
+                    longest = self.__dict__.setdefault("tpm_longest_hold", (0.0, None))
+                    if held > longest[0]:
+                        self.tpm_longest_hold = (held, name)
 
     def _abrmd_up(self, n):
         """The node's own bus (started once, kept across its TPM's restarts), then its tpm2-abrmd on it, as tss (as its
@@ -2179,6 +2191,10 @@ class Cluster:
 
     def close(self):
         self.stop_threads = True
+        held, by = getattr(self, "tpm_longest_hold", (0.0, None))
+        # MEASURED: how long this process ever held tpm_of's lock at once (its TPM calls are serialised by it, the services'
+        # are not): a long one would serialise what a scenario means to run at once (TEAMLEAD-grafana)
+        print("e2e3: this process's longest TPM call held tpm_of %.2f s (node %s)" % (held, by), flush=True)
         for n in self.members():
             self.stop(n.name, power=None)
         if self.audit:

@@ -108,17 +108,40 @@ class TpmOf(unittest.TestCase):
             raise ValueError
         self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", os.environ)
 
-    def test_a_nested_node_has_its_own_bus_and_the_outer_one_comes_back(self):
+    def test_another_node_inside_is_refused_loudly_and_the_outer_call_keeps_its_bus(self):
+        """TEAMLEAD-grafana on a0dfa53d: one bus at a time, so a nested call for another node would reach the wrong TPM."""
         with self.c.tpm_of("a"):
-            with self.c.tpm_of("b"):
-                self.assertEqual(os.environ["DBUS_SESSION_BUS_ADDRESS"], self.c.nodes["b"].bus_address)
+            with self.assertRaisesRegex(RuntimeError, "a TPM call for node b inside one for node a"):
+                with self.c.tpm_of("b"):
+                    self.fail("b's call ran")
             self.assertEqual(os.environ["DBUS_SESSION_BUS_ADDRESS"], self.c.nodes["a"].bus_address)
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", os.environ)
+        with self.c.tpm_of("b"):                      # and nothing was left held: b on its own is fine
+            self.assertEqual(os.environ["DBUS_SESSION_BUS_ADDRESS"], self.c.nodes["b"].bus_address)
 
-    def test_a_node_with_no_abrmd_gets_no_bus_even_inside_another_nodes(self):
+    def test_the_same_node_inside_is_allowed_and_keeps_its_bus(self):
+        with self.c.tpm_of("a"):
+            with self.c.tpm_of("a"):
+                with self.c.tpm_of("a"):
+                    self.assertEqual(os.environ["DBUS_SESSION_BUS_ADDRESS"], self.c.nodes["a"].bus_address)
+            self.assertEqual(os.environ["DBUS_SESSION_BUS_ADDRESS"], self.c.nodes["a"].bus_address)
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", os.environ)
+
+    def test_a_node_with_no_abrmd_gets_no_bus(self):
         self.c.nodes["b"].abrmd = None
-        with self.c.tpm_of("a"), self.c.tpm_of("b") as n:
+        with self.c.tpm_of("b") as n:
             self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", os.environ)
             self.assertEqual(n.tcti, n.raw_tcti)
+
+    def test_the_longest_hold_is_measured_by_the_outermost_call(self):
+        clock = iter([100.0, 100.5, 200.0, 203.25])
+        with unittest.mock.patch.object(threenode.time, "monotonic", side_effect=lambda: next(clock)):
+            with self.c.tpm_of("a"):
+                with self.c.tpm_of("a"):              # inner: not timed
+                    pass
+            with self.c.tpm_of("b"):
+                pass
+        self.assertEqual(self.c.tpm_longest_hold, (3.25, "b"))
 
     def test_one_node_at_a_time_across_threads(self):
         inside, release, other = threading.Event(), threading.Event(), []
