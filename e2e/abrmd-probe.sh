@@ -294,7 +294,19 @@ if [ "$private" = run ]; then
   ok "$(hexok "$dc" && ! hexok "$dh" && echo 0 || echo 1)" \
      "no address and the real system bus hidden: fails closed ($(echo "$dh" | tr '\n' ' ' | cut -c1-120)); control, the real bus visible: the decoy answered" \
      "control: $(echo "$dc" | tr '\n' ' ' | cut -c1-150) | hidden: $(echo "$dh" | tr '\n' ' ' | cut -c1-150) | decoy: $(tail -2 "$W/d.abrmd.log" | tr '\n' ' ')"
-  kill -TERM "$(cat "$W/d.abrmd.pid")" 2>/dev/null
+  # NOT ON THE SHARED BUS (TEAMLEAD-grafana): the nodes' tpm2-abrmd own nothing on the runner's real system bus, so a unit
+  # that reaches that bus still cannot reach a node's TPM through it. Its control: the decoy's own name IS there, owned
+  step "who owns what on the real system bus"
+  owners="$(timeout 10 busctl --system list --no-pager 2>&1)"
+  dpid="$(cat "$W/d.abrmd.pid")"; ppid_="$(cat "$W/p.abrmd.pid" 2>/dev/null)"; qpid="$(cat "$W/q.abrmd.pid" 2>/dev/null)"
+  # the abrmd pids are runuser's: the daemon is its child (runuser -u tss forks it), so match the children too
+  kids(){ [ -n "$1" ] && { echo "$1"; pgrep -P "$1"; }; }
+  decoy_owns="$(for k in $(kids "$dpid"); do echo "$owners" | awk -v k="$k" '$1 ~ /^com\.intel\.tss2\.Tabrmd/ && $2 == k'; done)"
+  node_owns="$(for k in $(kids "$ppid_") $(kids "$qpid"); do echo "$owners" | awk -v k="$k" '$2 == k'; done)"
+  ok "$([ -n "$decoy_owns" ] && [ -z "$node_owns" ] && [ -n "$ppid_" ] && [ -n "$qpid" ] && echo 0 || echo 1)" \
+     "on the real system bus the nodes' tpm2-abrmd own nothing; control: the decoy owns $(echo "$decoy_owns" | awk '{print $1}' | head -1)" \
+     "decoy owns: [$decoy_owns] | p/q own: [$node_owns] | p pid $ppid_, q pid $qpid | $(echo "$owners" | grep -i tabrmd | head -5 | tr '\n' ' ')"
+  kill -TERM "$dpid" 2>/dev/null
 fi
 
 echo "RESULT private_bus=$private socket_ok=$(wc -l < "$W/sock.ok" | tr -d ' ') socket_exhausted=$sock_mem abrmd_ok=${rm_ok:-?} abrmd_exhausted=${rm_mem:-?} socket_timeouts=${sock_to:-?} abrmd_timeouts=${rm_to:-?} of=$((CLIENTS * ROUNDS)) abrmd_survives_swtpm_restart=$survived abrmd_alive_after=$alive raw_beside_abrmd=${shared:-?} runner=$(. /etc/os-release; echo "$VERSION_ID")"
