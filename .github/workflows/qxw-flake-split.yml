@@ -1,0 +1,73 @@
+# regalia-qxw, an EXPERIMENT and never for main: does the swtpm flake family on the raw socket (FlushContext 0x1CB on
+# wan, unseal_local refused, swtpm not stopping) go away through one tpm2-abrmd per node? TEAMLEAD-grafana's bar: the
+# wan scenario at least 10 times in EACH mode on the same runner class (three-node-wan's own, ubuntu-24.04), failure
+# counts with their signatures. Runs and modes interleave (run is the outer key) so time of day falls on both alike.
+# Only a push to this branch runs it; every other workflow's push trigger is main-only.
+name: qxw flake split
+
+on:
+  push:
+    branches: [dev1/qxw-split]
+
+permissions:
+  contents: read
+
+jobs:
+  wan:
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        mode: [socket, abrmd]
+    name: wan ${{ matrix.mode }} ${{ matrix.run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # three-node-wan's packages, plus tpm2-abrmd, its client TCTI and dbus-daemon in BOTH modes, so the modes differ
+      # only in REGALIA_E2E_TPM
+      - name: The software TPM, tpm2-abrmd and its client TCTI, tpm2-tools, WireGuard, cryptsetup, netem
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 iputils-ping \
+            python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11 "linux-modules-extra-$(uname -r)" \
+            tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon
+          { uname -r; dpkg-query -W swtpm tpm2-tools tpm2-abrmd; } | tee "$RUNNER_TEMP/versions.txt"
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: The WAN scenario through the ${{ matrix.mode }} route
+        run: |
+          set -o pipefail
+          REGALIA_E2E_TPM=${{ matrix.mode }} REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_TPM,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
+            python3 -Es e2e/three-node-wan.py 2>&1 | tee "$RUNNER_TEMP/wan.log"
+          want='one tpm2-abrmd each'; [ "${{ matrix.mode }}" = socket ] && want='the raw socket'
+          grep -q "^e2e3: the nodes reach their TPMs through $want\$" "$RUNNER_TEMP/wan.log" || {
+            echo "::error::the run did not take the ${{ matrix.mode }} route" >&2; exit 1; }
+          grep -q '^three-node-wan: 33 passed, 0 failed$' "$RUNNER_TEMP/wan.log" || {
+            echo "::error::the three-node WAN test did not pass all 33 checks" >&2; exit 1; }
+      # every run's own log and versions, passing or not, so a count is read from the runs and not from memory
+      - name: Keep the scenario's log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wan-log-${{ matrix.mode }}-${{ matrix.run }}
+          path: |
+            ${{ runner.temp }}/wan.log
+            ${{ runner.temp }}/versions.txt
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Keep the software TPMs' and tpm2-abrmd's logs
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: qxw-${{ matrix.mode }}-${{ matrix.run }}
