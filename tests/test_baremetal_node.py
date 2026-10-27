@@ -179,7 +179,27 @@ class SimulatorTcti(Case):
             os.environ[node.SIMULATOR_SWITCH] = "yes"
             self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"])
             os.environ[node.SIMULATOR_SWITCH] = "1"
+            os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
             self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", node.SIMULATOR_SWITCH + "=1"])
+
+    def test_the_session_bus_rides_along_only_under_the_switch_and_only_as_a_socket_path(self):
+        """regalia-afi (#605's run 40456967936): a fixture node's tabrmd tcti names no bus address, so a handed-over step
+        (deliver, enrol, owner, recover, revoke) reached its tpm2-abrmd only if the address rode along. Only under the
+        switch, which nothing on a host sets, and only a unix socket path: nothing else of root's environment."""
+        from unittest import mock
+        from deploy.baremetal import membership as ms
+        base = ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"]
+        bus = "unix:path=/tmp/three-node-x/b/dbus/bus"
+        with mock.patch.dict(os.environ, {"DBUS_SESSION_BUS_ADDRESS": bus}, clear=False):
+            os.environ.pop(node.SIMULATOR_SWITCH, None)
+            self.assertEqual(ms.handover_env(), base)                  # a host: never, whatever root's session has
+            os.environ[node.SIMULATOR_SWITCH] = "1"
+            self.assertEqual(ms.handover_env(), base + [node.SIMULATOR_SWITCH + "=1", "DBUS_SESSION_BUS_ADDRESS=" + bus])
+            for other in ("unix:abstract=/x", "tcp:host=127.0.0.1,port=1", "unix:path=relative/bus", "unix:path=/a,guid=1",
+                          "unix:path=/a;unix:path=/b", "unix:path=/a b", ""):
+                with self.subTest(address=other):
+                    os.environ["DBUS_SESSION_BUS_ADDRESS"] = other
+                    self.assertEqual(ms.handover_env(), base + [node.SIMULATOR_SWITCH + "=1"])
         import pathlib as pl
         root = pl.Path(__file__).resolve().parents[1]
         literal = [str(p.relative_to(root)) for p in sorted((root / "deploy" / "baremetal").glob("*.py"))

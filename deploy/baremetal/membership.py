@@ -188,14 +188,26 @@ SESSION_MEMORY_CODE = re.compile(r"\(0x(?:00000)?903\)")  # the same, by its cod
 # DevicePolicy constrains: a software TPM with no hardware root) only under it. Only the e2e fixtures and the tests set
 # it; nothing shipped may (tests/test_baremetal_node.py holds that this is the one file under deploy/ that names it).
 # TODO(regalia-afi step 2): once the three-node fixture reaches its TPMs through the kernel (swtpm --vtpm-proxy, so
-# device:/dev/tpmrmN), refuse swtpm:/mssim: unconditionally and delete this switch and handover_env's carrying of it.
+# device:/dev/tpmrmN), refuse swtpm:/mssim: unconditionally and delete this switch and handover_env's carrying of it
+# (and of the session-bus address it carries for the tpm2-abrmd route).
 SIMULATOR_SWITCH = "REGALIA_TCTI_ALLOW_SIMULATOR"
 
 
 def handover_env():
     """The whole environment of a step handed to regalia-sync (`runuser … env -i …`): PATH and the C locale, nothing of
-    root's, except the test-only SIMULATOR_SWITCH when the caller has it, so a fixture's step reloads its own node.json."""
-    return ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"] + (["%s=1" % SIMULATOR_SWITCH] if os.environ.get(SIMULATOR_SWITCH) == "1" else [])
+    root's, except, only under the test-only SIMULATOR_SWITCH when the caller has it: the switch, so a fixture's step
+    reloads its own node.json, and the caller's session-bus address when it is a unix socket path, so a fixture node's
+    `tabrmd:…,bus_type=session` tcti reaches that node's tpm2-abrmd from the step too (regalia-afi: its TCTI names no
+    address, and without one every TPM call of a handed-over step failed closed, #605's run 40456967936). On a host
+    nothing sets the switch, and the step's TPM is /dev/tpmrm0, which needs no environment."""
+    env = ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"]
+    if os.environ.get(SIMULATOR_SWITCH) != "1":
+        return env
+    env.append("%s=1" % SIMULATOR_SWITCH)
+    bus = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
+    if re.fullmatch(r"unix:path=/[^,;=\s]+", bus):
+        env.append("DBUS_SESSION_BUS_ADDRESS=" + bus)
+    return env
 
 
 def simulator_tcti(tcti=None):
