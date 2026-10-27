@@ -210,6 +210,18 @@ def handover_env():
     return env
 
 
+def session_bus_hint(tcti):
+    """What to add to a TPM call's failure when its tcti is a tabrmd one on the SESSION bus (the e2e fixture's,
+    regalia-afi) and this process has no DBUS_SESSION_BUS_ADDRESS: that this is why. handover_env carries only a
+    unix:path= address, under the simulator switch; any other was dropped, and run 40456967936 chased a bare "the TPM
+    does not answer" (TEAMLEAD-grafana on #605). Empty otherwise, so every other refusal stays the one the Go reader
+    gives too (tests/vectors/highwater-v1.json holds both to it): that reader never takes a tabrmd tcti."""
+    if (tcti or "").startswith("tabrmd:") and "bus_type=session" in tcti and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        return (" | this process has no DBUS_SESSION_BUS_ADDRESS, which its tcti %s needs: a step handed to regalia-sync "
+                "carries one only under %s and only as unix:path=/… (handover_env), any other is dropped" % (tcti, SIMULATOR_SWITCH))
+    return ""
+
+
 def simulator_tcti(tcti=None):
     """A private software TPM reached with no resource manager (swtpm, mssim): only there does a call's TPM state outlive
     its process. Production's /dev/tpmrm0 cleans up after every connection (attest.node_init)."""
@@ -980,7 +992,7 @@ class HighWater:
         about the anchor, and that is neither "usable" nor "unusable"."""
         r = self._tpm("getcap", "handles-nv-index")
         require(r.returncode == 0, "the TPM does not answer (tpm2_getcap handles-nv-index failed): the high-water anchor is "
-                "unavailable (fail closed)")
+                "unavailable (fail closed)%s" % session_bus_hint((self.env or {}).get("TPM2TOOLS_TCTI")))
         return {int(found, 16) for found in re.findall(rb"0x[0-9A-Fa-f]+", r.stdout)}
 
     def _public(self, index):
