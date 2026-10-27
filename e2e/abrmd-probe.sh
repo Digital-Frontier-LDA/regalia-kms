@@ -206,7 +206,26 @@ bus_up(){ # $1 node: its private system-style bus, under its own directory
   <type>system</type>
   <listen>unix:path=$W/$1/dbus/system_bus_socket</listen>
   <auth>EXTERNAL</auth>
-  <policy context="default"><allow user="*"/><allow send_destination="$PRIV"/><allow receive_sender="$PRIV"/></policy>
+  <!-- the stock system bus's default policy (dbus's system.conf), plus tpm2-abrmd's name: a type=system bus with no
+       receive rules denies receives, the bus's own replies included ("Rejected receive message, 0 matched rules"), and
+       then every client hangs on its first call (#605, run 40449316347) -->
+  <policy context="default">
+    <allow user="*"/>
+    <deny own="*"/>
+    <deny send_type="method_call"/>
+    <allow send_type="signal"/>
+    <allow send_requested_reply="true" send_type="method_return"/>
+    <allow send_requested_reply="true" send_type="error"/>
+    <allow receive_type="method_call"/>
+    <allow receive_type="method_return"/>
+    <allow receive_type="error"/>
+    <allow receive_type="signal"/>
+    <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus"/>
+    <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus.Introspectable"/>
+    <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus.Properties"/>
+    <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus.Peer"/>
+    <allow send_destination="$PRIV"/>
+  </policy>
   <policy user="tss"><allow own="$PRIV"/></policy>
 </busconfig>
 EOF
