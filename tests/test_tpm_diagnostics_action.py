@@ -29,14 +29,17 @@ def find_expression():
 
 
 def found(top, argv):
-    done = subprocess.run(["find", top] + argv + ["-print"], capture_output=True, text=True, check=True)
-    return sorted(os.path.relpath(line, top) for line in done.stdout.split())
+    """What the expression matches under `top`, NUL-separated (-print0): a path with a space is one path (CodeRabbit on
+    #605; the tree below has one in it)."""
+    done = subprocess.run(["find", top] + argv + ["-print0"], capture_output=True, check=True)
+    return sorted(os.path.relpath(os.fsdecode(path), top) for path in done.stdout.split(b"\0") if path)
 
 
 class Action(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
-        self.addCleanup(subprocess.run, ["rm", "-rf", self.tmp])
+        self.tmp = os.path.join(tempfile.mkdtemp(dir=os.environ.get("TMPDIR")), "a tmp with spaces")   # found() splits by NUL
+        os.mkdir(self.tmp)
+        self.addCleanup(subprocess.run, ["rm", "-rf", os.path.dirname(self.tmp)])
         work = os.path.join(self.tmp, "work")
         files = {}
         for node in ("a", "b", "c"):
