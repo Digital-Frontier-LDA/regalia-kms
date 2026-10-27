@@ -235,7 +235,21 @@ jobs:
           # refuses any index whose InRelease signature the image's keyring does not verify, and every .deb is
           # checked against the signed index, so this fetch is authenticated without TLS. ca-certificates comes
           # from it; every later fetch is over https.
+          # No apt setting may accept an unsigned or unverified archive (TEAMLEAD-grafana's condition for the http
+          # bootstrap): checked in every live, uncommented line of apt's configuration and sources, before each fetch.
+          # Comments (# and apt.conf's //) are cut first; a URL's // goes with them, which no setting here sits after.
+          insecure_apt() {
+            find "$1" -type f -exec sed -e 's|#.*||' -e 's|//.*||' {} + |
+              grep -niE 'AllowInsecureRepositories|AllowDowngradeToInsecureRepositories|AllowUnauthenticated|allow-unauthenticated|trusted=yes|^[[:space:]]*Trusted:[[:space:]]*yes'
+          }
+          mkdir -p "$RUNNER_TEMP/apt-insecure" "$RUNNER_TEMP/apt-commented"
+          printf 'APT::Get::AllowUnauthenticated "true";\nAcquire::AllowInsecureRepositories "true";\n' > "$RUNNER_TEMP/apt-insecure/99insecure"
+          printf '// Acquire::AllowInsecureRepositories is not set\n# Types: deb [trusted=yes]\n' > "$RUNNER_TEMP/apt-commented/x.sources"
+          insecure_apt "$RUNNER_TEMP/apt-insecure" >/dev/null || { echo "the guard misses an insecure apt setting" >&2; exit 1; }
+          if insecure_apt "$RUNNER_TEMP/apt-commented"; then echo "the guard reads a comment as a setting" >&2; exit 1; fi
+          if insecure_apt /etc/apt; then echo "apt is set to accept an unverified archive" >&2; exit 1; fi
           apt-get update
+          # the only package fetched over http
           apt-get install -y --no-install-recommends ca-certificates
           sed -i 's|http://deb.debian.org/|https://deb.debian.org/|g' /etc/apt/sources.list.d/debian.sources
           # a live deb822 URIs line that is still http; the image's comments name http URLs and are not sources
@@ -246,6 +260,7 @@ jobs:
           if live_http "$RUNNER_TEMP/commented.sources"; then echo "the guard reads a comment as a source" >&2; exit 1; fi
           if live_http /etc/apt/sources.list.d/debian.sources; then echo "an http source is left" >&2; exit 1; fi
           rm -rf /var/lib/apt/lists/*
+          if insecure_apt /etc/apt; then echo "apt is set to accept an unverified archive" >&2; exit 1; fi
           apt-get update
           apt-get install -y --no-install-recommends python3 \
             "polkitd=$POLKITD" "systemd=$SYSTEMD" "network-manager=$NETWORK_MANAGER"
