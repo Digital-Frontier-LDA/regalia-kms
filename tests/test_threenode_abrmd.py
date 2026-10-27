@@ -358,15 +358,28 @@ class AbrmdAnswers(unittest.TestCase):
 
 
 
+# the units a scenario starts whose own command line takes a node's tcti (with its bus, which the unit carries): only a
+# "--tcti" in a sequence that names one of these is the unit's. tpm2-tools take --tcti too (the long -T), so the flag
+# alone says nothing (df-grafana-7e on #608)
+UNITS_TAKING_A_TCTI = ("deploy.baremetal.reanchor",)          # three-node-reanchor's re-anchor tool at b's console
+
+
 def around_the_route(source):
-    """The lines of `source` that read a node's tcti (`.tcti`, `.raw_tcti`) anywhere but inside the route: the attribute
-    must be read off the name a `with ….tpm_of(…) as n:` binds, lexically inside that block. One exception: the value
-    right after a "--tcti" in a call's arguments or a list, which is a unit's own command line, and a unit carries its
-    node's bus. Read from the parse, not a line pattern, so a node kept under another name (`node = cluster.nodes[b]`,
-    then `node.tcti`) is found as well as `cluster.nodes[b].tcti` itself (df-grafana-7e on #607, regalia-u90)."""
+    """The lines of `source` that read a node's tcti anywhere but inside the route, read from the parse and not a line
+    pattern (df-grafana-7e on #607 and #608, regalia-u90). Reported:
+    - `.tcti` / `.raw_tcti` read off anything but the name a `with ….tpm_of(…) as n:` binds, lexically inside that block,
+      so a node kept under another name (`node = cluster.nodes[b]`, then `node.tcti`) is found too;
+    - that name rebound inside its block (`n = cluster.nodes[c]`, `for n in …`), after which `n.tcti` is another node's;
+    - `getattr(…, "tcti")` and `attrgetter("tcti")`, whatever they are read from.
+    One exception: the value right after a "--tcti" in a call's arguments or a list that also names a unit in
+    UNITS_TAKING_A_TCTI, which is that unit's own command line. Lexical: a function defined inside the block and called
+    after it reads as inside; the abrmd jobs still fail that closed at run time, with no bus outside tpm_of."""
     found = []
+    attrs = ("tcti", "raw_tcti")
 
     def unit_args(seq):
+        if not any(isinstance(e, ast.Constant) and e.value in UNITS_TAKING_A_TCTI for e in seq):
+            return set()
         return {id(seq[i]) for i in range(1, len(seq)) if isinstance(seq[i - 1], ast.Constant) and seq[i - 1].value == "--tcti"}
 
     def visit(node, bound):
@@ -381,8 +394,13 @@ def around_the_route(source):
             for statement in node.body:
                 visit(statement, inner)
             return
-        if (isinstance(node, ast.Attribute) and node.attr in ("tcti", "raw_tcti")
+        if (isinstance(node, ast.Attribute) and node.attr in attrs
                 and not (isinstance(node.value, ast.Name) and node.value.id in bound)):
+            found.append(node.lineno)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id in bound:
+            found.append(node.lineno)
+        if (isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", None)) in ("getattr", "attrgetter")
+                and any(isinstance(a, ast.Constant) and a.value in attrs for a in node.args)):
             found.append(node.lineno)
         skip = unit_args(node.args) if isinstance(node, ast.Call) else unit_args(node.elts) if isinstance(node, (ast.List, ast.Tuple)) else set()
         for child in ast.iter_child_nodes(node):
@@ -428,11 +446,25 @@ class ScenariosUseTheRoute(unittest.TestCase):
         self.assertEqual(around_the_route('with open(p) as n:\n    sh("-T", n.tcti)\n'), [2])
 
     def test_a_units_own_tcti_is_not(self):
-        self.assertEqual(around_the_route('argv = ["--tpm-index", index, "--tcti", cluster.nodes[b].tcti, "--node-id", b]\n'), [])
-        self.assertEqual(around_the_route('run(unit, "--tcti", cluster.nodes[b].tcti)\n'), [])
+        self.assertEqual(around_the_route('argv = ["-m", "deploy.baremetal.reanchor", "--tcti", cluster.nodes[b].tcti, "--node-id", b]\n'), [])
+        self.assertEqual(around_the_route('run("-m", "deploy.baremetal.reanchor", "--tcti", cluster.nodes[b].tcti)\n'), [])
+
+    def test_a_tpm2_tools_long_tcti_is_found(self):
+        """7e on #608: tpm2-tools take --tcti as the long -T, so the flag alone is no unit's."""
+        self.assertEqual(around_the_route('sh("tpm2_nvread", "--tcti", cluster.nodes[b].tcti, index)\n'), [1])
+        self.assertEqual(around_the_route('argv = ["--tpm-index", index, "--tcti", cluster.nodes[b].tcti]\n'), [1])
+
+    def test_the_route_name_rebound_inside_its_block_is_found(self):
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    n = cluster.nodes[c]\n    sh("-T", n.tcti)\n'), [2])
+        self.assertEqual(around_the_route('with cluster.tpm_of(b) as n:\n    for n in cluster.nodes.values():\n        sh("-T", n.tcti)\n'), [2])
+
+    def test_a_tcti_read_by_getattr_is_found(self):
+        self.assertEqual(around_the_route('t = getattr(cluster.nodes[b], "tcti")\n'), [1])
+        self.assertEqual(around_the_route('t = operator.attrgetter("raw_tcti")(cluster.nodes[b])\n'), [1])
 
     def test_a_tcti_after_another_flag_is_found(self):
         self.assertEqual(around_the_route('argv = ["--node-id", cluster.nodes[b].tcti]\n'), [1])
+        self.assertEqual(around_the_route('argv = ["-m", "deploy.baremetal.reanchor", "--node-id", cluster.nodes[b].tcti]\n'), [1])
 
 
 if __name__ == "__main__":
