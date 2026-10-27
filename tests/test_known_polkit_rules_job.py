@@ -12,6 +12,9 @@ CI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".github", "
 JOB = "known-polkit-rules-debian13"
 TESTS = ("tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd.test_the_known_digests_are_debian_13_s_files",
          "tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd.test_a_flipped_known_digest_fails_on_this_machine_s_files")
+# The whole command, word for word once whitespace is normalised: "both names appear" would also hold for `|| true`,
+# `; exit 0`, a comment or an echo (df-grafana-7e on #612).
+RUN = " ".join(("python3 -Es -m unittest -v",) + TESTS + ("tests.test_baremetal_os_probe.KnownRulesCheck",))
 
 
 def job_findings(doc):
@@ -27,6 +30,11 @@ def job_findings(doc):
     if not runners:
         found.append("no step runs both %s" % " and ".join(name.rsplit(".", 1)[1] for name in TESTS))
     for step in runners:
+        if " ".join(str(step.get("run", "")).split()) != RUN:
+            found.append("the step %r runs %r, not exactly %r" % (step.get("name"), " ".join(str(step["run"]).split()), RUN))
+        for key in ("if", "shell"):
+            if key in step:
+                found.append("the step %r has %s: %r" % (step.get("name"), key, step[key]))
         env = dict(job.get("env") or {}, **(step.get("env") or {}))
         if str(env.get("REGALIA_EXPECT_DEBIAN13_RULES")) != "1":
             found.append("the step %r does not set REGALIA_EXPECT_DEBIAN13_RULES to 1" % step.get("name"))
@@ -45,6 +53,8 @@ class KnownPolkitRulesJob(unittest.TestCase):
     def test_each_way_out_is_found(self):
         with open(CI) as f:
             text = f.read()
+        STEP = "      - name: the probe's known digests are these files\n"
+
         def broken(old, new):
             self.assertEqual(text.count(old), 1, old)
             return yaml.safe_load(text.replace(old, new))
@@ -52,10 +62,15 @@ class KnownPolkitRulesJob(unittest.TestCase):
             "the variable dropped": (broken('REGALIA_EXPECT_DEBIAN13_RULES: "1"', 'REGALIA_EXPECT_DEBIAN13_RULES: "0"'), "does not set"),
             "an image by tag": (broken("image: debian:13.6@sha256:", "image: debian:13.6-was-sha256:"), "not a debian:13 image by digest"),
             "the control left out": (broken(" " + TESTS[1], ""), "no step runs both"),
-            "the step allowed to fail": (broken("      - name: the probe's known digests are these files\n",
-                                                "      - name: the probe's known digests are these files\n        continue-on-error: true\n"),
+            "the step allowed to fail": (broken(STEP, STEP + "        continue-on-error: true\n"),
                                          "may fail without failing the job"),
             "the job made conditional": (broken("  %s:\n" % JOB, "  %s:\n    if: false\n" % JOB), "the job runs only if"),
+            "the step made conditional": (broken(STEP, STEP + "        if: false\n"), "has if: False"),
+            "the step's shell replaced": (broken(STEP, STEP + "        shell: sh -c 'exit 0' {0}\n"), "has shell:"),
+            "a failure swallowed": (broken("tests.test_baremetal_os_probe.KnownRulesCheck\n", "tests.test_baremetal_os_probe.KnownRulesCheck || true\n"), "not exactly"),
+            "an exit 0 after": (broken("tests.test_baremetal_os_probe.KnownRulesCheck\n", "tests.test_baremetal_os_probe.KnownRulesCheck; exit 0\n"), "not exactly"),
+            "the names echoed": (broken("python3 -Es -m unittest -v tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd", "echo tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd"), "not exactly"),
+            "the names in a comment": (broken("python3 -Es -m unittest -v tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd", "true # tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd"), "not exactly"),
         }
         for name, (doc, reason) in cases.items():
             with self.subTest(name):
