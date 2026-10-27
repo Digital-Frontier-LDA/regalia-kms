@@ -1,0 +1,50 @@
+# regalia-afi step 2 (#592): after #597 measured that neither GitHub-hosted image has tpm_vtpm_proxy, prove on BOTH runner
+# images that a USER-SPACE resource manager can stand in for /dev/tpmrm0 per software TPM, before the three-node fixture
+# is moved onto it: one tpm2-abrmd per node on its own D-Bus name (com.intel.tss2.Tabrmd.e2e3.<node>), each node reaching
+# its own TPM, a session-heavy load passing through it where the raw swtpm socket exhausts (#592's mechanism), and a power
+# cycle with that node's tpm2-abrmd restarted. It also MEASURES whether a tpm2-abrmd left running survives a swtpm restart
+# (the fixture's power_cycle depends on the answer). It changes the system bus's policy, so it runs only on a hosted runner.
+name: abrmd probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - e2e/abrmd-probe.sh
+      - .github/workflows/abrmd-probe.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  abrmd:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # libtss2-tcti-tabrmd0 is the CLIENT side of tabrmd, only a Recommends of tpm2-abrmd: without it every client fails
+      # "Failed to instantiate TCTI" while the daemon runs fine (measured in a local container, 2026-10-27)
+      - name: The software TPM, tpm2-tools, tpm2-abrmd and its client TCTI
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm2-abrmd libtss2-tcti-tabrmd0
+          dpkg -l swtpm tpm2-abrmd libtss2-tcti-tabrmd0 tpm2-tools | tail -4
+      - name: One tpm2-abrmd per software TPM, against the raw socket
+        run: |
+          set -o pipefail
+          sudo --preserve-env=RUNNER_ENVIRONMENT bash e2e/abrmd-probe.sh | tee "$RUNNER_TEMP/probe.log"
+          grep -q '^abrmd-probe: 7 passed, 0 failed$' "$RUNNER_TEMP/probe.log" || {
+            echo "::error::the tpm2-abrmd probe did not pass all 7 checks on ${{ matrix.runner }}" >&2; exit 1; }
+      - name: The result, in the job summary
+        if: always()
+        run: grep -E '^(RESULT|  MEASURE) ' "$RUNNER_TEMP/probe.log" >> "$GITHUB_STEP_SUMMARY" || true
