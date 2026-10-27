@@ -1191,7 +1191,7 @@ def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bo
 def define_anchors(config_path, chain, directory, owner_auth, run=subprocess.run):
     """#419, as ROOT (enrol commit's parent), under v4: every owner-authorized definition of enrolment, so the owner
     authorization never enters a process of regalia-sync. The membership anchor (at epoch 0, the zero record) and the
-    signing counter (at 0), both under the node's define policy from the chain's tip (node.define_policy: the system key
+    signing counter and the activation counter (each at 0), all under the node's define policy from the chain's tip (node.define_policy: the system key
     its measurements name). Then anchor_and_store, as regalia-sync, finds them "as define leaves them" (its resumable
     state) and commits the chain by policy sessions, with no owner authorization. Locks are root's, in the enrolment
     directory: nothing else writes these indices during enrolment, and a lock file root made in regalia-sync's state
@@ -1208,8 +1208,13 @@ def define_anchors(config_path, chain, directory, owner_auth, run=subprocess.run
                               define_policy=policy, image_key=image_key, owner_auth=owner_auth)
     signing = heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=os.path.join(directory, "define-signing.lock"),
                                 define_policy=policy, image_key=image_key, owner_auth=owner_auth)
+    # the activation counter (#432, at 0) is owner-authorized like the signing counter, so it is defined here too:
+    # anchor_and_store, as regalia-sync under v4, holds no owner authorization to define it with
+    activation = heartbeat.Counter(cfg["nv_activation"], cfg["tcti"], run, lock_path=os.path.join(directory, "define-activation.lock"),
+                                   define_policy=policy, image_key=image_key, owner_auth=owner_auth)
     defined = []
-    for name, held, indices in (("anchor", hw, hw._indices()), ("signing counter", signing, (signing.index, signing.base_index))):
+    for name, held, indices in (("anchor", hw, hw._indices()), ("signing counter", signing, (signing.index, signing.base_index)),
+                                ("activation counter", activation, (activation.index, activation.base_index))):
         present = [i for i in indices if held._tpm("nvreadpublic", i).returncode == 0]
         if len(present) == len(indices):
             # a resumed commit: adopted only as this definer lays it down (HighWater._as_defined: the attributes, and an
