@@ -87,6 +87,9 @@ SIMULATOR_ENV = "Environment=REGALIA_TCTI_ALLOW_SIMULATOR=1"
 # calls take the same route (Cluster.tpm_of). The one raw client left is the pre-root unlock client (cmd/regalia-unlock
 # speaks to a socket or a device, never tabrmd), run only while none of the node's units does (Cluster._initrd_only).
 TPM_MODES = ("socket", "abrmd")
+# what close() keeps of each node for a failing CI job: .github/actions/tpm-diagnostics finds them by these names, and
+# tests/test_tpm_diagnostics_action.py holds the two together (a name the action does not find is not uploaded)
+KEPT_LOGS = ("tpm.log", "abrmd.log", "dbus.log")
 ABRMD_NAME = "com.intel.tss2.Tabrmd"
 
 
@@ -2223,7 +2226,7 @@ class Cluster:
                 pass
             sh("ip", "netns", "del", n.ns, check=False)
         # regalia-zga: the scripts remove the work directory after this; in CI each node's swtpm log is kept first
-        tpmdiag.keep({"%s/%s" % (n.name, log): str(n.dir / log) for n in self.members() for log in ("tpm.log", "abrmd.log", "dbus.log")},
+        tpmdiag.keep({"%s/%s" % (n.name, log): str(n.dir / log) for n in self.members() for log in KEPT_LOGS},
                      self.work.name)
         sh("ip", "netns", "del", SWITCH, check=False)
         for loop in self.loops.values():
