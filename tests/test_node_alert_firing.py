@@ -22,6 +22,7 @@ CONTEXT = {
     "regalia_admission_lease_seconds_left": "RegaliaNotServing watches the outcome",
     "regalia_audit_trail_lines": "read beside backlog",
     "regalia_esp_advance_run_timestamp_seconds": "when it last ran: a oneshot, run on each new chain",
+    "regalia_site_check_run_timestamp_seconds": "when it last ran: a oneshot, once per boot",
     "regalia_audit_trail_committed": "read beside backlog",
 }
 AUTHTIME = "/run/regalia-metrics/authtime/authtime.prom"
@@ -29,6 +30,7 @@ HEARTBEAT = "/run/regalia-metrics/sync/heartbeat.prom"
 LEASE = "/run/regalia-metrics/admission/lease.prom"
 MEMBERSHIP = "/run/regalia-metrics/sync/membership.prom"
 ESP_ADVANCE = "/run/regalia-metrics/esp-advance/esp-advance.prom"
+SITE_CHECK = "/run/regalia-metrics/site-check/site-check.prom"
 SHIP = "/run/regalia-metrics/audit-ship/sync.prom"
 SHIPPED = sorted(trails.TRAILS)                                 # one shipper, and one .prom, per registry trail (#580)
 
@@ -169,6 +171,11 @@ SCENARIOS = {
         "fault": [("regalia_esp_advance_ok", {}, "0+0x30")], "healthy": [("regalia_esp_advance_ok", {}, "1+0x30")], "at": 1200},
     "RegaliaNextBootNeedsRecoveryKey": {
         "fault": [("regalia_esp_boot_renderable", {}, "0+0x5")], "healthy": [("regalia_esp_boot_renderable", {}, "1+0x5")], "at": 120},
+    "RegaliaSiteMismatch": {            # no for: a refusal pages at once
+        "fault": [("regalia_site_check_ok", {}, "0+0x5")], "healthy": [("regalia_site_check_ok", {}, "1+0x5")], "at": 60},
+    "RegaliaSiteCheckMetricsMissing": {   # the unit failed at setup: no file this boot (/run), so nothing says 1
+        "fault": [("up", NODE_A, "1+0x10")],
+        "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=SITE_CHECK), "0+0x10")], "at": 420},
     "RegaliaEspAdvanceMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=ESP_ADVANCE), "0+0x10")], "at": 420},

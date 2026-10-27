@@ -108,8 +108,8 @@ jobs:
         run: |
           set -o pipefail
           REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/node-units-systemd.py | tee "$RUNNER_TEMP/units.log"
-          grep -q '^node-units-systemd: 71 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
-            echo "::error::the units test did not pass all 71 checks" >&2; exit 1; }
+          grep -q '^node-units-systemd: 78 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
+            echo "::error::the units test did not pass all 78 checks" >&2; exit 1; }
       - name: Keep the software TPMs' logs (regalia-zga)
         if: failure()
         uses: ./.github/actions/tpm-diagnostics

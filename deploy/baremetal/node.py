@@ -424,6 +424,44 @@ def esp_metrics(node, ok, renderable=None, publish=None):
         pass
 
 
+SITE_ON_ESP = "loader/credentials/regalia.site.cred"   # bootcreds.CREDENTIALS_DIR: the site document systemd-stub measures
+
+
+def site_compared():
+    """The keys the rootfs site configuration and the measured site document both hold, schema aside: what must agree.
+    Taken from both modules' key lists, so a key either gains later is compared without an edit here."""
+    from deploy.baremetal import bootcreds
+    return tuple(k for k in bootcreds.SITE_KEYS if k in sitecfg.KEYS and k != "schema")
+
+
+def site_check(node, esp):
+    """The rootfs site configuration (node.json's "site", what wg-apply builds the tunnels from) against the site document
+    on the ESP (what the initrd booted with, measured into PCR 12 and attested to the peers). After a node moves, its
+    site-advance writes only the ESP's document; a rootfs file left from the old site would bring up the old site's
+    tunnels. So the two must agree on every key both hold (site_compared), and a document that is missing or cannot be
+    read is a refusal, never a pass. Returns the keys compared."""
+    from deploy.baremetal import bootcreds
+    path = os.path.join(esp, SITE_ON_ESP)
+    raw = _read_regular(path, bootcreds.SITE_MAX_BYTES + 1)
+    require(raw is not None, "the measured site document %s is not there: the site configuration cannot be checked against it" % path)
+    measured, _device = bootcreds.read_site(raw)
+    keys = site_compared()
+    differ = [k for k in keys if membership.canonical(measured.get(k)) != membership.canonical(node.site.get(k))]
+    require(not differ, "the site configuration %s and the measured site document %s differ in %s: the rootfs file is not "
+            "this boot's site (replace it with the one for the site this node now boots at)" % (node.cfg["site"], path, ", ".join(differ)))
+    return keys
+
+
+def site_check_metrics(ok, publish=None):
+    """regalia-site-check's metric, written at every run, success or not. Never raises. Under metrics.RUN_DIR, a tmpfs:
+    a unit that never ran this boot leaves no file, never the last boot's value."""
+    publish = publish or (lambda samples: metrics.publish("site-check", samples))
+    try:
+        publish([("regalia_site_check_ok", {}, 1 if ok else 0), ("regalia_site_check_run_timestamp_seconds", {}, int(time.time()))])
+    except Exception:                                   # noqa: BLE001 - a metric does not change the run's outcome
+        pass
+
+
 def _read_regular(path, limit):
     """The bytes of the regular file `path` (up to `limit`), never through a link; None if it is not there."""
     try:
@@ -1137,8 +1175,8 @@ def authtime_service(cfg):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", default="/etc/regalia/node.json")
-    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check", "time-clear", "esp-advance"))
-    parser.add_argument("--esp", default="/efi", help="esp-advance only: the ESP's mount point")
+    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check", "time-clear", "esp-advance", "site-check"))
+    parser.add_argument("--esp", default="/efi", help="esp-advance and site-check: the ESP's mount point")
     parser.add_argument("--esp-trail", help="esp-advance only: its trail (default: the registry's, %s; the three-node fixture "
                         "gives each node its own)" % "trails.where(%r)" % ESP_TRAIL)
     parser.add_argument("--esp-lock", default=ESP_LOCK, help="esp-advance only: the anchor's writer lock (default: the unit's "
@@ -1191,6 +1229,14 @@ def main(argv=None):
             if unrenderable:
                 print("WARNING: the initrd cannot render a boot configuration under epoch %d (%s): the next boot asks for "
                       "the recovery key" % (epoch, unrenderable), file=sys.stderr)
+        elif args.service == "site-check":
+            try:
+                keys = site_check(node, args.esp)
+            except BaseException:
+                site_check_metrics(ok=False)
+                raise
+            site_check_metrics(ok=True)
+            print("the site configuration agrees with the measured site document in %s" % ", ".join(keys))
         elif args.service == "admission":
             admission_service(node).run(lambda: False)
         else:
