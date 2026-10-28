@@ -80,7 +80,7 @@ SCRIPT="deploy/baremetal/initrd/build-initrd.sh"
 SCHEMA="regalia.initrd-build/v1"
 SUITE=trixie
 PACKAGES="systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,libtss2-tcti-device0t64"
-REPO_FILES=("$SCRIPT" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh deploy/baremetal/uki.py go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
+REPO_FILES=("$SCRIPT" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/initrd/inventory-check.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh deploy/baremetal/uki.py go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
             deploy/baremetal/initrd/regalia-boot-render.service
             deploy/baremetal/initrd/regalia-wg-boot.service deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh
             deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab)
@@ -119,6 +119,8 @@ python3 -I -c 'import cryptography' 2>/dev/null || die "python3-cryptography is 
 . "$REPO/deploy/baremetal/initrd/repo-git.sh"
 # shellcheck source=deploy/baremetal/initrd/tree-retry.sh
 . "$REPO/deploy/baremetal/initrd/tree-retry.sh"
+# shellcheck source=deploy/baremetal/initrd/inventory-check.sh
+. "$REPO/deploy/baremetal/initrd/inventory-check.sh"
 repo_git_check || die "the checkout is refused (above)"
 echo "build-initrd: the checkout is read as uid $(repo_git_uid) (top $(stat -c %u "$REPO"), .git $(stat -c %u "$REPO/.git"))"
 COMMIT="$(repo_git rev-parse --verify HEAD)" || die "$REPO is not a git checkout"
@@ -232,13 +234,10 @@ echo "### every package file of the initrd, against its .deb (#246)"
 INVENTORY=deploy/baremetal/initrd/initrd-inventory.txt
 python3 -BEs -m deploy.baremetal.uki initrd-inventory --initrd "$W/stage/initrd.img" --root "$ROOT" > "$W/inventory.txt" \
   || die "the initrd's inventory could not be written"
-if ! grep -v '^#' "$INVENTORY" | cmp -s - "$W/inventory.txt"; then
-  # the whole built inventory, for a snapshot move to read and review (KERNEL-UPDATE.md; #330): the diff below
-  # shows only 60 lines, and a kernel move changes every module path. Only this text leaves a failed build.
-  cp "$W/inventory.txt" "$OUT/initrd-inventory.built.txt"
-  diff <(grep -v '^#' "$INVENTORY") "$W/inventory.txt" | head -60 || true
-  die "this initrd's inventory is not $INVENTORY (the lines above: < committed, > built)"
-fi
+# on a mismatch, both inventories and their whole difference are kept in --out, and the difference's size is said
+# first (inventory-check.sh): only this text leaves a failed build, never the initrd
+inventory_check "$INVENTORY" "$W/inventory.txt" "$W" "$OUT" \
+  || die "this initrd's inventory is not $INVENTORY (the lines above: < committed, > built)"
 python3 -BEs -m deploy.baremetal.debverify --inventory "$INVENTORY" --keyring "$KEYRING" --cache "$W/debs" --out "$W/verified.json" \
   --source "$MAIN" "$SUITE" --source "$MAIN" "$SUITE-updates" --source "$SECURITY" "$SUITE-security" >"$W/debverify.log" 2>&1 \
   || { tail -40 "$W/debverify.log"; die "a package file of the initrd is not what its .deb holds"; }
