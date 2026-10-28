@@ -90,14 +90,14 @@ class BuilderUsesIt(unittest.TestCase):
         self.assertIn('. "$REPO/deploy/baremetal/initrd/inventory-check.sh"', BUILDER)
         repo_files = re.search(r"^REPO_FILES=\(([^)]*)\)", BUILDER, re.M).group(1).split()
         self.assertIn("deploy/baremetal/initrd/inventory-check.sh", repo_files, "its hash goes in the build record (#266)")
-        self.assertRegex(BUILDER, r'inventory_check "\$INVENTORY" "\$W/inventory\.txt" "\$W" "\$OUT" \\\n  \|\| die ')
+        self.assertRegex(BUILDER, r'inventory_check "\$INVENTORY" "\$W/inventory\.txt" "\$W" "\$OUT" \\\n  \|\| \{ keep_dracut_log; die ')
 
     def test_no_inventory_is_compared_through_a_pipe(self):
         self.assertNotRegex(BUILDER, r"\|\s*cmp\b")
         self.assertNotRegex(BUILDER, r'"\$INVENTORY"\)?\s*[^\n]*\|\s*head\b')
 
     def test_unlock_boot_qemu_keeps_the_three_files_with_its_diagnostics(self):
-        self.assertIn('cp -- "$W"/initrd-build/initrd-inventory.* "$REGALIA_DIAG_DIR"/', UNLOCK)
+        self.assertIn('cp -- "$W"/initrd-build/initrd-inventory.* "$W"/initrd-build/initrd-dracut.log "$REGALIA_DIAG_DIR"/', UNLOCK)
 
 
 if __name__ == "__main__":

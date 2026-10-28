@@ -80,7 +80,7 @@ SCRIPT="deploy/baremetal/initrd/build-initrd.sh"
 SCHEMA="regalia.initrd-build/v1"
 SUITE=trixie
 PACKAGES="systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,libtss2-tcti-device0t64"
-REPO_FILES=("$SCRIPT" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/initrd/inventory-check.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh deploy/baremetal/uki.py go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
+REPO_FILES=("$SCRIPT" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/initrd/inventory-check.sh deploy/baremetal/elfclosure.py deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh deploy/baremetal/uki.py go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
             deploy/baremetal/initrd/regalia-boot-render.service
             deploy/baremetal/initrd/regalia-wg-boot.service deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh
             deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab)
@@ -222,6 +222,12 @@ inroot sh -c 'cd /tmp/unpacked && lsinitrd --unpack /tmp/initrd.img' >/dev/null 
 # No hard-linked file: whether dracut links two identical files depended on the clock (#248), so a file with
 # more than one link means --nohardlink was dropped or a dracut update links some other way. Refused. Regular
 # files only: a directory's link count is its subdirectories plus two, and nothing else in an initrd is linked.
+# dracut's log leaves a failed build from here on, beside the inventories: its lazy pass is what resolves libraries
+keep_dracut_log(){ cp -- "$W/dracut.log" "$OUT/initrd-dracut.log"; }
+# EVERY DYNAMIC ELF FILE WITH ITS LOADER AND ITS LIBRARIES: #620's run 40636249776 built an initrd with no libc
+# and no loader, and only the inventory's 51-line difference refused it. Said first, and by what is missing.
+python3 -BEs -m deploy.baremetal.elfclosure --root "$ROOT/tmp/unpacked" \
+  || { keep_dracut_log; die "dracut built an initrd whose programs lack their loader or libraries (above); dracut's log is $OUT/initrd-dracut.log"; }
 linked="$(awk -F'\t' '$2 == "f" && $7 > 1 {print $1 " (" $7 " links)"}' "$W/stage/initrd-listing.txt" | head -5)"
 [ -z "$linked" ] || die "the initrd holds hard-linked files, which make the archive depend on the build's timing (#248): $(tr '\n' ' ' <<< "$linked")"
 inroot dpkg-query -W -f '${Package}=${Version}\n' | sort > "$W/packages.txt"
@@ -237,7 +243,7 @@ python3 -BEs -m deploy.baremetal.uki initrd-inventory --initrd "$W/stage/initrd.
 # on a mismatch, both inventories and their whole difference are kept in --out, and the difference's size is said
 # first (inventory-check.sh): only this text leaves a failed build, never the initrd
 inventory_check "$INVENTORY" "$W/inventory.txt" "$W" "$OUT" \
-  || die "this initrd's inventory is not $INVENTORY (the lines above: < committed, > built)"
+  || { keep_dracut_log; die "this initrd's inventory is not $INVENTORY (the lines above: < committed, > built)"; }
 python3 -BEs -m deploy.baremetal.debverify --inventory "$INVENTORY" --keyring "$KEYRING" --cache "$W/debs" --out "$W/verified.json" \
   --source "$MAIN" "$SUITE" --source "$MAIN" "$SUITE-updates" --source "$SECURITY" "$SUITE-security" >"$W/debverify.log" 2>&1 \
   || { tail -40 "$W/debverify.log"; die "a package file of the initrd is not what its .deb holds"; }
