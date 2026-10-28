@@ -16,8 +16,11 @@ must be a file in the initrd, and each DT_NEEDED must be found, as the loader se
 with $ORIGIN expanded, then the default directories. Symbolic links are followed inside UNPACKED, never out of it.
 A static file needs nothing. A library loaded only by dlopen() is not anyone's DT_NEEDED and is not checked here.
 
+Another machine's ELF (ELF32, big-endian, not x86-64: a device's firmware) is not this loader's and is skipped. The
+directories etc/ld.so.conf names are searched after the run path, as the loader's cache holds them.
+
 Exit 0 when every file has what it needs; 1, naming the missing loader and libraries, how many files lack them and the
-first of those files, when one does not; 2 when the tree cannot be read.
+first of those files, when one does not; 2 when the tree cannot be read or holds no dynamic ELF file at all.
 """
 import argparse
 import os
@@ -28,6 +31,7 @@ DEFAULT_DIRS = ("lib/x86_64-linux-gnu", "usr/lib/x86_64-linux-gnu", "lib64", "us
 PT_LOAD, PT_DYNAMIC, PT_INTERP = 1, 2, 3
 DT_NEEDED, DT_STRTAB, DT_RPATH, DT_RUNPATH = 1, 5, 15, 29
 ET_EXEC, ET_DYN = 2, 3
+EM_X86_64 = 62
 MAX_LINKS = 40
 SHOWN = 20
 
@@ -69,8 +73,9 @@ def elf_needs(data):
     object; None for any other file. A malformed ELF is Unreadable: a file the loader would refuse is not passed."""
     if data[:4] != b"\x7fELF":
         return None
-    if data[4] != 2 or data[5] != 1:
-        raise Unreadable("not ELF64 little-endian")
+    # another machine's ELF (a device's firmware, ELF32 or big-endian) is not loaded by this initrd's loader
+    if len(data) < 20 or data[4] != 2 or data[5] != 1 or struct.unpack_from("<H", data, 18)[0] != EM_X86_64:
+        return None
     try:
         e_type, = struct.unpack_from("<H", data, 16)
         if e_type not in (ET_EXEC, ET_DYN):
@@ -116,9 +121,34 @@ def elf_needs(data):
         raise Unreadable(str(e))
 
 
+def configured_dirs(root):
+    """The directories etc/ld.so.conf names (with its include globs), inside root: the loader's cache holds them."""
+    import glob
+    found, seen = [], set()
+
+    def read(path):
+        real = resolve(root, path)
+        if real is None or real in seen:
+            return
+        seen.add(real)
+        with open(real) as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if line.startswith("include "):
+                    for pattern in line.split()[1:]:
+                        pattern = pattern if pattern.startswith("/") else os.path.join(os.path.dirname(path), pattern)
+                        for hit in sorted(glob.glob(os.path.join(root, pattern.lstrip("/")))):
+                            read("/" + os.path.relpath(hit, root))
+                elif line.startswith("/"):
+                    found.append(line)
+    read("/etc/ld.so.conf")
+    return found
+
+
 def missing_of(root):
     """{what is missing: [the files that lack it]}, and how many dynamic ELF files were judged."""
     missing, judged = {}, 0
+    configured = configured_dirs(root)
     for directory, dirs, files in os.walk(root):
         dirs.sort()
         for name in sorted(files):
@@ -141,7 +171,7 @@ def missing_of(root):
             if interp is not None and resolve(root, interp) is None:
                 missing.setdefault("the loader " + interp, []).append(relative)
             origin = os.path.dirname(relative)
-            search = [d.replace("$ORIGIN", origin).replace("${ORIGIN}", origin) for d in runpath] + ["/" + d for d in DEFAULT_DIRS]
+            search = [d.replace("$ORIGIN", origin).replace("${ORIGIN}", origin) for d in runpath] + configured + ["/" + d for d in DEFAULT_DIRS]
             for soname in needed:
                 if "/" in soname:
                     found = resolve(root, soname if soname.startswith("/") else os.path.join(origin, soname))
@@ -163,6 +193,10 @@ def main(argv=None):
         missing, judged = missing_of(args.root)
     except (OSError, Unreadable) as e:
         print("elfclosure: the initrd cannot be read: %s" % e, file=sys.stderr)
+        return 2
+    if judged == 0:
+        # a tree with no dynamic ELF file is no initrd this builder makes: a wrong --root, or an unpack that failed
+        print("elfclosure: %s holds no dynamic ELF file: nothing was checked" % args.root, file=sys.stderr)
         return 2
     if not missing:
         print("elfclosure: %d dynamic ELF file(s), each with its loader and every library it needs" % judged)

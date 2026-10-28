@@ -129,6 +129,41 @@ class ElfClosure(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("/usr/bin/broken", err)
 
+    def test_another_machines_elf_is_skipped_not_refused(self):
+        """A device's firmware may be ELF32, big-endian or another e_machine: not this loader's, so neither judged nor
+        Unreadable (which would fail the build)."""
+        tree = Tree(self).whole()
+        arm = bytearray(elf(interp="/lib/ld-linux-aarch64.so.1", needed=["libnothere.so"]))
+        arm[18:20] = struct.pack("<H", 183)                                 # EM_AARCH64
+        os.makedirs(os.path.join(tree.root, "usr/lib/firmware"))
+        tree.put("usr/lib/firmware/arm.elf", bytes(arm))
+        tree.put("usr/lib/firmware/elf32.bin", b"\x7fELF" + bytes([1, 1, 1]) + b"\0" * 40)
+        tree.put("usr/lib/firmware/be.bin", b"\x7fELF" + bytes([2, 2, 1]) + b"\0" * 40)
+        rc, out, err = tree.run()
+        self.assertEqual((rc, err), (0, ""), out)
+        self.assertIn("5 dynamic ELF file(s)", out)
+
+    def test_a_directory_ld_so_conf_names_is_searched(self):
+        tree = Tree(self).whole()
+        os.makedirs(os.path.join(tree.root, "usr/lib/extra"))
+        os.makedirs(os.path.join(tree.root, "etc/ld.so.conf.d"))
+        tree.put("usr/lib/extra/libextra.so.1", elf(needed=["libc.so.6"]))
+        tree.put("usr/bin/uses-extra", elf(interp=LOADER, needed=["libextra.so.1"]))
+        self.assertEqual(tree.run()[0], 1, "without the configuration the library is not found")
+        tree.put("etc/ld.so.conf", b"include /etc/ld.so.conf.d/*.conf\n")
+        tree.put("etc/ld.so.conf.d/extra.conf", b"# a comment\n/usr/lib/extra\n")
+        rc, out, _ = tree.run()
+        self.assertEqual(rc, 0, out)
+
+    def test_a_tree_with_no_dynamic_elf_judges_nothing_and_fails(self):
+        """A check that judged nothing must not pass: a wrong --root, or an unpack that left nothing."""
+        tree = Tree(self)
+        os.remove(os.path.join(tree.root, "usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"))
+        tree.put("usr/bin/script", b"#!/bin/sh\n")
+        rc, _, err = tree.run()
+        self.assertEqual(rc, 2)
+        self.assertIn("holds no dynamic ELF file", err)
+
     def test_the_module_reads_the_loader_interp_of_a_fixture_as_written(self):
         self.assertEqual(elfclosure.elf_needs(elf(interp=LOADER, needed=["a.so"], runpath="$ORIGIN/x")),
                          (LOADER, ["a.so"], ["$ORIGIN/x"]))
