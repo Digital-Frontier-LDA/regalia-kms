@@ -414,14 +414,18 @@ def site_advance(node, esp, site_path, lock_path=ESP_LOCK, record=None):
         booted = [entry["label"] for entry in sets if entry["pcrs"].get(siteadvance.SITE_PCR) == now]
         require(booted, "no accepted set has the PCR 12 the ESP measures now (%s): this node's boot is not one the root "
                 "approved, so a site change cannot be judged from it" % now)
+        # FAT finds the document whatever the case of its name, but the stub measures the name as it is spelled, and a
+        # rename onto an existing name may keep the old spelling on vfat. So the document is written under the spelling
+        # the ESP holds now (credential_files refuses two that FAT would take for one), and predicted with it.
         name = os.path.basename(SITE_ON_ESP)
-        predicted = espcreds.pcr12(dict(files, **{name: document}))
+        spelled = next((k for k in files if k.casefold() == name.casefold()), name)
+        predicted = espcreds.pcr12(dict(files, **{spelled: document}))
         try:
             label = siteadvance.target(sets, booted[0], predicted)
         except siteadvance.Refused as refused:  # attest's class: main reports node's Refused as a refusal (exit 2)
             raise Refused(str(refused)) from None
         try:
-            on_esp = enrol.EspChain(esp, document, relative=SITE_ON_ESP)
+            on_esp = enrol.EspChain(esp, document, relative=os.path.join(os.path.dirname(SITE_ON_ESP), spelled))
         except enrol.Refused as refused:
             raise Refused(str(refused)) from None
         facts = {"epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "booted_set": booted[0],
@@ -434,6 +438,11 @@ def site_advance(node, esp, site_path, lock_path=ESP_LOCK, record=None):
         except enrol.Refused as refused:
             raise Refused(str(refused)) from None
         result = label, facts["site_sha256"], on_esp.rewritten
+        measured = espcreds.pcr12(uki.credential_files(esp))
+        if measured != predicted:          # the ESP as written is not what the root approved: no ALLOW, no success
+            raise TrailIncomplete("the site document is written, but the ESP now measures PCR 12 %s, not the approved %s "
+                                  "(its names as written are not the ones predicted): DO NOT REBOOT this node; restore "
+                                  "the previous document or have the root approve this value" % (measured, predicted), result)
         if record is not None:
             try:
                 record(dict(facts, event="site-advance", outcome="ALLOW"))
