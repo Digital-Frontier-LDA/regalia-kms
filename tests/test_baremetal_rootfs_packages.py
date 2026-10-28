@@ -306,7 +306,8 @@ def reached(defs, entries):
 def import_shape(node, module):
     """How an import statement brings `module` in: "bare" (from deploy.baremetal import uki), "names" (from
     deploy.baremetal.uki import X), or another shape, which the entries below cannot see (an alias, import a.b.c, a
-    relative import, a star); None when it does not import it."""
+    relative import, a star of uki or of the package, the parent package imported); None when it imports none of
+    them."""
     if isinstance(node, ast.ImportFrom) and node.level > 0:
         # from . import uki, from .uki import X: relative to deploy.baremetal, which the entries do not follow
         named = node.module or ""
@@ -314,6 +315,10 @@ def import_shape(node, module):
             return "relative: from %s%s import %s" % ("." * node.level, named, ", ".join(a.name for a in node.names))
         return None
     if isinstance(node, ast.ImportFrom) and node.level == 0:
+        if node.module == "deploy.baremetal" and any(a.name == "*" for a in node.names):
+            return "star: from deploy.baremetal import *"     # brings uki in by a name no entry counts
+        if node.module == "deploy" and any(a.name in ("baremetal", "*") for a in node.names):
+            return "parent: from deploy import " + ", ".join(a.name for a in node.names)
         if node.module == "deploy.baremetal":
             for a in node.names:
                 if a.name == module:
@@ -326,7 +331,28 @@ def import_shape(node, module):
         for a in node.names:
             if a.name == "deploy.baremetal." + module or a.name.startswith("deploy.baremetal." + module + "."):
                 return "import " + a.name + ("" if a.asname is None else " as " + a.asname)
+            if a.name in ("deploy", "deploy.baremetal"):    # the parent package: deploy.baremetal.uki.X, unseen
+                return "parent: import " + a.name + ("" if a.asname is None else " as " + a.asname)
     return None
+
+
+def references(tree, module):
+    """(the names a module refers to in `module`: module.NAME, or imported by name; the shapes it reaches `module` by:
+    each import's import_shape, and "attribute: .module" for any x.module, whatever x is)."""
+    entries, shapes = set(), set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            shape = import_shape(node, module)
+            if shape is not None:
+                shapes.add(shape)
+        if isinstance(node, ast.Attribute) and node.attr == module:
+            # x.uki, whatever x is (deploy.baremetal.uki, a package handle): uki reached by a path no entry counts
+            shapes.add("attribute: ." + module)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == module:
+            entries.add(node.attr)
+        elif isinstance(node, ast.ImportFrom) and node.module == "deploy.baremetal." + module:
+            entries |= {a.name for a in node.names}
+    return entries, shapes
 
 
 class TheLaptopOnlyCommandsAreUnreachedFromTheHost(unittest.TestCase):
@@ -341,7 +367,8 @@ class TheLaptopOnlyCommandsAreUnreachedFromTheHost(unittest.TestCase):
     call. So it
     over-approximates: an unrelated def sharing a name can make it fail (a false red, read the path it prints), but a
     direct call or a def passed by name cannot pass unseen. It does not see getattr with a computed name or other
-    dynamic dispatch, a def handed in from outside uki.py, or a command built at run time."""
+    dynamic dispatch, a def handed in from outside uki.py, or a command built at run time. A host module reaching uki
+    by any other path (an alias, a relative or star import, the parent package, x.uki) fails, as import_shape says."""
 
     MODULE = "uki"
 
@@ -361,16 +388,10 @@ class TheLaptopOnlyCommandsAreUnreachedFromTheHost(unittest.TestCase):
         cls.entries, cls.import_shapes = set(), {}
         for name in sorted(cls.host - {cls.MODULE}):
             with open(os.path.join(BASE, name + ".py")) as f:
-                tree = ast.parse(f.read())
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.Import, ast.ImportFrom)):
-                    shape = import_shape(node, cls.MODULE)
-                    if shape is not None:
-                        cls.import_shapes.setdefault(shape, set()).add(name)
-                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == cls.MODULE:
-                    cls.entries.add(node.attr)
-                elif isinstance(node, ast.ImportFrom) and node.module == "deploy.baremetal." + cls.MODULE:
-                    cls.entries |= {a.name for a in node.names}
+                entries, shapes = references(ast.parse(f.read()), cls.MODULE)
+            cls.entries |= entries
+            for shape in shapes:
+                cls.import_shapes.setdefault(shape, set()).add(name)
 
     def test_the_host_reaches_no_def_that_runs_a_laptop_only_command(self):
         path = reached(self.defs, self.entries)
@@ -390,9 +411,25 @@ class TheLaptopOnlyCommandsAreUnreachedFromTheHost(unittest.TestCase):
                            ("from . import uki", "relative: from . import uki"),
                            ("from .uki import verify", "relative: from .uki import verify"),
                            ("from .. import sync", None),
-                           ("from deploy.baremetal.uki import *", "star")):
+                           ("from deploy.baremetal.uki import *", "star"),
+                           ("from deploy.baremetal import *", "star: from deploy.baremetal import *"),
+                           ("from deploy import baremetal", "parent: from deploy import baremetal"),
+                           ("import deploy.baremetal", "parent: import deploy.baremetal"),
+                           ("import deploy", "parent: import deploy"),
+                           ("import json", None)):
             with self.subTest(text):
                 self.assertEqual(import_shape(ast.parse(text).body[0], self.MODULE), want)
+
+    def test_a_module_s_references_and_shapes(self):
+        """references(): what a host module refers to in uki, and every path it reaches uki by."""
+        for text, entries, shapes in (
+                ("from deploy.baremetal import uki\nuki.verify(1)\n", {"verify"}, {"bare"}),
+                ("from deploy.baremetal.uki import measured\n", {"measured"}, {"names"}),
+                ("x = __import__('deploy.baremetal').baremetal.uki.verify\n", set(), {"attribute: .uki"}),
+                ("import deploy.baremetal\ndeploy.baremetal.uki.verify(1)\n", set(), {"parent: import deploy.baremetal", "attribute: .uki"}),
+                ("from deploy.baremetal import sync\nsync.run()\n", set(), set())):
+            with self.subTest(text):
+                self.assertEqual(references(ast.parse(text), self.MODULE), (entries, shapes))
 
     def test_a_nested_def_does_not_hide_its_parent_s_read(self):
         """A nested def's parameter or local is not the parent's binding: the parent's read of that name stays an edge."""
