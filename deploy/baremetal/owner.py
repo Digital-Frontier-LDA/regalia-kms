@@ -389,8 +389,8 @@ def main(argv=None):
                     export, _, receipt = pair.partition(":")
                     witnesses.append((manifest_tool.read_json(export, 64 * 1024 * 1024), manifest_tool.read_json(receipt, 65536),
                                       keys, args.collector_identity, stream))
-            with open(args.record, "rb") as f:
-                record = [json.loads(line) for line in f.read(16 * 1024 * 1024).splitlines() if line.strip()]
+            from deploy.baremetal import cardrecord
+            record = cardrecord.read_signing_record(args.record)     # read whole, parsed as every reader of the log does
 
             def confirm_line(text):
                 print(text)
