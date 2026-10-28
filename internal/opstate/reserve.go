@@ -164,8 +164,10 @@ func (s *EtcdState) try(ctx context.Context, r policy.Reservation) (bool, error)
 		case "sequence":
 			if previous != nil {
 				was, _ := strconv.ParseUint(string(previous["value"].(json.Number)), 10, 64)
-				if *r.Sequence <= was {
-					return false, policy.ErrSequence // as FileState answers a sequence that is not the next
+				// only the NEXT account sequence, as FileState and COSMOS-SUPPORT.md: a gap would sign S+k now and leave
+				// S+1..S+k-1 unsignable. (was+1 cannot wrap: a chain never reaches 2^64-1.)
+				if *r.Sequence != was+1 {
+					return false, policy.ErrSequence
 				}
 			}
 		case "quota":

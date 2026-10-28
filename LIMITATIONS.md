@@ -416,9 +416,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       `payload_sha256`, `approvers` and `expires_at`, so `FileState`'s journal events carry them. A build from before
       these fields decodes the journal with `DisallowUnknownFields` and refuses it. That fails closed (the state is
       unavailable, nothing is signed), but such a daemon does not start until it runs a build that knows the fields.
-    - **`EtcdState` takes any higher Cosmos sequence; `FileState` only the next.** Both refuse a sequence that is not
-      higher, as `ErrSequence`. `EtcdState` accepts a gap (9 after 7), `FileState` does not. Which is right for two or
-      more servers reserving is the D32 lane's to decide.
+    - **Both backends take only the next Cosmos sequence; `opstate.py`'s transition takes any higher value.**
+      `EtcdState` and `FileState` refuse a repeat, a lower value and a gap (9 after 7) as `ErrSequence`. The opstate
+      `sequence` kind is FENCING.md's per-key high-water mark, shared with a chain's sign height, which does skip,
+      so its verifier still accepts a higher value written by another server.
     - **An ambiguous commit burns the approval.** A Reserve whose transaction answers an error may still have
       committed. It isn't retried, the HSM never signs, and the request is approved again. That fails closed.
   - The daemon's unit doesn't yet join `regalia-etcd-client`, the group that may open etcd's socket. That
