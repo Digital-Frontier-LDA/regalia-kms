@@ -195,5 +195,24 @@ class Refuses(SiteAdvanceCase):
             self.advance()
 
 
+
+class MainTests(SiteAdvanceCase):
+    """node.main site-advance: a refusal is reported as one (exit 2), not a traceback."""
+
+    def main(self):
+        with unittest.mock.patch.object(node, "load", lambda path: {}), \
+             unittest.mock.patch.object(node, "Node", lambda cfg: self.n), \
+             unittest.mock.patch.object(node, "Trail", lambda *a: (lambda line: None)):
+            return node.main(["--config", "x", "--esp", self.esp, "--esp-lock", self.lock, "site-advance", "--site", self.site_path])
+
+    def test_a_site_the_root_has_not_approved_exits_2(self):
+        self.sets[:] = [a_set("current", self.old_pcr)]
+        self.assertEqual(self.main(), 2)
+        self.assertEqual(self.on_esp(), self.old_doc)
+
+    def test_an_approved_site_exits_0(self):
+        self.assertEqual(self.main(), 0)
+        self.assertEqual(self.on_esp(), self.new_doc)
+
 if __name__ == "__main__":
     unittest.main()

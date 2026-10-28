@@ -416,7 +416,10 @@ def site_advance(node, esp, site_path, lock_path=ESP_LOCK, record=None):
                 "approved, so a site change cannot be judged from it" % now)
         name = os.path.basename(SITE_ON_ESP)
         predicted = espcreds.pcr12(dict(files, **{name: document}))
-        label = siteadvance.target(sets, booted[0], predicted)
+        try:
+            label = siteadvance.target(sets, booted[0], predicted)
+        except siteadvance.Refused as refused:  # attest's class: main reports node's Refused as a refusal (exit 2)
+            raise Refused(str(refused)) from None
         try:
             on_esp = enrol.EspChain(esp, document, relative=SITE_ON_ESP)
         except enrol.Refused as refused:
