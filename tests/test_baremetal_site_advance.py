@@ -140,7 +140,10 @@ class Writes(SiteAdvanceCase):
         shouted = dict(SEALED, **{"REGALIA.SITE.CRED": self.old_doc})
         self.sets[:] = [a_set("current", espcreds.pcr12(shouted)), a_set("moved", self.new_pcr)]
         with unittest.mock.patch.object(uki, "credential_files", lambda esp: dict(shouted)):
-            label, _, _ = self.advance()
+            try:
+                label, _, _ = self.advance()
+            except node.Refused as refused:
+                self.fail("the approved move was refused: %s" % refused)
         self.assertEqual(label, "moved")
         self.assertEqual(self.on_esp(), self.new_doc)
 
