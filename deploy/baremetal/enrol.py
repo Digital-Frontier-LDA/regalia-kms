@@ -2028,13 +2028,17 @@ class EspChain:
       .write()              when it differs, `chain` written over it (_replace_esp: a temporary file fsynced, renamed,
                             the directory fsynced), read back, and refused if it is not `chain`. Returns `rewritten`.
 
-    Only the chain: the trail lines, the anchor's move and the chain's verification stay with each caller, which
+    `relative` names another RENDERED file to write the same way (default: the chain). node.site_advance (#615) writes
+    the site document with it, under the same lock and trusted-path rules; it is still enrolment's rendered-file
+    writer, never the sealed files' (_publish_esp).
+
+    Only the file: the trail lines, the anchor's move and the chain's verification stay with each caller, which
     verify against different things (the advance against the anchor; reanchor against the peers' agreed chain and the
     pinned root). Refusals are this module's Refused; each caller turns them into its own."""
 
-    def __init__(self, esp, chain):
+    def __init__(self, esp, chain, relative=None):
         from deploy.baremetal import bootcreds
-        relative = _rendered_path(bootcreds.CHAIN_ON_ESP)
+        relative = _rendered_path(bootcreds.CHAIN_ON_ESP if relative is None else relative)
         self.directory, self.filename = os.path.join(esp, os.path.dirname(relative)), os.path.basename(relative)
         self.target = os.path.join(self.directory, self.filename)
         self.chain = chain
