@@ -134,18 +134,54 @@ class Writes(SiteAdvanceCase):
         self.advance()
         self.assertEqual(open(os.path.join(self.esp, node.SITE_ON_ESP), "rb").read(), self.new_doc)
 
-    def test_a_site_document_named_in_another_case_is_the_one_replaced(self):
-        # FAT, and the stub, compare names case-insensitively: the write replaces REGALIA.SITE.CRED, so the prediction
-        # must not count it beside the new document (7e on #618). The booted set measures the ESP as it is named now.
-        shouted = dict(SEALED, **{"REGALIA.SITE.CRED": self.old_doc})
-        self.sets[:] = [a_set("current", espcreds.pcr12(shouted)), a_set("moved", self.new_pcr)]
-        with unittest.mock.patch.object(uki, "credential_files", lambda esp: dict(shouted)):
-            try:
-                label, _, _ = self.advance()
-            except node.Refused as refused:
-                self.fail("the approved move was refused: %s" % refused)
-        self.assertEqual(label, "moved")
-        self.assertEqual(self.on_esp(), self.new_doc)
+    def shout(self):
+        """The ESP's site document named REGALIA.SITE.CRED, on disk, and the sets measured with that spelling."""
+        os.remove(os.path.join(self.creds, "regalia.site.cred"))
+        with open(os.path.join(self.creds, "REGALIA.SITE.CRED"), "wb") as f:
+            f.write(self.old_doc)
+        self.sets[:] = [a_set("current", espcreds.pcr12(dict(SEALED, **{"REGALIA.SITE.CRED": self.old_doc}))),
+                        a_set("moved", espcreds.pcr12(dict(SEALED, **{"REGALIA.SITE.CRED": self.new_doc})))]
+
+    def test_a_site_document_named_in_another_case_keeps_its_spelling(self):
+        # the stub measures the name as spelled, and vfat may keep the old spelling on a rename: so the document is
+        # written under the spelling the ESP holds, and predicted with it (7e and TEAMLEAD on #619)
+        self.shout()
+        try:
+            label, _, rewritten = self.advance()
+        except (node.Refused, node.TrailIncomplete) as failure:
+            self.fail("the approved move was not completed: %s" % failure)
+        self.assertEqual((label, rewritten), ("moved", True))
+        names = [n for n in os.listdir(self.creds) if n.casefold() == "regalia.site.cred"]
+        self.assertEqual(names, ["REGALIA.SITE.CRED"])
+        with open(os.path.join(self.creds, "REGALIA.SITE.CRED"), "rb") as f:
+            self.assertEqual(f.read(), self.new_doc)
+
+    def test_an_esp_that_measures_other_than_predicted_after_the_write_is_incomplete(self):
+        # a file system that changes the spelling as it writes: written, but not the approved PCR 12, so no ALLOW, no
+        # success, and the operator is told not to reboot
+        real, calls, lines = uki.credential_files, [], []
+        def listing(esp):
+            calls.append(esp)
+            files = real(esp)
+            if len(calls) == 1:
+                return files
+            return {("Regalia.Site.Cred" if n == "regalia.site.cred" else n): v for n, v in files.items()}
+        with unittest.mock.patch.object(uki, "credential_files", listing), \
+             self.assertRaisesRegex(node.TrailIncomplete, "DO NOT REBOOT"):
+            self.advance(record=lines.append)
+        self.assertEqual([line["event"] for line in lines], ["site-advance-requested"], "no ALLOW line")
+
+    def test_two_names_fat_takes_for_one_are_refused(self):
+        # credential_files refuses them before any prediction: the spelling chosen above is never a guess between two
+        os.makedirs(os.path.join(self.d, "probe"))
+        with open(os.path.join(self.d, "probe", "a"), "w"):
+            pass
+        if os.path.exists(os.path.join(self.d, "probe", "A")):
+            self.skipTest("this file system compares names without case: it cannot hold the two (CI's can)")
+        with open(os.path.join(self.creds, "REGALIA.SITE.CRED"), "wb") as f:
+            f.write(self.old_doc)
+        with self.assertRaisesRegex(node.Refused, "names FAT would take for one"):
+            self.advance()
 
     def test_it_runs_under_the_esp_advance_lock(self):
         os.makedirs(os.path.dirname(self.lock))
