@@ -212,6 +212,27 @@ class TheHostsPackages(unittest.TestCase):
 
 
 
+def own_scope(node):
+    """The nodes of `node`'s own scope: its body, without descending into a nested def, class or lambda (their names
+    are theirs; each nested def has its own entry)."""
+    todo = list(ast.iter_child_nodes(node))
+    while todo:
+        n = todo.pop()
+        yield n
+        if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            todo += list(ast.iter_child_nodes(n))
+
+
+def own_bindings(node):
+    """The names `node` itself binds: its own arguments, and the names stored or deleted in its own scope."""
+    bound = set()
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        a = node.args
+        bound |= {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs + [a.vararg, a.kwarg] if x}
+    bound |= {n.id for n in own_scope(node) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
+    return bound
+
+
 def definitions(tree):
     """{name: [(the function or class node, the names it calls or reads: unbound names and attributes)]}, every def at
     any depth, a method under its own name: resolved by NAME, so an edge is drawn to every def so named."""
@@ -219,11 +240,10 @@ def definitions(tree):
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             # an edge for every name or attribute it calls or reads, a bare name only when it is not bound here: a
-            # local variable or argument is no edge, whatever def it shares a name with. A class's walk covers its
-            # methods' bodies, so naming a class reaches everything they call
-            bound = {a.arg for n in ast.walk(node) if isinstance(n, ast.arguments)
-                     for a in n.posonlyargs + n.args + n.kwonlyargs + [n.vararg, n.kwarg] if a}
-            bound |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
+            # local variable or argument OF THIS DEF is no edge, whatever def it shares a name with (a nested def's
+            # names do not count here). A class's walk covers its methods' bodies, so naming a class reaches
+            # everything they call
+            bound = own_bindings(node)
             used = set()
             for inner in ast.walk(node):
                 if isinstance(inner, ast.Call):
@@ -279,6 +299,25 @@ def reached(defs, entries):
     return path
 
 
+def import_shape(node, module):
+    """How an import statement brings `module` in: "bare" (from deploy.baremetal import uki), "names" (from
+    deploy.baremetal.uki import X), or another shape, which the entries below cannot see (an alias, import a.b.c);
+    None when it does not import it."""
+    if isinstance(node, ast.ImportFrom) and node.level == 0:
+        if node.module == "deploy.baremetal":
+            for a in node.names:
+                if a.name == module:
+                    return "bare" if a.asname is None else "aliased: as " + a.asname
+            return None
+        if node.module == "deploy.baremetal." + module:
+            return "names"
+    if isinstance(node, ast.Import):
+        for a in node.names:
+            if a.name == "deploy.baremetal." + module or a.name.startswith("deploy.baremetal." + module + "."):
+                return "import " + a.name + ("" if a.asname is None else " as " + a.asname)
+    return None
+
+
 class TheLaptopOnlyCommandsAreUnreachedFromTheHost(unittest.TestCase):
     """uki.py is on the host (bootnext, enrol, node and signkey import it for measured, verify, credential_files and
     policy_digest), and it also signs on the laptop: git (Checkout, the build's provenance), keyctl and systemd-measure.
@@ -287,7 +326,8 @@ class TheLaptopOnlyCommandsAreUnreachedFromTheHost(unittest.TestCase):
     reach, in uki.py's call graph, a def that runs one of them.
 
     The graph is by NAME: a call (f(), x.f()), an unbound read of a name or a read of an attribute (a def passed as
-    a value: run=self._git) is an edge to every def so named, and a class reaches all its methods. So it
+    a value: run=self._git) is an edge to every def so named; a class's walk covers its methods' bodies, so naming it reaches what they
+    call. So it
     over-approximates: an unrelated def sharing a name can make it fail (a false red, read the path it prints), but a
     direct call or a def passed by name cannot pass unseen. It does not see getattr with a computed name or other
     dynamic dispatch, a def handed in from outside uki.py, or a command built at run time."""
@@ -307,11 +347,15 @@ class TheLaptopOnlyCommandsAreUnreachedFromTheHost(unittest.TestCase):
         cls.laptop = not_run & set(commands({cls.MODULE}))
         cls.defs = definitions(cls.tree)
         cls.sinks = runs_of(cls.text, cls.tree, cls.laptop)
-        cls.entries = set()
+        cls.entries, cls.import_shapes = set(), {}
         for name in sorted(cls.host - {cls.MODULE}):
             with open(os.path.join(BASE, name + ".py")) as f:
                 tree = ast.parse(f.read())
             for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    shape = import_shape(node, cls.MODULE)
+                    if shape is not None:
+                        cls.import_shapes.setdefault(shape, set()).add(name)
                 if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == cls.MODULE:
                     cls.entries.add(node.attr)
                 elif isinstance(node, ast.ImportFrom) and node.module == "deploy.baremetal." + cls.MODULE:
@@ -322,6 +366,29 @@ class TheLaptopOnlyCommandsAreUnreachedFromTheHost(unittest.TestCase):
         bad = {name: (" -> ".join(path[name]), sorted(self.sinks[name])) for name in self.sinks if name in path}
         self.assertEqual(bad, {}, "the host reaches, through uki.py, a def that runs a command [imported-not-run] says "
                                   "runs only on the laptop: move the call off the host's path, or list the package")
+
+    def test_every_host_import_of_uki_is_a_shape_the_entries_see(self):
+        """An alias (from deploy.baremetal import uki as u) or a dotted import would bring in names the entries never
+        count: refused, so they cannot pass unseen."""
+        self.assertEqual({s: sorted(m) for s, m in self.import_shapes.items() if s not in ("bare", "names")}, {},
+                         "a host module imports uki in a shape this guard does not follow")
+        self.assertIn("bare", self.import_shapes)
+        for text, want in (("from deploy.baremetal import uki as u", "aliased: as u"), ("import deploy.baremetal.uki", "import deploy.baremetal.uki"),
+                           ("from deploy.baremetal import uki", "bare"), ("from deploy.baremetal.uki import verify", "names"),
+                           ("from deploy.baremetal import sync", None)):
+            with self.subTest(text):
+                self.assertEqual(import_shape(ast.parse(text).body[0], self.MODULE), want)
+
+    def test_a_nested_def_does_not_hide_its_parent_s_read(self):
+        """A nested def's parameter or local is not the parent's binding: the parent's read of that name stays an edge."""
+        for label, inner in (("a parameter", "    def inner(_git):\n        return _git\n"),
+                             ("a local", "    def inner():\n        _git = 1\n        return _git\n"),
+                             ("a lambda's parameter", "    inner = lambda _git: _git\n")):
+            with self.subTest(label):
+                tree = ast.parse("def outer():\n" + inner + "    return _git\n\n\ndef _git():\n    pass\n")
+                used = {node.name: u for node, u in (e for es in definitions(tree).values() for e in es)}
+                self.assertIn("_git", used["outer"])
+                self.assertNotIn("_git", own_bindings(tree.body[0]))
 
     def test_the_guard_sees_what_it_is_for(self):
         """Not vacuous: the host does refer into uki, the laptop-only commands are found, each by a def of its own,
