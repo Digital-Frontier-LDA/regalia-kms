@@ -79,6 +79,7 @@ pkcheck | os_probe only looks for polkit, which the image does not ship (absence
 activation | the activation lease (#440): no unit imports it yet; issuance over sync follows (#432, rewritten by D32)
 anchorpolicy | the anchor-policy authority's arithmetic (#361 A, #437): nothing on the host imports it yet; enrol init does from #361 C1 (#462), which removes this line
 cardrecord | the card-ceremony record, verified on the laptop (manifest propose --genesis)
+elfclosure | every dynamic ELF file of an unpacked initrd with its loader and libraries: run by build-initrd.sh on the builder
 drill | the fault-injection drill runner (#495): the operator runs it from the laptop against the three hosts (SSH, BMC)
 redfish | the servers' iLOs over Redfish (power off/on, readback), from the operator workstation: drills (#495), D32's G1 fence
 fence | the owner's iLO fence (#432, G1): run by owner.py from the management network, never on a node

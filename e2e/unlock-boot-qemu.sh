@@ -129,7 +129,7 @@ deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --keyr
   || { echo "unlock-boot-qemu: the initrd builder failed"
        # a mismatched inventory leaves its three files in --out: keep them with the diagnostics CI uploads (#620's run)
        if [ -n "${REGALIA_DIAG_DIR:-}" ]; then
-         mkdir -p "$REGALIA_DIAG_DIR"; cp -- "$W"/initrd-build/initrd-inventory.* "$REGALIA_DIAG_DIR"/ 2>/dev/null || true
+         mkdir -p "$REGALIA_DIAG_DIR"; cp -- "$W"/initrd-build/initrd-inventory.* "$W"/initrd-build/initrd-dracut.log "$REGALIA_DIAG_DIR"/ 2>/dev/null || true
        fi
        exit 2; }
 BIN="$W/initrd-build/regalia-unlock"          # the client the builder compiled: the initrd's, and the host's
