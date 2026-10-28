@@ -91,7 +91,7 @@ class ElfClosure(unittest.TestCase):
     def test_a_whole_initrd_passes(self):
         rc, out, err = Tree(self).whole().run()
         self.assertEqual((rc, err), (0, ""), out)
-        self.assertIn("5 dynamic ELF file(s)", out)  # tpm2_unseal, systemd and the 3 libraries with a NEEDED; not ld, busybox, .ko
+        self.assertIn("2 program(s), each with its loader and every library it loads", out)  # tpm2_unseal, systemd
 
     def test_the_620_initrd_is_refused_by_what_it_lacks(self):
         """The libraries ldd finds are gone; the ones dracut installs by name stay, as in run 40636249776."""
@@ -101,9 +101,9 @@ class ElfClosure(unittest.TestCase):
         rc, out, err = tree.run()
         self.assertEqual(rc, 1, out + err)
         first = out.splitlines()[0]
-        self.assertRegex(first, r"^elfclosure: \d+ of \d+ dynamic ELF file\(s\) lack what they need")
+        self.assertRegex(first, r"^elfclosure: 2 of 2 program\(s\) cannot load")
         self.assertIn("the loader %s, needed by 2 file(s)" % LOADER, out)
-        self.assertRegex(out, r"libc\.so\.6, needed by 4 file\(s\)")
+        self.assertRegex(out, r"libc\.so\.6, needed by 2 file\(s\)")
 
     def test_a_library_found_only_through_runpath_needs_the_runpath(self):
         tree = Tree(self).whole()
@@ -129,6 +129,30 @@ class ElfClosure(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("/usr/bin/broken", err)
 
+    def test_a_library_found_through_an_already_loaded_soname_loads(self):
+        """libsystemd-core-257.so has no run path and needs libsystemd-shared-257.so, which only systemd's run path
+        names: the loader has loaded it already, by that soname (this builder's real initrd, #623's first CI run)."""
+        tree = Tree(self).whole()
+        os.makedirs(os.path.join(tree.root, "usr/lib/x86_64-linux-gnu/systemd"))
+        tree.put("usr/lib/x86_64-linux-gnu/systemd/libsystemd-shared-257.so", elf(needed=["libc.so.6"]))
+        tree.put("usr/lib/x86_64-linux-gnu/systemd/libsystemd-core-257.so", elf(needed=["libsystemd-shared-257.so", "libc.so.6"]))
+        tree.put("usr/lib/systemd/systemd", elf(interp=LOADER, needed=["libsystemd-shared-257.so", "libsystemd-core-257.so"],
+                                                runpath="/usr/lib/x86_64-linux-gnu/systemd"))
+        rc, out, _ = tree.run()
+        self.assertEqual(rc, 0, out)
+
+    def test_a_library_no_program_needs_is_not_judged(self):
+        """dlopen()-only: this builder's real initrd ships liblz4 without the libxxhash it needs, and is correct."""
+        tree = Tree(self).whole()
+        tree.put("usr/lib/x86_64-linux-gnu/liblz4.so.1", elf(needed=["libxxhash.so.0", "libc.so.6"]))
+        rc, out, _ = tree.run()
+        self.assertEqual(rc, 0, out)
+        # ...and the same library, once a program needs it, is judged
+        tree.put("usr/bin/lz4", elf(interp=LOADER, needed=["liblz4.so.1"]))
+        rc, out, _ = tree.run()
+        self.assertEqual(rc, 1)
+        self.assertIn("libxxhash.so.0, needed by 1 file(s), e.g. /usr/bin/lz4", out)
+
     def test_another_machines_elf_is_skipped_not_refused(self):
         """A device's firmware may be ELF32, big-endian or another e_machine: not this loader's, so neither judged nor
         Unreadable (which would fail the build)."""
@@ -141,7 +165,7 @@ class ElfClosure(unittest.TestCase):
         tree.put("usr/lib/firmware/be.bin", b"\x7fELF" + bytes([2, 2, 1]) + b"\0" * 40)
         rc, out, err = tree.run()
         self.assertEqual((rc, err), (0, ""), out)
-        self.assertIn("5 dynamic ELF file(s), each with its loader and every library it needs; 3 skipped", out)
+        self.assertIn("2 program(s), each with its loader and every library it loads; 3 skipped", out)
         # each skip said, with its reason: the skip cannot hide a file silently
         for path, why in (("arm.elf", "e_machine 183, not x86-64"), ("elf32.bin", "ELF class 1, not ELF64"),
                           ("be.bin", "byte order 2, not little-endian")):
@@ -166,7 +190,7 @@ class ElfClosure(unittest.TestCase):
         tree.put("usr/bin/script", b"#!/bin/sh\n")
         rc, _, err = tree.run()
         self.assertEqual(rc, 2)
-        self.assertIn("holds no dynamic ELF file", err)
+        self.assertIn("holds no dynamically linked program", err)
 
     def test_the_module_reads_the_loader_interp_of_a_fixture_as_written(self):
         self.assertEqual(elfclosure.elf_needs(elf(interp=LOADER, needed=["a.so"], runpath="$ORIGIN/x")),

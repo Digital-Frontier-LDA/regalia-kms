@@ -11,16 +11,18 @@ below 126 ("not a dynamic executable" is 1) as a file with nothing to install: a
 makes dracut succeed with that very image. That the pass misanswered is inferred, not seen (dracut's log was not kept;
 it is now). The inventory comparison refused that image, as a difference of 51 lines; this says what it was.
 
-Each regular file that is an ELF64 little-endian executable or shared object (ET_EXEC, ET_DYN) is read: its PT_INTERP
-must be a file in the initrd, and each DT_NEEDED must be found, as the loader searches, in its DT_RUNPATH (or DT_RPATH)
-with $ORIGIN expanded, then the default directories. Symbolic links are followed inside UNPACKED, never out of it.
-A static file needs nothing. A library loaded only by dlopen() is not anyone's DT_NEEDED and is not checked here.
+Each PROGRAM (an x86-64 ELF64 file with a PT_INTERP) is loaded as the loader would: its PT_INTERP must be a file in the
+initrd, then its DT_NEEDED breadth-first, each object's own DT_RUNPATH (or DT_RPATH, $ORIGIN expanded) searched for
+its own needs, then the default directories, and a soname already loaded satisfies any later need of it. Symbolic
+links are followed inside UNPACKED, never out of it. A static program needs nothing. A library no program needs is
+not judged: one loaded only by dlopen() may lack its own dependencies in a correct initrd (this builder's ships liblz4
+without libxxhash, which systemd dlopen()s and does without).
 
 Another machine's ELF (ELF32, big-endian, not x86-64: a device's firmware) is not this loader's and is skipped. The
 directories etc/ld.so.conf names are searched after the run path, as the loader's cache holds them.
 
-Exit 0 when every file has what it needs; 1, naming the missing loader and libraries, how many files lack them and the
-first of those files, when one does not; 2 when the tree cannot be read or holds no dynamic ELF file at all.
+Exit 0 when every program loads; 1, naming the missing loader and libraries, how many programs lack each and one of
+them, when one does not; 2 when the tree cannot be read or holds no dynamically linked program at all.
 """
 import argparse
 import os
@@ -158,9 +160,15 @@ def configured_dirs(root):
 
 
 def missing_of(root):
-    """{what is missing: [the files that lack it]}, how many dynamic ELF files were judged, and [(file, why)] skipped as
-    another machine's."""
-    missing, judged, skipped = {}, 0, []
+    """{what is missing: [the programs that cannot load it]}, how many programs were judged, and [(file, why)] skipped
+    as another machine's.
+
+    A PROGRAM is judged, as the loader loads it: its PT_INTERP, then its DT_NEEDED breadth-first, each object's own run
+    path searched for its own dependencies, and a soname already loaded satisfying any later need of it (how
+    libsystemd-core finds libsystemd-shared, which only systemd's run path names). A library no program needs is
+    not judged: one loaded only by dlopen() may lack its own dependencies in a correct initrd (dracut 106 ships
+    liblz4 without libxxhash; systemd dlopen()s it and does without)."""
+    missing, programs, skipped, objects = {}, [], [], {}
     configured = configured_dirs(root)
     for directory, dirs, files in os.walk(root):
         dirs.sort()
@@ -180,22 +188,48 @@ def missing_of(root):
             if isinstance(needs, Foreign):
                 skipped.append((relative, needs))
                 continue
-            interp, needed, runpath = needs
-            if interp is None and not needed:
-                continue
-            judged += 1
-            if interp is not None and resolve(root, interp) is None:
-                missing.setdefault("the loader " + interp, []).append(relative)
-            origin = os.path.dirname(relative)
-            search = [d.replace("$ORIGIN", origin).replace("${ORIGIN}", origin) for d in runpath] + configured + ["/" + d for d in DEFAULT_DIRS]
-            for soname in needed:
-                if "/" in soname:
-                    found = resolve(root, soname if soname.startswith("/") else os.path.join(origin, soname))
-                else:
-                    found = next((hit for d in search for hit in [resolve(root, os.path.join(d, soname))] if hit), None)
+            objects[path] = (relative, needs)
+            if needs[0] is not None:
+                programs.append(path)
+
+    def needs_of(path):
+        if path not in objects:     # a needed file that is not an x86-64 ELF: the loader would refuse it
+            with open(path, "rb") as f:
+                data = f.read()
+            needs = elf_needs(data)
+            if needs is None or isinstance(needs, Foreign):
+                raise Unreadable("%s is needed but is not an x86-64 ELF object" % ("/" + os.path.relpath(path, root)))
+            objects[path] = ("/" + os.path.relpath(path, root), needs)
+        return objects[path]
+
+    def find(requester, soname):
+        relative, (_, _, runpath) = needs_of(requester)
+        origin = os.path.dirname(relative)
+        if "/" in soname:
+            return resolve(root, soname if soname.startswith("/") else os.path.join(origin, soname))
+        search = [d.replace("$ORIGIN", origin).replace("${ORIGIN}", origin) for d in runpath] + configured + ["/" + d for d in DEFAULT_DIRS]
+        return next((hit for d in search for hit in [resolve(root, os.path.join(d, soname))] if hit), None)
+
+    for program in programs:
+        relative, (interp, _, _) = objects[program]
+        lacks = set()
+        if resolve(root, interp) is None:
+            lacks.add("the loader " + interp)
+        loaded, queue = {}, [program]
+        while queue:
+            current = queue.pop(0)
+            for soname in needs_of(current)[1][1]:
+                if soname in loaded:
+                    continue
+                found = find(current, soname)
                 if found is None:
-                    missing.setdefault(soname, []).append(relative)
-    return missing, judged, skipped
+                    lacks.add(soname)
+                    continue
+                loaded[soname] = found
+                queue.append(found)
+        for what in lacks:
+            missing.setdefault(what, []).append(relative)
+    return missing, len(programs), skipped
 
 
 def main(argv=None):
@@ -214,14 +248,14 @@ def main(argv=None):
         print("elfclosure: skipped %s: another machine's ELF (%s)" % (path, why))
     if judged == 0:
         # a tree with no dynamic ELF file is no initrd this builder makes: a wrong --root, or an unpack that failed
-        print("elfclosure: %s holds no dynamic ELF file: nothing was checked" % args.root, file=sys.stderr)
+        print("elfclosure: %s holds no dynamically linked program: nothing was checked" % args.root, file=sys.stderr)
         return 2
     if not missing:
-        print("elfclosure: %d dynamic ELF file(s), each with its loader and every library it needs; %d skipped as another"
+        print("elfclosure: %d program(s), each with its loader and every library it loads; %d skipped as another"
               " machine's" % (judged, len(skipped)))
         return 0
     lacking = sorted({f for files in missing.values() for f in files})
-    print("elfclosure: %d of %d dynamic ELF file(s) lack what they need: %d missing (a loader or a library); %d skipped as"
+    print("elfclosure: %d of %d program(s) cannot load: %d missing (a loader or a library); %d skipped as"
           " another machine's" % (len(lacking), judged, len(missing), len(skipped)))
     for what in sorted(missing, key=lambda w: (-len(missing[w]), w))[:SHOWN]:
         print("  %s, needed by %d file(s), e.g. %s" % (what, len(missing[what]), missing[what][0]))
