@@ -16,8 +16,8 @@ KINDS, and the key under /regalia/v1/ each lives at (key_for):
              environment, payload SHA-256, the approver IDs counted, the ONE node that signs, that node's lease
              (digest and expiry; a lapse burns the spend) and the Binding's expiry (compaction keeps the key until
              then). Created only: Txn If version == 0.
-  sequence   seq/<sha256(sequence_key)>           a per-key high-water mark (a chain's sign height or sequence). Each
-             value is above the one it replaces: Txn If value == previous.
+  sequence   seq/<sha256(sequence_key)>           a Cosmos account sequence. Each value is the next after the one it
+             replaces: Txn If value == previous. (A sign height, which skips, would be a kind of its own.)
   quota      quota/<sha256(principal)>/<utc_date>/<sha256(counter)>   a principal's running total for the day, at
              most its cap.
   key-state  keys/<sha256(object_id)>/state       enabled, disabled or destroyed; destroyed is final. A chain: each
@@ -486,7 +486,8 @@ def transition(previous, entry):
     if kind == "spend":
         raise Refused("SPENT: the nonce %s was spent by %s at %s" % (entry["nonce_digest"][:16], previous["node_id"], previous["at"]))
     if kind == "sequence":
-        require(entry["value"] > previous["value"], "the sequence %s is at %d; %d is not above it" % (entry["sequence_key"], previous["value"], entry["value"]))
+        # only the next: a Cosmos account sequence, which never skips (a sign height, which does, is not this kind)
+        require(entry["value"] == previous["value"] + 1, "the sequence %s is at %d; %d is not the next" % (entry["sequence_key"], previous["value"], entry["value"]))
     elif kind == "quota":
         require(entry["total"] > previous["total"], "a quota total only grows within its day (%d, then %d)" % (previous["total"], entry["total"]))
     else:
