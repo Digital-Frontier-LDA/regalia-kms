@@ -419,8 +419,7 @@ def site_advance(node, esp, site_path, lock_path=ESP_LOCK, record=None):
         # the ESP holds now (credential_files refuses two that FAT would take for one), and predicted with it.
         name = os.path.basename(SITE_ON_ESP)
         spelled = next((k for k in files if k.casefold() == name.casefold()), name)
-        kept = {k: v for k, v in files.items() if k != spelled}
-        predicted = espcreds.pcr12(dict(kept, **{spelled: document}))
+        predicted = espcreds.pcr12(dict(files, **{spelled: document}))
         try:
             label = siteadvance.target(sets, booted[0], predicted)
         except siteadvance.Refused as refused:  # attest's class: main reports node's Refused as a refusal (exit 2)
