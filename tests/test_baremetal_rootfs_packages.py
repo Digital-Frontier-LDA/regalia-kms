@@ -211,5 +211,147 @@ class TheHostsPackages(unittest.TestCase):
         self.assertTrue(TPM2.search(text))
 
 
+
+def definitions(tree):
+    """{name: [(the function or class node, the names it calls or reads: unbound names and attributes)]}, every def at
+    any depth, a method under its own name: resolved by NAME, so an edge is drawn to every def so named."""
+    defs = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            # an edge for every name or attribute it calls or reads, a bare name only when it is not bound here: a
+            # local variable or argument is no edge, whatever def it shares a name with. A class's walk covers its
+            # methods' bodies, so naming a class reaches everything they call
+            bound = {a.arg for n in ast.walk(node) if isinstance(n, ast.arguments)
+                     for a in n.posonlyargs + n.args + n.kwonlyargs + [n.vararg, n.kwarg] if a}
+            bound |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
+            used = set()
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Call):
+                    f = inner.func
+                    if isinstance(f, ast.Name):
+                        used.add(f.id)
+                    elif isinstance(f, ast.Attribute):
+                        used.add(f.attr)
+                elif isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load) and inner.id not in bound:
+                    used.add(inner.id)
+                elif isinstance(inner, ast.Attribute) and isinstance(inner.ctx, ast.Load):
+                    used.add(inner.attr)                # x.f read, not called: a method passed as a value (run=self._git)
+            defs.setdefault(node.name, []).append((node, used))
+    return defs
+
+
+def runs_of(text, tree, commands):
+    """The defs of a module that run one of `commands`: by the scanner's own patterns over the def's source, or through
+    a module-level table naming the command (TOOLS = {"measure": "/usr/lib/systemd/systemd-measure"}; tools["measure"])."""
+    def found(segment):
+        return {c for rx in (CALL, ABSOLUTE) for c in rx.findall(segment)} & commands
+    keys = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
+            for k, v in zip(node.value.keys, node.value.values):
+                if isinstance(k, ast.Constant) and isinstance(v, ast.Constant) and isinstance(v.value, str):
+                    hit = {c for c in commands if v.value == c or os.path.basename(v.value) == os.path.basename(c)}
+                    if hit:
+                        keys[k.value] = hit
+    sinks = {}
+    for name, entries in definitions(tree).items():
+        for node, _ in entries:
+            segment = ast.get_source_segment(text, node) or ""
+            hit = found(segment)
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Subscript) and isinstance(inner.slice, ast.Constant) and inner.slice.value in keys:
+                    hit |= keys[inner.slice.value]
+            if hit:
+                sinks.setdefault(name, set()).update(hit)
+    return sinks
+
+
+def reached(defs, entries):
+    """{def name: the path from an entry} for every def the entries reach, over the by-name call graph."""
+    path, todo = {}, [(e, (e,)) for e in sorted(entries)]
+    while todo:
+        name, via = todo.pop(0)
+        if name in path or name not in defs:
+            continue
+        path[name] = via
+        for _, used in defs[name]:
+            todo += [(u, via + (u,)) for u in sorted(used) if u in defs and u not in path]
+    return path
+
+
+class TheLaptopOnlyCommandsAreUnreachedFromTheHost(unittest.TestCase):
+    """uki.py is on the host (bootnext, enrol, node and signkey import it for measured, verify, credential_files and
+    policy_digest), and it also signs on the laptop: git (Checkout, the build's provenance), keyctl and systemd-measure.
+    [imported-not-run] exempts those commands for the whole module, so a host path that came to run one would pass
+    every check above. Here, what the host's other modules refer to in uki (uki.NAME, or imported by name) must not
+    reach, in uki.py's call graph, a def that runs one of them.
+
+    The graph is by NAME: a call (f(), x.f()), an unbound read of a name or a read of an attribute (a def passed as
+    a value: run=self._git) is an edge to every def so named, and a class reaches all its methods. So it
+    over-approximates: an unrelated def sharing a name can make it fail (a false red, read the path it prints), but a
+    direct call or a def passed by name cannot pass unseen. It does not see getattr with a computed name or other
+    dynamic dispatch, a def handed in from outside uki.py, or a command built at run time."""
+
+    MODULE = "uki"
+
+    @classmethod
+    def setUpClass(cls):
+        with open(LIST) as f:
+            spec = parse(f.read())
+        local = local_modules()
+        cls.host, _ = closure([name for name, _ in spec["roots"]], local)
+        with open(os.path.join(BASE, cls.MODULE + ".py")) as f:
+            cls.text = f.read()
+        cls.tree = ast.parse(cls.text)
+        not_run = {name for name, _ in spec["imported-not-run"]}
+        cls.laptop = not_run & set(commands({cls.MODULE}))
+        cls.defs = definitions(cls.tree)
+        cls.sinks = runs_of(cls.text, cls.tree, cls.laptop)
+        cls.entries = set()
+        for name in sorted(cls.host - {cls.MODULE}):
+            with open(os.path.join(BASE, name + ".py")) as f:
+                tree = ast.parse(f.read())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == cls.MODULE:
+                    cls.entries.add(node.attr)
+                elif isinstance(node, ast.ImportFrom) and node.module == "deploy.baremetal." + cls.MODULE:
+                    cls.entries |= {a.name for a in node.names}
+
+    def test_the_host_reaches_no_def_that_runs_a_laptop_only_command(self):
+        path = reached(self.defs, self.entries)
+        bad = {name: (" -> ".join(path[name]), sorted(self.sinks[name])) for name in self.sinks if name in path}
+        self.assertEqual(bad, {}, "the host reaches, through uki.py, a def that runs a command [imported-not-run] says "
+                                  "runs only on the laptop: move the call off the host's path, or list the package")
+
+    def test_the_guard_sees_what_it_is_for(self):
+        """Not vacuous: the host does refer into uki, the laptop-only commands are found, each by a def of its own,
+        and the defs that run git, keyctl and systemd-measure are the signing path's."""
+        self.assertTrue({"measured", "verify", "credential_files", "policy_digest"} <= self.entries, sorted(self.entries))
+        self.assertEqual(self.laptop & {"git", "keyctl", "/usr/lib/systemd/systemd-measure"},
+                         {"git", "keyctl", "/usr/lib/systemd/systemd-measure"})
+        runs = {c: n for n, cs in self.sinks.items() for c in cs}
+        self.assertEqual(sorted(runs), ["/usr/lib/systemd/systemd-measure", "git", "keyctl"], self.sinks)
+        self.assertIn("_git", self.sinks)
+        # and the signing entry points do reach them: the graph walks as far as it must
+        path = reached(self.defs, {"sign", "main"})
+        self.assertTrue(all(name in path for name in self.sinks), sorted(set(self.sinks) - set(path)))
+
+    def test_a_host_call_into_the_signing_path_is_refused(self):
+        """The shapes this guards against, built on uki.py's real graph: verify coming to read the checkout by a call,
+        by a method of an instance it was handed, passed on as a value (no class named: only the attribute read is an
+        edge), or by handing the host a Checkout (no method named: only the class reaching its methods is an edge),
+        or to run systemd-measure through the tool table."""
+        for label, body, sink in (("a call", "Checkout().head()", "_git"),
+                                  ("a method passed as a value", "run_with(checkout._git)", "_git"),
+                                  ("an instance handed to the host", "return Checkout()", "_git"),
+                                  ("the tool table", "run([tools['measure'], 'calculate'])", "verify")):
+            with self.subTest(label):
+                text = self.text.replace("def verify(", "def verify(*_a, checkout=None, tools=TOOLS, **_k):\n    %s\n\n\ndef verify_(" % body, 1)
+                self.assertNotEqual(text, self.text)
+                tree = ast.parse(text)
+                path = reached(definitions(tree), self.entries)
+                self.assertIn(sink, {name for name in runs_of(text, tree, self.laptop) if name in path})
+
+
 if __name__ == "__main__":
     unittest.main()
