@@ -212,14 +212,18 @@ class TheHostsPackages(unittest.TestCase):
 
 
 
+SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp,
+          ast.GeneratorExp)
+
+
 def own_scope(node):
-    """The nodes of `node`'s own scope: its body, without descending into a nested def, class or lambda (their names
-    are theirs; each nested def has its own entry)."""
+    """The nodes of `node`'s own scope: its body, without descending into a nested def, class, lambda or comprehension
+    (Python 3 gives each its own scope: their names are theirs; each nested def has its own entry)."""
     todo = list(ast.iter_child_nodes(node))
     while todo:
         n = todo.pop()
         yield n
-        if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+        if not isinstance(n, SCOPES):
             todo += list(ast.iter_child_nodes(n))
 
 
@@ -301,8 +305,14 @@ def reached(defs, entries):
 
 def import_shape(node, module):
     """How an import statement brings `module` in: "bare" (from deploy.baremetal import uki), "names" (from
-    deploy.baremetal.uki import X), or another shape, which the entries below cannot see (an alias, import a.b.c);
-    None when it does not import it."""
+    deploy.baremetal.uki import X), or another shape, which the entries below cannot see (an alias, import a.b.c, a
+    relative import, a star); None when it does not import it."""
+    if isinstance(node, ast.ImportFrom) and node.level > 0:
+        # from . import uki, from .uki import X: relative to deploy.baremetal, which the entries do not follow
+        named = node.module or ""
+        if named == module or named.endswith("." + module) or (not named and any(a.name == module for a in node.names)):
+            return "relative: from %s%s import %s" % ("." * node.level, named, ", ".join(a.name for a in node.names))
+        return None
     if isinstance(node, ast.ImportFrom) and node.level == 0:
         if node.module == "deploy.baremetal":
             for a in node.names:
@@ -310,7 +320,8 @@ def import_shape(node, module):
                     return "bare" if a.asname is None else "aliased: as " + a.asname
             return None
         if node.module == "deploy.baremetal." + module:
-            return "names"
+            # a star brings in every public name unseen: the entries would hold "*"
+            return "star" if any(a.name == "*" for a in node.names) else "names"
     if isinstance(node, ast.Import):
         for a in node.names:
             if a.name == "deploy.baremetal." + module or a.name.startswith("deploy.baremetal." + module + "."):
@@ -375,7 +386,11 @@ class TheLaptopOnlyCommandsAreUnreachedFromTheHost(unittest.TestCase):
         self.assertIn("bare", self.import_shapes)
         for text, want in (("from deploy.baremetal import uki as u", "aliased: as u"), ("import deploy.baremetal.uki", "import deploy.baremetal.uki"),
                            ("from deploy.baremetal import uki", "bare"), ("from deploy.baremetal.uki import verify", "names"),
-                           ("from deploy.baremetal import sync", None)):
+                           ("from deploy.baremetal import sync", None),
+                           ("from . import uki", "relative: from . import uki"),
+                           ("from .uki import verify", "relative: from .uki import verify"),
+                           ("from .. import sync", None),
+                           ("from deploy.baremetal.uki import *", "star")):
             with self.subTest(text):
                 self.assertEqual(import_shape(ast.parse(text).body[0], self.MODULE), want)
 
@@ -383,7 +398,8 @@ class TheLaptopOnlyCommandsAreUnreachedFromTheHost(unittest.TestCase):
         """A nested def's parameter or local is not the parent's binding: the parent's read of that name stays an edge."""
         for label, inner in (("a parameter", "    def inner(_git):\n        return _git\n"),
                              ("a local", "    def inner():\n        _git = 1\n        return _git\n"),
-                             ("a lambda's parameter", "    inner = lambda _git: _git\n")):
+                             ("a lambda's parameter", "    inner = lambda _git: _git\n"),
+                             ("a comprehension's target", "    inner = [_git for _git in ()]\n")):
             with self.subTest(label):
                 tree = ast.parse("def outer():\n" + inner + "    return _git\n\n\ndef _git():\n    pass\n")
                 used = {node.name: u for node, u in (e for es in definitions(tree).values() for e in es)}
