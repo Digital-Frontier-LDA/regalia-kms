@@ -186,6 +186,25 @@ def read_signing_state(state_dir, root):
     require(state["root"] == root, "the state directory is another root's signing state: it is not this network's laptop")
     data = _read_own(state_dir, SIGNING_RECORD, MAX_SIGNING_RECORD, "the signing record %s" % SIGNING_RECORD)
     require(data, "the state directory %s holds no signing record: no card record can be shown to be the newest" % state_dir)
+    return parse_signing_record(data)
+
+
+def read_signing_record(path):
+    """A copy of the signing record named by path (owner.py sign-recovery's --record, which may sit on the owner's
+    machine, so no owner or mode is required of it), read whole: at most MAX_SIGNING_RECORD bytes, else refused whole,
+    since a cut at a line boundary would drop the newest lines and with them the floor a peer's chain is judged by.
+    Then parse_signing_record, the rule every reader of this log uses (7e on regalia-ceremony#139: the ceremony reader's too)."""
+    with open(path, "rb") as f:
+        data = f.read(MAX_SIGNING_RECORD + 1)
+    require(len(data) <= MAX_SIGNING_RECORD, "the signing record %s is larger than %d bytes: it is not read" % (path, MAX_SIGNING_RECORD))
+    require(data, "the signing record %s is empty" % path)
+    return parse_signing_record(data)
+
+
+def parse_signing_record(data):
+    """The signing record's bytes, every line parsed: cut at b"\n" only (never str.splitlines' \r, \x85 or U+2028,
+    nor bytes.splitlines' \r), the last line ending in a newline (a torn line is refused, never skipped), each line ASCII
+    JSON, an object with a kind. A blank line is not JSON and is refused. Returns the lines in file order."""
     require(data.endswith(b"\n"), "the signing record's last line is torn (no newline at its end): it is not read")
     lines = []
     for number, raw in enumerate(data.split(b"\n")[:-1], 1):

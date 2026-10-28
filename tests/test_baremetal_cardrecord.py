@@ -449,6 +449,72 @@ class ProducersWriterRun(unittest.TestCase):
         owners = self.record(2)["record"]["owner_keys"]
         self.assertEqual(written["owner_keys"], [{"alg": "ed25519", "key": k["key"]} for k in sorted(owners, key=lambda k: k["serial"])])
 
+class ReadSigningRecordFile(unittest.TestCase):
+    """read_signing_record: owner.py sign-recovery's --record, parsed by the same rule as read_signing_state and the
+    ceremony's reader (7e on regalia-ceremony#139), and read whole or refused whole."""
+    LINE = b'{"epoch": 1, "kind": "manifest", "verified": true}\n'
+
+    def setUp(self):
+        import tempfile
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, self.d)
+
+    def record(self, data):
+        path = os.path.join(self.d, "signing-record.jsonl")
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    def refuses(self, data, words):
+        with self.assertRaises(m.Refused) as caught:
+            cr.read_signing_record(self.record(data))
+        self.assertIn(words, str(caught.exception))
+
+    def test_reads_every_line_in_order(self):
+        two = self.LINE + b'{"epoch": 2, "kind": "manifest", "verified": true}\n'
+        self.assertEqual([line["epoch"] for line in cr.read_signing_record(self.record(two))], [1, 2])
+
+    def test_a_carriage_return_does_not_cut_a_line(self):
+        # bytes.splitlines() cut here, and read a second, higher-epoch line out of one line: a raised floor
+        self.refuses(b'{"epoch": 1, "kind": "manifest"}\r{"epoch": 9, "kind": "manifest", "verified": true}\n',
+                     "line 1 is not JSON")
+
+    def test_a_raw_line_separator_neither_cuts_nor_passes(self):
+        # str.splitlines() would cut at U+2028 and \x85; the writers escape them, so a raw one is refused, not split
+        for raw in ("\u2028", "\x85"):
+            self.refuses(('{"kind": "manifest", "note": "a%sb"}\n' % raw).encode("utf-8"), "line 1 is not JSON")
+
+    def test_a_blank_line_is_refused_not_skipped(self):
+        self.refuses(self.LINE + b"\n" + self.LINE, "line 2 is not JSON")
+
+    def test_a_torn_last_line_is_refused(self):
+        self.refuses(self.LINE + self.LINE[:-1], "torn")
+
+    def test_an_empty_record_is_refused(self):
+        self.refuses(b"", "is empty")
+
+    def test_read_whole_or_refused_whole(self):
+        # a cut at a line boundary would drop the newest lines, and with them the floor a peer's chain is judged by
+        from unittest import mock
+        with mock.patch.object(cr, "MAX_SIGNING_RECORD", 2 * len(self.LINE) - 1):
+            self.refuses(self.LINE * 2, "larger than")
+        with mock.patch.object(cr, "MAX_SIGNING_RECORD", 2 * len(self.LINE)):
+            self.assertEqual(len(cr.read_signing_record(self.record(self.LINE * 2))), 2)
+
+    def test_owner_sign_recovery_reads_its_record_by_this_rule(self):
+        import contextlib
+        import io
+        from deploy.baremetal import owner
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = owner.main(["sign-recovery", "--chain", os.path.join(self.d, "never-read.json"), "--root-key", "00" * 32,
+                             "--record", self.record(self.LINE + b"\n"), "--purpose", "recover", "--node-id", "b",
+                             "--session", "s", "--session-issued", "1", "--out", os.path.join(self.d, "never.json"),
+                             "--module", "/nonexistent.so", "--serial", "1"])
+        self.assertEqual(rc, 1)
+        self.assertIn("REFUSED: the signing record's line 2 is not JSON", err.getvalue())
+        self.assertFalse(os.path.exists(os.path.join(self.d, "never.json")))
+
 
 if __name__ == "__main__":
     unittest.main()
