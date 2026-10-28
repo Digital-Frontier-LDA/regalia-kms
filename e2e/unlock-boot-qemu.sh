@@ -126,7 +126,12 @@ if [ -z "$SNAPSHOT" ] && [[ "${REGALIA_BOOT_MIRROR:-}" =~ snapshot\.debian\.org/
 python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))["root_public"]; open(sys.argv[2],"wb").write(json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode())' \
   tests/vectors/highwater-v1.json "$W/root-key.json"
 deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --keyring "$KEYRING" --root-key "$W/root-key.json" --out "$W/initrd-build" \
-  || { echo "unlock-boot-qemu: the initrd builder failed"; exit 2; }
+  || { echo "unlock-boot-qemu: the initrd builder failed"
+       # a mismatched inventory leaves its three files in --out: keep them with the diagnostics CI uploads (#620's run)
+       if [ -n "${REGALIA_DIAG_DIR:-}" ]; then
+         mkdir -p "$REGALIA_DIAG_DIR"; cp -- "$W"/initrd-build/initrd-inventory.* "$REGALIA_DIAG_DIR"/ 2>/dev/null || true
+       fi
+       exit 2; }
 BIN="$W/initrd-build/regalia-unlock"          # the client the builder compiled: the initrd's, and the host's
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
 cp /etc/resolv.conf "$ROOT/etc/resolv.conf"
