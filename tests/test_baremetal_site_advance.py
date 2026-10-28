@@ -13,7 +13,7 @@ import tempfile
 import unittest
 import unittest.mock
 
-from deploy.baremetal import bootcreds, enrol, espcreds, measurements, node, sitecfg
+from deploy.baremetal import bootcreds, enrol, espcreds, measurements, node, sitecfg, uki
 from deploy.baremetal import membership as m
 import tests.test_baremetal_bootnet as bn
 
@@ -133,6 +133,16 @@ class Writes(SiteAdvanceCase):
         self.assertEqual(node.SITE_ON_ESP, bootcreds.CREDENTIALS_DIR + "/regalia.site.cred")
         self.advance()
         self.assertEqual(open(os.path.join(self.esp, node.SITE_ON_ESP), "rb").read(), self.new_doc)
+
+    def test_a_site_document_named_in_another_case_is_the_one_replaced(self):
+        # FAT, and the stub, compare names case-insensitively: the write replaces REGALIA.SITE.CRED, so the prediction
+        # must not count it beside the new document (7e on #618). The booted set measures the ESP as it is named now.
+        shouted = dict(SEALED, **{"REGALIA.SITE.CRED": self.old_doc})
+        self.sets[:] = [a_set("current", espcreds.pcr12(shouted)), a_set("moved", self.new_pcr)]
+        with unittest.mock.patch.object(uki, "credential_files", lambda esp: dict(shouted)):
+            label, _, _ = self.advance()
+        self.assertEqual(label, "moved")
+        self.assertEqual(self.on_esp(), self.new_doc)
 
     def test_it_runs_under_the_esp_advance_lock(self):
         os.makedirs(os.path.dirname(self.lock))

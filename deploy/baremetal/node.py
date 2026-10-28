@@ -415,7 +415,9 @@ def site_advance(node, esp, site_path, lock_path=ESP_LOCK, record=None):
         require(booted, "no accepted set has the PCR 12 the ESP measures now (%s): this node's boot is not one the root "
                 "approved, so a site change cannot be judged from it" % now)
         name = os.path.basename(SITE_ON_ESP)
-        predicted = espcreds.pcr12(dict(files, **{name: document}))
+        # FAT and the stub compare names case-insensitively: the write replaces the document whatever its case now
+        kept = {k: v for k, v in files.items() if k.casefold() != name.casefold()}
+        predicted = espcreds.pcr12(dict(kept, **{name: document}))
         try:
             label = siteadvance.target(sets, booted[0], predicted)
         except siteadvance.Refused as refused:  # attest's class: main reports node's Refused as a refusal (exit 2)
