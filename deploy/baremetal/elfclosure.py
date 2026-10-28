@@ -40,6 +40,10 @@ class Unreadable(Exception):
     pass
 
 
+class Foreign(str):
+    """Why an ELF file is another machine's (its class, its byte order or its e_machine): skipped, and said so."""
+
+
 def resolve(root, path):
     """`path` (absolute, as the initrd names it) to the file it is inside `root`, following symbolic links inside root
     only: an absolute target restarts at root. None when it is absent, or a link leads nowhere or loops."""
@@ -73,9 +77,17 @@ def elf_needs(data):
     object; None for any other file. A malformed ELF is Unreadable: a file the loader would refuse is not passed."""
     if data[:4] != b"\x7fELF":
         return None
-    # another machine's ELF (a device's firmware, ELF32 or big-endian) is not loaded by this initrd's loader
-    if len(data) < 20 or data[4] != 2 or data[5] != 1 or struct.unpack_from("<H", data, 18)[0] != EM_X86_64:
-        return None
+    # another machine's ELF (a device's firmware, ELF32 or big-endian) is not loaded by this initrd's loader: skipped,
+    # and every skip is printed with its reason, so the skip cannot hide a program of this machine
+    if len(data) < 20:
+        raise Unreadable("an ELF header cut short")
+    if data[4] != 2:
+        return Foreign("ELF class %d, not ELF64" % data[4])
+    if data[5] != 1:
+        return Foreign("byte order %d, not little-endian" % data[5])
+    machine, = struct.unpack_from("<H", data, 18)
+    if machine != EM_X86_64:
+        return Foreign("e_machine %d, not x86-64" % machine)
     try:
         e_type, = struct.unpack_from("<H", data, 16)
         if e_type not in (ET_EXEC, ET_DYN):
@@ -146,8 +158,9 @@ def configured_dirs(root):
 
 
 def missing_of(root):
-    """{what is missing: [the files that lack it]}, and how many dynamic ELF files were judged."""
-    missing, judged = {}, 0
+    """{what is missing: [the files that lack it]}, how many dynamic ELF files were judged, and [(file, why)] skipped as
+    another machine's."""
+    missing, judged, skipped = {}, 0, []
     configured = configured_dirs(root)
     for directory, dirs, files in os.walk(root):
         dirs.sort()
@@ -164,6 +177,9 @@ def missing_of(root):
                 raise Unreadable("%s: %s" % (relative, e))
             if needs is None:
                 continue
+            if isinstance(needs, Foreign):
+                skipped.append((relative, needs))
+                continue
             interp, needed, runpath = needs
             if interp is None and not needed:
                 continue
@@ -179,7 +195,7 @@ def missing_of(root):
                     found = next((hit for d in search for hit in [resolve(root, os.path.join(d, soname))] if hit), None)
                 if found is None:
                     missing.setdefault(soname, []).append(relative)
-    return missing, judged
+    return missing, judged, skipped
 
 
 def main(argv=None):
@@ -190,20 +206,23 @@ def main(argv=None):
         print("elfclosure: %s is not a directory" % args.root, file=sys.stderr)
         return 2
     try:
-        missing, judged = missing_of(args.root)
+        missing, judged, skipped = missing_of(args.root)
     except (OSError, Unreadable) as e:
         print("elfclosure: the initrd cannot be read: %s" % e, file=sys.stderr)
         return 2
+    for path, why in skipped:
+        print("elfclosure: skipped %s: another machine's ELF (%s)" % (path, why))
     if judged == 0:
         # a tree with no dynamic ELF file is no initrd this builder makes: a wrong --root, or an unpack that failed
         print("elfclosure: %s holds no dynamic ELF file: nothing was checked" % args.root, file=sys.stderr)
         return 2
     if not missing:
-        print("elfclosure: %d dynamic ELF file(s), each with its loader and every library it needs" % judged)
+        print("elfclosure: %d dynamic ELF file(s), each with its loader and every library it needs; %d skipped as another"
+              " machine's" % (judged, len(skipped)))
         return 0
     lacking = sorted({f for files in missing.values() for f in files})
-    print("elfclosure: %d of %d dynamic ELF file(s) lack what they need: %d missing (a loader or a library)"
-          % (len(lacking), judged, len(missing)))
+    print("elfclosure: %d of %d dynamic ELF file(s) lack what they need: %d missing (a loader or a library); %d skipped as"
+          " another machine's" % (len(lacking), judged, len(missing), len(skipped)))
     for what in sorted(missing, key=lambda w: (-len(missing[w]), w))[:SHOWN]:
         print("  %s, needed by %d file(s), e.g. %s" % (what, len(missing[what]), missing[what][0]))
     if len(missing) > SHOWN:

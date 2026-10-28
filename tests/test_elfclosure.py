@@ -78,7 +78,7 @@ class Tree:
         self.put("usr/lib/systemd/systemd", elf(interp=LOADER, needed=["libsystemd-shared-257.so", "libc.so.6"],
                                                 runpath="$ORIGIN"))
         self.put("usr/bin/busybox", elf(e_type=2))                          # static: needs nothing
-        self.put("usr/lib/x86_64-linux-gnu/thing.ko", b"\x7fELF" + bytes([2, 1, 1]) + b"\0" * 9 + struct.pack("<H", 1))
+        self.put("usr/lib/x86_64-linux-gnu/thing.ko", b"\x7fELF" + bytes([2, 1, 1]) + b"\0" * 9 + struct.pack("<HH", 1, 62) + b"\0" * 44)
         return self
 
     def run(self):
@@ -141,7 +141,11 @@ class ElfClosure(unittest.TestCase):
         tree.put("usr/lib/firmware/be.bin", b"\x7fELF" + bytes([2, 2, 1]) + b"\0" * 40)
         rc, out, err = tree.run()
         self.assertEqual((rc, err), (0, ""), out)
-        self.assertIn("5 dynamic ELF file(s)", out)
+        self.assertIn("5 dynamic ELF file(s), each with its loader and every library it needs; 3 skipped", out)
+        # each skip said, with its reason: the skip cannot hide a file silently
+        for path, why in (("arm.elf", "e_machine 183, not x86-64"), ("elf32.bin", "ELF class 1, not ELF64"),
+                          ("be.bin", "byte order 2, not little-endian")):
+            self.assertIn("elfclosure: skipped /usr/lib/firmware/%s: another machine's ELF (%s)" % (path, why), out)
 
     def test_a_directory_ld_so_conf_names_is_searched(self):
         tree = Tree(self).whole()
