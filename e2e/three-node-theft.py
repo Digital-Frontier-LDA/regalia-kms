@@ -89,6 +89,10 @@ def scenario(cluster):
         cluster.start(name, SERVICES)
     for name in names:
         ok(bool(until(lambda: cluster.lease(name), 150, 3)), "%s holds a lease" % name, cluster.journal(name, "admission")[-400:])
+    # regalia-2gb: a lease does not wait for a heartbeat, and section 2 measures the one c holds at the cut, so the cut
+    # waits until every node holds one the nodes signed (cut at once, c could hold none yet: 0 s of 0 s)
+    print("  OBSERVED: at its lease, c held %s" % ("a heartbeat" if cluster.heartbeat_left("c") is not None else "no heartbeat yet"))
+    beats = cluster.fresh(names)
 
     header("2  c partitioned from b; the window it is left with")
     cluster.partition("c", ["b"])
@@ -99,7 +103,8 @@ def scenario(cluster):
     stamp = lambda text: calendar.timegm(time.strptime(text, "%Y-%m-%dT%H:%M:%SZ"))         # noqa: E731
     life = stamp(held["heartbeat"]["expires_at"]) - stamp(held["heartbeat"]["issued_at"]) if held else None
     ok(left is not None and life is not None and 0 < left <= life,
-       "c holds a heartbeat with %.0f s left of its %.0f s at the cut: the longest a stale c can trust a stolen node" % (left or 0, life or 0), held)
+       "c holds a heartbeat with %.0f s left of its %.0f s at the cut: the longest a stale c can trust a stolen node" % (left or 0, life or 0),
+       {"held": held, "fresh before the cut": beats, "beat events": cluster.beat_events(names)})
     print("  MEASURED: c's heartbeat window at the cut: %.0f s (%.1f h), of a heartbeat lifetime of %.0f s. The manifest is v4, as in "
           "production: heartbeat_max_lifetime_s 21600, so at most 6 h (#69)"
           % (left or 0, (left or 0) / 3600, life or 0))
