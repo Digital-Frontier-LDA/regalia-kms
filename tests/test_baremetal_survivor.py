@@ -126,6 +126,15 @@ class FullScope(Case):
         typed = self.authorize(tip=tip, scope="full")                  # the typed fallback names the same set
         self.assertEqual(set(typed["authorization"]["fence"]["nodes"]), {"b"})
 
+    def test_no_survivor_when_every_other_node_is_retired_or_stolen(self):
+        """regalia-4rt: with no node left to fence, none can ever count again, so this is a one-node membership, which a
+        new manifest commissions; it is not an outage. The refusal says so, before any fence or typed line."""
+        for others in ({"b": "RETIRED", "c": "REVOKED_STOLEN"}, {"b": "RETIRED", "c": "RETIRED"}):
+            tip = manifest4(2, m.digest(self.m1), nodes4(**others))
+            for scope in ("stateless", "full"):
+                self.refused("every other node is RETIRED or REVOKED_STOLEN under epoch 2: nothing is left to fence",
+                             self.authorize, tip=tip, scope=scope)
+
     def test_the_evidence_is_this_outage_s(self):
         """05 on #516: read after the quarantine was signed, and again within the hour before the owner signs; a drill's
         or an earlier outage's evidence against the same inventory does not replay."""

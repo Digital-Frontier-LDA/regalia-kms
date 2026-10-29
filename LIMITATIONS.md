@@ -46,6 +46,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
     outlives a reboot; a store directory that is missing, a link, or open to others also refuses every key (regalia-kds).
     The store is never cleared by the tool: until the majority commits the directives on its return (not built), the
     keys stay disabled on that survivor across later outages, the safe side.
+  - no authorization when every other node is RETIRED or REVOKED_STOLEN (regalia-4rt): with nothing left to fence and
+    none able to count again, that is a one-node membership, commissioned by a new manifest, not an outage.
+    `sign-survivor` refuses it up front and says so. Whether such a node may instead serve alone under an empty fence is
+    not decided, so it stays refused.
   - **the owner's one-server decision (2026-10-05): scope `full`.** Stateful operations continue on the lone survivor from
     the owner's attestation plus 900 s plus 60 s (every request the fenced far side could have spent has expired), plus
     600 s more when the fence is only typed rather than an iLO power readback.

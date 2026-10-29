@@ -219,7 +219,12 @@ def make_authorization(tip, survivor, how, now, confirm, open_signer, life_s=Non
     others = sorted(n for n in nodes if n != survivor)
     _text(how, "how the other servers are fenced")
     targets = fenceable(nodes, survivor)
-    life = MAX_AUTHORIZATION_S if life_s is None else int(life_s)
+    # regalia-4rt: none of them can ever count again, so this is a one-node membership, not an outage; it is commissioned
+    # by a new manifest. Said here, because the empty fence would otherwise refuse only as malformed evidence.
+    require(targets or not others, "every other node is RETIRED or REVOKED_STOLEN under epoch %d: nothing is left to fence "
+            "and none can count again, so %s alone is a new membership, not a survivor: commission it with a new manifest"
+            % (tip["epoch"], survivor))
+    life =MAX_AUTHORIZATION_S if life_s is None else int(life_s)
     require(0 < life <= MAX_AUTHORIZATION_S, "a survivor authorization lives at most %d s" % MAX_AUTHORIZATION_S)
     auth = {"schema": AUTH_SCHEMA, "node_id": survivor, "quarantine_epoch": tip["epoch"], "quarantine_digest": membership.digest(tip),
             "not_before": _stamp(now), "expires_at": _stamp(now + life),
