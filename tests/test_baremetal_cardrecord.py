@@ -198,6 +198,13 @@ class Freshness(Case):
         self.refused("this card record (sequence 1) is not the newest the root signed (sequence 2", self.sign(self.record),
                      lines=[self.line(self.record), self.line(two)])
 
+    def test_a_record_newer_than_the_signing_record_is_refused_as_not_held(self):
+        """c6 on #634: a record the signing record does not hold yet (its sequence past the newest line) is refused as
+        that, never as "superseded", and its digest is never what admits it."""
+        two = self.second()
+        self.refused("this card record (sequence 2) is newer than the signing record's newest card-record line (sequence 1)",
+                     self.sign(two), lines=[self.line(self.record)])
+
     def test_no_card_record_line_refuses_never_accepts_sequence_1(self):
         self.refused("the signing record holds no card-record line", self.sign(self.record), lines=[{"kind": "manifest", "epoch": 1, "digest": "ab" * 32}])
         self.refused("the signing record holds no card-record line", self.sign(self.record), lines=[])
@@ -334,8 +341,9 @@ class ProducersVectors(unittest.TestCase):
                 envelope = json.loads((here / name).read_text())
                 if name in self.REBUILT:
                     self.assertEqual(want, "ok")
-                    with self.assertRaises(m.Refused):
+                    with self.assertRaises(m.Refused) as caught:
                         cr.verify(envelope, root, log[:envelope["record"]["sequence"]])
+                    self.assertIn("is newer than the signing record's newest card-record line (sequence 2)", str(caught.exception))
                     continue
                 if want == "ok":
                     got = cr.verify(envelope, root, log[:envelope["record"]["sequence"]])

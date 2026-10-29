@@ -237,6 +237,10 @@ def _newest(record, root, signing_lines):
     require(all(type(s) is int for s in sequences) and sequences == list(range(1, len(cards) + 1)),
             "the signing record's card-record lines are not 1..%d without a gap or a repeat (%s)" % (len(cards), sequences))
     newest = cards[-1]
+    # a record newer than every line is not "superseded": the signing record does not hold it (c6 on #634)
+    require(type(record["sequence"]) is not int or record["sequence"] <= newest["sequence"],
+            "this card record (sequence %d) is newer than the signing record's newest card-record line (sequence %d): the "
+            "signing record does not hold it (another or a rebuilt state directory?)" % (record["sequence"], newest["sequence"]))
     require(record["sequence"] == newest["sequence"] and digest(record) == newest["digest"],
             "this card record (sequence %d) is not the newest the root signed (sequence %d, digest %s): an older one is superseded"
             % (record["sequence"], newest["sequence"], newest["digest"][:16]))
