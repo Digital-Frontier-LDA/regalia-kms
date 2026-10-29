@@ -421,6 +421,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       or after a reset or migration, is taken at any value: nothing yet ties it to the chain's account sequence.
     - **An ambiguous commit burns the approval.** A Reserve whose transaction answers an error may still have
       committed. It isn't retried, the HSM never signs, and the request is approved again. That fails closed.
+      For a Cosmos sequence it can also stop that key's signing: if the commit did store S, S is refused as a repeat,
+      and S+1 is refused by the chain, which still wants S. The only way out is a re-seed, the unconstrained first
+      value above, so the two are decided together. (The earlier any-higher rule stopped there the same way.)
   - The daemon's unit doesn't yet join `regalia-etcd-client`, the group that may open etcd's socket. That
     group arrives with #484's sysusers, and naming it before then would stop the unit from starting.
   - The lone survivor's stateless serving under the owner's authorization (D32 item 6) has no gate path yet.
