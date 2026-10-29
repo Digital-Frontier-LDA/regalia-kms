@@ -88,7 +88,7 @@ import subprocess
 import tempfile
 import time
 
-from deploy.baremetal import attest, heartbeat, membership
+from deploy.baremetal import attest, heartbeat, membership, opstate
 
 Refused, require = membership.Refused, membership.require
 
@@ -123,12 +123,8 @@ def _state(fields, label):
     membership.hex_field(fields["cluster_id"], 16, "%s.cluster_id" % label)
     for k in ("state_epoch", "state_revision"):
         require(type(fields[k]) is int and 0 <= fields[k] < 2 ** 63, "%s.%s must be an integer from 0" % (label, k))
-    membership.hex_field(fields["session_key"], 64, "%s.session_key" % label)
-    try:
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(fields["session_key"]))
-    except ValueError:
-        raise Refused("%s.session_key is not an Ed25519 public key" % label) from None
+    # from_public_bytes takes any 32 bytes, so it could never refuse here; opstate's rule judges the encoding (regalia-53g)
+    opstate.session_public(fields["session_key"], "%s.session_key" % label)
 
 
 def request_binding(request):

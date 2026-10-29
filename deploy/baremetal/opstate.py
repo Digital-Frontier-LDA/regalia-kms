@@ -191,6 +191,23 @@ APPROVAL_FIELDS = ("approver_id", "nonce", "expires_at", "payload_digest", "sign
 SESSION_SCHEMA = "regalia.opstate-session/v1"
 SESSION_DOMAIN = b"regalia-opstate-session/v1\0"
 SESSION_FIELDS = ("schema", "node_id", "boot_id", "session_key", "issued_at")
+# regalia-53g: the y of each of edwards25519's eight small-order points (either sign of x). Under such a key, Go's
+# ed25519.Verify and cryptography's verify both accept a signature R || 0 for many or all messages (measured), and a
+# session vouches until its node's key is replaced, so one would let anyone who can write etcd sign as that session.
+# An honest daemon's key is never one. y >= p is a non-canonical encoding, refused too (y = p + 1 is the identity).
+_P25519 = 2 ** 255 - 19
+SMALL_ORDER_Y = frozenset((0, 1, _P25519 - 1,
+                           0x5fc536d880238b13933c6d305acdfd5f098eff289f4c345b027b2c28f95e826,
+                           0x7a03ac9277fdc74ec6cc392cfa53202a0f67100d760b3cba4fd84d3d706a17c7))
+
+
+def session_public(value, label):
+    """A session key: 32 bytes of lowercase hex that encode a canonical Ed25519 point outside the small-order subgroup.
+    Whether it is on the curve at all is left to verify, which refuses it there."""
+    membership.hex_field(value, 64, label)
+    y = int.from_bytes(bytes.fromhex(value), "little") & ((1 << 255) - 1)
+    require(y < _P25519, "%s is not a canonical Ed25519 encoding" % label)
+    require(y not in SMALL_ORDER_Y, "%s is a small-order Ed25519 point, under which a signature can be forged" % label)
 
 
 def session_key_path(entry):
@@ -199,9 +216,9 @@ def session_key_path(entry):
     require(entry["schema"] == SESSION_SCHEMA, "schema must be %s" % SESSION_SCHEMA)
     require(isinstance(entry["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", entry["node_id"]) is not None, "node_id must be a node ID")
     require(isinstance(entry["boot_id"], str) and BOOT_ID.fullmatch(entry["boot_id"]) is not None, "boot_id must be a boot UUID")
-    # 32 bytes, as Go's SessionKeyPath also takes it: Ed25519PublicKey.from_public_bytes accepts any 32 bytes, so a
-    # check on it here could never refuse (regalia-u1r); a key that is not one fails where it is used, at verify
-    membership.hex_field(entry["session_key"], 64, "session_key")
+    # Ed25519PublicKey.from_public_bytes accepts any 32 bytes, so it checks nothing here (regalia-u1r); the encoding is
+    # judged by arithmetic instead, as Go's SessionKeyPath does (regalia-53g)
+    session_public(entry["session_key"], "session_key")
     heartbeat.parse_time(entry["issued_at"], "issued_at")
     return PREFIX + "sessions/%s/%s/%s" % (entry["node_id"], entry["boot_id"], entry["session_key"])
 

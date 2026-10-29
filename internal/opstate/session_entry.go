@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,44 @@ var (
 	UngatedSet = ApproverSet{Approvers: map[string]string{}, Required: 0}.Digest()
 )
 
+// smallOrderY is opstate.SMALL_ORDER_Y: the y of each of edwards25519's eight small-order points (regalia-53g).
+var (
+	p25519      = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(19))
+	smallOrderY = func() []*big.Int {
+		ys := []*big.Int{big.NewInt(0), big.NewInt(1), new(big.Int).Sub(p25519, big.NewInt(1))}
+		for _, h := range []string{"5fc536d880238b13933c6d305acdfd5f098eff289f4c345b027b2c28f95e826",
+			"7a03ac9277fdc74ec6cc392cfa53202a0f67100d760b3cba4fd84d3d706a17c7"} {
+			y, _ := new(big.Int).SetString(h, 16)
+			ys = append(ys, y)
+		}
+		return ys
+	}()
+)
+
+// sessionPublic is opstate.session_public: a canonical Ed25519 encoding outside the small-order subgroup. Under a
+// small-order key ed25519.Verify accepts a forged R || 0 for many or all messages (regalia-53g, measured).
+func sessionPublic(value any, label string) error {
+	if err := hexOf(value, 64, label); err != nil {
+		return err
+	}
+	raw, _ := hex.DecodeString(value.(string))
+	le := make([]byte, len(raw))
+	for i := range raw {
+		le[len(raw)-1-i] = raw[i]
+	}
+	le[0] &= 0x7f // the sign of x
+	y := new(big.Int).SetBytes(le)
+	if y.Cmp(p25519) >= 0 {
+		return refuse("%s is not a canonical Ed25519 encoding", label)
+	}
+	for _, s := range smallOrderY {
+		if y.Cmp(s) == 0 {
+			return refuse("%s is a small-order Ed25519 point, under which a signature can be forged", label)
+		}
+	}
+	return nil
+}
+
 // SessionKeyPath is opstate.session_key_path: where a session entry lives, one per daemon start.
 func SessionKeyPath(value any) (map[string]any, string, error) {
 	entry, err := exactFields(value, sessionFields, "the session entry")
@@ -44,7 +83,7 @@ func SessionKeyPath(value any) (map[string]any, string, error) {
 	if s, ok := entry["boot_id"].(string); !ok || !bootIDPattern.MatchString(s) {
 		return nil, "", refuse("boot_id must be a boot UUID")
 	}
-	if err := hexOf(entry["session_key"], 64, "session_key"); err != nil {
+	if err := sessionPublic(entry["session_key"], "session_key"); err != nil {
 		return nil, "", err
 	}
 	if _, err := timeOf(entry["issued_at"], "issued_at"); err != nil {

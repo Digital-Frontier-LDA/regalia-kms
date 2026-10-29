@@ -307,6 +307,13 @@ session_case("a's key vouched for by b's signing key", vouched(session(), signer
 session_case("under another node's path", vouched(session()), False, where=opstate.PREFIX + "sessions/b/%s/%s" % (BOOT, SESSION_A_PUB))
 session_case("a node the manifest does not hold", vouched(session(node_id="z"), signer="c"), False)
 session_case("a session key of 31 bytes", vouched(session(key="00" * 31)), False)
+# regalia-53g: a key under which a signature can be forged is refused before its signature is judged, each class once
+session_case("a session key that is the identity point (small order)", vouched(session(key="01" + "00" * 31)), False)
+session_case("a session key that is the identity with x's sign set (small order)", vouched(session(key="01" + "00" * 30 + "80")), False)
+_Y8 = 0x5fc536d880238b13933c6d305acdfd5f098eff289f4c345b027b2c28f95e826      # an order-8 point's y (x even)
+session_case("a session key of order 8", vouched(session(key=_Y8.to_bytes(32, "little").hex())), False)
+session_case("a session key of order 4, the all-zero sentinel", vouched(session(key="00" * 32)), False)
+session_case("a session key with a non-canonical y (p + 1)", vouched(session(key="ee" + "ff" * 30 + "7f")), False)
 session_case("a signature over the entry without its domain", {"entry": session(), "signature": p256_sig(A_NEW, m.canonical(session()))}, False)
 session_case("a session node ID that is not one (regalia-u1r)", vouched(session(node_id="Node_A")), False)
 session_case("a session boot ID that is not a UUID (regalia-u1r)", vouched(session(boot_id="boot-1")), False)
