@@ -12,6 +12,11 @@ on:
     paths:
       - e2e/abrmd-probe.sh
       - .github/workflows/abrmd-probe.yml
+  # #592: every three-node job reaches its TPMs through tpm2-abrmd, and nothing retries a 0x903 any more, so this is the
+  # regression for the exhaustion itself: a runner image whose swtpm or tpm2-abrmd changes is caught here weekly, not
+  # first as a red three-node job
+  schedule:
+    - cron: "17 5 * * 1"
 
 permissions:
   contents: read

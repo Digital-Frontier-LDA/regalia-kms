@@ -1,5 +1,5 @@
-"""e2e/lib/threenode.py's tpm2-abrmd route (regalia-afi, #592, #605): REGALIA_E2E_TPM picks how the nodes reach their TPMs,
-and with "abrmd" each node's units reach theirs only through their own node's tpm2-abrmd (its bus, its raw socket hidden),
+"""e2e/lib/threenode.py's tpm2-abrmd route (regalia-afi, #592, #605), its only one: each node's units reach their TPM
+only through their own node's tpm2-abrmd (its bus, its raw socket hidden),
 this process's TPM calls only inside tpm_of (outside, no session bus: a forgotten one fails closed), and the raw unlock
 client only while none of the node's units runs. Unit tests on a Cluster with no machine behind it, so the rules are held
 here and not only by a scenario that needs a runner."""
@@ -20,19 +20,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import threenode  # noqa: E402
 
 
-class Mode(unittest.TestCase):
-    def test_unset_is_the_socket(self):
-        self.assertEqual(threenode.tpm_mode({}), "socket")
+class RetiredSwitch(unittest.TestCase):
+    """REGALIA_E2E_TPM chose the raw socket until #592: a job that still sets it, to any value, is refused, so neither
+    route is ever read from a configuration written for the switch."""
+    def test_unset_passes(self):
+        threenode.refuse_retired_switch({})
 
-    def test_each_mode_by_name(self):
-        for mode in ("socket", "abrmd"):
-            with self.subTest(mode):
-                self.assertEqual(threenode.tpm_mode({"REGALIA_E2E_TPM": mode}), mode)
+    def test_any_value_is_refused(self):
+        for value in ("socket", "abrmd", "", "ABRMD"):
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, r"REGALIA_E2E_TPM=.*the switch is gone \(#592\)"):
+                threenode.refuse_retired_switch({"REGALIA_E2E_TPM": value})
 
-    def test_anything_else_is_refused_never_read_as_the_default(self):
-        for mode in ("", "vtpm", "ABRMD", "abrmd "):
-            with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, "REGALIA_E2E_TPM"):
-                threenode.tpm_mode({"REGALIA_E2E_TPM": mode})
+    def test_a_cluster_asks_before_anything_else(self):
+        with unittest.mock.patch.dict(os.environ, REGALIA_E2E_TPM="socket"), \
+                self.assertRaisesRegex(RuntimeError, "the switch is gone"):
+            threenode.Cluster(pathlib.Path("/nonexistent"))
 
 
 class Node(unittest.TestCase):
@@ -66,12 +68,9 @@ class Node(unittest.TestCase):
     def test_its_bus_is_under_its_own_directory(self):
         self.assertEqual(self.n.bus_address, "unix:path=%s" % (self.work / "a" / "dbus" / "bus"))
 
-    def test_socket_mode_gives_a_unit_nothing_more(self):
-        self.assertEqual(threenode.unit_tpm_properties("socket", self.n), [])
-
-    def test_abrmd_mode_gives_a_unit_its_bus_and_hides_its_raw_tpm(self):
+    def test_a_unit_is_given_its_bus_and_its_raw_tpm_hidden(self):
         sock = self.work / "a" / "tpm.sock"
-        self.assertEqual(threenode.unit_tpm_properties("abrmd", self.n),
+        self.assertEqual(threenode.unit_tpm_properties(self.n),
                          ["Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%s" % (self.work / "a" / "dbus" / "bus"),
                           "InaccessiblePaths=-%s" % sock, "InaccessiblePaths=-%s.ctrl" % sock])
 
@@ -93,9 +92,8 @@ class BusConfig(unittest.TestCase):
         self.assertEqual(received, {"method_call", "method_return", "error", "signal"})
 
 
-def cluster(work, mode="abrmd"):
+def cluster(work):
     c = object.__new__(threenode.Cluster)
-    c.tpm = mode
     c._tpm_lock = threading.RLock()
     c.nodes = {name: threenode.NodeHere(work, name, i + 1) for i, name in enumerate("ab")}
     c.services = {"a": (), "b": ()}
@@ -185,7 +183,7 @@ class TpmOf(unittest.TestCase):
 
 class NodeThrough(unittest.TestCase):
     """A scenario's own `cluster.node(n).store().load()` (three-node-recovery's step 7 read one outside tpm_of, and failed
-    closed): in abrmd mode every call down the chain is made inside n's tpm_of, its bus set; in socket mode the Node itself."""
+    closed): every call down the chain is made inside n's tpm_of, its bus set."""
     def setUp(self):
         self.work = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.work, True)
@@ -229,14 +227,6 @@ class NodeThrough(unittest.TestCase):
         self.assertIsInstance(threenode.through(c, "a", type("X", (), {"__module__": "deploy.baremetal.lease"})()), threenode.Through)
         self.assertNotIsInstance(threenode.through(c, "a", type("Y", (), {"__module__": "deploy.baremetalx"})()), threenode.Through)
 
-    def test_socket_mode_is_the_node_itself(self):
-        c = cluster(self.work, "socket")
-        here = c.node("a")
-        self.assertNotIsInstance(here, threenode.Through)
-        here.store().load()
-        self.assertEqual(self.seen, [("store", None), ("load", None)])
-
-
 class InitrdOnly(unittest.TestCase):
     def setUp(self):
         self.work = pathlib.Path(tempfile.mkdtemp())
@@ -265,11 +255,6 @@ class InitrdOnly(unittest.TestCase):
         self.listed = "e2e3-b-sync.service loaded active running x\ne2e3-audit-collector.service loaded active running x\n"
         self.c._initrd_only("a", "unlock")
 
-    def test_socket_mode_keeps_what_it_did(self):
-        self.c.tpm, self.c.services["a"] = "socket", ("sync",)
-        self.c._initrd_only("a", "unlock")
-        self.sh.assert_not_called()
-
     def test_unlock_and_enrol_ask_it_before_they_touch_the_tpm(self):
         class Refused(Exception):
             pass
@@ -285,7 +270,7 @@ class InitrdOnly(unittest.TestCase):
 
 class Units(unittest.TestCase):
     """Both of the fixture's unit builders, the services' (properties: _run, _as_sync) and root's (as_root: deliver, the
-    operator's tools), give a node's unit its TPM route: in abrmd mode its bus and its raw socket hidden, else nothing."""
+    operator's tools), give a node's unit its TPM route: its bus, and its raw socket hidden."""
     def setUp(self):
         self.work = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.work, True)
@@ -294,27 +279,21 @@ class Units(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def built(self, mode):
-        c = cluster(self.work, mode)
+    def built(self):
+        c = cluster(self.work)
         c.code = self.work
         c.members = lambda: list(c.nodes.values())
         c.member = lambda name: c.nodes[name]
         c.as_root("a", "deliver-2", ["true"])
         return {"properties": c.properties("a", "sync"), "as_root": [p for argv in self.ran for p in argv]}
 
-    def test_abrmd_mode(self):
-        want = threenode.unit_tpm_properties("abrmd", threenode.NodeHere(self.work, "a", 1))
-        for builder, props in self.built("abrmd").items():
+    def test_both_builders(self):
+        want = threenode.unit_tpm_properties(threenode.NodeHere(self.work, "a", 1))
+        for builder, props in self.built().items():
             with self.subTest(builder):
                 for prop in want:
                     self.assertIn(prop, props)
                 self.assertNotIn("Environment=DBUS_SESSION_BUS_ADDRESS=" + threenode.NodeHere(self.work, "b", 2).bus_address, props)
-
-    def test_socket_mode(self):
-        for builder, props in self.built("socket").items():
-            with self.subTest(builder):
-                self.assertFalse([p for p in props if "DBUS_SESSION_BUS_ADDRESS" in p or "tpm.sock" in p])
-
 
 class AbrmdAnswers(unittest.TestCase):
     def setUp(self):
@@ -330,7 +309,7 @@ class AbrmdAnswers(unittest.TestCase):
     def answer(self, **done):
         return unittest.mock.patch.object(threenode, "sh", return_value=types.SimpleNamespace(**dict({"stdout": "", "stderr": "", "returncode": 0}, **done)))
 
-    def test_socket_mode_has_none_to_ask(self):
+    def test_a_stopped_tpm_has_none_to_ask(self):
         with self.answer(returncode=1) as sh:
             self.assertTrue(self.c.abrmd_answers("a"))
         sh.assert_not_called()
@@ -416,7 +395,7 @@ def around_the_route(source):
 
 class ScenariosUseTheRoute(unittest.TestCase):
     """#605's follow-up: a scenario's own TPM call on a node's tcti read anywhere but inside `cluster.tpm_of` skips the
-    route. In abrmd mode it has no bus and fails closed at run time (three-node-reanchor's step 3 and snapshot did); this
+    route. It has no bus and fails closed at run time (three-node-reanchor's step 3 and snapshot did); this
     finds it before a runner does. It reads the scenarios that use the three-node fixture."""
 
     def test_no_scenario_reads_a_tcti_around_tpm_of(self):

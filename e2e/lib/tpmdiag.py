@@ -6,8 +6,8 @@ regalia-a0y's cause took an experiment branch with --log level=20 to find. Every
   - logs it at LOG_LEVEL (each command and response, with the control channel's CMD_CANCEL_TPM_CMD and friends);
   - says which swtpm, libtpms, tpm2-tools, QEMU and kernel it ran on (versions()).
 tpm2-tss is left as it is: it already logs its warnings and errors to stderr (TSS2_LOG's default, all+warning), which
-the harnesses keep in their failures, and membership.run_tpm2 reads that stderr to recognise TPM_RC_SESSION_MEMORY
-(0x903). Redirecting it to a file would hide what that check reads.
+the harnesses keep in their failures, and every refusal ends with the TPM's own last line (#450): a TPM_RC_SESSION_MEMORY
+(0x903) is read from there. Redirecting it to a file would hide it.
 The CI jobs upload these on failure (.github/actions/tpm-diagnostics). Test TPMs only: no production key passes here.
 """
 import os
