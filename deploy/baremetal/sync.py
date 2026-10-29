@@ -92,7 +92,6 @@ import re
 import socket
 import threading
 import time
-_MUTANT_START = time.monotonic()  # MUTANT regalia-2gb, never to merge: c takes no pulled heartbeat for 120 s
 
 from deploy.baremetal import convergence, heartbeat, lease, measurements, membership
 
@@ -732,7 +731,7 @@ class Client:
                 return now_at, bundle["heartbeat"], len(bundle["envelopes"])
             now_at, beat, received = convergence.audited(self._record, "sync-apply", before, self.node_id, source, self._safely(manifests))
             fresh = None
-            if beat is not None and not (self.node_id == "c" and time.monotonic() - _MUTANT_START < 120):  # MUTANT regalia-2gb, never to merge
+            if beat is not None:
                 current = self._held()
 
                 def accept():
