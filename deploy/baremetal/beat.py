@@ -159,7 +159,7 @@ class Proposer:
         digest = membership.digest(manifest)
         if self.first_seen is None or self.first_seen[0] != digest:
             self.first_seen = (digest, now)
-        base = self.first_seen[1] - self.interval + 180  # MUTANT regalia-2gb, never to merge: the first beat 180 s late
+        base = self.first_seen[1] - self.interval       # nothing held for this manifest: go at once, by rank, from then
         try:
             body = heartbeat.verify(held, manifest) if held is not None else None
         except Refused:
