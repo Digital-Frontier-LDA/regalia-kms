@@ -1,4 +1,8 @@
 {
+ "baseline-not-first": {
+  "expect": "a card-record-baseline line is not the first card line of the signing record",
+  "record": "rebuilt-3.json"
+ },
  "bool-sequence": {
   "expect": "a card-record line of the signing record is malformed (sequence an integer, digest 64 hex)",
   "record": "valid.json"
@@ -10,6 +14,18 @@
  "current-2": {
   "expect": "ok",
   "record": "sequence-2.json"
+ },
+ "current-rebuilt": {
+  "expect": "ok",
+  "record": "rebuilt-3.json"
+ },
+ "current-rebuilt-pinned": {
+  "expect": "ok",
+  "pin": [
+   3,
+   "be6c37f11501ee6d4b4e53cdb3ddf37b5d7defed425a50a39de962be2be8261d"
+  ],
+  "record": "rebuilt-3.json"
  },
  "foreign-key": {
   "expect": "a card-record line names another root than the pinned one",
@@ -31,6 +47,18 @@
   "expect": "line 2 of the signing record is not an object with a kind",
   "record": "valid.json"
  },
+ "pin-mismatch": {
+  "expect": "this card record is not the one the chain pins (sequence 2)",
+  "pin": [
+   2,
+   "2db6e8aee83b3ea0772c0864524109275fa195afd7721ee1662c40c756351065"
+  ],
+  "record": "rebuilt-3.json"
+ },
+ "rebuild-record-missing": {
+  "expect": "the signing record has a baseline but",
+  "record": "rebuilt-3.json"
+ },
  "superseded": {
   "expect": "this card record is not the newest the root signed (sequence 1 of 2)",
   "record": "valid.json"
@@ -38,5 +66,9 @@
  "torn-line": {
   "expect": "line 2 of the signing record is not JSON (a torn write?)",
   "record": "sequence-2.json"
+ },
+ "two-baselines": {
+  "expect": "the signing record holds more than one card-record-baseline line",
+  "record": "rebuilt-3.json"
  }
 }

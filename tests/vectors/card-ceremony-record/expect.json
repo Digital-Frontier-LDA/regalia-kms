@@ -1,9 +1,10 @@
 {
  "bad-signature.json": "the signature does not verify under the pinned root",
  "first-supersedes.json": "the first card record (sequence 1) supersedes nothing: supersedes is \"\"",
- "missing-dev-backup.json": "owner_keys holds exactly the two developer cards' SIG keys (D30.3)",
+ "missing-owner-backup.json": "owner_keys holds exactly the two owner cards' SIG keys (D30.7)",
  "other-root.json": "the record names another root than the pinned one",
- "release-is-owner.json": "the release key is an owner key: the release cards hold no owner key (D30.3)",
+ "rebuilt-3.json": "ok",
+ "release-is-owner.json": "the release key is an owner key: the release cards hold no owner key (D30.7)",
  "sequence-2.json": "ok",
  "unknown-field.json": "owner_keys[0] has an unknown field: comment",
  "valid.json": "ok",
