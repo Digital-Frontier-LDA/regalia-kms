@@ -24,7 +24,7 @@ import (
 // tests/test_twin_rule_coverage.py is the same check over opstate.py's require()s.
 
 // twinModules are the Python modules whose twins this covers.
-var twinModules = []string{"opstate", "survivor"}
+var twinModules = []string{"opstate", "survivor", "lease"}
 
 // twinRefusals is every refuse() format reachable from a twin of one of twinModules, by the function it sits in.
 func twinRefusals(t *testing.T) map[string][]string {

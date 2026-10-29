@@ -70,7 +70,7 @@ import re
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from deploy.baremetal import heartbeat, membership
+from deploy.baremetal import heartbeat, lease, membership
 
 Refused, require = membership.Refused, membership.require
 
@@ -195,21 +195,6 @@ SESSION_FIELDS = ("schema", "node_id", "boot_id", "session_key", "issued_at")
 # ed25519.Verify and cryptography's verify both accept a signature R || 0 for many or all messages (measured), and a
 # session vouches until its node's key is replaced, so one would let anyone who can write etcd sign as that session.
 # An honest daemon's key is never one. y >= p is a non-canonical encoding, refused too (y = p + 1 is the identity).
-_P25519 = 2 ** 255 - 19
-SMALL_ORDER_Y = frozenset((0, 1, _P25519 - 1,
-                           0x5fc536d880238b13933c6d305acdfd5f098eff289f4c345b027b2c28f95e826,
-                           0x7a03ac9277fdc74ec6cc392cfa53202a0f67100d760b3cba4fd84d3d706a17c7))
-
-
-def session_public(value, label):
-    """A session key: 32 bytes of lowercase hex that encode a canonical Ed25519 point outside the small-order subgroup.
-    Whether it is on the curve at all is left to verify, which refuses it there."""
-    membership.hex_field(value, 64, label)
-    y = int.from_bytes(bytes.fromhex(value), "little") & ((1 << 255) - 1)
-    require(y < _P25519, "%s is not a canonical Ed25519 encoding" % label)
-    require(y not in SMALL_ORDER_Y, "%s is a small-order Ed25519 point, under which a signature can be forged" % label)
-
-
 def session_key_path(entry):
     """Where a session entry lives: one per daemon start (several in one boot)."""
     membership.exact(entry, SESSION_FIELDS, "the session entry")
@@ -218,7 +203,7 @@ def session_key_path(entry):
     require(isinstance(entry["boot_id"], str) and BOOT_ID.fullmatch(entry["boot_id"]) is not None, "boot_id must be a boot UUID")
     # Ed25519PublicKey.from_public_bytes accepts any 32 bytes, so it checks nothing here (regalia-u1r); the encoding is
     # judged by arithmetic instead, as Go's SessionKeyPath does (regalia-53g)
-    session_public(entry["session_key"], "session_key")
+    lease.session_public(entry["session_key"], "session_key")
     heartbeat.parse_time(entry["issued_at"], "issued_at")
     return PREFIX + "sessions/%s/%s/%s" % (entry["node_id"], entry["boot_id"], entry["session_key"])
 

@@ -174,7 +174,7 @@ class SessionKeyPoints(unittest.TestCase):
 
     def refused(self, key, reason):
         with self.assertRaises(m.Refused) as caught:
-            opstate.session_public(key, "session_key")
+            lease.session_public(key, "session_key")
         self.assertIn(reason, str(caught.exception))
 
     def test_each_small_order_point_is_refused_and_a_forgery_under_it_is_real(self):
@@ -185,7 +185,7 @@ class SessionKeyPoints(unittest.TestCase):
         # why: under the identity, R = identity and S = 0 verify for any message (cryptography accepts it; so does Go)
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(self.SMALL[0])).verify(bytes.fromhex(self.SMALL[0]) + bytes(32), b"anything")
         honest = Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex()
-        opstate.session_public(honest, "session_key")
+        lease.session_public(honest, "session_key")
         with self.assertRaises(InvalidSignature):
             Ed25519PublicKey.from_public_bytes(bytes.fromhex(honest)).verify(bytes.fromhex(self.SMALL[0]) + bytes(32), b"anything")
 

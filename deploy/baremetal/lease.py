@@ -88,9 +88,24 @@ import subprocess
 import tempfile
 import time
 
-from deploy.baremetal import attest, heartbeat, membership, opstate
+from deploy.baremetal import attest, heartbeat, membership
 
 Refused, require = membership.Refused, membership.require
+
+# regalia-53g: here, on the host, since the lease admits session keys; opstate (off the host) checks its entries by it
+_P25519 = 2 ** 255 - 19
+SMALL_ORDER_Y = frozenset((0, 1, _P25519 - 1,
+                           0x5fc536d880238b13933c6d305acdfd5f098eff289f4c345b027b2c28f95e826,
+                           0x7a03ac9277fdc74ec6cc392cfa53202a0f67100d760b3cba4fd84d3d706a17c7))
+
+
+def session_public(value, label):
+    """A session key: 32 bytes of lowercase hex that encode a canonical Ed25519 point outside the small-order subgroup.
+    Whether it is on the curve at all is left to verify, which refuses it there."""
+    membership.hex_field(value, 64, label)
+    y = int.from_bytes(bytes.fromhex(value), "little") & ((1 << 255) - 1)
+    require(y < _P25519, "%s is not a canonical Ed25519 encoding" % label)
+    require(y not in SMALL_ORDER_Y, "%s is a small-order Ed25519 point, under which a signature can be forged" % label)
 
 SCHEMA = "regalia.runtime-lease/v2"
 DOMAIN = b"regalia-runtime-lease/v2\0"
@@ -124,7 +139,7 @@ def _state(fields, label):
     for k in ("state_epoch", "state_revision"):
         require(type(fields[k]) is int and 0 <= fields[k] < 2 ** 63, "%s.%s must be an integer from 0" % (label, k))
     # from_public_bytes takes any 32 bytes, so it could never refuse here; opstate's rule judges the encoding (regalia-53g)
-    opstate.session_public(fields["session_key"], "%s.session_key" % label)
+    session_public(fields["session_key"], "%s.session_key" % label)
 
 
 def request_binding(request):

@@ -44,7 +44,7 @@ var (
 	}()
 )
 
-// sessionPublic is opstate.session_public: a canonical Ed25519 encoding outside the small-order subgroup. Under a
+// sessionPublic is lease.session_public: a canonical Ed25519 encoding outside the small-order subgroup. Under a
 // small-order key ed25519.Verify accepts a forged R || 0 for many or all messages (regalia-53g, measured).
 func sessionPublic(value any, label string) error {
 	if err := hexOf(value, 64, label); err != nil {
