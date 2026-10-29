@@ -28,8 +28,9 @@
    key purpose. Stateful operations are:
    - spending an approval: once, bound to the approval id, the key, the payload's SHA-256 and the one server
      that signs, so D25 is not loosened;
-   - advancing a per-key high-water mark (a chain's sign height or sequence): a repeated or lower value is
-     refused, as tmkms and Horcrux do;
+   - advancing a Cosmos account sequence: only the next value is accepted, so a repeated, lower or skipped one
+     is refused (a sign height, which skips, would be a kind of its own, refusing only a repeated or lower one, as
+     tmkms and Horcrux do);
    - changing a key's state (enable, disable, destroy): honoured on every server within one lease.
 4. **No server acts on key state older than its lease.**
    - The lease carries one `state_revision`: the subject server's own applied etcd revision, bound into what

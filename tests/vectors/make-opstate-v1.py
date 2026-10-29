@@ -176,6 +176,7 @@ case("a node's entry with two signatures", dict(by_node(spend()), signatures=by_
 case("an entry over 4096 bytes", by_node(spend(approvers=sorted("approver-%03d-%s" % (i, "x" * 200) for i in range(30)))), False)
 case("a sequence that does not move", by_node(sequence(7)), False, previous=sequence(7))
 case("a sequence that goes back", by_node(sequence(6)), False, previous=sequence(7))
+case("a sequence that skips one", by_node(sequence(9)), False, previous=sequence(7))
 case("a quota over its cap", by_node(quota(101)), False, previous=quota(100))
 case("a quota total that shrinks", by_node(quota(3)), False, previous=quota(4))
 case("one of two required approvals", by_approvers(DISABLED, "alice"), False, previous=ENABLED)
