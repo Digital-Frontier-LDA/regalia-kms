@@ -35,10 +35,10 @@ class Case(unittest.TestCase):
         self.record = {
             "schema": cr.SCHEMA, "event": cr.EVENT, "session": "ab" * 16, "tool": "offline-keys.py test", "at": "2026-10-04T12:00:00Z",
             "root_entry": {"alg": "ed25519", "key": self.root}, "root_fingerprint": hashlib.sha256(bytes.fromhex(self.root)).hexdigest(),
-            "owner_keys": [{"role": "dev-main", "serial": "11111111", "alg": "ed25519", "key": self.main, "attested": True,
-                            "attestation_sha256": {"sig": "a1" * 32, "dec": "a2" * 32}},
-                           {"role": "dev-backup", "serial": "22222222", "alg": "ed25519", "key": self.backup, "attested": True,
-                            "attestation_sha256": {"sig": "b1" * 32, "dec": "b2" * 32}}],
+            "owner_keys": [{"role": "owner-main", "serial": "11111111", "alg": "ed25519", "key": self.main, "attested": True,
+                            "attestation_sha256": {"sig": "a1" * 32, "dec": "a2" * 32, "aut": "a3" * 32}},
+                           {"role": "owner-backup", "serial": "22222222", "alg": "ed25519", "key": self.backup, "attested": True,
+                            "attestation_sha256": {"sig": "b1" * 32, "dec": "b2" * 32, "aut": "b3" * 32}}],
             "ownerauth_recipients": [{"serial": "11111111", "primary": "A" * 40, "subkey": "B" * 40},
                                      {"serial": "22222222", "primary": "C" * 40, "subkey": "D" * 40}],
             "ssh_signers": [{"serial": "11111111", "key": ssh(keys[3])}, {"serial": "22222222", "key": ssh(keys[4])}],
@@ -72,7 +72,7 @@ class Signature(Case):
     def test_a_record_the_pinned_root_signed_gives_its_owner_and_release_keys(self):
         got = cr.verify(self.sign(self.record), self.root, [self.line(self.record)])
         self.assertEqual(got["owners"], {"11111111": self.main, "22222222": self.backup})
-        self.assertEqual((got["roles"], got["release_key"]), ({"dev-main": "11111111", "dev-backup": "22222222"}, self.release))
+        self.assertEqual((got["roles"], got["release_key"]), ({"owner-main": "11111111", "owner-backup": "22222222"}, self.release))
 
     def test_a_bad_signature_a_wrong_domain_and_another_root_are_refused(self):
         bad = self.sign(self.record)
@@ -103,15 +103,34 @@ class Content(Case):
 
     def test_owner_keys_two_roles_two_cards_two_keys_attested(self):
         self.refused("owner_keys is not exactly two keys", self.changed(lambda r: r["owner_keys"].pop()))
-        self.refused("the role 'dev-main' is not one of", self.changed(lambda r: r["owner_keys"][1].update(role="dev-main")))
+        self.refused("the role 'owner-main' is not one of", self.changed(lambda r: r["owner_keys"][1].update(role="owner-main")))
         self.refused("the card 11111111 holds two owner keys", self.changed(lambda r: r["owner_keys"][1].update(serial="11111111")))
         self.refused("the two owner cards hold the same key", self.changed(lambda r: r["owner_keys"][1].update(key=self.main)))
         self.refused("is not attested as made on its card", self.changed(lambda r: r["owner_keys"][0].update(attested=False)))
         self.refused("owner_keys[1].serial is not a card serial", self.changed(lambda r: r["owner_keys"][1].update(serial="0222")))
 
-    def test_each_owner_key_names_its_own_two_attestation_certificates(self):
-        """regalia-ceremony#121 after d9's read: the evidence behind "attested", re-checkable from the disc."""
+    def test_the_developer_pair_s_role_names_are_refused(self):
+        """regalia-86f: the owner keys are the OWNER pair's (ADR-0002 D30.7, regalia-ceremony#133), and a record naming the
+        developer pair's roles, as this side took before, is refused in either place and as a pair."""
+        for i, own in ((0, "owner-main"), (1, "owner-backup")):
+            for old in ("dev-main", "dev-backup"):
+                self.refused("owner_keys[%d]: the role %r is not one of owner-main, owner-backup" % (i, old),
+                             self.changed(lambda r, i=i, old=old: r["owner_keys"][i].update(role=old)))
+
+        def developer_pair(r):
+            r["owner_keys"][0]["role"], r["owner_keys"][1]["role"] = "dev-main", "dev-backup"
+        self.refused("owner_keys[0]: the role 'dev-main' is not one of owner-main, owner-backup", self.changed(developer_pair))
+        self.assertEqual(cr.ROLES, ("owner-main", "owner-backup"))
+
+    def test_each_owner_key_names_its_own_three_attestation_certificates(self):
+        """regalia-ceremony#121 after d9's read: the evidence behind "attested", re-checkable from the disc. SIG, DEC and AUT
+        are all touch-fixed under D30.7, so all three are named (regalia-86f)."""
         self.refused("owner_keys[0].attestation_sha256 fields mismatch", self.changed(lambda r: r["owner_keys"][0]["attestation_sha256"].pop("dec")))
+        self.refused("owner_keys[1].attestation_sha256 fields mismatch", self.changed(lambda r: r["owner_keys"][1]["attestation_sha256"].pop("aut")))
+        self.refused("owner_keys[0].attestation_sha256.aut (a certificate's SHA-256, 64 hex)",
+                     self.changed(lambda r: r["owner_keys"][0]["attestation_sha256"].update(aut="A3" * 32)))
+        self.refused("an attestation certificate is named twice: each key has its own",
+                     self.changed(lambda r: r["owner_keys"][1]["attestation_sha256"].update(aut="a3" * 32)))
         self.refused("owner_keys[1].attestation_sha256.sig (a certificate's SHA-256, 64 hex)",
                      self.changed(lambda r: r["owner_keys"][1]["attestation_sha256"].update(sig="B1" * 32)))
         self.refused("an attestation certificate is named twice: each key has its own",
@@ -178,6 +197,13 @@ class Freshness(Case):
         two = self.second()
         self.refused("this card record (sequence 1) is not the newest the root signed (sequence 2", self.sign(self.record),
                      lines=[self.line(self.record), self.line(two)])
+
+    def test_a_record_newer_than_the_signing_record_is_refused_as_not_held(self):
+        """c6 on #634: a record the signing record does not hold yet (its sequence past the newest line) is refused as
+        that, never as "superseded", and its digest is never what admits it."""
+        two = self.second()
+        self.refused("this card record (sequence 2) is newer than the signing record's newest card-record line (sequence 1)",
+                     self.sign(two), lines=[self.line(self.record)])
 
     def test_no_card_record_line_refuses_never_accepts_sequence_1(self):
         self.refused("the signing record holds no card-record line", self.sign(self.record), lines=[{"kind": "manifest", "epoch": 1, "digest": "ab" * 32}])
@@ -295,8 +321,11 @@ class ProducersVectors(unittest.TestCase):
     # the producer's refusal, and the words this verifier refuses the same record with
     SAME = {"bad-signature.json": "signature is not the pinned root's", "wrong-domain.json": "signature is not the pinned root's",
             "other-root.json": "names another root than the pinned one", "release-is-owner.json": "the release key is an owner key",
-            "missing-dev-backup.json": "owner_keys is not exactly two keys", "unknown-field.json": "owner_keys[0] fields mismatch",
+            "missing-owner-backup.json": "owner_keys is not exactly two keys", "unknown-field.json": "owner_keys[0] fields mismatch",
             "first-supersedes.json": "supersedes is not \"\" at sequence 1"}
+    # the producer's rebuilt record (regalia-ceremony#131): "ok" to it, REFUSED here until this side reads a rebuilt
+    # signing state (regalia-lbi): fail-closed, never accepted on the lines this side does read
+    REBUILT = {"rebuilt-3.json"}
 
     def test_every_vector_as_the_producer_judges_it(self):
         """Each record judged by the signing record as it stood when that record was the newest (its first `sequence`
@@ -306,10 +335,16 @@ class ProducersVectors(unittest.TestCase):
         root = (here / "root.hex").read_text().strip()
         expect = json.loads((here / "expect.json").read_text())
         log = [json.loads(line) for line in (here / "signing-record.jsonl").read_text().splitlines()]
-        self.assertEqual(sorted(expect), sorted(list(self.SAME) + ["valid.json", "sequence-2.json"]))
+        self.assertEqual(sorted(expect), sorted(list(self.SAME) + ["valid.json", "sequence-2.json"] + sorted(self.REBUILT)))
         for name, want in sorted(expect.items()):
             with self.subTest(vector=name):
                 envelope = json.loads((here / name).read_text())
+                if name in self.REBUILT:
+                    self.assertEqual(want, "ok")
+                    with self.assertRaises(m.Refused) as caught:
+                        cr.verify(envelope, root, log[:envelope["record"]["sequence"]])
+                    self.assertIn("is newer than the signing record's newest card-record line (sequence 2)", str(caught.exception))
+                    continue
                 if want == "ok":
                     got = cr.verify(envelope, root, log[:envelope["record"]["sequence"]])
                     self.assertEqual(sorted(got["roles"]), sorted(cr.ROLES))
@@ -338,6 +373,11 @@ class ProducersFreshness(unittest.TestCase):
             "no-marker": "has no regalia-signing-state.json", "not-an-object": "line 2 is not an object with a kind",
             "superseded": "this card record (sequence 1) is not the newest the root signed (sequence 2",
             "torn-line": "the signing record's line 2 is not JSON"}
+    # the producer's rebuilt signing states (regalia-ceremony#131: a card-record-baseline line, a rebuild record, a pin),
+    # "ok" or refused by it: every one REFUSED here, by the card-record lines this side counts, until it reads a rebuilt
+    # state (regalia-lbi). Fail-closed: a rebuilt laptop's genesis is refused, as the module text states
+    REBUILT = {"baseline-not-first", "current-rebuilt", "current-rebuilt-pinned", "pin-mismatch", "rebuild-record-missing",
+               "two-baselines"}
 
     def test_every_case_as_the_producer_judges_it(self):
         import pathlib
@@ -346,7 +386,7 @@ class ProducersFreshness(unittest.TestCase):
         here = pathlib.Path(__file__).parent / "vectors" / "card-ceremony-record"
         root = (here / "root.hex").read_text().strip()
         cases = json.loads((here / "freshness-expect.json").read_text())
-        self.assertEqual(sorted(cases), sorted(list(self.SAME) + ["current-1", "current-2"]))
+        self.assertEqual(sorted(cases), sorted(list(self.SAME) + ["current-1", "current-2"] + sorted(self.REBUILT)))
         for case, want in sorted(cases.items()):
             with self.subTest(case=case):
                 state = tempfile.mkdtemp()
@@ -356,6 +396,11 @@ class ProducersFreshness(unittest.TestCase):
                     os.chmod(os.path.join(state, source.name), 0o600)
                 os.chmod(state, 0o700)
                 envelope = json.loads((here / want["record"]).read_text())
+                if case in self.REBUILT:
+                    with self.assertRaises(m.Refused) as caught:
+                        cr.verify(envelope, root, cr.read_signing_state(state, root))
+                    self.assertIn("the signing record's card-record lines are not 1..", str(caught.exception))
+                    continue
                 if want["expect"] == "ok":
                     got = cr.verify(envelope, root, cr.read_signing_state(state, root))
                     self.assertEqual((got["sequence"], got["of"]), (envelope["record"]["sequence"],) * 2)
@@ -382,12 +427,15 @@ class ProducersFreshness(unittest.TestCase):
 
 
 class ProducersWriterRun(unittest.TestCase):
-    """The producer's REAL output, not a vector: regalia-ceremony#128's writer (offline-keys card-record, head c688584)
-    run once, 2026-10-04, by regalia-kms-1e through that PR's test_card_record_writer.Writer setup: a 2-of-3 Shamir lab
-    root (ok.generate, real age; the shares not kept), then card_record(first=True) and card_record(). Kept: the state
-    directory it left (marker, signing-record.jsonl with card-record lines 1 and 2) and both records
-    (tests/vectors/card-ceremony-record/writer-run/). Its output is not byte-reproducible, so it is a fixture made once,
-    not regenerated. This side must read it as the writer meant it (regalia-kms-24's cross-repo check)."""
+    """The producer's REAL output, not a vector: regalia-ceremony#128's writer (offline-keys card-record) as it stands at
+    regalia-ceremony main f9e28e53575825bc0384184c18772fa07f40760d (D30.7's owner pair, three attestations), run once,
+    2026-10-29, by regalia-86f through that commit's test_card_record_writer.Writer setup (writer-run-gen.py beside the
+    vectors): a fresh 2-of-3 Shamir lab root e7bd989c... (ok.generate, real age 1.3.2 -pq; the shares not kept), then
+    card_record(first=True) and card_record(). Kept: the state directory it left (marker, signing-record.jsonl with
+    card-record lines 1 and 2) and both records (tests/vectors/card-ceremony-record/writer-run/). Its output is not
+    byte-reproducible, so it is a fixture made once per producer change, not regenerated by a test. This side must read
+    it as the writer meant it (regalia-kms-24's cross-repo check). The first run (head c688584, 2026-10-04) named the
+    developer pair, which this side no longer takes."""
 
     def setUp(self):
         import pathlib
@@ -409,7 +457,7 @@ class ProducersWriterRun(unittest.TestCase):
         lines = cr.read_signing_state(self.state, self.root)
         got = cr.verify(self.record(2), self.root, lines)
         self.assertEqual((got["sequence"], got["of"], got["supersedes"]), (2, 2, cr.digest(self.record(1)["record"])))
-        self.assertEqual(got["roles"], {"dev-main": "40000001", "dev-backup": "40000002"})
+        self.assertEqual(got["roles"], {"owner-main": "40000001", "owner-backup": "40000002"})
         with self.assertRaises(m.Refused) as caught:
             cr.verify(self.record(1), self.root, lines)
         self.assertIn("this card record (sequence 1) is not the newest the root signed (sequence 2", str(caught.exception))

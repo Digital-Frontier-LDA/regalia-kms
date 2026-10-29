@@ -1,7 +1,7 @@
 """The card-ceremony record, verified by the side that consumes it (regalia-ceremony#111 step 2; ADR-0002 D30).
 
-The card ceremony writes `cards.record.json`: which cards hold the owner's two keys (the developer pair's OpenPGP SIG
-keys) and which hold the release key, signed by the membership root in the offline session that made them. The
+The card ceremony writes `cards.record.json`: which cards hold the owner's two keys (the owner pair's OpenPGP SIG keys,
+D30.7) and which hold the release key, signed by the membership root in the offline session that made them. The
 genesis proposal takes owner_keys and the release key from it (manifest propose --genesis --card-record) instead of
 having them typed. This module is that consumer's own check: it imports nothing of regalia-ceremony, and it PINS the
 root (regalia-ceremony's own verify_record checks only that a record is consistent with itself).
@@ -14,8 +14,9 @@ Refused, by name, unless:
   * the record's root_entry is the PINNED root (Ed25519) and root_fingerprint is the SHA-256 of its raw key, and the
     signature verifies under that pinned key over RECORD_DOMAIN + canonical(record);
   * every field is as the producer writes it, none missing and none unknown, at every level (FIELDS);
-  * owner_keys are exactly two, the roles dev-main and dev-backup, with distinct serials and keys, Ed25519, and each
-    attested on its card (D5), naming the SHA-256 of its SIG and DEC keys' attestation certificates, all four distinct;
+  * owner_keys are exactly two, the roles owner-main and owner-backup (D30.7), with distinct serials and keys, Ed25519,
+    and each attested on its card (D5), naming the SHA-256 of its SIG, DEC and AUT keys' attestation certificates (all
+    three touch-fixed under D30.7), all six distinct;
   * the release key is Ed25519, imported, not attested, on two distinct cards, its key no owner key and its cards no
     owner card (D30.3);
   * no card is a bench YubiKey (membership.BENCH_YUBIKEYS; D28.5, D30);
@@ -40,7 +41,9 @@ CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.m
   * The signing record is not hash-chained (plain fsync'd 0600 lines, as manifest signing's): a deleted line, a cut
     tail or a state directory restored from an older backup is not seen here. The backstop is the ceremony sheet
     (`card record N of M, digest ...`, printed by propose --genesis); #405 would anchor the newest digest in the
-    root-signed manifest. A lost state directory refuses every later genesis until #406's rebuild exists.
+    root-signed manifest. A lost state directory refuses every later genesis until #406's rebuild exists. The producer has
+    one (regalia-ceremony#131: a card-record-baseline line and a root-signed rebuild record), and this side does not read
+    it yet (regalia-lbi): it counts card-record lines only, so a rebuilt state directory is refused, never accepted.
   * The release key's OpenPGP fingerprint and the SSH signers' keys are checked for form and distinctness, not tied to
     the cards (the producer reads them from the cards).
   * The bench YubiKeys refused are a hand-kept list (membership.BENCH_YUBIKEYS).
@@ -61,14 +64,14 @@ Refused, require = membership.Refused, membership.require
 RECORD_DOMAIN = b"regalia-ceremony-record/v1\x00"
 SCHEMA = "regalia.card-ceremony-record/v1"
 EVENT = "card-ceremony"
-ROLES = ("dev-main", "dev-backup")
+ROLES = ("owner-main", "owner-backup")      # ADR-0002 D30.7, regalia-ceremony#133: the owner pair (regalia-86f)
 FIELDS = {
     "record": ("schema", "event", "owner_keys", "ownerauth_recipients", "ssh_signers", "release_key", "session", "root_entry",
                "root_fingerprint", "tool", "at", "sequence", "supersedes"),
     "card_record_line": ("kind", "sequence", "digest", "key", "at"),
     "signing_state": ("schema", "root"),
     "owner_key": ("role", "serial", "alg", "key", "attested", "attestation_sha256"),
-    "attestation_sha256": ("sig", "dec"),
+    "attestation_sha256": ("sig", "dec", "aut"),
     "release_key": ("alg", "key", "fingerprint", "cards", "imported", "attested"),
     "ownerauth_recipient": ("serial", "primary", "subkey"),
     "ssh_signer": ("serial", "key"),
@@ -234,6 +237,10 @@ def _newest(record, root, signing_lines):
     require(all(type(s) is int for s in sequences) and sequences == list(range(1, len(cards) + 1)),
             "the signing record's card-record lines are not 1..%d without a gap or a repeat (%s)" % (len(cards), sequences))
     newest = cards[-1]
+    # a record newer than every line is not "superseded": the signing record does not hold it (c6 on #634)
+    require(type(record["sequence"]) is not int or record["sequence"] <= newest["sequence"],
+            "this card record (sequence %d) is newer than the signing record's newest card-record line (sequence %d): the "
+            "signing record does not hold it (another or a rebuilt state directory?)" % (record["sequence"], newest["sequence"]))
     require(record["sequence"] == newest["sequence"] and digest(record) == newest["digest"],
             "this card record (sequence %d) is not the newest the root signed (sequence %d, digest %s): an older one is superseded"
             % (record["sequence"], newest["sequence"], newest["digest"][:16]))
@@ -284,7 +291,7 @@ def verify(envelope, root, signing_lines):
         require(entry["alg"] == "ed25519", "%s is not an Ed25519 key" % where)
         require(entry["attested"] is True, "%s: the key is not attested as made on its card (D5)" % where)
         _exact(entry["attestation_sha256"], "attestation_sha256", where + ".attestation_sha256")
-        for f in ("sig", "dec"):
+        for f in FIELDS["attestation_sha256"]:
             certificates.append(_key(entry["attestation_sha256"][f], "%s.attestation_sha256.%s (a certificate's SHA-256, 64 hex)" % (where, f)))
         owners[serial], roles[entry["role"]] = _key(entry["key"], where + ".key"), serial
     require(sorted(roles) == sorted(ROLES), "owner_keys lacks a role: %s" % ", ".join(sorted(set(ROLES) - set(roles))))

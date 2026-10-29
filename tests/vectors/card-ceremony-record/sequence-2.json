@@ -6,23 +6,25 @@
    {
     "alg": "ed25519",
     "attestation_sha256": {
-     "dec": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
-     "sig": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+     "aut": "d9a599e259e44bb0bee2269b4f0d62600d1d9de2469bf313ebd75e9f1f53ec0c",
+     "dec": "ae3eedc6bedd6e1e6aa84938fb3853cb2cf67695e8919e500e1ee743cfe31976",
+     "sig": "2aec64330b18bda906d208f2cc0987dfd7ee91722f424947f539aaebba0a53d2"
     },
     "attested": true,
     "key": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
-    "role": "dev-main",
+    "role": "owner-main",
     "serial": "40000001"
    },
    {
     "alg": "ed25519",
     "attestation_sha256": {
-     "dec": "e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",
-     "sig": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+     "aut": "b46f21794de5eca5596cee8c0df7fd19cc21df6363ed70c0c4a0070885fd660c",
+     "dec": "f38693861594dfeb0c90b36a6df1e80567b56518e4c1613afd9fe5b24edda780",
+     "sig": "c1918378cd79e994544145f0fb7139da3fc91fa5423c0a6b7b2021e7eb4a9acf"
     },
     "attested": true,
     "key": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d",
-    "role": "dev-backup",
+    "role": "owner-backup",
     "serial": "40000002"
    }
   ],
@@ -67,8 +69,8 @@
     "serial": "40000002"
    }
   ],
-  "supersedes": "7b0e5616ebb831800e7801234f1a6b1468188cfa9e12a44b1b45f693a4f6067b",
+  "supersedes": "abf0909a5cc6e3b95c05d2513c93ae6477def69d917440c29a3b1ce931de281d",
   "tool": "card-ceremony-vectors/1"
  },
- "signature": "dc11712040bc4d0dfef6bb0ba8640391f973289f78e36f3dc0c605c7f591a0d311ad25e5312a0a1b378fdcbc18a211c02e3d3533051aaab3ac0e672bc8baa60d"
+ "signature": "c3d6c062388dd241744d891a86dff8f95609206d388e5987e2c47b56a51907ff636900bd7cfb5935cec4291bcf79df1c0bd2c4ac6a29d4eac8a86448cf329703"
 }
