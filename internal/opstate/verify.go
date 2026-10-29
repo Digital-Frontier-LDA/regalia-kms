@@ -476,8 +476,8 @@ func Transition(previous, entry map[string]any) error {
 	case "sequence":
 		was, _ := strconv.ParseInt(string(previous["value"].(json.Number)), 10, 64)
 		now, _ := strconv.ParseInt(string(entry["value"].(json.Number)), 10, 64)
-		if now <= was {
-			return refuse("the sequence %s is at %d; %d is not above it", entry["sequence_key"], was, now)
+		if now != was+1 { // only the next, as opstate.py
+			return refuse("the sequence %s is at %d; %d is not the next", entry["sequence_key"], was, now)
 		}
 	case "quota":
 		was, _ := strconv.ParseInt(string(previous["total"].(json.Number)), 10, 64)

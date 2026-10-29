@@ -11,6 +11,6 @@
  "divergent": {
   "bead": "regalia-07k",
   "why": "EtcdState and opstate.py's transition take any HIGHER sequence; the documents and FileState take only the next. Which is right is the owner's decision (regalia-07k). Each pair listed here must STILL diverge: a test fails when one starts to match, so the fix also removes its pair.",
-  "cases": {"etcdstate": ["gap"], "opstate.py": ["gap"]}
+  "cases": {}
  }
 }

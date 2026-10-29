@@ -26,7 +26,7 @@ class SequenceCases(unittest.TestCase):
                     opstate.transition(previous, entry(case["value"]))
                     got = "accept"
                 except membership.Refused as refusal:
-                    self.assertIn("is not above it", str(refusal))      # the sequence's refusal, not another
+                    self.assertIn("is not the next", str(refusal))      # the sequence's refusal, not another
                     got = "refuse"
                 if case["name"] in divergent:
                     self.assertNotEqual(got, case["documented"],
