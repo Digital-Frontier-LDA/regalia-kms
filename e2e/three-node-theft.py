@@ -89,10 +89,10 @@ def scenario(cluster):
         cluster.start(name, SERVICES)
     for name in names:
         ok(bool(until(lambda: cluster.lease(name), 150, 3)), "%s holds a lease" % name, cluster.journal(name, "admission")[-400:])
-    # regalia-2gb: a lease does not wait for a heartbeat, and section 2 measures the one c holds at the cut, so the cut
-    # waits until every node holds one the nodes signed (cut at once, c could hold none yet: 0 s of 0 s)
+    # regalia-2gb: a peer that holds the heartbeat can lease c before c has pulled it into its own Freshness, and section 2
+    # measures the one c holds at the cut, so the cut waits until c holds one the nodes signed (cut at once: 0 s of 0 s)
     print("  OBSERVED: at its lease, c held %s" % ("a heartbeat" if cluster.heartbeat_left("c") is not None else "no heartbeat yet"))
-    beats = cluster.fresh(names)
+    beats = cluster.fresh(["c"])
 
     header("2  c partitioned from b; the window it is left with")
     cluster.partition("c", ["b"])
