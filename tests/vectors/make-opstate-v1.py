@@ -313,6 +313,9 @@ session_case("a session key that is the identity point (small order)", vouched(s
 session_case("a session key that is the identity with x's sign set (small order)", vouched(session(key="01" + "00" * 30 + "80")), False)
 _Y8 = 0x5fc536d880238b13933c6d305acdfd5f098eff289f4c345b027b2c28f95e826      # an order-8 point's y (x even)
 session_case("a session key of order 8", vouched(session(key=_Y8.to_bytes(32, "little").hex())), False)
+_Y8B = 0x7a03ac9277fdc74ec6cc392cfa53202a0f67100d760b3cba4fd84d3d706a17c7    # the other order-8 y: each y in Go's list is pinned here
+session_case("a session key of order 8, the other y", vouched(session(key=_Y8B.to_bytes(32, "little").hex())), False)
+session_case("a session key of order 2 (y = p - 1)", vouched(session(key="ec" + "ff" * 30 + "7f")), False)
 session_case("a session key of order 4, the all-zero sentinel", vouched(session(key="00" * 32)), False)
 session_case("a session key with a non-canonical y (p + 1)", vouched(session(key="ee" + "ff" * 30 + "7f")), False)
 session_case("a signature over the entry without its domain", {"entry": session(), "signature": p256_sig(A_NEW, m.canonical(session()))}, False)
