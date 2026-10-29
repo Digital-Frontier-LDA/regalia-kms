@@ -26,7 +26,8 @@ command -v mmdebstrap >/dev/null || { echo "initrd-drift: mmdebstrap is required
 # day's report carried 7 generated lines no real build has: dev/console, kmsg, null, random and urandom (no
 # DRACUT_NO_MKNOD), etc/shadow (its last-changed day follows SOURCE_DATE_EPOCH) and build-parameter.txt (the flags).
 PINNED=deploy/baremetal/initrd/initrd-inventory.txt
-SNAPSHOT="$(grep -oE '^# Reviewed image: .* snapshot\.debian\.org [0-9]{8}T[0-9]{6}Z' "$PINNED" | grep -oE '[0-9]{8}T[0-9]{6}Z$' || true)"
+# every snapshot time on every "Reviewed image" line, each one separately: two on one line are two, not the last one
+SNAPSHOT="$(grep -E '^# Reviewed image: ' "$PINNED" | grep -oE 'snapshot\.debian\.org [0-9]{8}T[0-9]{6}Z' | grep -oE '[0-9]{8}T[0-9]{6}Z$' || true)"
 [ "$(grep -c . <<< "$SNAPSHOT")" = 1 ] \
   || { echo "initrd-drift: $PINNED's header names no one reviewed snapshot ('$SNAPSHOT'), so the reviewed build's epoch is unknown"; exit 2; }
 EPOCH="$(date -u -d "${SNAPSHOT:0:4}-${SNAPSHOT:4:2}-${SNAPSHOT:6:2}T${SNAPSHOT:9:2}:${SNAPSHOT:11:2}:${SNAPSHOT:13:2}Z" +%s)" \

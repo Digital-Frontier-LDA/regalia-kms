@@ -297,14 +297,36 @@ class Script(unittest.TestCase):
 
     def test_the_drift_epoch_is_the_reviewed_snapshot_s(self):
         """The reviewed inventory was built with SOURCE_DATE_EPOCH at its snapshot's time (build-initrd.sh's default),
-        so the drift build takes that time from the inventory's own header, which moves with it in one pull request."""
+        so the drift build takes that time from the inventory's own header, which moves with it in one pull request.
+        The script's OWN lines are run (CodeRabbit on #629: a regex re-read here missed that a greedy `.*` kept only
+        the last of two snapshots on one line): the real header gives one time, and none, or two, is exit 2."""
+        import subprocess
+        import tempfile
         drift = (ROOT / "e2e" / "initrd-drift.sh").read_text()
-        header = (ROOT / "deploy" / "baremetal" / "initrd" / "initrd-inventory.txt").read_text()
-        pattern = re.search(r"grep -oE '(\^# Reviewed image: [^']*)'", drift).group(1)
-        found = re.findall(pattern, header, re.M)
-        self.assertEqual(len(found), 1, found)
-        self.assertRegex(found[0], r"snapshot\.debian\.org 20[0-9]{6}T[0-9]{6}Z$")
-        self.assertIn('[ "$(grep -c . <<< "$SNAPSHOT")" = 1 ]', drift)      # none, or two, is exit 2
+        start = drift.index("\nSNAPSHOT=") + 1
+        end = drift.index("\nEPOCH=", start)
+        lines = drift[start:end]
+        self.assertIn('[ "$(grep -c . <<< "$SNAPSHOT")" = 1 ]', lines)
+
+        def run(header):
+            with tempfile.NamedTemporaryFile("w", suffix=".txt") as f:
+                f.write(header)
+                f.flush()
+                r = subprocess.run(["bash", "-c", 'set -euo pipefail; PINNED="$1"\n' + lines + '\necho "$SNAPSHOT"', "_", f.name],
+                                   capture_output=True, text=True)
+            return r.returncode, r.stdout.strip()
+
+        real = (ROOT / "deploy" / "baremetal" / "initrd" / "initrd-inventory.txt").read_text()
+        rc, out = run(real)
+        self.assertEqual(rc, 0)
+        self.assertRegex(out, r"^20[0-9]{6}T[0-9]{6}Z$")
+        self.assertIn("snapshot.debian.org %s " % out, real)
+        line = "# Reviewed image: Debian 13 (trixie) from snapshot.debian.org %s (main), built by\n"
+        self.assertEqual(run(line % "20261019T000000Z"), (0, "20261019T000000Z"))
+        two_on_one = "# Reviewed image: Debian 13 from snapshot.debian.org 20261019T000000Z and snapshot.debian.org 20261029T000000Z\n"
+        self.assertEqual(run(two_on_one)[0], 2)
+        self.assertEqual(run(line % "20261019T000000Z" + line % "20261029T000000Z")[0], 2)
+        self.assertEqual(run("# Reviewed build: snapshot.debian.org 20261019T000000Z\n")[0], 2)
 
     def test_the_security_list_is_the_one_apt_verified(self):
         script = (ROOT / "e2e" / "initrd-drift.sh").read_text()
