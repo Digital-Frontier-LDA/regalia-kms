@@ -73,20 +73,21 @@ def _state_directory_mode(unit):
 ADMISSION_DIR_MODE = _state_directory_mode("regalia-admission.service")
 # the nodes' TPMs are swtpm sockets here, which node.validate accepts only under its test-only switch (regalia-afi, b9 on
 # #596): every unit the fixture starts carries it, and so does a Cluster's own process (set when one is made, never on
-# import: the unit tests import this module). It stays with REGALIA_E2E_TPM=abrmd too: node.validate's switch is what
+# import: the unit tests import this module). It stays with tpm2-abrmd too: node.validate's switch is what
 # accepts tabrmd (the kernel's resource manager, swtpm --vtpm-proxy, is out of reach on GitHub's runners: #597)
 SIMULATOR_ENV = "Environment=REGALIA_TCTI_ALLOW_SIMULATOR=1"
 
-# regalia-afi (#592): how the nodes reach their TPMs. "socket", the default: the raw swtpm socket, every client straight to
-# it, as before. "abrmd": through one tpm2-abrmd per node, as a host's services reach /dev/tpmrm0 (the raw socket
-# exhausts its three session slots under the services' concurrent clients, and a resource manager does not: #605's probe,
-# on both runner images). Each node's tpm2-abrmd is on a dbus-daemon of the node's own, listening under its directory, as
+# regalia-afi (#592): the nodes reach their TPMs through one tpm2-abrmd per node, as a host's services reach /dev/tpmrm0.
+# The raw swtpm socket, every client straight to it, was the default until #592's second half: it has three session
+# slots, which the services' concurrent clients exhausted (0x903, on both runner images: #605's probe, and #514's
+# flush-and-retry hid it). REGALIA_E2E_TPM, the switch between the two, is gone, and a run that still sets it is refused
+# (refuse_retired_switch). Each node's tpm2-abrmd is on a dbus-daemon of the node's own, listening under its directory, as
 # its services' SESSION bus, under a name of the node's own (abrmd_tcti): so their system bus stays the host's (admission's
 # `systemctl show`, as its own user, needs it), and InaccessiblePaths= on the other nodes' directories hides their buses
 # with the rest. The units have their own node's raw socket hidden too (unit_tpm_properties), and this process's own TPM
 # calls take the same route (Cluster.tpm_of). The one raw client left is the pre-root unlock client (cmd/regalia-unlock
 # speaks to a socket or a device, never tabrmd), run only while none of the node's units does (Cluster._initrd_only).
-TPM_MODES = ("socket", "abrmd")
+RETIRED_SWITCH = "REGALIA_E2E_TPM"
 # what close() keeps of each node for a failing CI job: .github/actions/tpm-diagnostics finds them by these names, and
 # tests/test_tpm_diagnostics_action.py holds the two together (a name the action does not find is not uploaded)
 KEPT_LOGS = ("tpm.log", "abrmd.log", "dbus.log")
@@ -103,16 +104,16 @@ def abrmd_name(node_id):
 
 
 def abrmd_tcti(node_id):
-    """The tcti of node `node_id`'s services and of this process's calls for it, in abrmd mode."""
+    """The tcti of node `node_id`'s services and of this process's calls for it."""
     return "tabrmd:bus_name=%s,bus_type=session" % abrmd_name(node_id)
 
 
-def tpm_mode(environ=os.environ):
-    """REGALIA_E2E_TPM: "socket" (unset) or "abrmd"; anything else refused, never read as the default."""
-    mode = environ.get("REGALIA_E2E_TPM", "socket")
-    if mode not in TPM_MODES:
-        raise RuntimeError("REGALIA_E2E_TPM=%r: it is one of %s" % (mode, ", ".join(TPM_MODES)))
-    return mode
+def refuse_retired_switch(environ=os.environ):
+    """REGALIA_E2E_TPM chose the raw socket or tpm2-abrmd until #592; set at all now, a job's configuration predates that,
+    and its run is refused rather than read as either route."""
+    if RETIRED_SWITCH in environ:
+        raise RuntimeError("%s=%r: the switch is gone (#592), the nodes always reach their TPMs through one tpm2-abrmd each; "
+                           "unset it" % (RETIRED_SWITCH, environ[RETIRED_SWITCH]))
 
 
 def bus_config(socket_path, name):
@@ -147,13 +148,10 @@ def bus_config(socket_path, name):
 """ % {"socket": socket_path, "name": name}
 
 
-def unit_tpm_properties(mode, n):
-    """What a unit of node `n` is given to reach its TPM, as systemd-run -p values: nothing in socket mode (node.json names
-    the raw socket); in abrmd mode its node's bus as its session bus, and its node's raw TPM endpoints hidden, so no
-    service gets around tpm2-abrmd (#605's check 14). The other nodes' buses are under their directories, which every
-    unit already has hidden."""
-    if mode == "socket":
-        return []
+def unit_tpm_properties(n):
+    """What a unit of node `n` is given to reach its TPM, as systemd-run -p values: its node's bus as its session bus,
+    and its node's raw TPM endpoints hidden, so no service gets around tpm2-abrmd (#605's check 14). The other nodes'
+    buses are under their directories, which every unit already has hidden."""
     return ["Environment=DBUS_SESSION_BUS_ADDRESS=" + n.bus_address,
             "InaccessiblePaths=-%s" % n.tpm_sock, "InaccessiblePaths=-%s.ctrl" % n.tpm_sock]
 
@@ -352,7 +350,7 @@ def _replace(path, text):
 
 
 class Through:
-    """A deploy.baremetal object of node `name`'s, seen from this process in abrmd mode (Cluster.node): every method call is
+    """A deploy.baremetal object of node `name`'s, seen from this process (Cluster.node): every method call is
     made inside cluster.tpm_of(name), and what it returns, while it is another of deploy.baremetal's objects (its store,
     its anchor, an attester), is seen the same way. So a scenario's `cluster.node(n).store().load()` reaches n's TPM
     through n's tpm2-abrmd, without the scenario naming the route (regalia-afi: three-node-recovery's step 7 read a
@@ -388,7 +386,7 @@ class NodeHere:
         self.boot_address = "10.89.0.%d" % index
         self.tpm_sock = self.dir / "tpm.sock"
         self.raw_tcti = "swtpm:path=%s" % self.tpm_sock
-        self.bus = self.dir / "dbus" / "bus"          # abrmd mode: its own dbus-daemon's socket (bus_config)
+        self.bus = self.dir / "dbus" / "bus"          # its own dbus-daemon's socket (bus_config)
         self.dbus = self.abrmd = None                 # ...and the two processes, while they run
         self.cfg_path = self.dir / "etc" / "node.json"
         self.state, self.admission, self.run = self.dir / "state", self.dir / "admission", self.dir / "run"
@@ -479,6 +477,7 @@ def moving_line(events, epoch):
 
 class Cluster:
     def __init__(self, work, names=NAMES, audit=False):
+        refuse_retired_switch()                       # #592: one tpm2-abrmd per node, the only route; before anything runs
         self.work = pathlib.Path(work)
         # regalia-zga: what a TPM failure is diagnosed from, kept in this run (e2e/lib/tpmdiag.py): which stack it ran on;
         # each node's swtpm logs at level 20 (_tpm)
@@ -494,10 +493,9 @@ class Cluster:
         self.audit_bin = pathlib.Path(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"))
         self.tool_trails = {}                         # {node: {trail: path}}: an operator tool's trail a scenario ships too (ship_tool_trail)
         os.environ["REGALIA_TCTI_ALLOW_SIMULATOR"] = "1"   # this process loads the nodes' (swtpm) node.json too (SIMULATOR_ENV)
-        self.tpm = tpm_mode()                         # regalia-afi: "socket" or "abrmd" (REGALIA_E2E_TPM)
         self._tpm_lock = threading.RLock()            # tpm_of: this process's TPM calls, one node's at a time
         os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)   # none but tpm_of's: a call outside it fails closed
-        print("e2e3: the nodes reach their TPMs through %s" % ("one tpm2-abrmd each" if self.tpm == "abrmd" else "the raw socket"), flush=True)
+        print("e2e3: the nodes reach their TPMs through one tpm2-abrmd each", flush=True)
         self.nodes = {n: NodeHere(self.work, n, i + 1) for i, n in enumerate(names)}
         self.time = {n: True for n in names}          # authenticated time, per node
         self.stop_threads = False
@@ -604,18 +602,17 @@ class Cluster:
             raise RuntimeError("%s's software TPM did not start (%d): %s %s | log: %s | apparmor: %s"
                                % (n.name, done.returncode, done.stdout.strip(), done.stderr.strip(), log, denied))
         self.left_initrd.discard(n.name)              # a TPM start: PCR 11 at its reset value, the node in its initrd again
-        if self.tpm == "abrmd":                       # for as long as its TPM runs: a stopped node's TPM is reached too (deliver)
-            self._abrmd_up(n)
+        self._abrmd_up(n)                             # for as long as its TPM runs: a stopped node's TPM is reached too (deliver)
         self._booted(n)
 
-    # ---- regalia-afi: one tpm2-abrmd per node (REGALIA_E2E_TPM=abrmd) ----
+    # ---- regalia-afi: one tpm2-abrmd per node (#592) ----
 
     @contextlib.contextmanager
     def tpm_of(self, name):
         """This process's TPM calls for node `name`, made inside: one node's at a time (a process-wide lock), and while that
         node's tpm2-abrmd runs, with its bus as this process's session bus, so `n.tcti` reaches it there. Outside, no
         session bus is set: a call this fixture made without it finds none and fails closed (#605's check 10), never
-        another node's TPM. With no tpm2-abrmd (socket mode, or between a TPM's stop and start) `n.tcti` is the raw socket."""
+        another node's TPM. With no tpm2-abrmd (between a TPM's stop and start) `n.tcti` is the raw socket."""
         n = self.nodes[name]
         with self._tpm_lock:
             # re-entry for the SAME node is allowed (a Through call inside held_epoch, say); another node's, inside, is
@@ -684,7 +681,7 @@ class Cluster:
         a TPM it cannot serve shows there, not three tests later (TEAMLEAD-grafana)."""
         n = self.nodes[name]
         if n.abrmd is None:
-            return True                               # socket mode: no resource manager to ask
+            return True                               # its TPM is stopped, and its tpm2-abrmd with it: none to ask
         with self.tpm_of(name):
             try:
                 done = sh("tpm2_getrandom", "-T", abrmd_tcti(name), "--hex", "8", check=False, timeout=5)
@@ -699,8 +696,6 @@ class Cluster:
     def _initrd_only(self, name, what):
         """The raw unlock client (`what`) beside node `name`'s tpm2-abrmd: only while none of the node's units runs, as in
         an initrd, so no service's abrmd session is ever concurrent with it. A unit that still runs is a failure."""
-        if self.tpm != "abrmd":
-            return
         if self.services.get(name):
             raise RuntimeError("%s on %s while its services run (%s): the raw TPM client runs only with none of its units"
                                % (what, name, ", ".join(self.services[name])))
@@ -1049,7 +1044,7 @@ class Cluster:
                 "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444}}
         _replace(n.dir / "etc" / "site.json", json.dumps(site))            # whole, never torn: running services read them
         # no measurements.json: the document is in the node's store by digest, and later ones come by sync (#332)
-        cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=abrmd_tcti(n.name) if self.tpm == "abrmd" else n.raw_tcti,
+        cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=abrmd_tcti(n.name),
                    state_dir=str(n.state), admission_dir=str(n.admission), run_dir=str(n.run), admission_log_dir=str(n.admission_log),
                    wg_service_key=str(n.dir / "etc" / "wg-service.key"), measurements=str(n.dir / "etc" / "measurements.json"),
                    time_servers=["nts1.e2e3.invalid", "nts2.e2e3.invalid"], pull_interval=10,
@@ -1057,10 +1052,9 @@ class Cluster:
         _replace(n.cfg_path, json.dumps(cfg))
 
     def node(self, name):
-        """The node as its services see it (deploy/baremetal/node.Node), from its configuration. In abrmd mode seen
-        Through tpm_of: its TPM is reached through its tpm2-abrmd, whoever calls it."""
-        here = node.Node(node.load(str(self.nodes[name].cfg_path)))
-        return here if self.tpm == "socket" else Through(self, name, here)
+        """The node as its services see it (deploy/baremetal/node.Node), from its configuration, seen Through tpm_of: its
+        TPM is reached through its tpm2-abrmd, whoever calls it."""
+        return Through(self, name, node.Node(node.load(str(self.nodes[name].cfg_path))))
 
     def _anchor_and_store(self, n):
         with self.tpm_of(n.name):
@@ -1153,7 +1147,7 @@ class Cluster:
                  SIMULATOR_ENV]
         props += ["%s=%s" % (key, value) for key, value in self.identity(service).items()]
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
-        props += unit_tpm_properties(self.tpm, n)
+        props += unit_tpm_properties(n)
         # where a booted host's systemd-stub puts the image's PCR signatures and its system-phase key: the node's own
         pcr = n.dir / "pcr"
         props += ["BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
@@ -1895,7 +1889,7 @@ class Cluster:
                   "BindReadOnlyPaths=%s:%s" % (n.dir / "run-kms", os.path.dirname(lease.SESSION_KEY_PATH))]
         props += ["NetworkNamespacePath=/run/netns/" + n.ns] if in_ns else []
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
-        props += unit_tpm_properties(self.tpm, n)
+        props += unit_tpm_properties(n)
         return sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, label),
                   *[a for p in props for a in ("-p", p)], *args, check=False,
                   **({"input": input} if input is not None else {"stdin": subprocess.DEVNULL}))
