@@ -197,7 +197,7 @@ class ModuleCheck(unittest.TestCase):
         drift = (ROOT / "e2e" / "initrd-drift.sh").read_text()
         call = 'bash e2e/lib/dracut-module-check.sh "$ROOT" "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock"'
         self.assertIn(call, drift)
-        self.assertLess(drift.index(call), drift.index('chroot "$ROOT" dracut '))
+        self.assertLess(drift.index(call), drift.index('\ninroot dracut '))
         self.assertGreater(drift.index(call), drift.rindex('/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"'))
 
 
@@ -277,6 +277,34 @@ class Script(unittest.TestCase):
         self.assertIn("The initrd drift check FAILED", filing)
         self.assertIn("--body-file", filing)
         self.assertEqual(workflow["concurrency"]["group"], "initrd-drift")
+
+    def test_the_drift_build_runs_dracut_as_the_builder_does(self):
+        """#330: run as dracut's defaults, the drift build carried 7 generated lines no real build has, every day:
+        dev/console, kmsg, null, random and urandom (no DRACUT_NO_MKNOD=1), etc/shadow (its last-changed day follows
+        SOURCE_DATE_EPOCH, unset, so it moved daily) and build-parameter.txt (it records the flags). Only archive
+        drift may differ: the same chroot environment, the same dracut flags, the same epoch in the tree."""
+        builder = (ROOT / "deploy" / "baremetal" / "initrd" / "build-initrd.sh").read_text()
+        drift = (ROOT / "e2e" / "initrd-drift.sh").read_text()
+        inroot = re.search(r"^inroot\(\)\{ [^\n]*\}$", builder, re.M).group(0)
+        self.assertIn("DRACUT_NO_MKNOD=1", inroot)      # the instrument reads the builder's real definition
+        self.assertIn('SOURCE_DATE_EPOCH="$EPOCH"', inroot)
+        self.assertIn("\n" + inroot + "\n", drift)
+        flags = re.search(r"^inroot dracut (.*) --kver ", builder, re.M).group(1)
+        self.assertIn("--reproducible --nohardlink", flags)
+        self.assertRegex(drift, r"(?m)^inroot dracut %s --kver " % re.escape(flags))
+        self.assertNotRegex(drift, r'chroot "\$ROOT" dracut ')
+        self.assertRegex(drift, r'(?m)^env -i PATH="\$PATH" LC_ALL=C TZ=UTC SOURCE_DATE_EPOCH="\$EPOCH" mmdebstrap ')
+
+    def test_the_drift_epoch_is_the_reviewed_snapshot_s(self):
+        """The reviewed inventory was built with SOURCE_DATE_EPOCH at its snapshot's time (build-initrd.sh's default),
+        so the drift build takes that time from the inventory's own header, which moves with it in one pull request."""
+        drift = (ROOT / "e2e" / "initrd-drift.sh").read_text()
+        header = (ROOT / "deploy" / "baremetal" / "initrd" / "initrd-inventory.txt").read_text()
+        pattern = re.search(r"grep -oE '(\^# Reviewed image: [^']*)'", drift).group(1)
+        found = re.findall(pattern, header, re.M)
+        self.assertEqual(len(found), 1, found)
+        self.assertRegex(found[0], r"snapshot\.debian\.org 20[0-9]{6}T[0-9]{6}Z$")
+        self.assertIn('[ "$(grep -c . <<< "$SNAPSHOT")" = 1 ]', drift)      # none, or two, is exit 2
 
     def test_the_security_list_is_the_one_apt_verified(self):
         script = (ROOT / "e2e" / "initrd-drift.sh").read_text()
