@@ -416,9 +416,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       these fields decodes the journal with `DisallowUnknownFields` and refuses it. That fails closed (the state is
       unavailable, nothing is signed), but such a daemon does not start until it runs a build that knows the fields.
     - **Every rule takes only the next Cosmos sequence, but the first value is unconstrained.** `FileState`,
-      `EtcdState` and the opstate transition (`opstate.py` and its Go twin, which every peer runs on another
-      server's entry) refuse a repeat, a lower value and a gap (9 after 7). A key's FIRST reservation, at first use
-      or after a reset or migration, is taken at any value: nothing yet ties it to the chain's account sequence.
+      `EtcdState` (which also holds its own reservation to the opstate transition before it commits) and the opstate
+      transition (`opstate.py` and its Go twin) refuse a repeat, a lower value and a gap (9 after 7). No server yet
+      judges another's entries: the daemon builds its watch cache without `opstate.Judge`, so peer-side enforcement is
+      planned, not running. A key's FIRST reservation, at first use or after a reset or migration, is taken at any
+      value: nothing yet ties it to the chain's account sequence.
     - **An ambiguous commit burns the approval.** A Reserve whose transaction answers an error may still have
       committed. It isn't retried, the HSM never signs, and the request is approved again. That fails closed.
       For a Cosmos sequence it can also stop that key's signing: if the commit did store S, S is refused as a repeat,
