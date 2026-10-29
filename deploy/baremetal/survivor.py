@@ -219,6 +219,14 @@ def make_authorization(tip, survivor, how, now, confirm, open_signer, life_s=Non
     others = sorted(n for n in nodes if n != survivor)
     _text(how, "how the other servers are fenced")
     targets = fenceable(nodes, survivor)
+    # first, so a misspelt survivor is never told to commission itself below
+    require(survivor in nodes and nodes[survivor]["state"] not in membership.NOT_COUNTING, "%s does not count under epoch %d" % (survivor, tip["epoch"]))
+    # regalia-4rt: with nothing to fence, the empty fence would otherwise refuse only as malformed evidence
+    require(others, "%s is the only node under epoch %d: it counts alone, and no survivor authorization applies" % (survivor, tip["epoch"]))
+    # none of the others can ever count again, so this is a one-node membership, not an outage: a new manifest commissions it
+    require(targets, "every other node is RETIRED or REVOKED_STOLEN under epoch %d: nothing is left to fence "
+            "and none can count again, so %s alone is a new membership, not a survivor: commission it with a new manifest"
+            % (tip["epoch"], survivor))
     life = MAX_AUTHORIZATION_S if life_s is None else int(life_s)
     require(0 < life <= MAX_AUTHORIZATION_S, "a survivor authorization lives at most %d s" % MAX_AUTHORIZATION_S)
     auth = {"schema": AUTH_SCHEMA, "node_id": survivor, "quarantine_epoch": tip["epoch"], "quarantine_digest": membership.digest(tip),
@@ -235,7 +243,6 @@ def make_authorization(tip, survivor, how, now, confirm, open_signer, life_s=Non
     loose = sorted(n for n in others if nodes[n]["state"] not in membership.NOT_COUNTING)
     require(not loose, "quarantine %s first (a root- or owner-signed epoch): a survivor is authorized only once every other server "
             "has stopped counting" % ", ".join(loose))
-    require(survivor in nodes and nodes[survivor]["state"] not in membership.NOT_COUNTING, "%s does not count under epoch %d" % (survivor, tip["epoch"]))
     want = "authorize %s alone %s %d until %s" % (survivor, scope, tip["epoch"], auth["expires_at"])
     what = ("EVERYTHING, stateful operations included from %s" % _stamp(full_from(auth)) if scope == "full" else "stateless operations only")
     shown = ("A SURVIVOR AUTHORIZATION: %s serves ALONE, %s, until %s or until any new epoch, under epoch %d:\n"

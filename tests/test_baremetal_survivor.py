@@ -126,6 +126,27 @@ class FullScope(Case):
         typed = self.authorize(tip=tip, scope="full")                  # the typed fallback names the same set
         self.assertEqual(set(typed["authorization"]["fence"]["nodes"]), {"b"})
 
+    def test_no_survivor_when_every_other_node_is_retired_or_stolen(self):
+        """regalia-4rt: with no node left to fence, none can ever count again, so this is a one-node membership, which a
+        new manifest commissions; it is not an outage. The refusal says so, before any fence or typed line."""
+        for others in ({"b": "RETIRED", "c": "REVOKED_STOLEN"}, {"b": "RETIRED", "c": "RETIRED"}):
+            tip = manifest4(2, m.digest(self.m1), nodes4(**others))
+            for scope in ("stateless", "full"):
+                self.refused("every other node is RETIRED or REVOKED_STOLEN under epoch 2: nothing is left to fence",
+                             self.authorize, tip=tip, scope=scope)
+        # a misspelt survivor is refused as one that does not count, not told to commission itself
+        gone = manifest4(2, m.digest(self.m1), nodes4(a="RETIRED", b="RETIRED", c="REVOKED_STOLEN"))
+        self.refused("z does not count under epoch 2", self.authorize, tip=gone, who="z")
+
+    def test_no_survivor_authorization_for_the_only_node(self):
+        """regalia-4rt, 57's case: membership accepts a one-node manifest; its node counts alone, with nothing to fence."""
+        one = manifest4(2, m.digest(self.m1), nodes4()[:1], heartbeat_signers={"threshold": 2, "parties": ["a", "owner"]},
+                        activation_signers={"threshold": 2, "parties": ["a", "owner"]},
+                        revocation_signers=[{"threshold": 2, "parties": ["a", "owner"]}, {"threshold": 1, "parties": ["owner"]}])
+        m.validate(one)
+        self.refused("a is the only node under epoch 2: it counts alone, and no survivor authorization applies",
+                     self.authorize, tip=one)
+
     def test_the_evidence_is_this_outage_s(self):
         """05 on #516: read after the quarantine was signed, and again within the hour before the owner signs; a drill's
         or an earlier outage's evidence against the same inventory does not replay."""
