@@ -1,7 +1,7 @@
 """EVERY RULE OF A TWIN HAS A CASE IN THE SHARED VECTOR (regalia-u1r).
 
-internal/opstate's Go functions documented "X is opstate.<fn>" or "X is survivor.<fn>" mirror
-deploy/baremetal/opstate.py and survivor.py, and tests/vectors/opstate-v1.json holds both sides to the same decisions
+internal/opstate's Go functions documented "X is opstate.<fn>", "X is survivor.<fn>" or "X is lease.<fn>" mirror
+deploy/baremetal/opstate.py, survivor.py and lease.py, and tests/vectors/opstate-v1.json holds both sides to the same decisions
 and reasons. That held only for the rules some case happened to reach: three times in two days a rule changed on one
 side while no case reached it (#496's v2 binding, #516's redfish evidence and its fence set). So this iterates the
 RULES: every require() and Refused() in those Python functions, and in the same module's helpers they call, must be

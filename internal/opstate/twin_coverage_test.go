@@ -15,7 +15,8 @@ import (
 
 // EVERY RULE OF A TWIN HAS A CASE IN THE SHARED VECTOR (regalia-u1r).
 //
-// The Go functions here that are documented "X is opstate.<fn>" mirror deploy/baremetal/opstate.py, and the
+// The Go functions here that are documented "X is opstate.<fn>" (or survivor.<fn>, lease.<fn>) mirror
+// deploy/baremetal/opstate.py (survivor.py, lease.py), and the
 // vector (tests/vectors/opstate-v1.json) holds both to the same decisions and reasons. That held only for the
 // rules some case happened to reach: three times in two days a rule changed on one side while no case reached
 // it (#496's v2 binding, #516's redfish evidence and its fence set). So this iterates the RULES, not the cases:

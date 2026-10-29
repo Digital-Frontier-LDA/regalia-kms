@@ -191,10 +191,6 @@ APPROVAL_FIELDS = ("approver_id", "nonce", "expires_at", "payload_digest", "sign
 SESSION_SCHEMA = "regalia.opstate-session/v1"
 SESSION_DOMAIN = b"regalia-opstate-session/v1\0"
 SESSION_FIELDS = ("schema", "node_id", "boot_id", "session_key", "issued_at")
-# regalia-53g: the y of each of edwards25519's eight small-order points (either sign of x). Under such a key, Go's
-# ed25519.Verify and cryptography's verify both accept a signature R || 0 for many or all messages (measured), and a
-# session vouches until its node's key is replaced, so one would let anyone who can write etcd sign as that session.
-# An honest daemon's key is never one. y >= p is a non-canonical encoding, refused too (y = p + 1 is the identity).
 def session_key_path(entry):
     """Where a session entry lives: one per daemon start (several in one boot)."""
     membership.exact(entry, SESSION_FIELDS, "the session entry")
@@ -202,7 +198,7 @@ def session_key_path(entry):
     require(isinstance(entry["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", entry["node_id"]) is not None, "node_id must be a node ID")
     require(isinstance(entry["boot_id"], str) and BOOT_ID.fullmatch(entry["boot_id"]) is not None, "boot_id must be a boot UUID")
     # Ed25519PublicKey.from_public_bytes accepts any 32 bytes, so it checks nothing here (regalia-u1r); the encoding is
-    # judged by arithmetic instead, as Go's SessionKeyPath does (regalia-53g)
+    # judged by arithmetic instead (lease.session_public), as Go's SessionKeyPath does (regalia-53g)
     lease.session_public(entry["session_key"], "session_key")
     heartbeat.parse_time(entry["issued_at"], "issued_at")
     return PREFIX + "sessions/%s/%s/%s" % (entry["node_id"], entry["boot_id"], entry["session_key"])
