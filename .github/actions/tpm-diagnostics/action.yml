@@ -16,8 +16,8 @@ runs:
       run: |
         out="$RUNNER_TEMP/tpm-diagnostics"
         mkdir -p "$out"
-        # the harnesses' work directories live under /tmp (swtpm's AppArmor profile lets it write there), as root. With
-        # REGALIA_E2E_TPM=abrmd, each node's tpm2-abrmd and bus logs too: threenode's close() keeps them beside its
+        # the harnesses' work directories live under /tmp (swtpm's AppArmor profile lets it write there), as root. For the
+        # three-node fixture, each node's tpm2-abrmd and bus logs too (its only TPM route, #592): close() keeps them beside its
         # tpm.log, and a pattern that names only tpm.log left them out (#605's run 40456967936 kept 3 of its 9 logs;
         # tests/test_tpm_diagnostics_action.py holds every name close() keeps to these patterns)
         sudo find /tmp -maxdepth 4 -type f \( -name 'tpm.log' -o -name 'swtpm*.log' -o -name 'b-tpm.log' -o -name 'console-*.log' \

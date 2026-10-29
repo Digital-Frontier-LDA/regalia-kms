@@ -1,6 +1,9 @@
-"""#512: a software TPM with no resource manager keeps the sessions of a call that died connected, and three of them
-leave no slot (TPM_RC_SESSION_MEMORY, 0x903: three-node-recovery on #493). membership.run_tpm2 flushes the orphans and
-asks once more, on a simulator only. Run with python -B (a stale .pyc runs the previous falsifier case)."""
+"""#592: a 0x903 (TPM_RC_SESSION_MEMORY) is a failure, said as the TPM said it: nothing flushes the TPM's sessions or
+asks once more. #514 did both on a software TPM, because the three-node fixture reached each node's swtpm through its raw
+socket, where a call that died connected kept its slot; the fixture now goes through one tpm2-abrmd per node (#605,
+#607), which, like a host's /dev/tpmrm0, ends a dead connection's sessions with it, and e2e/abrmd-probe.sh is the
+regression for the exhaustion itself. A retry kept there would only hide a slot leak the resource manager should have
+made impossible. Run with python -B (a stale .pyc runs the previous case)."""
 import os
 import shutil
 import socket
@@ -14,6 +17,7 @@ import unittest.mock
 from deploy.baremetal import membership, signkey
 
 NO_SLOT = "WARNING:esys:...: Esys_StartAuthSession(0x903) - tpm:warn(2.0): out of memory for session contexts"
+SESSION_MEMORY = "out of memory for session contexts"
 
 
 def done(rc=0, out=b"", err=b""):
@@ -33,50 +37,33 @@ class Recorder:
         return self.answers.pop(0)
 
 
-class Gate(unittest.TestCase):
-    def test_a_simulator_without_a_slot_is_flushed_and_asked_once_more(self):
-        run = Recorder(done(1, err=NO_SLOT.encode()), done(), done(0, b"read"))
-        got = membership.run_tpm2(run, ["tpm2_nvread", "0x1500017"], {"E": "1"}, "swtpm:path=/x", input=b"in")
-        self.assertEqual(got.stdout, b"read")
-        self.assertEqual([c[0] for c in run.calls], [["tpm2_nvread", "0x1500017"], ["tpm2_flushcontext", "-l"], ["tpm2_nvread", "0x1500017"]])
-        self.assertEqual(run.calls[2][1], {"capture_output": True, "env": {"E": "1"}, "input": b"in"})   # the same call again
+class NoSlotIsAFailure(unittest.TestCase):
+    """Every TCTI, the software TPM's included: one call, its failure as it is, no flush."""
+    TCTIS = ("swtpm:path=/x", "mssim:host=localhost", "device:/dev/tpmrm0", "tabrmd:bus_type=system")
+    ERRORS = (NO_SLOT, "ERROR: Esys_StartAuthSession(0x903) - tpm:warn(2.0): (reworded)", "Esys Finish ErrorCode (0x00000903)")
 
-    def test_the_tcti_from_the_environment_counts(self):
-        run = Recorder(done(1, err=NO_SLOT), done(), done())
+    def test_the_anchor_reads_once_and_answers_the_tpms_failure(self):
+        for tcti in self.TCTIS:
+            for err in self.ERRORS:
+                run = Recorder(done(1, err=err.encode()))
+                hw = membership.HighWater("0x1500017", tcti=tcti, run=run)
+                got = hw._tpm("nvread", "0x1500017")
+                self.assertEqual((got.returncode, got.stderr), (1, err.encode()), (tcti, err))
+                self.assertEqual([c[0] for c in run.calls], [["tpm2_nvread", "0x1500017"]], (tcti, err))
+
+    def test_the_tcti_from_the_environment_changes_nothing(self):
+        run = Recorder(done(1, err=NO_SLOT.encode()))
         with unittest.mock.patch.dict(os.environ, TPM2TOOLS_TCTI="mssim:host=localhost"):
-            self.assertEqual(membership.run_tpm2(run, ["tpm2_nvread"], None).returncode, 0)
-        self.assertEqual(len(run.calls), 3)
+            self.assertEqual(membership.HighWater("0x1500017", run=run)._tpm("nvread", "0x1500017").returncode, 1)
+        self.assertEqual(len(run.calls), 1)
 
-    def test_a_host_resource_manager_is_never_flushed(self):
-        for tcti in ("device:/dev/tpmrm0", "tabrmd:bus_type=system"):
-            run = Recorder(done(1, err=NO_SLOT.encode()))
-            with unittest.mock.patch.dict(os.environ, {}, clear=True):
-                got = membership.run_tpm2(run, ["tpm2_nvread"], None, tcti)
-            self.assertEqual((got.returncode, len(run.calls)), (1, 1), tcti)
-
-    def test_the_code_alone_is_enough(self):
-        for err in ("ERROR: Esys_StartAuthSession(0x903) - tpm:warn(2.0): (reworded)", "Esys Finish ErrorCode (0x00000903)"):
-            run = Recorder(done(1, err=err.encode()), done(), done())
-            self.assertEqual(membership.run_tpm2(run, ["tpm2_nvread"], None, "swtpm:path=/x").returncode, 0, err)
-        run = Recorder(done(1, err=b"ERROR: Esys_ContextSave(0x901) - tpm:warn(2.0): gap for context ID is too large"))
-        self.assertEqual(len((membership.run_tpm2(run, ["tpm2_nvread"], None, "swtpm:path=/x"), run.calls)[1]), 1)   # 0x901: not ours
-
-    def test_any_other_failure_is_answered_as_it_is(self):
-        run = Recorder(done(1, err=b"ERROR: Esys_NV_Read(0x98E) - tpm:session(1):the authorization HMAC check failed"))
-        self.assertEqual((membership.run_tpm2(run, ["tpm2_nvread"], None, "swtpm:path=/x").returncode, len(run.calls)), (1, 1))
-
-    def test_asked_once_more_only(self):
-        run = Recorder(done(1, err=NO_SLOT.encode()), done(), done(1, err=NO_SLOT.encode()))
-        self.assertEqual(membership.run_tpm2(run, ["tpm2_nvread"], None, "swtpm:path=/x").returncode, 1)
-        self.assertEqual(len(run.calls), 3)
-
-    def test_the_anchor_and_the_signing_key_take_it(self):
-        run = Recorder(done(1, err=NO_SLOT.encode()), done(), done(0, b"x"))
-        hw = membership.HighWater("0x1500017", tcti="swtpm:path=/x", run=run)
-        self.assertEqual(hw._tpm("nvread", "0x1500017").stdout, b"x")
-        run = Recorder(done(1, err=NO_SLOT.encode()), done(), done(0, b"y"), done())      # the last: its transients' flush
-        self.assertEqual(signkey._tpm(run, "swtpm:path=/x", "startauthsession", "--policy-session", "-S", "s"), b"y")
-        self.assertEqual(run.calls[1][0], ["tpm2_flushcontext", "-l"])
+    def test_the_signing_key_refuses_with_what_the_tpm_said(self):
+        run = Recorder(done(1, err=NO_SLOT.encode()), done())      # the call, then its transients' flush (-t), never -l
+        with self.assertRaises(membership.Refused) as said:
+            signkey._tpm(run, "swtpm:path=/x", "startauthsession", "--policy-session", "-S", "s")
+        self.assertIn("0x903", str(said.exception))
+        self.assertEqual([c[0] for c in run.calls], [["tpm2_startauthsession", "--policy-session", "-S", "s"],
+                                                     ["tpm2_flushcontext", "-t"]])
 
 
 def start_auth_sessions(sock, count):
@@ -134,23 +121,16 @@ class OnSwtpm(unittest.TestCase):
     def session(self, name):
         return ["tpm2_startauthsession", "--policy-session", "-S", os.path.join(self.d, name)]
 
-    def test_orphans_take_every_slot_and_the_next_call_gets_one(self):
+    def test_orphans_take_every_slot_and_the_next_call_says_so(self):
+        """What #514 absorbed on the raw socket, now a failure that names it: on a swtpm with no resource manager (what
+        the fixture no longer is), three orphaned sessions leave the anchor's next call no slot."""
         start_auth_sessions(self.sock, 3)
         self.assertEqual(self.loaded(), 3)
-        plain = subprocess.run(self.session("plain.ctx"), capture_output=True, env=self.env)
-        self.assertIn(membership.SESSION_MEMORY, plain.stderr.decode())      # the fixture's failure, reproduced
-        got = membership.run_tpm2(subprocess.run, self.session("new.ctx"), self.env, self.tcti)
-        self.assertEqual(got.returncode, 0, got.stderr)
-        self.assertEqual(self.loaded(), 0)                                    # its own session saved, the orphans gone
-
-    def test_a_live_flow_between_its_calls_is_not_touched(self):
-        live = os.path.join(self.d, "live.ctx")
-        subprocess.run(["tpm2_startauthsession", "--policy-session", "-S", live], check=True, capture_output=True, env=self.env)
-        start_auth_sessions(self.sock, 3)
-        got = membership.run_tpm2(subprocess.run, self.session("new.ctx"), self.env, self.tcti)
-        self.assertEqual(got.returncode, 0, got.stderr)
-        subprocess.run(["tpm2_policypcr", "-S", live, "-l", "sha256:11"], check=True, capture_output=True, env=self.env)
-        subprocess.run(["tpm2_flushcontext", live], check=True, capture_output=True, env=self.env)
+        hw = membership.HighWater("0x1500017", tcti=self.tcti)
+        got = hw._tpm("startauthsession", "--policy-session", "-S", os.path.join(self.d, "new.ctx"))
+        self.assertNotEqual(got.returncode, 0)
+        self.assertIn(SESSION_MEMORY, got.stderr.decode())
+        self.assertEqual(self.loaded(), 3)                                    # nothing flushed them
 
 
 if __name__ == "__main__":

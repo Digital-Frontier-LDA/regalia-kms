@@ -379,12 +379,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   three-node fixture showed it intermittently on its shared software TPMs (#448). The refusal ends with the last
   line the tool printed, as `(TPM: …)` (#450), and the journal its last 400 characters; if that names a transient TPM code
   (`TPM_RC_RETRY`, `TPM_RC_YIELDED`, `TPM_RC_TESTING`, a busy socket), a small bounded retry on those codes alone is
-  the next step. One code is retried, on a software TPM only: `TPM_RC_SESSION_MEMORY` (0x903).
-  A bare swtpm has no resource manager, so a call that dies connected leaves its sessions loaded, and three of them
-  fill every slot (three-node-recovery, #512). `membership.run_tpm2` then flushes the loaded sessions and
-  asks once more; it logs `regalia: … (#512)` each time. Only the anchor's reads and writes and `signkey`'s policy
-  sessions take it: ownerauth, enrol and attest don't. Which fixture call dies connected is not established. A host's
-  `/dev/tpmrm0` is never flushed or retried.
+  the next step. Nothing is retried, `TPM_RC_SESSION_MEMORY` (0x903) included: until #592, a software TPM's
+  0x903 was flushed and asked once more (#512), because the three-node fixture reached each swtpm through its raw
+  socket, where a call that died connected kept its session slot. The fixture now reaches each node's TPM through its
+  own tpm2-abrmd (#605, #607), which ends a dead connection's sessions as a host's `/dev/tpmrm0` does, so a 0x903 is a
+  failure there too. `e2e/abrmd-probe.sh` is the regression for the exhaustion itself.
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
