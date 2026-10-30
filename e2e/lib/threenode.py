@@ -745,8 +745,10 @@ class Cluster:
         read whole to say a failure. 4 bytes a character at most (UTF-8), so the slice is the whole-file read's."""
         try:
             with open(path, "rb") as f:
-                f.seek(max(0, os.fstat(f.fileno()).st_size - 4 * limit))
-                return f.read().decode(errors="replace")[-limit:]
+                size = os.fstat(f.fileno()).st_size
+                start = max(0, size - 4 * limit)
+                f.seek(start)
+                return f.read(size - start).decode(errors="replace")[-limit:]   # not what a running daemon appends since
         except OSError:
             return "(none)"
 

@@ -432,6 +432,31 @@ class Tail(unittest.TestCase):
         self.assertTrue(read, "the spy saw no read: the tail was not read through open()")
         self.assertLessEqual(sum(read), 4 * 800)
 
+    def test_a_log_that_grows_during_the_read_is_still_read_bounded(self):
+        """CodeRabbit on #637: abrmd_answers reads a running daemon's log; what it appends after the size is taken is not
+        read, so the read stays bounded however much it writes meanwhile."""
+        path = self.d / "log"
+        path.write_bytes(b"x" * 10000 + b"the line before\n")
+        read = []
+        real_open = open
+
+        def spy(*args, **kwargs):
+            f = real_open(*args, **kwargs)
+            real_read = f.read
+
+            def grown_read(*a):
+                with real_open(path, "ab") as w:                      # the daemon writes 1 MiB between fstat and read
+                    w.write(b"y" * (1 << 20))
+                chunk = real_read(*a)
+                read.append(len(chunk))
+                return chunk
+            f.read = grown_read
+            return f
+        with unittest.mock.patch("builtins.open", spy):
+            tail = threenode.Cluster._tail(path)
+        self.assertTrue(tail.endswith("the line before\n"), tail[-40:])
+        self.assertEqual(read, [4 * 800])
+
     def test_a_missing_log_is_none(self):
         self.assertEqual(threenode.Cluster._tail(self.d / "missing"), "(none)")
 
