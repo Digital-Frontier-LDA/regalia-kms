@@ -4,6 +4,8 @@ this process's TPM calls only inside tpm_of (outside, no session bus: a forgotte
 client only while none of the node's units runs. Unit tests on a Cluster with no machine behind it, so the rules are held
 here and not only by a scenario that needs a runner."""
 import ast
+import contextlib
+import io
 import os
 import pathlib
 import shutil
@@ -339,6 +341,39 @@ class AbrmdDeath(unittest.TestCase):
         proc.wait()
         self.c.nodes["b"].abrmd = proc
         self.assertIn("(exit 3)", self.c.abrmd_death("b"))
+
+    @unittest.skipUnless(hasattr(threenode.signal, "SIGRTMIN"), "real-time signals: Linux")
+    def test_a_signal_with_no_name_is_said_by_its_number(self):
+        """CodeRabbit on #636: SIGRTMIN+1 is a valid signal that signal.Signals cannot name; that ValueError replaced the
+        diagnostic (and, in close, stopped the cleanup)."""
+        rt = int(threenode.signal.SIGRTMIN) + 1
+        proc = subprocess.Popen([sys.executable, "-c", "import os; os.kill(os.getpid(), %d)" % rt])
+        proc.wait()
+        self.c.nodes["b"].abrmd = proc
+        self.assertIn("(killed by signal %d)" % rt, self.c.abrmd_death("b"))
+
+    def test_stopping_a_dead_abrmd_reports_it_once_so_a_power_cycle_cannot_erase_it(self):
+        """CodeRabbit on #636: power_cycle's _abrmd_down cleared the dead process and started another, so a check after it
+        saw only the replacement. _abrmd_down is every path that clears n.abrmd; it says and keeps the death first."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.c._abrmd_down(self.c.nodes["b"])
+            self.c._abrmd_down(self.c.nodes["b"])                     # cleared: nothing more to say
+        self.assertIsNone(self.c.nodes["b"].abrmd)
+        self.assertEqual(len(self.c.abrmd_deaths), 1)
+        self.assertTrue(self.c.abrmd_deaths[0].startswith("b's tpm2-abrmd died while its TPM ran (killed by SIGABRT)"))
+        self.assertEqual(out.getvalue(), "e2e3: " + self.c.abrmd_deaths[0] + "\n")
+
+    def test_stopping_a_running_abrmd_reports_nothing(self):
+        running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.addCleanup(running.wait)
+        self.addCleanup(running.kill)
+        self.c.nodes["a"].abrmd = running
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.c._abrmd_down(self.c.nodes["a"])
+        self.assertEqual((out.getvalue(), self.c.__dict__.get("abrmd_deaths", [])), ("", []))
+        self.assertIsNotNone(running.poll())                          # and it was stopped
 
     def test_a_call_for_a_node_whose_abrmd_died_is_refused_by_name_and_releases_the_lock(self):
         ran = []                                                      # not self.fail: its error would be wrapped too

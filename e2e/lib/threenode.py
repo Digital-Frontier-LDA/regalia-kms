@@ -672,7 +672,13 @@ class Cluster:
                                   self._tail(n.dir / "abrmd.log"), self._tail(n.dir / "dbus.log")))
 
     def _abrmd_down(self, n, bus=False):
-        """The node's tpm2-abrmd stopped (before its TPM is), and with `bus` its dbus-daemon too (close)."""
+        """The node's tpm2-abrmd stopped (before its TPM is), and with `bus` its dbus-daemon too (close). A daemon that had
+        already died is said and kept in abrmd_deaths first (regalia-q84): every path that clears n.abrmd comes here, a
+        power cycle included, so none can erase a death before it is reported."""
+        dead = self.abrmd_death(n.name)
+        if dead:
+            self.__dict__.setdefault("abrmd_deaths", []).append(dead)
+            print("e2e3: " + dead, flush=True)
         for attr in ("abrmd", "dbus") if bus else ("abrmd",):
             proc = getattr(n, attr)
             setattr(n, attr, None)                    # n.tcti is the raw socket from here
@@ -693,7 +699,13 @@ class Cluster:
         if not isinstance(proc, subprocess.Popen) or proc.poll() is None:
             return None
         rc = proc.returncode
-        how = "killed by %s" % signal.Signals(-rc).name if rc < 0 and -rc in signal.valid_signals() else "exit %d" % rc
+        if rc >= 0:
+            how = "exit %d" % rc
+        else:
+            try:
+                how = "killed by %s" % signal.Signals(-rc).name
+            except ValueError:                        # a valid signal with no name (SIGRTMIN+n): its number
+                how = "killed by signal %d" % -rc
         return "%s's tpm2-abrmd died while its TPM ran (%s) | its log: %s" % (name, how, self._tail(n.dir / "abrmd.log"))
 
     def abrmd_answers(self, name, check=True):
@@ -2254,10 +2266,6 @@ class Cluster:
         # MEASURED: how long this process ever held tpm_of's lock at once (its TPM calls are serialised by it, the services'
         # are not): a long one would serialise what a scenario means to run at once (TEAMLEAD-grafana)
         print("e2e3: this process's longest TPM call held tpm_of %.2f s (node %s)" % (held, by), flush=True)
-        for n in self.members():                      # regalia-q84: before stop() reaps them
-            dead = self.abrmd_death(n.name)
-            if dead:
-                print("e2e3: " + dead, flush=True)
         for n in self.members():
             self.stop(n.name, power=None)
         if self.audit:
