@@ -627,7 +627,16 @@ class Cluster:
             if n.abrmd is not None:
                 os.environ["DBUS_SESSION_BUS_ADDRESS"] = n.bus_address
             try:
-                yield n
+                dead = self.abrmd_death(name)
+                if dead:
+                    raise RuntimeError(dead)
+                try:
+                    yield n
+                except Exception as error:            # regalia-q84: a call that failed because the daemon died says so
+                    dead = self.abrmd_death(name)
+                    if dead:
+                        raise RuntimeError(dead) from error
+                    raise
             finally:
                 holders.pop()
                 if not holders:                       # the outermost: no session bus again, and how long it held the lock
@@ -663,7 +672,13 @@ class Cluster:
                                   self._tail(n.dir / "abrmd.log"), self._tail(n.dir / "dbus.log")))
 
     def _abrmd_down(self, n, bus=False):
-        """The node's tpm2-abrmd stopped (before its TPM is), and with `bus` its dbus-daemon too (close)."""
+        """The node's tpm2-abrmd stopped (before its TPM is), and with `bus` its dbus-daemon too (close). A daemon that had
+        already died is said and kept in abrmd_deaths first (regalia-q84): every path that clears n.abrmd comes here, a
+        power cycle included, so none can erase a death before it is reported."""
+        dead = self.abrmd_death(n.name)
+        if dead:
+            self.__dict__.setdefault("abrmd_deaths", []).append(dead)
+            print("e2e3: " + dead, flush=True)
         for attr in ("abrmd", "dbus") if bus else ("abrmd",):
             proc = getattr(n, attr)
             setattr(n, attr, None)                    # n.tcti is the raw socket from here
@@ -674,6 +689,24 @@ class Cluster:
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait()
+
+    def abrmd_death(self, name):
+        """How node `name`'s tpm2-abrmd died, or None while it runs (or none was started). regalia-q84: b's tpm2-abrmd once
+        aborted on a GLib assertion mid-scenario, and the run said only GDBus ServiceUnknown ':1.0' from the next client;
+        the death, its signal and its log tail are said by name instead."""
+        n = self.nodes[name]
+        proc = n.abrmd
+        if not isinstance(proc, subprocess.Popen) or proc.poll() is None:
+            return None
+        rc = proc.returncode
+        if rc >= 0:
+            how = "exit %d" % rc
+        else:
+            try:
+                how = "killed by %s" % signal.Signals(-rc).name
+            except ValueError:                        # a valid signal with no name (SIGRTMIN+n): its number
+                how = "killed by signal %d" % -rc
+        return "%s's tpm2-abrmd died while its TPM ran (%s) | its log: %s" % (name, how, self._tail(n.dir / "abrmd.log"))
 
     def abrmd_answers(self, name, check=True):
         """Whether node `name`'s tpm2-abrmd answers a TPM command (TPM2_GetRandom), within 5 s. With `check`, an answer
