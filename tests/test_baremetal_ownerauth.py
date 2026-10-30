@@ -1,6 +1,7 @@
 """#242 step C: the TPM owner authorization from the ceremony's envelope (deploy/baremetal/ownerauth.py).
 
-  * regalia-kms-51's vector (tests/vectors/ownerauth-v1.json, regalia-ceremony offline-keys.py at ae0b1dc): the
+  * the ceremony writer's vector (tests/vectors/ownerauth-v1.json, by ownerauth-v1-gen.py from regalia-ceremony#178's
+    head cf60eaa, regalia-avz's per-kind domain; first made by regalia-kms-51 at ae0b1dc): the
     record verifies under its pinned root, and each node's value matches its check;
   * the record's refusals, each the one guard's own message; the value's form on standard input;
   * the channel: no value on any command line, `-C o` and `"hex:"` only in ownerauth.py (a grep of the package);
@@ -42,15 +43,16 @@ def raw_pub(key):
     return key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
 
 
-def resigned(change, key=None):
-    """The vector's record changed by `change` and signed by `key` as its root (pinned as raw_pub(key)): for the checks
-    that come after the signature."""
+def resigned(change, key=None, domain=None):
+    """The vector's record changed by `change` and signed by `key` as its root (pinned as raw_pub(key)) over `domain`
+    (ownerauth.RECORD_DOMAIN by default): for the checks that come after the signature."""
     key = key or Ed25519PrivateKey.generate()
+    domain = ownerauth.RECORD_DOMAIN if domain is None else domain
     record = copy.deepcopy(RECORD["record"])
     record["root_entry"]["key"] = raw_pub(key)
     record["root_fingerprint"] = hashlib.sha256(bytes.fromhex(raw_pub(key))).hexdigest()
     change(record)
-    return {"record": record, "signature": key.sign(ownerauth.RECORD_DOMAIN + m.canonical(record)).hex()}, raw_pub(key)
+    return {"record": record, "signature": key.sign(domain + m.canonical(record)).hex()}, raw_pub(key)
 
 
 class TheVector(unittest.TestCase):
@@ -78,6 +80,19 @@ class TheRecordIsRefused(unittest.TestCase):
         with self.assertRaises(m.Refused) as caught:
             ownerauth.verify(envelope, root, node)
         self.assertIn(reason, str(caught.exception))
+
+    def test_no_old_domain_nor_another_kind_s_signature_verifies(self):
+        """regalia-avz: an ownerauth record verifies under regalia.ownerauth-record/v1 only. Under the domain every record
+        kind shared before the cutover, another kind's (offline-keys, card-ceremony) or the membership's, it is refused,
+        its content otherwise the vector's: no old-domain record is accepted after the cutover."""
+        self.assertEqual(ownerauth.RECORD_DOMAIN, b"regalia.ownerauth-record/v1\x00")
+        self.assertEqual(ownerauth.RECORD_DOMAIN, (ownerauth.SCHEMA + "\x00").encode())
+        envelope, root = resigned(lambda r: None)
+        self.assertEqual(sorted(ownerauth.verify(envelope, root, "a")), ["bg_sha256", "check", "yk_sha256"])     # the control
+        for domain in (ownerauth.RETIRED_RECORD_DOMAIN, b"regalia.offline-keys-record/v1\x00",
+                       b"regalia.card-ceremony-record/v1\x00", m.DOMAIN):
+            with self.subTest(domain=domain):
+                self.refused("the owner-authorization record's signature is not the pinned root's", *resigned(lambda r: None, domain=domain))
 
     def test_under_another_root(self):
         self.refused("names another root than the pinned one", RECORD, root="ab" * 32)

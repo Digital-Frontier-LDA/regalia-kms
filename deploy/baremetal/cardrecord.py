@@ -61,7 +61,11 @@ from deploy.baremetal import membership
 
 Refused, require = membership.Refused, membership.require
 
-RECORD_DOMAIN = b"regalia-ceremony-record/v1\x00"
+# regalia-avz (agreed with regalia-ceremony#178): each root-signed record kind signs under its own schema, NUL-terminated,
+# so no other kind's signature (an offline-keys or ownerauth record) verifies as a card record. The domain all kinds
+# shared until then is retired and accepted nowhere (RETIRED_RECORD_DOMAIN: tests only)
+RETIRED_RECORD_DOMAIN = b"regalia-ceremony-record/v1\x00"
+RECORD_DOMAIN = b"regalia.card-ceremony-record/v1\x00"
 SCHEMA = "regalia.card-ceremony-record/v1"
 EVENT = "card-ceremony"
 ROLES = ("owner-main", "owner-backup")      # ADR-0002 D30.7, regalia-ceremony#133: the owner pair (regalia-86f)
