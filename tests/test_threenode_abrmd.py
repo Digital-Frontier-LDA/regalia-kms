@@ -400,6 +400,42 @@ class AbrmdDeath(unittest.TestCase):
             raise ValueError
 
 
+class Tail(unittest.TestCase):
+    """regalia-89s (c6 on #636): a failure's log tail is read from the log's end, never the whole file, and says what the
+    whole-file read said."""
+    def setUp(self):
+        self.d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def test_the_tail_is_the_whole_file_reads_tail(self):
+        for text in ("", "short\n", "x" * 5000 + "end\n", "é€😀" * 700 + "last line\n", "é" * 400):
+            path = self.d / "log"
+            path.write_text(text)
+            for limit in (1, 800):
+                with self.subTest(size=len(text), limit=limit):
+                    self.assertEqual(threenode.Cluster._tail(path, limit), path.read_text(errors="replace")[-limit:])
+
+    def test_a_long_log_is_not_read_whole(self):
+        path = self.d / "log"
+        path.write_bytes(b"x" * (4 << 20) + b"GLib:ERROR Bail out!\n")
+        read = []
+        real_open = open
+
+        def spy(*args, **kwargs):
+            f = real_open(*args, **kwargs)
+            real_read = f.read
+            f.read = lambda *a: read.append(len(chunk := real_read(*a))) or chunk
+            return f
+        with unittest.mock.patch("builtins.open", spy):
+            tail = threenode.Cluster._tail(path)
+        self.assertTrue(tail.endswith("GLib:ERROR Bail out!\n"))
+        self.assertTrue(read, "the spy saw no read: the tail was not read through open()")
+        self.assertLessEqual(sum(read), 4 * 800)
+
+    def test_a_missing_log_is_none(self):
+        self.assertEqual(threenode.Cluster._tail(self.d / "missing"), "(none)")
+
+
 class AbrmdAnswers(unittest.TestCase):
     def setUp(self):
         self.work = pathlib.Path(tempfile.mkdtemp())

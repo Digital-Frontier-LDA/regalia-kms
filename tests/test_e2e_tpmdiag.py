@@ -20,6 +20,13 @@ class TpmDiag(unittest.TestCase):
             self.assertIn(part, line)
         self.assertTrue(line.startswith("TPM stack: "))
 
+    def test_any_package_takes_the_first_installed_and_says_absent_with_none_named(self):
+        versions = {"libglib2.0-0t64": "absent", "libglib2.0-0": "2.80.0-6"}
+        with mock.patch.object(tpmdiag, "_package", versions.get):
+            self.assertEqual(tpmdiag._any_package("libglib2.0-0t64", "libglib2.0-0"), "2.80.0-6")
+            self.assertEqual(tpmdiag._any_package("libglib2.0-0t64"), "absent")
+        self.assertEqual(tpmdiag._any_package(), "absent")         # regalia-89s: no UnboundLocalError
+
     def test_keep_copies_the_logs_in_ci_only(self):
         import tempfile
         d = tempfile.mkdtemp()
