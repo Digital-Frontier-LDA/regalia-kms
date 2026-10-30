@@ -16,7 +16,7 @@ class TpmDiag(unittest.TestCase):
     def test_the_versions_line_names_each_part_and_says_what_is_absent(self):
         with mock.patch.object(tpmdiag.shutil, "which", lambda name: None):
             line = tpmdiag.versions()
-        for part in ("swtpm absent", "tpm2-tools absent", "qemu absent", "libtpms ?", "kernel "):
+        for part in ("swtpm absent", "tpm2-tools absent", "tpm2-abrmd ?", "glib ?", "qemu absent", "libtpms ?", "kernel "):
             self.assertIn(part, line)
         self.assertTrue(line.startswith("TPM stack: "))
 

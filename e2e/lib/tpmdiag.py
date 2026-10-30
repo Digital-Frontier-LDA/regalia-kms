@@ -4,7 +4,7 @@ Both of 2026-10-24's TPM failures needed evidence the runs did not keep: swtpm l
 per command), the QEMU boot test gave swtpm no log at all, and the tool versions were only in apt's install output.
 regalia-a0y's cause took an experiment branch with --log level=20 to find. Every harness that starts a swtpm now:
   - logs it at LOG_LEVEL (each command and response, with the control channel's CMD_CANCEL_TPM_CMD and friends);
-  - says which swtpm, libtpms, tpm2-tools, QEMU and kernel it ran on (versions()).
+  - says which swtpm, libtpms, tpm2-tools, tpm2-abrmd, GLib, QEMU and kernel it ran on (versions()).
 tpm2-tss is left as it is: it already logs its warnings and errors to stderr (TSS2_LOG's default, all+warning), which
 the harnesses keep in their failures, and every refusal ends with the TPM's own last line (#450): a TPM_RC_SESSION_MEMORY
 (0x903) is read from there. Redirecting it to a file would hide it.
@@ -61,11 +61,23 @@ def _package(name):
     return done.stdout.strip() or "absent"
 
 
+def _any_package(*names):
+    """The first of `names` that is installed (Ubuntu's t64 renames), else what the last one says."""
+    for name in names:
+        version = _package(name)
+        if version not in ("absent", "?"):
+            return version
+    return version
+
+
 def versions():
     """One line naming what the software TPM ran on: the evidence regalia-a0y had to dig out of apt's output."""
     parts = ["swtpm %s" % _first_line(["swtpm", "--version"]),
              "libtpms %s" % (_package("libtpms0") if _package("libtpms0") not in ("absent", "?") else _package("libtpms-dev")),
              "tpm2-tools %s" % _first_line(["tpm2_startup", "--version"]),
+             # regalia-q84: the three-node jobs reach their TPMs through tpm2-abrmd, which once aborted on a GLib assertion
+             "tpm2-abrmd %s" % _package("tpm2-abrmd"),
+             "glib %s" % _any_package("libglib2.0-0t64", "libglib2.0-0"),
              "qemu %s" % _first_line(["qemu-system-x86_64", "--version"]),
              "kernel %s" % os.uname().release]
     return "TPM stack: " + " | ".join(parts)
