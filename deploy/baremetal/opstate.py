@@ -70,7 +70,7 @@ import re
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from deploy.baremetal import heartbeat, membership
+from deploy.baremetal import heartbeat, lease, membership
 
 Refused, require = membership.Refused, membership.require
 
@@ -191,17 +191,15 @@ APPROVAL_FIELDS = ("approver_id", "nonce", "expires_at", "payload_digest", "sign
 SESSION_SCHEMA = "regalia.opstate-session/v1"
 SESSION_DOMAIN = b"regalia-opstate-session/v1\0"
 SESSION_FIELDS = ("schema", "node_id", "boot_id", "session_key", "issued_at")
-
-
 def session_key_path(entry):
     """Where a session entry lives: one per daemon start (several in one boot)."""
     membership.exact(entry, SESSION_FIELDS, "the session entry")
     require(entry["schema"] == SESSION_SCHEMA, "schema must be %s" % SESSION_SCHEMA)
     require(isinstance(entry["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", entry["node_id"]) is not None, "node_id must be a node ID")
     require(isinstance(entry["boot_id"], str) and BOOT_ID.fullmatch(entry["boot_id"]) is not None, "boot_id must be a boot UUID")
-    # 32 bytes, as Go's SessionKeyPath also takes it: Ed25519PublicKey.from_public_bytes accepts any 32 bytes, so a
-    # check on it here could never refuse (regalia-u1r); a key that is not one fails where it is used, at verify
-    membership.hex_field(entry["session_key"], 64, "session_key")
+    # Ed25519PublicKey.from_public_bytes accepts any 32 bytes, so it checks nothing here (regalia-u1r); the encoding is
+    # judged by arithmetic instead (lease.session_public), as Go's SessionKeyPath does (regalia-53g)
+    lease.session_public(entry["session_key"], "session_key")
     heartbeat.parse_time(entry["issued_at"], "issued_at")
     return PREFIX + "sessions/%s/%s/%s" % (entry["node_id"], entry["boot_id"], entry["session_key"])
 

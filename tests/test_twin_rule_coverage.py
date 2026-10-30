@@ -1,7 +1,7 @@
 """EVERY RULE OF A TWIN HAS A CASE IN THE SHARED VECTOR (regalia-u1r).
 
-internal/opstate's Go functions documented "X is opstate.<fn>" or "X is survivor.<fn>" mirror
-deploy/baremetal/opstate.py and survivor.py, and tests/vectors/opstate-v1.json holds both sides to the same decisions
+internal/opstate's Go functions documented "X is opstate.<fn>", "X is survivor.<fn>" or "X is lease.<fn>" mirror
+deploy/baremetal/opstate.py, survivor.py and lease.py, and tests/vectors/opstate-v1.json holds both sides to the same decisions
 and reasons. That held only for the rules some case happened to reach: three times in two days a rule changed on one
 side while no case reached it (#496's v2 binding, #516's redfish evidence and its fence set). So this iterates the
 RULES: every require() and Refused() in those Python functions, and in the same module's helpers they call, must be
@@ -16,7 +16,9 @@ import re
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULES = ("opstate", "survivor")
+MODULES = ("opstate", "survivor", "lease")
+# the fewest rules each module's twins must yield: a scan that read nothing fails here (lease: session_public's two, 53g)
+LEAST_RULES = {"opstate": 11, "survivor": 11, "lease": 2}
 TWIN = re.compile(r"^// [A-Za-z0-9_]+ is (%s)\.([a-z_]+)\b(?!['.])" % "|".join(MODULES), re.M)
 
 
@@ -104,7 +106,7 @@ class EveryRuleHasACase(unittest.TestCase):
             with self.subTest(module):
                 missing, found, unread, _ = uncovered(module, self.twins[module], reasons)
                 self.assertEqual(unread, [], "refusals whose message is not built from literals: this test cannot read their rule")
-                self.assertGreater(len(found), 10, "the scan read almost nothing from %s.py" % module)
+                self.assertGreaterEqual(len(found), LEAST_RULES[module], "the scan read almost nothing from %s.py" % module)
                 self.assertEqual(missing, [], "%d of %d rules of %s.py's twins have no refused case in opstate-v1.json (add one to "
                                  "make-opstate-v1.py; never an exemption)" % (len(missing), len(found), module))
 

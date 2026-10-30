@@ -163,5 +163,44 @@ class Format(unittest.TestCase):
         self.assertLessEqual(opstate.MAX_BATCH, 128 // 2)        # etcd's --max-txn-ops default, with room for the compares
 
 
+class SessionKeyPoints(unittest.TestCase):
+    """regalia-53g: a session key under which a signature can be forged is refused where it is admitted."""
+    # the eight small-order points' canonical encodings (Chalkias et al., "Taming the many EdDSAs", 2020)
+    SMALL = ("01" + "00" * 31, "ec" + "ff" * 30 + "7f", "00" * 31 + "80", "00" * 32,
+             "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+             "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+             "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+             "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa")
+
+    def refused(self, key, reason):
+        with self.assertRaises(m.Refused) as caught:
+            lease.session_public(key, "session_key")
+        self.assertIn(reason, str(caught.exception))
+
+    def test_each_small_order_point_is_refused_and_a_forgery_under_it_is_real(self):
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+        for key in self.SMALL:
+            self.refused(key, "small-order Ed25519 point")
+        # why: under the identity, R = identity and S = 0 verify for any message (cryptography accepts it; so does Go)
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(self.SMALL[0])).verify(bytes.fromhex(self.SMALL[0]) + bytes(32), b"anything")
+        honest = Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex()
+        lease.session_public(honest, "session_key")
+        with self.assertRaises(InvalidSignature):
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(honest)).verify(bytes.fromhex(self.SMALL[0]) + bytes(32), b"anything")
+
+    def test_a_non_canonical_y_is_refused_with_either_sign(self):
+        p = 2 ** 255 - 19
+        for y in (p, p + 1, p + 18, 2 ** 255 - 1):
+            for sign in (0, 1):
+                self.refused((y | sign << 255).to_bytes(32, "little").hex(), "not a canonical Ed25519 encoding")
+
+    def test_the_lease_admits_session_keys_by_the_same_rule(self):
+        state = {"cluster_id": "00" * 8, "state_epoch": 0, "state_revision": 0, "session_key": self.SMALL[0]}
+        with self.assertRaises(m.Refused) as caught:
+            lease._state(state, "lease")
+        self.assertIn("lease.session_key is a small-order Ed25519 point", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
