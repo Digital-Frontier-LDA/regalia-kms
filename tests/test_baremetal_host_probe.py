@@ -11,6 +11,7 @@ import io
 import json
 import os
 import re
+import struct
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -19,6 +20,22 @@ from unittest import mock
 from deploy.baremetal import evidence, host_probe
 
 SB_ON = b"\x06\x00\x00\x00\x01"
+
+
+def siglist(kind, entries, header=b""):
+    """One EFI_SIGNATURE_LIST: each entry an owner GUID and its data, all of one size."""
+    size = 16 + len(entries[0])
+    return kind + struct.pack("<III", 28 + len(header) + size * len(entries), len(header), size) + header + \
+        b"".join(b"\x11" * 16 + e for e in entries)
+
+
+SB_CERT = b"stand-in DER of OUR Secure Boot certificate"
+SB_SHA = hashlib.sha256(SB_CERT).hexdigest()
+FACTORY_CERTS = [b"stand-in DER of Microsoft's UEFI CA 2011", b"stand-in DER of HPE's db certificate"]
+EFI_CERT_SHA256 = bytes.fromhex("2616c4c14c509240aca941f936934328")
+DB_FACTORY = b"".join(siglist(host_probe.EFI_CERT_X509, [c]) for c in FACTORY_CERTS)
+DB_ATTRS = b"\x27\x00\x00\x00"    # NV, BS, RT, time-based authenticated write
+DB = DB_ATTRS + DB_FACTORY + siglist(host_probe.EFI_CERT_X509, [SB_CERT])
 DER = b"stand-in DER public key of the import key"
 FP = hashlib.sha256(DER).hexdigest()
 PEM = "-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----\n" % base64.b64encode(DER).decode()
@@ -144,7 +161,7 @@ class FakeHost:
             PIN_FILE: cred("host-pk-7-11.cred"),
             host_probe.PCRLOCK_POLICY: json.dumps(PCRLOCK),
         }
-        self.bytes = {host_probe.SECURE_BOOT_VAR: SB_ON, host_probe.KMS_BINARY: KMS_BYTES}
+        self.bytes = {host_probe.SECURE_BOOT_VAR: SB_ON, host_probe.DB_VAR: DB, host_probe.KMS_BINARY: KMS_BYTES}
         self.dirs = {"/sys/class/tpm/tpm0/pcr-sha256": [str(i) for i in range(24)], USB: ["1-1", "1-1.4", "usb1"],
                      # a replaced credential's backup sits beside it and is not a credential the service loads
                      host_probe.CREDSTORE: ["regalia-kms-hsm-site-a.pin", "regalia-kms-hsm-site-a.pin.prev-20260930T100000Z"]}
@@ -184,6 +201,8 @@ class FakeHost:
 def probe(host, name):
     if name == "pin_credentials_sealed_as_recorded":
         return host_probe.pin_credentials(host, SIGNED)
+    if name == "secure_boot_db_has_image_cert":
+        return host_probe.secure_boot_db(host, SB_SHA)
     return host_probe.import_key(host, FP[:16]) if name == "pin_import_key_present" else host_probe.PROBES[name](host)
 
 
@@ -201,6 +220,8 @@ class HostProbe(unittest.TestCase):
         cases = {
             "uefi_boot": (lambda h: h.paths.discard("/sys/firmware/efi"), "legacy BIOS"),
             "secure_boot_enabled": (lambda h: h.bytes.__setitem__(host_probe.SECURE_BOOT_VAR, b"\x06\x00\x00\x00\x00"), "SecureBoot = 0"),
+            "secure_boot_db_has_image_cert": (lambda h: h.bytes.__setitem__(host_probe.DB_VAR, DB_ATTRS + DB_FACTORY),
+                                              "none is the image's Secure Boot certificate"),
             "tpm2_present": (lambda h: h.files.__setitem__("/sys/class/tpm/tpm0/tpm_version_major", "1\n"), "no TPM 2.0"),
             "tpm_sha256_bank": (lambda h: h.dirs.pop("/sys/class/tpm/tpm0/pcr-sha256"), "SHA-256 bank"),
             "root_disk_tpm_unlocked": (lambda h: h.files.__setitem__("/etc/crypttab", "root_crypt UUID=abcd none luks\n"), "not TPM-unlocked"),
@@ -243,7 +264,7 @@ class HostProbe(unittest.TestCase):
         h = FakeHost()
         h.runs[LUKS_DUMP] = (0, LUKS_TODAY)
         with redirect_stdout(io.StringIO()) as out:
-            rc = host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
+            rc = host_probe.main(["--import-key-sha256", FP[:16], "--secure-boot-cert-sha256", SB_SHA, "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
                                      "--credential-pcr-key-pkfp", PKFP], host=h)
         report = json.loads(out.getvalue())
         self.assertEqual(rc, 1)
@@ -259,7 +280,7 @@ class HostProbe(unittest.TestCase):
         self.assertEqual([o for o in sorted(options) if re.search(r"skip|allow|ignore|force|override|except|waive|known", o)], [])
         for attempt in ("--skip", "--skip=root_disk_unlock_revocable", "--allow-known-blockers", "--ignore", "--force"):
             with self.subTest(attempt), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as refused:
-                host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", attempt], host=h)
+                host_probe.main(["--import-key-sha256", FP[:16], "--secure-boot-cert-sha256", SB_SHA, "--credential-pcrs", "7", attempt], host=h)
             self.assertEqual(refused.exception.code, 2)
 
     def judge(self, *tokens, keyslots=None, prepare=None):
@@ -342,7 +363,7 @@ class HostProbe(unittest.TestCase):
         self.assertTrue(host_probe.recovery_keyslot(h)[0])
         # through main(): every platform control true, with the record from the command line
         with redirect_stdout(io.StringIO()) as out:
-            host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
+            host_probe.main(["--import-key-sha256", FP[:16], "--secure-boot-cert-sha256", SB_SHA, "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
                              "--credential-pcr-key-pkfp", PKFP, "--node-id", "a",
                              "--unlock-peer", "b", "--unlock-peer", "c"],
                             host=self.peer_host(self.path("b", "1", "pk-7-11.cred"), LUKS_META["tokens"]["1"], self.path("c", "3", "pk-7-11.cred")))
@@ -369,7 +390,7 @@ class HostProbe(unittest.TestCase):
                     self.assertIn(reason, why)
         self.assertIn("BLOCKING FOR PRODUCTION (#135)", host_probe.unlock_revocable(h, ("a", ("b",)))[1])
         with redirect_stdout(io.StringIO()) as out:                      # main() with no record: both controls fail, and say why
-            rc = host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
+            rc = host_probe.main(["--import-key-sha256", FP[:16], "--secure-boot-cert-sha256", SB_SHA, "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
                                   "--credential-pcr-key-pkfp", PKFP], host=self.peer_host())
         report = json.loads(out.getvalue())["measured"]
         self.assertEqual(rc, 1)
@@ -377,7 +398,7 @@ class HostProbe(unittest.TestCase):
         for bad in (["--unlock-peer", "b"], ["--node-id", "A"], ["--node-id", "a", "--unlock-peer", "a"],
                     ["--node-id", "a", "--unlock-peer", "b", "--unlock-peer", "b"], ["--node-id", "a", "--unlock-peer", "b c"]):
             with self.subTest(args=bad), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as refused:
-                host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", *bad], host=self.peer_host())
+                host_probe.main(["--import-key-sha256", FP[:16], "--secure-boot-cert-sha256", SB_SHA, "--credential-pcrs", "7", *bad], host=self.peer_host())
             self.assertEqual(refused.exception.code, 2)
 
     def test_nothing_the_local_tpm_opens_by_itself_may_sit_beside_the_peer_paths(self):
@@ -507,7 +528,7 @@ class HostProbe(unittest.TestCase):
                 self.assertFalse(probe_fn(signed, self.RECORD, ([7], [11], "0" * 64))[0])    # signed by another key
         # through main(): the binding given for the PINs is the one the local share is held to
         with redirect_stdout(io.StringIO()) as out:
-            host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
+            host_probe.main(["--import-key-sha256", FP[:16], "--secure-boot-cert-sha256", SB_SHA, "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
                              "--credential-pcr-key-pkfp", PKFP, "--node-id", "a", "--unlock-peer", "b", "--unlock-peer", "c"], host=self.peer_host())
         report = json.loads(out.getvalue())["measured"]
         self.assertIn("the recorded binding is PCRs 7, signed PCRs 11", report["root_disk_unlock_revocable"]["why"])
@@ -766,7 +787,7 @@ class HostProbe(unittest.TestCase):
     def test_a_probe_that_raises_is_a_failing_control_in_the_report_not_a_crash(self):
         h = FakeHost()
         with mock.patch.dict(host_probe.PROBES, uefi_boot=lambda host: 1 / 0), redirect_stdout(io.StringIO()) as out:
-            rc = host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
+            rc = host_probe.main(["--import-key-sha256", FP[:16], "--secure-boot-cert-sha256", SB_SHA, "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
                                      "--credential-pcr-key-pkfp", PKFP], host=h)
         report = json.loads(out.getvalue())
         self.assertEqual(rc, 1)
@@ -1162,6 +1183,73 @@ class HostProbe(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("openssl"), "needs openssl")
+class SecureBootDb(unittest.TestCase):
+    """kms#543: the UKI carries our Secure Boot signature and is booted with no shim, so db must hold our certificate."""
+
+    def judge(self, db, want=SB_SHA):
+        h = FakeHost()
+        h.bytes[host_probe.DB_VAR] = db
+        return host_probe.secure_boot_db(h, want)
+
+    def test_our_certificate_is_found_among_the_factory_ones_and_after_a_hash_list(self):
+        value, why = self.judge(DB)
+        self.assertTrue(value, why)
+        self.assertEqual(why, "db holds the image's Secure Boot certificate (%s), among 3" % SB_SHA[:16])
+        # a list of hashes (another type, other sizes) and a list header of its own are stepped over, not read as certificates
+        hashes = siglist(EFI_CERT_SHA256, [b"\x22" * 32, b"\x33" * 32])
+        value, why = self.judge(DB_ATTRS + hashes + DB_FACTORY + siglist(host_probe.EFI_CERT_X509, [SB_CERT], header=b"\x44" * 8))
+        self.assertTrue(value, why)
+        self.assertIn("among 3", why)
+        self.assertEqual(host_probe.db_x509_sha256(hashes), [])
+
+    def test_the_factory_db_refuses_the_image_and_says_what_to_do(self):
+        value, why = self.judge(DB_ATTRS + DB_FACTORY)
+        self.assertFalse(value)
+        self.assertEqual(why, "db holds 2 certificate(s) (%s, %s), and none is the image's Secure Boot certificate (%s): this host "
+                         "refuses the image under Secure Boot. Append it to db in RBSU, before the first seal (kms#543)" % (
+                             hashlib.sha256(FACTORY_CERTS[0]).hexdigest()[:16], hashlib.sha256(FACTORY_CERTS[1]).hexdigest()[:16],
+                             SB_SHA[:16]))
+
+    def test_our_certificate_as_a_hash_entry_is_not_a_certificate(self):
+        value, why = self.judge(DB_ATTRS + DB_FACTORY + siglist(EFI_CERT_SHA256, [bytes.fromhex(SB_SHA)]))
+        self.assertFalse(value)
+        self.assertIn("none is the image's", why)
+
+    def test_a_malformed_db_is_refused_and_never_read_past(self):
+        good = siglist(host_probe.EFI_CERT_X509, [SB_CERT])
+        cases = {
+            "a header cut short": good[:20],
+            # one whole entry more than the variable holds: the sizes divide, only the length is wrong
+            "a list longer than the variable": good[:16] + struct.pack("<I", len(good) + 16 + len(SB_CERT)) + good[20:],
+            "entries that do not divide the list": good[:24] + struct.pack("<I", len(SB_CERT) + 15) + good[28:],
+            "an entry too small for its owner GUID": good[:24] + struct.pack("<I", 15) + good[28:],
+            "a header larger than the list": good[:20] + struct.pack("<I", len(good)) + good[24:],
+        }
+        for name, body in cases.items():
+            with self.subTest(name):
+                value, why = self.judge(DB_ATTRS + body)
+                self.assertFalse(value)
+                self.assertIn("the db EFI variable is malformed", why)
+
+    def test_without_a_full_recorded_digest_nothing_is_looked_for(self):
+        for want in (None, "", SB_SHA[:16], SB_SHA + "0", SB_SHA.upper()[:-1] + "g"):
+            with self.subTest(want=want):
+                value, why = self.judge(DB, want)
+                self.assertFalse(value)
+                self.assertIn("no recorded Secure Boot certificate to look for", why)
+        self.assertTrue(self.judge(DB, SB_SHA.upper())[0])          # an upper-case digest is the same digest
+
+    def test_an_absent_or_empty_db_fails(self):
+        for raw in (None, b"", DB_ATTRS[:3]):
+            with self.subTest(raw=raw):
+                value, why = self.judge(raw)
+                self.assertFalse(value)
+                self.assertIn("unreadable or absent", why)
+        value, why = self.judge(DB_ATTRS)
+        self.assertFalse(value)
+        self.assertIn("db holds 0 certificate(s) (none)", why)
+
+
 class SignedEvidence(unittest.TestCase):
     """The commissioning pass criterion: measured controls AND signed, complete, agreeing evidence."""
 
@@ -1181,7 +1269,7 @@ class SignedEvidence(unittest.TestCase):
     def doc(self, **host_overrides):
         host = {n: True for n in host_probe.MEASURED}
         host.update({n: True for n in evidence.ATTESTED})
-        host.update(pin_import_key_sha256=FP, hsm_usb_path="1-1.4", credential_tpm2_pcrs="7",
+        host.update(pin_import_key_sha256=FP, secure_boot_cert_sha256=SB_SHA, hsm_usb_path="1-1.4", credential_tpm2_pcrs="7",
                     credential_tpm2_signed_pcrs="", credential_tpm2_pcr_key_pkfp="",
                     system_rom_version="P89 v3.40 (2024-03-22)", ilo_firmware_version="2.82",
                     tpm_ek_certificate_present=True, node_id="a", unlock_peers=["b", "c"])
@@ -1280,6 +1368,9 @@ class SignedEvidence(unittest.TestCase):
             "a missing firmware setting": (dict(full, host={k: v for k, v in full["host"].items()
                                                            if k != "ilo_isolated_or_disabled"}), "missing"),
             "a bad import key record": (self.doc(pin_import_key_sha256="abc"), "64 lowercase hex"),
+            "a Secure Boot certificate record cut to a prefix": (self.doc(secure_boot_cert_sha256=SB_SHA[:16]), "secure_boot_cert_sha256 must be 64"),
+            "no Secure Boot certificate record": (dict(full, host={k: v for k, v in full["host"].items()
+                                                                 if k != "secure_boot_cert_sha256"}), "missing"),
             "a PIN sealed to the IMA PCR": (self.doc(credential_tpm2_pcrs="7+10"), "PCR 10"),
             "a PIN sealed to PCR 11 directly": (self.doc(credential_tpm2_pcrs="7+11"), "PCR 11"),
             "a policy without PCR 7": (self.doc(credential_tpm2_pcrs="1"), "include PCR 7"),
@@ -1312,6 +1403,22 @@ class SignedEvidence(unittest.TestCase):
                 self.assertEqual(rc, 1)
                 self.assertTrue(any(why in p for p in report["evidence_problems"]), report["evidence_problems"])
 
+    def test_the_recorded_secure_boot_certificate_is_what_db_is_searched_for(self):
+        """Not mocked: the evidence's record reaches the db probe; a record naming another certificate fails it,
+        and an argument cannot replace the signed record."""
+        def run(doc, extra=()):
+            path, sig = self.write(doc)
+            args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub, "--evidence-key-sha256", self.key_sha, *extra]
+            with redirect_stdout(io.StringIO()) as out:
+                host_probe.main(args, host=FakeHost())
+            return json.loads(out.getvalue())["measured"]["secure_boot_db_has_image_cert"]
+        self.assertTrue(run(self.doc())["value"])
+        other = hashlib.sha256(FACTORY_CERTS[0] + b"!").hexdigest()
+        refused = run(self.doc(secure_boot_cert_sha256=other))
+        self.assertFalse(refused["value"])
+        self.assertIn("none is the image's Secure Boot certificate (%s)" % other[:16], refused["why"])
+        self.assertFalse(run(self.doc(secure_boot_cert_sha256=other), ("--secure-boot-cert-sha256", SB_SHA))["value"])
+
     def test_the_recorded_binding_is_what_the_credentials_are_measured_against(self):
         """Not mocked: the evidence's record reaches the probe, which reads the blob on the host."""
         def run(doc, blob):
@@ -1338,7 +1445,7 @@ class SignedEvidence(unittest.TestCase):
             host = FakeHost()
             host.files[PIN_FILE] = cred(blob)
             with redirect_stdout(io.StringIO()) as out:
-                host_probe.main(["--import-key-sha256", FP[:16], *args], host=host)
+                host_probe.main(["--import-key-sha256", FP[:16], "--secure-boot-cert-sha256", SB_SHA, *args], host=host)
             return json.loads(out.getvalue())["measured"]["pin_credentials_sealed_as_recorded"]
         self.assertIn("no signed PCR 11 policy", run("--credential-pcrs", "7")["why"])
         self.assertTrue(run("--credential-pcrs", "7", "--credential-signed-pcrs", "11", "--credential-pcr-key-pkfp", PKFP,
