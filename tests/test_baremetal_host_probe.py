@@ -1223,6 +1223,11 @@ class SecureBootDb(unittest.TestCase):
             "a list longer than the variable": good[:16] + struct.pack("<I", len(good) + 16 + len(SB_CERT)) + good[20:],
             "entries that do not divide the list": good[:24] + struct.pack("<I", len(SB_CERT) + 15) + good[28:],
             "an entry too small for its owner GUID": good[:24] + struct.pack("<I", 15) + good[28:],
+            # the sizes divide in both: only the entry bound refuses them (with no entry size, a division by zero)
+            "entries of no size": host_probe.EFI_CERT_X509 + struct.pack("<III", 28 + 16, 0, 0) + b"\x11" * 16,
+            "entries of 8 bytes": host_probe.EFI_CERT_X509 + struct.pack("<III", 28 + 16, 0, 8) + b"\x11" * 16,
+            "a hash list of 8-byte entries": EFI_CERT_SHA256 + struct.pack("<III", 28 + 16, 0, 8) + b"\x11" * 16,
+            "certificates with an owner GUID and no DER": siglist(host_probe.EFI_CERT_X509, [b""]),
             "a header larger than the list": good[:20] + struct.pack("<I", len(good)) + good[24:],
         }
         for name, body in cases.items():

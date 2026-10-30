@@ -250,6 +250,8 @@ def db_x509_sha256(data):
         if size > len(data) - at or entry < 16 or (size - 28 - header) < 0 or (size - 28 - header) % entry:
             raise ValueError("the signature list at byte %d has inconsistent sizes" % at)
         if kind == EFI_CERT_X509:
+            if entry <= 16:
+                raise ValueError("the certificate list at byte %d has entries with no room for a certificate" % at)
             for e in range(at + 28 + header, at + size, entry):
                 out.append(hashlib.sha256(data[e + 16:e + entry]).hexdigest())   # after the owner GUID: the DER
         at += size
