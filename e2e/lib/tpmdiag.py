@@ -62,7 +62,8 @@ def _package(name):
 
 
 def _any_package(*names):
-    """The first of `names` that is installed (Ubuntu's t64 renames), else what the last one says."""
+    """The first of `names` that is installed (Ubuntu's t64 renames), else what the last one says; none named, "absent"."""
+    version = "absent"
     for name in names:
         version = _package(name)
         if version not in ("absent", "?"):

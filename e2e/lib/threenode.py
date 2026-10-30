@@ -673,7 +673,7 @@ class Cluster:
 
     def _abrmd_down(self, n, bus=False):
         """The node's tpm2-abrmd stopped (before its TPM is), and with `bus` its dbus-daemon too (close). A daemon that had
-        already died is said and kept in abrmd_deaths first (regalia-q84): every path that clears n.abrmd comes here, a
+        already died is said and kept in abrmd_deaths first (regalia-q84; the list is for the tests and a later reader): every path that clears n.abrmd comes here, a
         power cycle included, so none can erase a death before it is reported."""
         dead = self.abrmd_death(n.name)
         if dead:
@@ -697,7 +697,7 @@ class Cluster:
         n = self.nodes[name]
         proc = n.abrmd
         if not isinstance(proc, subprocess.Popen) or proc.poll() is None:
-            return None
+            return None                               # running; or a unit test's object() stand-in, which never dies
         rc = proc.returncode
         if rc >= 0:
             how = "exit %d" % rc
@@ -741,8 +741,14 @@ class Cluster:
 
     @staticmethod
     def _tail(path, limit=800):
+        """The last `limit` characters of a log, read from its end (regalia-89s): a long-running daemon's log is never
+        read whole to say a failure. 4 bytes a character at most (UTF-8), so the slice is the whole-file read's."""
         try:
-            return pathlib.Path(path).read_text(errors="replace")[-limit:]
+            with open(path, "rb") as f:
+                size = os.fstat(f.fileno()).st_size
+                start = max(0, size - 4 * limit)
+                f.seek(start)
+                return f.read(size - start).decode(errors="replace")[-limit:]   # not what a running daemon appends since
         except OSError:
             return "(none)"
 
