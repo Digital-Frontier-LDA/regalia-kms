@@ -45,7 +45,7 @@ generated dracut l 0777 0:0 etc/mtab /proc/self/mounts
 generated dracut-over:base-files=13.8+deb13u7 l 0777 0:0 etc/os-release initrd-release
 generated dracut f 0644 0:0 etc/passwd 4c046ed48ae30e8373364b32a8dec9e7ca68faa98d7093457cebc7a749a068b6
 generated dracut f 0644 0:0 etc/passwd- 71dc3fb95ffdc7745faaaf2377fe2f0d8f7b4f4ce9f556aedfc82d0a4014f892
-generated dracut f 0000 0:0 etc/shadow 392d3a5b6ab917bff43244d082bcf8a2d071f89541d60ed50355f126190383c1
+generated dracut f 0000 0:0 etc/shadow 2a935f90a3c86c48e79ab4ea55b185e5b7ac2b2ac9823d29d3c170384ce9b88e
 generated dracut d 0755 0:0 etc/systemd/system/cryptsetup.target.wants -
 generated dracut d 0755 0:0 etc/systemd/system/initrd.target.wants -
 generated dracut l 0777 0:0 etc/systemd/system/initrd.target.wants/dracut-cmdline-ask.service /usr/lib/systemd/system/dracut-cmdline-ask.service
