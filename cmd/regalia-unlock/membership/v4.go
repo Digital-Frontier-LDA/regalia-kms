@@ -27,17 +27,21 @@ const (
 	maxOwnerKeys      = 8
 	maxRules          = 4
 	maxSignatures     = 16
+	maxCardSequence   = 1<<31 - 1 // membership.MAX_CARD_SEQUENCE: exact in every JSON reader
 )
 
 var (
-	signingKeyAlgs = []string{"ecdsa-p256"}            // a TPM has no Ed25519
-	ownerKeyAlgs   = []string{"ed25519", "ecdsa-p256"} // the approval YubiKeys' OpenPGP applet (#126), or P-256
-	signerFields   = []string{"owner_heartbeat_lifetime_s", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers"}
+	signingKeyAlgs      = []string{"ecdsa-p256"}            // a TPM has no Ed25519
+	ownerKeyAlgs        = []string{"ed25519", "ecdsa-p256"} // the approval YubiKeys' OpenPGP applet (#126), or P-256
+	anchorPolicyKeyAlgs = []string{"ecdsa-p256"}            // K_A (#361): a key the TPM loads (tpm2_loadexternal)
+	signerFields        = []string{"owner_heartbeat_lifetime_s", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers"}
+	// #361/#405: K_A (immutable, every signer) and the card ceremony's record that names owner_keys (the root's)
+	v4OnlyFields   = []string{"anchor_policy_key", "card_record"}
 	singleRules    = []string{"heartbeat_signers", "activation_signers"} // one rule each; revocation_signers is a list
-	v4ManifestKeys = append(without(v2ManifestKeys, "revocation_keys"), signerFields...)
+	v4ManifestKeys = append(append(without(v2ManifestKeys, "revocation_keys"), signerFields...), v4OnlyFields...)
 	v4NodeKeys     = append(append([]string(nil), v2NodeKeys...), "signing_key")
 	// what only the root may change: a quorum (or a v1-v3 revocation key) leaves every one as it was
-	rootFields = append([]string{"policy_version", "revocation_keys", "heartbeat_max_lifetime_s"}, signerFields...)
+	rootFields = append(append([]string{"policy_version", "revocation_keys", "heartbeat_max_lifetime_s"}, signerFields...), "card_record")
 	// named in a signer rule, but not counting
 	notCounting = map[string]bool{"RETIRED": true, "REVOKED_STOLEN": true, "QUARANTINED": true}
 )
@@ -164,6 +168,42 @@ func signerRules(manifest map[string]any, byID map[string]map[string]any, seen m
 			return err
 		}
 	}
+	// K_A (#361): a P-256 key, as tpm2_loadexternal loads it, and no other key of this manifest (checked last, after the
+	// nodes' identities and owner_keys: `seen` holds them all)
+	_, key, err := typedKey(manifest["anchor_policy_key"], "anchor_policy_key", anchorPolicyKeyAlgs)
+	if err != nil {
+		return err
+	}
+	if other, used := seen[key]; used {
+		return refuse("anchor_policy_key is already used (%s)", other)
+	}
+	record, err := exact(manifest["card_record"], []string{"sequence", "digest"}, "card_record")
+	if err != nil {
+		return err
+	}
+	sequence, isInt := integer(record["sequence"])
+	if !isInt || sequence.Cmp(big.NewInt(1)) < 0 || sequence.Cmp(big.NewInt(maxCardSequence)) > 0 {
+		return refuse("card_record.sequence must be an integer from 1 to %d", maxCardSequence)
+	}
+	return hexField(record["digest"], 64, "card_record.digest")
+}
+
+// cardRecordRules is membership._card_record_rules: the root's own v4 rules for card_record (#405): a new card
+// record has a higher sequence, and owner_keys, which the card ceremony's record names, change only with a new one.
+// (A quorum changes neither: rootFields.)
+func cardRecordRules(current, candidate map[string]any) error {
+	old, fresh := current["card_record"].(map[string]any), candidate["card_record"].(map[string]any)
+	if !equal(fresh, old) {
+		newSeq, _ := integer(fresh["sequence"])
+		oldSeq, _ := integer(old["sequence"])
+		if newSeq.Cmp(oldSeq) <= 0 {
+			return refuse("card_record changes only to a later card ceremony's record (sequence %s after %s)", newSeq, oldSeq)
+		}
+		return nil
+	}
+	if !equal(candidate["owner_keys"], current["owner_keys"]) {
+		return refuse("owner_keys change only with a new card_record: the card ceremony's record names them")
+	}
 	return nil
 }
 
@@ -192,6 +232,7 @@ func apartFromRoot(manifest map[string]any, root any) error {
 			keys = append(keys, labelled{"signing_key of " + node["node_id"].(string), signing.(map[string]any)["key"].(string)})
 		}
 	}
+	keys = append(keys, labelled{"anchor_policy_key", manifest["anchor_policy_key"].(map[string]any)["key"].(string)})
 	for _, k := range keys {
 		if roots[k.key] {
 			return refuse("%s is a pinned root key: the payload root is never a quorum party", k.label)
