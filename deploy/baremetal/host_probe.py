@@ -163,6 +163,8 @@ import evidence as evidence_mod  # noqa: E402
 SECURE_BOOT_VAR = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 DB_VAR = "/sys/firmware/efi/efivars/db-d719b2cb-3d3a-4596-a3bc-dad00e67656f"
 EFI_CERT_X509 = bytes.fromhex("a159c0a5e494a74a87b5ab155c2bf072")   # a5c059a1-94e4-4aa7-87b5-ab155c2bf072, as stored
+DBX_VAR = "/sys/firmware/efi/efivars/dbx-d719b2cb-3d3a-4596-a3bc-dad00e67656f"
+EFI_CERT_X509_SHA256 = bytes.fromhex("92a4d23bc0967940b420fcf98ef103ed")   # 3bd2a492-96c0-4079-b420-fcf98ef103ed, as stored
 IMPORT_HANDLE = os.environ.get("REGALIA_PIN_IMPORT_HANDLE", "0x81000101")
 IMA_LOG = "/sys/kernel/security/ima/ascii_runtime_measurements"
 KMS_BINARY = os_probe.ALLOWED_TOKEN_CLIENT_EXES[0]
@@ -240,9 +242,9 @@ def secure_boot(host):
     return (True, "SecureBoot = 1") if raw[-1:] == b"\x01" else (False, "SecureBoot = %d" % raw[-1])
 
 
-def db_x509_sha256(data):
-    """The SHA-256 of each X.509 certificate in an EFI_SIGNATURE_LIST sequence (UEFI 2.10, 32.4.1), in order.
-    Lists of other types (hashes) are skipped; a list whose sizes do not add up is refused, never read past."""
+def signature_entries(data):
+    """Each entry of an EFI_SIGNATURE_LIST sequence (UEFI 2.10, 32.4.1) as (list type, data after its owner GUID), in
+    order. A list whose sizes do not add up is refused, never read past."""
     out, at = [], 0
     while at < len(data):
         if len(data) - at < 28:
@@ -251,13 +253,43 @@ def db_x509_sha256(data):
         size, header, entry = struct.unpack_from("<III", data, at + 16)
         if size > len(data) - at or entry < 16 or (size - 28 - header) < 0 or (size - 28 - header) % entry:
             raise ValueError("the signature list at byte %d has inconsistent sizes" % at)
-        if kind == EFI_CERT_X509:
-            if entry <= 16:
-                raise ValueError("the certificate list at byte %d has entries with no room for a certificate" % at)
-            for e in range(at + 28 + header, at + size, entry):
-                out.append(hashlib.sha256(data[e + 16:e + entry]).hexdigest())   # after the owner GUID: the DER
+        if kind == EFI_CERT_X509 and entry <= 16:
+            raise ValueError("the certificate list at byte %d has entries with no room for a certificate" % at)
+        if kind == EFI_CERT_X509_SHA256 and entry != 16 + 48:
+            raise ValueError("the certificate-hash list at byte %d does not hold a SHA-256 and a time per entry" % at)
+        for e in range(at + 28 + header, at + size, entry):
+            out.append((kind, data[e + 16:e + entry]))
         at += size
     return out
+
+
+def db_x509_sha256(data):
+    """The SHA-256 of each X.509 certificate in an EFI_SIGNATURE_LIST sequence, in order. Lists of other types (hashes)
+    are skipped."""
+    return [hashlib.sha256(der).hexdigest() for kind, der in signature_entries(data) if kind == EFI_CERT_X509]
+
+
+def tbs_certificate(der):
+    """The DER of a certificate's tbsCertificate (its first element): what an EFI_CERT_X509_SHA256 entry hashes."""
+    def tlv(at):
+        if at + 2 > len(der):
+            raise ValueError("the certificate is cut short")
+        n, at = der[at + 1], at + 2
+        if n & 0x80:
+            k = n & 0x7f
+            if not 1 <= k <= 4 or at + k > len(der):
+                raise ValueError("the certificate has an unreadable length")
+            n, at = int.from_bytes(der[at:at + k], "big"), at + k
+        if at + n > len(der):
+            raise ValueError("the certificate is cut short")
+        return at, at + n
+    if der[:1] != b"\x30":
+        raise ValueError("the certificate is not a DER SEQUENCE")
+    body, end = tlv(0)
+    if end != len(der) or der[body:body + 1] != b"\x30":
+        raise ValueError("the certificate does not start with a tbsCertificate SEQUENCE")
+    _, tbs_end = tlv(body)
+    return der[body:tbs_end]
 
 
 def secure_boot_db(host, expected=None):
@@ -276,7 +308,33 @@ def secure_boot_db(host, expected=None):
         return False, "db holds %d certificate(s) (%s), and none is the image's Secure Boot certificate (%s): this host " \
             "refuses the image under Secure Boot. Append it to db in RBSU, before the first seal (kms#543)" % (
                 len(certs), ", ".join(c[:16] for c in certs) or "none", want[:16])
-    return True, "db holds the image's Secure Boot certificate (%s), among %d" % (want[:16], len(certs))
+    # dbx overrides db: the firmware refuses a certificate it revokes, by the whole certificate or by the hash of its
+    # tbsCertificate (regalia-3ts). The image's own Authenticode hash is not checked here: that needs the image.
+    dbx = host.read_bytes(DBX_VAR)
+    if dbx is None and host.exists(DBX_VAR):
+        return False, "the dbx EFI variable exists but is unreadable: a revocation cannot be ruled out"
+    if dbx is None:
+        return True, "db holds the image's Secure Boot certificate (%s), among %d; there is no dbx" % (want[:16], len(certs))
+    try:
+        if len(dbx) < 4:
+            raise ValueError("it is shorter than its attributes")
+        revoked = signature_entries(dbx[4:])
+    except ValueError as error:
+        return False, "the dbx EFI variable is malformed: %s" % error
+    tbs = None
+    if any(kind == EFI_CERT_X509_SHA256 for kind, _ in revoked):
+        der = next(d for k, d in signature_entries(raw[4:]) if k == EFI_CERT_X509 and hashlib.sha256(d).hexdigest() == want)
+        try:
+            tbs = hashlib.sha256(tbs_certificate(der)).digest()
+        except ValueError as error:
+            return False, "dbx revokes certificates by their tbsCertificate, and the one in db cannot be read: %s" % error
+    for kind, entry in revoked:
+        if (kind == EFI_CERT_X509 and hashlib.sha256(entry).hexdigest() == want) or (kind == EFI_CERT_X509_SHA256 and entry[:32] == tbs):
+            return False, "dbx revokes the image's Secure Boot certificate (%s)%s: the firmware refuses the image whatever db " \
+                "holds. Sign the image with a certificate dbx does not list (kms#543)" % (
+                    want[:16], "" if kind == EFI_CERT_X509 else ", by the hash of its tbsCertificate")
+    return True, "db holds the image's Secure Boot certificate (%s), among %d, and dbx (%d entries) does not revoke it" % (
+        want[:16], len(certs), len(revoked))
 
 
 def tpm2(host):
