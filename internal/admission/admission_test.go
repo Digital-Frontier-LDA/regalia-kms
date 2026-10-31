@@ -339,6 +339,9 @@ func TestAFileInADirectoryThatIsNotThereIsNotAdmitted(t *testing.T) {
 }
 
 func TestAFileOwnedBySomeoneElseIsNotAdmitted(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("as root the test's directory is root's, which the gate trusts by design: the owner check cannot be reached")
+	}
 	w := newWorld(t)
 	other, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"), SessionOwnerUID: uint32(os.Getuid()),
 		OwnerUID: uint32(os.Getuid()) + 1, Boottime: func() (int64, error) { return w.now, nil }, BootID: func() (string, error) { return testBoot, nil }})
@@ -355,6 +358,9 @@ func TestAFileOwnedBySomeoneElseIsNotAdmitted(t *testing.T) {
 // boot session: the session is what the admission is checked against, so it stays root's (or, here,
 // whoever SessionOwnerUID names), whatever OwnerUID says.
 func TestTheBootSessionIsHeldToItsOwnOwnerNotTheLeaseServices(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("as root the session's directory is root's, which the gate trusts by design: the owner check cannot be reached")
+	}
 	w := newWorld(t)
 	gate, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"),
 		OwnerUID: uint32(os.Getuid()), SessionOwnerUID: uint32(os.Getuid()) + 1,

@@ -105,13 +105,16 @@ func TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted(t *testing.T) {
 	if gate.DirectivesStore() != admission.DirectivesPath {
 		t.Fatalf("the daemon's gate reads the directives at %q, not %s", gate.DirectivesStore(), admission.DirectivesPath)
 	}
+	if os.Getenv("REGALIA_EXPECT_ROOT_TESTS") == "1" && os.Geteuid() != 0 {
+		t.Fatalf("REGALIA_EXPECT_ROOT_TESTS=1 and euid %d: the as-root half this run was meant to reach was not reached", os.Geteuid())
+	}
 	if os.Getuid() != 0 {
 		if status := gate.Check(context.Background()); status.Admitted || !strings.Contains(status.Reason, "the boot session") {
 			t.Fatalf("a boot session root did not write was accepted, or the admission file of the lease service's user was refused: %+v", status)
 		}
 		return
 	}
-	// As root (run by hand: CI's Go tests run as the runner's user): the same wiring admits, and the runner reaches the executor.
+	// As root (CI's privileged-and-fuzz job, REGALIA_EXPECT_ROOT_TESTS=1; regalia-8zj): the same wiring admits, and the runner reaches the executor.
 	if !gate.Ready(context.Background()) {
 		t.Fatalf("a current admission file written by root did not admit the node: %+v", gate.Check(context.Background()))
 	}
