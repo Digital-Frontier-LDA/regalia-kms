@@ -398,10 +398,8 @@ func (gate *Gate) RefusesObject(ctx context.Context, objectID string) string {
 	if gate == nil {
 		return RefusedDirectivesUnreadable
 	}
-	status := gate.Check(ctx)
+	status := gate.Check(ctx) // it reads the directives only in recovery: under a lease both fields are empty
 	switch {
-	case !status.Recovery:
-		return ""
 	case status.DirectivesError != "":
 		return RefusedDirectivesUnreadable
 	case status.Disabled[objectID]:

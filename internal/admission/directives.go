@@ -204,14 +204,14 @@ func lowerHex(text string, n int) bool {
 	return true
 }
 
-// realUTC is heartbeat.parse_time: exactly the form, a real date, and one that formats back to itself (no second 60).
-// Python's strptime refuses year 0, which time.Parse takes.
+// realUTC is heartbeat.parse_time: exactly the form and a real date. time.Parse refuses what strptime does (second
+// 60, hour 24, the 30th of February) but takes year 0, which strptime refuses.
 func realUTC(text string) bool {
 	if !utcPattern.MatchString(text) || strings.HasPrefix(text, "0000-") {
 		return false
 	}
-	parsed, err := time.Parse("2006-01-02T15:04:05Z", text)
-	return err == nil && parsed.UTC().Format("2006-01-02T15:04:05Z") == text
+	_, err := time.Parse("2006-01-02T15:04:05Z", text)
+	return err == nil
 }
 
 // printableText is survivor._text: printable (Python's str.isprintable: no "Other" or "Separator" character but the

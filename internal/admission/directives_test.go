@@ -170,8 +170,16 @@ func TestAStoreThatCannotBeTrustedRefusesEveryKey(t *testing.T) {
 		"another user owns the store": func(t *testing.T) (string, uint32) {
 			return store(t, []byte(oneDirective)), uid() + 1
 		},
+		// Its first MaxDirectivesBytes+1 bytes are whole directives, so only the bound refuses it, not a cut line.
 		"the file is oversized": func(t *testing.T) (string, uint32) {
-			return store(t, []byte(strings.Repeat(oneDirective, MaxDirectivesBytes/len(oneDirective)+1))), uid()
+			lines := (MaxDirectivesBytes+1)/len(oneDirective) - 1
+			pad := MaxDirectivesBytes + 1 - lines*len(oneDirective) - len(oneDirective)
+			padded := strings.Replace(oneDirective, `"reason":"seen"`, `"reason":"seen`+strings.Repeat("n", pad)+`"`, 1)
+			contents := strings.Repeat(oneDirective, lines) + padded
+			if len(contents) != MaxDirectivesBytes+1 {
+				t.Fatalf("built %d bytes", len(contents))
+			}
+			return store(t, []byte(contents+oneDirective)), uid()
 		},
 		"the path is not clean": func(t *testing.T) (string, uint32) {
 			path := store(t, []byte(oneDirective))
