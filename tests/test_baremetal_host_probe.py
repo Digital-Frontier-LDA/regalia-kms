@@ -1360,7 +1360,11 @@ class SecureBootDbx(unittest.TestCase):
         c = self.cert
         for name, der in {"empty": b"", "not a SEQUENCE": b"\x31" + c[1:], "cut short": c[:-1], "trailing bytes": c + b"\x00",
                           "a length of 5 octets": b"\x30\x85" + b"\x00" * 5, "a length past the end": b"\x30\x82\xff\xff\x30\x00",
-                          "no tbsCertificate SEQUENCE": b"\x30\x02\x02\x00"}.items():
+                          "no tbsCertificate SEQUENCE": b"\x30\x02\x02\x00",
+                          # each refused by one rule alone: a well-formed certificate but for its length, and a tbsCertificate
+                          # that claims more than its certificate holds
+                          "a length in 5 octets around a whole tbsCertificate": b"\x30\x85\x00\x00\x00\x00\x05\x30\x03\x02\x01\x00",
+                          "a tbsCertificate past its certificate": b"\x30\x03\x30\x05\x00"}.items():
             with self.subTest(name):
                 with self.assertRaises(ValueError):
                     host_probe.tbs_certificate(der)
