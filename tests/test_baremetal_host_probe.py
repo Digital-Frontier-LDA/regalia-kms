@@ -1296,6 +1296,7 @@ class SignedEvidence(unittest.TestCase):
                 redirect_stdout(io.StringIO()) as out:
             rc = host_probe.main(args, host=FakeHost())
         self.judged_against = measure.call_args.args[3]
+        self.measured_with = (measure.call_args.args[1], measure.call_args.args[4])     # the import key, the db certificate
         return rc, json.loads(out.getvalue())
 
     def test_the_record_of_a_bad_unlock_record_is_refused_by_validate_itself(self):
@@ -1423,6 +1424,28 @@ class SignedEvidence(unittest.TestCase):
         self.assertFalse(refused["value"])
         self.assertIn("none is the image's Secure Boot certificate (%s)" % other[:16], refused["why"])
         self.assertFalse(run(self.doc(secure_boot_cert_sha256=other), ("--secure-boot-cert-sha256", SB_SHA))["value"])
+
+    def test_an_argument_that_disagrees_with_the_recorded_fingerprints_fails_the_run(self):
+        """regalia-t2h: --import-key-sha256 and --secure-boot-cert-sha256 may repeat the signed record (the import key
+        as any prefix of 16 hex or more, in any case, with colons); one that differs is a failing problem, and the
+        host is still measured against the record, never against the argument."""
+        def judged(extra):
+            rc, report = self.run_probe(*self.write(self.doc()), extra=extra)
+            return rc, report.get("evidence_problems"), self.measured_with
+        for agreeing in ([], ["--import-key-sha256", FP[:16]], ["--import-key-sha256", ":".join(FP[i:i + 2] for i in range(0, 32, 2)).upper()],
+                         ["--import-key-sha256", FP], ["--secure-boot-cert-sha256", SB_SHA.upper()]):
+            with self.subTest(agreeing=agreeing):
+                rc, problems, measured_with = judged(agreeing)
+                self.assertEqual((rc, problems, measured_with), (0, [], (FP, SB_SHA)))
+        other = hashlib.sha256(b"another certificate").hexdigest()
+        for disagreeing, why in ((["--import-key-sha256", FP[1:17]], "--import-key-sha256 %s is not the evidence's" % FP[1:17]),
+                                 (["--import-key-sha256", FP[:63] + ("0" if FP[63] != "0" else "1")], "they disagree, and the import key is judged against the evidence"),
+                                 (["--secure-boot-cert-sha256", other], "--secure-boot-cert-sha256 %s is not the evidence's" % other),
+                                 (["--secure-boot-cert-sha256", SB_SHA[:16]], "they disagree, and db is judged against the evidence")):
+            with self.subTest(disagreeing=disagreeing):
+                rc, problems, measured_with = judged(disagreeing)
+                self.assertEqual((rc, measured_with), (1, (FP, SB_SHA)))
+                self.assertTrue(any(why in p for p in problems), problems)
 
     def test_the_recorded_binding_is_what_the_credentials_are_measured_against(self):
         """Not mocked: the evidence's record reaches the probe, which reads the blob on the host."""
