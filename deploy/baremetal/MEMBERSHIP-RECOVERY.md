@@ -227,7 +227,7 @@ and nothing else may: a single source is refused by design. That is a **root cer
 under a root-signed manifest (`replacement.py`, `enrol.py`), with the owner's keys and the shares it needs.
 With only ONE other node left (the other destroyed or revoked), a single peer's chain is refused as now. The
 decided path (regalia-kms-24 on #388, the v4 rule 2 of {a, b, c, owner}) is **the owner as the second source**:
-an owner-key signature, by touch on a developer card, over that peer chain's tip digest and epoch, verified
+an owner-key signature, by touch on an owner card (D30.7), over that peer chain's tip digest and epoch, verified
 against the `owner_keys` the chain itself names; behind `--one-source`, with a phrase typed at `/dev/tty`, and
 recorded. For the refusals table's crash window that path is `recover apply --one-source` ("One other node and
 the owner", above, #387). Both peers gone remains a root ceremony.
