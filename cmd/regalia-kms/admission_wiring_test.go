@@ -41,7 +41,7 @@ import (
 // The lease service's user (runtime_admission_owner) is the one running the test, so the admission
 // file the test writes is trusted; the boot session it writes is not, because that file stays root's
 // whoever the lease service runs as (regalia-kms#191). So as anyone but root the gate refuses on the
-// session, and as root (CI's privileged job) it admits.
+// session, and as root (run by hand: CI's Go tests run as the runner's user) it admits.
 func TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted(t *testing.T) {
 	directory := t.TempDir()
 	me, err := user.Current()
@@ -101,13 +101,17 @@ func TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// owner item 212, as any user: the daemon's gate reads the survivor's directives where survivor.py keeps them
+	if gate.DirectivesStore() != admission.DirectivesPath {
+		t.Fatalf("the daemon's gate reads the directives at %q, not %s", gate.DirectivesStore(), admission.DirectivesPath)
+	}
 	if os.Getuid() != 0 {
 		if status := gate.Check(context.Background()); status.Admitted || !strings.Contains(status.Reason, "the boot session") {
 			t.Fatalf("a boot session root did not write was accepted, or the admission file of the lease service's user was refused: %+v", status)
 		}
 		return
 	}
-	// As root (CI's privileged job): the same wiring admits, and the runner reaches the executor.
+	// As root (run by hand: CI's Go tests run as the runner's user): the same wiring admits, and the runner reaches the executor.
 	if !gate.Ready(context.Background()) {
 		t.Fatalf("a current admission file written by root did not admit the node: %+v", gate.Check(context.Background()))
 	}

@@ -172,14 +172,7 @@ func TestAStoreThatCannotBeTrustedRefusesEveryKey(t *testing.T) {
 		},
 		// Its first MaxDirectivesBytes+1 bytes are whole directives, so only the bound refuses it, not a cut line.
 		"the file is oversized": func(t *testing.T) (string, uint32) {
-			lines := (MaxDirectivesBytes+1)/len(oneDirective) - 1
-			pad := MaxDirectivesBytes + 1 - lines*len(oneDirective) - len(oneDirective)
-			padded := strings.Replace(oneDirective, `"reason":"seen"`, `"reason":"seen`+strings.Repeat("n", pad)+`"`, 1)
-			contents := strings.Repeat(oneDirective, lines) + padded
-			if len(contents) != MaxDirectivesBytes+1 {
-				t.Fatalf("built %d bytes", len(contents))
-			}
-			return store(t, []byte(contents+oneDirective)), uid()
+			return store(t, []byte(directivesOf(t, MaxDirectivesBytes+1)+oneDirective)), uid()
 		},
 		"the path is not clean": func(t *testing.T) (string, uint32) {
 			path := store(t, []byte(oneDirective))
@@ -205,10 +198,49 @@ func TestAStoreThatCannotBeTrustedRefusesEveryKey(t *testing.T) {
 
 // The largest file the survivor would write is read whole: the bound is MaxDirectivesBytes, not less.
 func TestAFileAtTheBoundIsRead(t *testing.T) {
-	contents := []byte(strings.Repeat(oneDirective, MaxDirectivesBytes/len(oneDirective)))
+	contents := []byte(directivesOf(t, MaxDirectivesBytes))
 	got, err := ReadDisabled(store(t, contents), uid())
 	if err != nil || !got["kek-a"] {
 		t.Fatalf("%d bytes: %v, %v", len(contents), got, err)
+	}
+}
+
+// directivesOf is whole directive lines of exactly n bytes: the last one's reason is padded to make up the length.
+func directivesOf(t *testing.T, n int) string {
+	t.Helper()
+	lines := n/len(oneDirective) - 1
+	pad := n - (lines+1)*len(oneDirective)
+	last := strings.Replace(oneDirective, `"reason":"seen"`, `"reason":"seen`+strings.Repeat("n", pad)+`"`, 1)
+	contents := strings.Repeat(oneDirective, lines) + last
+	if len(contents) != n {
+		t.Fatalf("built %d bytes, not %d", len(contents), n)
+	}
+	return contents
+}
+
+// The directory's owner is checked on its own: a 0700 directory of this user's, judged for another owner, is refused
+// for the directory, before its file is looked at.
+func TestADirectoryOfAnotherOwnerIsRefusedForTheDirectory(t *testing.T) {
+	path := store(t, []byte(oneDirective))
+	_, err := ReadDisabled(path, uid()+1)
+	if err == nil || !strings.Contains(err.Error(), filepath.Dir(path)+" is not a directory of root's") {
+		t.Fatalf("not refused for its directory: %v", err)
+	}
+}
+
+// The file's owner is checked on its own: inside the owner's directory, a file another user owns is refused. Giving
+// a file away takes root, so this runs only as root, by hand: CI's Go tests run as the runner's user, which skips it.
+func TestAFileOfAnotherOwnerInTheOwnersDirectoryIsRefused(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("chown to another user needs root")
+	}
+	path := store(t, []byte(oneDirective))
+	if err := os.Chown(path, 4242, 4242); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadDisabled(path, 0)
+	if err == nil || !strings.Contains(err.Error(), path+" is not a regular, singly linked file of root's") {
+		t.Fatalf("not refused for its owner: %v", err)
 	}
 }
 

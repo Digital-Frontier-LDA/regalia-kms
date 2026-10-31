@@ -390,6 +390,10 @@ const (
 	RefusedDirectivesUnreadable = "survivor-directives-unreadable"
 )
 
+// DirectivesStore is where the gate reads the survivor's directives in recovery ("" when none is configured, and then
+// every key is refused there).
+func (gate *Gate) DirectivesStore() string { return gate.options.DirectivesPath }
+
 // RefusesObject says why the key `objectID` must not be served, or "" when nothing here refuses it: in recovery, a
 // key one of the survivor's directives disabled (RefusedDisabled), and EVERY key when the directives cannot be read
 // (RefusedDirectivesUnreadable: never taken for "nothing disabled"). Outside recovery the directives do not apply.
