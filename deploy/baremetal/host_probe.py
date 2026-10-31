@@ -269,27 +269,106 @@ def db_x509_sha256(data):
     return [hashlib.sha256(der).hexdigest() for kind, der in signature_entries(data) if kind == EFI_CERT_X509]
 
 
+def der_element(der, at, end=None):
+    """The DER element at `at`, within der[:end]: (tag, start of its content, end of its content). Lengths in up to
+    four octets; anything else, or an element past `end`, is refused."""
+    end = len(der) if end is None else end
+    if at + 2 > end:
+        raise ValueError("a DER element is cut short")
+    tag, n, at = der[at], der[at + 1], at + 2
+    if n & 0x80:
+        k = n & 0x7f
+        if not 1 <= k <= 4 or at + k > end:
+            raise ValueError("a DER element has an unreadable length")
+        n, at = int.from_bytes(der[at:at + k], "big"), at + k
+    if at + n > end:
+        raise ValueError("a DER element is cut short")
+    return tag, at, at + n
+
+
 def tbs_certificate(der):
     """The DER of a certificate's tbsCertificate (its first element): what an EFI_CERT_X509_SHA256 entry hashes."""
-    def tlv(at):
-        if at + 2 > len(der):
-            raise ValueError("the certificate is cut short")
-        n, at = der[at + 1], at + 2
-        if n & 0x80:
-            k = n & 0x7f
-            if not 1 <= k <= 4 or at + k > len(der):
-                raise ValueError("the certificate has an unreadable length")
-            n, at = int.from_bytes(der[at:at + k], "big"), at + k
-        if at + n > len(der):
-            raise ValueError("the certificate is cut short")
-        return at, at + n
     if der[:1] != b"\x30":
         raise ValueError("the certificate is not a DER SEQUENCE")
-    body, end = tlv(0)
+    _, body, end = der_element(der, 0)
     if end != len(der) or der[body:body + 1] != b"\x30":
         raise ValueError("the certificate does not start with a tbsCertificate SEQUENCE")
-    _, tbs_end = tlv(body)
+    _, _, tbs_end = der_element(der, body, end)
     return der[body:tbs_end]
+
+
+def authenticode_certificates(image):
+    try:
+        return _authenticode_certificates(image)
+    except struct.error:
+        raise ValueError("the image's PE headers are cut short")
+
+
+def _authenticode_certificates(image):
+    """The SHA-256 of each certificate carried in a PE image's Authenticode signatures (its security directory's
+    WIN_CERT_TYPE_PKCS_SIGNED_DATA entries: SignedData's `certificates`), in order. An image with no such directory
+    carries none; one whose directory or signatures do not parse is refused."""
+    if image[:2] != b"MZ" or len(image) < 0x40:
+        raise ValueError("the image is not a PE file")
+    pe = struct.unpack_from("<I", image, 0x3c)[0]
+    if image[pe:pe + 4] != b"PE\x00\x00" or pe + 24 + 2 > len(image):
+        raise ValueError("the image has no PE header")
+    optional = pe + 24
+    magic = struct.unpack_from("<H", image, optional)[0]
+    if magic not in (0x10b, 0x20b):
+        raise ValueError("the image's optional header is neither PE32 nor PE32+")
+    directories = optional + (96 if magic == 0x10b else 112)
+    count = struct.unpack_from("<I", image, directories - 4)[0]
+    if count <= 4:
+        return []
+    at, size = struct.unpack_from("<II", image, directories + 4 * 8)   # IMAGE_DIRECTORY_ENTRY_SECURITY: a file offset
+    if size == 0:
+        return []
+    if at + size > len(image):
+        raise ValueError("the image's security directory runs past its end")
+    out, end = [], at + size
+    while at < end:
+        if end - at < 8:
+            raise ValueError("a WIN_CERTIFICATE header is cut short")
+        length, revision, kind = struct.unpack_from("<IHH", image, at)
+        if length < 8 or at + length > end:
+            raise ValueError("a WIN_CERTIFICATE has an inconsistent length")
+        if kind == 0x0002:                                  # WIN_CERT_TYPE_PKCS_SIGNED_DATA
+            out += signed_data_certificates(image[at + 8:at + length])
+        at += (length + 7) & ~7                             # each entry is 8-byte aligned
+    return out
+
+
+def signed_data_certificates(blob):
+    """The SHA-256 of each certificate in a DER PKCS#7 ContentInfo holding SignedData (RFC 5652, 5.1). Authenticode
+    pads its entries, so bytes after the ContentInfo are ignored."""
+    tag, body, end = der_element(blob, 0)
+    if tag != 0x30:
+        raise ValueError("a signature is not a DER SEQUENCE")
+    tag, oid, oid_end = der_element(blob, body, end)
+    if tag != 0x06 or blob[oid:oid_end] != bytes.fromhex("2a864886f70d010702"):
+        raise ValueError("a signature is not PKCS#7 SignedData")
+    tag, inner, inner_end = der_element(blob, oid_end, end)
+    if tag != 0xa0:
+        raise ValueError("a signature's SignedData is missing")
+    tag, at, sd_end = der_element(blob, inner, inner_end)
+    if tag != 0x30:
+        raise ValueError("a signature's SignedData is not a SEQUENCE")
+    for want in (0x02, 0x31, 0x30):                          # version, digestAlgorithms, encapContentInfo
+        tag, _, at_next = der_element(blob, at, sd_end)
+        if tag != want:
+            raise ValueError("a signature's SignedData is out of order")
+        at = at_next
+    if at >= sd_end or blob[at] != 0xa0:                     # certificates [0] IMPLICIT, optional
+        return []
+    _, at, certs_end = der_element(blob, at, sd_end)
+    out = []
+    while at < certs_end:
+        tag, _, cert_end = der_element(blob, at, certs_end)
+        if tag == 0x30:                                      # a Certificate; the other CertificateChoices are skipped
+            out.append(hashlib.sha256(blob[at:cert_end]).hexdigest())
+        at = cert_end
+    return out
 
 
 def secure_boot_db(host, expected=None):
@@ -335,6 +414,27 @@ def secure_boot_db(host, expected=None):
                     want[:16], "" if kind == EFI_CERT_X509 else ", by the hash of its tbsCertificate")
     return True, "db holds the image's Secure Boot certificate (%s), among %d, and dbx (%d entries) does not revoke it" % (
         want[:16], len(certs), len(revoked))
+
+
+def image_cert(host, image, expected):
+    """regalia-xqx: the recorded Secure Boot certificate (the evidence's, or the argument's) is one the image to be booted
+    carries in its Authenticode signature. db is judged against the record; this ties the record to the image, so a
+    digest left from the image before a rotation is found before the firmware refuses the new one."""
+    want = (expected or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", want):
+        return {"value": False, "why": "no recorded Secure Boot certificate to compare the image with"}
+    data = host.read_bytes(image)
+    if data is None:
+        return {"value": False, "why": "the image %s is unreadable or absent" % image}
+    try:
+        certs = authenticode_certificates(data)
+    except ValueError as error:
+        return {"value": False, "why": "the image %s is malformed: %s" % (image, error)}
+    if want not in certs:
+        return {"value": False, "why": "the image %s carries %d certificate(s) (%s), and none is the recorded Secure Boot "
+                "certificate (%s): the record is not this image's (a digest from before a rotation?)" % (
+                    image, len(certs), ", ".join(c[:16] for c in certs) or "none", want[:16])}
+    return {"value": True, "why": "the image %s carries the recorded Secure Boot certificate (%s)" % (image, want[:16])}
 
 
 def tpm2(host):
@@ -1189,6 +1289,9 @@ def main(argv=None, host=None, run=None):
                     "least 16 hex); with evidence it comes from host.pin_import_key_sha256, and an argument must agree with it")
     ap.add_argument("--secure-boot-cert-sha256", help="the signed image record's secure_boot_cert_sha256 (uki.py sign), "
                     "which db must hold; with evidence it comes from host.secure_boot_cert_sha256, and an argument must agree with it")
+    ap.add_argument("--image", help="the signed boot image (UKI) the host will boot next, as on its ESP: the Secure Boot "
+                    "certificate it carries must be the recorded one, so a digest left over from the previous image fails "
+                    "here and not at the next boot (regalia-xqx)")
     ap.add_argument("--credential-pcrs", help="without evidence: the PCRs the PIN credentials are bound to directly, "
                     "as given to seal-hsm-pin.sh --pcrs (e.g. 7)")
     ap.add_argument("--credential-signed-pcrs", default="", help="without evidence: 11 if the PINs were sealed with "
@@ -1257,6 +1360,8 @@ def main(argv=None, host=None, run=None):
             ev_host = None
     measured = measure(host, want, binding, unlock_record, sb_cert)
     report["measured"] = measured
+    if args.image:
+        report["image_carries_recorded_cert"] = image_cert(host, args.image, sb_cert)
     if args.evidence:
         if ev_host is not None:
             problems += compare(measured, ev_host, hsm_ports(host))
@@ -1264,7 +1369,7 @@ def main(argv=None, host=None, run=None):
     print(json.dumps(report, indent=2))
     # Evidence never lowers the bar: every measured control must be true, AND, when given, the evidence
     # must be well-formed, signed by the recorded key, attest every firmware setting, and agree.
-    ok = all(v["value"] for v in measured.values()) and not problems
+    ok = all(v["value"] for v in measured.values()) and not problems and report.get("image_carries_recorded_cert", {"value": True})["value"]
     return 0 if ok else 1
 
 

@@ -1366,6 +1366,143 @@ class SecureBootDbx(unittest.TestCase):
                     host_probe.tbs_certificate(der)
 
 
+def pe_image(*signatures, magic=0x20b, rvas=16):
+    """A minimal PE file whose security directory holds each signature as a WIN_CERT_TYPE_PKCS_SIGNED_DATA entry."""
+    optional = struct.pack("<H", magic) + b"\x00" * ((92 if magic == 0x10b else 108) - 2) + struct.pack("<I", rvas)
+    head = b"MZ" + b"\x00" * 0x3a + struct.pack("<I", 0x40) + b"PE\x00\x00" + b"\x00" * 20
+    table_at = len(head) + len(optional)
+    body = b""
+    for sig in signatures:
+        entry = struct.pack("<IHH", 8 + len(sig), 0x0200, 0x0002) + sig
+        body += entry + b"\x00" * (-len(entry) % 8)
+    start = table_at + rvas * 8
+    dirs = b"".join(struct.pack("<II", start if i == 4 and body else 0, len(body) if i == 4 else 0) for i in range(rvas))
+    return head + optional + dirs + body
+
+
+@unittest.skipUnless(shutil.which("openssl"), "needs openssl")
+class ImageCarriesRecordedCert(unittest.TestCase):
+    """regalia-xqx: the recorded Secure Boot certificate must be the one the image to be booted is signed with."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.TemporaryDirectory()
+        d = cls.dir.name
+        def make(name):
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+                            "-subj", "/CN=%s" % name, "-days", "1", "-keyout", "%s/%s.key" % (d, name), "-out", "%s/%s.pem" % (d, name)],
+                           check=True, capture_output=True)
+        make("ours"), make("old")
+        open(d + "/payload", "wb").write(b"stand-in for the image's Authenticode digest")
+        def sign(signer, extra=()):
+            return subprocess.run(["openssl", "smime", "-sign", "-binary", "-noattr", "-outform", "DER", "-in", d + "/payload",
+                                   "-signer", "%s/%s.pem" % (d, signer), "-inkey", "%s/%s.key" % (d, signer), *extra],
+                                  check=True, capture_output=True).stdout
+        cls.ours, cls.old = sign("ours"), sign("old")
+        cls.both = sign("old", ("-certfile", d + "/ours.pem"))
+        cls.bare = sign("ours", ("-nocerts",))
+        cls.sha = {n: cls.oracle(n + ".pem") for n in ("ours", "old")}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dir.cleanup()
+
+    @classmethod
+    def oracle(cls, pem):
+        der = subprocess.run(["openssl", "x509", "-in", "%s/%s" % (cls.dir.name, pem), "-outform", "DER"], check=True,
+                             capture_output=True).stdout
+        return hashlib.sha256(der).hexdigest()
+
+    def certs_by_openssl(self, sig):
+        out = subprocess.run(["openssl", "pkcs7", "-inform", "DER", "-print_certs"], input=sig, check=True, capture_output=True).stdout
+        return [hashlib.sha256(base64.b64decode(b"".join(block.split(b"\n")[1:-1]))).hexdigest()
+                for block in re.findall(rb"-----BEGIN CERTIFICATE-----\n.*?-----END CERTIFICATE-----", out, re.S)]
+
+    def judge(self, image, want=None):
+        h = FakeHost()
+        if image is not None:
+            h.bytes["/efi/EFI/Linux/kms.efi"] = image
+        return host_probe.image_cert(h, "/efi/EFI/Linux/kms.efi", want or self.sha["ours"])
+
+    def test_the_certificates_found_are_openssls(self):
+        for name in ("ours", "old", "both", "bare"):
+            with self.subTest(name):
+                sig = getattr(self, name)
+                self.assertEqual(host_probe.authenticode_certificates(pe_image(sig)), self.certs_by_openssl(sig))
+        self.assertEqual(len(self.certs_by_openssl(self.both)), 2)
+        # PE32 places the directories 16 bytes earlier; two signatures (a dual-signed image) are both read
+        self.assertEqual(host_probe.authenticode_certificates(pe_image(self.old, magic=0x10b)), [self.sha["old"]])
+        self.assertEqual(host_probe.authenticode_certificates(pe_image(self.old, self.ours)), [self.sha["old"], self.sha["ours"]])
+
+    def test_an_image_signed_with_the_recorded_certificate_passes(self):
+        for image in (pe_image(self.ours), pe_image(self.both), pe_image(self.old, self.ours)):
+            result = self.judge(image)
+            self.assertTrue(result["value"], result["why"])
+        self.assertEqual(result["why"], "the image /efi/EFI/Linux/kms.efi carries the recorded Secure Boot certificate (%s)"
+                         % self.sha["ours"][:16])
+        self.assertTrue(self.judge(pe_image(self.ours), self.sha["ours"].upper())["value"])
+
+    def test_a_digest_left_from_the_previous_image_fails(self):
+        result = self.judge(pe_image(self.ours), self.sha["old"])
+        self.assertFalse(result["value"])
+        self.assertEqual(result["why"], "the image /efi/EFI/Linux/kms.efi carries 1 certificate(s) (%s), and none is the recorded "
+                         "Secure Boot certificate (%s): the record is not this image's (a digest from before a rotation?)" % (
+                             self.sha["ours"][:16], self.sha["old"][:16]))
+
+    def test_an_unsigned_image_or_one_without_certificates_fails(self):
+        for name, image in {"no security directory": pe_image(rvas=4), "an empty one": pe_image(),
+                            "a signature with no certificates": pe_image(self.bare)}.items():
+            with self.subTest(name):
+                result = self.judge(image)
+                self.assertFalse(result["value"])
+                self.assertIn("carries 0 certificate(s) (none)", result["why"])
+
+    def test_without_a_recorded_digest_or_an_image_nothing_passes(self):
+        for want in ("", "ab" * 16, "g" * 64):
+            self.assertIn("no recorded Secure Boot certificate", host_probe.image_cert(FakeHost(), "/x", want)["why"])
+        self.assertIn("unreadable or absent", self.judge(None)["why"])
+
+    def test_main_reports_the_image_and_fails_the_run_on_it(self):
+        """--image reaches the report and the exit status; every other control is held passing, so the image alone decides."""
+        def run(image, want):
+            h = FakeHost()
+            h.bytes["/efi/kms.efi"] = image
+            with mock.patch.object(host_probe, "measure", return_value={}), redirect_stdout(io.StringIO()) as out:
+                rc = host_probe.main(["--image", "/efi/kms.efi", "--secure-boot-cert-sha256", want], host=h)
+            return rc, json.loads(out.getvalue()).get("image_carries_recorded_cert")
+        rc, result = run(pe_image(self.ours), self.sha["ours"])
+        self.assertEqual((rc, result["value"]), (0, True))
+        rc, result = run(pe_image(self.ours), self.sha["old"])
+        self.assertEqual((rc, result["value"]), (1, False))
+        with mock.patch.object(host_probe, "measure", return_value={}), redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(host_probe.main(["--secure-boot-cert-sha256", self.sha["old"]], host=FakeHost()), 0)
+        self.assertNotIn("image_carries_recorded_cert", json.loads(out.getvalue()))
+
+    def test_a_malformed_image_is_refused_not_read_past(self):
+        good = pe_image(self.ours)
+        sec = struct.unpack_from("<II", good, 0x40 + 24 + 112 + 32)
+        def with_dir(at, size):
+            return good[:0x40 + 24 + 112 + 32] + struct.pack("<II", at, size) + good[0x40 + 24 + 112 + 40:]
+        sig_at = sec[0] + 8
+        cases = {
+            "not MZ": b"ZM" + good[2:],
+            "no PE signature": good[:0x40] + b"PX\x00\x00" + good[0x44:],
+            "an unknown optional header": good[:0x58] + b"\x07\x01" + good[0x5a:],
+            "headers cut short": good[:0x60],
+            "a directory past the end": with_dir(sec[0], sec[1] + 8),
+            "an entry header cut short": with_dir(sec[0], 4),
+            "an entry longer than the directory": good[:sec[0]] + struct.pack("<I", sec[1] + 8) + good[sec[0] + 4:],
+            "an entry shorter than its header": good[:sec[0]] + struct.pack("<I", 4) + good[sec[0] + 4:],
+            "not SignedData": good[:sig_at + 14] + b"\x01" + good[sig_at + 15:],
+            "a signature cut short": good[:sec[0]] + struct.pack("<I", 8 + 40) + good[sec[0] + 4:sig_at + 40] + b"\x00" * (sec[1] - 48),
+        }
+        for name, image in cases.items():
+            with self.subTest(name):
+                result = self.judge(image)
+                self.assertFalse(result["value"])
+                self.assertIn("is malformed", result["why"])
+
+
 class SignedEvidence(unittest.TestCase):
     """The commissioning pass criterion: measured controls AND signed, complete, agreeing evidence."""
 
