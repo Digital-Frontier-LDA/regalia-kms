@@ -137,6 +137,12 @@ type Status struct {
 	HSMSerials []string
 	// State is the held lease's operational state, zero when not admitted.
 	State LeaseState
+	// Recovery is true when the file is a lone survivor's (mode recovery, under the owner's authorization). Then
+	// Disabled is the set of keys the survivor's directives disable, or DirectivesError says why they could not be
+	// read, and every key is refused (regalia-j18, owner item 212).
+	Recovery        bool
+	Disabled        map[string]bool
+	DirectivesError string
 }
 
 // Options configure a Gate. Boottime, BootID and OwnerUID have production defaults; tests set them.
@@ -163,6 +169,10 @@ type Options struct {
 	ChainPath     string
 	ChainOwnerUID uint32
 	Root          any // the pinned membership root (membership.LoadRoot)
+	// DirectivesPath is the survivor's directives store (DirectivesPath, survivor.py's), read whenever the node is
+	// in recovery; DirectivesOwnerUID is who writes it (root). Left empty, a node in recovery refuses every key.
+	DirectivesPath     string
+	DirectivesOwnerUID uint32
 }
 
 // Gate answers whether this node may serve right now.
@@ -374,6 +384,34 @@ func (gate *Gate) Admits(ctx context.Context, serial string, boottimeMs int64) b
 	return false
 }
 
+// Survivor directive refusals, as RefusesObject names them (the coordinator's audit outcomes).
+const (
+	RefusedDisabled             = "survivor-directive-disabled"
+	RefusedDirectivesUnreadable = "survivor-directives-unreadable"
+)
+
+// DirectivesStore is where the gate reads the survivor's directives in recovery ("" when none is configured, and then
+// every key is refused there).
+func (gate *Gate) DirectivesStore() string { return gate.options.DirectivesPath }
+
+// RefusesObject says why the key `objectID` must not be served, or "" when nothing here refuses it: in recovery, a
+// key one of the survivor's directives disabled (RefusedDisabled), and EVERY key when the directives cannot be read
+// (RefusedDirectivesUnreadable: never taken for "nothing disabled"). Outside recovery the directives do not apply.
+// It does not answer whether the node is admitted: Ready does.
+func (gate *Gate) RefusesObject(ctx context.Context, objectID string) string {
+	if gate == nil {
+		return RefusedDirectivesUnreadable
+	}
+	status := gate.Check(ctx) // it reads the directives only in recovery: under a lease both fields are empty
+	switch {
+	case status.DirectivesError != "":
+		return RefusedDirectivesUnreadable
+	case status.Disabled[objectID]:
+		return RefusedDisabled
+	}
+	return ""
+}
+
 // RequestedAfter reports whether the node is admitted under a lease it asked for after
 // `boottimeMs`. A lease is issued after it is asked for, so this shows a peer vouched after that
 // moment without comparing two machines' clocks (regalia-kms#72, PoC 12.4).
@@ -410,9 +448,17 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 	}
 	if document.ServeUntilBoottimeMs != 0 && document.Mode == ModeRecovery {
 		// ADR-0002 D32.6: a lone survivor serves stateless operations only. Until the daemon can refuse every stateful
-		// operation (a Reserve) and every key a directive disabled, it serves nothing in recovery: fail closed (#432)
-		return refuse("the node is in recovery (a lone survivor under the owner's authorization), and this daemon has no " +
+		// operation (a Reserve), it serves nothing in recovery: fail closed (#432). The survivor's directives are read
+		// here all the same, so that the keys they disable (RefusesObject) are refused by name before that gate opens.
+		status := refuse("the node is in recovery (a lone survivor under the owner's authorization), and this daemon has no " +
 			"stateless-only gate yet: it serves nothing")
+		status.Recovery = true
+		if gate.options.DirectivesPath == "" {
+			status.DirectivesError = "no survivor directives store is configured: every key is refused"
+		} else if status.Disabled, err = ReadDisabled(gate.options.DirectivesPath, gate.options.DirectivesOwnerUID); err != nil {
+			status.Disabled, status.DirectivesError = nil, err.Error()
+		}
+		return status
 	}
 	if document.ServeUntilBoottimeMs == 0 {
 		reason := document.Reason
