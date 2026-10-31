@@ -1407,8 +1407,16 @@ class ImageCarriesRecordedCert(unittest.TestCase):
         cls.ours_carrying_old = sign("ours", "-certfile", d + "/old.pem")
         cls.by_keyid = sign("ours", "-keyid")                                  # sid as a subject key identifier
         cls.bare = sign("ours", "-nocerts")                                    # names a signer it does not carry
+        # one issuer, two serials; and one issuer AND serial on two keys (only a forger makes those)
+        for name, serial in (("twin1", "1"), ("twin2", "2"), ("clone", "1")):
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+                            "-subj", "/CN=twin", "-set_serial", serial, "-days", "1", "-keyout", "%s/%s.key" % (d, name),
+                            "-out", "%s/%s.pem" % (d, name)], check=True, capture_output=True)
+        cls.twin1_carrying_twin2 = sign("twin1", "-certfile", d + "/twin2.pem")
+        cls.twin1_carrying_clone = sign("twin1", "-certfile", d + "/clone.pem")
         cls.sha = {n: hashlib.sha256(subprocess.run(["openssl", "x509", "-in", "%s/%s.pem" % (d, n), "-outform", "DER"],
-                                                    check=True, capture_output=True).stdout).hexdigest() for n in ("ours", "old")}
+                                                    check=True, capture_output=True).stdout).hexdigest()
+                   for n in ("ours", "old", "twin1", "twin2", "clone")}
 
     @classmethod
     def tearDownClass(cls):
@@ -1460,6 +1468,18 @@ class ImageCarriesRecordedCert(unittest.TestCase):
         self.assertFalse(result["value"])
         self.assertIn("is signed by %s, and none is the recorded Secure Boot certificate (%s)" % (self.sha["ours"][:16], self.sha["old"][:16]),
                       result["why"])
+
+    def test_the_signer_is_named_by_issuer_and_serial_together(self):
+        sig = self.twin1_carrying_twin2
+        self.assertEqual(host_probe.authenticode_signers(pe_image(sig)), self.signer_by_openssl(sig))
+        self.assertTrue(self.judge(pe_image(sig), self.sha["twin1"])["value"])
+        self.assertFalse(self.judge(pe_image(sig), self.sha["twin2"])["value"])
+
+    def test_a_sid_two_carried_certificates_answer_to_names_no_signer(self):
+        """Two certificates with one issuer and serial: which one the firmware takes is not this probe's guess."""
+        self.assertEqual(host_probe.authenticode_signers(pe_image(self.twin1_carrying_clone)), [None])
+        for want in ("twin1", "clone"):
+            self.assertFalse(self.judge(pe_image(self.twin1_carrying_clone), self.sha[want])["value"])
 
     def test_a_signer_the_signature_does_not_carry_is_no_signer(self):
         result = self.judge(pe_image(self.bare))
