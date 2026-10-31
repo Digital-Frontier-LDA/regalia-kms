@@ -86,7 +86,7 @@ python3 -I - "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/i
 import hashlib, json, sys
 digest = lambda path: hashlib.sha256(open(path, "rb").read()).hexdigest()
 provenance = json.load(open(sys.argv[6]))
-json.dump({"schema": "regalia.initrd-build/v1", "commit": provenance["commit"], "go": sys.argv[8], "snapshot": "20261019T000000Z",
+json.dump({"schema": "regalia.initrd-build/v1", "commit": provenance["commit"], "go": sys.argv[8], "snapshot": "20261023T210712Z",
            "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "stand-in", "dracut": "stand-in", "packages_requested": [],
            "client_sha256": digest(sys.argv[2]), "root_key_sha256": digest(sys.argv[7]), "repository_files": provenance["repository_files"], "packages_sha256": "0" * 64, "packages": [],
            "initrd_sha256": digest(sys.argv[1]), "initrd_size": 0, "initrd_entries": 0,

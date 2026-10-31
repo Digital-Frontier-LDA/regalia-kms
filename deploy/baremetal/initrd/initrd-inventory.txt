@@ -10,7 +10,7 @@
 # built the initrd (e2e/unlock-boot-qemu.sh prints the lines that differ). A dracut, kernel or distribution
 # update changes it in a pull request whose diff is read: the "generated" lines first.
 #
-# Reviewed image: Debian 13 (trixie) from snapshot.debian.org 20261019T000000Z (main, updates, security), kernel 6.12.113+deb13-amd64, built by
+# Reviewed image: Debian 13 (trixie) from snapshot.debian.org 20261023T210712Z (main, updates, security), kernel 6.12.113+deb13-amd64, built by
 # deploy/baremetal/initrd/build-initrd.sh (#248: dracut --reproducible --nohardlink --no-hostonly --no-hostonly-cmdline
 # --add regalia-unlock, DRACUT_NO_MKNOD=1, so no dev/* nodes and no hard links), the client compiled by it from this
 # repository's cmd/regalia-unlock (CGO_ENABLED=0, -trimpath, -buildvcs=false, the go.mod Go release). The initrd's
@@ -45,7 +45,7 @@ generated dracut l 0777 0:0 etc/mtab /proc/self/mounts
 generated dracut-over:base-files=13.8+deb13u7 l 0777 0:0 etc/os-release initrd-release
 generated dracut f 0644 0:0 etc/passwd 4c046ed48ae30e8373364b32a8dec9e7ca68faa98d7093457cebc7a749a068b6
 generated dracut f 0644 0:0 etc/passwd- 71dc3fb95ffdc7745faaaf2377fe2f0d8f7b4f4ce9f556aedfc82d0a4014f892
-generated dracut f 0000 0:0 etc/shadow 392d3a5b6ab917bff43244d082bcf8a2d071f89541d60ed50355f126190383c1
+generated dracut f 0000 0:0 etc/shadow 2a935f90a3c86c48e79ab4ea55b185e5b7ac2b2ac9823d29d3c170384ce9b88e
 generated dracut d 0755 0:0 etc/systemd/system/cryptsetup.target.wants -
 generated dracut d 0755 0:0 etc/systemd/system/initrd.target.wants -
 generated dracut l 0777 0:0 etc/systemd/system/initrd.target.wants/dracut-cmdline-ask.service /usr/lib/systemd/system/dracut-cmdline-ask.service
@@ -1808,10 +1808,10 @@ package libblkid1=2.41.5-0+deb13u1 l 0777 0:0 usr/lib/x86_64-linux-gnu/libblkid.
 package libblkid1=2.41.5-0+deb13u1 f 0644 0:0 usr/lib/x86_64-linux-gnu/libblkid.so.1.1.0 116b712c143ac68bb59f6d8e32ed8e05e0772c730a9ba55ec544dd28916af58c
 package libbpf1=1:1.5.0-3 l 0777 0:0 usr/lib/x86_64-linux-gnu/libbpf.so.1 libbpf.so.1.5.0
 package libbpf1=1:1.5.0-3 f 0644 0:0 usr/lib/x86_64-linux-gnu/libbpf.so.1.5.0 0c49fc88c249ba8f584103d5db55a84bd84735d8529e64122a3433c50b21a5b7
-package libbrotli1=1.1.0-2+b7 l 0777 0:0 usr/lib/x86_64-linux-gnu/libbrotlicommon.so.1 libbrotlicommon.so.1.1.0
-package libbrotli1=1.1.0-2+b7 f 0644 0:0 usr/lib/x86_64-linux-gnu/libbrotlicommon.so.1.1.0 7b0b0de90d8d3d4f07b99738c0285c6a0dbb6611d774ca44e7ea53a19a01ea68
-package libbrotli1=1.1.0-2+b7 l 0777 0:0 usr/lib/x86_64-linux-gnu/libbrotlidec.so.1 libbrotlidec.so.1.1.0
-package libbrotli1=1.1.0-2+b7 f 0644 0:0 usr/lib/x86_64-linux-gnu/libbrotlidec.so.1.1.0 06530583d5927000480f4214d80d0213fec3d34cc448527f932a6eceb50cefef
+package libbrotli1=1.1.0-2+deb13u1 l 0777 0:0 usr/lib/x86_64-linux-gnu/libbrotlicommon.so.1 libbrotlicommon.so.1.1.0
+package libbrotli1=1.1.0-2+deb13u1 f 0644 0:0 usr/lib/x86_64-linux-gnu/libbrotlicommon.so.1.1.0 0697dd09666e2a080974470950075ee959f2391ecb173ceee50423f969032d79
+package libbrotli1=1.1.0-2+deb13u1 l 0777 0:0 usr/lib/x86_64-linux-gnu/libbrotlidec.so.1 libbrotlidec.so.1.1.0
+package libbrotli1=1.1.0-2+deb13u1 f 0644 0:0 usr/lib/x86_64-linux-gnu/libbrotlidec.so.1.1.0 ff4baf3141862726c25ab08cdd94bced37dcae0c6827943d3e40fc1079969814
 package libbsd0=0.12.2-2 l 0777 0:0 usr/lib/x86_64-linux-gnu/libbsd.so.0 libbsd.so.0.12.2
 package libbsd0=0.12.2-2 f 0644 0:0 usr/lib/x86_64-linux-gnu/libbsd.so.0.12.2 167e3fa2b6320ce61534a48002e6d0921f61d61eae88a669c117e23ed3de9f37
 package libc6=2.41-12+deb13u4 f 0755 0:0 usr/lib/x86_64-linux-gnu/libc.so.6 9792e3cbb541c8f44c7acf5f14f4022ea62998ecc787d326bed4d8b6547dfd92
