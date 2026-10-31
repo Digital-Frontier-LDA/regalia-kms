@@ -33,7 +33,8 @@ Commissioning has two halves:
 | Setting | Value | Evidence field |
 |---|---|---|
 | Boot mode | **UEFI** (TPM 2.0 needs it; not Legacy BIOS) | measured: `uefi_boot` |
-| Secure Boot | **Enabled** (Debian 13's shim is signed by Microsoft's UEFI CA) | measured: `secure_boot_enabled` |
+| Secure Boot | **Enabled** | measured: `secure_boot_enabled` |
+| Secure Boot db | the factory keys **kept**, and **our** Secure Boot certificate **appended** (below) | measured: `secure_boot_db_has_image_cert`, against `host.secure_boot_cert_sha256` |
 | TPM | **TPM 2.0 visible and enabled**; SHA-256 PCR bank active | measured: `tpm2_present`, `tpm_sha256_bank` |
 | TPM module | **never moved**: the HPE module is bound to its system board | — |
 | AC power recovery ("Automatic Power-On") | **Restore last state / always on** | attested: `ac_power_recovery` |
@@ -41,6 +42,26 @@ Commissioning has two halves:
 | Chassis intrusion | the detection kit **fitted and armed** (it is optional on Gen9: check) | attested: `chassis_intrusion_armed` |
 | iLO 4 | default password changed; on an **isolated management network**, or disabled | attested: `ilo_isolated_or_disabled` |
 | Internal USB port | the **Nitrokey HSM 2** goes here, inside the chassis | measured: `hsm_token_attached` (USB 20a0:4230 in sysfs; path pinned in the evidence) |
+
+**Our certificate in db (kms#543).** Nothing boots through a shim: `install-host.sh` makes the firmware
+entry for the signed UKI itself, and the UKI carries OUR Secure Boot signature (`uki.py sign`, the third
+key). A Gen9's factory db holds HPE's and Microsoft's keys only, and refuses it under Secure Boot (shown
+under OVMF in kms#543: the same image boots once its certificate is in db, and a foreign-signed one is
+still refused). So:
+
+- **Keep the factory keys.** The P440ar and the NICs' option ROMs are signed through Microsoft's UEFI
+  CA: a db without it does not load them under Secure Boot.
+- **Append our certificate in RBSU,** from a file on iLO virtual media (Secure Boot configuration,
+  db, enrol a signature; the menu path is HPE's documentation and has NOT yet been walked on a host).
+  iLO 4's Redfish SecureBoot resource only resets or clears keys, so this is a console step, once per host.
+- **Before the first seal:** a db change moves PCR 7, which the PINs and the disk paths are bound to
+  (section 4). The order is install-host, then db, then reboot, then the evidence and the seals.
+- **Record it** as `host.secure_boot_cert_sha256`: the signed image record's
+  `signed.secure_boot_cert_sha256` (the SHA-256 of the certificate's DER). The probe reads db
+  (efivarfs) and fails unless an X.509 entry has that digest; a db that does not parse fails too.
+
+Rotating the Secure Boot signing key is then a console visit per host. Owning PK and KEK too would make it
+an authenticated update from the OS, at the cost of a key ceremony; it is not part of this step.
 
 ## 3. Operating system (Debian 13)
 
@@ -524,7 +545,7 @@ sudo python3 -Es deploy/baremetal/host_probe.py --evidence E.json --signature E.
 It must exit 0: every measured control true; the evidence at most 24 hours old (the firmware settings
 are not re-measured, so sign fresh evidence for each run), complete, signed by the recorded key,
 attesting every firmware setting, and agreeing with every measurement (including the import key's
-fingerprint). Then an unattended
+fingerprint, and db holding the recorded Secure Boot certificate). Then an unattended
 **reboot** brings the KMS back with no one present (the disk unseals from the TPM; the PIN from the
 TPM and the host key on that disk).
 
@@ -824,7 +845,8 @@ the client are on the console with no kernel argument. It is not secret. When a 
     recovery key, and nothing ended in a shell;
   - the peers back after 150 s: nobody types anything, and the host unlocks by itself.
   NOT shown: Secure Boot (OVMF runs with no enrolled keys, so nothing checks the image's signature
-  and PCR 7 says so), a network card that udev renames in the initrd (the
+  and PCR 7 says so; kms#543 booted a signed UKI alone under OVMF with Secure Boot on and our
+  certificate in db, not this guest), a network card that udev renames in the initrd (the
   guest's is `eth0`), and any physical machine.
 - **Reviewing an image.** What opens the root volume is decided inside the initrd, and the running host
   keeps no record of it: after switch-root the unit that opened the volume is no longer loaded (seen
