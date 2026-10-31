@@ -22,8 +22,9 @@ PLATFORM AND TPM, measured:
                             UKI is booted directly, with no shim, and carries OUR Secure Boot signature
                             (uki.py sign): a Gen9's factory db (HPE's and Microsoft's keys) refuses it
                             (kms#543). The certificate is appended in RBSU before the first seal, since
-                            a db change moves PCR 7. Compared with --secure-boot-cert-sha256, or the
-                            evidence's host.secure_boot_cert_sha256
+                            a db change moves PCR 7. Compared with the evidence's
+                            host.secure_boot_cert_sha256, or without evidence --secure-boot-cert-sha256
+                            (with evidence an argument must agree, else the run fails)
   tpm2_present              a TPM whose major version is 2, behind the kernel resource manager
                             (/dev/tpmrm0): seal-hsm-pin.sh refuses the raw /dev/tpm0
   tpm_sha256_bank           the TPM exposes an active SHA-256 PCR bank (/sys/class/tpm/tpm0/pcr-sha256)
@@ -87,7 +88,8 @@ PLATFORM AND TPM, measured:
                             the PIN is not sealed to the IMA PCR (README, section 3)
   pin_import_key_present    the persistent key at the import handle (default 0x81000101) IS the one
                             recorded at --init-import-key: the sha256 of its DER public key starts with
-                            --import-key-sha256 (or the evidence's host.pin_import_key_sha256), and it
+                            the evidence's host.pin_import_key_sha256 (without evidence,
+                            --import-key-sha256; with evidence an argument must agree), and it
                             is RSA-3072 with EXACTLY the attributes --init-import-key sets:
                             fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda
   pin_credentials_sealed_as_recorded
@@ -1125,10 +1127,10 @@ def main(argv=None, host=None, run=None):
     ap.add_argument("--signature", help="its detached signature (openssl dgst -sha256 -sign)")
     ap.add_argument("--evidence-key", help="the commissioning evidence public key (P-256 PEM)")
     ap.add_argument("--evidence-key-sha256", help="that key's recorded SHA-256 (DER), from the commissioning record")
-    ap.add_argument("--import-key-sha256", help="without evidence: the import key fingerprint written down at "
-                    "--init-import-key (at least 16 hex)")
-    ap.add_argument("--secure-boot-cert-sha256", help="without evidence: the signed image record's secure_boot_cert_sha256 "
-                    "(uki.py sign), which db must hold")
+    ap.add_argument("--import-key-sha256", help="the import key fingerprint written down at --init-import-key (at "
+                    "least 16 hex); with evidence it comes from host.pin_import_key_sha256, and an argument must agree with it")
+    ap.add_argument("--secure-boot-cert-sha256", help="the signed image record's secure_boot_cert_sha256 (uki.py sign), "
+                    "which db must hold; with evidence it comes from host.secure_boot_cert_sha256, and an argument must agree with it")
     ap.add_argument("--credential-pcrs", help="without evidence: the PCRs the PIN credentials are bound to directly, "
                     "as given to seal-hsm-pin.sh --pcrs (e.g. 7)")
     ap.add_argument("--credential-signed-pcrs", default="", help="without evidence: 11 if the PINs were sealed with "
@@ -1168,6 +1170,18 @@ def main(argv=None, host=None, run=None):
                 evidence_mod.verify_signature(snap.paths["evidence"], snap.paths["signature"], snap.paths["key"],
                                               args.evidence_key_sha256, **({"run": run} if run else {}))
             want, sb_cert = ev_host["pin_import_key_sha256"], ev_host["secure_boot_cert_sha256"]
+            # Arguments may repeat the record; one that disagrees is an operator holding the wrong record, refused
+            # rather than silently outvoted (kms#639, regalia-t2h). The host is still measured against the evidence.
+            given = re.sub(r"[\s:]", "", args.import_key_sha256 or "").lower()
+            if given and not re.fullmatch(r"[0-9a-f]{16,64}", given):
+                problems.append("--import-key-sha256 %r is not a fingerprint (at least 16 hex): it agrees with nothing" % given)
+            elif given and not want.startswith(given):
+                problems.append("--import-key-sha256 %s is not the evidence's pin_import_key_sha256 %s: they disagree, and the "
+                                "import key is judged against the evidence" % (given, want))
+            given = (args.secure_boot_cert_sha256 or "").lower()
+            if given and given != sb_cert:
+                problems.append("--secure-boot-cert-sha256 %s is not the evidence's secure_boot_cert_sha256 %s: they disagree, "
+                                "and db is judged against the evidence" % (given, sb_cert))
             binding = evidence_mod.credential_binding(ev_host["credential_tpm2_pcrs"], ev_host["credential_tpm2_signed_pcrs"],
                                                       ev_host["credential_tpm2_pcr_key_pkfp"])
             # The root disk is judged against the SIGNED record of which node this is and who its peers are
