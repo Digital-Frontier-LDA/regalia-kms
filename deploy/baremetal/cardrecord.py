@@ -285,7 +285,7 @@ def verify(envelope, root, signing_lines):
             isinstance(record["supersedes"], str) and HEX64.fullmatch(record["supersedes"]) is not None,
             "supersedes is not \"\" at sequence 1, or the previous record's digest (64 hex) after it")
     owners, roles, certificates = {}, {}, []
-    require(isinstance(record["owner_keys"], list) and len(record["owner_keys"]) == 2, "owner_keys is not exactly two keys: the two owner cards' (D30.7)")
+    require(isinstance(record["owner_keys"], list) and len(record["owner_keys"]) == 2, "owner_keys is not exactly two keys: the two owner cards' SIG keys (D30.7)")
     for i, entry in enumerate(record["owner_keys"]):
         where = "owner_keys[%d]" % i
         _exact(entry, "owner_key", where)

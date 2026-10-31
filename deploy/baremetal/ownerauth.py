@@ -185,10 +185,10 @@ def verify(envelope, root, node_id):
     membership.exact(entry, FIELDS["node"], "the record's entry for %s" % node_id)
     for field in FIELDS["node"]:
         membership.hex_field(entry[field], 64, "%s.%s" % (node_id, field))
-    # the YubiKey envelope's recipients: the two OWNER cards' decryption subkeys (D30.3, D30.7), and the ceremony's proof
+    # the YubiKey envelope's recipients: the two OWNER cards' decryption subkeys (D30.7), and the ceremony's proof
     # that each card opened its own (verify_keys: {subkey: SHA-256}); not used here, held to their form
     recipients = record["yk_recipients"]
-    require(isinstance(recipients, list) and len(recipients) == 2, "yk_recipients is not the two owner cards (D30.7)")
+    require(isinstance(recipients, list) and len(recipients) == 2, "yk_recipients is not the two owner cards' decryption subkeys (D30.7)")
     for i, recipient in enumerate(recipients):
         membership.exact(recipient, FIELDS["recipient"], "yk_recipients[%d]" % i)
         for f in FIELDS["recipient"]:
