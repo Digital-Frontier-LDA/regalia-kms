@@ -115,6 +115,13 @@ type Admission interface {
 	Ready(context.Context) bool
 }
 
+// ObjectAdmission is an Admission that can also refuse one key by name: a lone survivor's gate refuses the keys the
+// owner's directives disabled, and every key when those cannot be read (internal/admission, regalia-j18). It
+// returns the audit outcome of the refusal, or "" to serve.
+type ObjectAdmission interface {
+	RefusesObject(ctx context.Context, objectID string) string
+}
+
 // RequireAdmission makes every operation need a runtime lease. Call it before the coordinator
 // serves. The runner the coordinator was built with must be an admission runner over the same gate:
 // this check refuses before any policy state is spent, that one stops an operation whose lease
@@ -169,6 +176,21 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 	if coordinator.admission != nil && !coordinator.admission.Ready(ctx) {
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "not-admitted", started, false, nil)
 		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
+	}
+	// A KEY THE OWNER DISABLED ON A LONE SURVIVOR IS NOT SERVED (owner item 212), and no key is while the survivor's
+	// directives cannot be read. Before routing and policy, as above: a refused key spends no policy state. A
+	// disabled key is permanent here (re-enabling it is the majority's act), so a 403; an unreadable store may be
+	// repaired, so a retryable 503.
+	if objects, ok := coordinator.admission.(ObjectAdmission); ok {
+		switch outcome := objects.RefusesObject(ctx, request.ObjectID); outcome {
+		case "":
+		case "survivor-directive-disabled":
+			coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", outcome, started, false, nil)
+			return api.Result{}, failure("DENIED", http.StatusForbidden, false)
+		default:
+			coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", outcome, started, false, nil)
+			return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
+		}
 	}
 	// Seal routes differently: RouteForSeal admits standby and qualified bindings, because an
 	// envelope sealed today must open after tomorrow's rotation. Release routes differently

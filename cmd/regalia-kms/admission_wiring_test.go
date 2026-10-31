@@ -114,6 +114,27 @@ func TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted(t *testing.T) {
 	if err := runner.Run(context.Background(), func(context.Context) error { return nil }); err != nil || !base.ran {
 		t.Fatalf("an admitted node was refused: err=%v ran=%v", err, base.ran)
 	}
+	// The same node in recovery reads the survivor's directives where survivor.py keeps them (owner item 212): the
+	// gate the daemon builds names that store, never "no store configured", and refuses by key what it reads there.
+	var recovery map[string]any
+	if err := json.Unmarshal(document, &recovery); err != nil {
+		t.Fatal(err)
+	}
+	recovery["mode"] = "recovery"
+	recovered, _ := json.Marshal(recovery)
+	if err := os.WriteFile(filepath.Join(directory, "admission.json"), recovered, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	status := gate.Check(context.Background())
+	if !status.Recovery || status.Admitted {
+		t.Fatalf("a recovery admission file: %+v", status)
+	}
+	if status.DirectivesError != "" && !strings.Contains(status.DirectivesError, filepath.Dir(admission.DirectivesPath)) {
+		t.Fatalf("the daemon's gate does not read %s: %q", admission.DirectivesPath, status.DirectivesError)
+	}
+	if status.DirectivesError == "" && status.Disabled == nil {
+		t.Fatal("a recovering node read its directives and kept no set")
+	}
 }
 
 // A lab host, and a host with no token, keep working and gain no readiness dependency they have no
