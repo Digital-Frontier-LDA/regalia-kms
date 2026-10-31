@@ -42,8 +42,22 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "Ed25519 PUBLIC key of the throwaway Shamir lab root regalia-ceremony#128's writer was run under once, in tests/vectors/card-ceremony-record/writer-run/ (root.hex; its shares were not kept), pinned by value"
+description = "Ed25519 PUBLIC keys of the throwaway Shamir lab roots regalia-ceremony#128's writer was run under for tests/vectors/card-ceremony-record/writer-run/ (root.hex; no shares kept): the first run (head c688584, 2026-10-04, in history) the regeneration at ceremony main f9e28e5 (regalia-86f, 2026-10-29) and at regalia-ceremony#178's head cf60eaa (regalia-avz, 2026-10-29), pinned by value"
 regexTarget = "secret"
 regexes = [
     '''^76584946437bf4e61a99805663321c864da655197a406063af5e7da0840817da$''',
+    '''^e7bd989c704924f6b0508786b93c049622e4717d7bbfdde17fa2bdead9fe0483$''',
+    '''^8e119683841b2edd12a3f01c1a1985b49a373f782ce4c0bb0ed90e182dd8346f$''',
+]
+
+[[allowlists]]
+description = "TPM policy DIGESTS (SHA-256 of public data, not secrets) in tests/vectors/anchor-policy-v1.json: each object class's authPolicy = PolicyAuthorize(Name(K_A), class), K_A a public test key (#361), pinned by value"
+regexTarget = "secret"
+regexes = [
+    '''^04d0553819cd5f032d343502b7804fe1c9046082e1ab3a6c9e1e5bf946e9ce8b$''',
+    '''^34f4871e4d1bcb8abfc0068742e6b0d6ecae3b70348f8eafe590f679badf3e4e$''',
+    '''^7677748bb9ad8f9afd07f7d5e2d892bf00a2e50e006f919fdf719deb98397e42$''',
+    '''^83fd993384f08420cc36f06df726dc38a69104cf2609cebf985f32a1ddfc5817$''',
+    '''^b3bd6b94c082c63fe0797e9064aead96e23e37d5b5c5c7a3b070724d2dbc1c37$''',
+    '''^c8937c2f016cda0c8d325ce7ed3d49851e45da6270d5e458ae1238ab71d7573a$''',
 ]

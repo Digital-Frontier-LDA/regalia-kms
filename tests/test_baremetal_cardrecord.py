@@ -35,10 +35,10 @@ class Case(unittest.TestCase):
         self.record = {
             "schema": cr.SCHEMA, "event": cr.EVENT, "session": "ab" * 16, "tool": "offline-keys.py test", "at": "2026-10-04T12:00:00Z",
             "root_entry": {"alg": "ed25519", "key": self.root}, "root_fingerprint": hashlib.sha256(bytes.fromhex(self.root)).hexdigest(),
-            "owner_keys": [{"role": "dev-main", "serial": "11111111", "alg": "ed25519", "key": self.main, "attested": True,
-                            "attestation_sha256": {"sig": "a1" * 32, "dec": "a2" * 32}},
-                           {"role": "dev-backup", "serial": "22222222", "alg": "ed25519", "key": self.backup, "attested": True,
-                            "attestation_sha256": {"sig": "b1" * 32, "dec": "b2" * 32}}],
+            "owner_keys": [{"role": "owner-main", "serial": "11111111", "alg": "ed25519", "key": self.main, "attested": True,
+                            "attestation_sha256": {"sig": "a1" * 32, "dec": "a2" * 32, "aut": "a3" * 32}},
+                           {"role": "owner-backup", "serial": "22222222", "alg": "ed25519", "key": self.backup, "attested": True,
+                            "attestation_sha256": {"sig": "b1" * 32, "dec": "b2" * 32, "aut": "b3" * 32}}],
             "ownerauth_recipients": [{"serial": "11111111", "primary": "A" * 40, "subkey": "B" * 40},
                                      {"serial": "22222222", "primary": "C" * 40, "subkey": "D" * 40}],
             "ssh_signers": [{"serial": "11111111", "key": ssh(keys[3])}, {"serial": "22222222", "key": ssh(keys[4])}],
@@ -72,7 +72,20 @@ class Signature(Case):
     def test_a_record_the_pinned_root_signed_gives_its_owner_and_release_keys(self):
         got = cr.verify(self.sign(self.record), self.root, [self.line(self.record)])
         self.assertEqual(got["owners"], {"11111111": self.main, "22222222": self.backup})
-        self.assertEqual((got["roles"], got["release_key"]), ({"dev-main": "11111111", "dev-backup": "22222222"}, self.release))
+        self.assertEqual((got["roles"], got["release_key"]), ({"owner-main": "11111111", "owner-backup": "22222222"}, self.release))
+
+    def test_no_old_domain_nor_another_kind_s_signature_verifies(self):
+        """regalia-avz: a card record verifies under regalia.card-ceremony-record/v1 only. Under the domain every record
+        kind shared before the cutover, another kind's (offline-keys, ownerauth), the rebuild's or the membership's, it is
+        refused, its content otherwise valid: no old-domain record is accepted after the cutover."""
+        self.assertEqual(cr.RECORD_DOMAIN, b"regalia.card-ceremony-record/v1\x00")
+        self.assertEqual(cr.RECORD_DOMAIN, (cr.SCHEMA + "\x00").encode())
+        self.assertIsNotNone(cr.verify(self.sign(self.record), self.root, [self.line(self.record)]))
+        for domain in (cr.RETIRED_RECORD_DOMAIN, b"regalia.offline-keys-record/v1\x00", b"regalia.ownerauth-record/v1\x00",
+                       b"regalia-card-record-rebuild/v1\x00", m.DOMAIN):
+            with self.subTest(domain=domain):
+                self.refused("the card record's signature is not the pinned root's over 'regalia.card-ceremony-record/v1'",
+                             self.sign(self.record, domain=domain))
 
     def test_a_bad_signature_a_wrong_domain_and_another_root_are_refused(self):
         bad = self.sign(self.record)
@@ -103,15 +116,34 @@ class Content(Case):
 
     def test_owner_keys_two_roles_two_cards_two_keys_attested(self):
         self.refused("owner_keys is not exactly two keys", self.changed(lambda r: r["owner_keys"].pop()))
-        self.refused("the role 'dev-main' is not one of", self.changed(lambda r: r["owner_keys"][1].update(role="dev-main")))
+        self.refused("the role 'owner-main' is not one of", self.changed(lambda r: r["owner_keys"][1].update(role="owner-main")))
         self.refused("the card 11111111 holds two owner keys", self.changed(lambda r: r["owner_keys"][1].update(serial="11111111")))
         self.refused("the two owner cards hold the same key", self.changed(lambda r: r["owner_keys"][1].update(key=self.main)))
         self.refused("is not attested as made on its card", self.changed(lambda r: r["owner_keys"][0].update(attested=False)))
         self.refused("owner_keys[1].serial is not a card serial", self.changed(lambda r: r["owner_keys"][1].update(serial="0222")))
 
-    def test_each_owner_key_names_its_own_two_attestation_certificates(self):
-        """regalia-ceremony#121 after d9's read: the evidence behind "attested", re-checkable from the disc."""
+    def test_the_developer_pair_s_role_names_are_refused(self):
+        """regalia-86f: the owner keys are the OWNER pair's (ADR-0002 D30.7, regalia-ceremony#133), and a record naming the
+        developer pair's roles, as this side took before, is refused in either place and as a pair."""
+        for i, own in ((0, "owner-main"), (1, "owner-backup")):
+            for old in ("dev-main", "dev-backup"):
+                self.refused("owner_keys[%d]: the role %r is not one of owner-main, owner-backup" % (i, old),
+                             self.changed(lambda r, i=i, old=old: r["owner_keys"][i].update(role=old)))
+
+        def developer_pair(r):
+            r["owner_keys"][0]["role"], r["owner_keys"][1]["role"] = "dev-main", "dev-backup"
+        self.refused("owner_keys[0]: the role 'dev-main' is not one of owner-main, owner-backup", self.changed(developer_pair))
+        self.assertEqual(cr.ROLES, ("owner-main", "owner-backup"))
+
+    def test_each_owner_key_names_its_own_three_attestation_certificates(self):
+        """regalia-ceremony#121 after d9's read: the evidence behind "attested", re-checkable from the disc. SIG, DEC and AUT
+        are all touch-fixed under D30.7, so all three are named (regalia-86f)."""
         self.refused("owner_keys[0].attestation_sha256 fields mismatch", self.changed(lambda r: r["owner_keys"][0]["attestation_sha256"].pop("dec")))
+        self.refused("owner_keys[1].attestation_sha256 fields mismatch", self.changed(lambda r: r["owner_keys"][1]["attestation_sha256"].pop("aut")))
+        self.refused("owner_keys[0].attestation_sha256.aut (a certificate's SHA-256, 64 hex)",
+                     self.changed(lambda r: r["owner_keys"][0]["attestation_sha256"].update(aut="A3" * 32)))
+        self.refused("an attestation certificate is named twice: each key has its own",
+                     self.changed(lambda r: r["owner_keys"][1]["attestation_sha256"].update(aut="a3" * 32)))
         self.refused("owner_keys[1].attestation_sha256.sig (a certificate's SHA-256, 64 hex)",
                      self.changed(lambda r: r["owner_keys"][1]["attestation_sha256"].update(sig="B1" * 32)))
         self.refused("an attestation certificate is named twice: each key has its own",
@@ -178,6 +210,13 @@ class Freshness(Case):
         two = self.second()
         self.refused("this card record (sequence 1) is not the newest the root signed (sequence 2", self.sign(self.record),
                      lines=[self.line(self.record), self.line(two)])
+
+    def test_a_record_newer_than_the_signing_record_is_refused_as_not_held(self):
+        """c6 on #634: a record the signing record does not hold yet (its sequence past the newest line) is refused as
+        that, never as "superseded", and its digest is never what admits it."""
+        two = self.second()
+        self.refused("this card record (sequence 2) is newer than the signing record's newest card-record line (sequence 1)",
+                     self.sign(two), lines=[self.line(self.record)])
 
     def test_no_card_record_line_refuses_never_accepts_sequence_1(self):
         self.refused("the signing record holds no card-record line", self.sign(self.record), lines=[{"kind": "manifest", "epoch": 1, "digest": "ab" * 32}])
@@ -288,15 +327,19 @@ class SigningState(unittest.TestCase):
 
 
 class ProducersVectors(unittest.TestCase):
-    """regalia-ceremony's own signed vectors (regalia-ceremony#121, copied into tests/vectors/card-ceremony-record/):
+    """regalia-ceremony's own signed vectors (regalia-ceremony#121; copied into tests/vectors/card-ceremony-record/ from
+    regalia-ceremony#178's head cf60eaa639672e408a90cb9174402c4cc794233b, regalia-avz's per-kind domains):
     valid.json accepted under the pinned root.hex, every other one refused. expect.json carries the producer's reasons;
     this verifier's words may differ, and its refusal must be about the same thing."""
 
     # the producer's refusal, and the words this verifier refuses the same record with
     SAME = {"bad-signature.json": "signature is not the pinned root's", "wrong-domain.json": "signature is not the pinned root's",
             "other-root.json": "names another root than the pinned one", "release-is-owner.json": "the release key is an owner key",
-            "missing-dev-backup.json": "owner_keys is not exactly two keys", "unknown-field.json": "owner_keys[0] fields mismatch",
-            "first-supersedes.json": "supersedes is not \"\" at sequence 1"}
+            "missing-owner-backup.json": "owner_keys is not exactly two keys", "unknown-field.json": "owner_keys[0] fields mismatch",
+            "first-supersedes.json": "supersedes is not \"\" at sequence 1",
+            # regalia-avz: a valid card record signed under the retired shared domain, another record kind's or the rebuild's
+            "retired-domain.json": "signature is not the pinned root's", "offline-keys-domain.json": "signature is not the pinned root's",
+            "ownerauth-domain.json": "signature is not the pinned root's", "rebuild-domain.json": "signature is not the pinned root's"}
 
     def test_every_vector_as_the_producer_judges_it(self):
         """Each record judged by the signing record as it stood when that record was the newest (its first `sequence`
@@ -583,12 +626,16 @@ def _genesis(test, root, record, state):
 
 
 class ProducersWriterRun(unittest.TestCase):
-    """The producer's REAL output, not a vector: regalia-ceremony#128's writer (offline-keys card-record, head c688584)
-    run once, 2026-10-04, by regalia-kms-1e through that PR's test_card_record_writer.Writer setup: a 2-of-3 Shamir lab
-    root (ok.generate, real age; the shares not kept), then card_record(first=True) and card_record(). Kept: the state
-    directory it left (marker, signing-record.jsonl with card-record lines 1 and 2) and both records
-    (tests/vectors/card-ceremony-record/writer-run/). Its output is not byte-reproducible, so it is a fixture made once,
-    not regenerated. This side must read it as the writer meant it (regalia-kms-24's cross-repo check)."""
+    """The producer's REAL output, not a vector: regalia-ceremony#128's writer (offline-keys card-record) as it stands at
+    regalia-ceremony#178's head cf60eaa639672e408a90cb9174402c4cc794233b (regalia-avz: signed under
+    regalia.card-ceremony-record/v1; D30.7's owner pair, three attestations), run once, 2026-10-29, through that commit's
+    test_card_record_writer.Writer setup (writer-run-gen.py beside the vectors): a fresh 2-of-3 Shamir lab root
+    8e119683... (ok.generate, real age 1.3.2 -pq; the shares not kept), then card_record(first=True) and card_record().
+    Kept: the state directory it left (marker, signing-record.jsonl with card-record lines 1 and 2) and both records
+    (tests/vectors/card-ceremony-record/writer-run/). Its output is not byte-reproducible, so it is a fixture made once
+    per producer change, not regenerated by a test. This side must read it as the writer meant it (regalia-kms-24's
+    cross-repo check). Earlier runs: head c688584 (2026-10-04, the developer pair) and ceremony main f9e28e5 (regalia-86f,
+    2026-10-29, the shared domain), neither of which this side takes any more."""
 
     def setUp(self):
         import pathlib
@@ -610,7 +657,7 @@ class ProducersWriterRun(unittest.TestCase):
         lines = cr.read_signing_state(self.state, self.root)
         got = cr.verify(self.record(2), self.root, lines)
         self.assertEqual((got["sequence"], got["of"], got["supersedes"]), (2, 2, cr.digest(self.record(1)["record"])))
-        self.assertEqual(got["roles"], {"dev-main": "40000001", "dev-backup": "40000002"})
+        self.assertEqual(got["roles"], {"owner-main": "40000001", "owner-backup": "40000002"})
         with self.assertRaises(m.Refused) as caught:
             cr.verify(self.record(1), self.root, lines)
         self.assertIn("this card record (sequence 1) is not the newest the root signed (sequence 2", str(caught.exception))
@@ -649,6 +696,72 @@ class ProducersWriterRun(unittest.TestCase):
             written = json.load(f)
         owners = self.record(2)["record"]["owner_keys"]
         self.assertEqual(written["owner_keys"], [{"alg": "ed25519", "key": k["key"]} for k in sorted(owners, key=lambda k: k["serial"])])
+
+class ReadSigningRecordFile(unittest.TestCase):
+    """read_signing_record: owner.py sign-recovery's --record, parsed by the same rule as read_signing_state and the
+    ceremony's reader (7e on regalia-ceremony#139), and read whole or refused whole."""
+    LINE = b'{"epoch": 1, "kind": "manifest", "verified": true}\n'
+
+    def setUp(self):
+        import tempfile
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, self.d)
+
+    def record(self, data):
+        path = os.path.join(self.d, "signing-record.jsonl")
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    def refuses(self, data, words):
+        with self.assertRaises(m.Refused) as caught:
+            cr.read_signing_record(self.record(data))
+        self.assertIn(words, str(caught.exception))
+
+    def test_reads_every_line_in_order(self):
+        two = self.LINE + b'{"epoch": 2, "kind": "manifest", "verified": true}\n'
+        self.assertEqual([line["epoch"] for line in cr.read_signing_record(self.record(two))], [1, 2])
+
+    def test_a_carriage_return_does_not_cut_a_line(self):
+        # bytes.splitlines() cut here, and read a second, higher-epoch line out of one line: a raised floor
+        self.refuses(b'{"epoch": 1, "kind": "manifest"}\r{"epoch": 9, "kind": "manifest", "verified": true}\n',
+                     "line 1 is not JSON")
+
+    def test_a_raw_line_separator_neither_cuts_nor_passes(self):
+        # str.splitlines() would cut at U+2028 and \x85; the writers escape them, so a raw one is refused, not split
+        for raw in ("\u2028", "\x85"):
+            self.refuses(('{"kind": "manifest", "note": "a%sb"}\n' % raw).encode("utf-8"), "line 1 is not JSON")
+
+    def test_a_blank_line_is_refused_not_skipped(self):
+        self.refuses(self.LINE + b"\n" + self.LINE, "line 2 is not JSON")
+
+    def test_a_torn_last_line_is_refused(self):
+        self.refuses(self.LINE + self.LINE[:-1], "torn")
+
+    def test_an_empty_record_is_refused(self):
+        self.refuses(b"", "is empty")
+
+    def test_read_whole_or_refused_whole(self):
+        # a cut at a line boundary would drop the newest lines, and with them the floor a peer's chain is judged by
+        from unittest import mock
+        with mock.patch.object(cr, "MAX_SIGNING_RECORD", 2 * len(self.LINE) - 1):
+            self.refuses(self.LINE * 2, "larger than")
+        with mock.patch.object(cr, "MAX_SIGNING_RECORD", 2 * len(self.LINE)):
+            self.assertEqual(len(cr.read_signing_record(self.record(self.LINE * 2))), 2)
+
+    def test_owner_sign_recovery_reads_its_record_by_this_rule(self):
+        import contextlib
+        import io
+        from deploy.baremetal import owner
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = owner.main(["sign-recovery", "--chain", os.path.join(self.d, "never-read.json"), "--root-key", "00" * 32,
+                             "--record", self.record(self.LINE + b"\n"), "--purpose", "recover", "--node-id", "b",
+                             "--session", "s", "--session-issued", "1", "--out", os.path.join(self.d, "never.json"),
+                             "--module", "/nonexistent.so", "--serial", "1"])
+        self.assertEqual(rc, 1)
+        self.assertIn("REFUSED: the signing record's line 2 is not JSON", err.getvalue())
+        self.assertFalse(os.path.exists(os.path.join(self.d, "never.json")))
 
 
 if __name__ == "__main__":

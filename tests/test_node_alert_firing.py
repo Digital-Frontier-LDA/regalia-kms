@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from deploy.baremetal import metrics
+from deploy.baremetal import metrics, trails
 from tests.test_alert_firing import REQUIRE_PROMTOOL, render, series
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,8 +21,8 @@ CONTEXT = {
     "regalia_heartbeat_checked_timestamp_seconds": "staleness is node_textfile_mtime_seconds",
     "regalia_admission_lease_seconds_left": "RegaliaNotServing watches the outcome",
     "regalia_audit_trail_lines": "read beside backlog",
-    "regalia_esp_anchor_epoch": "root's reading of the anchor, beside sync's (RegaliaMembershipAnchorBehind)",
     "regalia_esp_advance_run_timestamp_seconds": "when it last ran: a oneshot, run on each new chain",
+    "regalia_site_check_run_timestamp_seconds": "when it last ran: a oneshot, once per boot",
     "regalia_audit_trail_committed": "read beside backlog",
 }
 AUTHTIME = "/run/regalia-metrics/authtime/authtime.prom"
@@ -30,11 +30,27 @@ HEARTBEAT = "/run/regalia-metrics/sync/heartbeat.prom"
 LEASE = "/run/regalia-metrics/admission/lease.prom"
 MEMBERSHIP = "/run/regalia-metrics/sync/membership.prom"
 ESP_ADVANCE = "/run/regalia-metrics/esp-advance/esp-advance.prom"
+SITE_CHECK = "/run/regalia-metrics/site-check/site-check.prom"
 SHIP = "/run/regalia-metrics/audit-ship/sync.prom"
+SHIPPED = sorted(trails.TRAILS)                                 # one shipper, and one .prom, per registry trail (#580)
+
+
+def ship_files(node, names=SHIPPED):
+    return [("node_textfile_mtime_seconds", dict(node, file="/run/regalia-metrics/audit-ship/%s.prom" % n), "0+30x10") for n in names]
+
+
 NODE_A, NODE_B = {"instance": "a:9100", "job": "regalia-node"}, {"instance": "b:9100", "job": "regalia-node"}
 
 # Cases a single fault/healthy pair cannot show, each with exactly the alerts expected (labels beyond the rule's).
 EXTRA = [
+    # one shipper missing on one node: that node alone, and every other trail's file does not hide it
+    ("RegaliaAuditShipMetricsMissing", "two nodes: only the one without the sync shipper's file", 420,
+     [("up", NODE_A, "1+0x10"), ("up", NODE_B, "1+0x10")] + ship_files(NODE_A)
+     + ship_files(NODE_B, [n for n in SHIPPED if n != "sync"]),
+     [NODE_B]),
+    # every trail's file but one (the last in the registry's order): the one missing shipper is enough to alert
+    ("RegaliaAuditShipMetricsMissing", "every shipper's file but %s's" % SHIPPED[-1], 420,
+     [("up", NODE_A, "1+0x10")] + ship_files(NODE_A, SHIPPED[:-1]), [NODE_A]),
     # two nodes with trails of the same name: each node's backlog is judged by ITS last success, never another's
     ("RegaliaAuditTrailBehind", "two nodes: only the one behind", 1200,
      [("regalia_audit_trail_backlog", dict(NODE_A, trail="sync"), "3+0x20"),
@@ -78,6 +94,25 @@ EXTRA = [
     # the ESP advance runs seconds after a publication: ten minutes behind, then caught up, is not an alert (#66 B3)
     ("RegaliaMembershipAnchorBehind", "ten minutes behind, then caught up", 1200,
      [("regalia_membership_epoch", {}, "5+0x30"), ("regalia_membership_anchor_epoch", {}, "4+0x9 5+0x20")], []),
+    # a new epoch reaches the nodes a few minutes apart: no alert; one left behind for 35 minutes: that node alone
+    ("RegaliaMembershipBehindFleet", "b catches up within ten minutes", 2100,
+     [("regalia_membership_epoch", NODE_A, "4+0x5 5+0x35"), ("regalia_membership_epoch", NODE_B, "4+0x15 5+0x25")], []),
+    ("RegaliaMembershipBehindFleet", "two clusters: only the node behind in its own job", 2100,
+     [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_membership_epoch", NODE_B, "4+0x40"),
+      ("regalia_membership_epoch", {"instance": "c:9100", "job": "regalia-node-other"}, "4+0x40")],
+     [NODE_B]),
+    ("RegaliaAnchorBehindFleet", "a sync that writes the peers' epoch but anchored nothing newer", 2100,
+     [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_membership_epoch", NODE_B, "5+0x40"),
+      ("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "4+0x40")],
+     [NODE_B]),
+    # a rolling update: one node's anchor follows ten minutes late, then catches up: no alert (1e)
+    ("RegaliaAnchorBehindFleet", "b's anchor catches up within ten minutes", 2100,
+     [("regalia_esp_anchor_epoch", NODE_A, "4+0x5 5+0x35"), ("regalia_esp_anchor_epoch", NODE_B, "4+0x15 5+0x25")], []),
+    # a peer's sync that writes an inflated epoch moves no honest node's alert: the reference is root-read anchors (48)
+    ("RegaliaAnchorBehindFleet", "a peer's sync claims epoch 99; every anchor is at 5", 2100,
+     [("regalia_membership_epoch", NODE_A, "99+0x40"), ("regalia_membership_epoch", NODE_B, "5+0x40"),
+      ("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "5+0x40")],
+     []),
     # the authtime file missing on one node only: that node alone
     ("RegaliaAuthtimeMetricsMissing", "two nodes: only the one without the file", 420,
      [("up", NODE_A, "1+0x10"), ("up", NODE_B, "1+0x10"),
@@ -111,6 +146,8 @@ SCENARIOS = {
         "fault": [("regalia_heartbeat_live", {}, "0+0x10")], "healthy": [("regalia_heartbeat_live", {}, "1+0x10")], "at": 420},
     "RegaliaNotServing": {
         "fault": [("regalia_admission_serving", {}, "0+0x10")], "healthy": [("regalia_admission_serving", {}, "1+0x10")], "at": 420},
+    "RegaliaSurvivorRecoveryActive": {
+        "fault": [("regalia_admission_recovery", {}, "1+0x10")], "healthy": [("regalia_admission_recovery", {}, "0+0x10")], "at": 60},
     "RegaliaAuditTrailBehind": {
         "fault": [("regalia_audit_trail_backlog", {"trail": "sync"}, "3+0x20"),
                   ("regalia_audit_trail_last_success_seconds", {"trail": "sync"}, "0+0x20")],
@@ -134,9 +171,24 @@ SCENARIOS = {
         "fault": [("regalia_esp_advance_ok", {}, "0+0x30")], "healthy": [("regalia_esp_advance_ok", {}, "1+0x30")], "at": 1200},
     "RegaliaNextBootNeedsRecoveryKey": {
         "fault": [("regalia_esp_boot_renderable", {}, "0+0x5")], "healthy": [("regalia_esp_boot_renderable", {}, "1+0x5")], "at": 120},
+    "RegaliaSiteMismatch": {            # no for: a refusal pages at once
+        "fault": [("regalia_site_check_ok", {}, "0+0x5")], "healthy": [("regalia_site_check_ok", {}, "1+0x5")], "at": 60},
+    "RegaliaSiteCheckMetricsMissing": {   # the unit failed at setup: no file this boot (/run), so nothing says 1
+        "fault": [("up", NODE_A, "1+0x10")],
+        "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=SITE_CHECK), "0+0x10")], "at": 420},
     "RegaliaEspAdvanceMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=ESP_ADVANCE), "0+0x10")], "at": 420},
+    # across the nodes: the node behind is listed LAST, so the alert's expected labels are its own
+    "RegaliaMembershipBehindFleet": {
+        "fault": [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_membership_epoch", NODE_B, "4+0x40")],
+        "healthy": [("regalia_membership_epoch", NODE_A, "5+0x40"), ("regalia_membership_epoch", NODE_B, "5+0x40")], "at": 2100},
+    "RegaliaAnchorBehindFleet": {
+        "fault": [("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "4+0x40")],
+        "healthy": [("regalia_esp_anchor_epoch", NODE_A, "5+0x40"), ("regalia_esp_anchor_epoch", NODE_B, "5+0x40")], "at": 2100},
+    "RegaliaEspAnchorEpochMissing": {
+        "fault": [("up", NODE_A, "1+0x10")],
+        "healthy": [("up", NODE_A, "1+0x10"), ("regalia_esp_anchor_epoch", NODE_A, "5+0x10")], "at": 420},
     "RegaliaMembershipMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=MEMBERSHIP), "0+60x10")], "at": 420},
@@ -156,6 +208,10 @@ SCENARIOS = {
     "RegaliaLeaseMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=LEASE), "0+60x10")], "at": 420},
+    # no shipper has ever written (as #580 left every node): alerts; every trail's file there: silent
+    "RegaliaAuditShipMetricsMissing": {
+        "fault": [("up", NODE_A, "1+0x10")],
+        "healthy": [("up", NODE_A, "1+0x10")] + ship_files(NODE_A), "at": 420},
     "RegaliaNodeTextfileUnreadable": {        # a malformed file: node_exporter drops its series and says so
         "fault": [("node_textfile_scrape_error", NODE_A, "1+0x5")],
         "healthy": [("node_textfile_scrape_error", NODE_A, "0+0x5")], "at": 120},
@@ -186,6 +242,16 @@ class Structure(unittest.TestCase):
         for name, rule in found.items():
             self.assertIn(rule["labels"]["severity"], ("critical", "warning"))
             self.assertTrue(rule["annotations"]["summary"])
+
+
+class ShipperCoverage(unittest.TestCase):
+    def test_the_missing_shipper_rule_names_exactly_the_registry_trails(self):
+        # a trail added to the registry without its shipper's file in the rule would be one no alert sees go silent
+        expr = rules()["RegaliaAuditShipMetricsMissing"]["expr"]
+        listed = re.search(r"audit-ship/\(([^)]*)\)", expr)
+        self.assertIsNotNone(listed, expr)
+        self.assertEqual(sorted(listed.group(1).split("|")), SHIPPED)
+        self.assertIn("== %d)" % len(SHIPPED), expr)
 
 
 class Firing(unittest.TestCase):

@@ -22,7 +22,11 @@ import json, os, subprocess, sys
 sys.path.insert(0, os.getcwd())
 from deploy.baremetal import membership as m
 vector = json.load(open("tests/vectors/highwater-v1.json"))
-chains = {name: [{"manifest": e["manifest"], "signature": {"signer": "root", "key": vector["root_public"], "sig": e["sig"]}} for e in envs]
+def restore(document):     # make-highwater-v1.py writes every "key" as "public" (composed)
+    if isinstance(document, dict):
+        return {("key" if k == "public" else k): restore(v) for k, v in document.items()}
+    return [restore(v) for v in document] if isinstance(document, list) else document
+chains = {name: [{"manifest": restore(e["manifest"]), "signature": {"signer": "root", "key": vector["root_public"], "sig": e["sig"]}} for e in envs]
           for name, envs in vector["chains"].items()}
 def manifests(envelopes):
     current, out = None, []
@@ -103,7 +107,7 @@ func TestTheTPMReaderReadsWhatHighWaterWrote(t *testing.T) {
 		var envelopes []any
 		for _, e := range vector["chains"].(map[string]any)[name].([]any)[:n] {
 			e := e.(map[string]any)
-			envelopes = append(envelopes, map[string]any{"manifest": e["manifest"], "signature": map[string]any{"signer": "root", "key": rootKey, "sig": e["sig"]}})
+			envelopes = append(envelopes, map[string]any{"manifest": vectorManifest(e["manifest"]), "signature": map[string]any{"signer": "root", "key": rootKey, "sig": e["sig"]}})
 		}
 		manifests, err := membership.ReadChain(envelopes, rootKey)
 		if err != nil {

@@ -253,11 +253,11 @@ func TestTheUnreachableCardInstrumentSeparatesItsThreeOutcomes(t *testing.T) {
 //
 // Falsifiers, each producing this test as the failure:
 //
-//	:245 op1 -> `(false && session.card == nil)`   "no card" reaches the card
-//	:245 op0 -> `(false && session.closed)`        "closed" reaches the card
-//	:240 op0 -> `(false && ctx.Err() != nil)`      "cancelled" reaches the card
-//	:101 op0 -> `(false && err != nil)`            Identity reaches the card
-//	:112/:127/:188/:207 op0, likewise, one method each
+//	piv_driver.go:(*pivSession).usable{session.closed || session.card == nil} op1 -> `(false && session.card == nil)`   "no card" reaches the card
+//	piv_driver.go:(*pivSession).usable{session.closed || session.card == nil} op0 -> `(false && session.closed)`        "closed" reaches the card
+//	piv_driver.go:(*pivSession).usable{ctx.Err() != nil} op0 -> `(false && ctx.Err() != nil)`      "cancelled" reaches the card
+//	piv_driver.go:(*pivSession).Identity{session.usable(ctx)} op0 -> `(false && err != nil)`            Identity reaches the card
+//	piv_driver.go:(*pivSession).Policies{session.usable(ctx)}/piv_driver.go:(*pivSession).PINRetries{session.usable(ctx)}/piv_driver.go:(*pivSession).PublicKey{session.usable(ctx)}/piv_driver.go:(*pivSession).privateKey{session.pin == ""} op0, likewise, one method each
 func TestASessionThatIsNotUsableRefusesWithoutReachingTheCard(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -265,19 +265,19 @@ func TestASessionThatIsNotUsableRefusesWithoutReachingTheCard(t *testing.T) {
 	// EVERY FIXTURE CARRIES A VERIFIED PIN, and the first draft did not. Without
 	// it, privateKey's `session.pin == ""` refuses Sign and Unwrap on its own,
 	// so the usability check above it was never the sole refuser and the claim
-	// against :207 op0 did not hold when it was measured. A session that has
+	// against piv_driver.go:(*pivSession).privateKey{session.pin == ""} op0 did not hold when it was measured. A session that has
 	// logged in and then become unusable is also the case that matters: the
 	// PIN is verified, the card is gone, and only usable stands in the way.
 	for name, build := range map[string]func() (*pivSession, context.Context){
-		// :245 op1 — closed is false, so the nil card is the only refuser.
+		// piv_driver.go:(*pivSession).usable{session.closed || session.card == nil} op1 — closed is false, so the nil card is the only refuser.
 		"no card at all": func() (*pivSession, context.Context) {
 			return &pivSession{serial: "12345678", pin: "123456"}, context.Background()
 		},
-		// :245 op0 — the card is present, so `closed` is the only refuser.
+		// piv_driver.go:(*pivSession).usable{session.closed || session.card == nil} op0 — the card is present, so `closed` is the only refuser.
 		"a session already closed": func() (*pivSession, context.Context) {
 			return &pivSession{card: unreachableCard(), serial: "12345678", pin: "123456", closed: true}, context.Background()
 		},
-		// :240 op0 — open and carrying a card, so the context is the only refuser.
+		// piv_driver.go:(*pivSession).usable{ctx.Err() != nil} op0 — open and carrying a card, so the context is the only refuser.
 		"a cancelled context": func() (*pivSession, context.Context) {
 			return &pivSession{card: unreachableCard(), serial: "12345678", pin: "123456"}, cancelled
 		},
@@ -338,7 +338,7 @@ func TestASessionThatIsNotUsableRefusesWithoutReachingTheCard(t *testing.T) {
 // open — so this operand is the only thing standing between an unauthenticated
 // caller and the slot.
 //
-// Falsifier: :207 op1 -> `(false && session.pin == "")`. The slot is read and
+// Falsifier: piv_driver.go:(*pivSession).privateKey{session.pin == ""} op1 -> `(false && session.pin == "")`. The slot is read and
 // the key requested with an empty PIN; this test is the failure.
 func TestNoPrivateKeyOperationHappensBeforeALogin(t *testing.T) {
 	for method, call := range map[string]func(*pivSession) error{
@@ -383,9 +383,9 @@ func TestNoPrivateKeyOperationHappensBeforeALogin(t *testing.T) {
 //
 // Falsifiers, one method each and each the sole failure:
 //
-//	:116 op0 -> `(false && err != nil)`   Policies reaches the card
-//	:192 op0 -> `(false && err != nil)`   PublicKey reaches the card
-//	:211 op0 -> `(false && err != nil)`   privateKey reaches the card
+//	piv_driver.go:(*pivSession).Policies{parseSlot then err != nil} op0 -> `(false && err != nil)`   Policies reaches the card
+//	piv_driver.go:(*pivSession).PublicKey{parseSlot then err != nil} op0 -> `(false && err != nil)`   PublicKey reaches the card
+//	piv_driver.go:(*pivSession).privateKey{parseSlot then err != nil} op0 -> `(false && err != nil)`   privateKey reaches the card
 func TestAnObjectIDThatIsNotASlotNeverReachesTheCard(t *testing.T) {
 	// "96" parses as hex and is outside every allowed slot range, so parseSlot
 	// refuses it at its own boundary rather than at strconv. "zz" is refused by
@@ -444,7 +444,7 @@ func TestAnObjectIDThatIsNotASlotNeverReachesTheCard(t *testing.T) {
 // being reached, by a check inside the library. It is recorded in the ledger as
 // cannot-be-sole-refuser, masked by piv.encodePIN, not as untested.
 //
-// Falsifier: :138 op1 -> `(false && len(pin) < 6)`. The five-byte PIN then
+// Falsifier: piv_driver.go:(*pivSession).Login{len(pin) < 6} op1 -> `(false && len(pin) < 6)`. The five-byte PIN then
 // passes encodePIN, which pads anything from 1 to 8 bytes, and is transmitted.
 // This test is the failure.
 func TestALoginPINBelowTheAcceptedLengthNeverReachesTheCard(t *testing.T) {
@@ -493,8 +493,8 @@ func TestALoginPINBelowTheAcceptedLengthNeverReachesTheCard(t *testing.T) {
 //
 // Falsifiers, each the sole failure:
 //
-//	:233 op0 -> `(false && session.card == nil)`  Close derefs a nil card
-//	:228 op0 -> `(false && session.closed)`       the second Close reaches the card
+//	piv_driver.go:(*pivSession).Close{session.card == nil} op0 -> `(false && session.card == nil)`  Close derefs a nil card
+//	piv_driver.go:(*pivSession).Close{if session.closed} op0 -> `(false && session.closed)`       the second Close reaches the card
 func TestCloseIsIdempotentAndSurvivesACardlessSession(t *testing.T) {
 	t.Run("a session that never held a card", func(t *testing.T) {
 		session := &pivSession{serial: "12345678", pin: "123456"}
@@ -542,7 +542,7 @@ func TestCloseIsIdempotentAndSurvivesACardlessSession(t *testing.T) {
 // name, so the three card-algorithm operands survived neutralisation and a
 // card holding a P-384 key would satisfy a request for p256.
 //
-// Falsifier: :292 op0 -> `(true || value == piv.AlgorithmEC256)`, which leaves
+// Falsifier: piv_driver.go:algorithmMatches{value == piv.AlgorithmEC256} op0 -> `(true || value == piv.AlgorithmEC256)`, which leaves
 // `algorithm == "p256"` deciding alone. This test is the failure;
 // TestPIVSlotAndAlgorithmAllowlist and both matrix conformance tests stay
 // green, because none of them pairs one advertised name with a different
@@ -589,7 +589,7 @@ func TestAlgorithmMatchesRefusesACardAlgorithmThatIsNotTheOneRequested(t *testin
 // rather than closed. A test written for it would assert an outcome the guard
 // does not produce alone.
 //
-// :267 op0 `ok` is unreachable-by-any-fixture in the forced direction for the
+// piv_driver.go:parseSlot{RetiredKeyManagementSlot} op0 `ok` is unreachable-by-any-fixture in the forced direction for the
 // same reason from the other side: within the bound above it the lookup always
 // succeeds, so `(true || ok)` cannot be reached with ok false.
 
@@ -626,47 +626,47 @@ func TestAlgorithmMatchesRefusesACardAlgorithmThatIsNotTheOneRequested(t *testin
 // means both directions, closedFalseDirectionOnly means the FALSE direction
 // only, with whyTrueOpen naming the missing fixture.
 //
-//	:43 op1 driver == nil (Open)         TestOpenRefusesBeforeTouchingADriverThatIsNil
-//	:47 target == "" (commission miss)   TestOpenDoesNotEnumerateReadersForADeviceIDThatIsNotCommissioned
-//	:63 openErr != nil                   TestOpenContinuesPastACardThatFailsToOpen
-//	:78 selected == nil                  TestOpenRefusesWhenNoCardMatchesTheCommissionedSerial
-//	:85 op0 driver == nil (Ready)        TestReadyRefusesBeforeTouchingADriverThatIsNil
-//	:85 op1 ctx.Err() (Ready)            TestReadyRefusesACancelledContextEvenWhenCardsArePresent
-//	:89 op0 err == nil                   TestReadyReportsTruthfullyAcrossBothHalvesOfItsReturn/not_ready_when_pivCards_errors
-//	:89 op1 len(cards) > 0               TestReadyReportsTruthfullyAcrossBothHalvesOfItsReturn/not_ready_when_no_cards_are_present
+//	piv_driver.go:(*PIVDriver).Open{driver == nil} op1 driver == nil (Open)         TestOpenRefusesBeforeTouchingADriverThatIsNil
+//	piv_driver.go:(*PIVDriver).Open{target == ""} target == "" (commission miss)   TestOpenDoesNotEnumerateReadersForADeviceIDThatIsNotCommissioned
+//	piv_driver.go:(*PIVDriver).Open{openErr != nil} openErr != nil                   TestOpenContinuesPastACardThatFailsToOpen
+//	piv_driver.go:(*PIVDriver).Open{selected == nil} selected == nil                  TestOpenRefusesWhenNoCardMatchesTheCommissionedSerial
+//	piv_driver.go:(*PIVDriver).Ready{driver == nil} op0 driver == nil (Ready)        TestReadyRefusesBeforeTouchingADriverThatIsNil
+//	piv_driver.go:(*PIVDriver).Ready{driver == nil} op1 ctx.Err() (Ready)            TestReadyRefusesACancelledContextEvenWhenCardsArePresent
+//	piv_driver.go:(*PIVDriver).Ready{len(cards) > 0} op0 err == nil                   TestReadyReportsTruthfullyAcrossBothHalvesOfItsReturn/not_ready_when_pivCards_errors
+//	piv_driver.go:(*PIVDriver).Ready{len(cards) > 0} op1 len(cards) > 0               TestReadyReportsTruthfullyAcrossBothHalvesOfItsReturn/not_ready_when_no_cards_are_present
 //
 // STILL UNREACHABLE in the seam fixture (cannot-be-sole-refuser or needs a
 // feature the seam does not provide):
 //
-//	:43 op0 ctx.Err()           masked by :56 — :56 fires only inside the loop,
-//	                            and :43 op0 fires on every path that reaches
-//	                            the loop, so :43 op0 cannot be the sole
+//	piv_driver.go:(*PIVDriver).Open{driver == nil} op0 ctx.Err()           masked by piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil} — piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil} fires only inside the loop,
+//	                            and piv_driver.go:(*PIVDriver).Open{driver == nil} op0 fires on every path that reaches
+//	                            the loop, so piv_driver.go:(*PIVDriver).Open{driver == nil} op0 cannot be the sole
 //	                            refusal: pivCards would never be called with
-//	                            :43 op0 alone neutralised, and the spy cannot
+//	                            piv_driver.go:(*PIVDriver).Open{driver == nil} op0 alone neutralised, and the spy cannot
 //	                            catch a call that did not happen because
-//	                            pivCards was already short-circuited at :43.
-//	:51 err != nil (pivCards)   cannot-be-sole-refuser in this fixture — both
-//	                            err != nil and len(cards) == 0 leave :78 to
+//	                            pivCards was already short-circuited at piv_driver.go:(*PIVDriver).Open{driver == nil}.
+//	piv_driver.go:(*PIVDriver).Open{pivCards then err != nil} err != nil (pivCards)   cannot-be-sole-refuser in this fixture — both
+//	                            err != nil and len(cards) == 0 leave piv_driver.go:(*PIVDriver).Open{selected == nil} to
 //	                            refuse, and the loop body never runs to
 //	                            disambiguate. The seam fixture returns errors
 //	                            with no cards, which is the same observable
 //	                            outcome as returning no cards with no error.
-//	:56 ctx.Err() in loop       masked by :43 op0 — pivOpen is synchronous in
+//	piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil} ctx.Err() in loop       masked by piv_driver.go:(*PIVDriver).Open{driver == nil} op0 — pivOpen is synchronous in
 //	                            the seam (it cannot observe a context cancel
-//	                            that happens after the call enters), so :56
+//	                            that happens after the call enters), so piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil}
 //	                            cannot fire under the seam. Real PC/SC
 //	                            transmits CAN observe a cancel mid-call; the
 //	                            seam cannot.
-//	:57 selected != nil         cannot-be-sole-refuser — :57 only fires when a
+//	piv_driver.go:(*PIVDriver).Open{selected != nil#1} selected != nil         cannot-be-sole-refuser — piv_driver.go:(*PIVDriver).Open{selected != nil#1} only fires when a
 //	                            previous iteration set `selected`, which
 //	                            requires pivOpen to return a successful card,
 //	                            which the seam does not. Would need a Serial()
 //	                            seam to construct the pre-set selected state.
-//	:67 op0, :67 op1            cannot-be-sole-refuser — both check the result
+//	piv_driver.go:(*PIVDriver).Open{serialErr != nil} op0, piv_driver.go:(*PIVDriver).Open{serialErr != nil} op1            cannot-be-sole-refuser — both check the result
 //	                            of candidate.Serial(), which on a nil-handed
 //	                            card panics before returning. Reaching them
 //	                            needs Serial() to return (uint32, error).
-//	:71 selected != nil (dup)   needs TWO pivCards() results whose Serial()
+//	piv_driver.go:(*PIVDriver).Open{selected != nil#2} selected != nil (dup)   needs TWO pivCards() results whose Serial()
 //	                            both match the target serial — physically
 //	                            impossible and not seam-reachable.
 
@@ -680,7 +680,7 @@ func TestAlgorithmMatchesRefusesACardAlgorithmThatIsNotTheOneRequested(t *testin
 // above is a card that cannot. They are the genuine hardware surface of this
 // package and the bench is the only instrument for them.
 //
-// :215 is worth naming, because it is the unattended-use contract itself —
+// piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever} is worth naming, because it is the unattended-use contract itself —
 // TouchPolicyNever, a PIN policy of Once or Always, and an algorithm that
 // matches. Its algorithm operand is closed indirectly by the
 // algorithmMatches test above; its touch and PIN policy operands are not, and

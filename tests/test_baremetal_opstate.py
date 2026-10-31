@@ -1,0 +1,206 @@
+"""deploy/baremetal/opstate.py (ADR-0002 D32, #432): the entries the three servers share through etcd, each carrying its
+own authorization. tests/vectors/opstate-v1.json, which the Go verifier reads, is replayed here and must be current."""
+import json
+import pathlib
+import subprocess
+import sys
+import unittest
+
+from deploy.baremetal import heartbeat, lease, membership as m, opstate
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+VECTORS = ROOT / "tests" / "vectors" / "opstate-v1.json"
+MAKE = ROOT / "tests" / "vectors" / "make-opstate-v1.py"
+
+
+def restored(document):
+    """A document from the vectors file: "public" read back as "key", "session_public" as "session_key"."""
+    names = {"public": "key", "session_public": "session_key"}
+    if isinstance(document, dict):
+        return {names.get(k, k): restored(v) for k, v in document.items()}
+    if isinstance(document, list):
+        return [restored(v) for v in document]
+    return document
+
+
+def load():
+    with open(VECTORS) as f:
+        return restored(json.load(f))
+
+
+class Vectors(unittest.TestCase):
+    def test_every_case_is_decided_as_the_vector_says(self):
+        doc = load()
+        def sessions(node, boot, key, at):
+            t = heartbeat.parse_time(at, "at")
+            return any(s["session_key"] == key and heartbeat.parse_time(s["issued_at"], "issued_at") <= t
+                       and (s["valid_until"] is None or t < heartbeat.parse_time(s["valid_until"], "valid_until"))
+                       for s in doc["sessions"].get("%s|%s" % (node, boot), []))
+        for c in doc["cases"]:
+            with self.subTest(c["name"]):
+                try:
+                    entry = opstate.verify(c["key"], c["value"], sessions, doc["approver_sets"])
+                    opstate.transition(c["previous"], entry)
+                    got, why = True, ""
+                except m.Refused as refused:
+                    got, why = False, str(refused)
+                self.assertEqual((got, why), (c["accept"], c["python_reason"]))
+        for c in doc["approval_checks"]:
+            with self.subTest(c["name"]):
+                try:
+                    opstate.check_approvals(c["spend"], c["approvals"], doc["approver_sets"])
+                    got, why = True, ""
+                except m.Refused as refused:
+                    got, why = False, str(refused)
+                self.assertEqual((got, why), (c["accept"], c["python_reason"]))
+        for c in doc["session_checks"]:
+            with self.subTest(c["name"]):
+                try:
+                    _, until = opstate.verify_session(c["key"], c["value"], c.get("chain", doc["chain"]))
+                    got, why = True, until or ""
+                except m.Refused as refused:
+                    got, why = False, str(refused)
+                self.assertEqual((got, why), (c["accept"], c["python_reason"]))
+        for c in doc["fresh_checks"]:
+            with self.subTest(c["name"]):
+                try:
+                    opstate.fresh(c["entry"], c["now"])
+                    got, why = True, ""
+                except m.Refused as refused:
+                    got, why = False, str(refused)
+                self.assertEqual((got, why), (c["accept"], c["python_reason"]))
+        for c in doc["sign_checks"]:
+            with self.subTest(c["name"]):
+                try:
+                    opstate.may_sign(c["spend"], c["now"], c["held_lease_digest"], c["held_lease_expires_at"])
+                    got, why = True, ""
+                except m.Refused as refused:
+                    got, why = False, str(refused)
+                self.assertEqual((got, why), (c["accept"], c["python_reason"]))
+        for c in doc["state_epoch_checks"]:
+            with self.subTest(c["name"]):
+                try:
+                    entry = opstate.verify_state_epoch(c["key"], c["value"], c.get("chain", doc["state_epoch_chain"]), c["previous"],
+                                                       tuple(c["store"]) if c["store"] else None)
+                    got, why = True, ""
+                    self.assertEqual(entry["state_epoch"], c["applied_state_epoch"])
+                except m.Refused as refused:
+                    got, why = False, str(refused)
+                self.assertEqual((got, why), (c["accept"], c["python_reason"]))
+        for b in doc["batches"]:
+            with self.subTest(b["name"]):
+                try:
+                    opstate.batch([(w["key"], w["value"], w["previous"]) for w in b["writes"]])
+                    got, why = True, ""
+                except m.Refused as refused:
+                    got, why = False, str(refused)
+                self.assertEqual((got, why), (b["accept"], b["python_reason"]))
+
+    def test_the_vector_is_what_the_generator_makes_now(self):
+        made = subprocess.run([sys.executable, "-Es", str(MAKE)], capture_output=True, text=True, check=True, cwd=ROOT).stdout
+
+        def steady(doc):
+            """P-256 signatures (the session entries') are randomized: compared as present, verified by the replay above."""
+            for c in doc["session_checks"] + doc["state_epoch_checks"]:
+                c["value"]["signature"] = "<p-256>"
+            for c in doc["state_epoch_checks"]:
+                auth = c["value"]["entry"].get("authorization") if isinstance(c["value"]["entry"], dict) else None
+                if isinstance(auth, dict) and auth.get("signature", {}).get("party") != "owner":
+                    auth["signature"]["sig"] = "<p-256>"          # a node's key over an authorization (regalia-u1r)
+            return doc
+        self.assertEqual(steady(restored(json.loads(made))), steady(load()),
+                         "regenerate: python3 -Es tests/vectors/make-opstate-v1.py > tests/vectors/opstate-v1.json")
+
+    def test_both_outcomes_and_every_kind_are_covered(self):
+        doc = load()
+        kinds = {c["value"]["entry"].get("kind") for c in doc["cases"] if isinstance(c["value"]["entry"], dict)}
+        self.assertTrue(set(opstate.KINDS) <= kinds)
+        self.assertTrue(any(c["accept"] for c in doc["cases"]) and any(not c["accept"] for c in doc["cases"]))
+        self.assertTrue(any(b["accept"] for b in doc["batches"]) and any(not b["accept"] for b in doc["batches"]))
+        epochs = doc["state_epoch_checks"]
+        self.assertTrue(any(c["accept"] and c["previous"] for c in epochs) and any(not c["accept"] for c in epochs))
+
+
+class StateEpoch(unittest.TestCase):
+    """The survivor's take-over mark (#432): what the vector cannot show by itself."""
+
+    def test_the_request_life_is_one_constant_in_both_modules(self):
+        from deploy.baremetal import survivor
+        self.assertEqual(survivor.REQUEST_LIFE_S, opstate.MAX_REQUEST_LIFE_S)
+        self.assertEqual(survivor.SKEW_S, opstate.SKEW_S)
+
+    def test_the_entry_carries_the_owner_s_authorization_whole(self):
+        """A node that wiped its store and rejoined holds no authorization file: the entry alone must verify (95, ed)."""
+        c = next(c for c in load()["state_epoch_checks"] if c["accept"] and c["previous"] is None)
+        self.assertEqual(set(c["value"]["entry"]["authorization"]), {"authorization", "signature"})
+        self.assertEqual(c["value"]["entry"]["authorization"]["authorization"]["scope"], "full")
+
+
+class Format(unittest.TestCase):
+    def test_its_own_domain(self):
+        for other in (m.DOMAIN, heartbeat.DOMAIN, lease.DOMAIN):
+            self.assertFalse(opstate.DOMAIN.startswith(other) or other.startswith(opstate.DOMAIN))
+
+    def test_names_inside_a_key_are_hashed_so_a_slash_cannot_join_two_keys(self):
+        a = {"schema": opstate.SCHEMA, "kind": "quota", "at": "2026-10-05T12:00:00Z", "principal": "spiffe://x/a", "utc_date": "2026-10-05",
+             "counter": "b", "total": 1, "cap": 2, "nonce_digest": "00" * 32, "node_id": "a", "boot_id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"}
+        b = dict(a, principal="spiffe://x", counter="a/2026-10-05/b")
+        self.assertNotEqual(opstate.key_for(a), opstate.key_for(b))
+        self.assertRegex(opstate.key_for(a), r"^/regalia/v1/quota/[0-9a-f]{64}/2026-10-05/[0-9a-f]{64}$")
+
+    def test_a_nonce_is_spent_under_its_sha256(self):
+        self.assertEqual(opstate.nonce_digest("n"), "1b16b1df538ba12dc3f97edbb85caa7050d46c148134290feba80f8236c83db9")
+        with self.assertRaises(m.Refused):
+            opstate.nonce_digest("")
+
+    def test_a_spend_s_key_outlives_its_request_by_the_skew(self):
+        """1e: etcd's lease runs on its leader's clock; the key must outlive the request, or the nonce could be replayed."""
+        spend = load()["cases"][0]["value"]["entry"]
+        self.assertEqual(spend["kind"], "spend")
+        self.assertEqual(opstate.gc_ttl(spend), 300 + opstate.SKEW_S)      # 12:00:00 to 12:05:00, plus the skew
+
+    def test_a_reserve_fits_one_etcd_transaction(self):
+        self.assertLessEqual(opstate.MAX_BATCH, 128 // 2)        # etcd's --max-txn-ops default, with room for the compares
+
+
+class SessionKeyPoints(unittest.TestCase):
+    """regalia-53g: a session key under which a signature can be forged is refused where it is admitted."""
+    # the eight small-order points' canonical encodings (Chalkias et al., "Taming the many EdDSAs", 2020)
+    SMALL = ("01" + "00" * 31, "ec" + "ff" * 30 + "7f", "00" * 31 + "80", "00" * 32,
+             "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+             "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+             "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+             "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa")
+
+    def refused(self, key, reason):
+        with self.assertRaises(m.Refused) as caught:
+            lease.session_public(key, "session_key")
+        self.assertIn(reason, str(caught.exception))
+
+    def test_each_small_order_point_is_refused_and_a_forgery_under_it_is_real(self):
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+        for key in self.SMALL:
+            self.refused(key, "small-order Ed25519 point")
+        # why: under the identity, R = identity and S = 0 verify for any message (cryptography accepts it; so does Go)
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(self.SMALL[0])).verify(bytes.fromhex(self.SMALL[0]) + bytes(32), b"anything")
+        honest = Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex()
+        lease.session_public(honest, "session_key")
+        with self.assertRaises(InvalidSignature):
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(honest)).verify(bytes.fromhex(self.SMALL[0]) + bytes(32), b"anything")
+
+    def test_a_non_canonical_y_is_refused_with_either_sign(self):
+        p = 2 ** 255 - 19
+        for y in (p, p + 1, p + 18, 2 ** 255 - 1):
+            for sign in (0, 1):
+                self.refused((y | sign << 255).to_bytes(32, "little").hex(), "not a canonical Ed25519 encoding")
+
+    def test_the_lease_admits_session_keys_by_the_same_rule(self):
+        state = {"cluster_id": "00" * 8, "state_epoch": 0, "state_revision": 0, "session_key": self.SMALL[0]}
+        with self.assertRaises(m.Refused) as caught:
+            lease._state(state, "lease")
+        self.assertIn("lease.session_key is a small-order Ed25519 point", str(caught.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()

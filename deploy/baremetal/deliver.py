@@ -66,8 +66,8 @@ def deliver(node, envelopes, documents, trail):
 def as_sync(config_path, envelopes, documents, run=subprocess.run):
     """deliver() in a process of regalia-sync with the tss group (the TPM anchor), nothing of root's environment, the
     files' contents on its standard input. Returns the epoch the node is at."""
-    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.deliver", "--config", config_path, "_deliver"],
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", *membership.handover_env(),
+                 sys.executable, "-Es", "-m", "deploy.baremetal.deliver", "--config", config_path, "_deliver"],
                cwd=PACKAGE_ROOT, capture_output=True, text=True, input=json.dumps({"envelopes": envelopes, "documents": documents}))
     require(done.returncode == 0, "the delivery, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     return json.loads(done.stdout.strip().splitlines()[-1])["epoch"]

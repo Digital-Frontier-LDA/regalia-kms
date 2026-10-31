@@ -19,9 +19,11 @@ on:
       - e2e/three-node-netns.py
       - e2e/three-node-recovery.py
       - e2e/three-node-outage.py
+      - e2e/three-node-reanchor.py
       - e2e/rolling-threenode.py
       - e2e/three-node-theft.py
       - e2e/three-node-leases.py
+      - e2e/three-node-wan.py
       - e2e/three-node-replace.py
       - cmd/regalia-unlock/**
       - e2e/lib/threenode.py
@@ -41,9 +43,11 @@ on:
       - e2e/three-node-netns.py
       - e2e/three-node-recovery.py
       - e2e/three-node-outage.py
+      - e2e/three-node-reanchor.py
       - e2e/rolling-threenode.py
       - e2e/three-node-theft.py
       - e2e/three-node-leases.py
+      - e2e/three-node-wan.py
       - e2e/three-node-replace.py
       - cmd/regalia-unlock/**
       - e2e/lib/threenode.py
@@ -51,9 +55,16 @@ on:
 permissions:
   contents: read
 
+# One run per pull request: a new push cancels its own superseded run (seven sessions' pushes starved the hosted
+# runners, 2026-10-05). Anything else (main, a schedule) is a group of its own run: GitHub cancels an older PENDING
+# run of a group even without cancel-in-progress, and every main run must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   node-units-systemd:
-    runs-on: ubuntu-24.04     # pinned: the chrony and systemd behaviour observed is 24.04's
+    runs-on: ubuntu-26.04     # was pinned: "the chrony and systemd behaviour observed is 24.04's"; tried on 26.04 (regalia-oiq)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,10 +76,12 @@ jobs:
       - name: Install the software TPM, chrony and WireGuard tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools chrony wireguard-tools iproute2 \
+          # tzdata-legacy: right/UTC, which authtime requires before it calls time authenticated (a node
+          # requirement on Debian 13); ubuntu-26.04's tzdata no longer carries it. Every job here runs authtime.
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools chrony wireguard-tools iproute2 \
             openssl python3-cryptography softhsm2 opensc libpcsclite-dev tpm2-abrmd libtss2-tcti-tabrmd0
-          # tpm-udev: the tss group and its rule for /dev/tpmrm*. The runner's Azure kernel has no vTPM proxy
-          # (CONFIG_TCG_VTPM_PROXY is not set), so the test makes the device with swtpm's CUSE mode.
+          # tpm-udev: the tss group and its rule for /dev/tpmrm*. The runner's Azure kernel had no vTPM proxy
+          # before the 2026-10-18 images; where it has none, the test makes the device with swtpm's CUSE mode.
           sudo apt-get install -y -qq --no-install-recommends tpm-udev
       - name: swtpm with its CUSE interface (Ubuntu builds it without; rebuilt from Ubuntu's own source package)
         run: |
@@ -95,14 +108,19 @@ jobs:
         run: |
           set -o pipefail
           REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/node-units-systemd.py | tee "$RUNNER_TEMP/units.log"
-          grep -q '^node-units-systemd: 70 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
-            echo "::error::the units test did not pass all 70 checks" >&2; exit 1; }
+          grep -q '^node-units-systemd: 78 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
+            echo "::error::the units test did not pass all 78 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: node-units-systemd
 
   # #278: the trail shipper's unit, as shipped, against the real collector: as its own user with no
   # capability it reads a trail only through its instance's group, and a trail cut short under what was
   # shipped stops it with an alarm and no restart.
   audit-ship-systemd:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -119,35 +137,55 @@ jobs:
         run: |
           set -o pipefail
           REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/audit-ship-systemd.py | tee "$RUNNER_TEMP/ship.log"
-          grep -q '^audit-ship-systemd: 21 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
-            echo "::error::the shipper test did not pass all 20 checks" >&2; exit 1; }
+          grep -q '^audit-ship-systemd: 24 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
+            echo "::error::the shipper test did not pass all 23 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: audit-ship-systemd
 
   # #70 (Phase 10), PR 1: three nodes on one machine, each its real services in its own namespace against
   # its own software TPM, the fixture the recovery rehearsals build on (e2e/lib/threenode.py).
   three-node-netns:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - name: The software TPM, tpm2-tools, WireGuard
         run: |
           sudo apt-get update -qq
           # softhsm2, opensc and python3-pykcs11: the owner's two keys under v4 (#199), signed through Pkcs11Signer
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 python3-cryptography \
-            softhsm2 opensc python3-pykcs11
-      - name: Three nodes, their sync and wg-apply, the service mesh, a power cut
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 python3-cryptography \
+            softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon
+      - name: Build the audit trail shipper and collector (#340)
+        run: |
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: Three nodes, their sync and wg-apply, the service mesh, a power cut; every event in the audit collector
         run: |
           set -o pipefail
-          sudo --preserve-env=RUNNER_ENVIRONMENT python3 -Es e2e/three-node-netns.py | tee "$RUNNER_TEMP/three.log"
-          grep -q '^three-node-netns: 40 passed, 0 failed$' "$RUNNER_TEMP/three.log" || {
-            echo "::error::the three-node test did not pass all 40 checks" >&2; exit 1; }
+          REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_AUDIT_BIN \
+            python3 -Es e2e/three-node-netns.py | tee "$RUNNER_TEMP/three.log"
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/three.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
+          grep -q '^three-node-netns: 44 passed, 0 failed$' "$RUNNER_TEMP/three.log" || {
+            echo "::error::the three-node test did not pass all 44 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-netns
 
   # #70 (Phase 10), PR 2: every directed peer recovery path (PoC 10.1) and the nodes that must not be
   # restored, on the three-node fixture: real disks (LUKS2 on loop devices), the real pre-root client.
   three-node-recovery:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -159,8 +197,8 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
-            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon   # the owner's keys (#199)
       - name: Build the pre-root client, and the audit trail shipper and collector (#340)
         run: |
           CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
@@ -172,14 +210,21 @@ jobs:
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
             sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-recovery.py | tee "$RUNNER_TEMP/recovery.log"
-          grep -q '^three-node-recovery: 65 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
-            echo "::error::the three-node recovery test did not pass all 65 checks" >&2; exit 1; }
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/recovery.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
+          grep -q '^three-node-recovery: 69 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
+            echo "::error::the three-node recovery test did not pass all 69 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-recovery
 
   # #75 (Phase 15), tier N: a new image rolled through the three nodes while CURRENT and NEXT are both accepted
   # (an image is PCR 11, extended after a power cycle); may_reboot on live leases as update.py asks it; the retire
   # judged from the peers' real attestation state.
   rolling-threenode:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -191,8 +236,8 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
-            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon   # the owner's keys (#199)
       - name: Build the pre-root client, and the audit trail shipper and collector (#340)
         run: |
           CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
@@ -204,13 +249,20 @@ jobs:
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
             sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/rolling-threenode.py | tee "$RUNNER_TEMP/rolling.log"
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/rolling.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
           grep -q '^rolling-threenode: 50 passed, 0 failed$' "$RUNNER_TEMP/rolling.log" || {
             echo "::error::the rolling-update test did not pass all 50 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: rolling-threenode
 
   # #71 (Phase 11): a total outage of the three nodes, restored by one manual recovery (one node by hand, its
   # heartbeat co-signed by an owner key, owner.py beat; then the other two through it; #199: no authority host).
   three-node-outage:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -222,22 +274,71 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
-            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
-      - name: Build the pre-root client
-        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
-      - name: A total outage, one node by hand, the rest through it
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon   # the owner's keys (#199)
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: A total outage, one node by hand, the rest through it; every event in the audit collector
         run: |
           set -o pipefail
-          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-outage.py | tee "$RUNNER_TEMP/outage.log"
-          grep -q '^three-node-outage: 34 passed, 0 failed$' "$RUNNER_TEMP/outage.log" || {
-            echo "::error::the three-node outage test did not pass all 34 checks" >&2; exit 1; }
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/outage.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
+          grep -q '^three-node-outage: 39 passed, 0 failed$' "$RUNNER_TEMP/outage.log" || {
+            echo "::error::the three-node outage test did not pass all 39 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-outage
+
+  # #388: a re-anchor in a total outage. One node's TPM anchor unusable; the other two opened by hand, each with its own
+  # recovery key; reanchor from their two chains at the node's terminal; the node serves again (MEMBERSHIP-RECOVERY.md).
+  three-node-reanchor:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon   # the owner's keys (#199)
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: A total outage, one node's anchor unusable, re-anchored from the other two opened by hand; every event in the audit collector
+        run: |
+          set -o pipefail
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
+            python3 -Es e2e/three-node-reanchor.py | tee "$RUNNER_TEMP/reanchor.log"
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/reanchor.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
+          grep -q '^three-node-reanchor: 29 passed, 0 failed$' "$RUNNER_TEMP/reanchor.log" || {
+            echo "::error::the three-node re-anchor test did not pass all 29 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-reanchor
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.
   three-node-replace:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -249,22 +350,33 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
-            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
-      - name: Build the pre-root client
-        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon   # the owner's keys (#199)
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
       - name: A node replaced, and its retired hardware refused
         run: |
           set -o pipefail
-          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-replace.py | tee "$RUNNER_TEMP/replace.log"
-          grep -q '^three-node-replace: 16 passed, 0 failed$' "$RUNNER_TEMP/replace.log" || {
-            echo "::error::the three-node replacement test did not pass all 16 checks" >&2; exit 1; }
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/replace.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
+          grep -q '^three-node-replace: 23 passed, 0 failed$' "$RUNNER_TEMP/replace.log" || {
+            echo "::error::the three-node replacement test did not pass all 23 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-replace
 
   # #69 (Phase 9): a stolen node revoked by the owner off the nodes (revoke.py), the revocation spreading, and the window a
   # partition leaves (an nftables table inside one node's namespace only).
   three-node-theft:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -276,8 +388,8 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
-            python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon   # the owner's keys (#199)
       - name: Build the pre-root client, and the audit trail shipper and collector (#340)
         run: |
           CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
@@ -289,8 +401,15 @@ jobs:
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
             sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-theft.py | tee "$RUNNER_TEMP/theft.log"
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/theft.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
           grep -q '^three-node-theft: 24 passed, 0 failed$' "$RUNNER_TEMP/theft.log" || {
             echo "::error::the three-node theft test did not pass all 24 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-theft
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.
@@ -298,7 +417,7 @@ jobs:
   # #74 (Phase 14): runtime leases on three nodes signing their own heartbeats: renewal, failover to the other peer,
   # a partition, and a running node revoked by two nodes (it stops serving by itself at its lease's end).
   three-node-leases:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -310,17 +429,67 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
-            python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
-      - name: Build the pre-root client
-        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon   # the owner's keys (#199)
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
       - name: Runtime leases, renewal and failover, a running node revoked
         run: |
           set -o pipefail
-          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
             python3 -Es e2e/three-node-leases.py | tee "$RUNNER_TEMP/leases.log"
-          grep -q '^three-node-leases: 12 passed, 0 failed$' "$RUNNER_TEMP/leases.log" || {
-            echo "::error::the three-node lease test did not pass all 12 checks" >&2; exit 1; }
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/leases.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
+          grep -q '^three-node-leases: 20 passed, 0 failed$' "$RUNNER_TEMP/leases.log" || {
+            echo "::error::the three-node lease test did not pass all 20 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-leases
+
+  # #432 (owner requirement 2026-10-05: servers about 500 km apart): today's leases, sync, failover and an epoch across
+  # a WAN, ~100 ms round trip with jitter (netem in the nodes' namespaces), measured for the multi-active design.
+  three-node-wan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: The software TPM, tpm2-tools, WireGuard, cryptsetup, netem
+        # linux-modules-extra only when the running kernel lacks sch_netem: the runner's kernel can be ahead of the
+        # archive's (7.0.0-1017-azure, run 40506387532), the step ci.yml's wg-boot-netns shares (regalia-1ur).
+        run: |
+          bash e2e/lib/apt-install-netem.sh swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 iputils-ping \
+            python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: Leases, sync, failover and an epoch across a ~100 ms WAN; every event in the audit collector
+        run: |
+          set -o pipefail
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
+            python3 -Es e2e/three-node-wan.py | tee "$RUNNER_TEMP/wan.log"
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/wan.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
+          grep -q '^three-node-wan: 33 passed, 0 failed$' "$RUNNER_TEMP/wan.log" || {
+            echo "::error::the three-node WAN test did not pass all 33 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-wan
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, taken by the
   # running nodes by sync), and its retired hardware refused.

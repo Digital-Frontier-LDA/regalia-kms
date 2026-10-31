@@ -1,6 +1,7 @@
 """#242 step C: the TPM owner authorization from the ceremony's envelope (deploy/baremetal/ownerauth.py).
 
-  * regalia-kms-51's vector (tests/vectors/ownerauth-v1.json, regalia-ceremony offline-keys.py at ae0b1dc): the
+  * the ceremony writer's vector (tests/vectors/ownerauth-v1.json, by ownerauth-v1-gen.py from regalia-ceremony#178's
+    head cf60eaa, regalia-avz's per-kind domain; first made by regalia-kms-51 at ae0b1dc): the
     record verifies under its pinned root, and each node's value matches its check;
   * the record's refusals, each the one guard's own message; the value's form on standard input;
   * the channel: no value on any command line, `-C o` and `"hex:"` only in ownerauth.py (a grep of the package);
@@ -15,6 +16,7 @@ import os
 import pathlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -41,15 +43,16 @@ def raw_pub(key):
     return key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
 
 
-def resigned(change, key=None):
-    """The vector's record changed by `change` and signed by `key` as its root (pinned as raw_pub(key)): for the checks
-    that come after the signature."""
+def resigned(change, key=None, domain=None):
+    """The vector's record changed by `change` and signed by `key` as its root (pinned as raw_pub(key)) over `domain`
+    (ownerauth.RECORD_DOMAIN by default): for the checks that come after the signature."""
     key = key or Ed25519PrivateKey.generate()
+    domain = ownerauth.RECORD_DOMAIN if domain is None else domain
     record = copy.deepcopy(RECORD["record"])
     record["root_entry"]["key"] = raw_pub(key)
     record["root_fingerprint"] = hashlib.sha256(bytes.fromhex(raw_pub(key))).hexdigest()
     change(record)
-    return {"record": record, "signature": key.sign(ownerauth.RECORD_DOMAIN + m.canonical(record)).hex()}, raw_pub(key)
+    return {"record": record, "signature": key.sign(domain + m.canonical(record)).hex()}, raw_pub(key)
 
 
 class TheVector(unittest.TestCase):
@@ -77,6 +80,19 @@ class TheRecordIsRefused(unittest.TestCase):
         with self.assertRaises(m.Refused) as caught:
             ownerauth.verify(envelope, root, node)
         self.assertIn(reason, str(caught.exception))
+
+    def test_no_old_domain_nor_another_kind_s_signature_verifies(self):
+        """regalia-avz: an ownerauth record verifies under regalia.ownerauth-record/v1 only. Under the domain every record
+        kind shared before the cutover, another kind's (offline-keys, card-ceremony) or the membership's, it is refused,
+        its content otherwise the vector's: no old-domain record is accepted after the cutover."""
+        self.assertEqual(ownerauth.RECORD_DOMAIN, b"regalia.ownerauth-record/v1\x00")
+        self.assertEqual(ownerauth.RECORD_DOMAIN, (ownerauth.SCHEMA + "\x00").encode())
+        envelope, root = resigned(lambda r: None)
+        self.assertEqual(sorted(ownerauth.verify(envelope, root, "a")), ["bg_sha256", "check", "yk_sha256"])     # the control
+        for domain in (ownerauth.RETIRED_RECORD_DOMAIN, b"regalia.offline-keys-record/v1\x00",
+                       b"regalia.card-ceremony-record/v1\x00", m.DOMAIN):
+            with self.subTest(domain=domain):
+                self.refused("the owner-authorization record's signature is not the pinned root's", *resigned(lambda r: None, domain=domain))
 
     def test_under_another_root(self):
         self.refused("names another root than the pinned one", RECORD, root="ab" * 32)
@@ -118,6 +134,58 @@ class TheValueOnStandardInput(unittest.TestCase):
         for bad in (good[:64], good[:64].upper() + "\n", good[:63] + "\n", good + "x", "", "hex:" + good):
             with self.subTest(bad=bad), self.assertRaisesRegex(m.Refused, "is not 64 lowercase hex and a newline"):
                 ownerauth.read_value(io.BytesIO(bad.encode()))
+
+
+class TheDrillCheck(unittest.TestCase):
+    """`python3 -Es -m deploy.baremetal.ownerauth check` (#242, the break-glass drill's last step): the value on standard
+    input judged against the record under the pinned root, with no TPM."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.record = os.path.join(self.d, "ownerauth.record.json")
+        with open(self.record, "w") as f:
+            f.write(VECTOR["record_file"])
+
+    def check(self, node, given, root=PIN):
+        return subprocess.run([sys.executable, "-Es", "-m", "deploy.baremetal.ownerauth", "check", "--node-id", node,
+                               "--root-key", root, "--record", self.record], input=given.encode(), capture_output=True,
+                              cwd=str(ROOT), env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1"})
+
+    def test_the_node_s_value_matches(self):
+        done = self.check("a", VECTOR["values"]["a"])
+        self.assertEqual((done.returncode, done.stderr), (0, b""))
+        self.assertIn(b"the value is a's: it matches the check value of the record signed by the pinned root", done.stdout)
+        self.assertNotIn(VECTOR["values"]["a"][:16].encode(), done.stdout)
+
+    def test_another_node_s_value_another_root_or_the_wrong_form(self):
+        for node, given, root, reason in (
+                ("b", VECTOR["values"]["a"], PIN, b"the owner authorization given is not b's"),
+                ("a", VECTOR["values"]["a"], "ab" * 32, b"names another root than the pinned one"),
+                ("a", VECTOR["values"]["a"][:64], PIN, b"is not 64 lowercase hex and a newline")):
+            with self.subTest(node=node, root=root, given=len(given)):
+                done = self.check(node, given, root)
+                self.assertEqual(done.returncode, 1)
+                self.assertIn(b"REFUSED: ", done.stderr)
+                self.assertIn(reason, done.stderr)
+                self.assertNotIn(VECTOR["values"]["a"][:16].encode(), done.stderr)
+
+    def test_a_terminal_on_standard_input_or_no_record_is_refused(self):
+        """regalia-kms-ed: each its own message and exit 1 (2 is argparse's), never a traceback."""
+        import contextlib
+
+        class Terminal(io.BytesIO):
+            def isatty(self):
+                return True
+        argv = ["check", "--node-id", "a", "--root-key", PIN, "--record", self.record]
+        for label, args, stdin, reason in (
+                ("a terminal", argv, Terminal(VECTOR["values"]["a"].encode()), "REFUSED: standard input is a terminal"),
+                ("no record", argv[:-1] + [os.path.join(self.d, "absent.json")], value("a"), "REFUSED: [Errno 2] No such file or directory")):
+            with self.subTest(label):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(ownerauth.main(args, stdin=stdin), 1)
+                self.assertTrue(err.getvalue().startswith(reason), err.getvalue())
 
 
 class TheChannel(unittest.TestCase):
@@ -274,12 +342,13 @@ class SetAndCheck(unittest.TestCase):
         self.tpm = FakeTpm()
 
     def run_step(self, node="a", check=False, stream=None):
-        return enrol.set_ownerauth(node, PIN, self.record, stream or value(node), check=check, run=self.tpm,
+        return enrol.set_ownerauth(node, PIN, self.record, stream or value(node), check=check, run=self.tpm, directory=self.d,
                                    ek_name=self.tpm.ek_name.hex())
 
     def test_set_from_empty_then_checked(self):
         self.assertFalse(ownerauth.posture(run=self.tpm)["owner"])
         self.assertIn("is set to a's envelope value, and answers to it", self.run_step())
+        self.assertEqual(enrol.ownerauth_current(self.d), hashlib.sha256(m.canonical(RECORD)).hexdigest())   # #456
         self.assertEqual(self.tpm.owner_auth, bytes.fromhex(VECTOR["values"]["a"][:64]))
         self.assertTrue(ownerauth.posture(run=self.tpm)["owner"])
         self.assertIn("is a's envelope value", self.run_step(check=True))
@@ -315,7 +384,7 @@ class SetAndCheck(unittest.TestCase):
                         return subprocess.CompletedProcess(argv, 1, b"", answer)
                     return tpm(argv, **kw)
                 with self.assertRaises(m.Refused) as caught:
-                    enrol.set_ownerauth("a", PIN, self.record, value("a"), run=run, ek_name=tpm.ek_name.hex())
+                    enrol.set_ownerauth("a", PIN, self.record, value("a"), run=run, ek_name=tpm.ek_name.hex(), directory=self.d)
                 self.assertIn("the owner authorization may now be UNKNOWN. Re-run `enrol ownerauth --check` with this envelope; "
                               "if that fails, clear the owner hierarchy with the lockout authorization (tpm2_clear -c l, #57)",
                               str(caught.exception))
@@ -354,6 +423,252 @@ class SetAndCheck(unittest.TestCase):
         self.assertIn("REFUSED: stop here", err.getvalue())
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):     # no value option exists
             enrol.main(["ownerauth", "--node-id", "a", "--root-key", PIN, "--record", self.record, "--value", "00" * 32])
+
+
+class Rotation(unittest.TestCase):
+    """`enrol ownerauth --rotate-from` (regalia-kms-24's assignment): a SET value changed to a new one, both checked against
+    their records first, the change in a session salted to the EK, the new value proven, a rerun idempotent."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.key = Ed25519PrivateKey.generate()
+        self.current, self.new = os.urandom(32), os.urandom(32)
+        self.records = {}
+        self.write("current", self.current, "2026-10-05T10:00:00Z")
+        self.write("new", self.new, "2026-10-05T11:00:00Z")
+        self.tpm = FakeTpm(owner_auth=self.current)
+        enrol._ownerauth_hold(self.d, self.digest("current"))             # the node is on the current record
+
+    def digest(self, name):
+        with open(self.records[name], "rb") as f:
+            return hashlib.sha256(m.canonical(json.loads(f.read()))).hexdigest()
+
+    def write(self, name, raw, at):
+        envelope, self.pin = resigned(lambda r: (r["nodes"]["a"].update(check=ownerauth.Auth(raw).check("a")), r.update(at=at)),
+                                      self.key)
+        self.records[name] = os.path.join(self.d, name + ".json")
+        with open(self.records[name], "w") as f:
+            f.write(json.dumps(envelope))
+
+    def rotate(self, first=None, second=None):
+        stream = io.BytesIO(((first or self.current).hex() + "\n" + (second or self.new).hex() + "\n").encode())
+        return enrol.set_ownerauth("a", self.pin, self.records["new"], stream, run=self.tpm, ek_name=self.tpm.ek_name.hex(),
+                                   rotate_from=self.records["current"], directory=self.d)
+
+    def with_changeauth(self, answer):
+        """self.tpm, but tpm2_changeauth answered by `answer(argv)` (a CompletedProcess) instead of the fake TPM."""
+        tpm = self.tpm
+
+        def run(argv, *args, **kw):
+            return answer(argv) if argv[0] == "tpm2_changeauth" else tpm(argv, *args, **kw)
+        run.ek_name = tpm.ek_name
+        self.tpm = run
+
+    def test_a_change_the_tpm_refuses_is_said_and_the_tpm_keeps_the_current_value(self):
+        """The changeauth itself refused (the falsifier sweep on #456 found nothing here but swtpm's wrong-EK case): the
+        refusal says the TPM should still hold the current value, and the node's record is not moved."""
+        tpm = self.tpm
+        self.with_changeauth(lambda argv: subprocess.CompletedProcess(argv, 1, b"", b"ERROR: Esys_HierarchyChangeAuth TPM_RC_AUTH_FAIL"))
+        with self.assertRaisesRegex(m.Refused, "the TPM did not change the owner authorization: .*TPM_RC_AUTH_FAIL"):
+            self.rotate()
+        self.assertEqual(tpm.owner_auth, self.current)
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+
+    def test_a_change_the_tpm_reports_but_that_cannot_be_proven_is_refused_with_the_way_on(self):
+        """changeauth said 0 and the TPM still answers to the old value only: the no-stranding refusal, never 'rotated',
+        and the node keeps the current record (the falsifier sweep on #456: nothing tested this)."""
+        tpm = self.tpm
+        self.with_changeauth(lambda argv: subprocess.CompletedProcess(argv, 0, b"", b""))
+        with self.assertRaisesRegex(m.Refused, "the TPM accepted the change but the new value could not be proven"):
+            self.rotate()
+        self.assertEqual(tpm.owner_auth, self.current)
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+
+    def test_standard_input_must_be_exactly_the_two_values(self):
+        for name, data in (("one value", self.current.hex() + "\n"), ("a third line", (self.current.hex() + "\n" + self.new.hex()
+                                                                                         + "\n") * 2), ("nothing", "")):
+            with self.subTest(name), self.assertRaisesRegex(enrol.Refused, "a rotation takes, on standard input, the CURRENT value then the NEW one"):
+                enrol.set_ownerauth("a", self.pin, self.records["new"], io.BytesIO(data.encode()), run=self.tpm,
+                                    ek_name=self.tpm.ek_name.hex(), rotate_from=self.records["current"], directory=self.d)
+        self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.current, []))
+
+    def test_the_node_s_record_of_its_record_is_trusted_only_as_root_s_0600_file(self):
+        path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
+        os.chmod(path, 0o644)
+        with self.assertRaisesRegex(m.Refused, "cannot be trusted"):
+            enrol.ownerauth_current(self.d)
+        with self.assertRaisesRegex(m.Refused, "cannot be trusted"):
+            self.rotate()
+        self.assertEqual(self.tpm.owner_auth, self.current)
+        os.chmod(path, 0o600)
+        os.rename(path, path + ".real")
+        os.symlink(path + ".real", path)                                  # a link in its place is never followed
+        with self.assertRaisesRegex(m.Refused, "cannot be trusted"):
+            enrol.ownerauth_current(self.d)
+
+    def test_rotated_in_a_salted_session_then_a_rerun_changes_nothing(self):
+        self.assertIn("is rotated to a's NEW envelope value, and answers to it", self.rotate())
+        self.assertEqual(self.tpm.owner_auth, self.new)
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("new"))   # the node now holds the new record
+        self.assertEqual(self.tpm.salted_with, [self.tpm.ek_name])          # one change, salted to the enrolled EK
+        enrol._ownerauth_hold(self.d, self.digest("current"))             # a run that stopped before the node noted it
+        self.assertIn("already answers to a's NEW envelope value: nothing was changed", self.rotate())
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("new"))
+        self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.new, [self.tpm.ek_name]))
+
+    def test_either_value_not_its_record_s_is_refused_before_the_tpm(self):
+        for first, second in ((os.urandom(32), None), (None, os.urandom(32))):
+            with self.subTest(wrong="current" if first else "new"), \
+                    self.assertRaisesRegex(m.Refused, "the owner authorization given is not a's"):
+                self.rotate(first, second)
+            self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.current, []))
+
+    def test_a_tpm_holding_neither_or_empty_and_a_same_value_are_refused(self):
+        self.tpm.owner_auth = os.urandom(32)
+        with self.assertRaisesRegex(m.Refused, "is neither the current value given nor the new one: this TPM was provisioned otherwise"):
+            self.rotate()
+        self.tpm.owner_auth = None
+        with self.assertRaisesRegex(m.Refused, "the TPM's owner authorization is empty: there is nothing to rotate"):
+            self.rotate()
+        self.assertEqual(self.tpm.salted_with, [])
+        with self.assertRaisesRegex(m.Refused, "the new owner authorization is the current one: nothing to rotate"):
+            ownerauth.rotate_owner(ownerauth.Auth(self.current), ownerauth.Auth(self.current), self.tpm.ek_name.hex(), run=self.tpm)
+        with self.assertRaisesRegex(enrol.Refused, "--check and --rotate-from are different commands"):
+            enrol.set_ownerauth("a", self.pin, self.records["new"], io.BytesIO(b""), check=True, run=self.tpm,
+                                rotate_from=self.records["current"], directory=self.d)
+
+
+    def test_a_stale_or_unheld_current_record_is_refused_before_the_tpm(self):
+        """regalia-kms-d9: the node remembers which record it is on; a rotation from another is refused with no TPM call."""
+        enrol._ownerauth_hold(self.d, "ab" * 32)
+        with self.assertRaisesRegex(enrol.Refused, "the current record given is not the one this node is on"):
+            self.rotate()
+        os.unlink(os.path.join(self.d, enrol.OWNERAUTH_STATE))
+        with self.assertRaisesRegex(enrol.Refused, "this node holds no record of which owner-authorization record it is on"):
+            self.rotate()
+        self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.current, []))
+
+    def test_adopt_is_one_way_and_only_after_the_tpm_answers(self):
+        os.unlink(os.path.join(self.d, enrol.OWNERAUTH_STATE))
+        check = lambda record, raw, **kw: enrol.set_ownerauth("a", self.pin, self.records[record], io.BytesIO((raw.hex() + "\n").encode()),
+                                                              check=True, run=self.tpm, directory=self.d, **kw)
+        self.assertIn("the node holds NO record of it (--adopt)", check("current", self.current))
+        with self.assertRaisesRegex(enrol.Refused, "is NOT a's envelope value"):             # the TPM does not answer to it
+            check("new", self.new, adopt=True)
+        self.assertIsNone(enrol.ownerauth_current(self.d))
+        self.assertIn("the node now holds this record", check("current", self.current, adopt=True))
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+        self.tpm.owner_auth = self.new                                      # (as if rotated elsewhere)
+        with self.assertRaisesRegex(enrol.Refused, "already holds another owner-authorization record"):
+            check("new", self.new, adopt=True)
+        self.assertIn("but the node holds ANOTHER record", check("new", self.new))
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+        with self.assertRaisesRegex(enrol.Refused, "--adopt goes with --check"):
+            enrol.set_ownerauth("a", self.pin, self.records["new"], io.BytesIO(b""), run=self.tpm, directory=self.d, adopt=True)
+
+    def test_a_directory_in_place_of_the_held_file_is_refused_by_name_with_nothing_recorded(self):
+        """b9 on #502: a directory there fails held()'s regular-file check, and then cannot be hard-linked aside (EPERM),
+        which escaped the adopt as a traceback. It is a named refusal, and nothing is recorded."""
+        path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
+        os.unlink(path)
+        os.mkdir(path, 0o700)
+        with self.assertRaisesRegex(m.Refused, "is not a regular file of root's"):
+            enrol.ownerauth_current(self.d)
+        with self.assertRaisesRegex(enrol.Refused, "cannot be kept aside as ownerauth.json.untrusted .*move it out of the way by hand"):
+            enrol.set_ownerauth("a", self.pin, self.records["current"], io.BytesIO((self.current.hex() + "\n").encode()),
+                                check=True, adopt=True, run=self.tpm, directory=self.d)
+        self.assertTrue(os.path.isdir(path))                               # left as it was
+        self.assertFalse(os.path.lexists(path + ".untrusted"))
+
+    def test_ninety_nine_kept_untrustworthy_files_stop_the_adopt_before_anything_is_recorded(self):
+        """The bound on the kept evidence (_ownerauth_replace): with every name from .untrusted to .untrusted.99 taken,
+        an adopt is refused and records nothing; the falsifier sweep on the adopted #502 found nothing reaching it."""
+        path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
+        for n in range(1, 100):
+            with open(os.path.join(self.d, enrol.OWNERAUTH_STATE + ".untrusted" + ("" if n == 1 else ".%d" % n)), "w") as f:
+                f.write("earlier evidence %d" % n)
+        os.chmod(path, 0o644)                                              # the held file is now untrustworthy
+        with self.assertRaisesRegex(enrol.Refused, "already keeps 99 untrustworthy owner-authorization files"):
+            enrol.set_ownerauth("a", self.pin, self.records["current"], io.BytesIO((self.current.hex() + "\n").encode()),
+                                check=True, adopt=True, run=self.tpm, directory=self.d)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o644)       # not replaced
+        with open(os.path.join(self.d, enrol.OWNERAUTH_STATE + ".untrusted.99")) as f:
+            self.assertEqual(f.read(), "earlier evidence 99")             # no earlier evidence touched
+
+    def test_an_untrustworthy_held_file_is_refused_with_its_recovery_and_the_recovery_works(self):
+        """regalia-kms-d9 on #502: no stranding by the guard itself. A held file that is not root's 0600 (or a link, or
+        malformed) is refused everywhere with the way on named, and that way on (--check --adopt, after the TPM answers)
+        replaces it, keeping the old one as .untrusted."""
+        path = os.path.join(self.d, enrol.OWNERAUTH_STATE)
+        check = lambda record, raw, **kw: enrol.set_ownerauth("a", self.pin, self.records[record], io.BytesIO((raw.hex() + "\n").encode()),
+                                                              check=True, run=self.tpm, directory=self.d, **kw)
+
+        def malformed():
+            with open(path, "w") as f:                                     # stays 0600: only its content is wrong
+                f.write("[]")
+        recovery = "then `enrol ownerauth --check --adopt --record RECORD`"
+        for label, spoil in (("readable", lambda: os.chmod(path, 0o644)),
+                             ("a link", lambda: (os.rename(path, path + ".real"), os.symlink(path + ".real", path))),
+                             ("malformed", malformed)):
+            with self.subTest(label):
+                for leftover in (path, path + ".real", path + ".untrusted"):
+                    if os.path.lexists(leftover):
+                        os.unlink(leftover)
+                enrol._ownerauth_hold(self.d, self.digest("current"))
+                spoil()
+                with open(self.records["current"]) as f:
+                    current = json.load(f)
+                with self.assertRaisesRegex(m.Refused, recovery):                    # the tools (enrol commit, reanchor, recount)
+                    ownerauth.require_held(current, self.d)
+                with self.assertRaisesRegex(m.Refused, recovery):                    # a rotation
+                    self.rotate()
+                with self.assertRaisesRegex(m.Refused, recovery):                    # a plain check
+                    check("current", self.current)
+                with self.assertRaisesRegex(enrol.Refused, "is NOT a's envelope value"):     # the TPM must answer first
+                    check("new", self.new, adopt=True)
+                self.assertTrue(os.path.lexists(path) and not os.path.lexists(path + ".untrusted"))
+                self.assertIn("kept as ownerauth.json.untrusted", check("current", self.current, adopt=True))
+                self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+                self.assertTrue(os.path.lexists(path + ".untrusted"))
+                ownerauth.require_held(current, self.d)                              # the tools work again
+        # a second episode keeps the first one's evidence: its file goes under the next free name, both stay
+        with open(path + ".untrusted") as f:
+            first = f.read()
+        os.chmod(path, 0o644)
+        self.assertIn("kept as ownerauth.json.untrusted.2", check("current", self.current, adopt=True))
+        with open(path + ".untrusted") as f:
+            self.assertEqual(f.read(), first)
+        self.assertEqual(stat.S_IMODE(os.stat(path + ".untrusted.2").st_mode), 0o644)
+        self.assertEqual(enrol.ownerauth_current(self.d), self.digest("current"))
+        self.assertEqual(self.tpm.salted_with, [])
+
+    def test_no_salted_changeauth_near_dictionary_attack_lockout(self):
+        """regalia-kms-d9: the one strike-capable call (a changeauth in the EK-salted session) is not made unless the TPM
+        has min(3, MAX) tries left: at MAX the node's DA-protected keys lock out."""
+        for counter, most in ((1, 3), (30, 32)):
+            with self.subTest(counter=counter, max=most):
+                self.tpm.da = [counter, most, 1000]
+                with self.assertRaisesRegex(m.Refused, "the TPM's dictionary-attack counter is %d of %d: a rotation could lock "
+                                            "the node's keys out" % (counter, most)):
+                    self.rotate()
+                self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.current, []))
+        self.tpm.da = [29, 32, 1000]
+        self.assertIn("is rotated to a's NEW envelope value", self.rotate())
+
+    def test_never_back_to_an_older_or_equal_record(self):
+        """regalia-kms-51: an operator who picks an older root-signed record must not re-arm envelopes that retired or lost
+        cards open; both `at` are root-signed, so the order is."""
+        for at in ("2026-10-05T10:00:00Z", "2026-10-05T09:59:59Z"):
+            with self.subTest(at=at):
+                self.write("new", self.new, at)
+                with self.assertRaisesRegex(enrol.Refused, "the new record is not newer than the current one \\(%s, not after "
+                                            "2026-10-05T10:00:00Z\\)" % at):
+                    self.rotate()
+                self.assertEqual((self.tpm.owner_auth, self.tpm.salted_with), (self.current, []))
+        self.write("new", self.new, "5 October")
+        with self.assertRaisesRegex(enrol.Refused, "is not a UTC time"):
+            self.rotate()
 
 
 @unittest.skipUnless(shutil.which("swtpm") and shutil.which("tpm2_changeauth"), "needs swtpm and tpm2-tools")
@@ -409,6 +724,19 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual((hw.value(), hw.record()[0]), (2, 2))
         hw.redefine(4, "04" * 32)
         self.assertEqual(hw.value(), 4)
+        # rotation (regalia-kms-24's assignment): the set value to a new one, in a session salted to the EK, the current
+        # value authorizing it (never sent); then the anchor answers to the new value only, and a rerun changes nothing
+        new = ownerauth.Auth(bytes.fromhex("ff00ee00dd00cc00bb00aa00998877665544332211000000ffeeddccbbaa0000"))
+        with self.assertRaisesRegex(m.Refused, "is not the one enrolment recorded"):
+            ownerauth.rotate_owner(self.auth, new, "000b" + "00" * 32, self.tcti)
+        self.assertTrue(ownerauth.holds(self.auth, self.tcti))                 # another EK: nothing was sent
+        self.assertIs(ownerauth.rotate_owner(self.auth, new, ek_name, self.tcti), True)
+        self.assertEqual((ownerauth.holds(new, self.tcti), ownerauth.holds(self.auth, self.tcti)), (True, False))
+        rotated = m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock", owner_auth=new)
+        rotated.redefine(5, "05" * 32)
+        self.assertEqual(rotated.value(), 5)
+        self.assertIs(ownerauth.rotate_owner(self.auth, new, ek_name, self.tcti), False)    # resumed: nothing to change
+        self.assertTrue(ownerauth.holds(new, self.tcti))
 
 
 @unittest.skipUnless(shutil.which("swtpm") and shutil.which("tpm2_changeauth"), "needs swtpm and tpm2-tools")

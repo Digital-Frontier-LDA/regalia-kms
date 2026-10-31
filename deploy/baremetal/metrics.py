@@ -56,6 +56,8 @@ WRITERS = {
     "admission": ("admission", ("lease.prom",)),
     # regalia-esp-advance (root): its own view of the anchor, not sync's (regalia-kms-48: sync parses peers' input)
     "esp-advance": ("esp-advance", ("esp-advance.prom",)),      # not admission.prom: a trail is called admission (its shipper's file)
+    # regalia-site-check (root): the rootfs site configuration against the measured site document (#615)
+    "site-check": ("site-check", ("site-check.prom",)),
     "audit-ship": ("audit-ship", None),     # one file per trail: <trail>.prom (cmd/regalia-audit-ship -metrics)
 }
 
@@ -84,9 +86,15 @@ METRICS = {
     "regalia_esp_boot_renderable": ("gauge", "1 when the initrd can render a boot configuration from the chain on the ESP; 0: the "
                                     "next boot asks for the recovery key.", {}, "esp-advance"),
     "regalia_esp_advance_run_timestamp_seconds": ("gauge", "When regalia-esp-advance last ran.", {}, "esp-advance"),
+    "regalia_site_check_ok": ("gauge", "1 when regalia-site-check found the rootfs site configuration and the measured site "
+                              "document in agreement this boot, 0 when they differ or the document could not be read: the "
+                              "tunnels are not brought up.", {}, "site-check"),
+    "regalia_site_check_run_timestamp_seconds": ("gauge", "When regalia-site-check last ran.", {}, "site-check"),
     "regalia_admission_serving": ("gauge", "1 while this node holds a runtime lease that lets the KMS daemon serve, else 0.",
                                   {}, "admission"),
     "regalia_admission_lease_seconds_left": ("gauge", "Seconds left on the runtime lease held; 0 with none.", {}, "admission"),
+    "regalia_admission_recovery": ("gauge", "1 while this node serves ALONE under the owner's survivor authorization (ADR-0002 "
+                                   "D32.6: stateless operations only), else 0.", {}, "admission"),
     # cmd/regalia-audit-ship's writeMetrics (regalia-kms-48; a test holds the Go source to these names). Its `trail`
     # label never passes through render(): it is the unit instance's name (%i), one of trails.TRAILS
     "regalia_audit_trail_lines": ("gauge", "Complete lines in the trail file.", {"trail": None}, "audit-ship"),

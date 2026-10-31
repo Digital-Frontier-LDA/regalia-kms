@@ -8,6 +8,10 @@ Description=Regalia KMS: the WireGuard tunnels, from the manifest
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
 After=network-online.target
 Wants=network-online.target
+# the tunnels are built from the rootfs site configuration: only once it is this boot's site (#615). A failed or
+# missing check leaves them down, and RegaliaSiteMismatch / RegaliaSiteCheckMetricsMissing say why
+Requires=regalia-site-check.service
+After=regalia-site-check.service
 
 # Triggered by a file regalia-sync writes: a burst of triggers must not stop the path unit (every run
 # re-verifies the chain, so running again is harmless).

@@ -85,6 +85,122 @@ class Report(unittest.TestCase):
         self.assertEqual(initrd_drift.security_versions(text), {"libssl3t64": "3.5.1-1+deb13u1", "udev": "257.13-1+deb13u1"})
 
 
+MODULE = ROOT / "deploy" / "baremetal" / "initrd" / "dracut" / "90regalia-unlock"
+CHECK = ROOT / "e2e" / "lib" / "dracut-module-check.sh"
+
+
+class ModuleCheck(unittest.TestCase):
+    """#330 (b9 on #599): the drift build runs the module's own check() before dracut, so any requirement it gains,
+    in any form, stops the build with check()'s own words instead of a "dracut failed" three weeks later."""
+
+    def tree(self):
+        import shutil
+        import tempfile
+        root = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        for path in ("usr/bin/regalia-unlock", "usr/bin/wg", "usr/sbin/nft", "usr/sbin/ip"):
+            (root / path).parent.mkdir(parents=True, exist_ok=True)
+            (root / path).write_text("#!/bin/sh\n")
+            (root / path).chmod(0o755)
+        lib = root / "usr/lib/x86_64-linux-gnu/libtss2-tcti-device.so.0"
+        lib.parent.mkdir(parents=True)
+        lib.write_bytes(b"\x7fELF")
+        key = root / "usr/lib/regalia/root-key.json"
+        key.parent.mkdir(parents=True)
+        key.write_text('"test"')
+        units = root / "usr/lib/systemd/system"
+        units.mkdir(parents=True)
+        shutil.copy(ROOT / "deploy/baremetal/initrd/regalia-unlock.service", units)
+        module = root / "usr/lib/dracut/modules.d/90regalia-unlock"
+        module.mkdir(parents=True)
+        for name in ("module-setup.sh", "crypttab"):
+            shutil.copy(MODULE / name, module)
+        return root, module
+
+    def run_check(self, root, module):
+        import subprocess
+        return subprocess.run(["bash", str(CHECK), str(root), str(module)], capture_output=True, text=True, timeout=30)
+
+    def test_a_tree_with_everything_passes(self):
+        out = self.run_check(*self.tree())
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("check() passes", out.stdout)
+
+    def test_each_requirement_missing_fails_with_the_module_s_own_words(self):
+        cases = {
+            "usr/lib/regalia/root-key.json": "root-key.json is missing",
+            "usr/lib/x86_64-linux-gnu/libtss2-tcti-device.so.0": "libtss2-tcti-device is not installed",
+            "usr/lib/dracut/modules.d/90regalia-unlock/crypttab": "crypttab is missing",
+            "usr/lib/systemd/system/regalia-unlock.service": "is not the one of this client",
+            "usr/sbin/nft": "nft is not in the tree's PATH",
+        }
+        for path, words in cases.items():
+            with self.subTest(path):
+                root, module = self.tree()
+                (root / path).unlink()
+                out = self.run_check(root, module)
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertIn("not 255: dracut would stop at it", out.stderr)
+                self.assertIn(words, out.stderr)
+
+    def test_a_requirement_the_module_gains_in_any_form_is_seen(self):
+        """The point of running check(): a new requirement needs no list kept beside it."""
+        root, module = self.tree()
+        setup = module / "module-setup.sh"
+        text = setup.read_text()
+        self.assertEqual(text.count("    return 255\n"), 1)
+        setup.write_text(text.replace("    return 255\n", '    [ -d "${dracutsysrootdir-}/etc/regalia-new" ] || { derror "regalia-unlock: new"; return 1; }\n    return 255\n'))
+        out = self.run_check(root, module)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("regalia-unlock: new", out.stderr)
+
+    def test_a_binary_is_resolved_inside_the_tree_not_on_the_runner(self):
+        """b9 on #601: an absolute link in the tree points into the tree, so one whose target the tree lacks is
+        missing, even though the runner has that path (/bin/sh here)."""
+        import os
+        for target in ("/bin/sh", "../../bin/sh"):
+            with self.subTest(target):
+                root, module = self.tree()
+                (root / "usr/sbin/nft").unlink()
+                os.symlink(target, root / "usr/sbin/nft")
+                self.assertTrue(os.path.exists("/bin/sh"))
+                out = self.run_check(root, module)
+                self.assertEqual(out.returncode, 1, out.stdout)
+                self.assertIn("nft is not in the tree's PATH", out.stderr)
+
+    def test_links_that_resolve_inside_the_tree_are_followed(self):
+        """the other side: merged /usr (/sbin -> usr/sbin) and an alternatives chain, all inside the tree, pass."""
+        import os
+        root, module = self.tree()
+        (root / "usr/sbin/nft").rename(root / "usr/sbin/nft.real")
+        (root / "etc/alternatives").mkdir(parents=True)
+        os.symlink("/usr/sbin/nft.real", root / "etc/alternatives/nft")
+        os.symlink("/etc/alternatives/nft", root / "usr/sbin/nft")
+        out = self.run_check(root, module)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        root, module = self.tree()
+        (root / "usr/sbin/ip").rename(root / "usr/sbin/ip.moved")
+        (root / "usr/sbin/ip.moved").rename(root / "usr/bin/ip")
+        os.symlink("usr/bin", root / "bin")                      # ip only through /bin -> usr/bin
+        out = self.run_check(root, module)
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_hostonly_from_the_caller_does_not_leak_in(self):
+        import os
+        import subprocess
+        root, module = self.tree()
+        out = subprocess.run(["bash", str(CHECK), str(root), str(module)], capture_output=True, text=True, timeout=30,
+                             env=dict(os.environ, hostonly="yes"))
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_the_drift_build_runs_it_before_dracut(self):
+        drift = (ROOT / "e2e" / "initrd-drift.sh").read_text()
+        call = 'bash e2e/lib/dracut-module-check.sh "$ROOT" "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock"'
+        self.assertIn(call, drift)
+        self.assertLess(drift.index(call), drift.index('\ninroot dracut '))
+        self.assertGreater(drift.index(call), drift.rindex('/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"'))
+
+
 class Script(unittest.TestCase):
     def test_the_drift_build_uses_the_packages_the_boot_test_uses(self):
         """Otherwise every day's report would show the difference between two package lists, not drift."""
@@ -94,6 +210,45 @@ class Script(unittest.TestCase):
         self.assertEqual(re.search(r"^INCLUDE=(\S+)$", drift, re.M).group(1), included)
         self.assertIn("--no-hostonly --no-hostonly-cmdline --add regalia-unlock", drift)
         self.assertIn("$SUITE-security", drift)
+
+    def test_the_drift_build_installs_every_file_the_module_requires(self):
+        """#330: dracut stops for a requested module whose check() fails, so a file the module comes to require and the
+        drift build does not install ends every daily run at dracut, exit 2, with nothing compared. f6e87f14 (#66 B3)
+        made the root key such a file and the check was dead from 2026-10-04."""
+        setup = (ROOT / "deploy" / "baremetal" / "initrd" / "dracut" / "90regalia-unlock" / "module-setup.sh").read_text()
+        drift = (ROOT / "e2e" / "initrd-drift.sh").read_text()
+        required = re.findall(r'\[ ! -[sefx] "\$\{dracutsysrootdir-\}(/[^"$]+)" \]', setup)
+        self.assertIn("/usr/lib/regalia/root-key.json", required)      # the instrument sees the file that broke it
+        for path in required:
+            with self.subTest(path):
+                self.assertRegex(drift, r'install [^\n]*"\$ROOT%s"' % re.escape(path))
+
+    def test_the_drift_build_trusts_the_boot_test_s_root(self):
+        """The root key is BOUND in the inventory (=root-key on both sides, uki.py), so any root compares equal: the
+        drift build takes the boot test's fixed TEST root, made the same way, never a deployment's."""
+        boot = (ROOT / "e2e" / "unlock-boot-qemu.sh").read_text()
+        drift = (ROOT / "e2e" / "initrd-drift.sh").read_text()
+        derive = re.search(r"^python3 -I -c '[^\n]*root_public[^\n]*' \\\n  tests/vectors/highwater-v1.json ", boot, re.M)
+        self.assertIsNotNone(derive)
+        self.assertIn(derive.group(0), drift)
+
+    def test_a_check_that_could_not_run_fails_the_run(self):
+        """#330: an exit 2 filed an issue and left the run green for three weeks. The build job now fails AFTER the
+        report is uploaded (so the filing job still says what failed), and a found drift (exit 1) does not fail it."""
+        import yaml
+        steps = yaml.safe_load((ROOT / ".github" / "workflows" / "initrd-drift.yml").read_text())["jobs"]["build"]["steps"]
+        upload = [i for i, s in enumerate(steps) if s.get("uses", "").startswith("actions/upload-artifact@")]
+        self.assertEqual(len(upload), 1)
+        last = steps[-1]
+        self.assertGreater(len(steps) - 1, upload[0])
+        self.assertIn('"$RUNNER_TEMP/drift/rc"', last["run"])
+        self.assertIn('-ge 2', last["run"])
+        self.assertIn("::error", last["run"])
+        self.assertIn("exit 1", last["run"])
+        # b9 on #599: a red that is not a regression says where to look first, on the run and in the issue
+        build = " ".join(st.get("run", "") for st in steps)
+        self.assertIn("mirror outage", last["run"])
+        self.assertEqual(build.count("archive or mirror outage"), 2)
 
     def test_the_workflow_splits_building_from_filing(self):
         import yaml
@@ -122,6 +277,56 @@ class Script(unittest.TestCase):
         self.assertIn("The initrd drift check FAILED", filing)
         self.assertIn("--body-file", filing)
         self.assertEqual(workflow["concurrency"]["group"], "initrd-drift")
+
+    def test_the_drift_build_runs_dracut_as_the_builder_does(self):
+        """#330: run as dracut's defaults, the drift build carried 7 generated lines no real build has, every day:
+        dev/console, kmsg, null, random and urandom (no DRACUT_NO_MKNOD=1), etc/shadow (its last-changed day follows
+        SOURCE_DATE_EPOCH, unset, so it moved daily) and build-parameter.txt (it records the flags). Only archive
+        drift may differ: the same chroot environment, the same dracut flags, the same epoch in the tree."""
+        builder = (ROOT / "deploy" / "baremetal" / "initrd" / "build-initrd.sh").read_text()
+        drift = (ROOT / "e2e" / "initrd-drift.sh").read_text()
+        inroot = re.search(r"^inroot\(\)\{ [^\n]*\}$", builder, re.M).group(0)
+        self.assertIn("DRACUT_NO_MKNOD=1", inroot)      # the instrument reads the builder's real definition
+        self.assertIn('SOURCE_DATE_EPOCH="$EPOCH"', inroot)
+        self.assertIn("\n" + inroot + "\n", drift)
+        flags = re.search(r"^inroot dracut (.*) --kver ", builder, re.M).group(1)
+        self.assertIn("--reproducible --nohardlink", flags)
+        self.assertRegex(drift, r"(?m)^inroot dracut %s --kver " % re.escape(flags))
+        self.assertNotRegex(drift, r'chroot "\$ROOT" dracut ')
+        self.assertRegex(drift, r'(?m)^env -i PATH="\$PATH" LC_ALL=C TZ=UTC SOURCE_DATE_EPOCH="\$EPOCH" mmdebstrap ')
+
+    def test_the_drift_epoch_is_the_reviewed_snapshot_s(self):
+        """The reviewed inventory was built with SOURCE_DATE_EPOCH at its snapshot's time (build-initrd.sh's default),
+        so the drift build takes that time from the inventory's own header, which moves with it in one pull request.
+        The script's OWN lines are run (CodeRabbit on #629: a regex re-read here missed that a greedy `.*` kept only
+        the last of two snapshots on one line): the real header gives one time, and none, or two, is exit 2."""
+        import subprocess
+        import tempfile
+        drift = (ROOT / "e2e" / "initrd-drift.sh").read_text()
+        start = drift.index("\nSNAPSHOT=") + 1
+        end = drift.index("\nEPOCH=", start)
+        lines = drift[start:end]
+        self.assertIn('[ "$(grep -c . <<< "$SNAPSHOT")" = 1 ]', lines)
+
+        def run(header):
+            with tempfile.NamedTemporaryFile("w", suffix=".txt") as f:
+                f.write(header)
+                f.flush()
+                r = subprocess.run(["bash", "-c", 'set -euo pipefail; PINNED="$1"\n' + lines + '\necho "$SNAPSHOT"', "_", f.name],
+                                   capture_output=True, text=True)
+            return r.returncode, r.stdout.strip()
+
+        real = (ROOT / "deploy" / "baremetal" / "initrd" / "initrd-inventory.txt").read_text()
+        rc, out = run(real)
+        self.assertEqual(rc, 0)
+        self.assertRegex(out, r"^20[0-9]{6}T[0-9]{6}Z$")
+        self.assertIn("snapshot.debian.org %s " % out, real)
+        line = "# Reviewed image: Debian 13 (trixie) from snapshot.debian.org %s (main), built by\n"
+        self.assertEqual(run(line % "20261019T000000Z"), (0, "20261019T000000Z"))
+        two_on_one = "# Reviewed image: Debian 13 from snapshot.debian.org 20261019T000000Z and snapshot.debian.org 20261029T000000Z\n"
+        self.assertEqual(run(two_on_one)[0], 2)
+        self.assertEqual(run(line % "20261019T000000Z" + line % "20261029T000000Z")[0], 2)
+        self.assertEqual(run("# Reviewed build: snapshot.debian.org 20261019T000000Z\n")[0], 2)
 
     def test_the_security_list_is_the_one_apt_verified(self):
         script = (ROOT / "e2e" / "initrd-drift.sh").read_text()

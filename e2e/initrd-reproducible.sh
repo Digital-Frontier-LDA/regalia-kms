@@ -21,7 +21,7 @@ export LC_ALL=C
 OUT="${1:?usage: initrd-reproducible.sh OUT [BUILDS]}"
 BUILDS="${2:-2}"
 GO="${REGALIA_GO:?set REGALIA_GO to a go (any release from 1.21: it launches the toolchain go.mod pins)}"
-SNAPSHOT="${REGALIA_SNAPSHOT:-20261003T121500Z}"
+SNAPSHOT="${REGALIA_SNAPSHOT:-20261023T210712Z}"
 # the membership root the initrd trusts (#156): the TEST root of tests/vectors/highwater-v1.json, canonical
 ROOT_KEY="$OUT/root-key.json"
 mkdir -p "$OUT"

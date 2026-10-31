@@ -926,10 +926,10 @@ class ProposeGenesis(unittest.TestCase):
             "schema": cardrecord.SCHEMA, "event": cardrecord.EVENT, "session": "cd" * 16, "tool": "offline-keys.py test",
             "at": "2026-10-04T11:00:00Z", "root_entry": {"alg": "ed25519", "key": raw(signer)},
             "root_fingerprint": hashlib.sha256(bytes.fromhex(raw(signer))).hexdigest(),
-            "owner_keys": [{"role": "dev-main", "serial": self.MAIN, "alg": "ed25519", "key": self.owner_a, "attested": True,
-                            "attestation_sha256": {"sig": "a1" * 32, "dec": "a2" * 32}},
-                           {"role": "dev-backup", "serial": self.BACKUP, "alg": "ed25519", "key": self.owner_b, "attested": True,
-                            "attestation_sha256": {"sig": "b1" * 32, "dec": "b2" * 32}}],
+            "owner_keys": [{"role": "owner-main", "serial": self.MAIN, "alg": "ed25519", "key": self.owner_a, "attested": True,
+                            "attestation_sha256": {"sig": "a1" * 32, "dec": "a2" * 32, "aut": "a3" * 32}},
+                           {"role": "owner-backup", "serial": self.BACKUP, "alg": "ed25519", "key": self.owner_b, "attested": True,
+                            "attestation_sha256": {"sig": "b1" * 32, "dec": "b2" * 32, "aut": "b3" * 32}}],
             "ownerauth_recipients": [{"serial": self.MAIN, "primary": "A" * 40, "subkey": "B" * 40},
                                      {"serial": self.BACKUP, "primary": "C" * 40, "subkey": "D" * 40}],
             "ssh_signers": [{"serial": s, "key": ssh(Ed25519PrivateKey.generate())} for s in (self.MAIN, self.BACKUP)],
@@ -1067,7 +1067,7 @@ class ProposeGenesis(unittest.TestCase):
         self.assertFalse(os.path.exists(path))
         code, out, err, path = self.run_cli()
         self.assertEqual(code, 0, err)
-        for shown in ("owner card 40000001 (dev-main): key " + self.owner_a, "owner card 40000002 (dev-backup): key " + self.owner_b,
+        for shown in ("owner card 40000001 (owner-main): key " + self.owner_a, "owner card 40000002 (owner-backup): key " + self.owner_b,
                       "card record: session " + "cd" * 16 + ", made 2026-10-04T11:00:00Z, signed by the pinned root",
                       "card record 1 of 1 (the newest on this laptop's signing record), digest ",
                       "supersedes nothing (the first): check both against the ceremony sheet",

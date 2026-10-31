@@ -79,11 +79,14 @@ python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/initrd" > "$W/
 # holds it to (#266: `uki provenance` reads them from this checkout; the real record is e2e/unlock-boot-qemu.sh's)
 python3 -Es -m deploy.baremetal.uki provenance > "$W/provenance.json"
 PINNED_KEYRING="$(sed -n 's/^KEYRING_SHA256 = "\([0-9a-f]\{64\}\)"$/\1/p' deploy/baremetal/debverify.py)"
-python3 -I - "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/initrd-build.json" "$W/initrd-inventory.txt" "$PINNED_KEYRING" "$W/provenance.json" "$W/root-key.json" <<'PY'
+# the client is built with go.mod's Go release (its toolchain line, else its go line), and uki.py refuses
+# a record that names another: ask uki.py, so the two cannot read go.mod differently
+GO_RELEASE="$(python3 -IB -c 'import sys; sys.path.append(sys.argv.pop(1)); from deploy.baremetal.uki import Checkout; print(Checkout().go_release())' "$PWD")"
+python3 -I - "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/initrd-build.json" "$W/initrd-inventory.txt" "$PINNED_KEYRING" "$W/provenance.json" "$W/root-key.json" "$GO_RELEASE" <<'PY'
 import hashlib, json, sys
 digest = lambda path: hashlib.sha256(open(path, "rb").read()).hexdigest()
 provenance = json.load(open(sys.argv[6]))
-json.dump({"schema": "regalia.initrd-build/v1", "commit": provenance["commit"], "go": "go1.26.6", "snapshot": "20261003T121500Z",
+json.dump({"schema": "regalia.initrd-build/v1", "commit": provenance["commit"], "go": sys.argv[8], "snapshot": "20261023T210712Z",
            "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "stand-in", "dracut": "stand-in", "packages_requested": [],
            "client_sha256": digest(sys.argv[2]), "root_key_sha256": digest(sys.argv[7]), "repository_files": provenance["repository_files"], "packages_sha256": "0" * 64, "packages": [],
            "initrd_sha256": digest(sys.argv[1]), "initrd_size": 0, "initrd_entries": 0,

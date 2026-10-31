@@ -671,6 +671,20 @@ class Secrets(Case):
                      run=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, b"", b""))
         self.refused("the TPM does not release the local contribution", unlock.unseal_local, "x",
                      run=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, b"short", b""))
+        # #592 occurrence 2: the refusal named a policy cause while the TPM had said TPM_RC_SESSION_MEMORY; systemd-creds'
+        # own reason now travels with it, and the exit status; nothing it printed on stdout (the secret's channel) does
+        said = "Failed to start policy session: TPM2_RC_SESSION_MEMORY\nWARNING:esys:Esys_StartAuthSession() 0x00000903\n"
+        with self.assertRaises(m.Refused) as caught:
+            unlock.unseal_local("x", run=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, b"PARTIAL-SECRET", said.encode()))
+        text = str(caught.exception)
+        self.assertIn("the TPM does not release the local contribution", text)
+        self.assertIn("systemd-creds exit 1", text)
+        self.assertIn("Failed to start policy session: TPM2_RC_SESSION_MEMORY | WARNING:esys:Esys_StartAuthSession() 0x00000903", text)
+        self.assertNotIn("PARTIAL-SECRET", text)
+        with self.assertRaises(m.Refused) as caught:                       # bounded, and only printable text
+            unlock.unseal_local("x", run=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, b"", b"\x1b[31m" + b"e" * 5000))
+        self.assertLess(len(str(caught.exception)), 700)
+        self.assertNotIn("\x1b", str(caught.exception))
 
 
 @unittest.skipUnless(CRYPTSETUP or os.environ.get("REGALIA_EXPECT_CRYPTSETUP") == "1", "cryptsetup is not installed")

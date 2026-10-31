@@ -1,7 +1,7 @@
 """The card-ceremony record, verified by the side that consumes it (regalia-ceremony#111 step 2; ADR-0002 D30).
 
-The card ceremony writes `cards.record.json`: which cards hold the owner's two keys (the developer pair's OpenPGP SIG
-keys) and which hold the release key, signed by the membership root in the offline session that made them. The
+The card ceremony writes `cards.record.json`: which cards hold the owner's two keys (the owner pair's OpenPGP SIG keys,
+D30.7) and which hold the release key, signed by the membership root in the offline session that made them. The
 genesis proposal takes owner_keys and the release key from it (manifest propose --genesis --card-record) instead of
 having them typed. This module is that consumer's own check: it imports nothing of regalia-ceremony, and it PINS the
 root (regalia-ceremony's own verify_record checks only that a record is consistent with itself).
@@ -14,8 +14,9 @@ Refused, by name, unless:
   * the record's root_entry is the PINNED root (Ed25519) and root_fingerprint is the SHA-256 of its raw key, and the
     signature verifies under that pinned key over RECORD_DOMAIN + canonical(record);
   * every field is as the producer writes it, none missing and none unknown, at every level (FIELDS);
-  * owner_keys are exactly two, the roles dev-main and dev-backup, with distinct serials and keys, Ed25519, and each
-    attested on its card (D5), naming the SHA-256 of its SIG and DEC keys' attestation certificates, all four distinct;
+  * owner_keys are exactly two, the roles owner-main and owner-backup (D30.7), with distinct serials and keys, Ed25519,
+    and each attested on its card (D5), naming the SHA-256 of its SIG, DEC and AUT keys' attestation certificates (all
+    three touch-fixed under D30.7), all six distinct;
   * the release key is Ed25519, imported, not attested, on two distinct cards, its key no owner key and its cards no
     owner card (D30.3);
   * no card is a bench YubiKey (membership.BENCH_YUBIKEYS; D28.5, D30);
@@ -59,10 +60,14 @@ from deploy.baremetal import membership
 
 Refused, require = membership.Refused, membership.require
 
-RECORD_DOMAIN = b"regalia-ceremony-record/v1\x00"
+# regalia-avz (agreed with regalia-ceremony#178): each root-signed record kind signs under its own schema, NUL-terminated,
+# so no other kind's signature (an offline-keys or ownerauth record) verifies as a card record. The domain all kinds
+# shared until then is retired and accepted nowhere (RETIRED_RECORD_DOMAIN: tests only)
+RETIRED_RECORD_DOMAIN = b"regalia-ceremony-record/v1\x00"
+RECORD_DOMAIN = b"regalia.card-ceremony-record/v1\x00"
 SCHEMA = "regalia.card-ceremony-record/v1"
 EVENT = "card-ceremony"
-ROLES = ("dev-main", "dev-backup")
+ROLES = ("owner-main", "owner-backup")      # ADR-0002 D30.7, regalia-ceremony#133: the owner pair (regalia-86f)
 FIELDS = {
     "record": ("schema", "event", "owner_keys", "ownerauth_recipients", "ssh_signers", "release_key", "session", "root_entry",
                "root_fingerprint", "tool", "at", "sequence", "supersedes"),
@@ -73,7 +78,7 @@ FIELDS = {
     "rebuild_rebuilt": ("sequence", "digest"),
     "signing_state": ("schema", "root"),
     "owner_key": ("role", "serial", "alg", "key", "attested", "attestation_sha256"),
-    "attestation_sha256": ("sig", "dec"),
+    "attestation_sha256": ("sig", "dec", "aut"),
     "release_key": ("alg", "key", "fingerprint", "cards", "imported", "attested"),
     "ownerauth_recipient": ("serial", "primary", "subkey"),
     "ssh_signer": ("serial", "key"),
@@ -201,6 +206,25 @@ def read_signing_state(state_dir, root):
     require(state["root"] == root, "the state directory is another root's signing state: it is not this network's laptop")
     data = _read_own(state_dir, SIGNING_RECORD, MAX_SIGNING_RECORD, "the signing record %s" % SIGNING_RECORD)
     require(data, "the state directory %s holds no signing record: no card record can be shown to be the newest" % state_dir)
+    return parse_signing_record(data)
+
+
+def read_signing_record(path):
+    """A copy of the signing record named by path (owner.py sign-recovery's --record, which may sit on the owner's
+    machine, so no owner or mode is required of it), read whole: at most MAX_SIGNING_RECORD bytes, else refused whole,
+    since a cut at a line boundary would drop the newest lines and with them the floor a peer's chain is judged by.
+    Then parse_signing_record, the rule every reader of this log uses (7e on regalia-ceremony#139: the ceremony reader's too)."""
+    with open(path, "rb") as f:
+        data = f.read(MAX_SIGNING_RECORD + 1)
+    require(len(data) <= MAX_SIGNING_RECORD, "the signing record %s is larger than %d bytes: it is not read" % (path, MAX_SIGNING_RECORD))
+    require(data, "the signing record %s is empty" % path)
+    return parse_signing_record(data)
+
+
+def parse_signing_record(data):
+    """The signing record's bytes, every line parsed: cut at b"\n" only (never str.splitlines' \r, \x85 or U+2028,
+    nor bytes.splitlines' \r), the last line ending in a newline (a torn line is refused, never skipped), each line ASCII
+    JSON, an object with a kind. A blank line is not JSON and is refused. Returns the lines in file order."""
     require(data.endswith(b"\n"), "the signing record's last line is torn (no newline at its end): it is not read")
     lines = []
     for number, raw in enumerate(data.split(b"\n")[:-1], 1):
@@ -306,6 +330,10 @@ def _newest(record, root, signing_lines, pin=None):
                 "the chain's pinned card record is not in this signing record")
         return cards[-1]["sequence"], base, None                     # the pin decides: supersedes is not this path's question
     newest = cards[-1]
+    # a record newer than every line is not "superseded": the signing record does not hold it (c6 on #634)
+    require(type(record["sequence"]) is not int or record["sequence"] <= newest["sequence"],
+            "this card record (sequence %d) is newer than the signing record's newest card-record line (sequence %d): the "
+            "signing record does not hold it (another or a rebuilt state directory?)" % (record["sequence"], newest["sequence"]))
     require(record["sequence"] == newest["sequence"] and digest(record) == newest["digest"],
             "this card record (sequence %d) is not the newest the root signed (sequence %d, digest %s): an older one is superseded"
             % (record["sequence"], newest["sequence"], newest["digest"][:16]))
@@ -362,7 +390,7 @@ def verify(envelope, root, signing_lines, pin=None):
         require(entry["alg"] == "ed25519", "%s is not an Ed25519 key" % where)
         require(entry["attested"] is True, "%s: the key is not attested as made on its card (D5)" % where)
         _exact(entry["attestation_sha256"], "attestation_sha256", where + ".attestation_sha256")
-        for f in ("sig", "dec"):
+        for f in FIELDS["attestation_sha256"]:
             certificates.append(_key(entry["attestation_sha256"][f], "%s.attestation_sha256.%s (a certificate's SHA-256, 64 hex)" % (where, f)))
         owners[serial], roles[entry["role"]] = _key(entry["key"], where + ".key"), serial
     require(sorted(roles) == sorted(ROLES), "owner_keys lacks a role: %s" % ", ".join(sorted(set(ROLES) - set(roles))))

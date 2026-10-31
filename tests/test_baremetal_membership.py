@@ -100,6 +100,23 @@ class Manifests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(m.Refused):
                 m.load(raw)
 
+    def test_nesting_is_bounded_before_parsing_on_every_python(self):
+        """Python 3.14's json parses 100000 levels where 3.12 raised RecursionError, so the bound is the loader's."""
+        deepest = "[" * m.MAX_DEPTH + "]" * m.MAX_DEPTH
+        self.assertEqual(m._depth(deepest), m.MAX_DEPTH)
+        m.load(deepest)                                                          # the bound itself is accepted
+        for raw in ("[" * (m.MAX_DEPTH + 1) + "]" * (m.MAX_DEPTH + 1), '{"a":' * (m.MAX_DEPTH + 1) + "1" + "}" * (m.MAX_DEPTH + 1),
+                    b"[" * 100000 + b"]" * 100000):
+            with self.subTest(depth=len(raw) // 2), self.assertRaisesRegex(m.Refused, "nested too deeply"):
+                m.load(raw)
+        # brackets inside strings, escaped quotes included, are not nesting; in every encoding json.loads takes
+        for encoding in ("utf-8", "utf-16", "utf-16-be", "utf-32"):
+            with self.subTest(encoding=encoding):
+                self.assertEqual(m.load(json.dumps(['"' + "[" * (m.MAX_DEPTH + 1)]).encode(encoding)), ['"' + "[" * (m.MAX_DEPTH + 1)])
+                with self.assertRaisesRegex(m.Refused, "nested too deeply"):
+                    m.load(("[" * (m.MAX_DEPTH + 1) + "]" * (m.MAX_DEPTH + 1)).encode(encoding))
+        self.assertEqual(m.load('{"a": "%s\\" [[[", "b": ["]]]"]}' % ("[" * 500)), {"a": "[" * 500 + '" [[[', "b": ["]]]"]})
+
     def test_hostile_input_is_a_refusal_never_another_exception(self):
         """48's findings: both are reachable with an unsigned envelope, before any signature is checked."""
         with self.assertRaisesRegex(m.Refused, "not valid JSON: nested too deeply"):
@@ -654,8 +671,8 @@ class RecordWrites(unittest.TestCase):
         verdict = self.fault(argv)
         if isinstance(verdict, bytes):                       # the tool succeeds and prints this
             return subprocess.CompletedProcess(argv, 0, verdict, b"")
-        if isinstance(verdict, tuple):                       # the tool FAILS and still prints this
-            return subprocess.CompletedProcess(argv, verdict[0], verdict[1], b"")
+        if isinstance(verdict, tuple):                       # the tool FAILS and still prints this (and, third, says this)
+            return subprocess.CompletedProcess(argv, verdict[0], verdict[1], verdict[2] if len(verdict) > 2 else b"")
         if verdict is not None:
             return subprocess.CompletedProcess(argv, verdict, b"", b"")
         return self.tpm(argv, **kw)
@@ -797,11 +814,75 @@ class RecordWrites(unittest.TestCase):
             hw.value()
         self.assertEqual(hw.remains(), (None, [(0, "00" * 32), (0, "00" * 32)]))
 
+    def test_a_failed_read_names_the_tpm_s_reason_in_the_refusal_and_the_journal(self):
+        """#448/#450: an intermittent "cannot read 8 bytes" in CI said nothing of why. The refusal now ends with the last
+        line tpm2_nvread printed; the journal keeps all of it (_said). The Go reader appends the same suffix, which is
+        what highwater-v1.json holds both to."""
+        import contextlib
+        import io
+        hw = self.defined()
+        said = b"WARNING:esys:src/tss2-esys/api/Esys_NV_Read.c:311:Esys_NV_Read_Finish() Received a non-TPM Error\nERROR: TPM_RC_RETRY"
+        for index, reason in (("0x1500016", "cannot read 8 bytes from NV index 0x1500016"),
+                              ("0x150001b", "cannot read 48 bytes from the record index 0x150001b")):
+            with self.subTest(index):
+                self.fault = lambda argv, index=index: (1, b"", said) if argv[:2] == ["tpm2_nvread", index] else None
+                journal = io.StringIO()
+                with contextlib.redirect_stderr(journal), self.assertRaises(m.Refused) as caught:
+                    hw.unusable()
+                self.assertTrue(str(caught.exception).startswith(reason), str(caught.exception))
+                self.assertTrue(str(caught.exception).endswith(" (TPM: ERROR: TPM_RC_RETRY)"), str(caught.exception))
+                self.assertNotIn("Received a non-TPM Error", str(caught.exception))   # the last line only
+                self.assertIn("regalia: tpm2_nvread %s failed (exit 1, 0 bytes out): " % index, journal.getvalue())
+                self.assertIn("Received a non-TPM Error | ERROR: TPM_RC_RETRY", journal.getvalue())
+        self.fault = lambda argv: None
+        # a run that gives text, not bytes (text=True, a fake), is named all the same (95's read)
+        journal = io.StringIO()
+        with contextlib.redirect_stderr(journal):
+            m._said("nvread", "0x1500016", subprocess.CompletedProcess(["tpm2_nvread"], 1, "", "ERROR: TPM_RC_YIELDED\n"))
+        self.assertIn("regalia: tpm2_nvread 0x1500016 failed (exit 1, 0 bytes out): ERROR: TPM_RC_YIELDED", journal.getvalue())
+
+    def test_the_refusal_s_tpm_reason_is_one_bounded_line_or_the_byte_count(self):
+        """_why: the last non-empty line, at most 200 characters, decoded with replacement; with no text, how many bytes
+        came back. A refusal that says nothing new is what #450 was."""
+        done = lambda out, err: subprocess.CompletedProcess(["tpm2_nvread"], 1, out, err)
+        self.assertEqual(m._why(done(b"", b"first\nERROR: TPM_RC_RETRY\n\n"), 8), " (TPM: ERROR: TPM_RC_RETRY)")
+        self.assertEqual(m._why(done(b"", "text, not bytes\n"), 8), " (TPM: text, not bytes)")
+        self.assertEqual(m._why(done(b"\0" * 3, b""), 8), " (TPM: 3 bytes, not 8)")
+        self.assertEqual(m._why(done(None, None), 48), " (TPM: 0 bytes, not 48)")
+        # the bytes came back and the tool still failed, saying nothing: the exit status, not "48 bytes, not 48" (#568)
+        self.assertEqual(m._why(done(b"\0" * 48, b""), 48), " (TPM: exit 1, no output)")
+        self.assertEqual(m._why(done(b"", b"\xff" + b"x" * 300), 8), " (TPM: %s)" % ("x" * 200))
+        self.assertEqual(m._why(done(b"", b"bad \xff byte"), 8), " (TPM: bad \ufffd byte)")
+
+    def test_the_tpm_reason_vector_is_what_why_decides(self):
+        """tests/vectors/tpm-reason-v1.json, which the Go reader replays too (TestTheTPMReasonIsTheSameRuleInBoth): a
+        change to _why fails here until the vector is regenerated, and then fails in Go until tpmReason follows. No
+        suffix may carry a C0 or C1 control, whatever the tool printed."""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors", "tpm-reason-v1.json")
+        with open(path, encoding="utf-8") as f:
+            cases = json.load(f)["cases"]
+        self.assertGreaterEqual(len(cases), 10)
+        for c in cases:
+            with self.subTest(c["name"]):
+                done = subprocess.CompletedProcess(["tpm2_nvread"], 1, b"\0" * c["stdout_len"], bytes.fromhex(c["stderr"]))
+                self.assertEqual(m._why(done, c["size"]), c["suffix"])
+                self.assertIsNone(m._UNPRINTABLE.search(c["suffix"]), c["suffix"])
+
+    def test_a_read_remains_cannot_make_names_the_tpm_s_reason(self):
+        """remains() (a re-anchor's read, with the owner's authorization as the fallback) refuses with the reason too."""
+        import contextlib
+        import io
+        hw = self.defined()
+        self.fault = lambda argv: (1, b"", b"ERROR: TPM_RC_YIELDED") if argv[:2] == ["tpm2_nvread", "0x1500016"] else None
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(m.Refused) as caught:
+            hw.remains()
+        self.assertIn("what the anchor holds cannot be known (fail closed) (TPM: ERROR: TPM_RC_YIELDED)", str(caught.exception))
+
     def test_a_record_read_that_fails_is_refused_whatever_it_printed(self):
         hw = self.defined()
         whole = m.HighWater.slot_bytes(0, "00" * 32)
         self.fault = lambda argv: (1, whole) if argv[:2] == ["tpm2_nvread", "0x150001a"] else None
-        with self.assertRaisesRegex(m.Refused, "cannot read 48 bytes from the record index 0x150001a"):
+        with self.assertRaisesRegex(m.Refused, r"cannot read 48 bytes from the record index 0x150001a: .* \(TPM: exit 1, no output\)$"):
             hw.record()
 
     def defined(self):
@@ -1126,6 +1207,110 @@ class PolicyLayout(unittest.TestCase):
         self.assertEqual((hw.value(), hw.unusable(), hw.record()), (4, None, (4, self.digest(4))))
         # the slot of another's policy was deleted and defined again, as this software defines one today
         self.assertNotIn("0x150001b", self.tpm.policies)
+
+
+class PolicyOnlyUnderV4(unittest.TestCase):
+    """#242 B3: under a v4 chain tip (production) the anchor is written by policy only: an owner-written counter or slot is
+    Unusable, which a re-anchor repairs; under v1-v3 (a lab image's chain) both layouts read. The tip's schema is the one
+    fact the Python and the Go initrd both hold (24); the Store judges by its own verified chain's tip."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.tpm = FakeTpm()
+        self.digest = lambda epoch: "%02x" % epoch * 32 if epoch else "00" * 32
+        first = m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.tpm)
+        first.define()
+        first.anchor(3, self.digest)
+
+    def hw(self, schema, **kw):
+        return m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.tpm, schema=schema, **kw)
+
+    def test_owner_written_reads_under_v1_to_v3_and_with_no_chain(self):
+        for schema in (m.SCHEMA, m.SCHEMA_V2, m.SCHEMA_V3, None):
+            with self.subTest(schema=schema):
+                self.assertEqual((self.hw(schema).value(), self.hw(schema).unusable()), (3, None))
+
+    def test_owner_written_is_unusable_under_v4(self):
+        with self.assertRaises(m.Unusable) as caught:
+            self.hw(m.SCHEMA_V4).value()
+        self.assertEqual(str(caught.exception), "NV index 0x1500016 is owner-written: under regalia.membership/v4 the anchor is written by "
+                         "policy only (re-anchor it)")
+        self.assertIn("is owner-written", self.hw(m.SCHEMA_V4).unusable())        # what a re-anchor is for
+
+    def test_the_tip_is_asked_for_once_and_only_for_an_owner_written_index(self):
+        asked = []
+        for index in ("0x1500016", "0x150001a", "0x150001b"):
+            self.tpm.nv[index][0] |= FakeTpm.BITS["policywrite"]
+            self.tpm.policies[index] = POLICY
+        hw = self.hw(lambda: asked.append(1) or m.SCHEMA_V4, policy=POLICY)
+        self.assertEqual((hw.value(), hw.record()[0], asked), (3, 3, []))              # every index policy-written: never asked
+        self.tpm.nv["0x150001b"][0] &= ~FakeTpm.BITS["policywrite"]                   # one owner-written slot
+        hw = self.hw(lambda: asked.append(1) or m.SCHEMA_V4, policy=POLICY)
+        self.assertIn("0x150001b is owner-written", hw.unusable())
+        self.assertEqual(len(asked), 1)
+
+    def test_a_re_anchor_under_v4_lays_the_anchor_down_by_policy(self):
+        hw = self.hw(m.SCHEMA_V4, define_policy=POLICY)
+        self.assertIsNotNone(hw.unusable())
+        hw.redefine(4, self.digest(4))
+        self.assertEqual((self.hw(m.SCHEMA_V4, policy=POLICY).value(), self.hw(m.SCHEMA_V4, policy=POLICY).unusable()), (4, None))
+        self.assertEqual({self.tpm.policies.get(i) for i in ("0x1500016", "0x150001a", "0x150001b")}, {POLICY})
+
+    def test_the_store_judges_by_its_own_chain_s_tip(self):
+        """A Store whose verified chain is v4 refuses an owner-written anchor though its caller named no schema."""
+        import tests.test_baremetal_membership_v4 as v4
+        first = m.HighWater("0x1500030", lock_path=self.d + "/s.lock", run=self.tpm)
+        first.define()
+        envelope = sign(v4.manifest4(1, "", v4.nodes4()), ROOT)
+        with self.assertRaisesRegex(m.Unusable, "is owner-written: under regalia.membership/v4"):
+            m.Store(self.d + "/membership.json", ROOT_PUB, m.HighWater("0x1500030", lock_path=self.d + "/s.lock", run=self.tpm)).commit(envelope)
+
+    def test_a_move_to_v4_over_an_owner_written_anchor_is_refused_before_the_disk(self):
+        """ed's ordering: a node whose anchor is owner-written cannot take the root's v3 -> v4 step: refused with nothing
+        moved (the disk still at v3, the anchor where it was), not left with a v4 chain over an anchor it then refuses.
+        Re-anchoring it by policy first is the way (MEMBERSHIP-RECOVERY.md). The same for sync's store, which never
+        anchors (#66 B3, anchors=False): its disk does not move to a v4 tip the ESP advance would then refuse to anchor."""
+        import tests.test_baremetal_membership_v4 as v4
+        lab = [{k: x for k, x in n.items() if k != "signing_key"} for n in v4.nodes4()]
+        m3 = v4.manifest3(1, "", lab)
+        for anchors, index in ((True, "0x1500030"), (False, "0x1500040")):
+            with self.subTest(anchors=anchors):
+                m.HighWater(index, lock_path=self.d + "/s.lock", run=self.tpm).define()
+                path = "%s/membership-%s.json" % (self.d, anchors)
+                store = m.Store(path, ROOT_PUB, m.HighWater(index, lock_path=self.d + "/s.lock", run=self.tpm), anchors=anchors)
+                store.commit(sign(m3, ROOT))
+                with open(path, "rb") as f:
+                    before = f.read()
+                with self.assertRaisesRegex(m.Unusable, "is owner-written: under regalia.membership/v4"):
+                    store.commit(sign(v4.manifest4(2, m.digest(m3), v4.nodes4()), ROOT))
+                with open(path, "rb") as f:
+                    self.assertEqual(f.read(), before)
+                self.assertEqual(m.HighWater(index, lock_path=self.d + "/s.lock", run=self.tpm, schema=m.SCHEMA_V3).value(),
+                                 1 if anchors else 0)
+                # regalia-kms-ed: the refused judgement is undone, so this store's anchor still reads for the chain it holds
+                self.assertEqual(store.hw.value(), 1 if anchors else 0)
+
+    def test_a_v4_chain_is_not_restored_over_an_owner_written_anchor(self):
+        """regalia-kms-ed: restore() judges by the chain it fetched, not by what the disk held (a rolled-back or lost file
+        names no schema, or an older one): a v4 chain over an owner-written anchor is refused, the disk untouched, for
+        both stores; the node is re-anchored instead (reanchor)."""
+        import tests.test_baremetal_membership_v4 as v4
+        lab = [{k: x for k, x in n.items() if k != "signing_key"} for n in v4.nodes4()]
+        m3 = v4.manifest3(1, "", lab)
+        fetched = [sign(m3, ROOT), sign(v4.manifest4(2, m.digest(m3), v4.nodes4()), ROOT)]
+        for anchors, index in ((True, "0x1500050"), (False, "0x1500060")):
+            with self.subTest(anchors=anchors):
+                hw = m.HighWater(index, lock_path=self.d + "/r.lock", run=self.tpm)
+                hw.define()
+                hw.anchor(1, m.Store._digests([m3]))
+                path = "%s/restored-%s.json" % (self.d, anchors)
+                store = m.Store(path, ROOT_PUB, m.HighWater(index, lock_path=self.d + "/r.lock", run=self.tpm), anchors=anchors)
+                with self.assertRaisesRegex(m.Unusable, "is owner-written: under regalia.membership/v4"):
+                    store.restore(fetched)
+                self.assertFalse(os.path.exists(path))
+                self.assertEqual(m.HighWater(index, lock_path=self.d + "/r.lock", run=self.tpm, schema=m.SCHEMA_V3).value(), 1)
+                self.assertEqual(store.hw.value(), 1)          # the refused judgement undone (regalia-kms-ed)
 
 
 class TornWrites(unittest.TestCase):

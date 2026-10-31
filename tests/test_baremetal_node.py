@@ -36,14 +36,15 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
-        for sub in ("state", "admission", "run", "etc"):
+        for sub in ("state", "admission", "run", "etc", "log-admission"):
             os.mkdir(os.path.join(self.d, sub), 0o755)
         with open(os.path.join(self.d, "etc", "site.json"), "w") as f:
             json.dump(SITE, f)
         with open(os.path.join(self.d, "etc", "wg-service.key"), "w") as f:
             f.write(PRIVATE + "\n")
-        self.cfg = {"schema": node.SCHEMA, "node_id": "a", "site": self.d + "/etc/site.json", "root_key": ROOT, "tcti": None,
+        self.cfg = {"schema": node.SCHEMA, "node_id": "a", "site": self.d + "/etc/site.json", "root_key": ROOT, "tcti": "device:/dev/tpmrm0",
                     "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "nv_signing": "0x0150001c", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
+                    "admission_log_dir": self.d + "/log-admission",
                     "wg_service_key": self.d + "/etc/wg-service.key", "measurements": self.d + "/etc/measurements.json",
                     "pcrs": [7, 11], "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
         self.tpm = hbt.FakeTpm()
@@ -62,6 +63,8 @@ class Case(unittest.TestCase):
 class Configuration(Case):
     def test_the_configuration_is_exact(self):
         self.assertEqual(node.validate(dict(self.cfg)), self.cfg)
+        for tcti in ("device:/dev/tpmrm0", "device:/dev/tpmrm3"):                          # any kernel resource manager
+            self.assertEqual(node.validate(dict(self.cfg, tcti=tcti))["tcti"], tcti)
         path = os.path.join(self.d, "etc", "node.json")
         with open(path, "w") as f:
             json.dump(self.cfg, f)
@@ -71,12 +74,23 @@ class Configuration(Case):
                 ("another schema", {"schema": "regalia.node/v2"}, "schema must be regalia.node/v1"),
                 ("a node ID in capitals", {"node_id": "A"}, "node_id is not a node ID"),
                 ("a root key in capitals", {"root_key": ROOT.upper()}, "root_key"),
-                ("a TCTI with a space", {"tcti": "swtpm:path=/x y"}, "tcti must be null"),
+                ("a TCTI with a space", {"tcti": "swtpm:path=/x y"}, "tcti must be device:/dev/tpmrm0"),
+                # regalia-afi (#592): only the kernel's resource manager, or a private simulator; never null (tpm2-tss's own
+                # search order would decide, and could reach the raw /dev/tpm0 where /dev/tpmrm0 is missing), never a raw device
+                ("a null TCTI", {"tcti": None}, "tcti must be device:/dev/tpmrm0"),
+                ("the raw TPM device", {"tcti": "device:/dev/tpm0"}, "tcti must be device:/dev/tpmrm0"),
+                ("a raw TPM device of another number", {"tcti": "device:/dev/tpm3"}, "tcti must be device:/dev/tpmrm0"),
+                ("a resource manager by another path", {"tcti": "device:/tmp/tpmrm0"}, "tcti must be device:/dev/tpmrm0"),
+                ("tabrmd, which the image does not ship", {"tcti": "tabrmd"}, "refused on a node"),
+                ("tabrmd on the system bus", {"tcti": "tabrmd:bus_type=system"}, "refused on a node"),
+                ("a device TCTI with no path", {"tcti": "device"}, "tcti must be device:/dev/tpmrm0"),
                 ("an NV index of the wrong range", {"nv_epoch": "0x81000001"}, "nv_epoch must be an NV index"),
                 ("an NV index in capitals", {"nv_heartbeat": "0x0150001A"}, "nv_heartbeat must be an NV index"),
                 ("overlapping indices", {"nv_heartbeat": "0x01500017"}, "must not overlap"),
                 ("a relative path", {"state_dir": "state"}, "state_dir must be an absolute, normalised path"),
-                ("one directory for two writers", {"admission_dir": "/x", "state_dir": "/x"}, "must be three directories"),
+                ("one directory for two writers", {"admission_dir": "/x", "state_dir": "/x"}, "must be four directories"),
+                ("the admission trail in its state directory", {"admission_log_dir": "/x", "admission_dir": "/x"}, "must be four directories"),
+                ("a relative admission log directory", {"admission_log_dir": "log"}, "admission_log_dir must be an absolute, normalised path"),
                 ("a path with ..", {"site": "/etc/regalia/../shadow"}, "site must be an absolute, normalised path"),
                 ("no PCRs", {"pcrs": []}, "pcrs must be"), ("PCRs out of order", {"pcrs": [11, 7]}, "pcrs must be"),
                 ("a PCR as true", {"pcrs": [True]}, "pcrs must be"), ("PCR 24", {"pcrs": [24]}, "pcrs must be"),
@@ -102,6 +116,129 @@ class Configuration(Case):
         self.assertEqual(sorted(n.sources(self.m1)), ["b", "c"])
         self.assertEqual(sorted(n.peers(hbt.manifest(c="REVOKED_STOLEN"))), ["b"])          # a terminal node is nobody's source
         self.refused("is not in the manifest", n.own_address, dict(self.m1, nodes=self.m1["nodes"][1:]))
+
+
+class AdmissionTrail(Case):
+    """#349: the admission trail lives in a directory of its own (admission_log_dir, /var/log/regalia-admission), so the
+    admission service's state directory can be 0700. No node has run an image yet (#61): a trail with lines still at the
+    old path (admission_dir/audit.jsonl, or its archives) is refused, never forked, since a fresh chain at the new path
+    would begin at seq 1 under a collector stream already further on, and strand the old file's unshipped lines."""
+
+    def test_the_trail_is_in_its_own_directory(self):
+        self.assertEqual(self.node().admission_trail(), self.d + "/log-admission/audit.jsonl")
+
+    def test_lines_at_the_old_path_are_refused_not_forked(self):
+        old = self.d + "/admission/audit.jsonl"
+        open(old, "w").close()                                                   # empty: nothing to strand
+        self.assertEqual(self.node().admission_trail(), self.d + "/log-admission/audit.jsonl")
+        with open(old, "w") as f:
+            f.write('{"event": "admission-serving", "seq": 1, "prev": ""}\n')
+        with self.assertRaisesRegex(node.Refused, "the admission trail still has lines at %s: move it, with its archives, to %s/log-admission" % (old, self.d)):
+            self.node().admission_trail()
+        os.unlink(old)
+        open(old + ".1", "w").close()                                            # an archive alone is a trail that was rotated
+        with self.assertRaisesRegex(node.Refused, "still has lines at"):
+            self.node().admission_trail()
+
+
+class SimulatorTcti(Case):
+    """b9 on #596: a simulator TCTI is a SOCKET, which no unit's DevicePolicy constrains, so a node.json naming one binds
+    the node to a software TPM with no hardware root. It is accepted only under a test-only switch that no unit, image or
+    package sets (the e2e fixtures set it); without it, it is refused and the refusal says why."""
+
+    def test_refused_without_the_switch_and_accepted_with_it(self):
+        from unittest import mock
+        for tcti in ("swtpm:path=/tmp/x/tpm.sock", "mssim:host=localhost,port=2321", "tabrmd:bus_type=system", "tabrmd"):
+            with self.subTest(tcti), mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(node.SIMULATOR_SWITCH, None)
+                with self.assertRaisesRegex(node.Refused, "a test fixture's TPM.*refused on a node.*%s=1" % node.SIMULATOR_SWITCH):
+                    node.validate(dict(self.cfg, tcti=tcti))
+                os.environ[node.SIMULATOR_SWITCH] = "1"
+                self.assertEqual(node.validate(dict(self.cfg, tcti=tcti))["tcti"], tcti)
+                os.environ[node.SIMULATOR_SWITCH] = "yes"                      # only exactly 1
+                with self.assertRaisesRegex(node.Refused, "refused on a node"):
+                    node.validate(dict(self.cfg, tcti=tcti))
+
+    def test_nothing_shipped_sets_the_switch(self):
+        """The units, the image, the packaging and the deploy tree never mention it: only tests and e2e may."""
+        import pathlib as pl
+        root = pl.Path(__file__).resolve().parents[1]
+        found = [str(p.relative_to(root)) for p in sorted((root / "deploy").rglob("*")) if p.is_file() and p.suffix != ".pyc"
+                 and node.SIMULATOR_SWITCH in p.read_text(errors="replace")]
+        self.assertEqual(found, ["deploy/baremetal/membership.py"])                   # its constant, and nowhere else
+        self.assertEqual((root / "deploy" / "baremetal" / "membership.py").read_text().count(node.SIMULATOR_SWITCH), 1)
+
+    def test_a_step_handed_to_regalia_sync_carries_the_switch_only_when_it_is_set(self):
+        """`runuser … env -i` drops everything: a fixture's handed-over step reloads its swtpm node.json, so the switch
+        rides along, and only when the caller has it (never on a host, where nothing sets it)."""
+        from unittest import mock
+        from deploy.baremetal import membership as ms
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(node.SIMULATOR_SWITCH, None)
+            self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"])
+            os.environ[node.SIMULATOR_SWITCH] = "yes"
+            self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"])
+            os.environ[node.SIMULATOR_SWITCH] = "1"
+            os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
+            self.assertEqual(ms.handover_env(), ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", node.SIMULATOR_SWITCH + "=1"])
+
+    def test_a_tpm_that_does_not_answer_says_when_the_session_bus_is_missing(self):
+        """TEAMLEAD-grafana on #605: a dropped address fails closed at the first TPM call, and that failure names it."""
+        from unittest import mock
+        from deploy.baremetal import membership as ms
+        tcti = "tabrmd:bus_name=com.intel.tss2.Tabrmd.b,bus_type=session"
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DBUS_SESSION_BUS_ADDRESS", None)
+            hint = ms.session_bus_hint(tcti)
+            self.assertIn("no DBUS_SESSION_BUS_ADDRESS", hint)
+            self.assertIn(tcti, hint)
+            self.assertIn(node.SIMULATOR_SWITCH, hint)
+            hw = ms.HighWater("0x1500016", run=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, b"", b"no bus"), tcti=tcti)
+            with self.assertRaisesRegex(ms.Refused, r"^the TPM does not answer \(tpm2_getcap handles-nv-index failed\): the high-water anchor is unavailable \(fail closed\) \| this process has no DBUS_SESSION_BUS_ADDRESS"):
+                hw._defined()
+            # not said when it is not the cause: a bus set, a system-bus or device tcti
+            os.environ["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/x"
+            self.assertEqual(ms.session_bus_hint(tcti), "")
+            os.environ.pop("DBUS_SESSION_BUS_ADDRESS")
+            for other in ("tabrmd:bus_type=system", "device:/dev/tpmrm0", "swtpm:path=/x", None):
+                with self.subTest(tcti=other):
+                    self.assertEqual(ms.session_bus_hint(other), "")
+            # the vector's refusal (no tcti: the Go reader's too) is byte-for-byte what it was
+            hw = ms.HighWater("0x1500016", run=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, b"", b"no bus"))
+            with self.assertRaises(ms.Refused) as caught:
+                hw._defined()
+            self.assertEqual(str(caught.exception), "the TPM does not answer (tpm2_getcap handles-nv-index failed): the high-water anchor is "
+                             "unavailable (fail closed)")
+
+    def test_the_session_bus_rides_along_only_under_the_switch_and_only_as_a_socket_path(self):
+        """regalia-afi (#605's run 40456967936): a fixture node's tabrmd tcti names no bus address, so a handed-over step
+        (deliver, enrol, owner, recover, revoke) reached its tpm2-abrmd only if the address rode along. Only under the
+        switch, which nothing on a host sets, and only a unix socket path: nothing else of root's environment."""
+        from unittest import mock
+        from deploy.baremetal import membership as ms
+        base = ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"]
+        bus = "unix:path=/tmp/three-node-x/b/dbus/bus"
+        with mock.patch.dict(os.environ, {"DBUS_SESSION_BUS_ADDRESS": bus}, clear=False):
+            os.environ.pop(node.SIMULATOR_SWITCH, None)
+            self.assertEqual(ms.handover_env(), base)                  # a host: never, whatever root's session has
+            os.environ[node.SIMULATOR_SWITCH] = "1"
+            self.assertEqual(ms.handover_env(), base + [node.SIMULATOR_SWITCH + "=1", "DBUS_SESSION_BUS_ADDRESS=" + bus])
+            # env -i still strips everything else: of a caller's whole environment, the bus is the one extra variable
+            os.environ.update({"TPM2TOOLS_TCTI": "swtpm:path=/x", "HOME": "/root", "LD_PRELOAD": "/x.so", "XDG_RUNTIME_DIR": "/run/user/0",
+                               "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/x", "PYTHONPATH": "/x", "DBUS_SESSION_BUS_ADDRESS": bus})
+            carried = ms.handover_env()
+            self.assertEqual(carried, base + [node.SIMULATOR_SWITCH + "=1", "DBUS_SESSION_BUS_ADDRESS=" + bus])
+            self.assertEqual([v.split("=", 1)[0] for v in carried], ["PATH", "LC_ALL", node.SIMULATOR_SWITCH, "DBUS_SESSION_BUS_ADDRESS"])
+            for other in ("unix:abstract=/x", "tcp:host=127.0.0.1,port=1", "unix:path=relative/bus", "unix:path=/a,guid=1",
+                          "unix:path=/a;unix:path=/b", "unix:path=/a b", ""):
+                with self.subTest(address=other):
+                    os.environ["DBUS_SESSION_BUS_ADDRESS"] = other
+                    self.assertEqual(ms.handover_env(), base + [node.SIMULATOR_SWITCH + "=1"])
+        import pathlib as pl
+        root = pl.Path(__file__).resolve().parents[1]
+        literal = [str(p.relative_to(root)) for p in sorted((root / "deploy" / "baremetal").glob("*.py"))
+                   if '"env", "-i", "PATH=' in p.read_text()]
+        self.assertEqual(literal, [], "every handover to regalia-sync builds its environment with membership.handover_env()")
 
 
 class Indices(unittest.TestCase):

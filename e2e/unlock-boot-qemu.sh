@@ -126,7 +126,12 @@ if [ -z "$SNAPSHOT" ] && [[ "${REGALIA_BOOT_MIRROR:-}" =~ snapshot\.debian\.org/
 python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))["root_public"]; open(sys.argv[2],"wb").write(json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode())' \
   tests/vectors/highwater-v1.json "$W/root-key.json"
 deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --keyring "$KEYRING" --root-key "$W/root-key.json" --out "$W/initrd-build" \
-  || { echo "unlock-boot-qemu: the initrd builder failed"; exit 2; }
+  || { echo "unlock-boot-qemu: the initrd builder failed"
+       # a mismatched inventory leaves its three files in --out: keep them with the diagnostics CI uploads (#620's run)
+       if [ -n "${REGALIA_DIAG_DIR:-}" ]; then
+         mkdir -p "$REGALIA_DIAG_DIR"; cp -- "$W"/initrd-build/initrd-inventory.* "$W"/initrd-build/initrd-dracut.log "$REGALIA_DIAG_DIR"/ 2>/dev/null || true
+       fi
+       exit 2; }
 BIN="$W/initrd-build/regalia-unlock"          # the client the builder compiled: the initrd's, and the host's
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
 cp /etc/resolv.conf "$ROOT/etc/resolv.conf"
@@ -208,7 +213,7 @@ git -C "$ROOT/tmp/uki/src" checkout --quiet --detach FETCH_HEAD
 cp -r "$W/keys" "$ROOT/tmp/uki/"
 cp "$W/initrd-build/initrd-build.json" "$ROOT/tmp/uki/initrd-build.json"      # the initrd's build record, an input (#248)
 cp "$W/root-key.json" "$ROOT/tmp/uki/root-key.json"                           # the membership root it trusts, an input (#156)
-printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0}" > "$ROOT/tmp/uki/cmdline"
+printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0}" > "$ROOT/tmp/uki/cmdline"
 IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmdline --os-release /usr/lib/os-release --uname $KVER"
 IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub --initrd-build /tmp/uki/initrd-build.json --root-key /tmp/uki/root-key.json"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"
@@ -250,8 +255,9 @@ chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki bui
 # #75 TIER Q, Q1: AN IMAGE WHOSE KERNEL DIFFERS. The same kernel with bytes appended after its PE image, which the
 # loader ignores (it boots identically) and systemd-stub measures with the whole .linux section into PCR 11: only the
 # measurement differs, the property under test (regalia-kms-d9). A real second kernel would not do: the initrd's
-# modules are built for this one. Its command line has NO systemd.journald.forward_to_console=1 (a production
-# image's has none either, #413): what its console shows is what the units themselves put there.
+# modules are built for this one. Its command line has no systemd.journald.forward_to_console=1, as the default
+# REGALIA_BOOT_CMDLINE has none since #413 (nor a production image's); the sed below strips it from this image's
+# command line even when an override of REGALIA_BOOT_CMDLINE adds it back. The other boots take an override as given.
 { cat "$ROOT/boot/vmlinuz-$KVER"; head -c 4096 /dev/zero | tr '\0' 'R'; } > "$ROOT/tmp/uki/vmlinuz-k2"
 sed 's/ systemd\.journald\.forward_to_console=1//' "$ROOT/tmp/uki/cmdline" > "$ROOT/tmp/uki/cmdline-k2"
 IN_K2="${IN/--linux \/boot\/vmlinuz-$KVER /--linux /tmp/uki/vmlinuz-k2 }"
@@ -293,11 +299,23 @@ cryptsetup close regalia-boot-build
 losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 
+python3 -BI -c 'import sys; sys.path.insert(0, "e2e/lib"); import tpmdiag; print(tpmdiag.versions())' || true
 echo "### twelve boots"
-out="$(REGALIA_EXPECT_QEMU=1 REGALIA_EXPECT_KVM="${REGALIA_EXPECT_KVM:-0}" REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot </dev/null 2>&1)" && rc=0 || rc=$?
+out="$(REGALIA_EXPECT_QEMU=1 REGALIA_EXPECT_KVM="${REGALIA_EXPECT_KVM:-0}" REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot.OnQemu </dev/null 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out"
 if [ "$rc" != 0 ]; then
   for log in "$W"/console-*.log; do [ -e "$log" ] && { echo "----- $(basename "$log") (last 80 lines)"; tail -80 "$log"; }; done
+  # regalia-zga/a0y: $W is removed on exit, so a failing run's consoles and swtpm logs (level 20) are copied out first,
+  # for the job to upload (.github/actions/tpm-diagnostics)
+  if [ -n "${REGALIA_DIAG_DIR:-}" ]; then
+    mkdir -p "$REGALIA_DIAG_DIR"; cp -- "$W"/console-*.log "$W"/swtpm-*.log "$REGALIA_DIAG_DIR"/ 2>/dev/null || true
+  fi
+  # regalia-a0y: a boot whose firmware could not measure is the host's QEMU/swtpm, named apart from a product failure
+  faulted="$(grep -l 'Failed to measure data for event [0-9]*: 0x8000000000000007' "$W"/console-*.log 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "$faulted" != 0 ]; then
+    echo "unlock-boot-qemu: FAILED: HOST TPM EMULATION FAULT (regalia-a0y) in $faulted boot(s): the host's QEMU/swtpm dropped a measurement, not the product"
+    exit 1
+  fi
   echo "unlock-boot-qemu: FAILED"; exit 1
 fi
 # (the test prints each boot's console digest between its name and its "ok", so the two are not on one line)

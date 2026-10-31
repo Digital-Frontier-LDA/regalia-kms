@@ -1,7 +1,8 @@
 # Bare-metal KMS host commissioning (HPE ProLiant DL360 Gen9)
 
 ADR-0002 D21: the KMS runs on **dedicated bare metal with a discrete TPM 2.0**, not as a Proxmox
-guest. Three DL360 Gen9 with the HPE TPM 2.0 module: Lisbon, Porto, and a spare (regalia#46).
+guest. Three DL360 Gen9 with the HPE TPM 2.0 module, one per site, all three active (D32): Lisbon, Porto and
+Coimbra (regalia#46).
 
 Commissioning has two halves:
 - **Firmware and hardware** (below): BIOS/RBSU and iLO settings the operating system cannot read.
@@ -32,7 +33,8 @@ Commissioning has two halves:
 | Setting | Value | Evidence field |
 |---|---|---|
 | Boot mode | **UEFI** (TPM 2.0 needs it; not Legacy BIOS) | measured: `uefi_boot` |
-| Secure Boot | **Enabled** (Debian 13's shim is signed by Microsoft's UEFI CA) | measured: `secure_boot_enabled` |
+| Secure Boot | **Enabled** | measured: `secure_boot_enabled` |
+| Secure Boot db | the factory keys **kept**, and **our** Secure Boot certificate **appended** (below) | measured: `secure_boot_db_has_image_cert`, against `host.secure_boot_cert_sha256` |
 | TPM | **TPM 2.0 visible and enabled**; SHA-256 PCR bank active | measured: `tpm2_present`, `tpm_sha256_bank` |
 | TPM module | **never moved**: the HPE module is bound to its system board | — |
 | AC power recovery ("Automatic Power-On") | **Restore last state / always on** | attested: `ac_power_recovery` |
@@ -40,6 +42,26 @@ Commissioning has two halves:
 | Chassis intrusion | the detection kit **fitted and armed** (it is optional on Gen9: check) | attested: `chassis_intrusion_armed` |
 | iLO 4 | default password changed; on an **isolated management network**, or disabled | attested: `ilo_isolated_or_disabled` |
 | Internal USB port | the **Nitrokey HSM 2** goes here, inside the chassis | measured: `hsm_token_attached` (USB 20a0:4230 in sysfs; path pinned in the evidence) |
+
+**Our certificate in db (kms#543).** Nothing boots through a shim: `install-host.sh` makes the firmware
+entry for the signed UKI itself, and the UKI carries OUR Secure Boot signature (`uki.py sign`, the third
+key). A Gen9's factory db holds HPE's and Microsoft's keys only, and refuses it under Secure Boot (shown
+under OVMF in kms#543: the same image boots once its certificate is in db, and a foreign-signed one is
+still refused). So:
+
+- **Keep the factory keys.** The P440ar and the NICs' option ROMs are signed through Microsoft's UEFI
+  CA: a db without it does not load them under Secure Boot.
+- **Append our certificate in RBSU,** from a file on iLO virtual media (Secure Boot configuration,
+  db, enrol a signature; the menu path is HPE's documentation and has NOT yet been walked on a host).
+  iLO 4's Redfish SecureBoot resource only resets or clears keys, so this is a console step, once per host.
+- **Before the first seal:** a db change moves PCR 7, which the PINs and the disk paths are bound to
+  (section 4). The order is install-host, then db, then reboot, then the evidence and the seals.
+- **Record it** as `host.secure_boot_cert_sha256`: the signed image record's
+  `signed.secure_boot_cert_sha256` (the SHA-256 of the certificate's DER). The probe reads db
+  (efivarfs) and fails unless an X.509 entry has that digest; a db that does not parse fails too.
+
+Rotating the Secure Boot signing key is then a console visit per host. Owning PK and KEK too would make it
+an authenticated update from the OS, at the cost of a key ceremony; it is not part of this step.
 
 ## 3. Operating system (Debian 13)
 
@@ -102,7 +124,7 @@ Commissioning has two halves:
 - **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`).
   This is for **attestation**: TPM quotes over PCR 10 and the IMA log let another host or an
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
-  `ima_policy_loaded`, which also requires the newest IMA entry for `/usr/local/sbin/regalia-kms` to
+  `ima_policy_loaded`, which also requires the newest IMA entry for `/usr/sbin/regalia-kms` to
   carry the digest of the binary there now (start the service first).
 - **The PIN, and the TPM's half of each disk path, are sealed to PCR 7** (Secure Boot state and the keys
   it trusts). A kernel or KMS update does not change PCR 7, so nothing is stranded; turning Secure Boot
@@ -166,9 +188,9 @@ Commissioning has two halves:
   in `/etc/hosts`. The profile is parser-checked only, so load it in complain mode first, correct it
   from the kernel log, and only then enforce (the full sequence is in the file's header):
   ```sh
-  sudo install -m 0644 deploy/baremetal/apparmor/usr.local.sbin.regalia-kms /etc/apparmor.d/
-  sudo apparmor_parser -r -C /etc/apparmor.d/usr.local.sbin.regalia-kms   # complain: logs, refuses nothing
-  sudo apparmor_parser -r /etc/apparmor.d/usr.local.sbin.regalia-kms      # enforce, once the log is clean
+  sudo install -m 0644 deploy/baremetal/apparmor/usr.sbin.regalia-kms /etc/apparmor.d/
+  sudo apparmor_parser -r -C /etc/apparmor.d/usr.sbin.regalia-kms   # complain: logs, refuses nothing
+  sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.regalia-kms      # enforce, once the log is clean
   ```
   Restart regalia-kms after each load. Measured: `kms_apparmor_enforced` (enforce mode only).
 - **Runtime admission.** A production configuration states `"runtime_admission": "required"` with
@@ -275,7 +297,7 @@ Commissioning has two halves:
   `regalia-audit-ship@time`) before it is published, as `time-authenticated` or `time-unauthenticated`
   with the reason; a transition that cannot be recorded is published as not authenticated.
   **If time is not authenticated, nothing is served:** peers authorize no unlock and issue no lease, a
-  node's own lease is not renewed, and within the lease bound (300 s) the KMS daemon stops. That is
+  node's own lease is not renewed, and within the lease bound (30 s, ADR-0002 D32) the KMS daemon stops. That is
   intended. So NTS must get out of each site: TCP 4460 to each server for the key exchange and UDP 123
   for the time itself; an outage of the NTS servers, or of that path, longer than those bounds stops the
   nodes. Proven against live chrony daemons in `e2e/authtime-chrony-nts.py`.
@@ -457,14 +479,17 @@ An update is three documents:
 3. **One node at a time.** On each node, in the order of the node IDs, `rollout.may_reboot(...)` must
    pass before the reboot: an update is approved for this node and it is not yet on NEXT; every node
    before it has been seen back on NEXT by this node's own verifier; and every peer that will have to
-   unlock it holds the new manifest and has vouched for it, in its current boot, in the last five
-   minutes (a runtime lease for this boot session). With every record current, one node can pass at
+   unlock it holds the new manifest and has vouched for it, in its current boot, within one lease
+   lifetime (30 s: a runtime lease for this boot session). With every record current, one node can pass at
    a time: the first, in order, that is not on NEXT. **The limit:** a node judges "the one before me is
    back" from its own last re-attestation of that node, which it repeats only at the next lease
    renewal. If the earlier node falls back or goes down just after, the next node may still pass for up
-   to the lease lifetime (five minutes), and two nodes can then be down together. Three cannot. So
-   wait for a node to be back and serving before starting the next, and do not treat `may_reboot` alone
-   as the interlock. A node that is down
+   to the lease lifetime (30 s), and two nodes can then be down together. Three cannot. So
+   wait for a node to be back and serving, **and then one lease more (30 s, plus a few seconds)**, before starting the next, and
+   do not treat `may_reboot` alone as the interlock. A host that has just restarted issues no lease for one
+   lease (lease v2, #489), so while the next node is down the third may get no renewal and stop serving.
+   **The same wait applies to every planned restart of a host**, not only an update: a maintenance reboot, a
+   burn-in drill, a hardware swap (KERNEL-UPDATE.md, step 3.5). A node that is down
    and must not hold the others up is taken out by a signed manifest (QUARANTINED); there is no
    unsigned way to skip it.
 4. **If the new image fails**, the node boots CURRENT again and is unlocked as before: both sets are
@@ -474,7 +499,7 @@ An update is three documents:
    the document that gives NEXT up instead), the root signs manifest N+2 for the NEXT-only document.
    From then on a node booted
    into the old image gets no unlock and no lease. A lease issued just before the retirement runs out
-   within five minutes.
+   within one lease lifetime (30 s).
 
 Both manifests can be signed in one root-key session and the second released later; if a revocation
 is published in between, the second no longer chains and is signed again.
@@ -520,7 +545,7 @@ sudo python3 -Es deploy/baremetal/host_probe.py --evidence E.json --signature E.
 It must exit 0: every measured control true; the evidence at most 24 hours old (the firmware settings
 are not re-measured, so sign fresh evidence for each run), complete, signed by the recorded key,
 attesting every firmware setting, and agreeing with every measurement (including the import key's
-fingerprint). Then an unattended
+fingerprint, and db holding the recorded Secure Boot certificate). Then an unattended
 **reboot** brings the KMS back with no one present (the disk unseals from the TPM; the PIN from the
 TPM and the host key on that disk).
 
@@ -647,8 +672,10 @@ the client are on the console with no kernel argument. It is not secret. When a 
   client read: the boot configuration (`unlock.boot_config`), the WireGuard configuration, the ruleset and
   boot.env, byte for byte what **`deploy/baremetal/bootcreds.py`**'s `render(manifest, site, device)` gives
   (`cmd/regalia-unlock/bootcfg`, held to it by a shared vector). So **a membership change does not move PCR
-  12**: only a change to the site does. Any refusal ends the render with one line; the boot mesh and the
-  client do not start, no peer is asked, and the console's prompt takes the recovery key. `esp_files(site,
+  12**: only a change to the site does. Any refusal ends the render with one line, on the console as well as
+  the initrd's journal (the unit's `StandardOutput=`/`StandardError=journal+console`, #413: a production command
+  line does not forward the journal); the boot mesh and the client do not start, no peer is asked, and the
+  console's prompt takes the recovery key. `esp_files(site,
   envelopes, root_key, device, anchor)` is the one call enrolment and the update path make: it verifies the
   chain the same way, renders what the initrd will render (refusing, e.g., a host left with no peer), and
   writes the site document and the chain, and removes the four files an earlier stage rendered onto the ESP.
@@ -673,16 +700,28 @@ the client are on the console with no kernel argument. It is not secret. When a 
     fifteen minutes behind, and `regalia-node check` prints both. regalia-esp-advance (root) writes its own
     `esp-advance.prom` at every run, success or not (`regalia_esp_advance_ok`, the anchor as it reads it, and
     `regalia_esp_boot_renderable`): `RegaliaEspAdvanceFailing` and `RegaliaNextBootNeedsRecoveryKey` do not depend
-    on sync telling the truth. **Not covered:** a compromised sync that stops publishing altogether. Then
-    regalia-esp-advance never runs, its last `ok` stays 1, and sync's own file can say anything. That is the
-    withholding a compromised sync could always do (it could refuse to commit); peers that hold a newer epoch
-    still see this node's heartbeats and leases judged under their own. **What the operator does:** read
+    on sync telling the truth. A compromised sync that stops publishing altogether is not seen on that node
+    (regalia-esp-advance never runs, its last `ok` stays 1, and sync's own file can say anything); it is seen
+    ACROSS the nodes: `RegaliaMembershipBehindFleet` and `RegaliaAnchorBehindFleet` (the root's reading of the
+    anchor, so a sync that writes its peers' epoch does not hide it) warn when a node stays 30 minutes below
+    the highest epoch its peers hold, compared within one scrape job (one cluster); the anchor rule compares
+    root-read anchors on both sides, so no peer's sync can make the honest nodes fire. A node whose sync or
+    ESP advance writes no file at all has no series here: the `*MetricsMissing` rules cover it. A retired or
+    revoked node lags by design: take it out of the scrape. **What the operator does:** read
     `journalctl -u regalia-esp-advance`, fix the cause (mount the ESP, free space), then
     `systemctl start regalia-esp-advance`; check that `regalia-node check` shows `anchor` equal to `epoch`.
     `update.py apply` refuses to reboot a node in that state, and one whose chain the initrd could not render
     (the next boot would ask for the recovery key).
-  - The run is recorded in the journal only. It has no hash-chained trail of its own (#278). The commit it
-    follows is in the sync trail.
+  - Each run is recorded in its own hash-chained trail (`/var/log/regalia-esp-advance/esp-advances.jsonl`,
+    `trails.py`, shipped by `regalia-audit-ship@esp-advances` through the group `regalia-audit-esp-advances`):
+    an `esp-advance-requested` line (epoch, manifest digest, the chain's SHA-256, whether the ESP is to be
+    rewritten, whether the next boot renders) BEFORE the ESP or the anchor changes, so a trail that cannot be
+    written changes nothing; an ALLOW line with the same facts after the anchor is checked; and a DENY line, best
+    effort, for a refusal. A crash between the two leaves a request with no outcome ("may or may not have moved;
+    the next run says"), never an ALLOW for a move that did not happen. Every run writes its pair, a run that
+    finds the ESP and the anchor already there included (one at each boot and each path trigger). A run systemd
+    refuses before it starts (`/efi` not mounted) writes no line: the unit's failure and the alerts say it.
+    `--esp-trail` names another file (the three-node fixture gives each node its own).
   - The anchor's run-time writer lock is its own (`/run/regalia-esp-advance/highwater.lock`). Enrolment and
     `reanchor.py`, run by hand, take a different lock, so do not run them while the node's units run.
   - Enrolment still anchors epoch 1 before it writes the ESP: its render verifies the chain against the anchor,
@@ -694,6 +733,25 @@ the client are on the console with no kernel argument. It is not secret. When a 
     real systemd (`e2e/node-units-systemd.py` step 7, on a plain `/efi` directory and not a FAT partition), and
     by QEMU boots of the three ESP/anchor orders (boots 10-12). Those boots write the ESP with the test's own
     code, not with the service, and no physical host has run it.
+
+  **The rootfs site configuration must be this boot's site** (`regalia-site-check`, #615). The initrd builds
+  the boot tunnel from the measured site document on the ESP (`loader/credentials/regalia.site.cred`, PCR 12);
+  `regalia-wg-apply` builds the tunnels from `/etc/regalia`'s site configuration (node.json's `site`). A node's
+  move rewrites only the ESP's document, so a rootfs file left from the old site would bring up the old site's
+  tunnels. `regalia-site-check.service`, a oneshot at boot that `regalia-wg-apply` `Requires=` and starts
+  `After=`, compares every key the two hold (`node.site_compared()`: `host_ipv4` and `boot_mesh` today) and
+  refuses on any difference, and when the document is missing or unreadable (bound with no `-`, so a missing
+  one fails the unit at setup). Either way the tunnels stay down.
+  - Seen as `RegaliaSiteMismatch` (`regalia_site_check_ok == 0`: it ran and refused) or
+    `RegaliaSiteCheckMetricsMissing` (no `site-check.prom` since boot: it never ran). Both are `warning` for now.
+  - **Recovering a refused node**, at its console or over SSH (the tunnels are down, the host is not):
+    `journalctl -u regalia-site-check` names the differing keys and both files. After a move, the ESP's
+    document is the new site's: replace `/etc/regalia`'s site configuration with the new site's (the move
+    sheet's), then `systemctl restart regalia-site-check regalia-wg-apply`. Never edit the ESP's document to
+    match instead: it is measured, and the peers accept only a PCR 12 the root has approved.
+  - Proven by unit tests (`tests/test_baremetal_site_check.py`) and under a real systemd
+    (`e2e/node-units-systemd.py` section 3b: accept, refuse, a missing document at setup, and the recovery).
+    No physical host has run it.
 
   **Nothing in the initrd acts on a credential by name.** The image's command line (signed, in PCR 11)
   carries `systemd.import_credentials=no`: systemd imports no credential from any source, not the ESP,
@@ -787,7 +845,8 @@ the client are on the console with no kernel argument. It is not secret. When a 
     recovery key, and nothing ended in a shell;
   - the peers back after 150 s: nobody types anything, and the host unlocks by itself.
   NOT shown: Secure Boot (OVMF runs with no enrolled keys, so nothing checks the image's signature
-  and PCR 7 says so), a network card that udev renames in the initrd (the
+  and PCR 7 says so; kms#543 booted a signed UKI alone under OVMF with Secure Boot on and our
+  certificate in db, not this guest), a network card that udev renames in the initrd (the
   guest's is `eth0`), and any physical machine.
 - **Reviewing an image.** What opens the root volume is decided inside the initrd, and the running host
   keeps no record of it: after switch-root the unit that opened the volume is no longer loaded (seen
@@ -861,7 +920,7 @@ Six systemd units in `deploy/baremetal/units/`, all run from one configuration, 
 | `regalia-authtime` | root | none, no network | asks chrony every 15 s whether time is authenticated; writes `/run/regalia/authtime.json` |
 | `regalia-wg-apply` (+ `.path`) | root | `CAP_NET_ADMIN` | makes `wg-svc` and `wg-unlock` what the current manifest says, reads them back, brings them up only then; re-run whenever the published chain changes |
 | `regalia-boot-session` | root | none, no network, no device; a oneshot | on a boot where the unlock client presented no session (recovery key), makes one and writes the pair in `/run/regalia` |
-| `regalia-admission` | `regalia-admission` (#191) | none; the TPM through `tss`; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission/admission.json`, its own directory and nothing else. Its trail (`admission_dir/audit.jsonl`, #340) holds each renewal (`admission-renew`: the issuing peer; a refusal whole the first time of its kind, then counted, one line a minute at most, so a node cut off writes tens of lines a day; attempts back off from 5 s to 60 s while they fail) and each change between serving and not (`admission-serving`, with the reason): it serves only once that change is recorded, and stops serving at once, recording after (a failed record is logged loudly and tried again) |
+| `regalia-admission` | `regalia-admission` (#191) | none; the TPM through `tss`; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission/admission.json`, its own directory and nothing else. Its trail (`admission_log_dir/audit.jsonl`, `/var/log/regalia-admission`, a directory of its own so that its state directory is 0700, #340, #349) holds each renewal (`admission-renew`: the issuing peer; a refusal whole the first time of its kind, then counted, one line a minute at most, so a node cut off writes tens of lines a day; attempts back off from 2 s doubling to 10 s while they fail (`admission.RETRY_FIRST`, `RETRY_MAX`)) and each change between serving and not (`admission-serving`, with the reason): it serves only once that change is recorded, and stops serving at once, recording after (a failed record is logged loudly and tried again) |
 | `regalia-sync` | `regalia-sync` | none; the TPM through `tss` | answers peers and booting nodes, pulls manifests and heartbeats, keeps the membership store (never moving the TPM anchor), runs the heartbeat watch |
 | `regalia-esp-advance` (+ `.path`) | root | none, no network; the TPM through `tss`; writes `/efi` only | on each new published chain: writes it to the ESP (`EFI/regalia/membership.json`), then moves the TPM anchor to it (§7, #66 B3) |
 
@@ -909,8 +968,23 @@ removing only what it can prove it made.
     list, a bench image included, is therefore refused at the genesis: enrol on the reviewed production image.
 - `ownerauth` (#242 step C), after `init` and before `commit`: `gpg --decrypt ownerauth-X.yk.gpg | enrol ownerauth
   --node-id X --root-key ROOT --record ownerauth.record.json` sets the TPM's owner authorization to this node's
-  value from the ceremony's envelope (regalia-ceremony#111; the break-glass `.bg.age` gives the same value through
-  `age --decrypt`). The value comes on standard input only. It is checked against the record verified under the
+  value from the ceremony's envelope (regalia-ceremony#111). **Custody** (owner, 2026-10-05, #242): two independent
+  paths. Day to day, `.yk.gpg`, to the owner pair's decryption keys (ADR-0002 D30.7, regalia#568). Break-glass, one binary SOPS file per node
+  (`ownerauth-X.bg.sops`), encrypted to the post-quantum "ownerauth-recovery" age identity that offline-keys keeps
+  in its D28 key map under the platform SLIP-39 shares (no server holds the value or that key). On the signing
+  laptop (regalia-ceremony#111):
+  `python3 -Es offline-keys.py open-recovery-identity --sealed offline-keys.sealed.json --out /dev/shm/ownerauth-recovery.key`
+  (k offline shares on standard input, then Ctrl-D; it writes a NEW mode-0600 file on a RAM filesystem), then
+  `SOPS_AGE_KEY_FILE=/dev/shm/ownerauth-recovery.key sops decrypt --input-type binary --output-type binary ownerauth-X.bg.sops | sudo ...`,
+  then `shred -u -- /dev/shm/ownerauth-recovery.key`. On a disk, removing a file does not destroy it. On the laptop
+  offline-keys can also check a decrypted value without regalia-kms:
+  `... | python3 -Es offline-keys.py ownerauth-check --record ownerauth.record.json --node X --sealed offline-keys.sealed.json`.
+  It refuses a record that is not signed by the sealed set's own root (regalia-ceremony#133). The ceremony's drill
+  checks every node. It must be a binary SOPS file, not a YAML map: `sops decrypt --extract` drops the newline
+  that the value's form requires (measured with sops 3.13.1). The drill, at the ceremony rehearsal, checks a
+  decrypted value with no TPM: `... | python3 -Es -m deploy.baremetal.ownerauth check --node-id X --root-key ROOT
+  --record ownerauth.record.json`. ROOT is the network's pinned root, from a node's node.json or the root card's
+  printed fingerprint, never from the record or the folder it came in. The value comes on standard input only. It is checked against the record verified under the
   pinned root BEFORE the TPM is touched (`deploy/baremetal/ownerauth.py`), and it is never written to disk. Every
   owner-authorized TPM call then gets it through one channel: a sealed in-memory file descriptor, never the command
   line (readable through /proc by root while the call runs). It sets the authorization from EMPTY only: a TPM whose owner authorization is already set is refused, never
@@ -921,21 +995,40 @@ removing only what it can prove it made.
   `gpg --decrypt ownerauth-X.yk.gpg | sudo <tool> ... --ownerauth ownerauth.record.json`, for `enrol commit`,
   `reanchor` and `recount`, and `seal-hsm-pin.sh --init-import-key --ownerauth-stdin`. The value always comes on
   standard input, never on another descriptor: sudo closes every one above 2. What the operator types (commit's
-  root fingerprint, the reanchor and recount phrases) is then read from the terminal itself. `commit` hands the value
-  to its regalia-sync steps through an inherited sealed memfd (runuser keeps it). Under v4 `commit` refuses unless
+  root fingerprint, the reanchor and recount phrases) is then read from the terminal itself. With a lab chain (v1–v3)
+  `commit` hands the value to its regalia-sync steps through an inherited sealed memfd (runuser keeps it); under v4
+  it hands them nothing and makes the owner's definitions itself (#419, below). Under v4 `commit` refuses unless
   the TPM's owner and lockout authorizations are both set and the value is given.
   **Current limitations:**
   - `init` takes no owner authorization; it runs before `ownerauth`.
-  - No end-to-end `enrol commit` under v4 with a set owner authorization runs on a software TPM (#420). The path is
-    held by unit tests: the decision, the handoff to the regalia-sync steps, and every owner call site against a TPM
-    stand-in that refuses a missing value. The anchor's owner calls are also proven on swtpm.
-  - While commit's regalia-sync steps run, the owner authorization is held by a process of that uid, the
-    network-facing sync daemon's. commit refuses to hand it over while any other process of the uid exists, which
-    leaves a race with one starting meanwhile; doing the owner calls in the root parent is #419.
+  - `enrol commit` under v4 with an owner authorization set by `enrol ownerauth` runs on swtpm (`InitOnSwtpm`,
+    #420), but its regalia-sync steps run in-process there, not through `runuser` as that user (that needs root and
+    the user: a CI e2e), and its heartbeat probe is a stand-in that finds no source.
+  - Under v4, commit makes every owner-authorized definition itself, as root (#419): the anchor and the signing
+    counter before its regalia-sync step, which then commits by policy with no owner authorization, and the
+    heartbeat counter after that step's probe. The probe only fetches the sources' heartbeats; root verifies them
+    and defines the counter one below the highest, so the node is fresh at its sync's first pull, not at once. With a
+    lab chain (v1–v3) the value is still handed to the regalia-sync steps (a memfd), as before.
   - `seal-hsm-pin.sh` passes the value to tpm2-tools as a file in a root-only directory on /run (tmpfs), removed on
     exit. A run killed outright leaves it until reboot. The script doesn't check it against the record: a wrong
     value is refused by the TPM.
-  - Rotating a set value is not built.
+  - **Rotation**, as regalia-ceremony#137 prints it for each node:
+    `cd /usr/lib/regalia-kms && (gpg --decrypt <current set>/ownerauth-X.yk.gpg; gpg --decrypt ownerauth-X.yk.gpg) | sudo python3 -Es -m deploy.baremetal.enrol ownerauth --rotate-from <current set>/ownerauth.record.json --record ownerauth.record.json --node-id X --root-key ROOT`.
+    Standard input carries the CURRENT value, then the NEW one (the `cd` is the units' WorkingDirectory, which `-m`
+    needs to find the package). A node set before the node held its record runs `--check --adopt --record <current
+    set>/ownerauth.record.json` once first, with the current value on standard input. Both are checked
+    against their records under the pinned root before the TPM is touched. The new record must be strictly later
+    (`at`; both are root-signed): a rotation never goes back to an older record, whose envelopes retired or lost cards
+    may open (regalia-kms-51). The change is one `tpm2_changeauth` in a session salted to the enrolled EK, where the
+    current value authorizes (never sent) and the new one is the encrypted parameter; then the new value is proven.
+    A rerun after a stop is idempotent. The ceremony's rotation run, with fresh values and envelopes to the current
+    owner cards only, is regalia-ceremony#135 (rc#137, its step t, in review). Measured on swtpm.
+    The node remembers which record it is on (`/var/lib/regalia-enrol/ownerauth.json`, root's 0600: the record's
+    SHA-256, written by set and rotate once the TPM answers). A rotation from another record is refused before the TPM.
+    A node set up before this records its current one with `enrol ownerauth --check --adopt`, one way and only after
+    the TPM answered to it. The rotation's one call that a wrong value would make a dictionary-attack strike (the
+    changeauth in the EK-salted session) is made only after the current value is proven, and only with `min(3, max)`
+    tries left: at the maximum the node's DA-protected keys lock out until `LOCKOUT_RECOVERY`.
   - On the TPM bus (measured on swtpm, #414): owner calls are authorized in HMAC sessions that tpm2-tools opens
     itself, so the value is never sent. Setting it (changeauth's new value is a parameter) goes in a session salted
     to the EK `enrol init` recorded, with parameter encryption. The EK's Name is checked first (`--enrol-dir`), so a
@@ -962,9 +1055,12 @@ removing only what it can prove it made.
 - `commit --replace OLD_ID` (#76): a host that replaces a node is enrolled only as the replacement typed.
   The manifest that first names it must retire `OLD_ID` and change nothing else (replacement's rules);
   without `--replace`, such a manifest is refused, and so is any other ID.
-- The heartbeat counter starts at a heartbeat this node verifies from a peer
-  (`Freshness.accept_first`), never at 0 on a running network. `--bootstrap` allows 0 only at epoch 1, when
-  no reachable source holds a heartbeat. An existing counter is checked against the network.
+- The heartbeat counter starts at a heartbeat this node verifies from a peer, never at 0 on a running network.
+  With a lab chain (v1–v3) that is `Freshness.accept_first` in the regalia-sync step. Under v4 (#419) root verifies
+  the envelopes the step's probe fetched, counts only those live by authenticated time, and defines the counter at
+  max(highest verified sequence − 1, 0), so the node's sync takes that heartbeat at its first pull.
+  `--bootstrap` allows 0 only at epoch 1, when no reachable source holds a heartbeat. An existing counter is checked
+  against the network (v4: adopted only as defined, `HighWater._as_defined`).
 - **What stays on disk in the clear, and for how long.**
   - The WG-BOOT private key stays only until its sealed copy is on the ESP.
   - The local unlock contribution (`/var/lib/regalia-enrol/local.bin`, root 0600) stays until
@@ -1005,7 +1101,25 @@ removing only what it can prove it made.
 
 Every trail in `deploy/baremetal/trails.py`'s registry is hash-chained line by line and shipped to the
 audit collector by one instance of `units/regalia-audit-ship@.service` per trail
-(`systemctl enable --now regalia-audit-ship@sync`; `cmd/regalia-audit-ship`, `internal/audit/trail.go`).
+(`cmd/regalia-audit-ship`, `internal/audit/trail.go`). Enable all of them, one per trail in the registry:
+
+```sh
+systemctl enable --now \
+    regalia-audit-ship@admission \
+    regalia-audit-ship@enrol \
+    regalia-audit-ship@esp-advances \
+    regalia-audit-ship@reanchor \
+    regalia-audit-ship@recount \
+    regalia-audit-ship@recovery-key \
+    regalia-audit-ship@recovery-reconcile \
+    regalia-audit-ship@survivor \
+    regalia-audit-ship@sync \
+    regalia-audit-ship@time \
+    regalia-audit-ship@update
+```
+
+A node that ships only some of them raises `RegaliaAuditShipMetricsMissing` until the rest are enabled
+(`tests/test_scrape_job_contract.py` holds this list to the registry).
 Each line becomes one audit event on the stream `<site>.<trail>`.
 
 The collector is an **external service** the owner chooses (#351). `AUDIT-COLLECTOR.md` is the contract it must
@@ -1017,7 +1131,8 @@ unit runs it before each start); `regalia-audit-ship conformance` checks a candi
   starting it by hand repeats the same check. Investigate first. Then restore the file from a backup
   (each shipped line's SHA-256 is in its event's detail, to check the copy against), and start the unit
   again.
-- **Metrics** are in `/var/lib/regalia-audit-ship/<trail>.prom`: lines, committed, backlog, tampered.
+- **Metrics** are in `/run/regalia-metrics/audit-ship/<trail>.prom` (the unit's `-metrics`, node_exporter's textfile
+  directory, #305): lines, committed, backlog, tampered.
 - **Its own user, no capability.** `regalia-audit-ship` (`units/regalia-audit-ship.sysusers.conf`) reads
   each trail through that trail's group only, given per instance by
   `units/regalia-audit-ship@<trail>.service.d/reader.conf`. Each service trail has a reader group of its own
@@ -1081,7 +1196,7 @@ the reason itself goes to the time trail.
 |---|---|---|
 | `regalia-authtime` | `/run/regalia-metrics/authtime/authtime.prom` | `regalia_time_authenticated{cause}`, `regalia_chrony_latch_set` |
 | `regalia-sync` | `/run/regalia-metrics/sync/heartbeat.prom`, `unlock.prom` | the heartbeat watch's `regalia_heartbeat_*`; the unlock listener's `regalia_unlock_refused_total{cause=rate\|connections}`, each refusal counted (the trail records the first of a window) |
-| `regalia-admission` | `/run/regalia-metrics/admission/lease.prom` | `regalia_admission_serving`, `regalia_admission_lease_seconds_left` |
+| `regalia-admission` | `/run/regalia-metrics/admission/lease.prom` | `regalia_admission_serving`, `regalia_admission_lease_seconds_left`, `regalia_admission_recovery` |
 | `regalia-audit-ship@<trail>` | `/run/regalia-metrics/audit-ship/<trail>.prom` | `regalia_audit_trail_*{trail}` |
 
 - **Who can read the files.** Each directory is its writer's, group `regalia-metrics`, setgid, 2750

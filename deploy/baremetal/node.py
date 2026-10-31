@@ -67,6 +67,8 @@ import argparse
 import binascii
 import contextlib
 import errno
+import fcntl
+import glob
 import hashlib
 import json
 import os
@@ -84,10 +86,25 @@ from deploy.baremetal import (admission, trails, attest, authtime, beat, bootnet
 
 Refused, require = membership.Refused, membership.require
 
+
+class TrailIncomplete(Exception):
+    """The ESP advance HAPPENED (the ESP holds the chain and the TPM anchor moved), but its ALLOW line could not be
+    written (#449, df-grafana-b9's read). Not a refusal: main() writes no DENY for it, which would record as refused an
+    advance that took place. `result` is what esp_advance returned. Neither OSError nor Refused, so nothing that
+    handles a refusal takes it for one."""
+
+    def __init__(self, message, result):
+        super().__init__(message)
+        self.result = result
+
 SCHEMA = "regalia.node/v1"
 KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "nv_signing", "state_dir", "admission_dir", "run_dir",
+        "admission_log_dir",
         "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval", "beat_interval_s")
+RESOURCE_MANAGER = "device:/dev/tpmrm0"   # the TCTI a host's node.json names (regalia-afi): the kernel's resource manager
+SIMULATOR_SWITCH = membership.SIMULATOR_SWITCH   # the test-only switch for a simulator TCTI (b9 on #596; its reasons there)
 PUBLISHED = "chain.json"        # in the state directory: the verified chain, for the root services
+OLD_ADMISSION_TRAIL = "audit.jsonl"   # where admission's trail was, in admission_dir, before #349
 MAX_BYTES = 64 * 1024
 
 
@@ -110,8 +127,20 @@ def validate(doc):
     require(doc["schema"] == SCHEMA, "schema must be %s" % SCHEMA)
     require(isinstance(doc["node_id"], str) and re.fullmatch(sitecfg.NODE_ID, doc["node_id"]) is not None, "node_id is not a node ID")
     membership.root_entries(doc["root_key"], "root_key")
-    require(doc["tcti"] is None or (isinstance(doc["tcti"], str) and re.fullmatch(r"[a-z]+(:[A-Za-z0-9/_.,=-]{1,200})?", doc["tcti"]) is not None),
-            "tcti must be null (the kernel's resource manager) or a TCTI string")
+    # regalia-afi (#592): the kernel's resource manager, named; or a private simulator (the e2e fixtures). Never null: then
+    # tpm2-tss's own search order decides, and an operator tool run by hand (no unit's DevicePolicy around it) could reach
+    # the raw /dev/tpm0, which has no resource manager, wherever /dev/tpmrm0 is missing. Never another device.
+    tcti = doc["tcti"]
+    # a test fixture's TPM: a simulator's socket (swtpm, mssim: no hardware root), or tabrmd (the e2e's user-space
+    # resource manager in front of a CUSE device; the image does not ship it, and it can front anything). None of them
+    # is a device a unit's DevicePolicy constrains
+    simulator = isinstance(tcti, str) and re.fullmatch(r"(swtpm|mssim):[A-Za-z0-9/_.,=-]{1,200}|tabrmd(:[A-Za-z0-9/_.,=-]{1,200})?", tcti) is not None
+    require(not simulator or os.environ.get(SIMULATOR_SWITCH) == "1",
+            "tcti %r is a test fixture's TPM (a simulator's socket, with no hardware root, or tabrmd, which the image does not "
+            "ship), which no unit's DevicePolicy constrains: refused on a node (only the e2e fixtures set %s=1)" % (tcti, SIMULATOR_SWITCH))
+    require(simulator or (isinstance(tcti, str) and re.fullmatch(r"device:/dev/tpmrm[0-9]+", tcti) is not None),
+            "tcti must be %s (the kernel's resource manager; /dev/tpmrm<N> on a host with several TPMs): never null, a raw "
+            "/dev/tpm<N>, tabrmd or another path" % RESOURCE_MANAGER)
     # what each really occupies, from the classes that define them (the anchor: counter, base and two record
     # slots; the heartbeat counter and the signing counter (#199): counter and base each), never retyped here
     taken = {"nv_epoch": membership.HighWater(_index(doc["nv_epoch"], "nv_epoch")).indices(),
@@ -124,10 +153,12 @@ def validate(doc):
             require(not overlap, "%s and %s must not overlap (both take %s): %s takes %s, %s takes %s" % (
                 one, other, ", ".join("0x%x" % i for i in sorted(overlap)), one, ", ".join("0x%x" % i for i in sorted(taken[one])),
                 other, ", ".join("0x%x" % i for i in sorted(taken[other]))))
-    for key in ("site", "state_dir", "admission_dir", "run_dir", "wg_service_key", "measurements"):
+    for key in ("site", "state_dir", "admission_dir", "run_dir", "admission_log_dir", "wg_service_key", "measurements"):
         _absolute(doc[key], key)
-    # each directory has ONE writer: sync's, admission's (regalia-admission, #191), and the run directory (root)
-    require(len({doc["state_dir"], doc["admission_dir"], doc["run_dir"]}) == 3, "state_dir, admission_dir and run_dir must be three directories")
+    # each directory has ONE writer: sync's, admission's (regalia-admission, #191), the run directory (root), and admission's
+    # trail's (#349: its own, so that admission_dir lists nothing to others)
+    require(len({doc["state_dir"], doc["admission_dir"], doc["run_dir"], doc["admission_log_dir"]}) == 4,
+            "state_dir, admission_dir, run_dir and admission_log_dir must be four directories")
     pcrs = doc["pcrs"]
     require(isinstance(pcrs, list) and pcrs and all(isinstance(i, int) and not isinstance(i, bool) and 0 <= i <= 23 for i in pcrs)
             and pcrs == sorted(set(pcrs)), "pcrs must be an ascending list of PCR indices 0-23")
@@ -236,7 +267,10 @@ ESP_LOCK = "/run/regalia-esp-advance/highwater.lock"     # its RuntimeDirectory:
 ESP_RENDER_DEVICE = "/dev/disk/by-partlabel/regalia-root"
 
 
-def esp_advance(node, esp, lock_path=ESP_LOCK):
+ESP_TRAIL = "esp-advances"                                 # trails.TRAILS: each run before the anchor moves, each refusal
+
+
+def esp_advance(node, esp, lock_path=ESP_LOCK, record=None):
     """Bring the boot chain on the ESP (`esp`, its mount point) up to the published chain, THEN move the TPM anchor
     to it: the order that never leaves the initrd an ESP chain below its anchor (a ROLLBACK, refused at boot).
 
@@ -246,9 +280,9 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
     is left as enrolment wrote it. The render the initrd will do is tried too, and a chain it would refuse (this
     node no longer in the manifest, or left with no peer) is STILL written and anchored, with a warning returned:
     the next boot then goes to the recovery prompt, which is what that manifest means for this node, whereas
-    refusing here would freeze the anchor, and rollback protection with it, at the older epoch. The write is enrolment's own (enrol._replace_esp, a
-    temporary file fsynced and renamed, the directory fsynced, under a trusted path), and is read back before the
-    anchor moves. A crash after the write and before the anchor leaves the ESP ahead, which the initrd accepts and
+    refusing here would freeze the anchor, and rollback protection with it, at the older epoch. The write is enrolment's own, the ESP's one chain writer
+    shared with reanchor (enrol.EspChain, #468: a temporary file fsynced and renamed, the directory fsynced, under a
+    trusted path), and is read back before the anchor moves. A crash after the write and before the anchor leaves the ESP ahead, which the initrd accepts and
     the next run completes. Returns (epoch, the chain's SHA-256, whether the ESP was rewritten, the render's
     refusal or None).
 
@@ -256,7 +290,11 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
     CAP_DAC_OVERRIDE; sync no longer writes the anchor, and systemd runs one start of this unit at a time."""
     from deploy.baremetal import bootcreds, enrol
     envelopes = read_published(node.path(PUBLISHED))
-    anchor = node.anchor(lock_path=lock_path)
+    # judged by the chain it anchors (#242 B3, regalia-kms-ed): under a v4 tip an owner-written anchor is Unusable, refused
+    # before the ESP is written (the unit's ok=0); a re-anchor repairs it
+    require(isinstance(envelopes, list) and envelopes, "the membership chain must be a non-empty list of envelopes")
+    tip = membership.accept_chain(None, envelopes, node.cfg["root_key"])
+    anchor = node.anchor(lock_path=lock_path, schema=tip["schema"])
     manifest = bootcreds.anchored(envelopes, node.cfg["root_key"], anchor)
     chain = membership.canonical(envelopes)
     require(len(chain) <= membership.MAX_CHAIN_BYTES, "the membership chain is over %d bytes" % membership.MAX_CHAIN_BYTES)
@@ -265,22 +303,182 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
         unrenderable = None
     except Refused as refused:
         unrenderable = str(refused)
-    relative = enrol._rendered_path(bootcreds.CHAIN_ON_ESP)
-    directory, filename = os.path.join(esp, os.path.dirname(relative)), os.path.basename(relative)
-    target = os.path.join(directory, filename)
+    # the ESP's ONE chain writer (#468, shared with reanchor.write_esp): whether it differs is known here, BEFORE the
+    # request line below names it; the write comes after that line
     try:
-        enrol._ensure_trusted_dir(directory)
+        on_esp = enrol.EspChain(esp, chain)
     except enrol.Refused as refused:
         raise Refused(str(refused)) from None
-    rewritten = _read_regular(target, len(chain) + 1) != chain
-    if rewritten:
-        enrol._replace_esp(directory, filename, chain)
-        require(_read_regular(target, len(chain) + 1) == chain, "the chain read back from %s is not the one written" % target)
+    rewritten = on_esp.rewritten
     manifests = [e["manifest"] for e in envelopes]               # verified by bootcreds.anchored
     epoch = manifests[-1]["epoch"]
+    facts = {"epoch": epoch, "manifest_digest": membership.digest(manifests[-1]), "chain_sha256": hashlib.sha256(chain).hexdigest(),
+             "esp_rewritten": rewritten, "boot_renderable": unrenderable is None}
+    # THE REQUEST, before the CHAIN on the ESP or the anchor changes (#278: never done unrecorded; regalia-kms-3e's read;
+    # EspChain above may already have created the chain's empty directory on a fresh ESP, not its content): a trail that
+    # cannot be written changes nothing. FAIL CLOSED, deliberately, and at a cost: while this node's trail cannot be
+    # written, its anchor stays at the epoch it holds, so its rollback protection does not advance with the fleet (a boot
+    # chain down to that epoch stays acceptable). RegaliaEspAdvanceFailing (15 min) and RegaliaAnchorBehindFleet (30 min)
+    # are what tell an operator; LIMITATIONS.md states the trade (df-grafana-b9's read of #449). The OUTCOME after the
+    # anchor is checked: a crash in between leaves a request with no outcome, read as "may or may not have moved; the next
+    # run says", never an ALLOW for a move that did not happen; a failed ALLOW is TrailIncomplete, never a refusal
+    if record is not None:
+        record(dict(facts, event="esp-advance-requested"))
+    try:
+        on_esp.write()
+    except enrol.Refused as refused:
+        raise Refused(str(refused)) from None
     anchor.anchor(epoch, membership.Store._digests(manifests))
     anchor.check(epoch)
-    return epoch, hashlib.sha256(chain).hexdigest(), rewritten, unrenderable
+    result = epoch, hashlib.sha256(chain).hexdigest(), rewritten, unrenderable
+    if record is not None:
+        try:
+            record(dict(facts, event="esp-advance", outcome="ALLOW"))
+        except Exception as failure:
+            # past this point the advance has happened: a failed ALLOW is a gap in the trail, never a refusal
+            raise TrailIncomplete("advanced to epoch %d (the ESP and the TPM anchor moved), but its ALLOW line could not be "
+                                  "written: %s: %s" % (epoch, type(failure).__name__, failure), result) from failure
+    return result
+
+
+ESP_SETTLE_RUNS = 5          # runs of esp_advance at most, while the published chain keeps changing under it
+
+
+def esp_advance_settled(node, esp, lock_path=ESP_LOCK, advance=None, record=None):
+    """esp_advance, run again while the published chain changed DURING the run, at most ESP_SETTLE_RUNS times.
+
+    regalia-esp-advance.path's PathChanged= is edge-triggered: a publication that lands while a run is already active
+    is folded into that run by systemd and starts nothing afterwards. If that run had read the chain before it changed,
+    the ESP and the anchor would stay one epoch behind until the NEXT publication (regalia-kms-24 and 3e on main's
+    three-node-recovery; on a host, the unit's boot run beside sync's first publication). So the published file is read
+    before and after each run; a run that saw what is published now is the last one. Still changing after the bound (a
+    sync publishing faster than a run, not something sync does), it is refused, and the unit's Restart= tries again.
+    That cannot strand a node (24): every run that completes has written the ESP and moved the anchor to the chain it
+    read, so each run makes progress and the anchor is never more than one publication behind; and the refusal is
+    what guarantees ANOTHER run (Restart=on-failure, 15 s later, re-reading the newest), where a success after the
+    bound could leave a lost trigger behind it."""
+    advance = advance or esp_advance
+    # #449: each run is recorded in the ESP-advance trail (`record`), request before the ESP or the anchor moves and
+    # ALLOW after: a settled advance that ran twice leaves two pairs, one per run that changed something or not. Passed
+    # only when given, so an `advance` stand-in that takes none (the settle tests') is called as before.
+    extra = {} if record is None else {"record": record}
+    path = node.path(PUBLISHED)
+    # the RUN holds `lock_path` (node.ESP_LOCK): the same file reanchor holds for its whole re-anchor (#391), so the unit,
+    # a hand-run esp-advance and a re-anchor all serialize on one lock (regalia-kms-24). The anchor's own HighWater lock
+    # inside each run is another file beside it: HighWater flocks its lock_path itself, and a second open of the held
+    # file in this process would block on itself (regalia-kms-95)
+    with _one_run(lock_path):
+        for _ in range(ESP_SETTLE_RUNS):
+            before = _read_regular(path, membership.MAX_CHAIN_BYTES + 1)
+            result = advance(node, esp, lock_path=lock_path + ".anchor", **extra)
+            if _read_regular(path, membership.MAX_CHAIN_BYTES + 1) == before:
+                return result
+    raise Refused("the published membership chain changed during each of %d runs: not settled; the unit tries again"
+                  % ESP_SETTLE_RUNS)
+
+
+SITE_TRAIL = ESP_TRAIL                                     # the ESP's writes share one trail: esp-advances
+
+
+def site_advance(node, esp, site_path, lock_path=ESP_LOCK, record=None):
+    """Write this node's NEW site document to the ESP (#615, the writer), only when the root has already approved the
+    boot it gives: the measurement document of the manifest anchored in this node's TPM must list, for this node, the
+    set it booted on with only PCR 12 replaced by what the ESP will then measure (siteadvance.target). The new site is
+    the operator's file at `site_path`, sitecfg-validated, this node's own (its boot_mesh names this node). Nothing is
+    resealed: the sealed files are bound to PCR 7 and 11, not 12 (enrol.seal_credentials).
+
+    The booted set is the accepted set whose PCR 12 is the ESP's credentials as they are now: a node runs only after
+    its peers accepted that measurement. The rootfs site configuration is NOT changed here: at the old site it would
+    move the live tunnels. regalia-site-check refuses a boot whose rootfs file disagrees with the ESP's document, so
+    replacing it at the move is checked (README §7).
+
+    Under the ESP advance's lock (one writer of the ESP at a time, beside esp-advance and reanchor), written by
+    enrolment's rendered-file writer (enrol.EspChain: a temporary file fsynced and renamed, the directory fsynced, read
+    back), with a request line in the esp-advances trail before the write and ALLOW after. Returns (the label of the
+    set the next boot matches, the document's SHA-256, whether the ESP was rewritten)."""
+    from deploy.baremetal import bootcreds, enrol, espcreds, siteadvance, uki
+    new = sitecfg.load(site_path)
+    require(new["boot_mesh"] is not None and new["boot_mesh"]["node_id"] == node.node_id,
+            "the site configuration %s is not this node's (%s): its boot_mesh names %s" % (
+                site_path, node.node_id, (new["boot_mesh"] or {}).get("node_id")))
+    document = bootcreds.site_document(new, ESP_RENDER_DEVICE)
+    with _one_run(lock_path):
+        envelopes = read_published(node.path(PUBLISHED))
+        require(isinstance(envelopes, list) and envelopes, "the membership chain must be a non-empty list of envelopes")
+        tip = membership.accept_chain(None, envelopes, node.cfg["root_key"])
+        manifest = bootcreds.anchored(envelopes, node.cfg["root_key"], node.anchor(lock_path=lock_path + ".anchor", schema=tip["schema"]))
+        sets = measurements.held(node.documents(), manifest)["nodes"].get(node.node_id, {}).get("accepted")
+        require(sets, "the anchored manifest's measurement document lists no accepted set for %s" % node.node_id)
+        files = uki.credential_files(esp)
+        now = espcreds.pcr12(files)
+        booted = [entry["label"] for entry in sets if entry["pcrs"].get(siteadvance.SITE_PCR) == now]
+        require(booted, "no accepted set has the PCR 12 the ESP measures now (%s): this node's boot is not one the root "
+                "approved, so a site change cannot be judged from it" % now)
+        # FAT finds the document whatever the case of its name, but the stub measures the name as it is spelled, and a
+        # rename onto an existing name may keep the old spelling on vfat. So the document is written under the spelling
+        # the ESP holds now (credential_files refuses two that FAT would take for one), and predicted with it.
+        name = os.path.basename(SITE_ON_ESP)
+        spelled = next((k for k in files if k.casefold() == name.casefold()), name)
+        predicted = espcreds.pcr12(dict(files, **{spelled: document}))
+        try:
+            label = siteadvance.target(sets, booted[0], predicted)
+        except siteadvance.Refused as refused:  # attest's class: main reports node's Refused as a refusal (exit 2)
+            raise Refused(str(refused)) from None
+        try:
+            on_esp = enrol.EspChain(esp, document, relative=os.path.join(os.path.dirname(SITE_ON_ESP), spelled))
+        except enrol.Refused as refused:
+            raise Refused(str(refused)) from None
+        facts = {"epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "booted_set": booted[0],
+                 "next_set": label, "pcr12": predicted, "site_sha256": hashlib.sha256(document).hexdigest(),
+                 "esp_rewritten": on_esp.rewritten}
+        if record is not None:
+            record(dict(facts, event="site-advance-requested"))
+        try:
+            on_esp.write()
+        except enrol.Refused as refused:
+            raise Refused(str(refused)) from None
+        result = label, facts["site_sha256"], on_esp.rewritten
+        measured = espcreds.pcr12(uki.credential_files(esp))
+        if measured != predicted:          # the ESP as written is not what the root approved: no ALLOW, no success
+            raise TrailIncomplete("the site document is written, but the ESP now measures PCR 12 %s, not the approved %s "
+                                  "(its names as written are not the ones predicted): DO NOT REBOOT this node; restore "
+                                  "the previous document or have the root approve this value" % (measured, predicted), result)
+        if record is not None:
+            try:
+                record(dict(facts, event="site-advance", outcome="ALLOW"))
+            except Exception as failure:
+                raise TrailIncomplete("the site document is written (the next boot matches %s), but its ALLOW line could not "
+                                      "be written: %s: %s" % (label, type(failure).__name__, failure), result) from failure
+        return result
+
+
+@contextlib.contextmanager
+def _one_run(path):
+    """One ESP advance at a time, across the WHOLE run (every rerun: the ESP's write and the anchor's move), on
+    node.ESP_LOCK, which reanchor also holds for its whole re-anchor (#391). Without it a hand-run `esp-advance` beside the
+    unit could write an OLDER chain to the ESP after the other run anchored a newer one: an ESP below its anchor, a
+    ROLLBACK at the next boot (regalia-kms-95 on #471). Its directory is the unit's RuntimeDirectory; a hand-run while the
+    unit is stopped makes it (root's, 0700) rather than run unlocked. Opened as reanchor opens it: never through a link, a
+    regular file with one name. Held by another run or a re-anchor, it is a refusal, not a wait: the unit's Restart=
+    tries again, and an operator is told."""
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as failure:
+        if failure.errno == errno.ELOOP:
+            raise Refused("the ESP advance's lock %s is a symbolic link: it is not taken through one" % path) from None
+        raise
+    try:
+        held = os.fstat(fd)
+        require(stat.S_ISREG(held.st_mode) and held.st_nlink == 1, "the ESP advance's lock %s is not a regular file with one name" % path)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refused("another regalia-esp-advance run, or a re-anchor, holds %s: one at a time (try again when it has "
+                          "finished)" % path) from None
+        yield
+    finally:
+        os.close(fd)
 
 
 def esp_metrics(node, ok, renderable=None, publish=None):
@@ -298,6 +496,44 @@ def esp_metrics(node, ok, renderable=None, publish=None):
     try:
         publish(samples)
     except Exception:                                   # noqa: BLE001 - see above
+        pass
+
+
+SITE_ON_ESP = "loader/credentials/regalia.site.cred"   # bootcreds.CREDENTIALS_DIR: the site document systemd-stub measures
+
+
+def site_compared():
+    """The keys the rootfs site configuration and the measured site document both hold, schema aside: what must agree.
+    Taken from both modules' key lists, so a key either gains later is compared without an edit here."""
+    from deploy.baremetal import bootcreds
+    return tuple(k for k in bootcreds.SITE_KEYS if k in sitecfg.KEYS and k != "schema")
+
+
+def site_check(node, esp):
+    """The rootfs site configuration (node.json's "site", what wg-apply builds the tunnels from) against the site document
+    on the ESP (what the initrd booted with, measured into PCR 12 and attested to the peers). After a node moves, its
+    site-advance writes only the ESP's document; a rootfs file left from the old site would bring up the old site's
+    tunnels. So the two must agree on every key both hold (site_compared), and a document that is missing or cannot be
+    read is a refusal, never a pass. Returns the keys compared."""
+    from deploy.baremetal import bootcreds
+    path = os.path.join(esp, SITE_ON_ESP)
+    raw = _read_regular(path, bootcreds.SITE_MAX_BYTES + 1)
+    require(raw is not None, "the measured site document %s is not there: the site configuration cannot be checked against it" % path)
+    measured, _device = bootcreds.read_site(raw)
+    keys = site_compared()
+    differ = [k for k in keys if membership.canonical(measured.get(k)) != membership.canonical(node.site.get(k))]
+    require(not differ, "the site configuration %s and the measured site document %s differ in %s: the rootfs file is not "
+            "this boot's site (replace it with the one for the site this node now boots at)" % (node.cfg["site"], path, ", ".join(differ)))
+    return keys
+
+
+def site_check_metrics(ok, publish=None):
+    """regalia-site-check's metric, written at every run, success or not. Never raises. Under metrics.RUN_DIR, a tmpfs:
+    a unit that never ran this boot leaves no file, never the last boot's value."""
+    publish = publish or (lambda samples: metrics.publish("site-check", samples))
+    try:
+        publish([("regalia_site_check_ok", {}, 1 if ok else 0), ("regalia_site_check_run_timestamp_seconds", {}, int(time.time()))])
+    except Exception:                                   # noqa: BLE001 - a metric does not change the run's outcome
         pass
 
 
@@ -468,6 +704,15 @@ def _chain_tip(cfg):
     return membership.accept_chain(None, envelopes, cfg["root_key"])
 
 
+def _tip_schema(cfg):
+    """The schema of the verified chain tip this node holds (_chain_tip), which its anchor and heartbeat counter are judged
+    by (#242 B3); None before it holds any chain (an anchor defined at enrolment, before its first commit: the Store then
+    judges by the chain it commits). A chain that is held but does not verify is refused, never None."""
+    if not any(os.path.lexists(os.path.join(cfg["state_dir"], name)) for name in ("membership.json", PUBLISHED)):
+        return None
+    return _chain_tip(cfg)["schema"]
+
+
 def heartbeat_counter(cfg, run=subprocess.run, owner_auth=None):
     """This node's heartbeat sequence counter, with the lock its users take: the one construction the
     services and the recovery command (recount.py) share. Written by policy like the anchor (#242)."""
@@ -475,7 +720,8 @@ def heartbeat_counter(cfg, run=subprocess.run, owner_auth=None):
                              policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg),
                              # its one definition, define_at (a first heartbeat, a replacement's, recount's floor), is
                              # laid down under the node's policy when its signed images name one (define_policy)
-                             define_policy=lambda: define_policy(cfg), owner_auth=owner_auth)
+                             define_policy=lambda: define_policy(cfg), owner_auth=owner_auth,
+                             schema=lambda: _tip_schema(cfg))
 
 
 # ---- the node ----
@@ -497,8 +743,25 @@ class Node:
         return os.path.join(self.state, name)
 
     def held(self, name):
-        """A file of the admission service's own directory (its lease and its trail)."""
+        """A file of the admission service's own directory (its lease and the lease's lock)."""
         return os.path.join(self.cfg["admission_dir"], name)
+
+    def admission_trail(self):
+        """The admission trail's path, from the registry: admission_log_dir/audit.jsonl (#349), a directory of its own, so
+        that admission_dir can be 0700. REFUSED while a trail with lines, or an archive of one, is still at the old path
+        (admission_dir/audit.jsonl): a fresh chain at the new path would begin at seq 1 under a collector stream already
+        further on, and strand the old file's unshipped lines. No node has run an image yet (#61), so this guards; it
+        does not move."""
+        old = self.held(OLD_ADMISSION_TRAIL)
+        try:
+            lines = os.lstat(old).st_size > 0
+        except FileNotFoundError:
+            lines = False
+        archived = sorted(glob.glob(glob.escape(old) + ".*"))
+        new = trails.where("admission", self.cfg)
+        require(not lines and not archived, "the admission trail still has lines at %s: move it, with its archives, to %s (#349) "
+                "before the admission service starts" % (old, os.path.dirname(new)))
+        return new
 
     # the shared view of time
     def clock(self):
@@ -507,13 +770,17 @@ class Node:
     def tpm_clock(self):
         return heartbeat.TpmClock(self.tcti, self.run)
 
-    def anchor(self, lock_path=None):
+    def anchor(self, lock_path=None, schema=None):
         """The membership epoch anchor: membership.HighWater on its own index (and the pair and slots after it),
-        with this node's approved-image write policy (image_policy) for an index written by policy (#242).
-        `lock_path`: the writer's lock. The run-time writer is esp_advance, with its own (ESP_LOCK); the default, in
-        the state directory, is for the hand tools that build an anchoring store (enrolment). sync only reads."""
+        with this node's approved-image write policy (image_policy) for an index written by policy (#242), judged by the
+        schema of the chain tip this node holds (_tip_schema, #242 B3).
+        `lock_path`: the writer's lock. The run-time writer is esp_advance: its run holds ESP_LOCK, and this lock is ESP_LOCK + ".anchor"; the default, in
+        the state directory, is for the hand tools that build an anchoring store (enrolment). sync only reads.
+        `schema`: the schema of the chain this anchor is judged by, for a caller holding another chain than the node's
+        (esp_advance: the published one it anchors); default, the chain tip this node holds."""
         return membership.HighWater(self.cfg["nv_epoch"], self.tcti, self.run, lock_path=lock_path or self.path("highwater.lock"),
-                                    policy=lambda: image_policy(self.cfg), image_key=lambda: image_key(self.cfg))
+                                    policy=lambda: image_policy(self.cfg), image_key=lambda: image_key(self.cfg),
+                                    schema=schema or (lambda: _tip_schema(self.cfg)))
 
     def manifest(self, patience=2.0, step=0.25):
         """The current manifest, by the published chain, verified (the root services' view).
@@ -574,7 +841,7 @@ class Node:
     def quote(self, session_id, ephemeral_public):
         """A `quote(nonce hex, manifest)` for sync.Client.renewer: this node's TPM quote over its boot
         session, the manifest's epoch and the peer's nonce."""
-        def evidence(nonce, manifest):
+        def evidence(nonce, manifest, binding=None):
             with tempfile.TemporaryDirectory(prefix="regalia-quote-") as d:
                 paths = (os.path.join(d, "quote"), os.path.join(d, "signature"))
                 old = os.environ.get("TPM2TOOLS_TCTI")
@@ -582,7 +849,7 @@ class Node:
                     os.environ["TPM2TOOLS_TCTI"] = self.tcti
                 try:
                     attest.node_quote(self.node_id, manifest["epoch"], bytes.fromhex(session_id), ephemeral_public, bytes.fromhex(nonce),
-                                      self.cfg["pcrs"], *paths, run=self.run)
+                                      self.cfg["pcrs"], *paths, run=self.run, binding=binding)
                 finally:
                     if self.tcti:
                         os.environ.pop("TPM2TOOLS_TCTI") if old is None else os.environ.__setitem__("TPM2TOOLS_TCTI", old)
@@ -686,7 +953,7 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
     """The lease holder and the admission file, asking peers in turn for a lease over the service tunnel."""
     session, public = boot_session(node.runtime, rand)
     holder = lease.Holder(node.node_id, session, node.clock(), node.tpm_clock(), node.held("lease.json"), run=node.run)
-    trail = Trail(node.held("audit.jsonl"), "admission")
+    trail = Trail(node.admission_trail(), "admission")
     quiet = QuietRefusals(trail)
 
     class Manifest:
@@ -695,7 +962,7 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
 
     def renew(request):
         manifest = node.manifest()
-        sources = node.sources(manifest)
+        sources = node.sources(manifest, timeout=admission.RENEW_TIMEOUT)    # a silent peer costs seconds, not a lease
         peers = sorted(sources)
         require(peers, "no peer to ask for a lease")
         order[:] = order[1:] + order[:1] if order and set(order) == set(peers) else peers
@@ -716,10 +983,58 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
         reason = "no peer gave a lease (%d asked: %s)" % (len(failures), "; ".join(sorted(failures)))     # by peer: one kind, whatever the rotation
         quiet.deny(dict(event, peer="", outcome="DENY", reason=convergence._printable(reason, membership.REASON_LIMIT)))
         raise Refused(reason)
+    from deploy.baremetal import survivor
+    clock = node.clock()
     return admission.Service(holder, node.manifest, renew, admission_file(node.runtime),
                              daemon_started=daemon_started or admission.unit_started(),
                              metrics=lambda samples: metrics.publish("admission", samples),      # #305
-                             record=trail)                                                     # #340: serving and not, on its trail
+                             record=trail,                                                     # #340: serving and not, on its trail
+                             # D32.6: the owner's survivor authorization root installed (survivor.py install), read every
+                             # round; consulted by the service only with no unexpired normal lease (#494)
+                             survivor=lambda manifest: survivor.seconds_left(os.path.join(node.runtime, survivor.AUTH_FILE), manifest,
+                                                                             node.node_id, clock))
+
+
+class RoundLog:
+    """#470: one journal line per source per pull round, saying what happened: an epoch applied, nothing newer, a DENY
+    with the reason the trail records, or a peer that did not answer. The trail (sync-audit.jsonl) stays the record;
+    this is what an operator reads in `journalctl -u regalia-sync`. Rate-bounded per source: a line when the outcome
+    changes, and the same outcome again at most once every REPEAT_S seconds. Nothing in it the trail does not hold
+    already (source names, epochs, the bounded reason), so no secrets."""
+
+    REPEAT_S = 900
+
+    def __init__(self, clock=time.monotonic, out=None):
+        self.clock = clock
+        self.out = out or (lambda line: print("sync: " + line, file=sys.stderr, flush=True))
+        self.last = {}                          # source -> (outcome key, when it was last said)
+
+    def _say(self, source, key, line):
+        now, prev = self.clock(), self.last.get(source)
+        if prev is not None and prev[0] == key and now - prev[1] < self.REPEAT_S:
+            return
+        try:
+            self.out(line)
+        except OSError:                         # the journal is best-effort: a closed stderr never stops a round
+            return
+        self.last[source] = (key, now)
+
+    def pulled(self, source, held, epoch):
+        if held is None or epoch > held:
+            self._say(source, ("applied", epoch), "applied epoch %d from %s (held %s before)" % (epoch, source, "none" if held is None else held))
+        else:
+            self._say(source, ("nothing", epoch), "nothing newer from %s: epoch %d held" % (source, epoch))
+
+    def refused(self, source, refusal, event):
+        text = convergence._printable(refusal, membership.REASON_LIMIT)
+        if text.startswith("%s did not answer (" % source):            # the error class is the whole key
+            self._say(source, ("silent", text), "peer " + text)
+            return
+        kind, reason = (event["event"], event["reason"]) if event is not None else ("pull", text)
+        # printable again, though audited() made them so: a sink event written raw later must not reach the journal
+        kind, reason = convergence._printable(kind, 64), convergence._printable(reason, membership.REASON_LIMIT)
+        # keyed with digit runs collapsed: a reason that carries a count, a time or a sequence is the same outcome
+        self._say(source, ("deny", kind, re.sub(r"[0-9]+", "#", reason)), "DENY %s from %s: %s" % (kind, source, reason))
 
 
 class Sync:
@@ -731,8 +1046,10 @@ class Sync:
         self.node, self.store, self.freshness = node, node.store(), node.freshness()
         self.trail = Trail(node.path("sync-audit.jsonl"), "sync")
         self.signer = lease.TpmSigner(node.tcti, node.run)
+        self.floor = lease.RevisionFloor()  # D32 (#432): fed every few seconds (observe_state); fails closed for one lease after start
         self._beat_signer = None        # beat.Signer, made at the first heartbeat signed (beat_signer())
         self.published = None
+        self.rounds = RoundLog()                # #470: each pull round's outcome, in the journal
         # the unlock listener's refusals, by cause (#317), in regalia-sync's metrics directory
         self.refusals = metrics.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", metrics.UNLOCK_CAUSES)
 
@@ -756,7 +1073,34 @@ class Sync:
                                enrolpeer.tpm_identity(self.node.tcti, self.node.run), enrolpeer.tpm_activate(self.node.tcti, self.node.run))
         # attester_for itself: each request is judged under the manifest held then, by that manifest's document (#332)
         return sync.Server(self.node.node_id, self.store, self.freshness, self.node.attester_for, self.signer,
-                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents(), cosigner=self.cosign)
+                           wgsvc.key_at, self.trail, enrol=enrol, documents=self.node.documents(), cosigner=self.cosign,
+                           floor=self.floor, applied=lease.read_applied)
+
+    FLOOR_SAMPLE_S = 5
+
+    def between_rounds(self, stop, interval, clock=time.monotonic, sleep=time.sleep):
+        """The wait until the next pull round (`interval` s, or until `stop()`), feeding the RevisionFloor every
+        FLOOR_SAMPLE_S meanwhile. The floor issues only once it holds a sample a lease old, so sampling once a pull round
+        (60 s on a host) could keep a restarted issuer closed for up to a pull interval past "serving + one lease",
+        which the runbook's wait (KERNEL-UPDATE 3.5) and the drills rely on (62's read of c4's #504). Sampled every few
+        seconds, its warm-up ends at most FLOOR_SAMPLE_S after one lease from its watch's first fresh applied.json,
+        and the node serves only after that file is fresh (its own lease request carries it)."""
+        deadline, sample = clock() + interval, clock() + self.FLOOR_SAMPLE_S
+        while not stop() and clock() < deadline:
+            sleep(1)
+            if clock() >= sample:
+                self.observe_state()
+                sample = clock() + self.FLOOR_SAMPLE_S
+
+    def observe_state(self):
+        """D32 (#432): this issuer's RevisionFloor fed from its etcd watch's file, each round and every FLOOR_SAMPLE_S. A refusal here (a stale,
+        absent or regressed file: a revision or state epoch gone back) records nothing; it is not lost, because each
+        lease request reads the file again (sync.Server.observe_state) and that read refuses the lease (fail closed;
+        regalia-kms-48)."""
+        try:
+            self.floor.applied(*lease.read_applied())
+        except (Refused, OSError):          # an I/O error too (an EIO, /proc): a missed sample, never the end of Sync.run (c4)
+            pass
 
     # ---- heartbeats signed by the nodes (#199, beat.py) ----
 
@@ -812,11 +1156,25 @@ class Sync:
         chain is published after EACH source, not after all of them: a commit moves the TPM anchor, and
         the root services refuse the published chain until it catches up (Node.manifest)."""
         sources = self.node.sources(self.manifest())
-        client = sync.Client(self.node.node_id, self.store, self.freshness, sources, self.trail, documents=self.node.documents())
+        seen = []
+
+        def sink(event):
+            self.trail(event)                   # the trail first: it is the record, and a sink that fails still stops the round
+            seen.append(event)
+        client = sync.Client(self.node.node_id, self.store, self.freshness, sources, sink, documents=self.node.documents())
         changed = False
         for name in sorted(sources):
-            with contextlib.suppress(Refused):
-                client.pull(name)
+            del seen[:]
+            try:
+                now_at, _ = client.pull(name)
+            except Refused as refused:
+                denied = [e for e in seen if e.get("outcome") == "DENY"]
+                self.rounds.refused(name, refused, denied[-1] if denied else None)
+            else:
+                # the epoch held when this source's pull began: its first sync-apply event was filed under it (no
+                # second store load, and no TPM read, per round: 3e's read)
+                applies = [e["epoch"] for e in seen if e.get("event") == "sync-apply"]
+                self.rounds.pulled(name, applies[0] if applies and applies[0] else None, now_at["epoch"])
             changed = self.publish() or changed
         return changed
 
@@ -843,6 +1201,7 @@ class Sync:
         self.refusals.flush()                   # its zeros from the start, then every round (refusals only count)
         try:
             while not stop():
+                self.observe_state()
                 self.pull_round()
                 # #199: under v4 the nodes sign the heartbeats; this node proposes when it is its turn (beat.Proposer).
                 # A refusal before any proposal (no authenticated time, not a UKI boot: no PCR key to sign under) is
@@ -861,9 +1220,7 @@ class Sync:
                     watch.step()
                 self.refusals.flush()
                 self.membership_metrics()
-                deadline = time.monotonic() + self.node.cfg["pull_interval"]
-                while not stop() and time.monotonic() < deadline:
-                    time.sleep(1)
+                self.between_rounds(stop, self.node.cfg["pull_interval"])
         finally:
             for listener in listeners:
                 listener.close()
@@ -893,8 +1250,12 @@ def authtime_service(cfg):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", default="/etc/regalia/node.json")
-    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check", "time-clear", "esp-advance"))
-    parser.add_argument("--esp", default="/efi", help="esp-advance only: the ESP's mount point")
+    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check", "time-clear", "esp-advance", "site-advance", "site-check"))
+    parser.add_argument("--esp", default="/efi", help="esp-advance, site-advance and site-check: the ESP's mount point")
+    parser.add_argument("--site", help="site-advance only: the NEW site configuration (sitecfg), this node's, from the move "
+                        "sheet. Run only after the root's epoch lists this node's new PCR 12 (README §7, the move)")
+    parser.add_argument("--esp-trail", help="esp-advance only: its trail (default: the registry's, %s; the three-node fixture "
+                        "gives each node its own)" % "trails.where(%r)" % ESP_TRAIL)
     parser.add_argument("--esp-lock", default=ESP_LOCK, help="esp-advance only: the anchor's writer lock (default: the unit's "
                         "RuntimeDirectory; the three-node fixture gives each node its own)")
     parser.add_argument("--reason", help="time-clear only: why chronyd may run again. FIRST compare the declared NTS servers "
@@ -925,10 +1286,19 @@ def main(argv=None):
         elif args.service == "wg-apply":
             print("wg-svc and %s applied under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
         elif args.service == "esp-advance":
+            trail = Trail(args.esp_trail or trails.where(ESP_TRAIL), ESP_TRAIL)
             try:
-                epoch, sha, rewritten, unrenderable = esp_advance(node, args.esp, lock_path=args.esp_lock)
-            except BaseException:
+                epoch, sha, rewritten, unrenderable = esp_advance_settled(node, args.esp, lock_path=args.esp_lock, record=trail)
+            except TrailIncomplete as gap:
+                # the advance happened: its metrics say so, and no DENY line is written for it; the trail holds its
+                # request with no outcome, and the exit (3, neither success nor a refusal) fails the unit for an operator
+                esp_metrics(node, ok=True, renderable=gap.result[3] is None)
+                print("INCOMPLETE: %s" % gap, file=sys.stderr)
+                return 3
+            except BaseException as failure:
                 esp_metrics(node, ok=False)
+                with contextlib.suppress(Exception):      # the refusal recorded too, best effort: it is also in the journal
+                    trail({"event": "esp-advance", "outcome": "DENY", "reason": ("%s: %s" % (type(failure).__name__, failure))[:240]})
                 raise
             esp_metrics(node, ok=True, renderable=unrenderable is None)
             print("the ESP's membership chain is epoch %d (sha256 %s%s), and the TPM anchor with it"
@@ -936,6 +1306,29 @@ def main(argv=None):
             if unrenderable:
                 print("WARNING: the initrd cannot render a boot configuration under epoch %d (%s): the next boot asks for "
                       "the recovery key" % (epoch, unrenderable), file=sys.stderr)
+        elif args.service == "site-advance":
+            require(args.site, "site-advance takes --site: the new site configuration")
+            trail = Trail(args.esp_trail or trails.where(ESP_TRAIL), ESP_TRAIL)
+            try:
+                label, sha, rewritten = site_advance(node, args.esp, args.site, lock_path=args.esp_lock, record=trail)
+            except TrailIncomplete as gap:
+                print("INCOMPLETE: %s" % gap, file=sys.stderr)
+                return 3
+            except BaseException as failure:
+                with contextlib.suppress(Exception):      # best effort: it is also in the journal
+                    trail({"event": "site-advance", "outcome": "DENY", "reason": ("%s: %s" % (type(failure).__name__, failure))[:240]})
+                raise
+            print("the ESP's site document is %s (sha256 %s%s): the next boot matches the accepted set %r. Replace the rootfs "
+                  "site configuration at the move; regalia-site-check refuses a boot where the two differ"
+                  % (args.site, sha, ", written now" if rewritten else ", already there", label))
+        elif args.service == "site-check":
+            try:
+                keys = site_check(node, args.esp)
+            except BaseException:
+                site_check_metrics(ok=False)
+                raise
+            site_check_metrics(ok=True)
+            print("the site configuration agrees with the measured site document in %s" % ", ".join(keys))
         elif args.service == "admission":
             admission_service(node).run(lambda: False)
         else:

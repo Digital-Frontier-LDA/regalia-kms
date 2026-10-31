@@ -64,7 +64,8 @@ class InitOnSwtpm(unittest.TestCase):
                     raise
                 time.sleep(0.05)
         self.addCleanup(lambda: os.kill(pid, 15))
-        patcher = unittest.mock.patch.dict(os.environ, TPM2TOOLS_TCTI="swtpm:path=" + sock)
+        # a swtpm node.json is a test's only (regalia-afi, b9 on #596): the switch no shipped file sets
+        patcher = unittest.mock.patch.dict(os.environ, {"TPM2TOOLS_TCTI": "swtpm:path=" + sock, "REGALIA_TCTI_ALLOW_SIMULATOR": "1"})
         patcher.start()
         self.addCleanup(patcher.stop)
         self.dir, self.wg = self.d + "/enrol", self.d + "/etc/wg-service.key"
@@ -266,7 +267,8 @@ class InitOnSwtpm(unittest.TestCase):
         with self.assertRaisesRegex(enrol.Refused, "made for another system-phase PCR key"):
             self.init(system_pub=OTHER_PUB)
         # a bundle whose signing key another TPM certified: the AK's signature does not cover it
-        forged = dict(bundle, signing_public=bundle["signing_public"][:-2] + "00")
+        last = bundle["signing_public"][-2:]                    # always another byte: "00" over a "00" changed nothing (1 in 256)
+        forged = dict(bundle, signing_public=bundle["signing_public"][:-2] + ("00" if last != "00" else "01"))
         with self.assertRaises(membership.Refused):
             enrol.entry(forged, SYSTEM_PUB, keep, activation)
         # another AK of this TPM, named consistently in the bundle (its Name recomputes): the certification is not its
@@ -553,7 +555,7 @@ class InitOnSwtpm(unittest.TestCase):
         root = hbt.pub(hbt.ROOT)
         example = {"schema": "regalia.node/v1", "node_id": "x", "site": etc + "site.json", "root_key": "00" * 32,
                    "tcti": os.environ["TPM2TOOLS_TCTI"], "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018",
-                   "nv_signing": "0x0150001c", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
+                   "nv_signing": "0x0150001c", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run", "admission_log_dir": self.d + "/log-admission",
                    "wg_service_key": self.wg, "measurements": etc + "measurements.json", "pcrs": [7, 11],
                    "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
         with unittest.mock.patch.object(enrol, "CONFIG_DIR", etc), unittest.mock.patch.object(enrol, "NODE_JSON", etc + "node.json"), \
@@ -585,6 +587,12 @@ class InitOnSwtpm(unittest.TestCase):
                                           as_sync=in_process, out=io.StringIO(), first_beat=first_beat), (1, digest))
 
 
+    def _record_file(self, record):
+        path = self.d + "/ownerauth.record.json"
+        with open(path, "w") as f:
+            json.dump(record, f)
+        return path
+
     def test_commit_under_v4_with_the_owner_authorization_set(self):
         """#420: the production enrolment, on a real TPM whose owner and lockout authorizations are set (#242). init on
         this TPM; the root's challenge, activate and entry; a v4 manifest naming this host; the measurements naming the
@@ -607,9 +615,9 @@ class InitOnSwtpm(unittest.TestCase):
         serials = ["DENK0500001", "36000001"]                        # not bench tokens: a v4 chain refuses those
         with unittest.mock.patch.object(enrol, "token_serials", lambda module, run=None: list(serials)):
             bundle = self.init(system_pub=pem)
-        keep, answer = self.proven(bundle)
+        keep, activation = self.proven(bundle)
         nodes = v4.nodes4()
-        nodes[0] = dict(nodes[0], **enrol.entry(bundle, pem, keep, answer))
+        nodes[0] = dict(nodes[0], **enrol.entry(bundle, pem, keep, activation))
         # the signed image this host booted, and the measurements naming its system-phase key for every node
         image = sb.image("approved")
         signature, _ = sb.signature(image, private, public)
@@ -627,24 +635,33 @@ class InitOnSwtpm(unittest.TestCase):
         for argv in (["tpm2_createprimary", "-C", "o", "-c", self.d + "/srk.ctx"],
                      ["tpm2_evictcontrol", "-C", "o", "-c", self.d + "/srk.ctx", ownerauth.SRK], ["tpm2_flushcontext", "-t"]):
             self.assertEqual(subprocess.run(argv, capture_output=True).returncode, 0, argv)
-        for hierarchy in ("o", "l"):
-            with open(self.d + "/auth", "w") as f:
-                f.write("hex:" + value)
-            self.assertEqual(subprocess.run(["tpm2_changeauth", "-c", hierarchy, "file:" + self.d + "/auth"], capture_output=True).returncode, 0)
-        os.unlink(self.d + "/auth")
         record, record_root = toa.resigned(lambda r: None, key=tm.ROOT)     # the envelope's record, under this chain's root
         self.assertEqual(record_root, root)
+        # the owner authorization set as `enrol ownerauth` sets it (#420): from the envelope, in a session salted to the
+        # EK init recorded (#414); the lockout authorization as tpm-lockout.sh would, test-side
+        print(enrol.set_ownerauth("a", root, self._record_file(record), io.BytesIO((value + "\n").encode()), directory=self.dir),
+              file=io.StringIO())
+        with open(self.d + "/auth", "w") as f:
+            f.write("hex:" + value)
+        self.assertEqual(subprocess.run(["tpm2_changeauth", "-c", "l", "file:" + self.d + "/auth"], capture_output=True).returncode, 0)
+        os.unlink(self.d + "/auth")
         given = (ownerauth.read_value(io.BytesIO((value + "\n").encode())), record)
         etc = self.d + "/etc-regalia/"
         os.makedirs(etc)
         example = {"schema": "regalia.node/v1", "node_id": "x", "site": etc + "site.json", "root_key": "00" * 32, "tcti": tcti,
                    "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018", "nv_signing": "0x0150001c", "state_dir": self.d + "/state",
-                   "admission_dir": self.d + "/admission", "run_dir": self.d + "/run", "wg_service_key": self.wg,
+                   "admission_dir": self.d + "/admission", "run_dir": self.d + "/run", "admission_log_dir": self.d + "/log-admission", "wg_service_key": self.wg,
                    "measurements": etc + "measurements.json", "pcrs": [7, 11],
                    "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
 
+        handed = []
+
         def in_process(config, chain, owner_auth=None):         # the regalia-sync step, in process
+            handed.append(owner_auth)                            # #419: under v4 it is given none
             return enrol.anchor_and_store(config, chain, owner_auth=owner_auth)
+
+        def probe(config):                                       # the regalia-sync probe: no source holds a heartbeat
+            return [], ["no source is configured"]
 
         def first_beat(config, bootstrap=False, owner_auth=None):
             from deploy.baremetal import node as nm
@@ -663,8 +680,10 @@ class InitOnSwtpm(unittest.TestCase):
             self.assertEqual(listed & enrolment, set())          # nothing defined: no anchor, slot or counter index (1e)
             epoch, digest = enrol.commit(self.dir, envelope, root, enrol.fingerprint(root), document, nt.SITE, example,
                                          as_sync=in_process, out=io.StringIO(), first_beat=first_beat, bootstrap=True,
-                                         ownerauth_given=given)
+                                         ownerauth_given=given, probe=probe)
             self.assertEqual((epoch, digest), (1, m.digest(man)))
+            # #419: every owner-authorized definition was this process's; the regalia-sync step got no owner authorization
+            self.assertEqual(handed, [None])
             listed = {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", subprocess.run(["tpm2_getcap", "handles-nv-index"],
                                                                                          capture_output=True, text=True).stdout)}
             self.assertTrue({int(example[k], 16) for k in ("nv_epoch", "nv_heartbeat", "nv_signing")} <= listed)   # the control

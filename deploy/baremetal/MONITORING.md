@@ -33,6 +33,13 @@ A scrape interval of 15 to 60 s suits both. The textfiles are written at their w
 60 s); the rules carry their own staleness checks (`RegaliaNodeMetricsStale`, `RegaliaAuditShipMetricsStale`),
 so a scrape interval does not hide a writer that stopped.
 
+**The scrape job is `regalia-node`.** Scrape the three nodes' node_exporter in one job of exactly that name
+(`job_name: regalia-node`). The rules that tell a node missing a writer from a node that is down (every
+`Regalia…Missing` alert, and `RegaliaNodeExporterDown` itself) select `up{job="regalia-node"}`: under any other
+name they never fire, and nothing reports that they cannot. The fleet comparisons (`RegaliaMembershipBehindFleet`,
+`RegaliaAnchorBehindFleet`) compare the nodes of one job, so the job holds one cluster's nodes and nothing else.
+`tests/test_scrape_job_contract.py` holds every rule's `job` matcher to the name in this paragraph.
+
 ## 3. Configuration on the node
 
 Everything comes from the node's validated site configuration (`/etc/regalia/site.json`,
@@ -60,7 +67,8 @@ Everything comes from the node's validated site configuration (`/etc/regalia/sit
   `RegaliaAuditShipMetricsStale` (5 minutes for a shipper's).
 - **A writer that never wrote** (after a boot, `/run` is empty) leaves no series at all, which no value rule
   can see: `RegaliaAuthtimeMetricsMissing`, `RegaliaHeartbeatMetricsMissing` and `RegaliaLeaseMetricsMissing`
-  fire when a scraped node has no such file for 5 minutes.
+  fire when a scraped node has no such file for 5 minutes; `RegaliaAuditShipMetricsMissing` when it lacks the
+  shipper's file of any trail in `trails.py`'s registry (an instance never enabled, or refused its trail's path).
 - **A file node_exporter cannot read** drops its series: `RegaliaNodeTextfileUnreadable`.
 - **Silence is not health.** The rules above make a missing signal an alert; the one thing they cannot see is
   the service itself having stopped (section 1).

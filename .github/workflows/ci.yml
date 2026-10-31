@@ -9,9 +9,16 @@ on:
 permissions:
   contents: read
 
+# One run per pull request: a new push cancels its own superseded run (seven sessions' pushes starved the hosted
+# runners, 2026-10-05). Anything else (main, a schedule) is a group of its own run: GitHub cancels an older PENDING
+# run of a group even without cancel-in-progress, and every main run must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,6 +39,7 @@ jobs:
       - name: go vet (every module)
         run: |
           go vet ./...
+          go vet -tags piv ./...
           ( cd adapters/sops && go vet ./... )
           ( cd adapters/gpgsign && go vet ./... )
 
@@ -113,8 +121,35 @@ jobs:
           sudo locale-gen en_US.UTF-8 >/dev/null
           python3 -Es -m unittest discover -s tests -p 'test_*.py'
 
+      - name: Install checksum-pinned etcd v3.6.15 for the operational-state cache's real-store test (ADR-0002 D32)
+        env:
+          ETCD_SHA256: b51d86e6bff2168de5ba8cd631c0fe6c785c7a1b32b083079f5677d6b7e2772c
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/etcd.tar.gz" \
+            https://github.com/etcd-io/etcd/releases/download/v3.6.15/etcd-v3.6.15-linux-amd64.tar.gz
+          echo "$ETCD_SHA256  $RUNNER_TEMP/etcd.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/etcd.tar.gz" \
+            --directory "$RUNNER_TEMP" --strip-components=1 etcd-v3.6.15-linux-amd64/etcd \
+            etcd-v3.6.15-linux-amd64/etcdctl etcd-v3.6.15-linux-amd64/etcdutl
+          chmod 0755 "$RUNNER_TEMP/etcd" "$RUNNER_TEMP/etcdctl" "$RUNNER_TEMP/etcdutl"
+          {
+            echo "ETCD_BIN=$RUNNER_TEMP/etcd"
+            echo "ETCDCTL_BIN=$RUNNER_TEMP/etcdctl"
+            echo "ETCDUTL_BIN=$RUNNER_TEMP/etcdutl"
+          } >> "$GITHUB_ENV"
+
+      - name: the lone survivor's etcd take-over and the fenced servers' rejoin, against the real etcd (#432)
+        env:
+          # with this set, missing etcd binaries fail the test instead of skipping it
+          REGALIA_EXPECT_ETCD: "1"
+        run: python3 -Es -m unittest -v tests.test_baremetal_takeover_etcd tests.test_baremetal_rejoin_etcd
+
       - name: test (both modules, race + vet)
         env:
+          # internal/opstate's real-store test runs against the etcd installed above; with this set, a
+          # missing one fails instead of skipping.
+          REGALIA_EXPECT_ETCD: "1"
           # internal/pin's mlock refusal can only be exercised where mlock can be made to fail, and
           # on linux it can. With this set the test fails rather than skips if that stops being true.
           REGALIA_EXPECT_MLOCK_ENFORCED: "1"
@@ -129,6 +164,14 @@ jobs:
         run: |
           umask 002
           go test -race ./...
+          # The piv-tagged tests too (DEV1, 2026-10-24): `go test ./...` builds without the tag and never ran them, 24
+          # files, hardware-free ones among them (the YubiKey PIV driver, its seam and conformance). The physical ones
+          # skip without their env. The packages are DERIVED from the files, never listed, so a new piv-tagged test
+          # cannot be left out; finding none fails, so a renamed tag cannot turn this into a step that runs nothing.
+          mapfile -t piv < <(grep -rlE --include='*_test.go' '^//go:build .*\bpiv\b' . | xargs -r grep -LE '^//go:build .*!piv' | xargs -r -n1 dirname | sort -u)
+          [ "${#piv[@]}" -gt 0 ] || { echo "::error::no piv-tagged test file found: the tag or this step's search changed"; exit 1; }
+          echo "piv-tagged test packages:"; printf '  %s\n' "${piv[@]}"
+          go test -race -tags piv "${piv[@]}"
           ( cd adapters/sops && go test -race ./... )
           # regalia-sign's claim is that GnuPG and git accept what it makes, so both must be here:
           # with this set, a test that cannot find them fails instead of skipping.
@@ -139,7 +182,7 @@ jobs:
   # module stands in for the library. Without this job they would ship untested in a Go-only CI,
   # which is how the handle-reuse defect they pin reached review in the first place.
   bench-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -162,8 +205,89 @@ jobs:
           "$RUNNER_TEMP/bench/bin/python" -I -m pip install --quiet --require-hashes -r tools/bench/requirements.txt
           "$RUNNER_TEMP/bench/bin/python" -Es tools/bench/test_hsm_bench.py
 
+  known-polkit-rules-debian13:
+    # os_probe.KNOWN_RULES_FILES are the only polkit rules files a KMS host may carry beside the KMS rule, known by
+    # sha256 as Debian 13 ships them. build-test's runner is Ubuntu, whose files are not those (regalia-9qj), so the
+    # digests are held here to Debian 13 itself: the packages os_probe names, at the versions it names, installed from
+    # deb.debian.org with apt checking the archive's signature against the image's own keyring.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    container:
+      # debian:13.6 by digest: created 2026-08-24, past the 7-day floor. Its apt sources are trixie's, so what is
+      # installed is today's trixie, held to the versions below.
+      image: debian:13.6@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+    env:
+      # The versions os_probe's KNOWN_RULES_FILES comment names. apt installing any other version is a failure: a
+      # Debian update that moves one of these files must renew the digest, not pass on a newer package.
+      POLKITD: "126-2"
+      SYSTEMD: "257.13-1~deb13u1"
+      NETWORK_MANAGER: "1.52.1-1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install the named packages from deb.debian.org
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -eu
+          # The image has no CA certificates, so the first update is over the image's own http sources. apt
+          # refuses any index whose InRelease signature the image's keyring does not verify, and every .deb is
+          # checked against the signed index, so this fetch is authenticated without TLS. ca-certificates comes
+          # from it; every later fetch is over https.
+          # No apt setting may accept an unsigned or unverified archive (TEAMLEAD-grafana's condition for the http
+          # bootstrap): checked in every live, uncommented line of apt's configuration and sources, before each fetch.
+          # Comments (# and apt.conf's //) are cut first; a URL's // goes with them, which no setting here sits after.
+          insecure_apt() {
+            find "$1" -type f -exec sed -e 's|#.*||' -e 's|//.*||' {} + |
+              grep -niE 'AllowInsecureRepositories|AllowDowngradeToInsecureRepositories|AllowUnauthenticated|allow-unauthenticated|trusted=yes|^[[:space:]]*Trusted:[[:space:]]*yes'
+          }
+          mkdir -p "$RUNNER_TEMP/apt-insecure" "$RUNNER_TEMP/apt-commented"
+          printf 'APT::Get::AllowUnauthenticated "true";\nAcquire::AllowInsecureRepositories "true";\n' > "$RUNNER_TEMP/apt-insecure/99insecure"
+          printf '// Acquire::AllowInsecureRepositories is not set\n# Types: deb [trusted=yes]\n' > "$RUNNER_TEMP/apt-commented/x.sources"
+          insecure_apt "$RUNNER_TEMP/apt-insecure" >/dev/null || { echo "the guard misses an insecure apt setting" >&2; exit 1; }
+          if insecure_apt "$RUNNER_TEMP/apt-commented"; then echo "the guard reads a comment as a setting" >&2; exit 1; fi
+          if insecure_apt /etc/apt; then echo "apt is set to accept an unverified archive" >&2; exit 1; fi
+          apt-get update
+          # the only package fetched over http
+          apt-get install -y --no-install-recommends ca-certificates
+          sed -i 's|http://deb.debian.org/|https://deb.debian.org/|g' /etc/apt/sources.list.d/debian.sources
+          # An http source left anywhere apt reads: a deb822 URIs line or a one-line `deb http://…` entry, in
+          # sources.list or any *.list / *.sources, with comments cut (the image's own name snapshot http URLs).
+          live_http() {
+            find "$1" \( -name sources.list -o -name '*.list' -o -name '*.sources' \) -type f -exec sed -e 's|#.*||' {} + |
+              grep -nE '^[[:space:]]*URIs:.*http://|^[[:space:]]*deb(-src)?[[:space:]]+(\[[^]]*\][[:space:]]+)?http://'
+          }
+          for case in live.sources one-line.list commented; do mkdir -p "$RUNNER_TEMP/apt-$case/sources.list.d"; done
+          printf 'Types: deb\nURIs: http://deb.debian.org/debian\n' > "$RUNNER_TEMP/apt-live.sources/sources.list.d/a.sources"
+          printf 'deb [arch=amd64] http://deb.debian.org/debian trixie main\n' > "$RUNNER_TEMP/apt-one-line.list/sources.list"
+          printf '# http://snapshot.debian.org/\nURIs: https://deb.debian.org/debian\n# deb http://x/ trixie main\n' \
+            > "$RUNNER_TEMP/apt-commented/sources.list.d/b.sources"
+          for case in live.sources one-line.list; do
+            live_http "$RUNNER_TEMP/apt-$case" >/dev/null || { echo "the guard misses a live http source ($case)" >&2; exit 1; }
+          done
+          if live_http "$RUNNER_TEMP/apt-commented"; then echo "the guard reads a comment as a source" >&2; exit 1; fi
+          if live_http /etc/apt; then echo "an http source is left" >&2; exit 1; fi
+          rm -rf /var/lib/apt/lists/*
+          if insecure_apt /etc/apt; then echo "apt is set to accept an unverified archive" >&2; exit 1; fi
+          apt-get update
+          apt-get install -y --no-install-recommends python3 \
+            "polkitd=$POLKITD" "systemd=$SYSTEMD" "network-manager=$NETWORK_MANAGER"
+          # what was measured: the version of each package the digests are compared with
+          dpkg-query -W -f '${Package} ${Version}\n' polkitd systemd network-manager | tee "$RUNNER_TEMP/measured.txt"
+          for want in "polkitd $POLKITD" "systemd $SYSTEMD" "network-manager $NETWORK_MANAGER"; do
+            grep -qxF "$want" "$RUNNER_TEMP/measured.txt" || { echo "installed is not $want" >&2; exit 1; }
+          done
+          sha256sum /usr/share/polkit-1/rules.d/*.rules
+      - name: the probe's known digests are these files
+        env:
+          # here the check never skips, and a known file that is missing fails it
+          REGALIA_EXPECT_DEBIAN13_RULES: "1"
+        run: |
+          python3 -Es -m unittest -v tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd.test_the_known_digests_are_debian_13_s_files tests.test_baremetal_os_probe.OnlyTheKMSReachesPcscd.test_a_flipped_known_digest_fails_on_this_machine_s_files tests.test_baremetal_os_probe.KnownRulesCheck
+
   govulncheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -183,7 +307,7 @@ jobs:
   # without the token e2e/softhsm-pkcs11.sh provisions — and after regalia#487 nothing here ran it,
   # so all of them passed by skipping. Closure evidence for regalia#12, #6 and #24 cites this run.
   pkcs11-e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -240,7 +364,7 @@ jobs:
 
   # Checks that need a context the main job does not have: root, and time.
   privileged-and-fuzz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -294,7 +418,7 @@ jobs:
   # one (the control), and what the KMS needs still works. It starts root units on the runner's own
   # system manager, which is why it has a job, and a runner, to itself.
   kms-sandbox:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -308,7 +432,7 @@ jobs:
   # is measured on that process (os_probe.py). It installs a binary, a user, a unit and an AppArmor
   # profile (complain mode) on the runner, so it has a runner to itself too.
   kms-hardened-serve:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -331,7 +455,7 @@ jobs:
   # SDK commit — no binary is downloaded, so the node under test is exactly what the tag's source
   # says. The build is cached by that commit; a cache miss costs one build, never a different binary.
   cosmos-node:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
       COSMOS_SDK_TAG: v0.50.15
@@ -381,7 +505,7 @@ jobs:
   # PCRs, another TPM's AK, a session carried across a reboot and rolled-back TPM state are refused.
   # The script exits nonzero on any FAIL; the count guards against it passing by running nothing.
   tpm-attest:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -397,8 +521,8 @@ jobs:
           bash e2e/tpm-attest-swtpm.sh > "$RUNNER_TEMP/attest.log" 2>&1 || status=$?
           cat "$RUNNER_TEMP/attest.log"
           [ "$status" -eq 0 ] || exit "$status"
-          grep -q '^tpm-attest-swtpm: 31 passed, 0 failed$' "$RUNNER_TEMP/attest.log" || {
-            echo "::error::the attestation battery did not run all 31 checks" >&2; exit 1; }
+          grep -q '^tpm-attest-swtpm: 33 passed, 0 failed$' "$RUNNER_TEMP/attest.log" || {
+            echo "::error::the attestation battery did not run all 33 checks" >&2; exit 1; }
       - name: regalia-node enrol init against swtpm (keys made on the host, nothing foreign touched, a crash at every call) — may not skip
         env:
           REGALIA_EXPECT_SWTPM: "1"
@@ -410,7 +534,7 @@ jobs:
   # without loading it, so this proves the profile is well-formed and says what the tests read in it;
   # it does not prove a daemon runs under it. That is measured on the host (kms_apparmor_enforced).
   apparmor-profile:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -429,7 +553,7 @@ jobs:
   # its own NV counter (replay and disk rollback refused), and the TPM clock behind the time floor.
   # The script fails if any of its three tests is skipped.
   heartbeat-swtpm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -446,7 +570,7 @@ jobs:
   # signs a 5-minute lease, a holds and renews it; a revoked a is refused renewal; a rebooted a needs
   # a new attested session. The script fails if either of its two tests is skipped.
   runtime-lease-swtpm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -465,7 +589,7 @@ jobs:
   # script fails if the file-backed tests of recovery-key.sh do not all run. Every header sync under a
   # fault is lab/recovery/matrix.py (recovery-matrix.yml, #175).
   luks-recovery-key:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -486,16 +610,16 @@ jobs:
   # loss, latency, an unreachable peer and a wrong key each end within a bound. Every ruleset is
   # loaded only inside a throwaway namespace.
   wg-boot-netns:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install WireGuard tools, nftables, conntrack, and the kernel's extra modules (netem)
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends wireguard-tools nftables iproute2 conntrack "linux-modules-extra-$(uname -r)"
+        # The runner's kernel can be ahead of the archive's linux-modules-extra (7.0.0-1017-azure since
+        # 2026-10-21): the shared step installs it only when the running kernel lacks sch_netem (regalia-1ur).
+        run: bash e2e/lib/apt-install-netem.sh wireguard-tools nftables iproute2 conntrack
       - name: The boot mesh, by behaviour (WireGuard, the initrd ruleset, the host firewall)
         run: sudo bash e2e/wg-boot-netns.sh
 
@@ -505,7 +629,13 @@ jobs:
   # key opens), unattended (systemd unseals the credentials, WireGuard comes up before root, a peer
   # gives its half, nobody types anything), and no peer (the console asks for the recovery key).
   unlock-boot-qemu:
-    runs-on: ubuntu-latest
+    # Kept on 24.04 (regalia-a0y): on 26.04 the guest's credentials intermittently fail to unseal ("Failed to set up
+    # credentials: Protocol error", a different boot each run: 2c in 39886774777, 2 in 39890995069), and never on
+    # 24.04. Explained (regalia-d8, runs 39919392188, 39922567279, 39928371319): QEMU 10.2.1 with swtpm 0.10.1 cancels a
+    # PCR_Extend swtpm already answered, so the firmware drops a measurement (EFI_DEVICE_ERROR), with tpm-tis and tpm-crb
+    # alike; 0 in 38 boots on 24.04. The host's emulation, not the product. Such a boot now fails BY NAME ("HOST TPM
+    # EMULATION FAULT"). Move when the 26.04 image's QEMU/swtpm change, or before GitHub retires 24.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -525,7 +655,12 @@ jobs:
         # are built by deploy/baremetal/initrd/build-initrd.sh (#248), with the Go release go.mod pins.
         # REGALIA_EXPECT_KVM=1: without /dev/kvm the test FAILS, so boots 8 and 9 (#70: 150 s with no peer, the
         # peers back after 150 s) can never be skipped here.
-        run: sudo REGALIA_EXPECT_KVM=1 REGALIA_GO="$(command -v go)" REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/20261003T121500Z/ REGALIA_BOOT_SECURITY_MIRROR=https://snapshot.debian.org/archive/debian-security/20261003T121500Z/ bash e2e/unlock-boot-qemu.sh
+        run: sudo REGALIA_DIAG_DIR="$RUNNER_TEMP/unlock-diag" REGALIA_EXPECT_KVM=1 REGALIA_GO="$(command -v go)" REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/20261023T210712Z/ REGALIA_BOOT_SECURITY_MIRROR=https://snapshot.debian.org/archive/debian-security/20261023T210712Z/ bash e2e/unlock-boot-qemu.sh
+      - name: Keep the software TPM's logs and the consoles (regalia-zga, regalia-a0y)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: unlock-boot-qemu
 
   # regalia-kms#248: the KMS host initrd is REPRODUCIBLE, and stays so. deploy/baremetal/initrd/build-initrd.sh
   # builds it from pinned inputs (one snapshot.debian.org time with the security suite, dracut --reproducible,
@@ -533,7 +668,7 @@ jobs:
   # locale, time zone, umask and environment), and a Debian 13 container (another host userland, the one a
   # real builder runs). initrd-reproducible-compare FAILS unless every initrd and build record is identical.
   initrd-reproducible:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -568,8 +703,57 @@ jobs:
           path: ${{ runner.temp }}/repro
           retention-days: 14
 
+  # regalia-kms#61, first slice: the KMS host's root filesystem, built twice from nothing (the second in a hostile
+  # environment) at the pinned snapshot; the two archives must be identical. The cgo daemon (-tags piv) is linked in a
+  # build tree from the same snapshot, so its reproducibility is measured here.
+  rootfs-reproducible:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the tree builder
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mmdebstrap debian-archive-keyring
+      - name: Build the root filesystem twice from nothing (the second in a hostile environment); both must be identical
+        run: sudo REGALIA_GO="$(command -v go)" bash e2e/rootfs-reproducible.sh "$RUNNER_TEMP/rootfs" 2
+      - name: The image's etcd, run under the image's regalia-etcd.service sandbox (#484)
+        run: sudo bash e2e/etcd-unit-sandbox.sh "$RUNNER_TEMP/rootfs/build-1/rootfs.tar"
+      - name: Make the builds readable
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/rootfs" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: rootfs-listing-and-record
+          path: |
+            ${{ runner.temp }}/rootfs/build-*/rootfs-listing.txt
+            ${{ runner.temp }}/rootfs/build-*/rootfs-build.json
+          retention-days: 14
+
+  # regalia-kms#61, second slice: install-host.sh on a loop device (GPT, LUKS2 made on the host, the rootfs, the ESP),
+  # read back from the disk, and its refusals before anything is written
+  install-host-loop:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the disk tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends cryptsetup-bin dosfstools mdadm
+      - name: Install onto a loop device and read it back
+        run: sudo bash e2e/install-host-loop.sh | tee "$RUNNER_TEMP/install.log"; grep -q ' 0 failed$' "$RUNNER_TEMP/install.log"
+
   initrd-reproducible-debian:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     container:
       image: debian:trixie
@@ -601,10 +785,10 @@ jobs:
 
   initrd-reproducible-compare:
     needs: [initrd-reproducible, initrd-reproducible-debian]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: ${{ runner.temp }}/builds
       - name: Every builder's initrd and build record are identical
@@ -632,7 +816,7 @@ jobs:
   # as authenticated only while chrony is synchronised to two agreeing NTS sources; one server
   # stopping, a plain NTP source in the configuration, and a check that has stopped each end it.
   authtime-chrony-nts:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -641,7 +825,9 @@ jobs:
       - name: Install chrony
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends chrony python3-cryptography
+          # tzdata-legacy: /usr/share/zoneinfo/right/UTC, chronyd's leap-second table (leapsectz), a node
+          # requirement on Debian 13; ubuntu-26.04's tzdata no longer carries it
+          sudo apt-get install -y -qq --no-install-recommends chrony python3-cryptography tzdata-legacy
       - name: The clock is authenticated only under two agreeing NTS sources (live chronyd)
         run: |
           set -o pipefail
@@ -656,7 +842,7 @@ jobs:
   # detected and repaired; a partitioned node catches up in rounds and authorizes nothing until a
   # heartbeat for the tip arrives. Every interface lives in a throwaway namespace.
   regalia-sync-netns:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -681,7 +867,7 @@ jobs:
   # started by the runner's systemd and the real systemd-cryptsetup takes the key from their socket.
   # The script fails if any of its tests is skipped.
   peer-unlock-swtpm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -708,7 +894,7 @@ jobs:
   # holds a lease; the old hardware is refused by every decision; its identities cannot be enrolled
   # again. The script fails if its test is skipped.
   node-replacement-swtpm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -727,7 +913,7 @@ jobs:
   # including the retired image with the old policy file restored. Debian 13, because that is what the
   # KMS hosts run (systemd 257). Privileged, with the runner's /dev: the unlock needs device-mapper.
   pcrlock-luks-swtpm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     container:
       image: debian:13
@@ -750,7 +936,7 @@ jobs:
   # record's value in the initrd and again once booted, and a secret sealed to each phase's key opens
   # with the image's own signature in that phase only. Nothing is booted; no real key is used.
   uki-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     container:
       image: debian:13
@@ -820,7 +1006,7 @@ jobs:
   # in one exchange (its TPM epoch counter follows), and its disk rolled back is refused. The script
   # fails if its test is skipped.
   convergence-swtpm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -839,7 +1025,7 @@ jobs:
   # seen on NEXT; the old image, booted again, is then refused, and so is a peer's membership restored
   # from before the retirement. The script fails if its test is skipped.
   rolling-policy-swtpm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -857,7 +1043,7 @@ jobs:
   # it names; another node's name, a retired node's key, a bare key and a bad certificate are refused.
   # No port (ProxyCommand runs `sshd -i`), no FIDO token. The script fails if a test is skipped.
   ssh-trust-sshd:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -875,7 +1061,7 @@ jobs:
   # through the admission file. Not ready and 503 without a lease; a verified signature with one;
   # stops by itself when renewal stops; refuses at once when the node is revoked.
   runtime-admission:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
