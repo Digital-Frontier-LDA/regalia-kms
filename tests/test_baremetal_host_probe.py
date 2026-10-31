@@ -1441,7 +1441,10 @@ class SignedEvidence(unittest.TestCase):
         for disagreeing, why in ((["--import-key-sha256", FP[1:17]], "--import-key-sha256 %s is not the evidence's" % FP[1:17]),
                                  (["--import-key-sha256", FP[:63] + ("0" if FP[63] != "0" else "1")], "they disagree, and the import key is judged against the evidence"),
                                  (["--secure-boot-cert-sha256", other], "--secure-boot-cert-sha256 %s is not the evidence's" % other),
-                                 (["--secure-boot-cert-sha256", SB_SHA[:16]], "they disagree, and db is judged against the evidence")):
+                                 (["--secure-boot-cert-sha256", SB_SHA[:16]], "they disagree, and db is judged against the evidence"),
+                                 # a prefix of the record, but shorter than the 16 hex a fingerprint must be: agrees with nothing
+                                 (["--import-key-sha256", FP[:15]], "--import-key-sha256 %r is not a fingerprint (at least 16 hex)" % FP[:15]),
+                                 (["--import-key-sha256", FP[:16] + "zz"], "is not a fingerprint (at least 16 hex)")):
             with self.subTest(disagreeing=disagreeing):
                 rc, problems, measured_with = judged(disagreeing)
                 self.assertEqual((rc, measured_with), (1, (FP, SB_SHA)))

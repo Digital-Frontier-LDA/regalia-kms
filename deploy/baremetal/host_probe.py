@@ -1173,7 +1173,9 @@ def main(argv=None, host=None, run=None):
             # Arguments may repeat the record; one that disagrees is an operator holding the wrong record, refused
             # rather than silently outvoted (kms#639, regalia-t2h). The host is still measured against the evidence.
             given = re.sub(r"[\s:]", "", args.import_key_sha256 or "").lower()
-            if given and not want.startswith(given):
+            if given and not re.fullmatch(r"[0-9a-f]{16,64}", given):
+                problems.append("--import-key-sha256 %r is not a fingerprint (at least 16 hex): it agrees with nothing" % given)
+            elif given and not want.startswith(given):
                 problems.append("--import-key-sha256 %s is not the evidence's pin_import_key_sha256 %s: they disagree, and the "
                                 "import key is judged against the evidence" % (given, want))
             given = (args.secure_boot_cert_sha256 or "").lower()
