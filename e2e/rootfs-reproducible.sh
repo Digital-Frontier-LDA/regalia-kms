@@ -17,7 +17,7 @@ export LC_ALL=C
 OUT="${1:?usage: rootfs-reproducible.sh OUT [BUILDS]}"
 BUILDS="${2:-2}"
 GO="${REGALIA_GO:?set REGALIA_GO to a go (any release from 1.21: it launches the toolchain go.mod pins)}"
-SNAPSHOT="${REGALIA_SNAPSHOT:-20261019T000000Z}"
+SNAPSHOT="${REGALIA_SNAPSHOT:-20261023T210712Z}"
 HOSTILE_TMP=""
 cleanup(){ [ -n "$HOSTILE_TMP" ] && rm -rf --one-file-system -- "$HOSTILE_TMP"; return 0; }
 trap cleanup EXIT
