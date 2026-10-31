@@ -961,7 +961,7 @@ class ProposeGenesis(unittest.TestCase):
 
     def test_owner_keys_exactly_two_cards_two_keys(self):
         """The library's own check (the card record already holds these): a caller giving owners otherwise."""
-        self.refused("the owner's keys are exactly two cards'", self.propose, owners={self.MAIN: self.owner_a})
+        self.refused("the owner's keys are exactly the two owner cards' SIG keys (D30.7)", self.propose, owners={self.MAIN: self.owner_a})
         self.refused("the two owner cards have the same key: they are one card", self.propose, owners={self.MAIN: self.owner_a, self.BACKUP: self.owner_a})
         self.refused("the owner card 40000002's key is not a raw Ed25519 public key", self.propose, owners={self.MAIN: self.owner_a, self.BACKUP: "AB" * 32})
 
