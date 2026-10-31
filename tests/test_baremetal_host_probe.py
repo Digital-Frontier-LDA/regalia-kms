@@ -1303,6 +1303,28 @@ class SecureBootDbx(unittest.TestCase):
                     self.assertFalse(value)
                     self.assertIn("does not hold a %s and a time per entry" % name, why)
 
+    def test_the_signature_list_types_are_the_specs(self):
+        """regalia-c6 on #644: every other test builds dbx from these same constants, so a wrong one (a GUID written in
+        its text order rather than as stored) would pass them all. Pinned here to UEFI 2.10, 32.4.1's GUIDs."""
+        import uuid
+        for constant, guid in ((host_probe.EFI_CERT_X509, "a5c059a1-94e4-4aa7-87b5-ab155c2bf072"),
+                               (host_probe.EFI_CERT_X509_SHA256, "3bd2a492-96c0-4079-b420-fcf98ef103ed"),
+                               (host_probe.EFI_CERT_X509_SHA384, "7076876e-80c2-4ee6-aad2-28b349a6865b"),
+                               (host_probe.EFI_CERT_X509_SHA512, "446dbf63-2502-4cda-bcfa-2465d2b0fe9d"),
+                               (EFI_CERT_SHA256, "c1c41626-504c-4092-aca9-41f936934328")):
+            with self.subTest(guid):
+                self.assertEqual(constant, uuid.UUID(guid).bytes_le)
+
+    def test_a_tbs_hash_is_compared_whole(self):
+        """regalia-c6 on #644: a SHA-384 or SHA-512 entry that agrees with our digest in its first 32 bytes only names
+        another certificate."""
+        for kind, hasher in ((host_probe.EFI_CERT_X509_SHA384, hashlib.sha384), (host_probe.EFI_CERT_X509_SHA512, hashlib.sha512)):
+            with self.subTest(hasher().name):
+                ours = hasher(self.tbs).digest()
+                near = ours[:32] + bytes(b ^ 0xff for b in ours[32:])
+                value, why = self.judge(DB_ATTRS + self.hashes(near, kind=kind))
+                self.assertTrue(value, why)
+
     def test_a_tbs_hash_revokes_only_under_a_certificate_hash_type(self):
         """regalia-c6 on #644: the same 32 bytes in an image-hash (EFI_CERT_SHA256) list, beside a certificate-hash list
         that names another certificate, revoke nothing; and our DER under a type that is not X509 revokes nothing."""
