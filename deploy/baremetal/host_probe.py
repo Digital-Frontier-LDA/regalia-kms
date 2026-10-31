@@ -165,6 +165,12 @@ DB_VAR = "/sys/firmware/efi/efivars/db-d719b2cb-3d3a-4596-a3bc-dad00e67656f"
 EFI_CERT_X509 = bytes.fromhex("a159c0a5e494a74a87b5ab155c2bf072")   # a5c059a1-94e4-4aa7-87b5-ab155c2bf072, as stored
 DBX_VAR = "/sys/firmware/efi/efivars/dbx-d719b2cb-3d3a-4596-a3bc-dad00e67656f"
 EFI_CERT_X509_SHA256 = bytes.fromhex("92a4d23bc0967940b420fcf98ef103ed")   # 3bd2a492-96c0-4079-b420-fcf98ef103ed, as stored
+EFI_CERT_X509_SHA384 = bytes.fromhex("6e877670c280e64eaad228b349a6865b")   # 7076876e-80c2-4ee6-aad2-28b349a6865b, as stored
+EFI_CERT_X509_SHA512 = bytes.fromhex("63bf6d440225da4cbcfa2465d2b0fe9d")   # 446dbf63-2502-4cda-bcfa-2465d2b0fe9d, as stored
+# dbx revokes a certificate by the hash of its tbsCertificate under any of these (UEFI 2.10, 32.4.1; edk2
+# ImageAuthentication.h): each entry is that hash, then an EFI_TIME of 16 bytes
+TBS_HASHES = {EFI_CERT_X509_SHA256: ("SHA-256", hashlib.sha256), EFI_CERT_X509_SHA384: ("SHA-384", hashlib.sha384),
+              EFI_CERT_X509_SHA512: ("SHA-512", hashlib.sha512)}
 IMPORT_HANDLE = os.environ.get("REGALIA_PIN_IMPORT_HANDLE", "0x81000101")
 IMA_LOG = "/sys/kernel/security/ima/ascii_runtime_measurements"
 KMS_BINARY = os_probe.ALLOWED_TOKEN_CLIENT_EXES[0]
@@ -208,6 +214,18 @@ class Host(os_probe.Host):
 
     def exists(self, path):
         return os.path.exists(path)
+
+    def missing(self, path):
+        """True only when the path is not there. os.path.exists is False for a path it may not stat (EACCES on a
+        directory above it): that is not absence, and a check that passes on absence must not pass on it (CodeRabbit
+        on kms#644)."""
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return False
 
     def which_all(self, tool):
         """Every executable named tool on PATH or in the standard system directories, by real path."""
@@ -255,8 +273,8 @@ def signature_entries(data):
             raise ValueError("the signature list at byte %d has inconsistent sizes" % at)
         if kind == EFI_CERT_X509 and entry <= 16:
             raise ValueError("the certificate list at byte %d has entries with no room for a certificate" % at)
-        if kind == EFI_CERT_X509_SHA256 and entry != 16 + 48:
-            raise ValueError("the certificate-hash list at byte %d does not hold a SHA-256 and a time per entry" % at)
+        if kind in TBS_HASHES and entry != 16 + TBS_HASHES[kind][1]().digest_size + 16:
+            raise ValueError("the certificate-hash list at byte %d does not hold a %s and a time per entry" % (at, TBS_HASHES[kind][0]))
         for e in range(at + 28 + header, at + size, entry):
             out.append((kind, data[e + 16:e + entry]))
         at += size
@@ -311,8 +329,8 @@ def secure_boot_db(host, expected=None):
     # dbx overrides db: the firmware refuses a certificate it revokes, by the whole certificate or by the hash of its
     # tbsCertificate (regalia-3ts). The image's own Authenticode hash is not checked here: that needs the image.
     dbx = host.read_bytes(DBX_VAR)
-    if dbx is None and host.exists(DBX_VAR):
-        return False, "the dbx EFI variable exists but is unreadable: a revocation cannot be ruled out"
+    if dbx is None and not host.missing(DBX_VAR):
+        return False, "the dbx EFI variable is unreadable, and not absent: a revocation cannot be ruled out"
     if dbx is None:
         return True, "db holds the image's Secure Boot certificate (%s), among %d; there is no dbx" % (want[:16], len(certs))
     try:
@@ -322,17 +340,24 @@ def secure_boot_db(host, expected=None):
     except ValueError as error:
         return False, "the dbx EFI variable is malformed: %s" % error
     tbs = None
-    if any(kind == EFI_CERT_X509_SHA256 for kind, _ in revoked):
+    if any(kind in TBS_HASHES for kind, _ in revoked):
         der = next(d for k, d in signature_entries(raw[4:]) if k == EFI_CERT_X509 and hashlib.sha256(d).hexdigest() == want)
         try:
-            tbs = hashlib.sha256(tbs_certificate(der)).digest()
+            tbs = tbs_certificate(der)
         except ValueError as error:
             return False, "dbx revokes certificates by their tbsCertificate, and the one in db cannot be read: %s" % error
     for kind, entry in revoked:
-        if (kind == EFI_CERT_X509 and hashlib.sha256(entry).hexdigest() == want) or (kind == EFI_CERT_X509_SHA256 and entry[:32] == tbs):
+        if kind == EFI_CERT_X509:
+            how = "" if hashlib.sha256(entry).hexdigest() == want else None
+        elif kind in TBS_HASHES:
+            name, hasher = TBS_HASHES[kind]
+            digest = hasher(tbs).digest()
+            how = ", by the %s hash of its tbsCertificate" % name if entry[:len(digest)] == digest else None
+        else:
+            how = None                                  # an image hash (EFI_CERT_SHA256), or a type this probe does not read
+        if how is not None:
             return False, "dbx revokes the image's Secure Boot certificate (%s)%s: the firmware refuses the image whatever db " \
-                "holds. Sign the image with a certificate dbx does not list (kms#543)" % (
-                    want[:16], "" if kind == EFI_CERT_X509 else ", by the hash of its tbsCertificate")
+                "holds. Sign the image with a certificate dbx does not list (kms#543)" % (want[:16], how)
     return True, "db holds the image's Secure Boot certificate (%s), among %d, and dbx (%d entries) does not revoke it" % (
         want[:16], len(certs), len(revoked))
 

@@ -34,7 +34,7 @@ Commissioning has two halves:
 |---|---|---|
 | Boot mode | **UEFI** (TPM 2.0 needs it; not Legacy BIOS) | measured: `uefi_boot` |
 | Secure Boot | **Enabled** | measured: `secure_boot_enabled` |
-| Secure Boot db | the factory keys **kept**, and **our** Secure Boot certificate **appended** (below) | measured: `secure_boot_db_has_image_cert`, against `host.secure_boot_cert_sha256`; it also fails when `dbx` revokes that certificate, whole or by its tbsCertificate hash (an unreadable `dbx` fails too; the image's own Authenticode hash in `dbx` is not checked) |
+| Secure Boot db | the factory keys **kept**, and **our** Secure Boot certificate **appended** (below) | measured: `secure_boot_db_has_image_cert`, against `host.secure_boot_cert_sha256`; it also fails when `dbx` revokes that certificate, whole or by its tbsCertificate's SHA-256, SHA-384 or SHA-512 hash (a `dbx` that is unreadable, or that cannot even be looked at, fails too: only a missing one passes; the image's own Authenticode hash in `dbx` is not checked) |
 | TPM | **TPM 2.0 visible and enabled**; SHA-256 PCR bank active | measured: `tpm2_present`, `tpm_sha256_bank` |
 | TPM module | **never moved**: the HPE module is bound to its system board | — |
 | AC power recovery ("Automatic Power-On") | **Restore last state / always on** | attested: `ac_power_recovery` |
