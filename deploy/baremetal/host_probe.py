@@ -16,6 +16,14 @@ re-seals the PINs and so needs opensc-tool and pkcs11-tool.
 PLATFORM AND TPM, measured:
   uefi_boot                 booted through UEFI (/sys/firmware/efi): TPM 2.0 measured boot needs it
   secure_boot_enabled       the SecureBoot EFI variable is 1
+  secure_boot_db_has_image_cert
+                            the firmware's db holds the certificate the signed image's record names
+                            (secure_boot_cert_sha256, the SHA-256 of its DER), as an X.509 entry. The
+                            UKI is booted directly, with no shim, and carries OUR Secure Boot signature
+                            (uki.py sign): a Gen9's factory db (HPE's and Microsoft's keys) refuses it
+                            (kms#543). The certificate is appended in RBSU before the first seal, since
+                            a db change moves PCR 7. Compared with --secure-boot-cert-sha256, or the
+                            evidence's host.secure_boot_cert_sha256
   tpm2_present              a TPM whose major version is 2, behind the kernel resource manager
                             (/dev/tpmrm0): seal-hsm-pin.sh refuses the raw /dev/tpm0
   tpm_sha256_bank           the TPM exposes an active SHA-256 PCR bank (/sys/class/tpm/tpm0/pcr-sha256)
@@ -151,6 +159,8 @@ import os_probe  # noqa: E402  (the Host and the OS-hardening probes)
 import evidence as evidence_mod  # noqa: E402
 
 SECURE_BOOT_VAR = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+DB_VAR = "/sys/firmware/efi/efivars/db-d719b2cb-3d3a-4596-a3bc-dad00e67656f"
+EFI_CERT_X509 = bytes.fromhex("a159c0a5e494a74a87b5ab155c2bf072")   # a5c059a1-94e4-4aa7-87b5-ab155c2bf072, as stored
 IMPORT_HANDLE = os.environ.get("REGALIA_PIN_IMPORT_HANDLE", "0x81000101")
 IMA_LOG = "/sys/kernel/security/ima/ascii_runtime_measurements"
 KMS_BINARY = os_probe.ALLOWED_TOKEN_CLIENT_EXES[0]
@@ -175,7 +185,7 @@ CRED_REFUSED = {"5a1c6a86df9d4096b1d5a65e0862f19a": "the host key alone (bench o
 HOST_KEY = "/var/lib/systemd/credential.secret"
 TPM2_ALG_SHA256 = 0x000B
 RSA_ALGORITHM = bytes.fromhex("300d06092a864886f70d0101010500")   # AlgorithmIdentifier: rsaEncryption, NULL
-PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank", "tpm_lockout_policy",
+PLATFORM = ("uefi_boot", "secure_boot_enabled", "secure_boot_db_has_image_cert", "tpm2_present", "tpm_sha256_bank", "tpm_lockout_policy",
             "root_disk_tpm_unlocked", "root_disk_unlock_revocable", "root_disk_recovery_keyslot", "ima_policy_loaded",
             "pin_import_key_present",
             "pin_credentials_sealed_as_recorded", "hsm_token_attached",
@@ -226,6 +236,45 @@ def secure_boot(host):
         return False, "the SecureBoot EFI variable is unreadable or absent"
     # efivarfs: 4 bytes of attributes, then the value byte
     return (True, "SecureBoot = 1") if raw[-1:] == b"\x01" else (False, "SecureBoot = %d" % raw[-1])
+
+
+def db_x509_sha256(data):
+    """The SHA-256 of each X.509 certificate in an EFI_SIGNATURE_LIST sequence (UEFI 2.10, 32.4.1), in order.
+    Lists of other types (hashes) are skipped; a list whose sizes do not add up is refused, never read past."""
+    out, at = [], 0
+    while at < len(data):
+        if len(data) - at < 28:
+            raise ValueError("a signature list header is cut short at byte %d" % at)
+        kind = data[at:at + 16]
+        size, header, entry = struct.unpack_from("<III", data, at + 16)
+        if size > len(data) - at or entry < 16 or (size - 28 - header) < 0 or (size - 28 - header) % entry:
+            raise ValueError("the signature list at byte %d has inconsistent sizes" % at)
+        if kind == EFI_CERT_X509:
+            if entry <= 16:
+                raise ValueError("the certificate list at byte %d has entries with no room for a certificate" % at)
+            for e in range(at + 28 + header, at + size, entry):
+                out.append(hashlib.sha256(data[e + 16:e + entry]).hexdigest())   # after the owner GUID: the DER
+        at += size
+    return out
+
+
+def secure_boot_db(host, expected=None):
+    want = (expected or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", want):
+        return False, "no recorded Secure Boot certificate to look for (pass --secure-boot-cert-sha256: the signed " \
+            "image record's secure_boot_cert_sha256, 64 hex)"
+    raw = host.read_bytes(DB_VAR)
+    if not raw or len(raw) < 4:
+        return False, "the db EFI variable is unreadable or absent"
+    try:
+        certs = db_x509_sha256(raw[4:])           # efivarfs: 4 bytes of attributes, then the variable
+    except ValueError as error:
+        return False, "the db EFI variable is malformed: %s" % error
+    if want not in certs:
+        return False, "db holds %d certificate(s) (%s), and none is the image's Secure Boot certificate (%s): this host " \
+            "refuses the image under Secure Boot. Append it to db in RBSU, before the first seal (kms#543)" % (
+                len(certs), ", ".join(c[:16] for c in certs) or "none", want[:16])
+    return True, "db holds the image's Secure Boot certificate (%s), among %d" % (want[:16], len(certs))
 
 
 def tpm2(host):
@@ -1032,17 +1081,19 @@ def firewall(host):
     return True, "inet regalia_kms loaded; input, output and forward default to drop"
 
 
-PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot,
+PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot, secure_boot_db_has_image_cert=secure_boot_db,
               tpm2_present=tpm2, tpm_sha256_bank=sha256_bank, tpm_lockout_policy=lockout_policy, root_disk_tpm_unlocked=root_unlock,
               root_disk_unlock_revocable=unlock_revocable, root_disk_recovery_keyslot=recovery_keyslot, ima_policy_loaded=ima,
               pin_import_key_present=import_key, pin_credentials_sealed_as_recorded=pin_credentials,
               hsm_token_attached=hsm_token, token_clients_root_only=token_clients_root_only, firewall_default_deny=firewall)
 
 
-def measure(host, import_key_sha256=None, credential_binding=None, unlock_record=None):
+def measure(host, import_key_sha256=None, credential_binding=None, unlock_record=None, secure_boot_cert_sha256=None):
     def run(name):
         if name == "pin_import_key_present":
             return import_key(host, import_key_sha256)
+        if name == "secure_boot_db_has_image_cert":
+            return secure_boot_db(host, secure_boot_cert_sha256)
         if name == "pin_credentials_sealed_as_recorded":
             return pin_credentials(host, credential_binding)
         if name in ("root_disk_tpm_unlocked", "root_disk_unlock_revocable"):
@@ -1076,6 +1127,8 @@ def main(argv=None, host=None, run=None):
     ap.add_argument("--evidence-key-sha256", help="that key's recorded SHA-256 (DER), from the commissioning record")
     ap.add_argument("--import-key-sha256", help="without evidence: the import key fingerprint written down at "
                     "--init-import-key (at least 16 hex)")
+    ap.add_argument("--secure-boot-cert-sha256", help="without evidence: the signed image record's secure_boot_cert_sha256 "
+                    "(uki.py sign), which db must hold")
     ap.add_argument("--credential-pcrs", help="without evidence: the PCRs the PIN credentials are bound to directly, "
                     "as given to seal-hsm-pin.sh --pcrs (e.g. 7)")
     ap.add_argument("--credential-signed-pcrs", default="", help="without evidence: 11 if the PINs were sealed with "
@@ -1090,7 +1143,7 @@ def main(argv=None, host=None, run=None):
     args = ap.parse_args(argv)
     host = host or Host()
     report = {"attested_not_measured": list(UNMEASURED)}
-    problems, want, binding = [], args.import_key_sha256, None
+    problems, want, binding, sb_cert = [], args.import_key_sha256, None, args.secure_boot_cert_sha256
     if args.unlock_peer and not args.node_id:
         ap.error("--unlock-peer needs --node-id")
     unlock_record = None
@@ -1114,7 +1167,7 @@ def main(argv=None, host=None, run=None):
                 ev_host = evidence_mod.validate(evidence_mod.load(snap.data["evidence"]), MEASURED)
                 evidence_mod.verify_signature(snap.paths["evidence"], snap.paths["signature"], snap.paths["key"],
                                               args.evidence_key_sha256, **({"run": run} if run else {}))
-            want = ev_host["pin_import_key_sha256"]
+            want, sb_cert = ev_host["pin_import_key_sha256"], ev_host["secure_boot_cert_sha256"]
             binding = evidence_mod.credential_binding(ev_host["credential_tpm2_pcrs"], ev_host["credential_tpm2_signed_pcrs"],
                                                       ev_host["credential_tpm2_pcr_key_pkfp"])
             # The root disk is judged against the SIGNED record of which node this is and who its peers are
@@ -1130,7 +1183,7 @@ def main(argv=None, host=None, run=None):
         except (OSError, evidence_mod.InvalidEvidence) as error:
             problems.append("evidence REFUSED: %s" % error)
             ev_host = None
-    measured = measure(host, want, binding, unlock_record)
+    measured = measure(host, want, binding, unlock_record, sb_cert)
     report["measured"] = measured
     if args.evidence:
         if ev_host is not None:

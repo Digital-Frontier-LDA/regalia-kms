@@ -86,7 +86,10 @@ Refused, require = membership.Refused, membership.require
 
 SCHEMA = "regalia.ownerauth-record/v1"
 EVENT = "ownerauth"
-RECORD_DOMAIN = b"regalia-ceremony-record/v1\x00"
+# regalia-avz (agreed with regalia-ceremony#178): the ownerauth record signs under its own schema, NUL-terminated, so no
+# other kind's signature verifies as one. The shared domain is retired and accepted nowhere (RETIRED_RECORD_DOMAIN: tests only)
+RETIRED_RECORD_DOMAIN = b"regalia-ceremony-record/v1\x00"
+RECORD_DOMAIN = b"regalia.ownerauth-record/v1\x00"
 CHECK_DOMAIN = b"regalia-ownerauth/v1\x00"
 FIELDS = {
     "record": ("at", "event", "master_id", "nodes", "root_entry", "root_fingerprint", "schema", "session", "share_indices",

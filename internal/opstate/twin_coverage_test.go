@@ -15,7 +15,8 @@ import (
 
 // EVERY RULE OF A TWIN HAS A CASE IN THE SHARED VECTOR (regalia-u1r).
 //
-// The Go functions here that are documented "X is opstate.<fn>" mirror deploy/baremetal/opstate.py, and the
+// The Go functions here that are documented "X is opstate.<fn>" (or survivor.<fn>, lease.<fn>) mirror
+// deploy/baremetal/opstate.py (survivor.py, lease.py), and the
 // vector (tests/vectors/opstate-v1.json) holds both to the same decisions and reasons. That held only for the
 // rules some case happened to reach: three times in two days a rule changed on one side while no case reached
 // it (#496's v2 binding, #516's redfish evidence and its fence set). So this iterates the RULES, not the cases:
@@ -24,7 +25,7 @@ import (
 // tests/test_twin_rule_coverage.py is the same check over opstate.py's require()s.
 
 // twinModules are the Python modules whose twins this covers.
-var twinModules = []string{"opstate", "survivor"}
+var twinModules = []string{"opstate", "survivor", "lease"}
 
 // twinRefusals is every refuse() format reachable from a twin of one of twinModules, by the function it sits in.
 func twinRefusals(t *testing.T) map[string][]string {

@@ -4,6 +4,8 @@ this process's TPM calls only inside tpm_of (outside, no session bus: a forgotte
 client only while none of the node's units runs. Unit tests on a Cluster with no machine behind it, so the rules are held
 here and not only by a scenario that needs a runner."""
 import ast
+import contextlib
+import io
 import os
 import pathlib
 import shutil
@@ -294,6 +296,170 @@ class Units(unittest.TestCase):
                 for prop in want:
                     self.assertIn(prop, props)
                 self.assertNotIn("Environment=DBUS_SESSION_BUS_ADDRESS=" + threenode.NodeHere(self.work, "b", 2).bus_address, props)
+
+def aborted():
+    """A finished process killed by SIGABRT, as b's tpm2-abrmd was by its GLib assertion (regalia-q84)."""
+    proc = subprocess.Popen([sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGABRT)"])
+    proc.wait()
+    return proc
+
+
+class AbrmdDeath(unittest.TestCase):
+    """regalia-q84: run 40943800172's three-node-theft said only GDBus ServiceUnknown ':1.0' from the client after b's
+    tpm2-abrmd had aborted itself; the death is said by name, with its signal and its log."""
+    GLIB = "GLib:ERROR:../../../glib/ghash.c:507:g_hash_table_remove_node: assertion failed: (hash_table->nnodes > 0)\nBail out!\n"
+
+    def setUp(self):
+        self.work = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.work, True)
+        self.c = cluster(self.work)
+        self.c.nodes["a"].abrmd = object()
+        self.c.nodes["b"].abrmd = aborted()
+        self.c.nodes["b"].dir.mkdir(parents=True, exist_ok=True)
+        (self.c.nodes["b"].dir / "abrmd.log").write_text(self.GLIB)
+        patch = unittest.mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_dead_abrmd_is_named_with_its_signal_and_its_log(self):
+        said = self.c.abrmd_death("b")
+        self.assertTrue(said.startswith("b's tpm2-abrmd died while its TPM ran (killed by SIGABRT) | its log: "), said)
+        self.assertIn("g_hash_table_remove_node: assertion failed", said)
+
+    def test_a_running_none_or_stand_in_abrmd_is_not_a_death(self):
+        self.assertIsNone(self.c.abrmd_death("a"))                    # the other tests' stand-in
+        running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.addCleanup(running.wait)
+        self.addCleanup(running.kill)
+        self.c.nodes["a"].abrmd = running
+        self.assertIsNone(self.c.abrmd_death("a"))
+        self.c.nodes["a"].abrmd = None                                # stopped with its TPM (_abrmd_down)
+        self.assertIsNone(self.c.abrmd_death("a"))
+
+    def test_an_exit_code_is_said_as_one(self):
+        proc = subprocess.Popen([sys.executable, "-c", "raise SystemExit(3)"])
+        proc.wait()
+        self.c.nodes["b"].abrmd = proc
+        self.assertIn("(exit 3)", self.c.abrmd_death("b"))
+
+    @unittest.skipUnless(hasattr(threenode.signal, "SIGRTMIN"), "real-time signals: Linux")
+    def test_a_signal_with_no_name_is_said_by_its_number(self):
+        """CodeRabbit on #636: SIGRTMIN+1 is a valid signal that signal.Signals cannot name; that ValueError replaced the
+        diagnostic (and, in close, stopped the cleanup)."""
+        rt = int(threenode.signal.SIGRTMIN) + 1
+        proc = subprocess.Popen([sys.executable, "-c", "import os; os.kill(os.getpid(), %d)" % rt])
+        proc.wait()
+        self.c.nodes["b"].abrmd = proc
+        self.assertIn("(killed by signal %d)" % rt, self.c.abrmd_death("b"))
+
+    def test_stopping_a_dead_abrmd_reports_it_once_so_a_power_cycle_cannot_erase_it(self):
+        """CodeRabbit on #636: power_cycle's _abrmd_down cleared the dead process and started another, so a check after it
+        saw only the replacement. _abrmd_down is every path that clears n.abrmd; it says and keeps the death first."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.c._abrmd_down(self.c.nodes["b"])
+            self.c._abrmd_down(self.c.nodes["b"])                     # cleared: nothing more to say
+        self.assertIsNone(self.c.nodes["b"].abrmd)
+        self.assertEqual(len(self.c.abrmd_deaths), 1)
+        self.assertTrue(self.c.abrmd_deaths[0].startswith("b's tpm2-abrmd died while its TPM ran (killed by SIGABRT)"))
+        self.assertEqual(out.getvalue(), "e2e3: " + self.c.abrmd_deaths[0] + "\n")
+
+    def test_stopping_a_running_abrmd_reports_nothing(self):
+        running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.addCleanup(running.wait)
+        self.addCleanup(running.kill)
+        self.c.nodes["a"].abrmd = running
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.c._abrmd_down(self.c.nodes["a"])
+        self.assertEqual((out.getvalue(), self.c.__dict__.get("abrmd_deaths", [])), ("", []))
+        self.assertIsNotNone(running.poll())                          # and it was stopped
+
+    def test_a_call_for_a_node_whose_abrmd_died_is_refused_by_name_and_releases_the_lock(self):
+        ran = []                                                      # not self.fail: its error would be wrapped too
+        with self.assertRaisesRegex(RuntimeError, r"^b's tpm2-abrmd died while its TPM ran \(killed by SIGABRT\)"):
+            with self.c.tpm_of("b"):
+                ran.append("b")
+        self.assertEqual(ran, [], "the call ran against a dead tpm2-abrmd")
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", os.environ)
+        with self.c.tpm_of("a"):                                      # nothing left held
+            pass
+
+    def test_a_call_that_failed_because_the_abrmd_died_inside_says_so_with_the_client_error_as_its_cause(self):
+        b = self.c.nodes["b"]
+        dead, b.abrmd = b.abrmd, object()                             # alive on entry
+        client = RuntimeError("tpm2_nvread 0x01500016 failed: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown")
+        with self.assertRaisesRegex(RuntimeError, "b's tpm2-abrmd died while its TPM ran") as caught:
+            with self.c.tpm_of("b"):
+                b.abrmd = dead                                        # ...and dies during the call
+                raise client
+        self.assertIs(caught.exception.__cause__, client)
+
+    def test_a_failure_with_the_abrmd_alive_is_raised_unchanged(self):
+        with self.assertRaises(ValueError), self.c.tpm_of("a"):
+            raise ValueError
+
+
+class Tail(unittest.TestCase):
+    """regalia-89s (c6 on #636): a failure's log tail is read from the log's end, never the whole file, and says what the
+    whole-file read said."""
+    def setUp(self):
+        self.d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def test_the_tail_is_the_whole_file_reads_tail(self):
+        for text in ("", "short\n", "x" * 5000 + "end\n", "é€😀" * 700 + "last line\n", "é" * 400):
+            path = self.d / "log"
+            path.write_text(text)
+            for limit in (1, 800):
+                with self.subTest(size=len(text), limit=limit):
+                    self.assertEqual(threenode.Cluster._tail(path, limit), path.read_text(errors="replace")[-limit:])
+
+    def test_a_long_log_is_not_read_whole(self):
+        path = self.d / "log"
+        path.write_bytes(b"x" * (4 << 20) + b"GLib:ERROR Bail out!\n")
+        read = []
+        real_open = open
+
+        def spy(*args, **kwargs):
+            f = real_open(*args, **kwargs)
+            real_read = f.read
+            f.read = lambda *a: read.append(len(chunk := real_read(*a))) or chunk
+            return f
+        with unittest.mock.patch("builtins.open", spy):
+            tail = threenode.Cluster._tail(path)
+        self.assertTrue(tail.endswith("GLib:ERROR Bail out!\n"))
+        self.assertTrue(read, "the spy saw no read: the tail was not read through open()")
+        self.assertLessEqual(sum(read), 4 * 800)
+
+    def test_a_log_that_grows_during_the_read_is_still_read_bounded(self):
+        """CodeRabbit on #637: abrmd_answers reads a running daemon's log; what it appends after the size is taken is not
+        read, so the read stays bounded however much it writes meanwhile."""
+        path = self.d / "log"
+        path.write_bytes(b"x" * 10000 + b"the line before\n")
+        read = []
+        real_open = open
+
+        def spy(*args, **kwargs):
+            f = real_open(*args, **kwargs)
+            real_read = f.read
+
+            def grown_read(*a):
+                with real_open(path, "ab") as w:                      # the daemon writes 1 MiB between fstat and read
+                    w.write(b"y" * (1 << 20))
+                chunk = real_read(*a)
+                read.append(len(chunk))
+                return chunk
+            f.read = grown_read
+            return f
+        with unittest.mock.patch("builtins.open", spy):
+            tail = threenode.Cluster._tail(path)
+        self.assertTrue(tail.endswith("the line before\n"), tail[-40:])
+        self.assertEqual(read, [4 * 800])
+
+    def test_a_missing_log_is_none(self):
+        self.assertEqual(threenode.Cluster._tail(self.d / "missing"), "(none)")
+
 
 class AbrmdAnswers(unittest.TestCase):
     def setUp(self):
