@@ -169,3 +169,61 @@ func TestAnAdmissionTransitionIsOneCompleteAuditEvent(t *testing.T) {
 		t.Fatalf("RecordAdmission = %v, want the journal's error", err)
 	}
 }
+
+// objectAdmission is an admitted gate that refuses keys by name (internal/admission's RefusesObject in recovery).
+type objectAdmission struct {
+	scriptedAdmission
+	refuse map[string]string
+	asked  []string
+}
+
+func (gate *objectAdmission) RefusesObject(_ context.Context, objectID string) string {
+	gate.asked = append(gate.asked, objectID)
+	return gate.refuse[objectID]
+}
+
+// OWNER ITEM 212: a key the survivor's directives disabled is refused by name, before routing and policy, as a
+// permanent 403; while the directives cannot be read, every key is refused as a retryable 503.
+func TestAKeyTheSurvivorsDirectivesRefuseIsNotServed(t *testing.T) {
+	cases := []struct {
+		outcome, code string
+		status        int
+		retryable     bool
+	}{
+		{admission.RefusedDisabled, "DENIED", http.StatusForbidden, false},
+		{admission.RefusedDirectivesUnreadable, "DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true},
+	}
+	for _, c := range cases {
+		t.Run(c.outcome, func(t *testing.T) {
+			gate := &objectAdmission{scriptedAdmission: scriptedAdmission{answers: []bool{true, true, true, true, true}},
+				refuse: map[string]string{"production-sops": c.outcome}}
+			coordinator, semantic, recorder, hardware, router := admissionFixture(t, &gate.scriptedAdmission)
+			coordinator.RequireAdmission(gate)
+			result, err := coordinator.Execute(context.Background(), operationRequest())
+			var failure *api.Failure
+			if !errors.As(err, &failure) || failure.Code != c.code || failure.Status != c.status || failure.Retryable != c.retryable {
+				t.Fatalf("Execute = %v, want %d %s retryable=%v", err, c.status, c.code, c.retryable)
+			}
+			if result.Data != nil || semantic.calls != 0 || hardware.calls != 0 || router.calls != 0 {
+				t.Fatalf("a refused key: data %v, policy %d, token %d, routing %d", result.Data, semantic.calls, hardware.calls, router.calls)
+			}
+			if len(gate.asked) != 1 || gate.asked[0] != operationRequest().ObjectID {
+				t.Fatalf("asked about %v, not the request's object", gate.asked)
+			}
+			if len(recorder.drafts) != 1 || recorder.drafts[0].Decision != "deny" || recorder.drafts[0].Outcome != c.outcome {
+				t.Fatalf("audit events = %#v", recorder.drafts)
+			}
+		})
+	}
+	// the control: the same gate, refusing another key, serves this one
+	gate := &objectAdmission{scriptedAdmission: scriptedAdmission{answers: []bool{true, true, true, true, true}},
+		refuse: map[string]string{"another-key": admission.RefusedDisabled}}
+	coordinator, _, _, hardware, _ := admissionFixture(t, &gate.scriptedAdmission)
+	coordinator.RequireAdmission(gate)
+	if _, err := coordinator.Execute(context.Background(), operationRequest()); err != nil || hardware.calls != 1 {
+		t.Fatalf("a key no directive names: %v, token used %d times", err, hardware.calls)
+	}
+}
+
+// The daemon's gate is an ObjectAdmission: without that, the coordinator would never ask it about a key.
+var _ ObjectAdmission = (*admission.Gate)(nil)

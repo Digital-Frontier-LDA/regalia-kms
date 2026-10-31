@@ -925,6 +925,8 @@ func admitRunner(settings config.Config, base operations.Runner, onTransition fu
 	options := admission.Options{
 		Path: settings.RuntimeAdmissionPath, NodeID: settings.NodeID, SessionPath: settings.BootSessionPath,
 		OwnerUID: owner, OnTransition: onTransition,
+		// a lone survivor refuses the keys the owner's directives disabled, and every key when it cannot read them
+		DirectivesPath: admission.DirectivesPath,
 	}
 	// AN ADMISSION IS GOOD ONLY FOR THE EPOCH IT WAS JUDGED UNDER (#432): judged against the published chain
 	if settings.MembershipChainPath != "" {

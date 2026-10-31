@@ -3,6 +3,8 @@ held only at the quarantine epoch with every other server stopped; and the owner
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -520,3 +522,28 @@ class OnTheNode(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DirectivesVector(unittest.TestCase):
+    """tests/vectors/survivor-directives-v1.json is what Directives decides for each file, and internal/admission's
+    ReadDisabled is held to it (TestSurvivorDirectivesVector): the daemon refuses the keys the survivor applied (j18)."""
+
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def load(self):
+        with open(os.path.join(self.ROOT, "tests", "vectors", "survivor-directives-v1.json")) as f:
+            return json.load(f)
+
+    def test_the_vector_is_what_the_generator_makes_now(self):
+        made = subprocess.run([sys.executable, "-Es", os.path.join(self.ROOT, "tests", "vectors", "make-survivor-directives-v1.py")],
+                              capture_output=True, text=True, check=True, cwd=self.ROOT).stdout
+        self.assertEqual(json.loads(made), self.load(),
+                         "regenerate: python3 -Es tests/vectors/make-survivor-directives-v1.py > tests/vectors/survivor-directives-v1.json")
+
+    def test_both_answers_and_every_field_are_reached(self):
+        cases = self.load()["cases"]
+        self.assertTrue(any(c["disabled"] == "refused" for c in cases) and any(c["disabled"] != "refused" for c in cases))
+        self.assertTrue(any(isinstance(c["disabled"], list) and len(c["disabled"]) == 2 for c in cases))
+        names = " ".join(c["name"] for c in cases)
+        for field in ("object ID", "epoch", "digest", "reason", "schema", "state", "signature", "CR"):
+            self.assertIn(field, names)
