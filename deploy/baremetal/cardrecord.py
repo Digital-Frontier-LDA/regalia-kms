@@ -206,7 +206,24 @@ def read_signing_state(state_dir, root):
     require(state["root"] == root, "the state directory is another root's signing state: it is not this network's laptop")
     data = _read_own(state_dir, SIGNING_RECORD, MAX_SIGNING_RECORD, "the signing record %s" % SIGNING_RECORD)
     require(data, "the state directory %s holds no signing record: no card record can be shown to be the newest" % state_dir)
-    return parse_signing_record(data)
+    lines = parse_signing_record(data)
+    baselines = [line for line in lines if line["kind"] == BASELINE_KIND]
+    if baselines:                       # a rebuilt record carries the root-signed record of its rebuild (d9 on #406)
+        held = _read_own(state_dir, REBUILD_RECORD, MAX_REBUILD_RECORD, "the rebuild record %s" % REBUILD_RECORD)
+        require(held is not None, "the signing record has a baseline but %s holds no %s as a regular file" % (state_dir, REBUILD_RECORD))
+        try:
+            rebuild = verify_rebuild(json.loads(held.decode("ascii")), root)
+        except (UnicodeDecodeError, ValueError):
+            raise Refused("the rebuild record %s is not JSON" % REBUILD_RECORD) from None
+        base = baselines[0]
+        require(rebuild["baseline"] == {"sequence": base.get("sequence"), "digest": base.get("digest"), "source": base.get("source")},
+                "the rebuild record does not name the signing record's baseline")
+        # the record it re-signed as N+1 is the signing record's line N+1, once that line is written (a crash between the
+        # baseline line and it leaves none: the baseline is then the newest)
+        following = [line for line in lines if line["kind"] == "card-record" and line.get("sequence") == rebuild["rebuilt"]["sequence"]]
+        require(all(line.get("digest") == rebuild["rebuilt"]["digest"] for line in following),
+                "the signing record's card record %d is not the one its rebuild record re-signed" % rebuild["rebuilt"]["sequence"])
+    return lines
 
 
 def read_signing_record(path):
@@ -235,22 +252,6 @@ def parse_signing_record(data):
         require(isinstance(line, dict) and isinstance(line.get("kind"), str),
                 "the signing record's line %d is not an object with a kind (\"manifest\", \"card-record\")" % number)
         lines.append(line)
-    baselines = [line for line in lines if line["kind"] == BASELINE_KIND]
-    if baselines:                       # a rebuilt record carries the root-signed record of its rebuild (d9 on #406)
-        held = _read_own(state_dir, REBUILD_RECORD, MAX_REBUILD_RECORD, "the rebuild record %s" % REBUILD_RECORD)
-        require(held is not None, "the signing record has a baseline but %s holds no %s as a regular file" % (state_dir, REBUILD_RECORD))
-        try:
-            rebuild = verify_rebuild(json.loads(held.decode("ascii")), root)
-        except (UnicodeDecodeError, ValueError):
-            raise Refused("the rebuild record %s is not JSON" % REBUILD_RECORD) from None
-        base = baselines[0]
-        require(rebuild["baseline"] == {"sequence": base.get("sequence"), "digest": base.get("digest"), "source": base.get("source")},
-                "the rebuild record does not name the signing record's baseline")
-        # the record it re-signed as N+1 is the signing record's line N+1, once that line is written (a crash between the
-        # baseline line and it leaves none: the baseline is then the newest)
-        following = [line for line in lines if line["kind"] == "card-record" and line.get("sequence") == rebuild["rebuilt"]["sequence"]]
-        require(all(line.get("digest") == rebuild["rebuilt"]["digest"] for line in following),
-                "the signing record's card record %d is not the one its rebuild record re-signed" % rebuild["rebuilt"]["sequence"])
     return lines
 
 
