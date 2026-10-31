@@ -270,20 +270,33 @@ def db_x509_sha256(data):
 
 
 def der_element(der, at, end=None):
-    """The DER element at `at`, within der[:end]: (tag, start of its content, end of its content). Lengths in up to
-    four octets; anything else, or an element past `end`, is refused."""
+    """The DER element at `at`, within der[:end]: (tag, start of its content, end of its content). One-octet tags, and
+    definite lengths in up to four octets; anything else (an indefinite length, which DER forbids, a high tag number), or
+    an element past `end`, is refused."""
     end = len(der) if end is None else end
     if at + 2 > end:
         raise ValueError("a DER element is cut short")
     tag, n, at = der[at], der[at + 1], at + 2
+    if tag & 0x1f == 0x1f:
+        raise ValueError("a DER element has a high tag number")
     if n & 0x80:
         k = n & 0x7f
         if not 1 <= k <= 4 or at + k > end:
-            raise ValueError("a DER element has an unreadable length")
+            raise ValueError("a DER element has an indefinite or unreadable length")
         n, at = int.from_bytes(der[at:at + k], "big"), at + k
     if at + n > end:
         raise ValueError("a DER element is cut short")
     return tag, at, at + n
+
+
+def der_children(der, start, end):
+    """Each element directly inside der[start:end], as (tag, whole element's start, its content's start, its end)."""
+    out, at = [], start
+    while at < end:
+        tag, body, stop = der_element(der, at, end)
+        out.append((tag, at, body, stop))
+        at = stop
+    return out
 
 
 def tbs_certificate(der):
@@ -297,29 +310,30 @@ def tbs_certificate(der):
     return der[body:tbs_end]
 
 
-def authenticode_certificates(image):
+def authenticode_signers(image):
+    """For each Authenticode signature a PE image carries (every WIN_CERTIFICATE in its security directory), the SHA-256
+    of each signer's certificate: the one of SignedData's `certificates` its SignerInfo names (by issuer and serial
+    number, or by subject key identifier), or None when it carries no such certificate. Nothing is verified: the firmware
+    does that; this names which certificate it will verify. [] for an image with no signature; a directory, an entry
+    of another type or a signature that does not parse is refused."""
     try:
-        return _authenticode_certificates(image)
+        return _authenticode_signers(image)
     except struct.error:
         raise ValueError("the image's PE headers are cut short")
 
 
-def _authenticode_certificates(image):
-    """The SHA-256 of each certificate carried in a PE image's Authenticode signatures (its security directory's
-    WIN_CERT_TYPE_PKCS_SIGNED_DATA entries: SignedData's `certificates`), in order. An image with no such directory
-    carries none; one whose directory or signatures do not parse is refused."""
+def _authenticode_signers(image):
     if image[:2] != b"MZ" or len(image) < 0x40:
         raise ValueError("the image is not a PE file")
     pe = struct.unpack_from("<I", image, 0x3c)[0]
-    if image[pe:pe + 4] != b"PE\x00\x00" or pe + 24 + 2 > len(image):
+    if image[pe:pe + 4] != b"PE\x00\x00":
         raise ValueError("the image has no PE header")
     optional = pe + 24
     magic = struct.unpack_from("<H", image, optional)[0]
     if magic not in (0x10b, 0x20b):
         raise ValueError("the image's optional header is neither PE32 nor PE32+")
     directories = optional + (96 if magic == 0x10b else 112)
-    count = struct.unpack_from("<I", image, directories - 4)[0]
-    if count <= 4:
+    if struct.unpack_from("<I", image, directories - 4)[0] <= 4:
         return []
     at, size = struct.unpack_from("<II", image, directories + 4 * 8)   # IMAGE_DIRECTORY_ENTRY_SECURITY: a file offset
     if size == 0:
@@ -330,18 +344,51 @@ def _authenticode_certificates(image):
     while at < end:
         if end - at < 8:
             raise ValueError("a WIN_CERTIFICATE header is cut short")
-        length, revision, kind = struct.unpack_from("<IHH", image, at)
+        length, _, kind = struct.unpack_from("<IHH", image, at)
         if length < 8 or at + length > end:
             raise ValueError("a WIN_CERTIFICATE has an inconsistent length")
-        if kind == 0x0002:                                  # WIN_CERT_TYPE_PKCS_SIGNED_DATA
-            out += signed_data_certificates(image[at + 8:at + length])
+        if kind != 0x0002:
+            raise ValueError("a WIN_CERTIFICATE is of type %#06x, not PKCS signed data" % kind)
+        out += signed_data_signers(image[at + 8:at + length])
         at += (length + 7) & ~7                             # each entry is 8-byte aligned
     return out
 
 
-def signed_data_certificates(blob):
-    """The SHA-256 of each certificate in a DER PKCS#7 ContentInfo holding SignedData (RFC 5652, 5.1). Authenticode
-    pads its entries, so bytes after the ContentInfo are ignored."""
+def _certificate_ids(der, at, end):
+    """A certificate's (issuer DER + serialNumber DER, subject key identifier or None), from its tbsCertificate."""
+    tag, body, stop = der_element(der, at, end)
+    if tag != 0x30:
+        raise ValueError("a carried certificate is not a SEQUENCE")
+    tag, _, tbs, tbs_end = (der_children(der, body, stop) or [(None, 0, 0, 0)])[0]
+    if tag != 0x30:
+        raise ValueError("a carried certificate has no tbsCertificate")
+    fields = der_children(der, tbs, tbs_end)
+    if fields and fields[0][0] == 0xa0:                     # [0] EXPLICIT version
+        fields = fields[1:]
+    if len(fields) < 6 or [f[0] for f in fields[:6]] != [0x02, 0x30, 0x30, 0x30, 0x30, 0x30]:
+        raise ValueError("a carried certificate's tbsCertificate is out of order")
+    serial, issuer = fields[0], fields[2]
+    ski = None
+    for tag, _, body, stop in fields[6:]:
+        if tag != 0xa3:                                     # [3] EXPLICIT extensions
+            continue
+        wrapped = der_children(der, body, stop)
+        if len(wrapped) != 1 or wrapped[0][0] != 0x30:
+            raise ValueError("a carried certificate's extensions are not a SEQUENCE")
+        for _, _, e_body, e_end in der_children(der, wrapped[0][2], wrapped[0][3]):
+            parts = der_children(der, e_body, e_end)
+            if parts and parts[0][0] == 0x06 and der[parts[0][2]:parts[0][3]] == b"\x55\x1d\x0e" and parts[-1][0] == 0x04:
+                inner = der_children(der, parts[-1][2], parts[-1][3])
+                if len(inner) != 1 or inner[0][0] != 0x04:
+                    raise ValueError("a carried certificate's subject key identifier is malformed")
+                ski = der[inner[0][2]:inner[0][3]]
+    return der[issuer[1]:issuer[3]] + der[serial[1]:serial[3]], ski
+
+
+def signed_data_signers(blob):
+    """For each SignerInfo of a DER PKCS#7 ContentInfo holding SignedData (RFC 5652, 5.1 and 5.3), the SHA-256 of the
+    carried certificate its sid names, or None. Authenticode pads its entries, so bytes after the ContentInfo are
+    ignored."""
     tag, body, end = der_element(blob, 0)
     if tag != 0x30:
         raise ValueError("a signature is not a DER SEQUENCE")
@@ -351,23 +398,40 @@ def signed_data_certificates(blob):
     tag, inner, inner_end = der_element(blob, oid_end, end)
     if tag != 0xa0:
         raise ValueError("a signature's SignedData is missing")
-    tag, at, sd_end = der_element(blob, inner, inner_end)
+    tag, sd, sd_end = der_element(blob, inner, inner_end)
     if tag != 0x30:
         raise ValueError("a signature's SignedData is not a SEQUENCE")
-    for want in (0x02, 0x31, 0x30):                          # version, digestAlgorithms, encapContentInfo
-        tag, _, at_next = der_element(blob, at, sd_end)
-        if tag != want:
-            raise ValueError("a signature's SignedData is out of order")
-        at = at_next
-    if at >= sd_end or blob[at] != 0xa0:                     # certificates [0] IMPLICIT, optional
-        return []
-    _, at, certs_end = der_element(blob, at, sd_end)
+    parts = der_children(blob, sd, sd_end)
+    tags = [p[0] for p in parts]
+    if tags[:3] != [0x02, 0x31, 0x30] or tags[-1:] != [0x31] or not set(tags[3:-1]) <= {0xa0, 0xa1} or len(tags) > 6:
+        raise ValueError("a signature's SignedData is out of order")
+    certs = []
+    for tag, _, c_body, c_end in parts[3:-1]:
+        if tag == 0xa0:                                     # certificates [0] IMPLICIT; other CertificateChoices skipped
+            for c_tag, c_at, _, c_stop in der_children(blob, c_body, c_end):
+                if c_tag == 0x30:
+                    certs.append((hashlib.sha256(blob[c_at:c_stop]).hexdigest(), _certificate_ids(blob, c_at, c_stop)))
+    signers = der_children(blob, parts[-1][2], parts[-1][3])
+    if not signers:
+        raise ValueError("a signature has no SignerInfo")
     out = []
-    while at < certs_end:
-        tag, _, cert_end = der_element(blob, at, certs_end)
-        if tag == 0x30:                                      # a Certificate; the other CertificateChoices are skipped
-            out.append(hashlib.sha256(blob[at:cert_end]).hexdigest())
-        at = cert_end
+    for s_tag, _, s_body, s_end in signers:
+        fields = der_children(blob, s_body, s_end)
+        if s_tag != 0x30 or len(fields) < 2 or fields[0][0] != 0x02:
+            raise ValueError("a SignerInfo is malformed")
+        sid_tag, sid_at, sid_body, sid_end = fields[1]
+        if sid_tag == 0x30:                                 # issuerAndSerialNumber
+            named = der_children(blob, sid_body, sid_end)
+            if [n[0] for n in named] != [0x30, 0x02]:
+                raise ValueError("a SignerInfo's issuerAndSerialNumber is malformed")
+            key = blob[named[0][1]:named[0][3]] + blob[named[1][1]:named[1][3]]
+            found = [sha for sha, (ids, _) in certs if ids == key]
+        elif sid_tag == 0x80:                               # [0] IMPLICIT SubjectKeyIdentifier
+            key = blob[sid_body:sid_end]
+            found = [sha for sha, (_, ski) in certs if ski == key]
+        else:
+            raise ValueError("a SignerInfo names its signer in a form this probe does not read")
+        out.append(found[0] if len(set(found)) == 1 else None)
     return out
 
 
@@ -417,8 +481,8 @@ def secure_boot_db(host, expected=None):
 
 
 def image_cert(host, image, expected):
-    """regalia-xqx: the recorded Secure Boot certificate (the evidence's, or the argument's) is one the image to be booted
-    carries in its Authenticode signature. db is judged against the record; this ties the record to the image, so a
+    """regalia-xqx: the recorded Secure Boot certificate (the evidence's, or the argument's) is the one that signed the
+    image to be booted (a signer of one of its Authenticode signatures; a certificate merely carried is not). db is judged against the record; this ties the record to the image, so a
     digest left from the image before a rotation is found before the firmware refuses the new one."""
     want = (expected or "").lower()
     if not re.fullmatch(r"[0-9a-f]{64}", want):
@@ -427,14 +491,16 @@ def image_cert(host, image, expected):
     if data is None:
         return {"value": False, "why": "the image %s is unreadable or absent" % image}
     try:
-        certs = authenticode_certificates(data)
+        signers = authenticode_signers(data)
     except ValueError as error:
         return {"value": False, "why": "the image %s is malformed: %s" % (image, error)}
-    if want not in certs:
-        return {"value": False, "why": "the image %s carries %d certificate(s) (%s), and none is the recorded Secure Boot "
-                "certificate (%s): the record is not this image's (a digest from before a rotation?)" % (
-                    image, len(certs), ", ".join(c[:16] for c in certs) or "none", want[:16])}
-    return {"value": True, "why": "the image %s carries the recorded Secure Boot certificate (%s)" % (image, want[:16])}
+    if not signers:
+        return {"value": False, "why": "the image %s carries no Authenticode signature" % image}
+    if want not in signers:
+        return {"value": False, "why": "the image %s is signed by %s, and none is the recorded Secure Boot certificate (%s): "
+                "the record is not this image's (a digest from before a rotation?)" % (
+                    image, ", ".join(c[:16] if c else "a certificate it does not carry" for c in signers), want[:16])}
+    return {"value": True, "why": "the image %s is signed by the recorded Secure Boot certificate (%s)" % (image, want[:16])}
 
 
 def tpm2(host):
@@ -1290,8 +1356,8 @@ def main(argv=None, host=None, run=None):
     ap.add_argument("--secure-boot-cert-sha256", help="the signed image record's secure_boot_cert_sha256 (uki.py sign), "
                     "which db must hold; with evidence it comes from host.secure_boot_cert_sha256, and an argument must agree with it")
     ap.add_argument("--image", help="the signed boot image (UKI) the host will boot next, as on its ESP: the Secure Boot "
-                    "certificate it carries must be the recorded one, so a digest left over from the previous image fails "
-                    "here and not at the next boot (regalia-xqx)")
+                    "certificate that signed it must be the recorded one, so a digest left over from the previous image fails "
+                    "here and not at the next boot (regalia-xqx). Required with --evidence")
     ap.add_argument("--credential-pcrs", help="without evidence: the PCRs the PIN credentials are bound to directly, "
                     "as given to seal-hsm-pin.sh --pcrs (e.g. 7)")
     ap.add_argument("--credential-signed-pcrs", default="", help="without evidence: 11 if the PINs were sealed with "
@@ -1324,6 +1390,9 @@ def main(argv=None, host=None, run=None):
     if args.evidence:
         if not (args.signature and args.evidence_key and args.evidence_key_sha256):
             ap.error("--evidence needs --signature, --evidence-key and --evidence-key-sha256")
+        if not args.image:
+            ap.error("--evidence needs --image: the record's Secure Boot certificate is judged against the image the host "
+                     "boots next (regalia-xqx)")
         try:
             # One snapshot of all three inputs: the bytes validated are the bytes verified.
             with evidence_mod.Snapshot(evidence=args.evidence, signature=args.signature, key=args.evidence_key) as snap:

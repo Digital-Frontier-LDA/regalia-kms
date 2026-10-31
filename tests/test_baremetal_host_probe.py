@@ -1366,14 +1366,17 @@ class SecureBootDbx(unittest.TestCase):
                     host_probe.tbs_certificate(der)
 
 
-def pe_image(*signatures, magic=0x20b, rvas=16):
-    """A minimal PE file whose security directory holds each signature as a WIN_CERT_TYPE_PKCS_SIGNED_DATA entry."""
+IMAGE = "/boot/efi/EFI/Linux/regalia-kms.efi"
+
+
+def pe_image(*signatures, magic=0x20b, rvas=16, kind=0x0002):
+    """A minimal PE file whose security directory holds each signature as a WIN_CERTIFICATE of `kind`."""
     optional = struct.pack("<H", magic) + b"\x00" * ((92 if magic == 0x10b else 108) - 2) + struct.pack("<I", rvas)
     head = b"MZ" + b"\x00" * 0x3a + struct.pack("<I", 0x40) + b"PE\x00\x00" + b"\x00" * 20
     table_at = len(head) + len(optional)
     body = b""
     for sig in signatures:
-        entry = struct.pack("<IHH", 8 + len(sig), 0x0200, 0x0002) + sig
+        entry = struct.pack("<IHH", 8 + len(sig), 0x0200, kind) + sig
         body += entry + b"\x00" * (-len(entry) % 8)
     start = table_at + rvas * 8
     dirs = b"".join(struct.pack("<II", start if i == 4 and body else 0, len(body) if i == 4 else 0) for i in range(rvas))
@@ -1382,80 +1385,91 @@ def pe_image(*signatures, magic=0x20b, rvas=16):
 
 @unittest.skipUnless(shutil.which("openssl"), "needs openssl")
 class ImageCarriesRecordedCert(unittest.TestCase):
-    """regalia-xqx: the recorded Secure Boot certificate must be the one the image to be booted is signed with."""
+    """regalia-xqx: the recorded Secure Boot certificate must be the one that SIGNED the image to be booted; a
+    certificate the signature merely carries (a chain, an extra) is not it (regalia-c6 on the design)."""
 
     @classmethod
     def setUpClass(cls):
         cls.dir = tempfile.TemporaryDirectory()
         d = cls.dir.name
-        def make(name):
+        for name in ("ours", "old"):
             subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
                             "-subj", "/CN=%s" % name, "-days", "1", "-keyout", "%s/%s.key" % (d, name), "-out", "%s/%s.pem" % (d, name)],
                            check=True, capture_output=True)
-        make("ours"), make("old")
-        open(d + "/payload", "wb").write(b"stand-in for the image's Authenticode digest")
-        def sign(signer, extra=()):
-            return subprocess.run(["openssl", "smime", "-sign", "-binary", "-noattr", "-outform", "DER", "-in", d + "/payload",
+        cls.payload = d + "/payload"
+        open(cls.payload, "wb").write(b"stand-in for the image's Authenticode digest")
+        def sign(signer, *extra):
+            return subprocess.run(["openssl", "cms", "-sign", "-binary", "-noattr", "-nosmimecap", "-outform", "DER", "-in", cls.payload,
                                    "-signer", "%s/%s.pem" % (d, signer), "-inkey", "%s/%s.key" % (d, signer), *extra],
                                   check=True, capture_output=True).stdout
         cls.ours, cls.old = sign("ours"), sign("old")
-        cls.both = sign("old", ("-certfile", d + "/ours.pem"))
-        cls.bare = sign("ours", ("-nocerts",))
-        cls.sha = {n: cls.oracle(n + ".pem") for n in ("ours", "old")}
+        cls.old_carrying_ours = sign("old", "-certfile", d + "/ours.pem")      # signed by old; ours only carried
+        cls.ours_carrying_old = sign("ours", "-certfile", d + "/old.pem")
+        cls.by_keyid = sign("ours", "-keyid")                                  # sid as a subject key identifier
+        cls.bare = sign("ours", "-nocerts")                                    # names a signer it does not carry
+        cls.sha = {n: hashlib.sha256(subprocess.run(["openssl", "x509", "-in", "%s/%s.pem" % (d, n), "-outform", "DER"],
+                                                    check=True, capture_output=True).stdout).hexdigest() for n in ("ours", "old")}
 
     @classmethod
     def tearDownClass(cls):
         cls.dir.cleanup()
 
-    @classmethod
-    def oracle(cls, pem):
-        der = subprocess.run(["openssl", "x509", "-in", "%s/%s" % (cls.dir.name, pem), "-outform", "DER"], check=True,
-                             capture_output=True).stdout
-        return hashlib.sha256(der).hexdigest()
-
-    def certs_by_openssl(self, sig):
-        out = subprocess.run(["openssl", "pkcs7", "-inform", "DER", "-print_certs"], input=sig, check=True, capture_output=True).stdout
-        return [hashlib.sha256(base64.b64decode(b"".join(block.split(b"\n")[1:-1]))).hexdigest()
-                for block in re.findall(rb"-----BEGIN CERTIFICATE-----\n.*?-----END CERTIFICATE-----", out, re.S)]
+    def signer_by_openssl(self, sig):
+        """The oracle: openssl's own verification names the signer (-noverify: no chain to a trust store)."""
+        path = os.path.join(self.dir.name, "signer.pem")
+        subprocess.run(["openssl", "cms", "-verify", "-inform", "DER", "-binary", "-noverify", "-content", self.payload,
+                        "-signer", path, "-out", os.devnull], input=sig, check=True, capture_output=True)
+        der = subprocess.run(["openssl", "x509", "-in", path, "-outform", "DER"], check=True, capture_output=True).stdout
+        return [hashlib.sha256(der).hexdigest()]
 
     def judge(self, image, want=None):
         h = FakeHost()
         if image is not None:
-            h.bytes["/efi/EFI/Linux/kms.efi"] = image
-        return host_probe.image_cert(h, "/efi/EFI/Linux/kms.efi", want or self.sha["ours"])
+            h.bytes[IMAGE] = image
+        return host_probe.image_cert(h, IMAGE, want or self.sha["ours"])
 
-    def test_the_certificates_found_are_openssls(self):
-        for name in ("ours", "old", "both", "bare"):
+    def test_the_signer_found_is_openssls(self):
+        for name in ("ours", "old", "old_carrying_ours", "ours_carrying_old", "by_keyid"):
             with self.subTest(name):
                 sig = getattr(self, name)
-                self.assertEqual(host_probe.authenticode_certificates(pe_image(sig)), self.certs_by_openssl(sig))
-        self.assertEqual(len(self.certs_by_openssl(self.both)), 2)
-        # PE32 places the directories 16 bytes earlier; two signatures (a dual-signed image) are both read
-        self.assertEqual(host_probe.authenticode_certificates(pe_image(self.old, magic=0x10b)), [self.sha["old"]])
-        self.assertEqual(host_probe.authenticode_certificates(pe_image(self.old, self.ours)), [self.sha["old"], self.sha["ours"]])
+                self.assertEqual(host_probe.authenticode_signers(pe_image(sig)), self.signer_by_openssl(sig))
+        self.assertEqual(host_probe.authenticode_signers(pe_image(self.bare)), [None])
+        # PE32 places the directories 16 bytes earlier; a dual-signed image has both signatures read, in order
+        self.assertEqual(host_probe.authenticode_signers(pe_image(self.old, magic=0x10b)), [self.sha["old"]])
+        self.assertEqual(host_probe.authenticode_signers(pe_image(self.old, self.ours)), [self.sha["old"], self.sha["ours"]])
 
     def test_an_image_signed_with_the_recorded_certificate_passes(self):
-        for image in (pe_image(self.ours), pe_image(self.both), pe_image(self.old, self.ours)):
-            result = self.judge(image)
-            self.assertTrue(result["value"], result["why"])
-        self.assertEqual(result["why"], "the image /efi/EFI/Linux/kms.efi carries the recorded Secure Boot certificate (%s)"
-                         % self.sha["ours"][:16])
+        for name, image in {"signed by ours": pe_image(self.ours), "ours, carrying old": pe_image(self.ours_carrying_old),
+                            "named by key identifier": pe_image(self.by_keyid), "dual-signed, ours second": pe_image(self.old, self.ours)}.items():
+            with self.subTest(name):
+                result = self.judge(image)
+                self.assertTrue(result["value"], result["why"])
+                self.assertEqual(result["why"], "the image %s is signed by the recorded Secure Boot certificate (%s)" % (
+                    IMAGE, self.sha["ours"][:16]))
         self.assertTrue(self.judge(pe_image(self.ours), self.sha["ours"].upper())["value"])
+
+    def test_a_certificate_carried_but_not_signing_fails(self):
+        """sbsign and pesign may add certificates; the firmware verifies the signer, so a carried one passes nothing."""
+        result = self.judge(pe_image(self.old_carrying_ours))
+        self.assertFalse(result["value"])
+        self.assertEqual(result["why"], "the image %s is signed by %s, and none is the recorded Secure Boot certificate (%s): "
+                         "the record is not this image's (a digest from before a rotation?)" % (IMAGE, self.sha["old"][:16], self.sha["ours"][:16]))
 
     def test_a_digest_left_from_the_previous_image_fails(self):
         result = self.judge(pe_image(self.ours), self.sha["old"])
         self.assertFalse(result["value"])
-        self.assertEqual(result["why"], "the image /efi/EFI/Linux/kms.efi carries 1 certificate(s) (%s), and none is the recorded "
-                         "Secure Boot certificate (%s): the record is not this image's (a digest from before a rotation?)" % (
-                             self.sha["ours"][:16], self.sha["old"][:16]))
+        self.assertIn("is signed by %s, and none is the recorded Secure Boot certificate (%s)" % (self.sha["ours"][:16], self.sha["old"][:16]),
+                      result["why"])
 
-    def test_an_unsigned_image_or_one_without_certificates_fails(self):
-        for name, image in {"no security directory": pe_image(rvas=4), "an empty one": pe_image(),
-                            "a signature with no certificates": pe_image(self.bare)}.items():
+    def test_a_signer_the_signature_does_not_carry_is_no_signer(self):
+        result = self.judge(pe_image(self.bare))
+        self.assertFalse(result["value"])
+        self.assertIn("is signed by a certificate it does not carry, and none is", result["why"])
+
+    def test_an_unsigned_image_fails_by_name(self):
+        for name, image in {"no security directory": pe_image(rvas=4), "an empty one": pe_image()}.items():
             with self.subTest(name):
-                result = self.judge(image)
-                self.assertFalse(result["value"])
-                self.assertIn("carries 0 certificate(s) (none)", result["why"])
+                self.assertEqual(self.judge(image), {"value": False, "why": "the image %s carries no Authenticode signature" % IMAGE})
 
     def test_without_a_recorded_digest_or_an_image_nothing_passes(self):
         for want in ("", "ab" * 16, "g" * 64):
@@ -1466,34 +1480,47 @@ class ImageCarriesRecordedCert(unittest.TestCase):
         """--image reaches the report and the exit status; every other control is held passing, so the image alone decides."""
         def run(image, want):
             h = FakeHost()
-            h.bytes["/efi/kms.efi"] = image
+            h.bytes[IMAGE] = image
             with mock.patch.object(host_probe, "measure", return_value={}), redirect_stdout(io.StringIO()) as out:
-                rc = host_probe.main(["--image", "/efi/kms.efi", "--secure-boot-cert-sha256", want], host=h)
+                rc = host_probe.main(["--image", IMAGE, "--secure-boot-cert-sha256", want], host=h)
             return rc, json.loads(out.getvalue()).get("image_carries_recorded_cert")
         rc, result = run(pe_image(self.ours), self.sha["ours"])
         self.assertEqual((rc, result["value"]), (0, True))
         rc, result = run(pe_image(self.ours), self.sha["old"])
         self.assertEqual((rc, result["value"]), (1, False))
+        # without evidence (the bench) --image is optional
         with mock.patch.object(host_probe, "measure", return_value={}), redirect_stdout(io.StringIO()) as out:
             self.assertEqual(host_probe.main(["--secure-boot-cert-sha256", self.sha["old"]], host=FakeHost()), 0)
         self.assertNotIn("image_carries_recorded_cert", json.loads(out.getvalue()))
 
+    def test_evidence_without_an_image_is_refused(self):
+        with redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as exit_:
+            host_probe.main(["--evidence", "e", "--signature", "s", "--evidence-key", "k", "--evidence-key-sha256", "0" * 64], host=FakeHost())
+        self.assertEqual(exit_.exception.code, 2)
+        self.assertIn("--evidence needs --image", err.getvalue())
+
     def test_a_malformed_image_is_refused_not_read_past(self):
         good = pe_image(self.ours)
-        sec = struct.unpack_from("<II", good, 0x40 + 24 + 112 + 32)
+        sec_field = 0x40 + 24 + 112 + 32
+        sec = struct.unpack_from("<II", good, sec_field)
         def with_dir(at, size):
-            return good[:0x40 + 24 + 112 + 32] + struct.pack("<II", at, size) + good[0x40 + 24 + 112 + 40:]
+            return good[:sec_field] + struct.pack("<II", at, size) + good[sec_field + 8:]
         sig_at = sec[0] + 8
         cases = {
             "not MZ": b"ZM" + good[2:],
             "no PE signature": good[:0x40] + b"PX\x00\x00" + good[0x44:],
             "an unknown optional header": good[:0x58] + b"\x07\x01" + good[0x5a:],
             "headers cut short": good[:0x60],
+            "a PE offset past the end": good[:0x3c] + struct.pack("<I", 1 << 20) + good[0x40:],
             "a directory past the end": with_dir(sec[0], sec[1] + 8),
             "an entry header cut short": with_dir(sec[0], 4),
             "an entry longer than the directory": good[:sec[0]] + struct.pack("<I", sec[1] + 8) + good[sec[0] + 4:],
             "an entry shorter than its header": good[:sec[0]] + struct.pack("<I", 4) + good[sec[0] + 4:],
+            "an entry not of PKCS signed data": pe_image(self.ours, kind=0x0001),
+            "a second entry of another type": pe_image(self.ours, self.old, kind=0x0EF1),
             "not SignedData": good[:sig_at + 14] + b"\x01" + good[sig_at + 15:],
+            "an indefinite length": good[:sig_at + 1] + b"\x80" + good[sig_at + 2:],
+            "a five-octet length": good[:sig_at + 1] + b"\x85" + good[sig_at + 2:],
             "a signature cut short": good[:sec[0]] + struct.pack("<I", 8 + 40) + good[sec[0] + 4:sig_at + 40] + b"\x00" * (sec[1] - 48),
         }
         for name, image in cases.items():
@@ -1501,6 +1528,23 @@ class ImageCarriesRecordedCert(unittest.TestCase):
                 result = self.judge(image)
                 self.assertFalse(result["value"])
                 self.assertIn("is malformed", result["why"])
+
+    def test_fuzzed_images_raise_nothing_but_a_refusal(self):
+        """Every truncation, and seeded byte flips across the whole file: a ValueError or an answer, never another exception."""
+        import random
+        rng = random.Random(3)
+        for good in (pe_image(self.ours_carrying_old), pe_image(self.by_keyid, self.old)):
+            images = [good[:n] for n in range(len(good))]
+            for _ in range(3000):
+                b = bytearray(good)
+                for _ in range(rng.randint(1, 4)):
+                    b[rng.randrange(len(b))] = rng.choice((0x00, 0x7f, 0x80, 0x81, 0x84, 0xff, rng.randrange(256)))
+                images.append(bytes(b))
+            for image in images:
+                try:
+                    host_probe.authenticode_signers(image)
+                except ValueError:
+                    pass
 
 
 class SignedEvidence(unittest.TestCase):
@@ -1539,9 +1583,10 @@ class SignedEvidence(unittest.TestCase):
 
     def run_probe(self, path, sig, measured=None, key_sha=None, extra=()):
         args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub,
-                "--evidence-key-sha256", key_sha or self.key_sha, *extra]
+                "--evidence-key-sha256", key_sha or self.key_sha, "--image", IMAGE, *extra]
+        image = {"value": True, "why": "held passing here: ImageCarriesRecordedCert judges the image"}
         with mock.patch.object(host_probe, "measure", return_value=measured or self.everything) as measure, \
-                redirect_stdout(io.StringIO()) as out:
+                mock.patch.object(host_probe, "image_cert", return_value=image), redirect_stdout(io.StringIO()) as out:
             rc = host_probe.main(args, host=FakeHost())
         self.judged_against = measure.call_args.args[3]
         self.measured_with = (measure.call_args.args[1], measure.call_args.args[4])     # the import key, the db certificate
@@ -1662,7 +1707,7 @@ class SignedEvidence(unittest.TestCase):
         and an argument cannot replace the signed record."""
         def run(doc, extra=()):
             path, sig = self.write(doc)
-            args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub, "--evidence-key-sha256", self.key_sha, *extra]
+            args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub, "--evidence-key-sha256", self.key_sha, "--image", IMAGE, *extra]
             with redirect_stdout(io.StringIO()) as out:
                 host_probe.main(args, host=FakeHost())
             return json.loads(out.getvalue())["measured"]["secure_boot_db_has_image_cert"]
@@ -1704,7 +1749,7 @@ class SignedEvidence(unittest.TestCase):
             path, sig = self.write(doc)
             host = FakeHost()
             host.files[PIN_FILE] = blob
-            args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub, "--evidence-key-sha256", self.key_sha]
+            args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub, "--evidence-key-sha256", self.key_sha, "--image", IMAGE]
             with redirect_stdout(io.StringIO()) as out:
                 host_probe.main(args, host=host)
             return json.loads(out.getvalue())["measured"]["pin_credentials_sealed_as_recorded"]
