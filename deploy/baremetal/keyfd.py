@@ -24,7 +24,9 @@ only refuses the plainly wrong thing, a file descriptor of a file. Likewise for 
 zeroed, but loading the key makes an immutable `bytes` copy (load_pem_private_key(bytes(buffer))) and the library
 keeps its own key object; neither can be cleared from Python, and both live until the process exits, seconds later.
 The ceremony laptop's RAM is the boundary, and it is powered off after the session."""
+import argparse
 import fcntl
+import functools
 import os
 import re
 import stat
@@ -153,3 +155,44 @@ def tty_line(prompt):
         return typed.decode("utf-8", "replace")
     finally:
         os.close(fd)
+
+
+# ---- the command lines of the tools that take a key by descriptor (regalia-kms-51, 95) ----
+#
+# offline-keys allows a command by its exact flags. argparse takes an abbreviation (--key-f) and, for a flag given twice,
+# the LAST value, so `--key-fd {keyfd:x} ... --key-fd 0` or `--key-f 0` would pass the allow-list and read another
+# descriptor. exact() makes a parser, and every subcommand it adds, take no abbreviation and refuse any single-value
+# option given twice.
+
+class Once(argparse.Action):
+    """A plain store action that refuses a second occurrence of its option."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        seen = namespace.__dict__.setdefault("_once_seen", set())
+        if self.dest in seen:
+            parser.error("%s given twice: each option is taken once" % option_string)
+        seen.add(self.dest)
+        setattr(namespace, self.dest, values)
+
+
+def _once_arguments(parser):
+    add = parser.add_argument
+
+    def add_argument(*args, **kwargs):
+        if "action" not in kwargs and any(a.startswith("--") for a in args):
+            kwargs["action"] = Once
+        return add(*args, **kwargs)
+    parser.add_argument = add_argument
+    return parser
+
+
+def exact(parser, sub=None):
+    """`parser` (and the subcommands `sub`, its add_subparsers, adds) without abbreviations and with every single-value
+    option taken once. Returns the parser."""
+    parser.allow_abbrev = False
+    _once_arguments(parser)
+    if sub is not None:
+        add_parser = sub.add_parser
+        sub.add_parser = lambda *a, **kw: _once_arguments(add_parser(*a, allow_abbrev=False, **kw))
+    return parser
+
