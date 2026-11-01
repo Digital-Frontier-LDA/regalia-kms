@@ -326,7 +326,12 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   the root oneshot `regalia-esp-advance` writes the published chain to the ESP, then anchors it.
   - **Not measured** on a host: shown by unit tests, a real-systemd e2e on a plain `/efi` directory, the
     three-node fixture (an ESP directory per node) and QEMU boots 10-12, whose ESP the test writes.
-  - Only the chain is written. A site change (the measured `regalia.site.cred`) still needs enrolment.
+  - Only the chain is written. A site change (the measured `regalia.site.cred`) is `regalia-node site-advance`'s
+    (#615), with no re-enrolment: it writes the new document only when the anchored manifest's measurement
+    document already lists the booted set with only PCR 12 replaced. Rehearsed on the three-node fixture with
+    PCR 12 measured (`e2e/three-node-site-advance.py`): the move changes a field the fixture's network does not
+    read (`boot_mesh.nic_mac`), not the addresses, and that every peer has anchored the approving epoch is the
+    operator's check, not site-advance's. The node-move runbook is in the private repository.
   - Until a run succeeds the node acts on a chain ahead of its anchor, and rollback protection stands at
     the anchor's epoch. `RegaliaMembershipAnchorBehind` and `RegaliaEspAdvanceFailing` warn after 15 min;
     an operator fixes the ESP and restarts the unit (deploy/baremetal/README.md §7). Nothing repairs it alone.

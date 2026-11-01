@@ -160,7 +160,7 @@ if str(ROOT) not in sys.path:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tpmdiag                                                                                      # noqa: E402
-from deploy.baremetal import attest, authtime, bootnet, enrol, heartbeat, lease, measurements, membership, node, signkey, sitecfg, trails, unlock, uki, wgsvc   # noqa: E402
+from deploy.baremetal import attest, authtime, bootcreds, bootnet, enrol, espcreds, heartbeat, lease, measurements, membership, node, signkey, sitecfg, trails, unlock, uki, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
 NAMES = ("a", "b", "c")
@@ -476,7 +476,7 @@ def moving_line(events, epoch):
     return None
 
 class Cluster:
-    def __init__(self, work, names=NAMES, audit=False):
+    def __init__(self, work, names=NAMES, audit=False, site_pcr=False):
         refuse_retired_switch()                       # #592: one tpm2-abrmd per node, the only route; before anything runs
         self.work = pathlib.Path(work)
         # regalia-zga: what a TPM failure is diagnosed from, kept in this run (e2e/lib/tpmdiag.py): which stack it ran on;
@@ -490,6 +490,10 @@ class Cluster:
         # the real audit trail shippers and collector (#340): each node's own trails shipped as a host ships them,
         # so a scenario can hold every event it caused to the collector's chained stream (audit_complete)
         self.audit = audit
+        # #615: PCR 12 attested as on a host (bootcreds.UNLOCK_PCRS): each node's ESP holds its site document, every TPM
+        # start measures the ESP's credentials into PCR 12 as systemd-stub does (espcreds), and the nodes attest and unlock
+        # on 7, 11 and 12. Off, the nodes attest 7 and 11 only (node.example.json), as every other scenario was written for
+        self.site_pcr = site_pcr
         self.audit_bin = pathlib.Path(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"))
         self.tool_trails = {}                         # {node: {trail: path}}: an operator tool's trail a scenario ships too (ship_tool_trail)
         os.environ["REGALIA_TCTI_ALLOW_SIMULATOR"] = "1"   # this process loads the nodes' (swtpm) node.json too (SIMULATOR_ENV)
@@ -520,6 +524,10 @@ class Cluster:
     def member(self, name):
         return self.nodes[name]
 
+    def attested(self, pcrs):
+        """The PCRs the nodes attest and unlock on: `pcrs`, and PCR 12 too when the site document is measured (#615)."""
+        return sorted(set(pcrs) | ({12} if self.site_pcr else set()))
+
     # ---- building ----
 
     def build(self):
@@ -543,6 +551,8 @@ class Cluster:
             for d in (n.dir / "etc", n.state, n.admission, n.run, n.admission_log):
                 d.mkdir(parents=True)
             os.chmod(n.dir, 0o711)
+            if self.site_pcr:                         # on the ESP before the TPM's first start: the stub measures it at every boot
+                self.write_site_document(n.name, self.site_config(n))
             self._tpm(n)
             self._wg_keys(n)
         self._identities_and_chain()
@@ -798,6 +808,8 @@ class Cluster:
         /run/systemd)."""
         with self.tpm_of(n.name):
             sh("tpm2_pcrextend", "-T", n.tcti, "11:sha256=" + hashlib.sha256(BOOTED).hexdigest())
+        if self.site_pcr:
+            self._measure_site(n)
         self._sign_pcr11(n.name, extended(self._pcr11(n), LEAVE_INITRD))
 
     def _leave_initrd(self, name):
@@ -991,7 +1003,7 @@ class Cluster:
         example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
         self.signing = {}
         self.ids = {n.name: self._identity(n) for n in self.nodes.values()}
-        self.reference = {n.name: self._reference(n, example["pcrs"]) for n in self.nodes.values()}
+        self.reference = {n.name: self._reference(n, self.attested(example["pcrs"])) for n in self.nodes.values()}
         self.document = {"schema": measurements.SCHEMA, "name": "e2e3",
                          "nodes": {n.name: {"accepted": [dict(self.reference[n.name])]} for n in self.nodes.values()}}
         # #199: the first real manifest is v4 (no ceremony has run): the nodes and the owner sign, by quorum
@@ -1070,8 +1082,9 @@ class Cluster:
                         pass
             time.sleep(3)
 
-    def _configure(self, n):
-        example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
+    def site_config(self, n):
+        """The node's site configuration (sitecfg) as built: its rootfs site.json, and the source of its measured site
+        document (#615)."""
         others = [o for o in self.nodes.values() if o is not n]
         site = {"schema": "regalia.baremetal-site/v1", "site": "e2e3-" + n.name, "host_ipv4": n.underlay, "kms_port": 8443, "ssh_port": 22,
                 "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["203.0.113.128/32"], "admin_cidrs": ["203.0.113.0/28"],
@@ -1081,9 +1094,14 @@ class Cluster:
                               "nic_mac": "52:54:00:12:34:%02x" % (0x50 + n.index), "prefix": 24, "gateway": None,
                               "peers": [{"node_id": o.name, "underlay": o.underlay, "address": o.boot_address} for o in others]},
                 "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444}}
+        return site
+
+    def _configure(self, n):
+        example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
+        site = self.site_config(n)
         _replace(n.dir / "etc" / "site.json", json.dumps(site))            # whole, never torn: running services read them
         # no measurements.json: the document is in the node's store by digest, and later ones come by sync (#332)
-        cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=abrmd_tcti(n.name),
+        cfg = dict(example, pcrs=self.attested(example["pcrs"]), node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=abrmd_tcti(n.name),
                    state_dir=str(n.state), admission_dir=str(n.admission), run_dir=str(n.run), admission_log_dir=str(n.admission_log),
                    wg_service_key=str(n.dir / "etc" / "wg-service.key"), measurements=str(n.dir / "etc" / "measurements.json"),
                    time_servers=["nts1.e2e3.invalid", "nts2.e2e3.invalid"], pull_interval=10,
@@ -1261,6 +1279,80 @@ class Cluster:
         """The node's ESP stand-in (a directory: what regalia-esp-advance writes; nothing boots from it here)."""
         return self.nodes[name].dir / "esp"
 
+    # ---- the measured site document (#615, tier N) ----
+    # With site_pcr, each node's ESP holds loader/credentials/regalia.site.cred, the site document bootcreds renders from its
+    # site configuration, and every TPM start extends PCR 12 with what systemd-stub extends it with: the SHA-256 of the cpio
+    # archive of the ESP's credentials (espcreds). Nothing boots from the ESP here: the initrd's network is still set up from
+    # the rootfs site.json (unlock), so a move here changes what the document says, not the addresses the fixture wires.
+
+    def site_document_path(self, name):
+        return self.esp(name) / node.SITE_ON_ESP
+
+    def write_site_document(self, name, site):
+        """`site` rendered as the node's measured site document, written to its ESP as anyone with root or the ESP in hand
+        could write it (no check: the peers judge the PCR 12 it gives). Returns the bytes."""
+        document = bootcreds.site_document(site, node.ESP_RENDER_DEVICE)
+        path = self.site_document_path(name)
+        for d in (self.esp(name), path.parent.parent, path.parent):
+            d.mkdir(mode=0o755, exist_ok=True)
+            os.chmod(d, 0o755)
+        tmp = pathlib.Path(str(path) + ".tmp")        # whole: a temporary file beside it, then renamed over it
+        tmp.write_bytes(document)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+        return document
+
+    def site_pcr12(self, name, document=None):
+        """PCR 12 as the stub leaves it for the node's ESP credentials, with its site document replaced by `document`."""
+        files = uki.credential_files(str(self.esp(name)))
+        if document is not None:
+            files = dict(files, **{os.path.basename(node.SITE_ON_ESP): document})
+        return espcreds.pcr12(files)
+
+    def _measure_site(self, n):
+        """systemd-stub's PCR 12 at a TPM start: one extend with the SHA-256 of the archive of the ESP's credentials, read
+        back and held to espcreds.pcr12, so a set built from the TPM is the set the stub would give."""
+        files = uki.credential_files(str(self.esp(n.name))) if (self.esp(n.name) / espcreds.DIRECTORY).is_dir() else {}
+        packed = espcreds.archive(files)
+        out = n.dir / "pcr12.bin"
+        with self.tpm_of(n.name):
+            if packed is not None:
+                sh("tpm2_pcrextend", "-T", n.tcti, "12:sha256=" + hashlib.sha256(packed).hexdigest())
+            sh("tpm2_pcrread", "-T", n.tcti, "sha256:12", "-o", str(out))
+        if out.read_bytes().hex() != espcreds.pcr12(files):
+            raise RuntimeError("%s's PCR 12 is %s after its start, not the stub's %s for its ESP" % (n.name, out.read_bytes().hex(), espcreds.pcr12(files)))
+
+    def site_set(self, name, document, label):
+        """The node's CURRENT set (as built) with only PCR 12 replaced by what its ESP measures once `document` is its site
+        document: the set the root approves for a move (siteadvance.target's prediction)."""
+        base = self.reference[name]
+        return dict(base, label=label, pcrs=dict(base["pcrs"], **{"12": self.site_pcr12(name, document)}))
+
+    def site_advance(self, name, site):
+        """`regalia-node site-advance --site` as the operator runs it, as root under regalia-esp-advance's identity (the same
+        ESP writer, its lock and trail), in the node's namespace. `site` is written to the node's etc/ first. Returns the
+        CompletedProcess: a refusal is a result here, not an error."""
+        n = self.nodes[name]
+        path = n.dir / "etc" / "site-next.json"
+        _replace(path, json.dumps(site))
+        os.chmod(path, 0o644)
+        unit = self.unit(name, "site-advance-%d" % time.monotonic_ns())
+        argv = ["systemd-run", "--unit", unit, "--collect", "--wait", "-p", "Type=oneshot", "--pipe"]
+        for prop in self.properties(name, "esp-advance"):
+            argv += ["-p", prop]
+        return sh(*(argv + ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.node", "--config", str(n.cfg_path), "site-advance"]
+                    + list(self._esp_args(n)) + ["--site", str(path)]), check=False)
+
+    def site_check(self, name):
+        """regalia-site-check as its installed unit runs it, against the node's ESP. Returns the CompletedProcess."""
+        n = self.nodes[name]
+        unit = self.unit(name, "site-check-%d" % time.monotonic_ns())
+        argv = ["systemd-run", "--unit", unit, "--collect", "--wait", "-p", "Type=oneshot", "--pipe"]
+        for prop in self.properties(name, "site-check"):
+            argv += ["-p", prop]
+        return sh(*(argv + ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.node", "--config", str(n.cfg_path), "site-check",
+                            "--esp", str(self.esp(name))]), check=False)
+
     def _esp_args(self, n):
         esp = self.esp(n.name)
         if not esp.exists():
@@ -1351,7 +1443,7 @@ class Cluster:
         example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
         n = self.nodes[new]
         document = self.document if same_policy else \
-            dict(self.document, nodes=dict(self.document["nodes"], **{new: {"accepted": [self._reference(n, example["pcrs"])]}}))
+            dict(self.document, nodes=dict(self.document["nodes"], **{new: {"accepted": [self._reference(n, self.attested(example["pcrs"]))]}}))
         entry = {"node_id": new, "state": "ACTIVE", "ek_name": self.ids[new][0], "ak_name": self.ids[new][1],
                  "wg_boot_pub": self.keys[new]["boot"][1], "wg_service_pub": self.keys[new]["service"][1], "hsm_serials": ["E2E3%s" % new.upper()]}
         current = self.manifest
@@ -1637,7 +1729,7 @@ class Cluster:
         n.in_ns("ip", "address", "add", "%s/%d" % (n.boot_address, site["boot_mesh"]["prefix"]), "dev", "wg-boot")
         n.in_ns("ip", "link", "set", "wg-boot", "up")
         config = n.dir / "unlock.json"
-        config.write_text(json.dumps(unlock.boot_config(manifest, name, loop, [7, 11], bootnet.unlock_endpoints(site, manifest))))
+        config.write_text(json.dumps(unlock.boot_config(manifest, name, loop, self.attested([7, 11]), bootnet.unlock_endpoints(site, manifest))))
         creds = n.dir / "creds"
         shutil.rmtree(creds, True)
         creds.mkdir(mode=0o700)
