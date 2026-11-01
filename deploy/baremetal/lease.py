@@ -254,6 +254,11 @@ class RevisionFloor:
                     % (state_epoch, self.epoch or 0))
             if self.epoch is not None and state_epoch > self.epoch:
                 self.started, self.seen = now, []                                # a new history: start again, closed for one lease
+            if not self.seen:
+                # regalia-t78: the lease it waits out is counted from the watch's FIRST report, not from construction. Counted
+                # from construction, a first report landing late left a window past one lease with nothing held a lease ago,
+                # refused as "its watch had not reported" (not retriable) where the start-up gap below says when to ask again.
+                self.started = now
             require(not self.seen or revision >= self.seen[-1][1], "the applied etcd revision went back (%d after %d): refused"
                     % (revision, self.seen[-1][1] if self.seen else 0))
             self.cluster_id, self.epoch = cluster_id, state_epoch
@@ -278,6 +283,7 @@ class RevisionFloor:
             require(state_epoch == self.epoch, "ANOTHER HISTORY: the subject's etcd state is of state epoch %d, this issuer's of %d: "
                     "revisions of two histories are not compared, no lease" % (state_epoch, self.epoch))
             held = [r for t, r in self.seen if t <= now - self.lifetime]
+            # a backstop since regalia-t78: started is the first report, so the start-up gap above already refuses this case
             require(held, "this issuer applied no etcd revision a lease ago (its watch had not reported): no lease")
             require(revision >= held[-1], "STALE STATE: the subject has applied etcd revision %d, below the %d this issuer had applied one lease "
                     "(%d s) ago: no lease until it catches up" % (revision, held[-1], self.lifetime))
