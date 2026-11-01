@@ -397,5 +397,154 @@ class Integers(unittest.TestCase):
                 drill.report("r1", "a", "b", {"passed": True, "rtt": [1, {"x": bad}]}, {})
 
 
+class FakeIlo:
+    def __init__(self, node, log):
+        self.node, self.log = node, log
+
+    def force_off(self):
+        self.log.append(("off", self.node))
+        return {"outcome": "Off", "node": self.node}
+
+    def power_on(self):
+        self.log.append(("on", self.node))
+        return {"outcome": "On", "node": self.node, "readbacks": [{"power": "Off"}, {"power": "PoweringOn"}, {"power": "On"}]}
+
+
+class HardwareBackend(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d)
+        self.journal = drill.Journal(os.path.join(self.d, "faults.jsonl"))
+        self.log, self.server = [], FakeServer()
+
+        def ssh(node, argv, input=None):
+            self.log.append(("ssh", node, argv[0], [e["action"] for e in self.journal.pending()]))
+            if argv == ["systemctl", "reboot"]:
+                return subprocess.CompletedProcess(argv, 255, "", "Connection closed by remote host")
+            return self.server(node, argv, input)
+
+        def ilo(node):
+            pending = [e["action"] for e in self.journal.pending()]
+            self.log.append(("journal at iLO call", node, pending))
+            return FakeIlo(node, self.log)
+        self.hw = drill.Hardware(self.journal, ssh, ilo)
+
+    def test_every_fault_is_journaled_before_it_is_injected_and_undone_after(self):
+        self.hw.power_off("c")
+        self.assertEqual(self.log[:2], [("journal at iLO call", "c", ["power-off"]), ("off", "c")])
+        self.hw.power_on("c")
+        self.assertEqual(self.journal.pending(), [])
+        self.hw.restart("b")                                             # 255: the connection dropping with the reboot
+        self.assertEqual(self.log[-1], ("ssh", "b", "systemctl", ["restart"]))
+        self.assertEqual(self.journal.pending()[0]["undo"], {"action": "power-cycle", "node": "b"})
+        self.hw.restarted("b")
+        self.hw.partition("a")
+        self.assertEqual([e["action"] for e in self.journal.pending()], ["partition"])
+        self.hw.heal("a")
+        self.assertEqual((self.journal.pending(), self.server.table), ([], False))
+
+    def test_restore_powers_on_through_the_ilo_and_heals(self):
+        self.hw.power_off("c")
+        self.hw.partition("a")
+        restored, failed = self.journal.restore(self.hw.undoers())
+        self.assertEqual(failed, [])
+        self.assertIn(("on", "c"), self.log)
+        self.assertFalse(self.server.table)
+
+    def test_scenarios_bind_each_their_own_node(self):
+        # a regression: lambdas read a shared name, and every scenario hit the last planned node
+        judged = []
+        built = drill.scenarios(self.hw, {"S1": "c", "S2": "b", "S3": "a", "S5": ["a", "b"]},
+                                lambda name, ctx: judged.append((name, ctx.get("node"))) or {"seen": (True, name)},
+                                sleep=lambda s: None)
+        out = drill.run(built, abort=lambda: None, restore=lambda: None)
+        self.assertTrue(out["passed"], out)
+        self.assertIn(("off", "c"), self.log)
+        self.assertIn(("on", "c"), self.log)
+        self.assertEqual([n for name, n in judged if name in ("S1", "S2", "S3")], ["c", "b", "a"])
+        self.assertEqual([n for name, n in judged if name == "S5-wait"], ["a", "b"])
+        self.assertEqual(self.journal.pending(), [])                     # every fault the run made, undone by it
+        self.assertEqual([s["scenario"] for s in out["scenarios"]], ["S1", "S2", "S3", "S5"])
+        self.assertIn("recovered", out["scenarios"][0])
+
+    def test_what_the_recovery_must_show_counts_and_can_fail_the_scenario(self):
+        def judge(name, ctx):
+            if name == "S1-back":
+                return {"caught up before serving": (False, "served at revision 7 below the lease's 9")}
+            return {"seen": (True, name)}
+        out = drill.run(drill.scenarios(self.hw, {"S1": "c", "S3": "a"}, judge), abort=lambda: None, restore=lambda: None)
+        s1, s3 = out["scenarios"]
+        self.assertFalse(s1["passed"])
+        self.assertFalse(s1["predicates"]["after recovery: caught up before serving"]["ok"])
+        self.assertTrue(s3["passed"])
+        self.assertIn("after recovery: seen", s3["predicates"])            # S3-healed judged too
+        self.assertFalse(out["passed"])
+
+    def test_s5_stops_when_a_server_does_not_come_back_and_leaves_its_restart_pending(self):
+        # d9 on #504: rolling on would have two of three down
+        def judge(name, ctx):
+            if name == "S5-wait" and ctx["node"] == "b":
+                return {"it serves again": (False, "no serving line in 240 s")}
+            return {"seen": (True, name)}
+        restarted = []
+        out = drill.run(drill.scenarios(self.hw, {"S5": ["a", "b", "c"]}, judge, sleep=lambda s: None), abort=lambda: None,
+                        restore=lambda: None)
+        self.assertIn("ABORTED: S5: b did not come back", out["stopped"])
+        self.assertFalse(out["passed"])
+        self.assertNotIn(("ssh", "c", "systemctl", ["restart"]), [x for x in self.log if x[0] == "ssh"])   # c never restarted
+        self.assertEqual([(e["node"], e["undo"]["action"]) for e in self.journal.pending()], [("b", "power-cycle")])
+
+    def test_s5_waits_one_lease_before_each_restart(self):
+        """KERNEL-UPDATE step 3.5 (#522): back and serving, then one lease more, before the next host is touched (#504's
+        red under lease v2, #489: a host back less than one lease ago issues no lease yet)."""
+        def judge(name, ctx):
+            self.log.append(("judged", name, ctx.get("node")))
+            return {"seen": (True, name)}
+        out = drill.run(drill.scenarios(self.hw, {"S5": ["a", "b", "c"]}, judge,
+                                        sleep=lambda s: self.log.append(("slept", s))), abort=lambda: None, restore=lambda: None)
+        self.assertTrue(out["passed"], out)
+        steps = [x[:3] if x[0] == "ssh" else x for x in self.log if x[0] in ("slept", "judged") or (x[0] == "ssh" and x[2] == "systemctl")]
+        self.assertEqual(steps, [("slept", lease_s := drill.lease.MAX_LIFETIME), ("ssh", "a", "systemctl"), ("judged", "S5-wait", "a"),
+                                 ("slept", lease_s), ("ssh", "b", "systemctl"), ("judged", "S5-wait", "b"),
+                                 ("slept", lease_s), ("ssh", "c", "systemctl"), ("judged", "S5-wait", "c"), ("judged", "S5", None)])
+        self.assertEqual(drill.S5_SETTLE_S, 30)
+
+    def test_s2_leaves_its_restart_pending_when_its_predicates_fail(self):
+        out = drill.run(drill.scenarios(self.hw, {"S2": "b"}, lambda name, ctx: {"back": (False, "not serving")}),
+                        abort=lambda: None, restore=lambda: None)
+        self.assertFalse(out["passed"])
+        self.assertIn("left pending", out["scenarios"][0]["recovered"])
+        self.assertEqual([e["undo"] for e in self.journal.pending()], [{"action": "power-cycle", "node": "b"}])
+
+    def test_a_power_cycle_undo_is_by_hand_until_the_client_can(self):
+        self.hw.restart("b")
+        restored, failed = self.journal.restore(self.hw.undoers())
+        self.assertIn("power-cycle b through its iLO by hand", failed[0]["error"])
+
+    def test_a_power_on_without_a_final_on_readback_leaves_the_fault_pending(self):
+        class Stuck(FakeIlo):
+            def power_on(self):
+                return {"outcome": "timeout", "readbacks": [{"power": "Off"}, {"power": "Off"}]}
+        hw = drill.Hardware(self.journal, lambda *a, **k: None, lambda node: Stuck(node, []))
+        hw.power_off("c")
+        with self.assertRaisesRegex(m.Refused, "did not read back On"):
+            hw.power_on("c")
+        self.assertEqual(len(self.journal.pending()), 1)
+
+    def test_restore_says_serving_is_not_confirmed_for_every_power_undo(self):
+        self.hw.power_off("c")
+        self.hw.partition("a")
+        restored, failed = self.journal.restore(self.hw.undoers())
+        lines = drill.restore_summary(restored, failed + [{"error": "b: power-cycle by hand"}])
+        self.assertIn("c: powered On by readback; SERVING NOT CONFIRMED. Check that c serves (or that RegaliaNodeDown has "
+                      "cleared) before you leave", lines)
+        self.assertIn("a: unpartition done", lines)
+        self.assertIn("STILL PENDING: b: power-cycle by hand", lines)
+
+    def test_a_plan_with_no_scenario_is_refused(self):
+        with self.assertRaises(m.Refused):
+            drill.scenarios(self.hw, {}, lambda name, ctx: {})
+
+
 if __name__ == "__main__":
     unittest.main()
