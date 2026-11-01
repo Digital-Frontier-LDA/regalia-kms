@@ -11,7 +11,8 @@ re-seals the PINs and so needs opensc-tool and pkcs11-tool.
 
     sudo python3 -Es deploy/baremetal/host_probe.py --import-key-sha256 HEX     # exit 1 unless every control is true
     sudo python3 -Es deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
-        --evidence-key commissioning-p256.pem --evidence-key-sha256 HEX      # the commissioning pass criterion
+        --evidence-key commissioning-p256.pem --evidence-key-sha256 HEX \
+        --image /boot/efi/EFI/Linux/NAME.efi                                # the commissioning pass criterion
 
 PLATFORM AND TPM, measured:
   uefi_boot                 booted through UEFI (/sys/firmware/efi): TPM 2.0 measured boot needs it
@@ -447,7 +448,13 @@ def signed_data_signers(blob):
     out = []
     for s_tag, _, s_body, s_end in signers:
         fields = der_children(blob, s_body, s_end)
-        if s_tag != 0x30 or len(fields) < 2 or fields[0][0] != 0x02:
+        layout = [f[0] for f in fields[2:]]                 # RFC 5652 5.3, after version and sid
+        if layout[1:2] == [0xa0]:                           # signedAttrs [0], optional
+            del layout[1]
+        if layout[3:] == [0xa1]:                            # unsignedAttrs [1], optional
+            del layout[3]
+        # digestAlgorithm, signatureAlgorithm, signature, and nothing else
+        if s_tag != 0x30 or layout != [0x30, 0x30, 0x04] or fields[0][0] != 0x02:
             raise ValueError("a SignerInfo is malformed")
         sid_tag, sid_at, sid_body, sid_end = fields[1]
         if sid_tag == 0x30:                                 # issuerAndSerialNumber

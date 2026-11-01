@@ -1646,6 +1646,18 @@ class ImageCarriesRecordedCert(unittest.TestCase):
             "a SignedData element neither certificates nor crls": (sig, SIGNED_DATA, lambda p: p[:-1] + [(0x04, b"")] + p[-1:]),
             "seven SignedData elements": (sig, SIGNED_DATA, lambda p: p[:-1] + [(0xa0, b""), (0xa1, b"")] + p[-1:]),
             "a SignerInfo version not an INTEGER": (sig, SIGNER, lambda p: [(0x04, p[0][1])] + p[1:]),
+            # the rest of a SignerInfo (Copilot on #646, regalia-c6's layout): openssl's is version, sid, digestAlgorithm,
+            # signatureAlgorithm, signature
+            "a digestAlgorithm not a SEQUENCE": (sig, SIGNER, lambda p: p[:2] + [(0x31, p[2][1])] + p[3:]),
+            "a signatureAlgorithm not a SEQUENCE": (sig, SIGNER, lambda p: p[:3] + [(0x31, p[3][1])] + p[4:]),
+            "a signature not an OCTET STRING": (sig, SIGNER, lambda p: p[:4] + [(0x03, p[4][1])]),
+            "a SignerInfo of version and sid alone": (sig, SIGNER, lambda p: p[:2]),
+            "a SignerInfo without its signature": (sig, SIGNER, lambda p: p[:4]),
+            "a SignerInfo's signature before its algorithm": (sig, SIGNER, lambda p: p[:3] + [p[4], p[3]]),
+            "signedAttrs after the signatureAlgorithm": (sig, SIGNER, lambda p: p[:4] + [(0xa0, b"")] + p[4:]),
+            "a field after the signature": (sig, SIGNER, lambda p: p + [(0x05, b"")]),
+            "unsignedAttrs twice": (sig, SIGNER, lambda p: p + [(0xa1, b""), (0xa1, b"")]),
+            "a field after the unsignedAttrs": (sig, SIGNER, lambda p: p + [(0xa1, b""), (0x05, b"")]),
             "an issuerAndSerialNumber of three elements": (sig, SIGNER + [1], lambda p: p + [(0x05, b"")]),
             "a tbsCertificate out of order": (sig, TBS, lambda p: p[:4] + [(0x31, p[4][1])] + p[5:]),
             "a subject key identifier of two OCTET STRINGs": (self.by_keyid, TBS + [ext, 0, ski], lambda p: p[:-1] + [(0x04, p[-1][1] + b"\x04\x00")]),
@@ -1661,7 +1673,10 @@ class ImageCarriesRecordedCert(unittest.TestCase):
         # and what the rules let through still names the signer: a certificate with an issuer unique ID ([1]) before
         # its extensions, and a CertificateChoice that is not a certificate ([1], skipped)
         for name, edited in {"an issuer unique ID": der_rewrite(sig, TBS, lambda p: p[:ext] + [(0x81, b"\x00\x01")] + p[ext:]),
-                             "a CertificateChoice not a certificate": der_rewrite(sig, CERTS, lambda p: [(0xa1, b"")] + p)}.items():
+                             "a CertificateChoice not a certificate": der_rewrite(sig, CERTS, lambda p: [(0xa1, b"")] + p),
+                             "signedAttrs": der_rewrite(sig, SIGNER, lambda p: p[:3] + [(0xa0, b"")] + p[3:]),
+                             "unsignedAttrs": der_rewrite(sig, SIGNER, lambda p: p + [(0xa1, b"")]),
+                             "both": der_rewrite(sig, SIGNER, lambda p: p[:3] + [(0xa0, b"")] + p[3:] + [(0xa1, b"")])}.items():
             with self.subTest(name):
                 cert = [c for c in der_at(edited, CERTS) if c[0] == 0x30]
                 self.assertEqual(host_probe.signed_data_signers(edited), [hashlib.sha256(der_join(cert)).hexdigest()])
