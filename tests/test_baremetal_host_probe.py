@@ -1703,7 +1703,7 @@ class ImageCarriesRecordedCert(unittest.TestCase):
             self.assertIn("no recorded Secure Boot certificate", host_probe.signed_by(pe_image(self.ours), "/x", want)["why"])
         self.assertEqual(self.judge(None), {"value": False, "why": "the image %s is unreadable or absent" % IMAGE})
 
-    def on_esp(self, images, boot_next=None, order=("0001",), current="0001"):
+    def on_esp(self, images, boot_next=None, order=("0001",), current="0001", inactive=()):
         """A host whose ESP (a temporary directory: the vfat mount of the partition BootCurrent's entry is on, the one
         systemd-stub names) holds `images` {entry: bytes} as \\EFI\\Linux\\image-<entry>.efi, and whose efibootmgr reports
         them (efibootmgr 17's File() form, as tests/test_baremetal_bootnext.py prints it)."""
@@ -1714,8 +1714,8 @@ class ImageCarriesRecordedCert(unittest.TestCase):
         for entry, data in sorted(images.items()):
             with open(os.path.join(esp, "EFI", "Linux", "image-%s.efi" % entry), "wb") as f:
                 f.write(data)
-            lines.append("Boot%s* regalia-kms\tHD(1,GPT,%s,0x800,0x100000)/File(\\EFI\\Linux\\image-%s.efi)" % (
-                entry, ESP_GUID.upper(), entry))
+            lines.append("Boot%s%s regalia-kms\tHD(1,GPT,%s,0x800,0x100000)/File(\\EFI\\Linux\\image-%s.efi)" % (
+                entry, "" if entry in inactive else "*", ESP_GUID.upper(), entry))
         h = FakeHost()
         h.calls, h.report = [], "\n".join(lines) + "\n"
         def efibootmgr(argv, **kw):
@@ -1750,6 +1750,20 @@ class ImageCarriesRecordedCert(unittest.TestCase):
                 self.assertFalse(result["value"])
                 self.assertIn("image-0001.efi (Boot0001, %s) is signed by %s" % ("BootNext" if boot_next else "first in BootOrder",
                                                                                  self.sha["old"][:16]), result["why"])
+
+    def test_an_inactive_entry_is_refused_not_walked_past(self):
+        """regalia-c6 on #647: the firmware skips an inactive entry; the probe names it rather than guess which one the
+        firmware boots instead (bootnext refuses to set BootNext to one, for the same reason)."""
+        ours, old = pe_image(self.ours), pe_image(self.old)
+        for name, boot_next, order, which in (("first in BootOrder", None, ("0001", "0002"), "first in BootOrder"),
+                                              ("BootNext", "0001", ("0002", "0001"), "BootNext")):
+            with self.subTest(name):
+                h, esp = self.on_esp({"0001": ours, "0002": old}, boot_next=boot_next, order=order, inactive=("0001",))
+                self.assertEqual(self.next_image(h, esp), {"value": False, "why": "the image the firmware boots next cannot be "
+                                 "read: Boot0001 (%s) is not active: the firmware would skip it" % which})
+        # an inactive entry the firmware does not take decides nothing
+        h, esp = self.on_esp({"0001": ours, "0002": old}, order=("0001", "0002"), inactive=("0002",))
+        self.assertTrue(self.next_image(h, esp)["value"])
 
     def test_an_image_argument_must_be_the_firmwares(self):
         ours = pe_image(self.ours)

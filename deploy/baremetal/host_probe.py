@@ -568,11 +568,15 @@ def next_boot(host, esp):
         entry = boot["next"] or (boot["order"] or [None])[0]
         if entry is None:
             raise ValueError("BootNext is unset and BootOrder is empty: the firmware names no image to boot")
+        which = "BootNext" if boot["next"] else "first in BootOrder"
+        # the firmware skips an inactive entry, and which one it boots then is not this probe's guess (regalia-c6, #647)
+        if entry in boot["entries"] and not boot["entries"][entry]["active"]:
+            raise ValueError("Boot%s (%s) is not active: the firmware would skip it" % (entry, which))
         data = bootnext.image(esp, entry, boot, **host.boot_where)
     except (bootnext.Refused, OSError) as error:
         raise ValueError(str(error))
     path = os.path.join(esp, *boot["entries"][entry]["path"].split("\\")[1:])
-    return "%s (Boot%s, %s)" % (path, entry, "BootNext" if boot["next"] else "first in BootOrder"), data
+    return "%s (Boot%s, %s)" % (path, entry, which), data
 
 
 def image_cert(host, esp, image, expected):
