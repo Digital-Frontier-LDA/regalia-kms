@@ -13,6 +13,7 @@ import codecs
 import os
 import re
 import subprocess
+import tempfile
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -24,6 +25,33 @@ PATTERN = re.compile(r"(?<![a-zA-Z])(?i:%s)|(?<=[a-z])(?:%s)" % (_ANY, _CAPS))
 
 def hits(text):
     return [m.group(0) for m in PATTERN.finditer(text)]
+
+
+def scan(root):
+    """Every hit in the tracked files under root: paths, symlink targets, and contents (binary byte for byte).
+    Returns (hits, files listed, files scanned)."""
+    listed = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True, check=True).stdout
+    paths = [p for p in listed.decode("utf-8").split("\0") if p]
+    found, scanned = [], 0
+    for rel in paths:
+        found.extend("%s (path): %s" % (rel, h) for h in hits(rel))
+        path = os.path.join(root, rel)
+        if os.path.islink(path):                   # a tracked symlink: its target is content too
+            found.extend("%s (symlink target): %s" % (rel, h) for h in hits(os.readlink(path)))
+            scanned += 1
+            continue
+        if not os.path.isfile(path):
+            continue
+        with open(path, "rb") as f:
+            data = f.read()
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = data.decode("latin-1")
+        scanned += 1
+        for lineno, line in enumerate(text.splitlines(), 1):
+            found.extend("%s:%d: %s" % (rel, lineno, h) for h in hits(line))
+    return found, len(paths), scanned
 
 
 class SiteNamesNeverAppear(unittest.TestCase):
@@ -38,27 +66,27 @@ class SiteNamesNeverAppear(unittest.TestCase):
             with self.subTest(clean=clean):
                 self.assertEqual(hits(clean), [])
 
+    def test_the_scan_reads_paths_symlink_targets_and_contents(self):
+        a, _, b, c = WORDS
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["git", "init", "-q", d], check=True)
+            with open(os.path.join(d, "clean.txt"), "w") as f:
+                f.write("nothing here\n")
+            with open(os.path.join(d, "content.txt"), "w") as f:
+                f.write("x\n%s.boot.key\n" % b)
+            os.symlink("../%s/target" % c, os.path.join(d, "link"))
+            os.mkdir(os.path.join(d, a.capitalize()))
+            with open(os.path.join(d, a.capitalize(), "f"), "w") as f:
+                f.write("\n")
+            subprocess.run(["git", "-C", d, "add", "-A"], check=True)
+            found, listed, scanned = scan(d)
+        self.assertEqual((listed, scanned), (4, 4))
+        self.assertEqual(sorted(x.split(":")[0].split(" (")[0] for x in found), ["%s/f" % a.capitalize(), "content.txt", "link"])
+        self.assertTrue(any("(symlink target)" in x for x in found), found)
+
     def test_no_tracked_file_names_a_site(self):
-        listed = subprocess.run(["git", "-C", REPO, "ls-files", "-z"], capture_output=True, check=True).stdout
-        paths = [p for p in listed.decode("utf-8").split("\0") if p]
-        self.assertGreater(len(paths), 100, "git ls-files listed almost nothing: the scan would prove nothing")
-        found, scanned = [], 0
-        for rel in paths:
-            for name_hit in hits(rel):
-                found.append("%s (path): %s" % (rel, name_hit))
-            path = os.path.join(REPO, rel)
-            if not os.path.isfile(path) or os.path.islink(path):
-                continue
-            with open(path, "rb") as f:
-                data = f.read()
-            try:
-                text = data.decode("utf-8")
-            except UnicodeDecodeError:
-                text = data.decode("latin-1")      # binary files are scanned too, byte for byte
-            scanned += 1
-            for lineno, line in enumerate(text.splitlines(), 1):
-                for name_hit in hits(line):
-                    found.append("%s:%d: %s" % (rel, lineno, name_hit))
+        found, listed, scanned = scan(REPO)
+        self.assertGreater(listed, 100, "git ls-files listed almost nothing: the scan would prove nothing")
         self.assertGreater(scanned, 100)
         self.assertEqual(found, [], "real site names in a public repository; use alder/birch/cedar:\n" + "\n".join(found[:40]))
 
