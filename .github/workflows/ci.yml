@@ -388,6 +388,27 @@ jobs:
             -test.run '^TestACredentialOwnedByAThirdUserIsRefused$' || status=$?
           exit $status
 
+      - name: The other root-only Go tests, as root, where a skip is a failure (regalia-8zj)
+        env:
+          # each test fails rather than taking its non-root branch when this is set and it is not root
+          REGALIA_EXPECT_ROOT_TESTS: "1"
+        run: |
+          set -euo pipefail
+          # name|package|-test.run: tests/test_root_only_go_tests_run_in_ci.py holds this list to every test with a root gate
+          for spec in 'kms|cmd/regalia-kms|^TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted$' \
+                      'admission|internal/admission|^TestAFileOfAnotherOwnerInTheOwnersDirectoryIsRefused$'; do
+            IFS='|' read -r name pkg run <<<"$spec"
+            # compiled as the normal user, so root never writes into GOCACHE; run in the package's directory, as go test does
+            go test -race -c -o "$RUNNER_TEMP/$name.test" "./$pkg"
+            out="$RUNNER_TEMP/$name.out"
+            status=0
+            ( cd "$pkg" && sudo --preserve-env=REGALIA_EXPECT_ROOT_TESTS "$RUNNER_TEMP/$name.test" -test.v -test.run "$run" ) >"$out" 2>&1 || status=$?
+            cat "$out"
+            [ "$status" -eq 0 ] || exit "$status"
+            grep -q -- '^--- PASS' "$out" || { echo "::error::$pkg ran no test matching $run"; exit 1; }
+            if grep -q -- '--- SKIP' "$out"; then echo "::error::$pkg skipped a root-only test as root"; exit 1; fi
+          done
+
       # #308: each target runs a COUNT of executions, not a duration. A duration budget let the fuzz
       # coordinator's minimize and teardown race the deadline ("context deadline exceeded", no crasher) and
       # fail the job at random. No minimization (a crasher is saved as found), a test timeout far above the

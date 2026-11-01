@@ -229,8 +229,12 @@ func TestADirectoryOfAnotherOwnerIsRefusedForTheDirectory(t *testing.T) {
 }
 
 // The file's owner is checked on its own: inside the owner's directory, a file another user owns is refused. Giving
-// a file away takes root, so this runs only as root, by hand: CI's Go tests run as the runner's user, which skips it.
+// a file away takes root, so this runs only as root: CI's privileged-and-fuzz job runs it so, with
+// REGALIA_EXPECT_ROOT_TESTS=1, which makes a skip a failure (regalia-8zj).
 func TestAFileOfAnotherOwnerInTheOwnersDirectoryIsRefused(t *testing.T) {
+	if os.Getenv("REGALIA_EXPECT_ROOT_TESTS") == "1" && os.Geteuid() != 0 {
+		t.Fatalf("REGALIA_EXPECT_ROOT_TESTS=1 and euid %d: the as-root half this run was meant to reach was not reached", os.Geteuid())
+	}
 	if os.Geteuid() != 0 {
 		t.Skip("chown to another user needs root")
 	}

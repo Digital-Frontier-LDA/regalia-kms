@@ -221,6 +221,9 @@ func TestProvenanceDecidesWhatAbsenceMeans(t *testing.T) {
 }
 
 func TestAnUnreadableStatePathIsNotAnAbsentOne(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory whatever its mode: no state path is unreadable to it")
+	}
 	// Third instance of the stat-error class, and the one that is directly constructible:
 	// the provenance loop stats state paths but never reads them, so an unreadable directory
 	// reaches the probe. Before the fix it counted as absent and an unaccountable host was
