@@ -419,6 +419,15 @@ func TestAsRootAFileOwnedBySomeoneElseIsNotAdmitted(t *testing.T) {
 	if status.Admitted || !strings.Contains(status.Reason, "its directory is not one only its owner or root can write") {
 		t.Fatalf("status = %+v", status)
 	}
+	// The owner's directory, someone else's file (only root can make it): the file's own owner check refuses it.
+	w = rootWorldOwnedBy(t, nobody)
+	if err := os.Chown(w.path("admission.json"), nobody+1, nobody+1); err != nil {
+		t.Fatal(err)
+	}
+	status = w.gateFor(nobody, nobody)
+	if status.Admitted || !strings.Contains(status.Reason, "the admission file: it is not a file only its owner or root can write") {
+		t.Fatalf("another uid's admission file in the owner's directory: status = %+v", status)
+	}
 }
 
 func TestAsRootTheBootSessionIsHeldToItsOwnOwnerNotTheLeaseServices(t *testing.T) {
@@ -435,6 +444,15 @@ func TestAsRootTheBootSessionIsHeldToItsOwnOwnerNotTheLeaseServices(t *testing.T
 	status := w.gateFor(nobody, nobody+1)
 	if status.Admitted || !strings.Contains(status.Reason, "the boot session: its directory is not one only its owner or root can write") {
 		t.Fatalf("status = %+v", status)
+	}
+	// The session owner's directory, someone else's session file: the file's own owner check refuses it.
+	w = rootWorldOwnedBy(t, nobody)
+	if err := os.Chown(w.path("boot-session"), nobody+1, nobody+1); err != nil {
+		t.Fatal(err)
+	}
+	status = w.gateFor(nobody, nobody)
+	if status.Admitted || !strings.Contains(status.Reason, "the boot session: it is not a file only its owner or root can write") {
+		t.Fatalf("another uid's boot session in the owner's directory: status = %+v", status)
 	}
 }
 
