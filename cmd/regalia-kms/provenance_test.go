@@ -220,6 +220,29 @@ func TestProvenanceDecidesWhatAbsenceMeans(t *testing.T) {
 	})
 }
 
+// AS ROOT (regalia-sp1). The test below skips as root, which reads a directory whatever its mode. A stat error
+// root still gets is ENOTDIR: a state path under a regular file. It must refuse the same way, not read as absent.
+// CI's privileged-and-fuzz job runs this under sudo with REGALIA_EXPECT_ROOT_TESTS=1, which makes a skip a failure.
+func TestAsRootAStatePathThatCannotBeStatedIsNotAnAbsentOne(t *testing.T) {
+	if os.Getenv("REGALIA_EXPECT_ROOT_TESTS") == "1" && os.Geteuid() != 0 {
+		t.Fatalf("REGALIA_EXPECT_ROOT_TESTS=1 and euid %d: the as-root half this run was meant to reach was not reached", os.Geteuid())
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("the as-root half: as any other user the mode-000 test below covers this branch")
+	}
+	settings, _ := provenanceSettings(t)
+	notADirectory := filepath.Join(filepath.Dir(settings.CommissioningRecordPath), "state")
+	if err := os.WriteFile(notADirectory, []byte("a file, not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings.FencingStatePath = filepath.Join(notADirectory, "epochs.jsonl")
+	_, err := checkProvenance(settings)
+	if err == nil || !strings.Contains(err.Error(), "cannot tell whether "+settings.FencingStatePath+" exists") ||
+		!strings.Contains(err.Error(), "not a directory") || !strings.Contains(err.Error(), "unreadable state path") {
+		t.Fatalf("a state path root cannot stat read as absent (err=%v) — unaccountable must not report as uncommissioned", err)
+	}
+}
+
 func TestAnUnreadableStatePathIsNotAnAbsentOne(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a directory whatever its mode: no state path is unreadable to it")
