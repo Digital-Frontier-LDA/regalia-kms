@@ -21,6 +21,7 @@ on:
       - e2e/three-node-outage.py
       - e2e/three-node-reanchor.py
       - e2e/rolling-threenode.py
+      - e2e/three-node-site-advance.py
       - e2e/three-node-theft.py
       - e2e/three-node-leases.py
       - e2e/three-node-wan.py
@@ -45,6 +46,7 @@ on:
       - e2e/three-node-outage.py
       - e2e/three-node-reanchor.py
       - e2e/rolling-threenode.py
+      - e2e/three-node-site-advance.py
       - e2e/three-node-theft.py
       - e2e/three-node-leases.py
       - e2e/three-node-wan.py
@@ -258,6 +260,45 @@ jobs:
         uses: ./.github/actions/tpm-diagnostics
         with:
           name: rolling-threenode
+
+  # #615: a site change through three nodes without re-enrolment, PCR 12 measured from each node's site document on its
+  # ESP: the root approves each node's set with only PCR 12 replaced; site-advance writes the new document; each node
+  # reboots onto it and is unlocked; the next epoch retires the old sets, and the old document is then refused.
+  three-node-site-advance:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon   # the owner's keys (#199)
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: A site change through three nodes, approved by PCR 12, the old sets retired and the old document refused
+        run: |
+          set -o pipefail
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
+            python3 -Es e2e/three-node-site-advance.py | tee "$RUNNER_TEMP/site-advance.log"
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/site-advance.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
+          grep -q '^three-node-site-advance: 40 passed, 0 failed$' "$RUNNER_TEMP/site-advance.log" || {
+            echo "::error::the site-advance test did not pass all 40 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-site-advance
 
   # #71 (Phase 11): a total outage of the three nodes, restored by one manual recovery (one node by hand, its
   # heartbeat co-signed by an owner key, owner.py beat; then the other two through it; #199: no authority host).
