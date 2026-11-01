@@ -396,7 +396,10 @@ jobs:
           set -euo pipefail
           # name|package|-test.run: tests/test_root_only_go_tests_run_in_ci.py holds this list to every test with a root gate
           for spec in 'kms|cmd/regalia-kms|^TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted$' \
-                      'admission|internal/admission|^TestAFileOfAnotherOwnerInTheOwnersDirectoryIsRefused$'; do
+                      'admission|internal/admission|^TestAFileOfAnotherOwnerInTheOwnersDirectoryIsRefused$' \
+                      'admission-owner|internal/admission|^TestAsRootAFileOwnedBySomeoneElseIsNotAdmitted$' \
+                      'admission-session|internal/admission|^TestAsRootTheBootSessionIsHeldToItsOwnOwnerNotTheLeaseServices$' \
+                      'provenance|cmd/regalia-kms|^TestAsRootAStatePathThatCannotBeStatedIsNotAnAbsentOne$'; do
             IFS='|' read -r name pkg run <<<"$spec"
             # compiled as the normal user, so root never writes into GOCACHE; run in the package's directory, as go test does
             go test -race -c -o "$RUNNER_TEMP/$name.test" "./$pkg"

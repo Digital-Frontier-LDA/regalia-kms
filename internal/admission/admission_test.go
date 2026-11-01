@@ -374,6 +374,70 @@ func TestTheBootSessionIsHeldToItsOwnOwnerNotTheLeaseServices(t *testing.T) {
 	}
 }
 
+// AS ROOT (regalia-sp1). The two tests above skip as root, because t.TempDir() is then root's and the gate trusts
+// root by design. Here the directory and both files are chowned to nobody (65534), so the owner check is reached,
+// and OwnerUID / SessionOwnerUID are derived from that uid, not from os.Getuid(). Each check proves both halves:
+// the uid that owns the directory is admitted, and another is refused for its directory. CI's privileged-and-fuzz
+// job runs these under sudo with REGALIA_EXPECT_ROOT_TESTS=1, which makes a skip a failure.
+const nobody = 65534
+
+// rootWorldOwnedBy needs root; its callers hold the gate (the census in tests/ reads gates per test function).
+func rootWorldOwnedBy(t *testing.T, owner uint32) *world {
+	t.Helper()
+	w := newWorld(t)
+	for _, path := range []string{w.directory, w.path("admission.json"), w.path("boot-session")} {
+		if err := os.Chown(path, int(owner), int(owner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return w
+}
+
+func (w *world) gateFor(owner, sessionOwner uint32) Status {
+	w.t.Helper()
+	gate, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"),
+		OwnerUID: owner, SessionOwnerUID: sessionOwner,
+		Boottime: func() (int64, error) { return w.now, nil }, BootID: func() (string, error) { return testBoot, nil }})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return gate.Check(context.Background())
+}
+
+func TestAsRootAFileOwnedBySomeoneElseIsNotAdmitted(t *testing.T) {
+	if os.Getenv("REGALIA_EXPECT_ROOT_TESTS") == "1" && os.Geteuid() != 0 {
+		t.Fatalf("REGALIA_EXPECT_ROOT_TESTS=1 and euid %d: the as-root half this run was meant to reach was not reached", os.Geteuid())
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("chown to another user needs root")
+	}
+	w := rootWorldOwnedBy(t, nobody)
+	if status := w.gateFor(nobody, nobody); !status.Admitted {
+		t.Fatalf("the directory owner's own admission was refused: %+v", status)
+	}
+	status := w.gateFor(nobody+1, nobody)
+	if status.Admitted || !strings.Contains(status.Reason, "its directory is not one only its owner or root can write") {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
+func TestAsRootTheBootSessionIsHeldToItsOwnOwnerNotTheLeaseServices(t *testing.T) {
+	if os.Getenv("REGALIA_EXPECT_ROOT_TESTS") == "1" && os.Geteuid() != 0 {
+		t.Fatalf("REGALIA_EXPECT_ROOT_TESTS=1 and euid %d: the as-root half this run was meant to reach was not reached", os.Geteuid())
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("chown to another user needs root")
+	}
+	w := rootWorldOwnedBy(t, nobody)
+	if status := w.gateFor(nobody, nobody); !status.Admitted {
+		t.Fatalf("the session owner's own session was refused: %+v", status)
+	}
+	status := w.gateFor(nobody, nobody+1)
+	if status.Admitted || !strings.Contains(status.Reason, "the boot session: its directory is not one only its owner or root can write") {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
 // A file of root's is trusted whatever OwnerUID names: root can write it anyway. /etc/hostname is
 // root's, 0644, in root's /etc, on every host this suite runs on.
 func TestAFileOfRootsIsTrustedForAnyWriter(t *testing.T) {
