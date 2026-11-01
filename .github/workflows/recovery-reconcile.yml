@@ -40,7 +40,7 @@ jobs:
           python3 -Es lab/recovery/reconcile_matrix.py \
             --script deploy/baremetal/recovery-reconcile.py \
             --output "$RUNNER_TEMP/recovery-reconcile/matrix.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: explicit-recovery-reconciliation-evidence
