@@ -745,6 +745,31 @@ class StateAndSessionKey(Case):
         self.refused("the applied etcd revision went back (8 after 9)", floor.applied, CLUSTER, STATE_EPOCH, 8)
         self.refused("names cluster %s, not %s" % (OTHER_CLUSTER, CLUSTER), floor.applied, OTHER_CLUSTER, STATE_EPOCH, 10)
 
+    def test_the_lease_an_issuer_waits_out_starts_at_its_watchs_first_report(self):
+        """regalia-t78 (three-node-recovery §1b, run 41337182171): the watch first reports 40 s after the floor is made.
+        One lease after construction, but before one lease after that first report, the issuer gives the start-up gap's
+        refusal, which says when to ask again, not "its watch had not reported"; it issues at first report + one lease.
+        A watch that has never reported still issues nothing (it knows no cluster)."""
+        made = self.boottime
+        floor = lease.RevisionFloor(clock=lambda: self.boottime)
+        self.boottime = made + 40
+        floor.applied(CLUSTER, STATE_EPOCH, 7)
+        self.assertEqual(floor.started, made + 40)
+        for at in (made + lease.MAX_LIFETIME, made + 40 + lease.MAX_LIFETIME - 1):
+            with self.subTest(at - made):
+                self.boottime = at
+                floor.applied(CLUSTER, STATE_EPOCH, 7)
+                self.refused("less than one lease (%d s): it issues no lease until it knows what it held a lease ago" % lease.MAX_LIFETIME,
+                             floor.require, CLUSTER, STATE_EPOCH, 7)
+        self.boottime = made + 40 + lease.MAX_LIFETIME
+        floor.require(CLUSTER, STATE_EPOCH, 7)                             # one lease after the first report: issues
+        later = self.boottime = made + 40 + lease.MAX_LIFETIME + 5
+        floor.applied(CLUSTER, STATE_EPOCH, 8)                             # a later report never moves the start again
+        self.assertEqual((floor.started, self.boottime), (made + 40, later))
+        never = lease.RevisionFloor(clock=lambda: self.boottime)            # a watch that never reported, a lease on
+        self.boottime += lease.MAX_LIFETIME
+        self.refused("not this issuer's None", never.require, CLUSTER, STATE_EPOCH, 7)
+
     def test_another_state_epoch_is_another_history(self):
         """#432 item (e): etcd's --force-new-cluster keeps the cluster ID and the revision, so the epoch names the
         history: a subject of another epoch than the issuer's is refused, whichever is ahead (the quote binds it)."""
