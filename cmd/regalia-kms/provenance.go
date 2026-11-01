@@ -39,6 +39,10 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/config"
 )
 
+// lstat is os.Lstat, a seam so a test can reach the race-only arm in checkProvenance where
+// Lstat fails with something other than ENOENT right after Stat's ENOENT (regalia-ibh).
+var lstat = os.Lstat
+
 type commissioningRecord struct {
 	Site              string    `json:"site"`
 	CommissionedAt    time.Time `json:"commissioned_at"`
@@ -89,14 +93,16 @@ func checkProvenance(settings config.Config) (*commissioningRecord, error) {
 				// Lstat, which looks at the last component only (a linked parent directory
 				// resolves as before), refuses. Lstat failing otherwise after Stat's ENOENT
 				// takes a race; it refuses the same way, with Lstat's own error as the reason.
-				if _, lstatErr := os.Lstat(path); !errors.Is(lstatErr, os.ErrNotExist) {
+				if _, lstatErr := lstat(path); !errors.Is(lstatErr, os.ErrNotExist) {
 					why := "it is a symbolic link whose target is missing"
 					if lstatErr != nil {
 						why = lstatErr.Error()
 					}
 					return nil, fmt.Errorf("cannot tell whether %s exists: %s — a state path that cannot be ruled out is not an absent one, and an unaccountable host must not read as a fresh one", path, why)
 				}
-				// genuinely absent: the fresh-host reading below
+				// genuinely absent: the fresh-host reading below. Out of scope: a dangling
+				// PARENT link (state dir -> an unmounted /data) gives ENOENT to both calls, the
+				// same class as an unmounted state directory, which no path check can see.
 			default:
 				// A STAT ERROR IS NOT ABSENCE. The loop this replaces counted only
 				// stat==nil as existing, so an unreadable state file read as absent and

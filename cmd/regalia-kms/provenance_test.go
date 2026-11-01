@@ -11,9 +11,11 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -257,6 +259,27 @@ func TestASymbolicLinkAtAStatePathIsNeverAbsence(t *testing.T) {
 		want := "cannot tell whether " + settings.FencingStatePath + " exists: it is a symbolic link whose target is missing"
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("a dangling link at a state path read as absent (err=%v)", err)
+		}
+	})
+	t.Run("an Lstat that fails otherwise after Stat's ENOENT is not absence", func(t *testing.T) {
+		// Reachable on disk only through a race, so the seam stands in for it. Not parallel:
+		// lstat is package state.
+		settings, _ := provenanceSettings(t)
+		// the arm under test is Stat's ENOENT one, not the default stat-error one
+		if _, err := os.Stat(settings.FencingStatePath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("precondition: Stat must find %s absent (err=%v)", settings.FencingStatePath, err)
+		}
+		t.Cleanup(func() { lstat = os.Lstat })
+		lstat = func(p string) (os.FileInfo, error) {
+			if p != settings.FencingStatePath {
+				return os.Lstat(p)
+			}
+			return nil, &os.PathError{Op: "lstat", Path: p, Err: syscall.EACCES}
+		}
+		_, err := checkProvenance(settings)
+		want := "cannot tell whether " + settings.FencingStatePath + " exists: lstat " + settings.FencingStatePath + ": permission denied — a state path that cannot be ruled out is not an absent one"
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("an Lstat EACCES after Stat's ENOENT read as absent (err=%v)", err)
 		}
 	})
 	t.Run("a live link to a file is state that exists", func(t *testing.T) {
