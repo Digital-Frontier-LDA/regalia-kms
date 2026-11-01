@@ -191,6 +191,7 @@ class FakeHost:
     def read_bytes(self, path): return self.bytes.get(path)
     def listdir(self, path): return self.dirs.get(path, [])
     def exists(self, path): return path in self.paths
+    def missing(self, path): return path not in self.paths and path not in self.bytes
     def which(self, tool): return "/usr/bin/" + tool if tool in self.tools else None
     def readlink(self, path): return None
     def stat(self, path): return self.stats.get(path)
@@ -1194,7 +1195,7 @@ class SecureBootDb(unittest.TestCase):
     def test_our_certificate_is_found_among_the_factory_ones_and_after_a_hash_list(self):
         value, why = self.judge(DB)
         self.assertTrue(value, why)
-        self.assertEqual(why, "db holds the image's Secure Boot certificate (%s), among 3" % SB_SHA[:16])
+        self.assertEqual(why, "db holds the image's Secure Boot certificate (%s), among 3; there is no dbx" % SB_SHA[:16])
         # a list of hashes (another type, other sizes) and a list header of its own are stepped over, not read as certificates
         hashes = siglist(EFI_CERT_SHA256, [b"\x22" * 32, b"\x33" * 32])
         value, why = self.judge(DB_ATTRS + hashes + DB_FACTORY + siglist(host_probe.EFI_CERT_X509, [SB_CERT], header=b"\x44" * 8))
@@ -1253,6 +1254,193 @@ class SecureBootDb(unittest.TestCase):
         value, why = self.judge(DB_ATTRS)
         self.assertFalse(value)
         self.assertIn("db holds 0 certificate(s) (none)", why)
+
+
+@unittest.skipUnless(shutil.which("openssl"), "needs openssl")
+class SecureBootDbx(unittest.TestCase):
+    """regalia-3ts: dbx overrides db, so a certificate dbx revokes fails the probe instead of passing until boot."""
+
+    @classmethod
+    def setUpClass(cls):
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+                            "-subj", "/CN=regalia test db", "-days", "1", "-keyout", d + "/k", "-outform", "DER",
+                            "-out", d + "/c"], check=True, capture_output=True)
+            cls.cert = open(d + "/c", "rb").read()
+            # the oracle is openssl's own parse: the first element one level down is the tbsCertificate
+            tree = subprocess.run(["openssl", "asn1parse", "-inform", "DER", "-in", d + "/c"], check=True,
+                                  capture_output=True, text=True).stdout
+        at, hl, n = map(int, re.search(r"^\s*(\d+):d=1\s+hl=(\d+)\s+l=\s*(\d+)", tree, re.M).groups())
+        cls.tbs = cls.cert[at:at + hl + n]
+        cls.sha = hashlib.sha256(cls.cert).hexdigest()
+        cls.db = DB_ATTRS + DB_FACTORY + siglist(host_probe.EFI_CERT_X509, [cls.cert])
+
+    def judge(self, dbx, cert=None, db=None):
+        h = FakeHost()
+        h.bytes[host_probe.DB_VAR] = db or self.db
+        if dbx is not None:
+            h.bytes[host_probe.DBX_VAR] = dbx
+            h.paths.add(host_probe.DBX_VAR)
+        return host_probe.secure_boot_db(h, cert or self.sha)
+
+    def hashes(self, *digests, kind=None):
+        return siglist(kind or host_probe.EFI_CERT_X509_SHA256, [d + b"\x00" * 16 for d in digests])
+
+    def test_dbx_revoking_our_tbs_by_sha384_or_sha512_fails(self):
+        """regalia-c6 on #644: dbx revokes by the tbsCertificate's hash under three algorithms, not one."""
+        for kind, name, hasher in ((host_probe.EFI_CERT_X509_SHA384, "SHA-384", hashlib.sha384),
+                                   (host_probe.EFI_CERT_X509_SHA512, "SHA-512", hashlib.sha512)):
+            with self.subTest(name):
+                ours, size = hasher(self.tbs).digest(), hasher().digest_size
+                value, why = self.judge(DB_ATTRS + self.hashes(b"\x55" * size, ours, kind=kind))
+                self.assertFalse(value)
+                self.assertIn("by the %s hash of its tbsCertificate" % name, why)
+                # another certificate's hash under the same algorithm revokes nothing
+                self.assertTrue(self.judge(DB_ATTRS + self.hashes(b"\x55" * size, kind=kind))[0])
+                # an entry sized for another algorithm, smaller or larger, is malformed, never read by its prefix
+                for other in (hashlib.sha256(self.tbs).digest(), ours + b"\x55" * 16):
+                    value, why = self.judge(DB_ATTRS + self.hashes(other, kind=kind))
+                    self.assertFalse(value)
+                    self.assertIn("does not hold a %s and a time per entry" % name, why)
+
+    def test_the_signature_list_types_are_the_specs(self):
+        """regalia-c6 on #644: every other test builds dbx from these same constants, so a wrong one (a GUID written in
+        its text order rather than as stored) would pass them all. Pinned here to UEFI 2.10, 32.4.1's GUIDs."""
+        import uuid
+        for constant, guid in ((host_probe.EFI_CERT_X509, "a5c059a1-94e4-4aa7-87b5-ab155c2bf072"),
+                               (host_probe.EFI_CERT_X509_SHA256, "3bd2a492-96c0-4079-b420-fcf98ef103ed"),
+                               (host_probe.EFI_CERT_X509_SHA384, "7076876e-80c2-4ee6-aad2-28b349a6865b"),
+                               (host_probe.EFI_CERT_X509_SHA512, "446dbf63-2502-4cda-bcfa-2465d2b0fe9d"),
+                               (EFI_CERT_SHA256, "c1c41626-504c-4092-aca9-41f936934328")):
+            with self.subTest(guid):
+                self.assertEqual(constant, uuid.UUID(guid).bytes_le)
+
+    def test_a_tbs_hash_is_compared_whole(self):
+        """regalia-c6 on #644: a SHA-384 or SHA-512 entry that agrees with our digest in its first 32 bytes only names
+        another certificate."""
+        for kind, hasher in ((host_probe.EFI_CERT_X509_SHA384, hashlib.sha384), (host_probe.EFI_CERT_X509_SHA512, hashlib.sha512)):
+            with self.subTest(hasher().name):
+                ours = hasher(self.tbs).digest()
+                near = ours[:32] + bytes(b ^ 0xff for b in ours[32:])
+                value, why = self.judge(DB_ATTRS + self.hashes(near, kind=kind))
+                self.assertTrue(value, why)
+
+    def test_a_tbs_hash_revokes_only_under_a_certificate_hash_type(self):
+        """regalia-c6 on #644: the same 32 bytes in an image-hash (EFI_CERT_SHA256) list, beside a certificate-hash list
+        that names another certificate, revoke nothing; and our DER under a type that is not X509 revokes nothing."""
+        ours = hashlib.sha256(self.tbs).digest()
+        value, why = self.judge(DB_ATTRS + self.hashes(b"\x55" * 32) + siglist(EFI_CERT_SHA256, [ours]))
+        self.assertTrue(value, why)
+        other_type = bytes.fromhex("00112233445566778899aabbccddeeff")
+        value, why = self.judge(DB_ATTRS + siglist(other_type, [self.cert]))
+        self.assertTrue(value, why)
+
+    def test_the_tbs_found_is_openssls(self):
+        self.assertEqual(host_probe.tbs_certificate(self.cert), self.tbs)
+        self.assertNotEqual(self.tbs, self.cert)
+
+    def test_a_dbx_of_other_revocations_does_not_revoke_ours(self):
+        other = self.hashes(b"\x55" * 32, hashlib.sha256(b"another tbs").digest())
+        dbx = DB_ATTRS + siglist(EFI_CERT_SHA256, [b"\x22" * 32]) + other + siglist(host_probe.EFI_CERT_X509, FACTORY_CERTS[:1])
+        value, why = self.judge(dbx)
+        self.assertTrue(value, why)
+        self.assertEqual(why, "db holds the image's Secure Boot certificate (%s), among 3, and dbx (4 entries) does not "
+                         "revoke it" % self.sha[:16])
+
+    def test_dbx_revoking_our_whole_certificate_fails(self):
+        value, why = self.judge(DB_ATTRS + siglist(host_probe.EFI_CERT_X509, [self.cert]))
+        self.assertFalse(value)
+        self.assertEqual(why, "dbx revokes the image's Secure Boot certificate (%s): the firmware refuses the image whatever "
+                         "db holds. Sign the image with a certificate dbx does not list (kms#543)" % self.sha[:16])
+
+    def test_dbx_revoking_our_tbs_hash_fails_wherever_it_sits(self):
+        ours = hashlib.sha256(self.tbs).digest()
+        for name, dbx in {"alone": self.hashes(ours), "after another": self.hashes(b"\x55" * 32, ours),
+                          "after a hash list": siglist(EFI_CERT_SHA256, [b"\x22" * 32]) + self.hashes(ours)}.items():
+            with self.subTest(name):
+                value, why = self.judge(DB_ATTRS + dbx)
+                self.assertFalse(value)
+                self.assertIn("dbx revokes the image's Secure Boot certificate (%s), by the SHA-256 hash of its tbsCertificate"
+                              % self.sha[:16], why)
+
+    def test_the_whole_certificates_hash_is_not_its_tbs_hash(self):
+        # an X509_SHA256 entry hashes the tbsCertificate: the whole certificate's digest there revokes nothing
+        value, why = self.judge(DB_ATTRS + self.hashes(bytes.fromhex(self.sha)))
+        self.assertTrue(value, why)
+
+    def test_a_revocation_of_another_db_certificate_is_not_ours(self):
+        value, why = self.judge(DB_ATTRS + siglist(host_probe.EFI_CERT_X509, FACTORY_CERTS[1:]))
+        self.assertTrue(value, why)
+
+    def test_an_empty_dbx_revokes_nothing(self):
+        value, why = self.judge(DB_ATTRS)
+        self.assertTrue(value, why)
+        self.assertIn("dbx (0 entries)", why)
+
+    def test_an_unreadable_dbx_is_not_an_absent_one(self):
+        h = FakeHost()
+        h.bytes[host_probe.DB_VAR] = self.db
+        h.paths.add(host_probe.DBX_VAR)              # it is there, and read_bytes returns None (EACCES, EIO)
+        value, why = host_probe.secure_boot_db(h, self.sha)
+        self.assertFalse(value)
+        self.assertEqual(why, "the dbx EFI variable is unreadable, and not absent: a revocation cannot be ruled out")
+
+    @unittest.skipIf(os.geteuid() == 0, "root stats through any directory mode")
+    def test_a_path_that_cannot_be_looked_at_is_not_missing(self):
+        """CodeRabbit on #644: os.path.exists is False for a path whose directory may not be searched. The real Host
+        calls that not absent; only FileNotFoundError is."""
+        with tempfile.TemporaryDirectory() as d:
+            locked = os.path.join(d, "locked")
+            os.mkdir(locked)
+            open(os.path.join(locked, "dbx"), "wb").close()
+            os.chmod(locked, 0)
+            try:
+                path = os.path.join(locked, "dbx")
+                self.assertFalse(os.path.exists(path))                 # the trap: exists says no
+                self.assertFalse(host_probe.Host().missing(path))      # and it is not missing
+                self.assertIsNone(host_probe.Host().read_bytes(path))
+            finally:
+                os.chmod(locked, 0o700)
+            self.assertTrue(host_probe.Host().missing(os.path.join(d, "absent")))
+            self.assertFalse(host_probe.Host().missing(os.path.join(locked, "dbx")))
+
+    def test_a_malformed_dbx_fails_closed(self):
+        good = self.hashes(b"\x55" * 32)
+        cases = {
+            "shorter than its attributes": DB_ATTRS[:3],
+            "a header cut short": DB_ATTRS + good[:20],
+            "a list longer than the variable": DB_ATTRS + good[:16] + struct.pack("<I", len(good) + 64) + good[20:],
+            "a certificate-hash entry of the wrong size": DB_ATTRS + siglist(host_probe.EFI_CERT_X509_SHA256, [b"\x55" * 32]),
+        }
+        for name, dbx in cases.items():
+            with self.subTest(name):
+                value, why = self.judge(dbx)
+                self.assertFalse(value)
+                self.assertIn("the dbx EFI variable is malformed", why)
+
+    def test_a_db_certificate_that_is_not_der_fails_only_when_a_tbs_hash_must_be_compared(self):
+        ours = hashlib.sha256(self.tbs).digest()
+        value, why = self.judge(DB_ATTRS + self.hashes(ours), cert=SB_SHA, db=DB)
+        self.assertFalse(value)
+        self.assertIn("dbx revokes certificates by their tbsCertificate, and the one in db cannot be read", why)
+        self.assertTrue(self.judge(DB_ATTRS + siglist(host_probe.EFI_CERT_X509, FACTORY_CERTS[1:]), cert=SB_SHA, db=DB)[0])
+
+    def test_a_malformed_certificate_is_refused_not_read_past(self):
+        c = self.cert
+        for name, der in {"empty": b"", "not a SEQUENCE": b"\x31" + c[1:], "cut short": c[:-1], "trailing bytes": c + b"\x00",
+                          "a length of 5 octets": b"\x30\x85" + b"\x00" * 5, "a length past the end": b"\x30\x82\xff\xff\x30\x00",
+                          "no tbsCertificate SEQUENCE": b"\x30\x02\x02\x00",
+                          # each refused by one rule alone: a well-formed certificate but for its length, and a tbsCertificate
+                          # that claims more than its certificate holds
+                          "a length in 5 octets around a whole tbsCertificate": b"\x30\x85\x00\x00\x00\x00\x05\x30\x03\x02\x01\x00",
+                          "a tbsCertificate past its certificate": b"\x30\x03\x30\x05\x00",
+                          # regalia-c6 on #644: an indefinite length (DER forbids it), and an element header cut short
+                          # (a ValueError, never an IndexError the probe does not catch)
+                          "an indefinite length": bytes.fromhex("300430800000"),
+                          "a header cut short": bytes.fromhex("300130")}.items():
+            with self.subTest(name):
+                with self.assertRaises(ValueError):
+                    host_probe.tbs_certificate(der)
 
 
 class SignedEvidence(unittest.TestCase):
