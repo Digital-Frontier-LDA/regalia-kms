@@ -62,6 +62,13 @@ class SiteNamesNeverAppear(unittest.TestCase):
                         "from" + b.capitalize(), "x-%s-y" % c, '"node_id": "%s"' % a):
             with self.subTest(planted=planted):
                 self.assertTrue(hits(planted), planted)
+        # An independent copy of the words (reversed, not ROT13), so a mutated WORDS cannot test itself.
+        control = [w[::-1] for w in ("nobsil", "aobsil", "otrop", "arbmioc")]
+        self.assertEqual(sorted(WORDS), sorted(control))
+        for word in control:                       # every listed word, so none of them can go untested
+            for planted in (word, word.capitalize(), word.upper() + "_X", "from" + word.capitalize()):
+                with self.subTest(planted=planted):
+                    self.assertEqual(hits(planted), [planted[4:] if planted.startswith("from") else planted.split("_")[0]])
         for clean in ("Trans" + b[:4] + "Opener", "trans" + b[:4] + "ation", "alder birch cedar", ""):
             with self.subTest(clean=clean):
                 self.assertEqual(hits(clean), [])
