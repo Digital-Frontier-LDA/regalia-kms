@@ -162,7 +162,7 @@ class SiteMesh(Case):
             "absent": (lambda d: d.pop("boot_mesh"), "fields mismatch"),
             "not an object": (lambda d: d.__setitem__("boot_mesh", []), "boot_mesh must be null or hold exactly"),
             "unknown field": (lambda d: d["boot_mesh"].__setitem__("psk", "x"), "boot_mesh must be null or hold exactly"),
-            "node id": (lambda d: d["boot_mesh"].__setitem__("node_id", "Lisbon"), "boot_mesh.node_id is not a node ID"),
+            "node id": (lambda d: d["boot_mesh"].__setitem__("node_id", "Alder"), "boot_mesh.node_id is not a node ID"),
             "interface": (lambda d: d["boot_mesh"].__setitem__("interface", "wg-unlock-too-long"), "a WireGuard interface of its own"),
             "interface quote": (lambda d: d["boot_mesh"].__setitem__("interface", 'wg-" accept'), "a WireGuard interface of its own"),
             "a physical interface": (lambda d: d["boot_mesh"].__setitem__("interface", "eth0"), "a WireGuard interface of its own"),

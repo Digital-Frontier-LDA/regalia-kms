@@ -152,7 +152,7 @@ install -m 0644 e2e/lib/boot-guest/regalia-e2e-enrol.service e2e/lib/boot-guest/
 mkdir -p "$ROOT/etc/systemd/system/multi-user.target.wants"
 for u in regalia-e2e-enrol.service regalia-e2e-report.service; do ln -sf "/etc/systemd/system/$u" "$ROOT/etc/systemd/system/multi-user.target.wants/$u"; done
 echo "/dev/mapper/root / ext4 defaults 0 1" > "$ROOT/etc/fstab"
-echo "lisbon" > "$ROOT/etc/hostname"
+echo "alder" > "$ROOT/etc/hostname"
 
 echo "### the initrd the builder made, beside the guest's kernel of the same snapshot"
 KVER="$(ls "$ROOT/lib/modules" | sort -V | tail -1)"

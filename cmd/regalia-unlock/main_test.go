@@ -167,7 +167,7 @@ func noQuote(qualifying []byte) ([]byte, []byte, map[string]string, error) {
 
 func testSession(t *testing.T) *session {
 	t.Helper()
-	boot, err := newSession("lisbon")
+	boot, err := newSession("alder")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,12 +275,12 @@ func TestTheClientAgreesWithThePeerOnThePublishedVectors(t *testing.T) {
 }
 
 func TestAPeerGivesItsContributionAndTheFirstValidResponseSpendsTheSession(t *testing.T) {
-	peer, boot := newFakePeer(t, "porto"), testSession(t)
+	peer, boot := newFakePeer(t, "birch"), testSession(t)
 	secret, err := boot.ask(peer.pin(), 3, peer.send, noQuote)
 	if err != nil || !bytes.Equal(secret, peer.contribution) || !boot.consumed {
 		t.Fatalf("got %x, %v, consumed=%v", secret, err, boot.consumed)
 	}
-	if len(peer.requests) != 2 || len(peer.requests[0]) != 3 || peer.requests[0]["op"] != "hello" || peer.requests[0]["node_id"] != "lisbon" {
+	if len(peer.requests) != 2 || len(peer.requests[0]) != 3 || peer.requests[0]["op"] != "hello" || peer.requests[0]["node_id"] != "alder" {
 		t.Fatalf("the hello is not {v, op, node_id}: %v", peer.requests)
 	}
 	if peer.requests[1]["path_epoch"] != float64(3) || len(peer.requests[1]) != 6 {
@@ -295,7 +295,7 @@ func TestAPeerGivesItsContributionAndTheFirstValidResponseSpendsTheSession(t *te
 }
 
 func TestTheQuoteIsOverTheTranscriptOfThisBootAndTheEpochThePeerStates(t *testing.T) {
-	peer, boot := newFakePeer(t, "porto"), testSession(t)
+	peer, boot := newFakePeer(t, "birch"), testSession(t)
 	peer.epoch = 12
 	var qualified []byte
 	_, err := boot.ask(peer.pin(), 3, peer.send, func(qualifying []byte) ([]byte, []byte, map[string]string, error) {
@@ -305,7 +305,7 @@ func TestTheQuoteIsOverTheTranscriptOfThisBootAndTheEpochThePeerStates(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := sha256.Sum256(transcript("lisbon", 12, boot.id, boot.ephemeralPublic, peer.nonce))
+	want := sha256.Sum256(transcript("alder", 12, boot.id, boot.ephemeralPublic, peer.nonce))
 	if !bytes.Equal(qualified, want[:]) {
 		t.Fatal("the quote's qualifying data is not the transcript of this session at the peer's epoch")
 	}
@@ -320,17 +320,17 @@ func TestTheQuoteIsOverTheTranscriptOfThisBootAndTheEpochThePeerStates(t *testin
 }
 
 func TestAnInvalidResponseIsRefusedAndSpendsNothing(t *testing.T) {
-	impostor := newFakePeer(t, "porto")
+	impostor := newFakePeer(t, "birch")
 	cases := []struct {
 		reason string
 		change func(*fakePeer)
 	}{
-		{"hello: the peer that answered is not porto", func(p *fakePeer) { p.hello = func(h *helloReply) { h.PeerID = "faro" } }},
+		{"hello: the peer that answered is not birch", func(p *fakePeer) { p.hello = func(h *helloReply) { h.PeerID = "faro" } }},
 		{"hello: the peer's epoch or nonce is malformed", func(p *fakePeer) { p.hello = func(h *helloReply) { h.Nonce = "zz" } }},
 		{"hello: the peer's epoch or nonce is malformed", func(p *fakePeer) { p.hello = func(h *helloReply) { h.Epoch = 0 } }},
 		{"hello: the peer refused (DENIED)", func(p *fakePeer) { p.deny = "DENIED" }},
 		{"hello: the peer refused (?)", func(p *fakePeer) { p.deny = "the reason, which a peer never sends" }},
-		{"the response is not from porto", func(p *fakePeer) { p.edit = func(r *response) { r.PeerID = "faro" } }},
+		{"the response is not from birch", func(p *fakePeer) { p.edit = func(r *response) { r.PeerID = "faro" } }},
 		{"the peer answered for path epoch 2, not 3", func(p *fakePeer) { p.edit = func(r *response) { r.PathEpoch = 2 } }},
 		{"the response is for another node or another boot session", func(p *fakePeer) { p.edit = func(r *response) { r.NodeID = "faro" } }},
 		{"the response is for another node or another boot session", func(p *fakePeer) { p.edit = func(r *response) { r.SessionID = strings.Repeat("00", 32) } }},
@@ -339,8 +339,8 @@ func TestAnInvalidResponseIsRefusedAndSpendsNothing(t *testing.T) {
 		{"the response has another schema", func(p *fakePeer) { p.edit = func(r *response) { r.Schema = "regalia.unlock-response/v2" } }},
 		{"the response's digests must be 64 lowercase hex", func(p *fakePeer) { p.edit = func(r *response) { r.ManifestDigest = strings.Repeat("D1", 32) } }},
 		{"the response's ciphertext is not one RSA-3072 block", func(p *fakePeer) { p.edit = func(r *response) { r.Ciphertext = "00" } }},
-		{"the response is not signed by the AK recorded for porto", func(p *fakePeer) { p.signWith = impostor.sign }},
-		{"the response is not signed under the EK recorded for porto", func(p *fakePeer) { p.ekName = append([]byte{0, 0x0b}, make([]byte, 32)...) }},
+		{"the response is not signed by the AK recorded for birch", func(p *fakePeer) { p.signWith = impostor.sign }},
+		{"the response is not signed under the EK recorded for birch", func(p *fakePeer) { p.ekName = append([]byte{0, 0x0b}, make([]byte, 32)...) }},
 		{"the peer's quote is not over this response", func(p *fakePeer) {
 			p.forge = func(u *unlockReply) { u.Response.ManifestDigest = strings.Repeat("ee", 32) }
 		}},
@@ -366,7 +366,7 @@ func TestAnInvalidResponseIsRefusedAndSpendsNothing(t *testing.T) {
 	}
 	boot := testSession(t)
 	for _, c := range cases {
-		peer := newFakePeer(t, "porto")
+		peer := newFakePeer(t, "birch")
 		recorded := peer.pin()
 		c.change(peer)
 		_, err := boot.ask(recorded, 3, peer.send, noQuote)
@@ -376,7 +376,7 @@ func TestAnInvalidResponseIsRefusedAndSpendsNothing(t *testing.T) {
 		}
 	}
 	// a contribution encrypted to this key under another label (another exchange) does not decrypt either
-	peer := newFakePeer(t, "porto")
+	peer := newFakePeer(t, "birch")
 	peer.edit = func(r *response) {
 		ciphertext, _ := rsa.EncryptOAEP(sha256.New(), rand.Reader, &boot.key.PublicKey, peer.contribution, append([]byte(contributionLabel), make([]byte, 32)...))
 		r.Ciphertext = hex.EncodeToString(ciphertext)
@@ -384,25 +384,25 @@ func TestAnInvalidResponseIsRefusedAndSpendsNothing(t *testing.T) {
 	_, err := boot.ask(peer.pin(), 3, peer.send, noQuote)
 	wantError(t, err, "the contribution does not decrypt")
 	// and after all of that the same session still takes the real answer
-	good := newFakePeer(t, "porto")
+	good := newFakePeer(t, "birch")
 	if secret, err := boot.ask(good.pin(), 3, good.send, noQuote); err != nil || !bytes.Equal(secret, good.contribution) {
 		t.Fatalf("the session was not usable after the refusals: %v", err)
 	}
 }
 
 func TestAReplyIsParsedStrictly(t *testing.T) {
-	for _, raw := range []string{``, `[]`, `{"v":1,"peer_id":"porto","epoch":7,"nonce":"aa","extra":1}`, `{"v":1} {"v":1}`, `{"epoch":-1}`, `{"epoch":1.5}`,
+	for _, raw := range []string{``, `[]`, `{"v":1,"peer_id":"birch","epoch":7,"nonce":"aa","extra":1}`, `{"v":1} {"v":1}`, `{"epoch":-1}`, `{"epoch":1.5}`,
 		`{"v":1,"error":"DENIED"}}`, `{"v":1,"error":"DENIED"}]anything {{{`, `{"v":1}x`,
-		`{"v":1,"peer_id":"porto","epoch":7,"nonce":"` + strings.Repeat("a", maxMessage) + `"}`} {
+		`{"v":1,"peer_id":"birch","epoch":7,"nonce":"` + strings.Repeat("a", maxMessage) + `"}`} {
 		var hello helloReply
 		if decodeReply([]byte(raw), &hello) == nil {
 			t.Fatalf("accepted %.40q", raw)
 		}
 	}
 	boot := testSession(t)
-	_, err := boot.ask(newFakePeer(t, "porto").pin(), 1, func([]byte) ([]byte, error) { return nil, errors.New("no connection") }, noQuote)
+	_, err := boot.ask(newFakePeer(t, "birch").pin(), 1, func([]byte) ([]byte, error) { return nil, errors.New("no connection") }, noQuote)
 	wantError(t, err, "hello: the transport failed (no connection)")
-	_, err = boot.ask(newFakePeer(t, "porto").pin(), 1, func([]byte) ([]byte, error) { return []byte(`{"v":1,"response":null,"signature":null}`), nil }, noQuote)
+	_, err = boot.ask(newFakePeer(t, "birch").pin(), 1, func([]byte) ([]byte, error) { return []byte(`{"v":1,"response":null,"signature":null}`), nil }, noQuote)
 	wantError(t, err, "hello: the reply is not the expected JSON object")
 }
 
@@ -540,7 +540,7 @@ func TestTheQuoteIsAskedForThroughGoTPM(t *testing.T) {
 	// TPM_ALG_NULL, one selection of sha256 with PCRs 7 and 11. A go-tpm that sent anything else fails here.
 	wantCommand := "8002" + "00000049" + "00000158" + "81010002" + "00000009" + "40000009" + "0000" + "00" + "0000" +
 		"0020" + strings.Repeat("5c", 32) + "0010" + "00000001" + "000b" + "03" + "800800"
-	peer := newFakePeer(t, "porto") // its public area stands for this TPM's attestation key
+	peer := newFakePeer(t, "birch") // its public area stands for this TPM's attestation key
 	device := &wireTPM{public: peer.akPublic, quote: quoteResponse(attestation, algECDSA, algSHA256, []byte{0x01, 0x02}, []byte{0x80, 0x03})}
 	attest, signature, err = tpmQuoteOnce(device, qualifying, []int{7, 11})
 	if err != nil || len(device.commands) != 2 || hex.EncodeToString(device.commands[1]) != wantCommand {
@@ -597,7 +597,7 @@ func TestThePCRValuesBesideTheQuoteAreTheQuotedOnes(t *testing.T) {
 	attestation = binary.BigEndian.AppendUint32(attestation, 1)
 	attestation = append(attestation, 0x00, 0x0b, 3, 0x80, 0x08, 0)
 	attestation = append(attestation, sized(digest[:])...)
-	peer := newFakePeer(t, "porto")
+	peer := newFakePeer(t, "birch")
 	device := &wireTPM{public: peer.akPublic, quote: quoteResponse(attestation, algECDSA, algSHA256, []byte{1}, []byte{2}),
 		pcrs: map[int][]byte{7: seven, 11: eleven}}
 	_, _, values, err := tpmQuote(device, qualifying, []int{7, 11})
@@ -637,7 +637,7 @@ func TestThePCRValuesBesideTheQuoteAreTheQuotedOnes(t *testing.T) {
 
 // A peer's structures that are not exactly what attest.py accepts are refused, whatever go-tpm can parse.
 func TestOnlyARestrictedP256AttestationKeyIsAccepted(t *testing.T) {
-	peer := newFakePeer(t, "porto")
+	peer := newFakePeer(t, "birch")
 	if name, key, err := akIdentity(peer.akPublic); err != nil || len(name) != 34 || key == nil {
 		t.Fatal(err)
 	}
@@ -698,7 +698,7 @@ func TestOnlyARestrictedP256AttestationKeyIsAccepted(t *testing.T) {
 }
 
 func validConfig(peers ...*fakePeer) *bootConfig {
-	config := &bootConfig{Schema: bootSchema, NodeID: "lisbon", Device: "/dev/disk/by-partlabel/root", PCRs: []int{7, 11}}
+	config := &bootConfig{Schema: bootSchema, NodeID: "alder", Device: "/dev/disk/by-partlabel/root", PCRs: []int{7, 11}}
 	for _, peer := range peers {
 		config.Peers = append(config.Peers, peer.pin())
 	}
@@ -706,41 +706,41 @@ func validConfig(peers ...*fakePeer) *bootConfig {
 }
 
 func TestTheBootConfigurationIsRefusedUnlessExact(t *testing.T) {
-	porto := newFakePeer(t, "porto")
-	if err := validConfig(porto).validate(); err != nil {
+	birch := newFakePeer(t, "birch")
+	if err := validConfig(birch).validate(); err != nil {
 		t.Fatal(err)
 	}
 	for reason, change := range map[string]func(*bootConfig){
 		"schema must be":                         func(c *bootConfig) { c.Schema = "v0" },
-		"node_id is not a node ID":               func(c *bootConfig) { c.NodeID = "Lisbon" },
+		"node_id is not a node ID":               func(c *bootConfig) { c.NodeID = "Alder" },
 		"device must be a plain path":            func(c *bootConfig) { c.Device = "/dev/sda3; reboot" },
 		"pcrs must be an ascending list":         func(c *bootConfig) { c.PCRs = []int{11, 7} },
 		"pcrs must be an ascending list of PCR":  func(c *bootConfig) { c.PCRs = []int{7, 7} },
 		"pcrs must be an ascending list of PCR ": func(c *bootConfig) { c.PCRs = []int{24} },
 		"peers must list 1 to 8 peers":           func(c *bootConfig) { c.Peers = nil },
-		"peer porto is listed twice":             func(c *bootConfig) { c.Peers = append(c.Peers, c.Peers[0]) },
-		"is listed twice, or is the node itself": func(c *bootConfig) { c.NodeID = "porto" },
-		"a peer's endpoint must be host:port":    func(c *bootConfig) { c.Peers[0].Endpoint = "porto.boot" },
+		"peer birch is listed twice":             func(c *bootConfig) { c.Peers = append(c.Peers, c.Peers[0]) },
+		"is listed twice, or is the node itself": func(c *bootConfig) { c.NodeID = "birch" },
+		"a peer's endpoint must be host:port":    func(c *bootConfig) { c.Peers[0].Endpoint = "birch.boot" },
 		"a peer's endpoint must be host:port,":   func(c *bootConfig) { c.Peers[0].Endpoint = "fd00::2:7000" }, // IPv6 without brackets: nothing can dial it
 		"an IPv6 address in brackets":            func(c *bootConfig) { c.Peers[0].Endpoint = "192.0.2.1:70000" },
 		"the port 1-65535":                       func(c *bootConfig) { c.Peers[0].Endpoint = "192.0.2.1:0" },
 		"must be SHA-256 TPM Names":              func(c *bootConfig) { c.Peers[0].AKName = "000b" + strings.Repeat("ZZ", 32) },
 	} {
-		config := validConfig(porto)
+		config := validConfig(birch)
 		change(config)
 		wantError(t, config.validate(), strings.TrimSpace(reason))
 	}
-	for _, endpoint := range []string{"[2001:db8::3]:7443", "porto.boot:7443", "192.0.2.1:65535"} {
-		config := validConfig(porto)
+	for _, endpoint := range []string{"[2001:db8::3]:7443", "birch.boot:7443", "192.0.2.1:65535"} {
+		config := validConfig(birch)
 		config.Peers[0].Endpoint = endpoint
 		if err := config.validate(); err != nil {
 			t.Fatalf("%s: %v", endpoint, err)
 		}
 	}
 	path := filepath.Join(t.TempDir(), "unlock.json")
-	raw, _ := json.Marshal(validConfig(porto))
+	raw, _ := json.Marshal(validConfig(birch))
 	_ = os.WriteFile(path, raw, 0o600)
-	if loaded, err := loadBootConfig(path); err != nil || loaded.Peers[0].NodeID != "porto" {
+	if loaded, err := loadBootConfig(path); err != nil || loaded.Peers[0].NodeID != "birch" {
 		t.Fatal(err)
 	}
 	_ = os.WriteFile(path, append(append([]byte{}, raw...), '}'), 0o600)
@@ -759,7 +759,7 @@ func sealedLocal() string {
 }
 
 func token(peer, slot string, epoch uint64) map[string]any {
-	return map[string]any{"type": tokenType, "keyslots": []string{slot}, "version": 1, "target": "lisbon", "peer": peer, "path_epoch": epoch, "local": sealedLocal()}
+	return map[string]any{"type": tokenType, "keyslots": []string{slot}, "version": 1, "target": "alder", "peer": peer, "path_epoch": epoch, "local": sealedLocal()}
 }
 
 // luksCopy is one copy of a LUKS2 header as cryptsetup writes it: the 4096-byte binary header with its
@@ -794,7 +794,7 @@ func tokensFor(peers ...*fakePeer) map[string]any {
 
 func pathsOf(t *testing.T, tokens map[string]any) (map[string][]pathToken, []string) {
 	t.Helper()
-	paths, skipped, err := pathTokens(bytes.NewReader(luksImage(tokens)), "lisbon")
+	paths, skipped, err := pathTokens(bytes.NewReader(luksImage(tokens)), "alder")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -823,16 +823,16 @@ func configFor(peers ...*fakePeer) *bootConfig {
 }
 
 func TestTheLUKS2HeaderIsReadFromTheDiskAndItsNewerValidCopyIsUsed(t *testing.T) {
-	old, _ := json.Marshal(map[string]any{"tokens": map[string]any{"1": token("porto", "1", 3)}})
-	updated, _ := json.Marshal(map[string]any{"tokens": map[string]any{"1": token("porto", "1", 4)}})
+	old, _ := json.Marshal(map[string]any{"tokens": map[string]any{"1": token("birch", "1", 3)}})
+	updated, _ := json.Marshal(map[string]any{"tokens": map[string]any{"1": token("birch", "1", 4)}})
 	primary, secondary := luksCopy("LUKS\xba\xbe", 0, 5, old), luksCopy("SKUL\xba\xbe", luksMinHeader, 5, old)
 	epoch := func(image []byte) uint64 {
 		t.Helper()
-		paths, _, err := pathTokens(bytes.NewReader(image), "lisbon")
+		paths, _, err := pathTokens(bytes.NewReader(image), "alder")
 		if err != nil {
 			t.Fatal(err)
 		}
-		return paths["porto"][0].PathEpoch
+		return paths["birch"][0].PathEpoch
 	}
 	if epoch(append(append([]byte{}, primary...), secondary...)) != 3 {
 		t.Fatal("the header was not read")
@@ -853,11 +853,11 @@ func TestTheLUKS2HeaderIsReadFromTheDiskAndItsNewerValidCopyIsUsed(t *testing.T)
 		"no valid LUKS2 header  ":  primary[:100],
 		"no valid LUKS2 header   ": luksCopy("LUKS\xba\xbe", 4096, 5, old), // it says it is somewhere else
 	} {
-		_, _, err := pathTokens(bytes.NewReader(image), "lisbon")
+		_, _, err := pathTokens(bytes.NewReader(image), "alder")
 		wantError(t, err, strings.TrimSpace(reason))
 	}
 	notJSON := luksCopy("LUKS\xba\xbe", 0, 5, []byte("{"))
-	_, _, err := pathTokens(bytes.NewReader(notJSON), "lisbon")
+	_, _, err := pathTokens(bytes.NewReader(notJSON), "alder")
 	wantError(t, err, "the LUKS2 metadata is not readable JSON")
 }
 
@@ -882,8 +882,8 @@ func TestTheTransportIsOneBoundedRequestPerConnection(t *testing.T) {
 		}
 	}()
 	send := tcpTransport(listener.Addr().String(), time.Time{})
-	reply, err := send([]byte(`{"v":1,"op":"hello","node_id":"lisbon"}`))
-	if err != nil || string(reply) != `{"v":1,"error":"DENIED"}` || string(<-got) != `{"v":1,"op":"hello","node_id":"lisbon"}` {
+	reply, err := send([]byte(`{"v":1,"op":"hello","node_id":"alder"}`))
+	if err != nil || string(reply) != `{"v":1,"error":"DENIED"}` || string(<-got) != `{"v":1,"op":"hello","node_id":"alder"}` {
 		t.Fatalf("%q %v", reply, err)
 	}
 	reply, err = send([]byte("x"))

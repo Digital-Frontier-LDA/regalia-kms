@@ -92,10 +92,10 @@ func (w *world) env() agentEnv {
 // what it held zeroed.
 func TestTheAgentAnswersTheRootRequestOnceAPeerHelps(t *testing.T) {
 	directory := t.TempDir()
-	porto := newFakePeer(t, "porto")
-	porto.deny = "DENIED" // a blackout: no peer helps for two attempts
+	birch := newFakePeer(t, "birch")
+	birch.deny = "DENIED" // a blackout: no peer helps for two attempts
 	var log bytes.Buffer
-	u := newUnlocker(t, directory, &log, porto)
+	u := newUnlocker(t, directory, &log, birch)
 	mine := hex.EncodeToString(u.boot.id)
 	private := u.boot.key
 	w := newWorld()
@@ -105,7 +105,7 @@ func TestTheAgentAnswersTheRootRequestOnceAPeerHelps(t *testing.T) {
 		if strings.Count(log.String(), "asking again in") > attempts {
 			attempts++
 			if attempts == 2 {
-				porto.deny = "" // the peer comes back
+				birch.deny = "" // the peer comes back
 			}
 		}
 		if len(w.answers[root]) > 0 {
@@ -115,23 +115,23 @@ func TestTheAgentAnswersTheRootRequestOnceAPeerHelps(t *testing.T) {
 	if err := u.agent(w.env()); err != nil {
 		t.Fatal(err)
 	}
-	want, _ := credential(bytes.Repeat([]byte{0x11}, 32), porto.contribution, "lisbon", "porto", 3)
+	want, _ := credential(bytes.Repeat([]byte{0x11}, 32), birch.contribution, "alder", "birch", 3)
 	if string(w.answers[root]) != "+"+string(want) {
 		t.Fatalf("the root request got %q", w.answers[root])
 	}
 	if id, _ := recordOf(t, directory); id != mine+"\n" {
 		t.Fatalf("the record is %q, not this boot's session", id)
 	}
-	sessions, unlocks := unlockSessions(porto)
+	sessions, unlocks := unlockSessions(birch)
 	if len(sessions) != 1 || !sessions[mine] || unlocks != 1 {
 		t.Fatalf("%d unlock requests under %v", unlocks, sessions)
 	}
 	through, _ := os.ReadFile(filepath.Join(directory, "key-given-through"))
-	if string(through) != "porto 1\n" {
+	if string(through) != "birch 1\n" {
 		t.Fatalf("key-given-through is %q", through)
 	}
 	// one diagnostic line per attempt, and the pauses are backoff's
-	if strings.Count(log.String(), "regalia-unlock: attempt ") != 2 || !strings.Contains(log.String(), "attempt 1: porto (path epoch 3): hello: the peer refused (DENIED); asking again in 2s") {
+	if strings.Count(log.String(), "regalia-unlock: attempt ") != 2 || !strings.Contains(log.String(), "attempt 1: birch (path epoch 3): hello: the peer refused (DENIED); asking again in 2s") {
 		t.Fatalf("the diagnostics:\n%s", log.String())
 	}
 	// the first pause, 2 s at the jitter's middle, slept in steps of at most standPoll (the volume is looked at
@@ -159,8 +159,8 @@ func TestTheAgentAnswersTheRootRequestOnceAPeerHelps(t *testing.T) {
 
 // Only the root volume's request is answered: another volume's, or a prompt with another Id, never is.
 func TestOnlyTheRootVolumesRequestIsAnswered(t *testing.T) {
-	porto := newFakePeer(t, "porto")
-	u := newUnlocker(t, t.TempDir(), &bytes.Buffer{}, porto)
+	birch := newFakePeer(t, "birch")
+	u := newUnlocker(t, t.TempDir(), &bytes.Buffer{}, birch)
 	w := newWorld()
 	other := w.request("cryptsetup:/dev/disk/by-partlabel/regalia-data")
 	pin := w.request("systemd-ask-password:pin")
@@ -181,10 +181,10 @@ func TestOnlyTheRootVolumesRequestIsAnswered(t *testing.T) {
 // A recovery key mistyped at the console: systemd-cryptsetup (tries=0) removes the request and makes another.
 // That neither stops nor slows the agent: its backoff goes on where it was, and it answers the new request.
 func TestAMistypedRecoveryKeyNeitherStopsNorResetsTheAgent(t *testing.T) {
-	porto := newFakePeer(t, "porto")
-	porto.deny = "DENIED"
+	birch := newFakePeer(t, "birch")
+	birch.deny = "DENIED"
 	var log bytes.Buffer
-	u := newUnlocker(t, t.TempDir(), &log, porto)
+	u := newUnlocker(t, t.TempDir(), &log, birch)
 	w := newWorld()
 	first := w.request(askpass.RootID)
 	var second string
@@ -195,7 +195,7 @@ func TestAMistypedRecoveryKeyNeitherStopsNorResetsTheAgent(t *testing.T) {
 			second = w.request(askpass.RootID) // and asked again
 		}
 		if attempts == 4 {
-			porto.deny = ""
+			birch.deny = ""
 		}
 		if second != "" && len(w.answers[second]) > 0 {
 			w.open = true
@@ -217,9 +217,9 @@ func TestAMistypedRecoveryKeyNeitherStopsNorResetsTheAgent(t *testing.T) {
 
 // A key the volume refuses (it asks again after each answer) is offered to maxAnswers requests, then no more.
 func TestARefusedKeyIsNotOfferedForEver(t *testing.T) {
-	porto := newFakePeer(t, "porto")
+	birch := newFakePeer(t, "birch")
 	var log bytes.Buffer
-	u := newUnlocker(t, t.TempDir(), &log, porto)
+	u := newUnlocker(t, t.TempDir(), &log, birch)
 	w := newWorld()
 	current := w.request(askpass.RootID)
 	w.tick = func(w *world) {
@@ -240,30 +240,30 @@ func TestARefusedKeyIsNotOfferedForEver(t *testing.T) {
 // holding two paths during a rotation is still asked once: the peers' hello limit is sized for that).
 // Unusable tokens are reported, by number only.
 func TestEachPeerIsAskedOncePerAttemptByOnePath(t *testing.T) {
-	porto, faro := newFakePeer(t, "porto"), newFakePeer(t, "faro")
+	birch, faro := newFakePeer(t, "birch"), newFakePeer(t, "faro")
 	faro.contribution = bytes.Repeat([]byte{0x43}, 32)
-	tokens := tokensFor(porto, faro)
-	tokens["5"] = token("porto", "5", 9) // a rotation: the new keyslot beside the old
-	tokens["6"] = token("porto", "6", 4)
+	tokens := tokensFor(birch, faro)
+	tokens["5"] = token("birch", "5", 9) // a rotation: the new keyslot beside the old
+	tokens["6"] = token("birch", "6", 4)
 	tokens["6"].(map[string]any)["target"] = "faro"
-	tokens["7"] = token("porto", "7", 4)
+	tokens["7"] = token("birch", "7", 4)
 	tokens["7"].(map[string]any)["local"] = base64.StdEncoding.EncodeToString(make([]byte, 40)) // not sealed to the TPM alone
 	tokens["11\x1b[2J\nregalia-unlock: all is well"] = token("faro", "3", 4)                    // an ID that is not a number is never printed
 	paths, skipped := pathsOf(t, tokens)
 	local := bytes.Repeat([]byte{0x11}, 32)
-	porto.deny, faro.deny = "DENIED", "DENIED"
+	birch.deny, faro.deny = "DENIED", "DENIED"
 	boot := testSession(t)
-	key, _, _, reasons, err := attempt(configFor(porto, faro), 0, paths, local, boot, dialer(porto, faro), noQuote)
-	if err != nil || key != nil || len(reasons) != 2 || len(porto.requests) != 1 || len(faro.requests) != 1 {
-		t.Fatalf("attempt 1: %v %v; porto %d, faro %d requests", reasons, err, len(porto.requests), len(faro.requests))
+	key, _, _, reasons, err := attempt(configFor(birch, faro), 0, paths, local, boot, dialer(birch, faro), noQuote)
+	if err != nil || key != nil || len(reasons) != 2 || len(birch.requests) != 1 || len(faro.requests) != 1 {
+		t.Fatalf("attempt 1: %v %v; birch %d, faro %d requests", reasons, err, len(birch.requests), len(faro.requests))
 	}
-	if porto.requests[0]["op"] != "hello" || !strings.Contains(reasons[0], "porto (path epoch 9)") || boot.consumed {
-		t.Fatalf("attempt 1 did not ask porto's newest path once: %v", reasons)
+	if birch.requests[0]["op"] != "hello" || !strings.Contains(reasons[0], "birch (path epoch 9)") || boot.consumed {
+		t.Fatalf("attempt 1 did not ask birch's newest path once: %v", reasons)
 	}
-	porto.deny = ""
-	key, peer, slot, _, err := attempt(configFor(porto, faro), 1, paths, local, boot, dialer(porto, faro), noQuote)
-	want, _ := credential(local, porto.contribution, "lisbon", "porto", 3)
-	if err != nil || peer != "porto" || slot != "1" || !bytes.Equal(key, want) {
+	birch.deny = ""
+	key, peer, slot, _, err := attempt(configFor(birch, faro), 1, paths, local, boot, dialer(birch, faro), noQuote)
+	want, _ := credential(local, birch.contribution, "alder", "birch", 3)
+	if err != nil || peer != "birch" || slot != "1" || !bytes.Equal(key, want) {
 		t.Fatalf("attempt 2 (the next path, epoch 3): %s %s %v", peer, slot, err)
 	}
 	if strings.Contains(strings.Join(reasons, ""), hex.EncodeToString(local)) {
@@ -276,36 +276,36 @@ func TestEachPeerIsAskedOncePerAttemptByOnePath(t *testing.T) {
 	}
 	// a disk with no path from any configured peer: nothing to ask, said, and the console is the way
 	none, _ := pathsOf(t, map[string]any{})
-	_, _, _, _, err = attempt(configFor(porto), 0, none, local, testSession(t), dialer(porto), noQuote)
+	_, _, _, _, err = attempt(configFor(birch), 0, none, local, testSession(t), dialer(birch), noQuote)
 	wantError(t, err, "it has no path from any peer of the boot configuration; the console asks for the recovery key")
 }
 
 // A peer not yet upgraded answers a version 2 hello INVALID_REQUEST: it is asked again in version 1, without
 // values, and the attempt says so; a quote whose PCRs would not hold goes in version 1, said too.
 func TestVersion1AndUnsteadyQuotesAreSaid(t *testing.T) {
-	porto := newFakePeer(t, "porto")
-	porto.onlyV1 = true
-	paths, _ := pathsOf(t, tokensFor(porto))
-	key, _, _, _, err := attempt(configFor(porto), 0, paths, bytes.Repeat([]byte{0x11}, 32), testSession(t), dialer(porto), noQuote)
+	birch := newFakePeer(t, "birch")
+	birch.onlyV1 = true
+	paths, _ := pathsOf(t, tokensFor(birch))
+	key, _, _, _, err := attempt(configFor(birch), 0, paths, bytes.Repeat([]byte{0x11}, 32), testSession(t), dialer(birch), noQuote)
 	versions := []any{}
-	for _, request := range porto.requests {
+	for _, request := range birch.requests {
 		versions = append(versions, request["v"])
 	}
 	if err != nil || len(key) == 0 || fmt.Sprint(versions) != "[2 1 1]" {
 		t.Fatalf("%v; versions %v", err, versions)
 	}
-	porto2 := newFakePeer(t, "porto")
-	porto2.deny = "DENIED"
+	birch2 := newFakePeer(t, "birch")
+	birch2.deny = "DENIED"
 	unsteady := func(qualifying []byte) ([]byte, []byte, map[string]string, error) {
 		attest, signature, _, err := noQuote(qualifying)
 		return attest, signature, nil, err
 	}
-	porto2.deny = ""
-	paths2, _ := pathsOf(t, tokensFor(porto2))
-	if _, _, _, _, err := attempt(configFor(porto2), 0, paths2, bytes.Repeat([]byte{0x11}, 32), testSession(t), dialer(porto2), unsteady); err != nil {
+	birch2.deny = ""
+	paths2, _ := pathsOf(t, tokensFor(birch2))
+	if _, _, _, _, err := attempt(configFor(birch2), 0, paths2, bytes.Repeat([]byte{0x11}, 32), testSession(t), dialer(birch2), unsteady); err != nil {
 		t.Fatal(err)
 	}
-	for _, request := range porto2.requests {
+	for _, request := range birch2.requests {
 		if request["op"] == "unlock" && request["v"] != float64(1) {
 			t.Fatalf("a request without values in version %v", request["v"])
 		}
@@ -315,8 +315,8 @@ func TestVersion1AndUnsteadyQuotesAreSaid(t *testing.T) {
 // The key the agent sends is the keyslot's passphrase as enrolled (unlock.py: base64 of the HKDF output, 44
 // characters), with nothing after it: the requester strips nothing.
 func TestTheAnswerIsTheEnrolledPassphraseExactly(t *testing.T) {
-	porto := newFakePeer(t, "porto")
-	key, err := credential(bytes.Repeat([]byte{0x11}, 32), porto.contribution, "lisbon", "porto", 3)
+	birch := newFakePeer(t, "birch")
+	key, err := credential(bytes.Repeat([]byte{0x11}, 32), birch.contribution, "alder", "birch", 3)
 	if err != nil || len(key) != 44 {
 		t.Fatalf("the credential is %d bytes, %v", len(key), err)
 	}
@@ -330,24 +330,24 @@ func TestTheAnswerIsTheEnrolledPassphraseExactly(t *testing.T) {
 // to leave the disk locked.
 func TestASecondClientInTheSameBootAsksNoPeer(t *testing.T) {
 	directory := t.TempDir()
-	porto := newFakePeer(t, "porto")
+	birch := newFakePeer(t, "birch")
 	if err := publishSession(directory, testSession(t)); err != nil {
 		t.Fatal(err)
 	}
 	earlierID, _ := recordOf(t, directory)
 	var log bytes.Buffer
-	u := newUnlocker(t, directory, &log, porto)
+	u := newUnlocker(t, directory, &log, birch)
 	w := newWorld()
 	w.request(askpass.RootID)
-	if err := u.agent(w.env()); err != nil || len(porto.requests) != 0 || len(w.answers) != 0 {
-		t.Fatalf("a second client of the boot: %v, %d requests, answers %v", err, len(porto.requests), w.answers)
+	if err := u.agent(w.env()); err != nil || len(birch.requests) != 0 || len(w.answers) != 0 {
+		t.Fatalf("a second client of the boot: %v, %d requests, answers %v", err, len(birch.requests), w.answers)
 	}
 	if id, _ := recordOf(t, directory); id != earlierID || !strings.Contains(log.String(), "reboot, or use the recovery key") {
 		t.Fatal("the earlier record was changed, or what to do is not said")
 	}
 	halfway := t.TempDir()
 	_ = os.WriteFile(filepath.Join(halfway, "boot-session.pub"), []byte("00\n"), 0o644)
-	second := newUnlocker(t, halfway, &log, porto)
+	second := newUnlocker(t, halfway, &log, birch)
 	w2 := newWorld()
 	root := w2.request(askpass.RootID)
 	w2.tick = func(w *world) { w.open = len(w.answers[root]) > 0 }
@@ -363,7 +363,7 @@ func TestASecondClientInTheSameBootAsksNoPeer(t *testing.T) {
 		t.Fatal("a public key was left on record without its session")
 	}
 	log.Reset()
-	lost := newUnlocker(t, filepath.Join(directory, "absent"), &log, porto)
+	lost := newUnlocker(t, filepath.Join(directory, "absent"), &log, birch)
 	w3 := newWorld()
 	root3 := w3.request(askpass.RootID)
 	w3.tick = func(w *world) { w.open = len(w.answers[root3]) > 0 }
@@ -374,16 +374,16 @@ func TestASecondClientInTheSameBootAsksNoPeer(t *testing.T) {
 
 // -attempts bounds the attempts (tests); the volume already open stands the agent down before any attempt.
 func TestAttemptsAndAnOpenVolume(t *testing.T) {
-	porto := newFakePeer(t, "porto")
-	porto.deny = "DENIED"
-	u := newUnlocker(t, t.TempDir(), &bytes.Buffer{}, porto)
+	birch := newFakePeer(t, "birch")
+	birch.deny = "DENIED"
+	u := newUnlocker(t, t.TempDir(), &bytes.Buffer{}, birch)
 	u.o.attempts = 3
 	wantError(t, u.agent(newWorld().env()), "no peer helped in 3 attempts")
-	open := newUnlocker(t, t.TempDir(), &bytes.Buffer{}, porto)
+	open := newUnlocker(t, t.TempDir(), &bytes.Buffer{}, birch)
 	w := newWorld()
 	w.open = true
-	if err := open.agent(w.env()); err != nil || len(porto.requests) != 3 {
-		t.Fatalf("an open volume: %v, %d requests (the 3 of before only)", err, len(porto.requests))
+	if err := open.agent(w.env()); err != nil || len(birch.requests) != 3 {
+		t.Fatalf("an open volume: %v, %d requests (the 3 of before only)", err, len(birch.requests))
 	}
 }
 

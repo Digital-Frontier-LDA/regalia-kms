@@ -6,7 +6,7 @@ until a phase's evidence and a recorded decision exist, [PIN-CUSTODY.md](PIN-CUS
 TPM-sealed user PINs, no runtime PKA), [FENCING.md](FENCING.md) (one independent activation
 signer) and `deploy/baremetal/` (single-site commissioning, TPM-only disk unlock as the interim
 baseline) remain authoritative. The secrets and their lifecycles are in
-[THREE-SITE-SECRETS.md](THREE-SITE-SECRETS.md).
+the operators' secrets inventory, kept in their private repository.
 
 ## The goal, stated as invariants
 

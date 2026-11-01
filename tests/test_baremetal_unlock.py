@@ -359,9 +359,9 @@ class Exchange(Case):
         self.assertEqual(self.ask("b", epoch), secret)
 
     def test_the_boot_configuration_lists_the_peers_that_may_authorize(self):
-        config = unlock.boot_config(self.m1, "a", "/dev/sda3", [11, 7, 7], {"c": "[2001:db8::3]:7443", "b": "porto.boot:7443"})
+        config = unlock.boot_config(self.m1, "a", "/dev/sda3", [11, 7, 7], {"c": "[2001:db8::3]:7443", "b": "birch.boot:7443"})
         self.assertEqual((config["node_id"], config["pcrs"], [p["node_id"] for p in config["peers"]]), ("a", [7, 11], ["b", "c"]))
-        self.assertEqual(config["peers"][0], {"node_id": "b", "endpoint": "porto.boot:7443", "ek_name": self.keys["b"].ek_name, "ak_name": self.keys["b"].ak_name})
+        self.assertEqual(config["peers"][0], {"node_id": "b", "endpoint": "birch.boot:7443", "ek_name": self.keys["b"].ek_name, "ak_name": self.keys["b"].ak_name})
         self.assertEqual(list(unlock.validate_boot_config(json.loads(json.dumps(config)))), ["b", "c"])
         quarantined = unlock.boot_config(self.manifest(c="QUARANTINED"), "a", "/dev/sda3", [7], {"b": "192.0.2.2:1", "c": "192.0.2.3:1"})
         self.assertEqual([p["node_id"] for p in quarantined["peers"]], ["b"])
@@ -372,7 +372,7 @@ class Exchange(Case):
                                (dict(pcrs=[]), "pcrs must be an ascending list"), (dict(pcrs=[24]), "pcrs must be an ascending list"),
                                (dict(peers=[]), "peers must list 1 to 8 peers"), (dict(peers=config["peers"][:1] * 2), "peer b is listed twice"),
                                (dict(node_id="b"), "is listed twice, or is the node itself"),
-                               (dict(peers=[dict(config["peers"][0], endpoint="porto.boot")]), "peer.endpoint must be host:port"),
+                               (dict(peers=[dict(config["peers"][0], endpoint="birch.boot")]), "peer.endpoint must be host:port"),
                                (dict(peers=[dict(config["peers"][0], endpoint="fd00::2:7000")]), "an IPv6 address in brackets"),
                                (dict(peers=[dict(config["peers"][0], endpoint="192.0.2.2:70000")]), "the port 1-65535"),
                                (dict(peers=[dict(config["peers"][0], endpoint="192.0.2.2:0")]), "the port 1-65535"),

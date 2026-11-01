@@ -1,6 +1,6 @@
 {
   "schema": "regalia.node/v1",
-  "node_id": "lisbon",
+  "node_id": "alder",
   "site": "/etc/regalia/site.json",
   "root_key": "0000000000000000000000000000000000000000000000000000000000000000",
   "tcti": "device:/dev/tpmrm0",

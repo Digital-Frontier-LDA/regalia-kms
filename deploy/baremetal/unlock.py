@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Peer-assisted disk unlock: a KMS host's root disk opens with its TPM AND one peer, never the TPM alone
-(#67, Phase 7 of #59; closes the gap of #135; THREE-SITE-THREAT-MODEL.md S1-S3, THREE-SITE-SECRETS.md).
+(#67, Phase 7 of #59; closes the gap of #135; THREE-SITE-THREAT-MODEL.md S1-S3; the secrets inventory is private).
 
 WHY. A disk that unlocks from the local TPM alone unlocks for every boot image the TPM's policy ever
 accepted: a signed PCR policy has no counter, so an old signed kernel on a stolen server opens the disk,
@@ -80,7 +80,7 @@ carry it: T's boot-session key is gone after unlock, and the verifier refuses a 
 
 LIMITS, stated:
   * Root on a running T can read local_T and whatever contribution it received this boot, and so keep a
-    whole credential (THREE-SITE-SECRETS.md). After a suspected compromise: rotate both paths, reencrypt.
+    whole credential (the private secrets inventory). After a suspected compromise: rotate both paths, reencrypt.
   * A LUKS header backup restores killed keyslots. None is kept; a host with a damaged header is rebuilt.
   * A peer that has not heard of a revocation helps until its heartbeat expires (24 hours, #69).
 
