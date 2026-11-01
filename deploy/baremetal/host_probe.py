@@ -11,8 +11,7 @@ re-seals the PINs and so needs opensc-tool and pkcs11-tool.
 
     sudo python3 -Es deploy/baremetal/host_probe.py --import-key-sha256 HEX     # exit 1 unless every control is true
     sudo python3 -Es deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
-        --evidence-key commissioning-p256.pem --evidence-key-sha256 HEX \
-        --image /boot/efi/EFI/Linux/NAME.efi                                # the commissioning pass criterion
+        --evidence-key commissioning-p256.pem --evidence-key-sha256 HEX      # the commissioning pass criterion
 
 PLATFORM AND TPM, measured:
   uefi_boot                 booted through UEFI (/sys/firmware/efi): TPM 2.0 measured boot needs it
@@ -154,6 +153,7 @@ import json
 import os
 import re
 import struct
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -206,6 +206,10 @@ UNMEASURED = evidence_mod.ATTESTED + evidence_mod.RECORDS
 
 
 class Host(os_probe.Host):
+    # efibootmgr, as deploy/baremetal/bootnext.py runs it, and the ESP checks' own readers (next_boot)
+    boot_run = staticmethod(subprocess.run)
+    boot_where = {}
+
     def read_bytes(self, path):
         try:
             with open(path, "rb") as f:
@@ -524,27 +528,64 @@ def secure_boot_db(host, expected=None):
         want[:16], len(certs), len(revoked))
 
 
-def image_cert(host, image, expected):
+def signed_by(data, label, expected):
     """regalia-xqx: the recorded Secure Boot certificate (the evidence's, or the argument's) is the one that signed the
-    image to be booted (a signer of one of its Authenticode signatures; a certificate merely carried is not). db is judged against the record; this ties the record to the image, so a
-    digest left from the image before a rotation is found before the firmware refuses the new one."""
+    image `data` (a signer of one of its Authenticode signatures; a certificate merely carried is not). db is judged
+    against the record; this ties the record to the image, so a digest left from the image before a rotation is found
+    before the firmware refuses the new one."""
     want = (expected or "").lower()
     if not re.fullmatch(r"[0-9a-f]{64}", want):
         return {"value": False, "why": "no recorded Secure Boot certificate to compare the image with"}
-    data = host.read_bytes(image)
     if data is None:
-        return {"value": False, "why": "the image %s is unreadable or absent" % image}
+        return {"value": False, "why": "the image %s is unreadable or absent" % label}
     try:
         signers = authenticode_signers(data)
     except ValueError as error:
-        return {"value": False, "why": "the image %s is malformed: %s" % (image, error)}
+        return {"value": False, "why": "the image %s is malformed: %s" % (label, error)}
     if not signers:
-        return {"value": False, "why": "the image %s carries no Authenticode signature" % image}
+        return {"value": False, "why": "the image %s carries no Authenticode signature" % label}
     if want not in signers:
         return {"value": False, "why": "the image %s is signed by %s, and none is the recorded Secure Boot certificate (%s): "
                 "the record is not this image's (a digest from before a rotation?)" % (
-                    image, ", ".join(c[:16] if c else "a certificate it does not carry" for c in signers), want[:16])}
-    return {"value": True, "why": "the image %s is signed by the recorded Secure Boot certificate (%s)" % (image, want[:16])}
+                    label, ", ".join(c[:16] if c else "a certificate it does not carry" for c in signers), want[:16])}
+    return {"value": True, "why": "the image %s is signed by the recorded Secure Boot certificate (%s)" % (label, want[:16])}
+
+
+def next_boot(host, esp):
+    """regalia-t7g: (a label, the bytes) of the image the firmware boots next: BootNext's entry, else BootOrder's
+    first, read by deploy/baremetal/bootnext.py as a rollout reads it (the entry must be on the partition BootCurrent's
+    is on, `esp` must be that partition's vfat mount, the one systemd-stub was loaded from, and no component of the
+    path is followed through a link). Anything it cannot establish raises ValueError."""
+    root = os.path.dirname(os.path.dirname(HERE))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    try:
+        from deploy.baremetal import bootnext
+    except Exception as error:      # noqa: BLE001  without bootnext nothing names the image the firmware boots next
+        raise ValueError("deploy/baremetal/bootnext.py cannot be loaded (%s: %s)" % (type(error).__name__, error))
+    try:
+        boot = bootnext.state(host.boot_run)
+        entry = boot["next"] or (boot["order"] or [None])[0]
+        if entry is None:
+            raise ValueError("BootNext is unset and BootOrder is empty: the firmware names no image to boot")
+        data = bootnext.image(esp, entry, boot, **host.boot_where)
+    except (bootnext.Refused, OSError) as error:
+        raise ValueError(str(error))
+    path = os.path.join(esp, *boot["entries"][entry]["path"].split("\\")[1:])
+    return "%s (Boot%s, %s)" % (path, entry, "BootNext" if boot["next"] else "first in BootOrder"), data
+
+
+def image_cert(host, esp, image, expected):
+    """The image the firmware boots next (next_boot) must be signed by the recorded certificate (signed_by). An
+    --image is the operator's word for which image that is: one that is not those same bytes fails."""
+    try:
+        label, data = next_boot(host, esp)
+    except ValueError as error:
+        return {"value": False, "why": "the image the firmware boots next cannot be read: %s" % error}
+    if image is not None and host.read_bytes(image) != data:
+        return {"value": False, "why": "--image %s is not the image the firmware boots next, %s: the image judged is the "
+                "firmware's, and the two disagree" % (image, label)}
+    return signed_by(data, label, expected)
 
 
 def tpm2(host):
@@ -1399,9 +1440,12 @@ def main(argv=None, host=None, run=None):
                     "least 16 hex); with evidence it comes from host.pin_import_key_sha256, and an argument must agree with it")
     ap.add_argument("--secure-boot-cert-sha256", help="the signed image record's secure_boot_cert_sha256 (uki.py sign), "
                     "which db must hold; with evidence it comes from host.secure_boot_cert_sha256, and an argument must agree with it")
-    ap.add_argument("--image", help="the signed boot image (UKI) the host will boot next, as on its ESP: the Secure Boot "
-                    "certificate that signed it must be the recorded one, so a digest left over from the previous image fails "
-                    "here and not at the next boot (regalia-xqx). Required with --evidence")
+    ap.add_argument("--esp", default="/efi", help="where the ESP this host booted from is mounted (default %(default)s). "
+                    "With --evidence, the image the firmware boots next (BootNext, else BootOrder's first) is read from it, "
+                    "and the Secure Boot certificate that signed it must be the recorded one, so a digest left over from the "
+                    "previous image fails here and not at the next boot (regalia-xqx, regalia-t7g)")
+    ap.add_argument("--image", help="optional: the image you expect the firmware to boot next, as a file. It must be those "
+                    "same bytes; the image judged is always the firmware's")
     ap.add_argument("--credential-pcrs", help="without evidence: the PCRs the PIN credentials are bound to directly, "
                     "as given to seal-hsm-pin.sh --pcrs (e.g. 7)")
     ap.add_argument("--credential-signed-pcrs", default="", help="without evidence: 11 if the PINs were sealed with "
@@ -1434,9 +1478,6 @@ def main(argv=None, host=None, run=None):
     if args.evidence:
         if not (args.signature and args.evidence_key and args.evidence_key_sha256):
             ap.error("--evidence needs --signature, --evidence-key and --evidence-key-sha256")
-        if not args.image:
-            ap.error("--evidence needs --image: the record's Secure Boot certificate is judged against the image the host "
-                     "boots next (regalia-xqx)")
         try:
             # One snapshot of all three inputs: the bytes validated are the bytes verified.
             with evidence_mod.Snapshot(evidence=args.evidence, signature=args.signature, key=args.evidence_key) as snap:
@@ -1473,8 +1514,8 @@ def main(argv=None, host=None, run=None):
             ev_host = None
     measured = measure(host, want, binding, unlock_record, sb_cert)
     report["measured"] = measured
-    if args.image:
-        report["image_signed_by_recorded_cert"] = image_cert(host, args.image, sb_cert)
+    if args.evidence or args.image:
+        report["image_signed_by_recorded_cert"] = image_cert(host, args.esp, args.image, sb_cert)
     if args.evidence:
         if ev_host is not None:
             problems += compare(measured, ev_host, hsm_ports(host))
