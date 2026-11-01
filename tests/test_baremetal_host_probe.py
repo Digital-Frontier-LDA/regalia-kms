@@ -1761,9 +1761,15 @@ class ImageCarriesRecordedCert(unittest.TestCase):
                 h, esp = self.on_esp({"0001": ours, "0002": old}, boot_next=boot_next, order=order, inactive=("0001",))
                 self.assertEqual(self.next_image(h, esp), {"value": False, "why": "the image the firmware boots next cannot be "
                                  "read: Boot0001 (%s) is not active: the firmware would skip it" % which})
-        # an inactive entry the firmware does not take decides nothing
-        h, esp = self.on_esp({"0001": ours, "0002": old}, order=("0001", "0002"), inactive=("0002",))
-        self.assertTrue(self.next_image(h, esp)["value"])
+        # the entry judged active is the one the firmware takes, not the one it booted (regalia-c6, active-checks-current)
+        h, esp = self.on_esp({"0001": ours, "0002": old}, boot_next="0001", order=("0002", "0001"), current="0002", inactive=("0001",))
+        self.assertEqual(self.next_image(h, esp), {"value": False, "why": "the image the firmware boots next cannot be "
+                         "read: Boot0001 (BootNext) is not active: the firmware would skip it"})
+        # an inactive entry the firmware does not take decides nothing, BootCurrent's included
+        for current, inactive in (("0001", ("0002",)), ("0002", ("0002",))):
+            with self.subTest(current=current, inactive=inactive):
+                h, esp = self.on_esp({"0001": ours, "0002": old}, order=("0001", "0002"), current=current, inactive=inactive)
+                self.assertTrue(self.next_image(h, esp)["value"])
 
     def test_an_image_argument_must_be_the_firmwares(self):
         ours = pe_image(self.ours)
