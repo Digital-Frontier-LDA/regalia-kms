@@ -34,7 +34,7 @@ Commissioning has two halves:
 |---|---|---|
 | Boot mode | **UEFI** (TPM 2.0 needs it; not Legacy BIOS) | measured: `uefi_boot` |
 | Secure Boot | **Enabled** | measured: `secure_boot_enabled` |
-| Secure Boot db | the factory keys **kept**, and **our** Secure Boot certificate **appended** (below) | measured: `secure_boot_db_has_image_cert`, against `host.secure_boot_cert_sha256`; it also fails when `dbx` revokes that certificate, whole or by its tbsCertificate's SHA-256, SHA-384 or SHA-512 hash (a `dbx` that is unreadable, or that cannot even be looked at, fails too: only a missing one passes; the image's own Authenticode hash in `dbx` is not checked) |
+| Secure Boot db | the factory keys **kept**, and **our** Secure Boot certificate **appended** (below) | measured: `secure_boot_db_has_image_cert`, against `host.secure_boot_cert_sha256`; it also fails when `dbx` revokes that certificate, whole or by its tbsCertificate's SHA-256, SHA-384 or SHA-512 hash (a `dbx` that is unreadable, or that cannot even be looked at, fails too: only a missing one passes; the image's own Authenticode hash in `dbx` is not checked). With `--image ESP/EFI/Linux/NAME.efi` (required with `--evidence`), the image to be booted must be SIGNED by that certificate, named by a SignerInfo of one of its Authenticode signatures, not merely carried in one (`image_signed_by_recorded_cert`), so a digest left from before an image rotation fails the probe, not the next boot. This checks the signer's identity only; the firmware verifies the signature at boot |
 | TPM | **TPM 2.0 visible and enabled**; SHA-256 PCR bank active | measured: `tpm2_present`, `tpm_sha256_bank` |
 | TPM module | **never moved**: the HPE module is bound to its system board | — |
 | AC power recovery ("Automatic Power-On") | **Restore last state / always on** | attested: `ac_power_recovery` |
@@ -539,13 +539,18 @@ E.json.sig E.json`), then:
 
 ```sh
 sudo python3 -Es deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
-  --evidence-key commissioning-p256.pem --evidence-key-sha256 <recorded fingerprint>
+  --evidence-key commissioning-p256.pem --evidence-key-sha256 <recorded fingerprint> \
+  --image /boot/efi/EFI/Linux/NAME.efi
 ```
+
+`NAME.efi` is the signed UKI the host boots next. The probe checks only *who* signed it: that the
+recorded Secure Boot certificate is the one a SignerInfo of its Authenticode signature names. It does
+not verify the signature itself; the firmware does that at boot.
 
 It must exit 0: every measured control true; the evidence at most 24 hours old (the firmware settings
 are not re-measured, so sign fresh evidence for each run), complete, signed by the recorded key,
 attesting every firmware setting, and agreeing with every measurement (including the import key's
-fingerprint, and db holding the recorded Secure Boot certificate). Then an unattended
+fingerprint, db holding the recorded Secure Boot certificate, and the image signed by it). Then an unattended
 **reboot** brings the KMS back with no one present (the disk unseals from the TPM; the PIN from the
 TPM and the host key on that disk).
 
