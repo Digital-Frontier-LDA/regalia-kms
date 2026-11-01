@@ -1443,6 +1443,20 @@ class SecureBootDbx(unittest.TestCase):
                     host_probe.tbs_certificate(der)
 
 
+class DerElement(unittest.TestCase):
+    """The signature's DER reader: each case below is refused by one of its rules alone."""
+
+    def test_each_rule_refuses_alone(self):
+        self.assertEqual(host_probe.der_element(b"\x04\x02ab", 0), (0x04, 2, 4))
+        self.assertEqual(host_probe.der_element(b"\x04\x84\x00\x00\x00\x02ab", 0), (0x04, 6, 8))
+        for name, der, end in (("an indefinite length, which would read as empty", b"\x30\x80\x00\x00", None),
+                               ("a high tag number", b"\x1f\x00", None),
+                               ("an element past its parent, inside the blob", b"\x04\x02ab", 3)):
+            with self.subTest(name):
+                with self.assertRaises(ValueError):
+                    host_probe.der_element(der, 0, end)
+
+
 IMAGE = "/boot/efi/EFI/Linux/regalia-kms.efi"
 
 
@@ -1610,6 +1624,8 @@ class ImageCarriesRecordedCert(unittest.TestCase):
             "headers cut short": good[:0x60],
             "a PE offset past the end": good[:0x3c] + struct.pack("<I", 1 << 20) + good[0x40:],
             "a directory past the end": with_dir(sec[0], sec[1] + 8),
+            # refused by the directory's own bound alone: the signature is whole, only the entry's alignment padding is gone
+            "a file that ends inside its directory": pe_image(self.ours + b"\x00" * (len(self.ours) % 8 == 0))[:-1],
             "an entry header cut short": with_dir(sec[0], 4),
             "an entry longer than the directory": good[:sec[0]] + struct.pack("<I", sec[1] + 8) + good[sec[0] + 4:],
             "an entry shorter than its header": good[:sec[0]] + struct.pack("<I", 4) + good[sec[0] + 4:],
