@@ -243,6 +243,62 @@ func TestAsRootAStatePathThatCannotBeStatedIsNotAnAbsentOne(t *testing.T) {
 	}
 }
 
+// A SYMBOLIC LINK AT A STATE PATH (regalia-ibh, found by regalia-c6 on #648). os.Stat follows the last link, so a
+// dangling one read as absent and an unaccountable host as a fresh one. A dangling link is "cannot tell", by name; a
+// live link to a file is state that exists; a linked parent directory resolves as it always has. None needs root or
+// mode bits, so this runs as any user.
+func TestASymbolicLinkAtAStatePathIsNeverAbsence(t *testing.T) {
+	t.Run("a dangling link cannot be told from state", func(t *testing.T) {
+		settings, dir := provenanceSettings(t)
+		if err := os.Symlink(filepath.Join(dir, "gone"), settings.FencingStatePath); err != nil {
+			t.Fatal(err)
+		}
+		_, err := checkProvenance(settings)
+		want := "cannot tell whether " + settings.FencingStatePath + " exists: it is a symbolic link whose target is missing"
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("a dangling link at a state path read as absent (err=%v)", err)
+		}
+	})
+	t.Run("a live link to a file is state that exists", func(t *testing.T) {
+		settings, dir := provenanceSettings(t)
+		target := filepath.Join(dir, "elsewhere.jsonl")
+		if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, settings.FencingStatePath); err != nil {
+			t.Fatal(err)
+		}
+		_, err := checkProvenance(settings)
+		want := "is absent but state exists (" + settings.FencingStatePath + ")"
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("a live link to a state file did not count as existing state (err=%v)", err)
+		}
+	})
+	t.Run("a linked parent directory resolves as before", func(t *testing.T) {
+		settings, dir := provenanceSettings(t)
+		realDir := filepath.Join(dir, "real")
+		if err := os.Mkdir(realDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		linked := filepath.Join(dir, "linked")
+		if err := os.Symlink(realDir, linked); err != nil {
+			t.Fatal(err)
+		}
+		settings.FencingStatePath = filepath.Join(linked, "epochs.jsonl")
+		// absent through the linked parent: the fresh-host reading
+		if _, err := checkProvenance(settings); err == nil || !strings.Contains(err.Error(), "is absent and no state exists") {
+			t.Fatalf("an absent file under a linked directory did not read as absent (err=%v)", err)
+		}
+		// present through the linked parent: existing state
+		if err := os.WriteFile(filepath.Join(realDir, "epochs.jsonl"), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := checkProvenance(settings); err == nil || !strings.Contains(err.Error(), "is absent but state exists ("+settings.FencingStatePath+")") {
+			t.Fatalf("a file under a linked directory did not count as existing state (err=%v)", err)
+		}
+	})
+}
+
 func TestAnUnreadableStatePathIsNotAnAbsentOne(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a directory whatever its mode: no state path is unreadable to it")

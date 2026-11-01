@@ -84,6 +84,18 @@ func checkProvenance(settings config.Config) (*commissioningRecord, error) {
 			case statErr == nil:
 				existing = append(existing, path)
 			case errors.Is(statErr, os.ErrNotExist):
+				// os.Stat follows a final symbolic link, so a dangling one reads as absent
+				// (regalia-ibh). The name itself must be absent too: anything but ENOENT from
+				// Lstat, which looks at the last component only (a linked parent directory
+				// resolves as before), refuses. Lstat failing otherwise after Stat's ENOENT
+				// takes a race; it refuses the same way, with Lstat's own error as the reason.
+				if _, lstatErr := os.Lstat(path); !errors.Is(lstatErr, os.ErrNotExist) {
+					why := "it is a symbolic link whose target is missing"
+					if lstatErr != nil {
+						why = lstatErr.Error()
+					}
+					return nil, fmt.Errorf("cannot tell whether %s exists: %s — a state path that cannot be ruled out is not an absent one, and an unaccountable host must not read as a fresh one", path, why)
+				}
 				// genuinely absent: the fresh-host reading below
 			default:
 				// A STAT ERROR IS NOT ABSENCE. The loop this replaces counted only
