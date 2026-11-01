@@ -166,6 +166,9 @@ class FakeHost:
                      # a replaced credential's backup sits beside it and is not a credential the service loads
                      host_probe.CREDSTORE: ["regalia-kms-hsm-site-a.pin", "regalia-kms-hsm-site-a.pin.prev-20260930T100000Z"]}
         self.paths = {"/sys/firmware/efi", "/dev/tpmrm0"}
+        # efibootmgr as bootnext runs it (absent unless a test gives this host an ESP), and the ESP checks' readers
+        self.boot_run = lambda argv, **kw: subprocess.CompletedProcess(argv, 127, "", "efibootmgr: not on this fake host")
+        self.boot_where = {}
         self.tools = {"tpm2_readpublic", "tpm2_getcap", "opensc-tool", "pkcs11-tool"}
         self.stats = {"/usr/bin/opensc-tool": (0, 0, 0o100700), "/usr/bin/pkcs11-tool": (0, 0, 0o100700)}
         self.runs = {
@@ -1465,7 +1468,8 @@ class DerElement(unittest.TestCase):
             host_probe.der_children(b"\x30\x02\x04\x05" + b"\x00" * 8, 2, 4)
 
 
-IMAGE = "/boot/efi/EFI/Linux/regalia-kms.efi"
+IMAGE = "/root/regalia-kms.efi"
+ESP_GUID, OTHER_GUID = "0b8c6a2c-1111-2222-3333-444455556666", "9f3e0000-aaaa-bbbb-cccc-ddddeeeeffff"
 
 
 def pe_image(*signatures, magic=0x20b, rvas=16, kind=0x0002):
@@ -1582,10 +1586,7 @@ class ImageCarriesRecordedCert(unittest.TestCase):
         return [hashlib.sha256(der).hexdigest()]
 
     def judge(self, image, want=None):
-        h = FakeHost()
-        if image is not None:
-            h.bytes[IMAGE] = image
-        return host_probe.image_cert(h, IMAGE, want or self.sha["ours"])
+        return host_probe.signed_by(image, IMAGE, want or self.sha["ours"])
 
     def test_the_signer_found_is_openssls(self):
         for name in ("ours", "old", "old_carrying_ours", "ours_carrying_old", "by_keyid"):
@@ -1699,31 +1700,149 @@ class ImageCarriesRecordedCert(unittest.TestCase):
 
     def test_without_a_recorded_digest_or_an_image_nothing_passes(self):
         for want in ("", "ab" * 16, "g" * 64):
-            self.assertIn("no recorded Secure Boot certificate", host_probe.image_cert(FakeHost(), "/x", want)["why"])
+            self.assertIn("no recorded Secure Boot certificate", host_probe.signed_by(pe_image(self.ours), "/x", want)["why"])
         self.assertEqual(self.judge(None), {"value": False, "why": "the image %s is unreadable or absent" % IMAGE})
 
+    def on_esp(self, images, boot_next=None, order=("0001",), current="0001", inactive=()):
+        """A host whose ESP (a temporary directory: the vfat mount of the partition BootCurrent's entry is on, the one
+        systemd-stub names) holds `images` {entry: bytes} as \\EFI\\Linux\\image-<entry>.efi, and whose efibootmgr reports
+        them (efibootmgr 17's File() form, as tests/test_baremetal_bootnext.py prints it)."""
+        esp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, esp, True)
+        os.makedirs(os.path.join(esp, "EFI", "Linux"))
+        lines = ["BootCurrent: %s" % current] + (["BootNext: %s" % boot_next] if boot_next else []) + ["BootOrder: %s" % ",".join(order)]
+        for entry, data in sorted(images.items()):
+            with open(os.path.join(esp, "EFI", "Linux", "image-%s.efi" % entry), "wb") as f:
+                f.write(data)
+            lines.append("Boot%s%s regalia-kms\tHD(1,GPT,%s,0x800,0x100000)/File(\\EFI\\Linux\\image-%s.efi)" % (
+                entry, "" if entry in inactive else "*", ESP_GUID.upper(), entry))
+        h = FakeHost()
+        h.calls, h.report = [], "\n".join(lines) + "\n"
+        def efibootmgr(argv, **kw):
+            h.calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, h.report, "")
+        h.boot_run = efibootmgr
+        h.devices, h.stub = {esp: 0x0801}, ESP_GUID
+        h.boot_where = {"mount": lambda path: (h.devices.get(path, 0x0811), "vfat"),
+                        "partition_device": lambda g: {ESP_GUID: 0x0801}.get(g, 0x0899), "loader_partition": lambda: h.stub}
+        return h, esp
+
+    def next_image(self, h, esp, image=None, want=None):
+        verdict = host_probe.image_cert(h, esp, image, want or self.sha["ours"])
+        # the probe reads the boot entries and never writes one
+        self.assertTrue(h.calls == [] or set(map(tuple, h.calls)) == {("/usr/bin/efibootmgr", "-v")}, getattr(h, "calls", None))
+        return verdict
+
+    def test_the_image_judged_is_the_one_the_firmware_boots_next(self):
+        """regalia-t7g: BootNext's entry, else BootOrder's first; read from the ESP, by bootnext as a rollout reads it."""
+        ours, old = pe_image(self.ours), pe_image(self.old)
+        h, esp = self.on_esp({"0001": old, "0002": ours}, boot_next="0002", order=("0001", "0002"))
+        self.assertEqual(self.next_image(h, esp), {"value": True, "why": "the image %s/EFI/Linux/image-0002.efi (Boot0002, BootNext) "
+                                                   "is signed by the recorded Secure Boot certificate (%s)" % (esp, self.sha["ours"][:16])})
+        h, esp = self.on_esp({"0001": old, "0002": ours}, order=("0002", "0001"))
+        self.assertEqual(self.next_image(h, esp)["why"], "the image %s/EFI/Linux/image-0002.efi (Boot0002, first in BootOrder) is signed "
+                         "by the recorded Secure Boot certificate (%s)" % (esp, self.sha["ours"][:16]))
+        # the firmware's choice decides, not whichever image is signed by ours
+        for boot_next, order in (("0001", ("0002", "0001")), (None, ("0001", "0002"))):
+            with self.subTest(boot_next=boot_next, order=order):
+                h, esp = self.on_esp({"0001": old, "0002": ours}, boot_next=boot_next, order=order)
+                result = self.next_image(h, esp)
+                self.assertFalse(result["value"])
+                self.assertIn("image-0001.efi (Boot0001, %s) is signed by %s" % ("BootNext" if boot_next else "first in BootOrder",
+                                                                                 self.sha["old"][:16]), result["why"])
+
+    def test_an_inactive_entry_is_refused_not_walked_past(self):
+        """regalia-c6 on #647: the firmware skips an inactive entry; the probe names it rather than guess which one the
+        firmware boots instead (bootnext refuses to set BootNext to one, for the same reason)."""
+        ours, old = pe_image(self.ours), pe_image(self.old)
+        for name, boot_next, order, which in (("first in BootOrder", None, ("0001", "0002"), "first in BootOrder"),
+                                              ("BootNext", "0001", ("0002", "0001"), "BootNext")):
+            with self.subTest(name):
+                h, esp = self.on_esp({"0001": ours, "0002": old}, boot_next=boot_next, order=order, inactive=("0001",))
+                self.assertEqual(self.next_image(h, esp), {"value": False, "why": "the image the firmware boots next cannot be "
+                                 "read: Boot0001 (%s) is not active: the firmware would skip it" % which})
+        # the entry judged active is the one the firmware takes, not the one it booted (regalia-c6, active-checks-current)
+        h, esp = self.on_esp({"0001": ours, "0002": old}, boot_next="0001", order=("0002", "0001"), current="0002", inactive=("0001",))
+        self.assertEqual(self.next_image(h, esp), {"value": False, "why": "the image the firmware boots next cannot be "
+                         "read: Boot0001 (BootNext) is not active: the firmware would skip it"})
+        # an inactive entry the firmware does not take decides nothing, BootCurrent's included
+        for current, inactive in (("0001", ("0002",)), ("0002", ("0002",))):
+            with self.subTest(current=current, inactive=inactive):
+                h, esp = self.on_esp({"0001": ours, "0002": old}, order=("0001", "0002"), current=current, inactive=inactive)
+                self.assertTrue(self.next_image(h, esp)["value"])
+
+    def test_an_image_argument_must_be_the_firmwares(self):
+        ours = pe_image(self.ours)
+        h, esp = self.on_esp({"0001": ours})
+        h.bytes[IMAGE] = ours
+        self.assertTrue(self.next_image(h, esp, IMAGE)["value"])
+        for name, given in {"another image": pe_image(self.ours_carrying_old), "absent": None}.items():
+            with self.subTest(name):
+                h, esp = self.on_esp({"0001": ours})
+                if given is not None:
+                    h.bytes[IMAGE] = given
+                self.assertEqual(self.next_image(h, esp, IMAGE), {"value": False, "why": "--image %s is not the image the firmware "
+                                 "boots next, %s/EFI/Linux/image-0001.efi (Boot0001, first in BootOrder): the image judged is the "
+                                 "firmware's, and the two disagree" % (IMAGE, esp)})
+
+    def test_what_cannot_name_the_next_image_fails(self):
+        ours = pe_image(self.ours)
+        def failing(argv, **kw):
+            return subprocess.CompletedProcess(argv, 5, "", "EFI variables are not supported on this system.")
+        def edit(change):
+            h, esp = self.on_esp({"0001": ours, "0002": ours}, order=("0002", "0001"))
+            change(h, esp)
+            return h, esp
+        cases = {
+            "efibootmgr fails": (lambda h, esp: setattr(h, "boot_run", failing), "efibootmgr -v failed (exit 5)"),
+            "no BootNext and an empty BootOrder": (lambda h, esp: setattr(h, "report", h.report.replace("BootOrder: 0002,0001", "BootOrder: ")),
+                                                   "BootNext is unset and BootOrder is empty: the firmware names no image to boot"),
+            "BootOrder's first is no entry": (lambda h, esp: setattr(h, "report", h.report.replace("BootOrder: 0002,0001", "BootOrder: 0007")),
+                                              "there is no Boot0007"),
+            "the entry on another disk": (lambda h, esp: setattr(h, "report", h.report.replace(
+                "HD(1,GPT,%s,0x800,0x100000)/File(\\EFI\\Linux\\image-0002" % ESP_GUID.upper(),
+                "HD(1,GPT,%s,0x800,0x100000)/File(\\EFI\\Linux\\image-0002" % OTHER_GUID.upper())), "Boot0002 is on partition %s" % OTHER_GUID),
+            "another ESP mounted there": (lambda h, esp: h.devices.update({esp: 0x0812}), "is not the partition this host booted from"),
+            "not booted through systemd-stub": (lambda h, esp: setattr(h, "stub", None), "LoaderDevicePartUUID is not set"),
+            "the image missing": (lambda h, esp: os.remove(os.path.join(esp, "EFI", "Linux", "image-0002.efi")), "has no image-0002.efi"),
+            # every component opened without following a link: the OSError of O_NOFOLLOW is a refusal, not a crash
+            "the image a link": (lambda h, esp: (os.remove(os.path.join(esp, "EFI", "Linux", "image-0002.efi")),
+                                                 os.symlink("image-0001.efi", os.path.join(esp, "EFI", "Linux", "image-0002.efi"))),
+                                 "Errno"),
+        }
+        for name, (change, why) in cases.items():
+            with self.subTest(name):
+                result = self.next_image(*edit(change))
+                self.assertFalse(result["value"])
+                self.assertTrue(result["why"].startswith("the image the firmware boots next cannot be read: "), result["why"])
+                self.assertIn(why, result["why"])
+        import deploy.baremetal.bootnext
+        loaded = deploy.baremetal.bootnext                      # `from deploy.baremetal import bootnext` takes this first
+        with self.subTest("bootnext cannot be loaded"), mock.patch.dict(sys.modules, {"deploy.baremetal.bootnext": None}):
+            del deploy.baremetal.bootnext
+            try:
+                result = self.next_image(*edit(lambda h, esp: None))
+            finally:
+                deploy.baremetal.bootnext = loaded
+            self.assertFalse(result["value"])
+            self.assertIn("the image the firmware boots next cannot be read: deploy/baremetal/bootnext.py cannot be loaded (", result["why"])
+
     def test_main_reports_the_image_and_fails_the_run_on_it(self):
-        """--image reaches the report and the exit status; every other control is held passing, so the image alone decides."""
-        def run(image, want):
-            h = FakeHost()
+        """The firmware's next image reaches the report and the exit status; every other control is held passing, so the
+        image alone decides. Without evidence or --image (the bench) it is not judged."""
+        def run(image, want, extra=()):
+            h, esp = self.on_esp({"0001": image})
             h.bytes[IMAGE] = image
             with mock.patch.object(host_probe, "measure", return_value={}), redirect_stdout(io.StringIO()) as out:
-                rc = host_probe.main(["--image", IMAGE, "--secure-boot-cert-sha256", want], host=h)
+                rc = host_probe.main(["--image", IMAGE, "--esp", esp, "--secure-boot-cert-sha256", want, *extra], host=h)
             return rc, json.loads(out.getvalue()).get("image_signed_by_recorded_cert")
         rc, result = run(pe_image(self.ours), self.sha["ours"])
         self.assertEqual((rc, result["value"]), (0, True))
         rc, result = run(pe_image(self.ours), self.sha["old"])
         self.assertEqual((rc, result["value"]), (1, False))
-        # without evidence (the bench) --image is optional
         with mock.patch.object(host_probe, "measure", return_value={}), redirect_stdout(io.StringIO()) as out:
             self.assertEqual(host_probe.main(["--secure-boot-cert-sha256", self.sha["old"]], host=FakeHost()), 0)
         self.assertNotIn("image_signed_by_recorded_cert", json.loads(out.getvalue()))
-
-    def test_evidence_without_an_image_is_refused(self):
-        with redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as exit_:
-            host_probe.main(["--evidence", "e", "--signature", "s", "--evidence-key", "k", "--evidence-key-sha256", "0" * 64], host=FakeHost())
-        self.assertEqual(exit_.exception.code, 2)
-        self.assertIn("--evidence needs --image", err.getvalue())
 
     def test_a_malformed_image_is_refused_not_read_past(self):
         good = pe_image(self.ours)
@@ -1809,13 +1928,14 @@ class SignedEvidence(unittest.TestCase):
         subprocess.run(["openssl", "dgst", "-sha256", "-sign", self.key, "-out", path + ".sig", path], check=True)
         return path, path + ".sig"
 
-    def run_probe(self, path, sig, measured=None, key_sha=None, extra=()):
+    def run_probe(self, path, sig, measured=None, key_sha=None, extra=(), image=None):
         args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub,
-                "--evidence-key-sha256", key_sha or self.key_sha, "--image", IMAGE, *extra]
-        image = {"value": True, "why": "held passing here: ImageCarriesRecordedCert judges the image"}
+                "--evidence-key-sha256", key_sha or self.key_sha, *extra]
+        image = image or {"value": True, "why": "held passing here: ImageCarriesRecordedCert judges the image"}
         with mock.patch.object(host_probe, "measure", return_value=measured or self.everything) as measure, \
-                mock.patch.object(host_probe, "image_cert", return_value=image), redirect_stdout(io.StringIO()) as out:
+                mock.patch.object(host_probe, "image_cert", return_value=image) as image_cert, redirect_stdout(io.StringIO()) as out:
             rc = host_probe.main(args, host=FakeHost())
+        self.image_call = image_cert.call_args
         self.judged_against = measure.call_args.args[3]
         self.measured_with = (measure.call_args.args[1], measure.call_args.args[4])     # the import key, the db certificate
         return rc, json.loads(out.getvalue())
@@ -1866,6 +1986,17 @@ class SignedEvidence(unittest.TestCase):
     def test_complete_signed_agreeing_evidence_passes(self):
         rc, report = self.run_probe(*self.write(self.doc()))
         self.assertEqual(rc, 0, report.get("evidence_problems"))
+
+    def test_evidence_alone_judges_the_image_the_firmware_boots_next(self):
+        """regalia-t7g: no --image is needed; the ESP is /efi unless --esp says otherwise, against the record's certificate,
+        and the image's verdict decides the exit status."""
+        doc = self.write(self.doc())
+        rc, report = self.run_probe(*doc)
+        self.assertEqual(self.image_call.args[1:], ("/efi", None, SB_SHA))
+        self.run_probe(*doc, extra=("--esp", "/boot/efi", "--image", IMAGE))
+        self.assertEqual(self.image_call.args[1:], ("/boot/efi", IMAGE, SB_SHA))
+        rc, report = self.run_probe(*doc, image={"value": False, "why": "held failing"})
+        self.assertEqual((rc, report["image_signed_by_recorded_cert"]), (1, {"value": False, "why": "held failing"}))
 
     def test_no_evidence_can_be_signed_for_a_host_with_the_known_blocker(self):
         """Evidence records a commissioned host: every measured control true. A host enrolled with
@@ -1935,7 +2066,7 @@ class SignedEvidence(unittest.TestCase):
         and an argument cannot replace the signed record."""
         def run(doc, extra=()):
             path, sig = self.write(doc)
-            args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub, "--evidence-key-sha256", self.key_sha, "--image", IMAGE, *extra]
+            args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub, "--evidence-key-sha256", self.key_sha, *extra]
             with redirect_stdout(io.StringIO()) as out:
                 host_probe.main(args, host=FakeHost())
             return json.loads(out.getvalue())["measured"]["secure_boot_db_has_image_cert"]
@@ -1977,7 +2108,7 @@ class SignedEvidence(unittest.TestCase):
             path, sig = self.write(doc)
             host = FakeHost()
             host.files[PIN_FILE] = blob
-            args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub, "--evidence-key-sha256", self.key_sha, "--image", IMAGE]
+            args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub, "--evidence-key-sha256", self.key_sha]
             with redirect_stdout(io.StringIO()) as out:
                 host_probe.main(args, host=host)
             return json.loads(out.getvalue())["measured"]["pin_credentials_sealed_as_recorded"]
