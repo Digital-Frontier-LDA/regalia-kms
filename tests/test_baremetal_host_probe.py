@@ -1451,10 +1451,18 @@ class DerElement(unittest.TestCase):
         self.assertEqual(host_probe.der_element(b"\x04\x84\x00\x00\x00\x02ab", 0), (0x04, 6, 8))
         for name, der, end in (("an indefinite length, which would read as empty", b"\x30\x80\x00\x00", None),
                                ("a high tag number", b"\x1f\x00", None),
-                               ("an element past its parent, inside the blob", b"\x04\x02ab", 3)):
+                               ("an element past its parent, inside the blob", b"\x04\x02ab", 3),
+                               # regalia-c6 on #646: a header cut short is a ValueError, never an IndexError the probe
+                               # does not catch; a length in five octets is refused though its value is small and in bounds
+                               ("a header cut short", b"\x30", None),
+                               ("a length in five octets", bytes.fromhex("0485000000000100"), None)):
             with self.subTest(name):
                 with self.assertRaises(ValueError):
                     host_probe.der_element(der, 0, end)
+        # and der_children bounds each child by the parent it walks, not by the blob around it
+        self.assertEqual(host_probe.der_children(b"\x30\x02\x04\x00" + b"\x00" * 8, 2, 4), [(0x04, 2, 4, 4)])
+        with self.assertRaises(ValueError):
+            host_probe.der_children(b"\x30\x02\x04\x05" + b"\x00" * 8, 2, 4)
 
 
 IMAGE = "/boot/efi/EFI/Linux/regalia-kms.efi"
@@ -1472,6 +1480,50 @@ def pe_image(*signatures, magic=0x20b, rvas=16, kind=0x0002):
     start = table_at + rvas * 8
     dirs = b"".join(struct.pack("<II", start if i == 4 and body else 0, len(body) if i == 4 else 0) for i in range(rvas))
     return head + optional + dirs + body
+
+
+def der_split(b):
+    """(tag, content) of each DER element in b: the tests' own reader, so no fixture is built by the parser it tests."""
+    out, at = [], 0
+    while at < len(b):
+        tag, n, at = b[at], b[at + 1], at + 2
+        if n & 0x80:
+            n, at = int.from_bytes(b[at:at + (n & 0x7f)], "big"), at + (n & 0x7f)
+        out.append((tag, b[at:at + n]))
+        at += n
+    return out
+
+
+def der_join(parts):
+    out = b""
+    for tag, body in parts:
+        n = len(body)
+        size = n.to_bytes((n.bit_length() + 7) // 8, "big")
+        out += bytes([tag]) + (bytes([n]) if n < 0x80 else bytes([0x80 | len(size)]) + size) + body
+    return out
+
+
+def der_rewrite(b, path, edit):
+    """b with the children of the element at `path` (child indexes from the top) replaced by edit(children)."""
+    parts = der_split(b)
+    if not path:
+        return der_join(edit(parts))
+    tag, body = parts[path[0]]
+    parts[path[0]] = (tag, der_rewrite(body, path[1:], edit))
+    return der_join(parts)
+
+
+def der_at(b, path):
+    """The children of the element at `path`."""
+    parts = der_split(b)
+    for i in path:
+        parts = der_split(parts[i][1])
+    return parts
+
+
+# paths into an openssl CMS signature: ContentInfo > [0] > SignedData > its certificates / signerInfos
+SIGNED_DATA, CERTS, SIGNER = [0, 1, 0], [0, 1, 0, 3], [0, 1, 0, 4, 0]
+TBS = CERTS + [0, 0]
 
 
 @unittest.skipUnless(shutil.which("openssl"), "needs openssl")
@@ -1505,9 +1557,17 @@ class ImageCarriesRecordedCert(unittest.TestCase):
                             "-out", "%s/%s.pem" % (d, name)], check=True, capture_output=True)
         cls.twin1_carrying_twin2 = sign("twin1", "-certfile", d + "/twin2.pem")
         cls.twin1_carrying_clone = sign("twin1", "-certfile", d + "/clone.pem")
+        # a signer a CA issued (regalia-c6 on #646): its issuer is not its subject, and the CA's serial is not its own
+        key = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes"]
+        for args in (["req", "-x509", *key, "-subj", "/CN=ca", "-set_serial", "7", "-days", "1", "-keyout", d + "/ca.key", "-out", d + "/ca.pem"],
+                     ["req", "-new", *key, "-subj", "/CN=leaf", "-keyout", d + "/leaf.key", "-out", d + "/leaf.csr"],
+                     ["x509", "-req", "-in", d + "/leaf.csr", "-CA", d + "/ca.pem", "-CAkey", d + "/ca.key", "-set_serial", "9",
+                      "-days", "1", "-out", d + "/leaf.pem"]):
+            subprocess.run(["openssl", *args], check=True, capture_output=True)
+        cls.leaf_carrying_ca = sign("leaf", "-certfile", d + "/ca.pem")
         cls.sha = {n: hashlib.sha256(subprocess.run(["openssl", "x509", "-in", "%s/%s.pem" % (d, n), "-outform", "DER"],
                                                     check=True, capture_output=True).stdout).hexdigest()
-                   for n in ("ours", "old", "twin1", "twin2", "clone")}
+                   for n in ("ours", "old", "twin1", "twin2", "clone", "leaf", "ca")}
 
     @classmethod
     def tearDownClass(cls):
@@ -1566,6 +1626,46 @@ class ImageCarriesRecordedCert(unittest.TestCase):
         self.assertTrue(self.judge(pe_image(sig), self.sha["twin1"])["value"])
         self.assertFalse(self.judge(pe_image(sig), self.sha["twin2"])["value"])
 
+    def test_a_signer_a_ca_issued_is_named_by_its_issuer_not_its_subject(self):
+        sig = self.leaf_carrying_ca
+        self.assertEqual(host_probe.authenticode_signers(pe_image(sig)), self.signer_by_openssl(sig))
+        self.assertEqual(self.signer_by_openssl(sig), [self.sha["leaf"]])
+
+    def test_each_rule_of_the_signature_refuses_alone(self):
+        """One element of a real openssl signature edited per case, so that only the rule named refuses it."""
+        sig = self.ours
+        self.assertEqual(der_rewrite(sig, SIGNED_DATA, lambda p: p), sig)                   # the editor is exact
+        self.assertEqual(host_probe.signed_data_signers(sig), [self.sha["ours"]])
+        tbs = der_at(sig, TBS)
+        ext = next(i for i, (tag, _) in enumerate(tbs) if tag == 0xa3)
+        keyid_exts = der_at(self.by_keyid, TBS + [ext, 0])
+        ski = next(i for i, e in enumerate(keyid_exts) if der_split(e[1])[0] == (0x06, b"\x55\x1d\x0e"))
+        cases = {
+            "SignedData not under [0]": (sig, [0], lambda p: [p[0], (0xa2, p[1][1])]),
+            "SignedData's first three out of order": (sig, SIGNED_DATA, lambda p: [p[0], p[2], p[1]] + p[3:]),
+            "a SignedData element neither certificates nor crls": (sig, SIGNED_DATA, lambda p: p[:-1] + [(0x04, b"")] + p[-1:]),
+            "seven SignedData elements": (sig, SIGNED_DATA, lambda p: p[:-1] + [(0xa0, b""), (0xa1, b"")] + p[-1:]),
+            "a SignerInfo version not an INTEGER": (sig, SIGNER, lambda p: [(0x04, p[0][1])] + p[1:]),
+            "an issuerAndSerialNumber of three elements": (sig, SIGNER + [1], lambda p: p + [(0x05, b"")]),
+            "a tbsCertificate out of order": (sig, TBS, lambda p: p[:4] + [(0x31, p[4][1])] + p[5:]),
+            "a subject key identifier of two OCTET STRINGs": (self.by_keyid, TBS + [ext, 0, ski], lambda p: p[:-1] + [(0x04, p[-1][1] + b"\x04\x00")]),
+            "an empty subject key identifier": (self.by_keyid, TBS + [ext, 0, ski], lambda p: p[:-1] + [(0x04, b"")]),
+            # not blocking for regalia-c6, whose verdict was the same for another reason; each is refused by its own rule
+            "no SignerInfo": (sig, SIGNED_DATA, lambda p: p[:-1] + [(0x31, b"")]),
+            "a sid of a form this probe does not read": (sig, SIGNER, lambda p: [p[0], (0xa1, p[1][1])] + p[2:]),
+        }
+        for name, (base, path, edit) in cases.items():
+            with self.subTest(name):
+                with self.assertRaises(ValueError):
+                    host_probe.signed_data_signers(der_rewrite(base, path, edit))
+        # and what the rules let through still names the signer: a certificate with an issuer unique ID ([1]) before
+        # its extensions, and a CertificateChoice that is not a certificate ([1], skipped)
+        for name, edited in {"an issuer unique ID": der_rewrite(sig, TBS, lambda p: p[:ext] + [(0x81, b"\x00\x01")] + p[ext:]),
+                             "a CertificateChoice not a certificate": der_rewrite(sig, CERTS, lambda p: [(0xa1, b"")] + p)}.items():
+            with self.subTest(name):
+                cert = [c for c in der_at(edited, CERTS) if c[0] == 0x30]
+                self.assertEqual(host_probe.signed_data_signers(edited), [hashlib.sha256(der_join(cert)).hexdigest()])
+
     def test_a_sid_two_carried_certificates_answer_to_names_no_signer(self):
         """Two certificates with one issuer and serial: which one the firmware takes is not this probe's guess."""
         self.assertEqual(host_probe.authenticode_signers(pe_image(self.twin1_carrying_clone)), [None])
@@ -1585,7 +1685,7 @@ class ImageCarriesRecordedCert(unittest.TestCase):
     def test_without_a_recorded_digest_or_an_image_nothing_passes(self):
         for want in ("", "ab" * 16, "g" * 64):
             self.assertIn("no recorded Secure Boot certificate", host_probe.image_cert(FakeHost(), "/x", want)["why"])
-        self.assertIn("unreadable or absent", self.judge(None)["why"])
+        self.assertEqual(self.judge(None), {"value": False, "why": "the image %s is unreadable or absent" % IMAGE})
 
     def test_main_reports_the_image_and_fails_the_run_on_it(self):
         """--image reaches the report and the exit status; every other control is held passing, so the image alone decides."""
@@ -1594,7 +1694,7 @@ class ImageCarriesRecordedCert(unittest.TestCase):
             h.bytes[IMAGE] = image
             with mock.patch.object(host_probe, "measure", return_value={}), redirect_stdout(io.StringIO()) as out:
                 rc = host_probe.main(["--image", IMAGE, "--secure-boot-cert-sha256", want], host=h)
-            return rc, json.loads(out.getvalue()).get("image_carries_recorded_cert")
+            return rc, json.loads(out.getvalue()).get("image_signed_by_recorded_cert")
         rc, result = run(pe_image(self.ours), self.sha["ours"])
         self.assertEqual((rc, result["value"]), (0, True))
         rc, result = run(pe_image(self.ours), self.sha["old"])
@@ -1602,7 +1702,7 @@ class ImageCarriesRecordedCert(unittest.TestCase):
         # without evidence (the bench) --image is optional
         with mock.patch.object(host_probe, "measure", return_value={}), redirect_stdout(io.StringIO()) as out:
             self.assertEqual(host_probe.main(["--secure-boot-cert-sha256", self.sha["old"]], host=FakeHost()), 0)
-        self.assertNotIn("image_carries_recorded_cert", json.loads(out.getvalue()))
+        self.assertNotIn("image_signed_by_recorded_cert", json.loads(out.getvalue()))
 
     def test_evidence_without_an_image_is_refused(self):
         with redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as exit_:

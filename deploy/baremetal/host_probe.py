@@ -1467,7 +1467,7 @@ def main(argv=None, host=None, run=None):
     measured = measure(host, want, binding, unlock_record, sb_cert)
     report["measured"] = measured
     if args.image:
-        report["image_carries_recorded_cert"] = image_cert(host, args.image, sb_cert)
+        report["image_signed_by_recorded_cert"] = image_cert(host, args.image, sb_cert)
     if args.evidence:
         if ev_host is not None:
             problems += compare(measured, ev_host, hsm_ports(host))
@@ -1475,7 +1475,7 @@ def main(argv=None, host=None, run=None):
     print(json.dumps(report, indent=2))
     # Evidence never lowers the bar: every measured control must be true, AND, when given, the evidence
     # must be well-formed, signed by the recorded key, attest every firmware setting, and agree.
-    ok = all(v["value"] for v in measured.values()) and not problems and report.get("image_carries_recorded_cert", {"value": True})["value"]
+    ok = all(v["value"] for v in measured.values()) and not problems and report.get("image_signed_by_recorded_cert", {"value": True})["value"]
     return 0 if ok else 1
 
 
