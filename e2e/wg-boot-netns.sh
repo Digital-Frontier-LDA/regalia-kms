@@ -10,7 +10,7 @@
 #   alder    the node that boots: interface wg-boot with its WG-BOOT key, the initrd ruleset
 #             (bootnet.boot_ruleset), as its initrd would have them. No root filesystem is involved.
 #   birch     two running peers: interface wg-unlock with their WG-SERVICE keys (bootnet.peer_wg_conf),
-#   faro      the host firewall (firewall.py) with the boot-mesh rules, and unlock.py's serve() on the
+#   acacia      the host firewall (firewall.py) with the boot-mesh rules, and unlock.py's serve() on the
 #             unlock port with bootnet.caller_of. The peer is unlock.Peer with its two decisions
 #             replaced by fixed answers: what is under test is who gets an answer, not what it says.
 #   outsider  a host on the same network, in no list
@@ -49,9 +49,9 @@ for t in ip nft wg tc conntrack python3; do
 done
 
 T="$(mktemp -d)"; chmod 700 "$T"; SFX="wb$$"
-NS=(alder birch faro outsider away)
-declare -A IP=([alder]=192.0.2.10 [birch]=198.51.100.7 [faro]=198.51.100.9 [outsider]=203.0.113.66 [away]=203.0.113.77)
-declare -A TUN=([alder]=10.89.0.1 [birch]=10.89.0.2 [faro]=10.89.0.3)
+NS=(alder birch acacia outsider away)
+declare -A IP=([alder]=192.0.2.10 [birch]=198.51.100.7 [acacia]=198.51.100.9 [outsider]=203.0.113.66 [away]=203.0.113.77)
+declare -A TUN=([alder]=10.89.0.1 [birch]=10.89.0.2 [acacia]=10.89.0.3)
 WG=51820; UNLOCK=7443
 n(){ echo "$1-$SFX"; }
 x(){ local h="$1"; shift; ip netns exec "$(n "$h")" "$@"; }
@@ -78,7 +78,7 @@ x alder ip link set eth0 address "$ALDER_MAC"
 
 # Keys: a WG-BOOT and a WG-SERVICE pair per node, as the manifest lists them (hex), and one for the outsider.
 umask 077
-for h in alder birch faro; do for k in boot service; do wg genkey > "$T/$h.$k.key"; wg pubkey < "$T/$h.$k.key" > "$T/$h.$k.pub"; done; done
+for h in alder birch acacia; do for k in boot service; do wg genkey > "$T/$h.$k.key"; wg pubkey < "$T/$h.$k.key" > "$T/$h.$k.pub"; done; done
 wg genkey > "$T/outsider.key"; wg genkey > "$T/wrong.key"
 
 # The manifests (epoch 1: all ACTIVE; epoch 2: alder REVOKED_STOLEN), the three site configs, and
@@ -90,8 +90,8 @@ import base64, json, sys
 from deploy.baremetal import bootnet, firewall, sitecfg
 from deploy.baremetal import membership as m
 T = sys.argv[1]
-IP = {"alder": "192.0.2.10", "birch": "198.51.100.7", "faro": "198.51.100.9"}
-TUN = {"alder": "10.89.0.1", "birch": "10.89.0.2", "faro": "10.89.0.3"}
+IP = {"alder": "192.0.2.10", "birch": "198.51.100.7", "acacia": "198.51.100.9"}
+TUN = {"alder": "10.89.0.1", "birch": "10.89.0.2", "acacia": "10.89.0.3"}
 def pub(node, kind):
     return base64.b64decode(open("%s/%s.%s.pub" % (T, node, kind)).read().strip()).hex()
 def manifest(epoch, prev, **states):
@@ -117,7 +117,7 @@ def write(name, text):
 write("alder.boot.conf", bootnet.boot_wg_conf(site("alder"), m1))
 write("alder.boot.nft", bootnet.boot_ruleset(site("alder"), m1))
 write("alder.endpoints", json.dumps(bootnet.unlock_endpoints(site("alder"), m1), sort_keys=True))
-for peer in ("birch", "faro"):
+for peer in ("birch", "acacia"):
     write(peer + ".unlock.conf", bootnet.peer_wg_conf(site(peer), m1))
     write(peer + ".unlock.revoked.conf", bootnet.peer_wg_conf(site(peer), m2))
     write(peer + ".nft", firewall.render(site(peer)))
@@ -132,7 +132,7 @@ apply(){ python3 -IB -c 'import sys; sys.path.append(sys.argv.pop(1))
 import sys
 from deploy.baremetal import bootnet
 sys.stdout.write(bootnet.with_key(open(sys.argv[1]).read(), open(sys.argv[2]).read()))' "$HERE" "$3" "$4" | x "$1" wg syncconf "$2" /dev/stdin; }
-for h in birch faro; do
+for h in birch acacia; do
   x "$h" ip link add wg-unlock type wireguard || { echo "wg-boot-netns: this kernel has no WireGuard"; exit 2; }
   apply "$h" wg-unlock "$T/$h.unlock.conf" "$T/$h.service.key"
   x "$h" ip addr add "${TUN[$h]}/32" dev wg-unlock; x "$h" ip link set wg-unlock up; x "$h" ip route add 10.89.0.0/24 dev wg-unlock
@@ -172,7 +172,7 @@ for other in (8443, 22, 9999):
 cfg, manifest = json.load(open("%s/%s.site.json" % (T, name))), json.load(open(T + "/m1.json"))
 unlock.serve(StandIn(), socket.create_server(("0.0.0.0", port)), caller=bootnet.caller_of(cfg, manifest))
 PY
-for h in birch faro; do x "$h" env PYTHONPATH="$HERE" python3 -s "$T/serve.py" "$T" "$h" "$UNLOCK" & disown; done
+for h in birch acacia; do x "$h" env PYTHONPATH="$HERE" python3 -s "$T/serve.py" "$T" "$h" "$UNLOCK" & disown; done
 for h in outsider:443 alder:22; do
   x "${h%%:*}" python3 -I -c "
 import socket
@@ -232,7 +232,7 @@ shook(){ # shook <peer> <public key file>: the peer has completed a handshake wi
   x "$1" wg show wg-unlock latest-handshakes | awk -v k="$(cat "$2")" '$1 == k && $2 > 0 { found = 1 } END { exit !found }'; }
 
 hdr "0  controls, before any ruleset: everything a later check finds closed is open now"
-asked alder "${TUN[birch]}" && asked alder "${TUN[faro]}" && P "control: alder reaches both peers' unlock port through the tunnel" || F "control: the tunnel does not work at all"
+asked alder "${TUN[birch]}" && asked alder "${TUN[acacia]}" && P "control: alder reaches both peers' unlock port through the tunnel" || F "control: the tunnel does not work at all"
 tcpok alder "${TUN[birch]}" 22 && tcpok alder "${TUN[birch]}" 8443 && tcpok alder "${TUN[birch]}" 9999 \
   && P "control: inside the tunnel, SSH, the KMS port and port 9999 of a peer answer" || F "control: the listeners inside the tunnel do not answer"
 stray alder "${TUN[birch]}" "$UNLOCK" && P "control: a lone ACK to the unlock port, inside the tunnel, reaches the peer's TCP and is answered with a reset" \
@@ -246,7 +246,7 @@ asked away "${TUN[birch]}" && shook birch "$T/alder.boot.pub" \
   && P "control: WireGuard alone lets alder's key in from an address nobody declared" || F "control: the undeclared address does not work even without a firewall"
 
 hdr "1  the rendered rulesets: nft -c, then loaded inside their namespaces only"
-for h in birch faro; do
+for h in birch acacia; do
   x "$h" nft -c -f "$T/$h.nft" && x "$h" nft -f "$T/$h.nft" && P "$h: the host firewall with the boot mesh loads" || F "$h: the host firewall does not load"
 done
 x alder nft -c -f "$T/alder.boot.nft" && x alder nft -f "$T/alder.boot.nft" && P "alder: the initrd ruleset loads" || F "alder: the initrd ruleset does not load"
@@ -257,7 +257,7 @@ print(" ".join(sorted("%s=%s" % (c["chain"]["name"], c["chain"].get("policy")) f
 [ "$pol" = "forward=drop input=drop output=drop" ] && P "alder: every chain defaults to drop" || F "alder: policies: $pol"
 # A ruleset does not cut a flow that was already established: the controls above left some. A host
 # loads its ruleset at boot, before any flow; here the connection tracking table is emptied instead.
-for h in alder birch faro; do x "$h" conntrack -F >/dev/null 2>&1; done
+for h in alder birch acacia; do x "$h" conntrack -F >/dev/null 2>&1; done
 
 hdr "2  the stolen server away from its datacenter: alder's key, a live session, an undeclared address"
 # The control a moment ago left birch holding a live session with `away` (the last to shake hands with
@@ -266,11 +266,11 @@ hdr "2  the stolen server away from its datacenter: alder's key, a live session,
 # handshake seen by a peer below can only be the copy's.
 x alder ip link del wg-boot
 shaken(){ x "$1" wg show wg-unlock latest-handshakes | awk -v k="$(cat "$T/alder.boot.pub")" '$1 == k { print $2 }'; }
-before="$(shaken birch)"; before_faro="$(shaken faro)"
+before="$(shaken birch)"; before_acacia="$(shaken acacia)"
 asked away "${TUN[birch]}" 4 && F "alder's key was answered from an undeclared address" || P "alder's key, with a live session, gets no answer from an undeclared address"
-asked away "${TUN[faro]}" 4 && F "alder's key was answered by the other peer from an undeclared address" || P "nor a first handshake with the other peer"
-[ "$(shaken birch)" = "$before" ] && [ "$(shaken faro)" = "$before_faro" ] && P "neither peer shook hands with it" \
-  || F "a peer shook hands with the undeclared address (birch: $before -> $(shaken birch), faro: $before_faro -> $(shaken faro))"
+asked away "${TUN[acacia]}" 4 && F "alder's key was answered by the other peer from an undeclared address" || P "nor a first handshake with the other peer"
+[ "$(shaken birch)" = "$before" ] && [ "$(shaken acacia)" = "$before_acacia" ] && P "neither peer shook hands with it" \
+  || F "a peer shook hands with the undeclared address (birch: $before -> $(shaken birch), acacia: $before_acacia -> $(shaken acacia))"
 
 hdr "3  PoC 6.1: the node boots and reaches both peers' unlock port through the tunnel"
 # The boot is made by the script the initrd runs (deploy/baremetal/initrd/wg-boot, as
@@ -326,15 +326,15 @@ x alder ip link show wg-boot >/dev/null 2>&1 || x alder nft list table inet rega
   && F "the failed start left the interface, the ruleset or the address behind" || P "leaves no interface, no ruleset and no address behind"
 sed -i "s|^BOOT_TUNNEL=.*|BOOT_TUNNEL=${TUN[alder]}|" "$C/regalia.boot-env"
 initrd up && P "and the next start succeeds" || F "the start after a failed one does not succeed"
-for h in birch faro; do
+for h in birch acacia; do
   asked alder "${TUN[$h]}" && P "alder is answered by $h on the unlock port, inside the tunnel" || F "alder is not answered by $h"
 done
 endpoint="$(x birch wg show wg-unlock endpoints | awk -v k="$(cat "$T/alder.boot.pub")" '$1 == k { print $2 }')"
 [ "$endpoint" = "${IP[alder]}:$(x alder wg show wg-boot listen-port)" ] && P "the peer now knows that key at its declared address ($endpoint)" || F "the peer's endpoint for alder's key is $endpoint"
-[ "$(cat "$T/alder.endpoints")" = "{\"faro\": \"${TUN[faro]}:$UNLOCK\", \"birch\": \"${TUN[birch]}:$UNLOCK\"}" ] \
+[ "$(cat "$T/alder.endpoints")" = "{\"acacia\": \"${TUN[acacia]}:$UNLOCK\", \"birch\": \"${TUN[birch]}:$UNLOCK\"}" ] \
   && P "the endpoints for the client's boot configuration are those two" || F "endpoints: $(cat "$T/alder.endpoints")"
-asked alder "${TUN[birch]}" 3 faro; rc=$?
-[ "$rc" = 3 ] && grep -q '"unlock-caller"' "$T/birch.audit" && P "a request in faro's name from alder's tunnel address is refused by the peer, and audited" \
+asked alder "${TUN[birch]}" 3 acacia; rc=$?
+[ "$rc" = 3 ] && grep -q '"unlock-caller"' "$T/birch.audit" && P "a request in acacia's name from alder's tunnel address is refused by the peer, and audited" \
   || F "a request in another node's name: rc=$rc (3 is a refusal)"
 
 hdr "4  the booting node's own ruleset: nothing but WireGuard to the peers and the unlock port"
@@ -375,10 +375,10 @@ hdr "7  revocation: the peer that took the manifest drops the key; the peer that
 apply birch wg-unlock "$T/birch.unlock.revoked.conf" "$T/birch.service.key"
 x birch wg show wg-unlock peers | grep -qx "$(cat "$T/alder.boot.pub")" && F "birch still lists the revoked node's key" || P "birch no longer lists the revoked node's key"
 # so that the refusal below is the list's doing: birch still has its own key and still lists the other node
-[ "$(x birch wg show wg-unlock private-key)" = "$(cat "$T/birch.service.key")" ] && x birch wg show wg-unlock peers | grep -qx "$(cat "$T/faro.boot.pub")" \
+[ "$(x birch wg show wg-unlock private-key)" = "$(cat "$T/birch.service.key")" ] && x birch wg show wg-unlock peers | grep -qx "$(cat "$T/acacia.boot.pub")" \
   && P "birch keeps its own key and the other node's" || F "applying the manifest took birch's key or the other node's away"
 asked alder "${TUN[birch]}" 4 && F "the revoked node was answered by the peer that took the manifest" || P "the revoked node gets no answer from birch"
-asked alder "${TUN[faro]}" && P "faro, which has not taken the manifest, still answers: the window that the heartbeat bounds (#69)" || F "faro stopped answering without the manifest"
+asked alder "${TUN[acacia]}" && P "acacia, which has not taken the manifest, still answers: the window that the heartbeat bounds (#69)" || F "acacia stopped answering without the manifest"
 apply birch wg-unlock "$T/birch.unlock.conf" "$T/birch.service.key"
 boot_up alder "$T/alder.boot.key"          # the next boot: birch dropped the old session with the key
 asked alder "${TUN[birch]}" && P "(the manifest put back for the checks below: at its next boot alder is answered by birch again)" || F "birch does not answer after the peer list was restored"
@@ -399,24 +399,24 @@ qd="$(x alder tc qdisc show dev eth0)"
 grep -q "netem" <<< "$qd" && grep -qw "delay 100ms" <<< "$qd" && grep -qw "loss 20%" <<< "$qd" && P "netem applies exactly what the case is sized on: $qd" || F "netem is not loss 20% delay 100ms: $qd"
 ok=0; bad=0; worst=0; seen=""
 while [ "$ok" -lt 27 ] && [ "$bad" -le 8 ]; do
-  if timed asked alder "${TUN[faro]}" 10; then ok=$((ok+1)); seen="${seen}o"; else bad=$((bad+1)); seen="${seen}x"; fi
+  if timed asked alder "${TUN[acacia]}" 10; then ok=$((ok+1)); seen="${seen}o"; else bad=$((bad+1)); seen="${seen}x"; fi
   [ "$took" -gt "$worst" ] && worst=$took
 done
 echo "  (loss and delay: attempts $seen)"
 [ "$ok" -ge 27 ] && [ "$worst" -le 12 ] && P "with 20% loss and 100 ms delay: 27 requests answered, $bad not, each ending within ${worst}s" \
   || F "with loss and delay: $ok answered and $bad not (fails at 9), the slowest ending in ${worst}s"
 x alder tc qdisc del dev eth0 root
-x faro ip link set eth0 down
-timed asked alder "${TUN[faro]}" 3; rc=$?
+x acacia ip link set eth0 down
+timed asked alder "${TUN[acacia]}" 3; rc=$?
 [ "$rc" != 0 ] && [ "$took" -le 10 ] && P "an unreachable peer: refused after ${took}s, and the other peer is asked" || F "an unreachable peer: rc=$rc after ${took}s"
 asked alder "${TUN[birch]}" && P "the other peer still answers" || F "the other peer does not answer"
-x faro ip link set eth0 up; x faro ip route add default dev eth0 2>/dev/null
+x acacia ip link set eth0 up; x acacia ip route add default dev eth0 2>/dev/null
 # what bootnet.py warns of, shown: a configuration applied without its key leaves the interface with none
 # Piped from this root shell: ubuntu-26.04's AppArmor profile for wg reads no file in $T, and a refused read
 # left the key in place, which this check took for wg's behaviour (regalia-kms#550). So the apply must succeed.
-if ! x faro wg syncconf wg-unlock /dev/stdin < <(cat "$T/faro.unlock.conf"); then
+if ! x acacia wg syncconf wg-unlock /dev/stdin < <(cat "$T/acacia.unlock.conf"); then
   F "wg syncconf of the keyless configuration failed: nothing was measured"
-elif [ "$(x faro wg show wg-unlock private-key)" = "(none)" ]; then
+elif [ "$(x acacia wg show wg-unlock private-key)" = "(none)" ]; then
   P "measured: wg syncconf with a file that has no PrivateKey unsets the interface's key"
 else
   F "wg syncconf without a key did not unset it: bootnet.py's warning is out of date"

@@ -16,7 +16,7 @@ import subprocess
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WORDS = [codecs.decode(w, "rot13") for w in ("yvfoba", "cbegb", "pbvzoen")]
+WORDS = [codecs.decode(w, "rot13") for w in ("yvfoba", "yvfobn", "cbegb", "pbvzoen")]
 _ANY = "|".join(WORDS)
 _CAPS = "|".join([w.capitalize() for w in WORDS] + [w.upper() for w in WORDS])
 PATTERN = re.compile(r"(?<![a-zA-Z])(?i:%s)|(?<=[a-z])(?:%s)" % (_ANY, _CAPS))
@@ -29,7 +29,7 @@ def hits(text):
 class SiteNamesNeverAppear(unittest.TestCase):
 
     def test_the_scan_catches_every_shape_and_spares_english(self):
-        a, b, c = WORDS
+        a, _, b, c = WORDS
         for planted in (a, a.upper(), a.capitalize(), b + "2", b + ".boot.key", "%s_MAC" % c.upper(),
                         "from" + b.capitalize(), "x-%s-y" % c, '"node_id": "%s"' % a):
             with self.subTest(planted=planted):

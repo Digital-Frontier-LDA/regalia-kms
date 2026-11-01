@@ -39,7 +39,7 @@ network_probe.py checks the result from each zone, so the two can never describe
                                                      #   cannot show: network_probe.py checks reachability
       "peers": [                                     # the other nodes: where each is, outside and inside the tunnel
         {"node_id": "birch", "underlay": "198.51.100.7", "address": "10.89.0.2"},
-        {"node_id": "faro", "underlay": "198.51.100.9", "address": "10.89.0.3"}
+        {"node_id": "acacia", "underlay": "198.51.100.9", "address": "10.89.0.3"}
       ]
     }
 

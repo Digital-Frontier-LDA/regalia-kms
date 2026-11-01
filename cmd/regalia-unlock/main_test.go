@@ -286,7 +286,7 @@ func TestAPeerGivesItsContributionAndTheFirstValidResponseSpendsTheSession(t *te
 	if peer.requests[1]["path_epoch"] != float64(3) || len(peer.requests[1]) != 6 {
 		t.Fatalf("the unlock request is not as specified: %v", peer.requests[1])
 	}
-	other := newFakePeer(t, "faro")
+	other := newFakePeer(t, "acacia")
 	_, err = boot.ask(other.pin(), 3, other.send, noQuote)
 	wantError(t, err, "this boot session has already accepted a response")
 	if len(other.requests) != 0 {
@@ -325,14 +325,14 @@ func TestAnInvalidResponseIsRefusedAndSpendsNothing(t *testing.T) {
 		reason string
 		change func(*fakePeer)
 	}{
-		{"hello: the peer that answered is not birch", func(p *fakePeer) { p.hello = func(h *helloReply) { h.PeerID = "faro" } }},
+		{"hello: the peer that answered is not birch", func(p *fakePeer) { p.hello = func(h *helloReply) { h.PeerID = "acacia" } }},
 		{"hello: the peer's epoch or nonce is malformed", func(p *fakePeer) { p.hello = func(h *helloReply) { h.Nonce = "zz" } }},
 		{"hello: the peer's epoch or nonce is malformed", func(p *fakePeer) { p.hello = func(h *helloReply) { h.Epoch = 0 } }},
 		{"hello: the peer refused (DENIED)", func(p *fakePeer) { p.deny = "DENIED" }},
 		{"hello: the peer refused (?)", func(p *fakePeer) { p.deny = "the reason, which a peer never sends" }},
-		{"the response is not from birch", func(p *fakePeer) { p.edit = func(r *response) { r.PeerID = "faro" } }},
+		{"the response is not from birch", func(p *fakePeer) { p.edit = func(r *response) { r.PeerID = "acacia" } }},
 		{"the peer answered for path epoch 2, not 3", func(p *fakePeer) { p.edit = func(r *response) { r.PathEpoch = 2 } }},
-		{"the response is for another node or another boot session", func(p *fakePeer) { p.edit = func(r *response) { r.NodeID = "faro" } }},
+		{"the response is for another node or another boot session", func(p *fakePeer) { p.edit = func(r *response) { r.NodeID = "acacia" } }},
 		{"the response is for another node or another boot session", func(p *fakePeer) { p.edit = func(r *response) { r.SessionID = strings.Repeat("00", 32) } }},
 		{"the response does not answer the request this boot session sent", func(p *fakePeer) { p.edit = func(r *response) { r.TranscriptSHA256 = strings.Repeat("ab", 32) } }},
 		{"the response was decided under epoch 8, not the epoch 7", func(p *fakePeer) { p.edit = func(r *response) { r.Epoch = 8 } }},

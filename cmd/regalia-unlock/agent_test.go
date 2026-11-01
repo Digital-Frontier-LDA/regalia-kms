@@ -240,28 +240,28 @@ func TestARefusedKeyIsNotOfferedForEver(t *testing.T) {
 // holding two paths during a rotation is still asked once: the peers' hello limit is sized for that).
 // Unusable tokens are reported, by number only.
 func TestEachPeerIsAskedOncePerAttemptByOnePath(t *testing.T) {
-	birch, faro := newFakePeer(t, "birch"), newFakePeer(t, "faro")
-	faro.contribution = bytes.Repeat([]byte{0x43}, 32)
-	tokens := tokensFor(birch, faro)
+	birch, acacia := newFakePeer(t, "birch"), newFakePeer(t, "acacia")
+	acacia.contribution = bytes.Repeat([]byte{0x43}, 32)
+	tokens := tokensFor(birch, acacia)
 	tokens["5"] = token("birch", "5", 9) // a rotation: the new keyslot beside the old
 	tokens["6"] = token("birch", "6", 4)
-	tokens["6"].(map[string]any)["target"] = "faro"
+	tokens["6"].(map[string]any)["target"] = "acacia"
 	tokens["7"] = token("birch", "7", 4)
 	tokens["7"].(map[string]any)["local"] = base64.StdEncoding.EncodeToString(make([]byte, 40)) // not sealed to the TPM alone
-	tokens["11\x1b[2J\nregalia-unlock: all is well"] = token("faro", "3", 4)                    // an ID that is not a number is never printed
+	tokens["11\x1b[2J\nregalia-unlock: all is well"] = token("acacia", "3", 4)                  // an ID that is not a number is never printed
 	paths, skipped := pathsOf(t, tokens)
 	local := bytes.Repeat([]byte{0x11}, 32)
-	birch.deny, faro.deny = "DENIED", "DENIED"
+	birch.deny, acacia.deny = "DENIED", "DENIED"
 	boot := testSession(t)
-	key, _, _, reasons, err := attempt(configFor(birch, faro), 0, paths, local, boot, dialer(birch, faro), noQuote)
-	if err != nil || key != nil || len(reasons) != 2 || len(birch.requests) != 1 || len(faro.requests) != 1 {
-		t.Fatalf("attempt 1: %v %v; birch %d, faro %d requests", reasons, err, len(birch.requests), len(faro.requests))
+	key, _, _, reasons, err := attempt(configFor(birch, acacia), 0, paths, local, boot, dialer(birch, acacia), noQuote)
+	if err != nil || key != nil || len(reasons) != 2 || len(birch.requests) != 1 || len(acacia.requests) != 1 {
+		t.Fatalf("attempt 1: %v %v; birch %d, acacia %d requests", reasons, err, len(birch.requests), len(acacia.requests))
 	}
 	if birch.requests[0]["op"] != "hello" || !strings.Contains(reasons[0], "birch (path epoch 9)") || boot.consumed {
 		t.Fatalf("attempt 1 did not ask birch's newest path once: %v", reasons)
 	}
 	birch.deny = ""
-	key, peer, slot, _, err := attempt(configFor(birch, faro), 1, paths, local, boot, dialer(birch, faro), noQuote)
+	key, peer, slot, _, err := attempt(configFor(birch, acacia), 1, paths, local, boot, dialer(birch, acacia), noQuote)
 	want, _ := credential(local, birch.contribution, "alder", "birch", 3)
 	if err != nil || peer != "birch" || slot != "1" || !bytes.Equal(key, want) {
 		t.Fatalf("attempt 2 (the next path, epoch 3): %s %s %v", peer, slot, err)
@@ -271,7 +271,7 @@ func TestEachPeerIsAskedOncePerAttemptByOnePath(t *testing.T) {
 	}
 	reported := strings.Join(skipped, "\n")
 	if strings.Contains(reported, "all is well") || strings.ContainsAny(reported, "\x1b") ||
-		!strings.Contains(reported, "token 6: it is for node faro") || !strings.Contains(reported, "token 7: its local contribution is not a systemd credential sealed to the TPM alone") {
+		!strings.Contains(reported, "token 6: it is for node acacia") || !strings.Contains(reported, "token 7: its local contribution is not a systemd credential sealed to the TPM alone") {
 		t.Fatalf("the unusable tokens:\n%q", reported)
 	}
 	// a disk with no path from any configured peer: nothing to ask, said, and the console is the way
