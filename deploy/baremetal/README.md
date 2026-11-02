@@ -1,8 +1,8 @@
 # Bare-metal KMS host commissioning (HPE ProLiant DL360 Gen9)
 
 ADR-0002 D21: the KMS runs on **dedicated bare metal with a discrete TPM 2.0**, not as a Proxmox
-guest. Three DL360 Gen9 with the HPE TPM 2.0 module, one per site, all three active (D32): Lisbon, Porto and
-Coimbra (regalia#46).
+guest. Three DL360 Gen9 with the HPE TPM 2.0 module, one per site, all three active (D32), at three
+sites (regalia#46).
 
 Commissioning has two halves:
 - **Firmware and hardware** (below): BIOS/RBSU and iLO settings the operating system cannot read.
@@ -1153,7 +1153,7 @@ unit runs it before each start); `regalia-audit-ship conformance` checks a candi
   chain (`trails.py verify <trail>`), and a writer killed at any step of a rotation leaves it so. The
   shipper streams them in order, line by line, so a trail of any size ships after an outage.
 - **Pruning only on the collector's signed word.** The collector, started with `-receipt-key` (Ed25519,
-  root 0600, on its host; THREE-SITE-SECRETS), signs receipts. A receipt says "this collector holds, in
+  root 0600, on its host; the operators' private secrets inventory), signs receipts. A receipt says "this collector holds, in
   this client's stream, at this position, this event and this line". It checks every trail event's
   content against the line hash it names (`regalia.trail/v2` carries the exact line), so a receipt is
   for the line itself. After each pass the shipper fetches a receipt for each archive the collector

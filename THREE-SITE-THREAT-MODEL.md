@@ -6,7 +6,7 @@ until a phase's evidence and a recorded decision exist, [PIN-CUSTODY.md](PIN-CUS
 TPM-sealed user PINs, no runtime PKA), [FENCING.md](FENCING.md) (one independent activation
 signer) and `deploy/baremetal/` (single-site commissioning, TPM-only disk unlock as the interim
 baseline) remain authoritative. The secrets and their lifecycles are in
-[THREE-SITE-SECRETS.md](THREE-SITE-SECRETS.md).
+the operators' secrets inventory, kept in their private repository.
 
 ## The goal, stated as invariants
 
@@ -141,15 +141,15 @@ assumed.
 
 | Item | State |
 |---|---|
-| Nitrokey HSM 2 DENK0404144 (staging) | attached; firmware 4.1, hardware 24.13; PKCS#11 contract 14/0 (#62) |
-| Nitrokey HSM 2 DENK0404380, DENK0404547 (staging) | on the bench, not attached |
-| PicoHSM staging units (ESP2202E14A, ESP41D722E2) | not attached; firmware under disclosure GHSA-wq3w-g2fj-q2jq |
-| YubiKeys 36345471, 36344616, 35718625 (staging) | not attached |
+| One Nitrokey HSM 2 (staging) | attached; firmware 4.1, hardware 24.13; PKCS#11 contract 14/0 (#62) |
+| Two more Nitrokey HSM 2 (staging) | on the bench, not attached |
+| Two PicoHSM staging units | not attached; firmware under disclosure GHSA-wq3w-g2fj-q2jq |
+| Three YubiKeys (staging) | not attached |
 | ACS ACR40U (SLE-4442) | attached; validated (regalia#43) |
 | HPE DL360 Gen9 ×3 with TPM 2.0 | **not delivered** (expected mid-October): every TPM, PCR, initramfs and LUKS phase on real hardware waits for them |
 | Software | Debian 13, OpenSC 0.26.1, pcscd 2.3.3, libccid 1.6.2, OpenSSL 3.5.1, cryptsetup 2.7.5, nftables 1.1.3, swtpm (kernel vTPM via tpm_vtpm_proxy for harness work) |
 
-Invariants under test are A1–A4 and S1–S6 above. Evidence format: each phase records device serials,
+Invariants under test are A1–A4 and S1–S6 above. Evidence format: each phase records device serials (in the operators' private records),
 firmware and software versions, the exact commands, positive and negative outcomes, sanitized logs
 and stated limits on its issue; harness evidence (swtpm, SoftHSM, network namespaces) is labelled as
 such.

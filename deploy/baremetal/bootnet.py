@@ -6,7 +6,7 @@ The unlock exchange (unlock.py) needs no secrecy from its transport. What the ne
 REACH a peer's unlock port at all: only a node whose WireGuard key the peer's current manifest lists, and
 only from an address the site declared.
 
-TWO SIDES, TWO KEYS (THREE-SITE-SECRETS.md):
+TWO SIDES, TWO KEYS (the operators' private secrets inventory):
 
   the booting node   in its initrd, interface wg-boot, with its WG-BOOT private key (sealed to its TPM).
                      Its WireGuard peers are the nodes that may AUTHORIZE, by their wg_service_pub, each

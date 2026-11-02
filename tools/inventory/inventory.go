@@ -145,7 +145,7 @@ var (
 	// checks is how the copies in this file would have started drifting on day one. The length
 	// bound the registry folds into its pattern is carried here by maxFieldBytes.
 	identifierPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-	// ownerPattern accepts a handle or a team path: @jobordu, @df/security.
+	// ownerPattern accepts a handle or a team path: @owner, @df/security.
 	//
 	// AN OWNER IS A HANDLE, NOT A NAME, because the verifier's job is to make an unowned secret
 	// refusable and a person's name is not addressable. "Security team" cannot be paged.
