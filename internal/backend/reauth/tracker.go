@@ -83,10 +83,11 @@ func (tracker *Tracker) Gone(deviceID string) {
 	}
 }
 
-// Serves reports whether a token that has just answered, and has proved to be the right one, may
-// serve. The first time it is seen back, that moment is recorded; it serves once the node holds a
-// lease asked for after it.
-func (tracker *Tracker) Serves(ctx context.Context, deviceID string) bool {
+// Serves reports whether a token that has just answered, and has proved to be the right one (its
+// serial is `serial`), may serve. The first time it is seen back, that moment is recorded; it serves
+// once the node holds a lease asked for after it, and while the manifest lists the serial as one of
+// the node's tokens (G1: asked on every operation, so a token de-listed stops at once).
+func (tracker *Tracker) Serves(ctx context.Context, deviceID, serial string) bool {
 	tracker.mu.Lock()
 	gate := tracker.gate
 	if gate == nil {
@@ -111,7 +112,7 @@ func (tracker *Tracker) Serves(ctx context.Context, deviceID string) bool {
 	}
 	tracker.absences[deviceID] = current
 	tracker.mu.Unlock()
-	if !gate.RequestedAfter(ctx, current.returnedAtMs) {
+	if !gate.Admits(ctx, serial, current.returnedAtMs) {
 		return false
 	}
 	tracker.mu.Lock()

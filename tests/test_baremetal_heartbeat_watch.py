@@ -125,7 +125,7 @@ class Watching(hbt.Case):
             text = f.read()
         self.assertIn("# TYPE regalia_heartbeat_seconds_left gauge\nregalia_heartbeat_seconds_left 82800\n", text)
         self.assertEqual(text.count("# HELP "), 5)
-        self.assertEqual(stat.S_IMODE(os.stat(self.prom).st_mode), 0o644)       # node_exporter is not root
+        self.assertEqual(stat.S_IMODE(os.stat(self.prom).st_mode), 0o640)       # node_exporter reads it through its directory's group (#305)
         self.assertEqual(stat.S_IMODE(os.stat(self.wstate).st_mode), 0o600)
         self.assertEqual(sorted(os.listdir(self.d)), sorted(set(os.listdir(self.d)) - {n for n in os.listdir(self.d) if n.startswith(".heartbeat-watch-")}))
         self.assertEqual(self.kinds(), [])
@@ -211,7 +211,7 @@ class Watching(hbt.Case):
             self.w.step()
         self.assertEqual(self.kinds(), [])
 
-    def test_an_authority_that_renews_at_one_third_used_never_warns(self):
+    def test_signers_that_renew_at_one_third_used_never_warn(self):
         """The condition the thresholds assume: a renewal before half of a heartbeat is used. Across restarts
         of the watcher too."""
         for sequence in range(2, 12):
@@ -221,7 +221,7 @@ class Watching(hbt.Case):
             self.f.accept(beat(self.man, sequence, issued=self.now, lifetime=DAY), self.man)
             self.watch().step()
         self.assertEqual(self.kinds(), [])
-        # and one that renews only after half is used warns in every cycle: the setting to change is the authority's
+        # and one that renews only after half is used warns in every cycle: the setting to change is node.json's beat_interval_s
         self.later(12 * HOUR)
         self.w.step()
         self.assertEqual(self.kinds(), [("WARN", "RUNNING_OUT", 50)])
@@ -457,11 +457,16 @@ class Watching(hbt.Case):
             with self.subTest(repeat=bad):
                 self.refused("at least 60 seconds", lambda: self.watch(repeat=bad))
 
-    def test_a_failed_write_leaves_no_temporary_file(self):
+    def test_a_failed_metrics_write_leaves_no_temporary_file_and_never_stops_the_warnings(self):
+        """#305: the metrics file is best effort (a missing or full metrics directory never silences a warning, and
+        RegaliaNodeMetricsStale sees the file stop moving); the watch's own state is still written."""
         os.mkdir(self.prom)                                                      # the metrics path cannot be replaced
-        with self.assertRaises(OSError):
-            self.w.step()
+        self.w.step()                                                            # no exception
         self.assertEqual([n for n in os.listdir(self.d) if n.startswith(".heartbeat-watch-")], [])
+        self.assertTrue(os.path.exists(self.wstate))
+        self.left(DAY // 4 - 1)                                                  # a warning due: still delivered
+        self.w.step()
+        self.assertTrue(self.kinds())
 
 
 if __name__ == "__main__":

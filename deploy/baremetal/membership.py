@@ -7,12 +7,13 @@ node claims (THREE-SITE-THREAT-MODEL.md S2, ADR-0002 D23).
 
     envelope = {"manifest": {...}, "signature": {"signer": "root" | "revocation", "key": "<hex Ed25519 public key>",
                                                  "sig": "<hex Ed25519 signature>"}}
+             | {"manifest": {...}, "signatures": [{"party": "<node_id>" | "owner", "key": "<hex>", "sig": "<hex>"}, ...]}  (v4)
 
-    manifest = {"schema": "regalia.membership/v1" | "regalia.membership/v2", "epoch": <int >= 1>,
+    manifest = {"schema": "regalia.membership/v1" | ... | "regalia.membership/v4", "epoch": <int >= 1>,
                 "prev_digest": "<64 hex, or "" at epoch 1>",
                 "policy_version": "<text>", "issued_at": "YYYY-MM-DDTHH:MM:SSZ",
                 "heartbeat_max_lifetime_s": <int> (v2 only),
-                "revocation_keys": ["<hex Ed25519 public key>", ...],
+                "revocation_keys": ["<hex Ed25519 public key>" | {"alg": "ecdsa-p256", "key": "<hex>"}, ...],
                 "nodes": [{"node_id": ..., "state": ..., "ek_name": ..., "ak_name": ..., "wg_boot_pub": ...,
                            "wg_service_pub": ..., "hsm_serials": [...],
                            "ssh_host_pub": ... (v2; absent from a node retired before it had one)}]}
@@ -34,6 +35,36 @@ Schemas (#143). v2 is v1 plus two required fields.
     manifest can exceed). It is the window in which a partitioned peer still helps a node revoked
     elsewhere, so it is the root's to set, like the policy version: a revocation key cannot change it.
     There is no default: it is in the signed manifest, or the manifest is invalid.
+v3 is v2 with typed keys (below).
+
+Schema v4 (#199: the three nodes and the owner sign; there is no authority host and no revocation key).
+v3's fields without `revocation_keys`, and:
+  * a node field, `signing_key`: {"alg": "ecdsa-p256", "key": <130 hex>}, a key in the node's own TPM that
+    signs only in an approved image's booted phase (PolicyAuthorize of the system-phase PCR key, #242). An
+    identity like ssh_host_pub: unique across every node, every role and the owner's keys, set only by the
+    root, kept by a tombstone. Every node that is not RETIRED or REVOKED_STOLEN has one; a node retired
+    before v4 keeps the fields it had;
+  * `owner_keys`: one to eight typed keys, {"alg": "ed25519", "key": <64 hex>} (the approval YubiKeys'
+    OpenPGP applet, #126) or ecdsa-p256, together ONE party named "owner". The key's touch policy is
+    "fixed" (D26, rc#111: always required, and unchangeable without deleting the key), so an owner
+    signature comes from a present human, never a daemon: a setting of the token, which no signature
+    shows, and which the ceremony enforces. No owner key (nor any signing_key) may be a pinned root key
+    (accept() refuses it): one device is never both the payload root and a quorum party;
+  * `owner_heartbeat_lifetime_s`: the longest life of a heartbeat whose counting signatures include the
+    owner's (an emergency credential), from 300 s to heartbeat_max_lifetime_s. Such a heartbeat is always
+    the owner AND at least one node: the heartbeat threshold is at least 2 and the owner is one party
+    however many of its keys sign, so no rule admits the owner alone;
+  * `heartbeat_signers`: {"threshold", "parties"}, the parties node IDs or "owner";
+  * `activation_signers`: the same form, for activation leases (#199: a node quorum, signed by the nodes
+    once the lease side lands; in the format now so that it needs no further schema);
+  * `revocation_signers`: one to four such rules, any one of which signs a restrictive change.
+  THE FLOORS ARE THE FORMAT'S: the heartbeat and activation thresholds are at least 2, a revocation rule that names a node
+  needs at least 2, and only a rule naming the owner alone may be 1; no threshold exceeds its parties.
+  A quorum-signed envelope is {"manifest", "signatures": [{"party", "key", "sig"}, ...]}: every signature
+  over the same DOMAIN + canonical(manifest), by the key the CURRENT manifest gives that party and verified
+  the way that key's entry says (P-256 low-S for a node, Ed25519 for the owner), all verifying, no party twice. A RETIRED, REVOKED_STOLEN or QUARANTINED node does not count. A quorum
+  may make only the changes a revocation key could (restrictive), and changes none of the signer fields.
+  The move to v4 is one root-signed step, after every verifier has learnt it; revocation_keys end there.
 Each manifest is
 validated under the schema it names, so a chain that starts at v1 and moves to v2 verifies from epoch 1.
 The schema only moves forward, and only in a ROOT-signed manifest: v1 may be followed by v1 or v2, v2
@@ -73,18 +104,48 @@ import datetime
 import fcntl
 import hashlib
 import json
+import os
 import re
 import subprocess
+import tempfile
 
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 SCHEMA = "regalia.membership/v1"
 SCHEMA_V2 = "regalia.membership/v2"
-SCHEMAS = (SCHEMA, SCHEMA_V2)          # in order: a chain never goes back
+# v3 is v2 with TYPED keys allowed (an {"alg": ...} entry, ECDSA P-256 for keys held on a Nitrokey, whose
+# PKCS#11 has no EdDSA). Gated behind its own version so that a verifier that knows only Ed25519 (the
+# initrd's Go accept() until it is ported) refuses the whole manifest rather than misreading a key: the
+# switch is one root-signed step, after every verifier that will see it has learnt v3.
+SCHEMA_V3 = "regalia.membership/v3"
+# v4 (#199: no authority host) drops the revocation keys. Heartbeats and restrictive changes are signed by a
+# QUORUM of parties the manifest names: each node by a key in its own TPM (signing_key), and the owner by any
+# one of the approval keys (owner_keys). See "Schema v4" in the docstring.
+SCHEMA_V4 = "regalia.membership/v4"
+SCHEMAS = (SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4)          # in order: a chain never goes back
 HEARTBEAT_MIN_S, HEARTBEAT_HARD_MAX_S = 3600, 7 * 24 * 3600      # what a v2 manifest may set as heartbeat_max_lifetime_s
+OWNER_HEARTBEAT_MIN_S = 300                                      # the least a v4 manifest may set as owner_heartbeat_lifetime_s
+OWNER = "owner"                                                  # the owner's party name in a v4 signer rule (never a node_id)
+HEARTBEAT_FLOOR = NODE_RULE_FLOOR = 2                            # no single party keeps a cluster alive or revokes alone,
+                                                                 # except the owner's own revocation rule (1 of owner)
+MAX_OWNER_KEYS, MAX_RULES, MAX_SIGNATURES = 8, 4, 16
+# the bench's tokens, never a production node's token nor a ceremony card (ADR-0002 D28.5, D30): the Nitrokeys of regalia's
+# tools/hsm-staging-registry.json and DENK0400664 (dead), the staging Pico HSMs, and the staging YubiKeys
+# (regalia-ceremony's BENCH_YUBIKEYS). One list for every reader here; a YubiKey in each form a node's hsm_serials pins
+# it (decimal, OpenPGP 0006%08d). The destructive drills' STAGING_SERIALS default (e2e/pkcs11-*.sh) is the live part of
+# it, the Nitrokeys but the dead one and the Picos: a test holds the two equal.
+BENCH_NITROKEYS = ("DENK0404144", "DENK0404380", "DENK0404547", "DENK0400664")
+BENCH_NITROKEYS_DEAD = ("DENK0400664",)
+BENCH_PICOS = ("ESP2202E14A", "ESP41D722E2")
+BENCH_YUBIKEYS = ("36345471", "36344616", "35718625")
+BENCH_TOKENS = frozenset(BENCH_NITROKEYS + BENCH_PICOS + BENCH_YUBIKEYS + tuple("0006%08d" % int(s) for s in BENCH_YUBIKEYS))
 DOMAIN = b"regalia-membership/v1\0"
 MAX_BYTES = 256 * 1024
+MAX_DEPTH = 64            # arrays and objects in one another; the deepest document here is 10 (tests/vectors/opstate-v1.json)
 MAX_CHAIN_BYTES = 64 * 1024 * 1024
 CAPABILITIES = {
     "ACTIVE": frozenset({"serve", "request", "authorize"}),
@@ -92,25 +153,140 @@ CAPABILITIES = {
     "DRAINING": frozenset({"serve"}),
     "QUARANTINED": frozenset(), "RETIRED": frozenset(), "REVOKED_STOLEN": frozenset(),
 }
+UTC_TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")   # [0-9], never \d: ASCII only
 MANIFEST_KEYS = ("schema", "epoch", "prev_digest", "policy_version", "issued_at", "revocation_keys", "nodes")
 NODE_KEYS = ("node_id", "state", "ek_name", "ak_name", "wg_boot_pub", "wg_service_pub", "hsm_serials")
 IDENTITY_KEYS = ("ek_name", "ak_name", "wg_boot_pub", "wg_service_pub")
 V2_MANIFEST_KEYS = MANIFEST_KEYS + ("heartbeat_max_lifetime_s",)
 V2_NODE_KEYS = NODE_KEYS + ("ssh_host_pub",)
 V2_IDENTITY_KEYS = IDENTITY_KEYS + ("ssh_host_pub",)
+SIGNER_FIELDS = ("owner_heartbeat_lifetime_s", "owner_keys", "heartbeat_signers", "activation_signers", "revocation_signers")
+SINGLE_RULES = ("heartbeat_signers", "activation_signers")       # one rule each; revocation_signers is a list of them
+V4_MANIFEST_KEYS = tuple(k for k in V2_MANIFEST_KEYS if k != "revocation_keys") + SIGNER_FIELDS
+V4_NODE_KEYS = V2_NODE_KEYS + ("signing_key",)
+# What only the root may change: a quorum (or a v1-v3 revocation key) leaves every one as it was.
+ROOT_FIELDS = ("policy_version", "revocation_keys", "heartbeat_max_lifetime_s") + SIGNER_FIELDS
+# A node that is retired, revoked or quarantined is named in a signer rule but does not count.
+NOT_COUNTING = ("RETIRED", "REVOKED_STOLEN", "QUARANTINED")
 
 
 class Refused(Exception):
     pass
 
 
+class Unusable(Refused):
+    """The TPM answered, and what it holds cannot serve as this node's anchor: an index that is not
+    defined or is not of the right kind, no valid record, a counter and a record that are out of step.
+    Distinct from a TPM that did not answer (a plain Refused): only this is what re-anchoring repairs."""
+
+
+# a test-only switch (b9 on #596, regalia-afi): node.validate accepts a simulator TCTI (a SOCKET, which no unit's
+# DevicePolicy constrains: a software TPM with no hardware root) only under it. Only the e2e fixtures and the tests set
+# it; nothing shipped may (tests/test_baremetal_node.py holds that this is the one file under deploy/ that names it).
+# TODO(regalia-afi step 2): once the three-node fixture reaches its TPMs through the kernel (swtpm --vtpm-proxy, so
+# device:/dev/tpmrmN), refuse swtpm:/mssim: unconditionally and delete this switch and handover_env's carrying of it
+# (and of the session-bus address it carries for the tpm2-abrmd route).
+SIMULATOR_SWITCH = "REGALIA_TCTI_ALLOW_SIMULATOR"
+
+
+def handover_env():
+    """The whole environment of a step handed to regalia-sync (`runuser … env -i …`): PATH and the C locale, nothing of
+    root's, except, only under the test-only SIMULATOR_SWITCH when the caller has it: the switch, so a fixture's step
+    reloads its own node.json, and the caller's session-bus address when it is a unix socket path, so a fixture node's
+    `tabrmd:…,bus_type=session` tcti reaches that node's tpm2-abrmd from the step too (regalia-afi: its TCTI names no
+    address, and without one every TPM call of a handed-over step failed closed, #605's run 40456967936). On a host
+    nothing sets the switch, and the step's TPM is /dev/tpmrm0, which needs no environment."""
+    env = ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"]
+    if os.environ.get(SIMULATOR_SWITCH) != "1":
+        return env
+    env.append("%s=1" % SIMULATOR_SWITCH)
+    bus = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
+    if re.fullmatch(r"unix:path=/[^,;=\s]+", bus):
+        env.append("DBUS_SESSION_BUS_ADDRESS=" + bus)
+    return env
+
+
+def session_bus_hint(tcti):
+    """What to add to a TPM call's failure when its tcti is a tabrmd one on the SESSION bus (the e2e fixture's,
+    regalia-afi) and this process has no DBUS_SESSION_BUS_ADDRESS: that this is why. handover_env carries only a
+    unix:path= address, under the simulator switch; any other was dropped, and run 40456967936 chased a bare "the TPM
+    does not answer" (TEAMLEAD-grafana on #605). Empty otherwise, so every other refusal stays the one the Go reader
+    gives too (tests/vectors/highwater-v1.json holds both to it): that reader never takes a tabrmd tcti."""
+    if (tcti or "").startswith("tabrmd:") and "bus_type=session" in tcti and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        return (" | this process has no DBUS_SESSION_BUS_ADDRESS, which its tcti %s needs: a step handed to regalia-sync "
+                "carries one only under %s and only as unix:path=/… (handover_env), any other is dropped" % (tcti, SIMULATOR_SWITCH))
+    return ""
+
+
+# What a TPM tool's text may not carry into a refusal or the journal, each mapped to a space: every C0 control, DEL and
+# C1 control (an ESC, a "\r"), and the format characters that reorder or hide text on an operator's terminal
+# (zero-width and LRM/RLM, the bidi embeddings and overrides, U+202E among them, the isolates, the BOM) and the
+# Unicode line and paragraph separators. A fixed list, not a Unicode category, so it is the same in the Go reader
+# (highwater.go, unprintable) whatever Unicode version either was built with.
+_UNPRINTABLE = re.compile("[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]")
+
+
+def _lines(text):
+    """`text` (bytes or str) as the lines _why and _said print: each run of bytes that are not UTF-8 one U+FFFD, split
+    on "\\n" only, every _UNPRINTABLE character a space, spaces trimmed, empty lines dropped."""
+    text = text if isinstance(text, str) else text.decode("utf-8", "replace")
+    text = re.sub("\ufffd+", "\ufffd", text)
+    return [line for line in (_UNPRINTABLE.sub(" ", raw).strip(" ") for raw in text.split("\n")) if line]
+
+
+def _why(done, size):
+    """The TPM's reason for a read of `size` bytes that `done` did not give, as a refusal's suffix: " (TPM: <the last line
+    tpm2_nvread wrote on stderr>)", or the byte count when it wrote nothing (#450). The line is made safe to print and
+    the same in both readers whatever the input (_lines), and the last 200 characters of the last line are kept. A tool
+    that failed with no text at all is named by its exit status when the bytes did come back, else by the count. The
+    Go reader (highwater.go, tpmReason) does exactly this to its own TPM error; tests/vectors/tpm-reason-v1.json holds
+    both to it (Go has no exit status: an error with no text and the bytes back is a read that did not fail). The two never see the same text in production (this reads the
+    tool's stderr, Go its library's error), so the vector is what makes "the same rule" checkable."""
+    lines = _lines(done.stderr or b"")
+    if lines:
+        return " (TPM: %s)" % lines[-1][-200:]
+    got = len(done.stdout or b"")
+    if got == size:
+        return " (TPM: exit %s, no output)" % done.returncode
+    return " (TPM: %d bytes, not %d)" % (got, size)
+
+
+def _said(tool, index, done):
+    """What tpm2_<tool> said when it failed on `index`, on this process's stderr (the unit's journal): every line, made
+    safe to print as _why's are (_lines) and joined by " | ", of which the last 400 characters are kept. The refusal
+    carries only the last line (_why, #450); this keeps the lines before it for whoever reads the journal (an
+    intermittent refusal in CI, #448). Never raises."""
+    try:
+        import sys
+        text = " | ".join(_lines(done.stderr or b""))
+        print("regalia: tpm2_%s %s failed (exit %s, %d bytes out): %s" % (tool, index, done.returncode, len(done.stdout or b""), text[-400:] or "no output"),
+              file=sys.stderr)
+    except Exception:                                   # noqa: BLE001 - a diagnostic never changes the outcome
+        pass
+
+
 @contextlib.contextmanager
 def _exclusive(lock_path):
     """An exclusive flock held for the block: every read-modify-write of the anchor or the stored
-    chain is serialized across processes on the host."""
+    chain is serialized across processes on the host.
+
+    NEVER THROUGH A LINK (#388, regalia-kms-1e): the locks live in regalia-sync's state directory, and root opens them
+    there too (reanchor). A link planted in place of a lock would have root open, or create, any file read-write; so
+    the last component is never followed (O_NOFOLLOW: a symbolic link is refused, and nothing is created through it)
+    and what was opened must be a regular file with one name (a hard link to another file is refused)."""
+    import errno
     import os
-    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    import stat
     try:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as failure:
+        if failure.errno == errno.ELOOP:
+            raise Refused("the lock %s is a symbolic link: it is not taken through one" % lock_path) from None
+        raise
+    try:
+        held = os.fstat(fd)
+        if not stat.S_ISREG(held.st_mode) or held.st_nlink != 1:
+            raise Refused("the lock %s is not a regular file with one name: it is not taken" % lock_path)
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:
@@ -120,6 +296,11 @@ def _exclusive(lock_path):
 def require(cond, message):
     if not cond:
         raise Refused(message)
+
+
+def require_anchor(cond, message):
+    if not cond:
+        raise Unusable(message)
 
 
 def _pairs(pairs):
@@ -134,12 +315,31 @@ def _no_float(text):
     raise Refused("floats are not allowed (%s)" % text)
 
 
+_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+_NOT_A_BRACKET = re.compile(r"[^\[\]{}]")
+
+
+def _depth(text):
+    """How deeply arrays and objects nest in `text`, brackets inside strings not counted."""
+    depth = deepest = 0
+    for c in _NOT_A_BRACKET.sub("", _STRING.sub("", text)):
+        depth += 1 if c in "[{" else -1
+        deepest = max(deepest, depth)
+    return deepest
+
+
 def load(raw, limit=MAX_BYTES):
     require(isinstance(raw, (bytes, str)) and len(raw) <= limit, "a document is at most %d bytes here" % limit)
+    # Refused before parsing, on every Python: 3.12 json.loads raised RecursionError on 30000 levels,
+    # 3.14 parses 100000, and the depth would then reach code that walks the document.
+    text = raw.decode(json.detect_encoding(raw), "replace") if isinstance(raw, bytes) else raw     # as json.loads decodes it
+    require(_depth(text) <= MAX_DEPTH, "not valid JSON: nested too deeply (more than %d levels)" % MAX_DEPTH)
     try:
         return json.loads(raw, object_pairs_hook=_pairs, parse_float=_no_float, parse_constant=_no_float)
     except ValueError as error:
         raise Refused("not valid JSON: %s" % error)
+    except RecursionError:
+        raise Refused("not valid JSON: nested too deeply")
 
 
 NAME_LIMIT = 240          # a name in an audit event or a message: a node ID, a host, a source
@@ -171,18 +371,199 @@ def hex_field(value, n, label):
     require(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{%d}" % n, value) is not None, "%s must be %d lowercase hex" % (label, n))
 
 
+# ---- revocation keys: Ed25519, or ECDSA P-256 (the HSM's: its PKCS#11 has no EdDSA) ----
+#
+# A manifest's revocation_keys entry is either a bare 64-hex string, an Ed25519 key for ever, or
+# {"alg": "ecdsa-p256", "key": "<130 hex: 04 || X || Y>"}. THE ALGORITHM COMES FROM THE ENTRY ONLY, never from
+# a signature or the message: a signature names its key by that key's hex, and is verified the way the
+# manifest's entry for that hex says. A malformed entry (an unknown alg, a point not on the curve, the
+# wrong length) makes the manifest invalid when it is validated, not when something is verified with it.
+# ECDSA signs SHA-256 over the same domain-separated bytes as Ed25519; the signature is r || s, 64 bytes,
+# and only the low-S form is accepted (the signer normalises). Introducing a P-256 key is a root-signed
+# change, like any change to revocation_keys. A node whose code predates this refuses a manifest with a
+# typed entry (fail closed): every node is upgraded before the root introduces one.
+# Two entries are distinct by their key hex: a P-256 point and a bare 64-hex string equal to its X
+# coordinate are two keys in two algorithms, each verified its own way, and neither stands in for the other.
+REVOCATION_ALGS = ("ed25519", "ecdsa-p256")
+P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+
+
+def revocation_entry(entry, label="a revocation key"):
+    """(alg, key hex) of one revocation_keys entry, or Refused."""
+    if isinstance(entry, str):
+        hex_field(entry, 64, label)
+        return "ed25519", entry
+    exact(entry, ("alg", "key"), label)
+    require(entry["alg"] in REVOCATION_ALGS[1:], "%s: alg must be one of %s" % (label, ", ".join(REVOCATION_ALGS[1:])))
+    hex_field(entry["key"], 130, "%s: an ecdsa-p256 key (04 || X || Y)" % label)
+    require(entry["key"].startswith("04"), "%s: an ecdsa-p256 key must be an uncompressed point" % label)
+    try:
+        ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), bytes.fromhex(entry["key"]))
+    except ValueError:
+        raise Refused("%s: not a point on P-256" % label) from None
+    return entry["alg"], entry["key"]
+
+
+def root_entries(root, label="the root key"):
+    """The pinned root: one entry or a non-empty list of them, each a bare 64-hex Ed25519 key or a typed
+    {"alg", "key"} entry (#156: the root on an offline Nitrokey). Returns [(alg, key hex), ...]."""
+    entries = root if isinstance(root, list) else [root]
+    require(entries and len(entries) <= 8, "the root is one key or a list of one to eight")
+    out = [revocation_entry(entry, label) for entry in entries]
+    require(len({k for _, k in out}) == len(out), "the root keys must be distinct")
+    return out
+
+
+SIGNING_KEY_ALGS, OWNER_KEY_ALGS = ("ecdsa-p256",), ("ed25519", "ecdsa-p256")
+
+
+def typed_key(entry, label, algs):
+    """(alg, key hex) of a TYPED entry ({"alg", "key"}) whose alg is one of `algs`. A v4 node's signing_key
+    is ecdsa-p256 (a TPM has no Ed25519); an owner key is ed25519 (the approval YubiKeys' OpenPGP applet,
+    #126) or ecdsa-p256. Never a bare string: the algorithm is always written beside the key."""
+    require(isinstance(entry, dict), "%s must be a typed key {\"alg\", \"key\"}" % label)
+    exact(entry, ("alg", "key"), label)
+    require(entry["alg"] in algs, "%s: alg must be one of %s" % (label, ", ".join(algs)))
+    if entry["alg"] != "ed25519":
+        return revocation_entry(entry, label)
+    hex_field(entry["key"], 64, "%s: an ed25519 key" % label)
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(entry["key"]))
+    except ValueError:
+        raise Refused("%s: not an Ed25519 public key" % label) from None
+    return "ed25519", entry["key"]
+
+
+def revocation_alg(manifest, key):
+    """The algorithm the manifest's revocation_keys give for `key` (its hex), or None if it names none. A v4
+    manifest has no revocation keys: nothing is signed by one under it."""
+    for entry in manifest.get("revocation_keys", ()):
+        alg, hexkey = revocation_entry(entry)
+        if hexkey == key:
+            return alg
+    return None
+
+
+def verify_revocation(alg, key, message, sig, what):
+    """A revocation key's signature over `message`, the way its manifest entry's `alg` says."""
+    hex_field(sig, 128, "%s signature" % what)
+    raw = bytes.fromhex(sig)
+    try:
+        if alg == "ed25519":
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(key)).verify(raw, message)
+            return
+        require(alg == "ecdsa-p256", "unknown revocation key algorithm %r" % (alg,))
+        r, s = int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big")
+        require(0 < r < P256_ORDER and 0 < s <= P256_ORDER // 2, "the %s signature is not a low-S P-256 signature" % what)
+        public = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), bytes.fromhex(key))
+        public.verify(encode_dss_signature(r, s), message, ec.ECDSA(hashes.SHA256()))
+    except (InvalidSignature, ValueError):
+        raise Refused("the %s signature does not verify" % what) from None
+
+
 def identity_keys(node):
-    """The identity fields a validated node entry carries: v1's four, and ssh_host_pub in a v2 manifest."""
-    return V2_IDENTITY_KEYS if "ssh_host_pub" in node else IDENTITY_KEYS
+    """The identity fields a validated node entry carries: v1's four, ssh_host_pub from v2, and signing_key
+    from v4."""
+    return (V2_IDENTITY_KEYS if "ssh_host_pub" in node else IDENTITY_KEYS) + (("signing_key",) if "signing_key" in node else ())
+
+
+def identity_value(node, k):
+    """An identity as one comparable value: the field itself, or a typed key's hex (signing_key)."""
+    return node[k]["key"] if k == "signing_key" else node[k]
+
+
+def rename_party(rules, old_id, new_id):
+    """A v4 signer rule (or list of rules) with `old_id` named `new_id` instead: what a replacement may do to
+    them, and nothing else (replacement.py)."""
+    if rules is None:
+        return None
+    swap = lambda rule: dict(rule, parties=[new_id if p == old_id else p for p in rule["parties"]])
+    return [swap(r) for r in rules] if isinstance(rules, list) else swap(rules)
+
+
+def _signer_rules(manifest, by_id, seen):
+    """A v4 manifest's signer fields: the owner's keys, the owner's heartbeat bound, and the rules. The
+    floors are the format's, so no root-signed manifest can lower a threshold into danger."""
+    owners = manifest["owner_keys"]
+    require(isinstance(owners, list) and 1 <= len(owners) <= MAX_OWNER_KEYS, "owner_keys must be a list of one to %d keys" % MAX_OWNER_KEYS)
+    for i, entry in enumerate(owners):
+        key = typed_key(entry, "owner_keys[%d]" % i, OWNER_KEY_ALGS)[1]
+        require(key not in seen, "owner_keys[%d] is already used (%s)" % (i, seen.get(key)))
+        seen[key] = "owner_keys[%d]" % i
+    owner_life = manifest["owner_heartbeat_lifetime_s"]
+    require(isinstance(owner_life, int) and not isinstance(owner_life, bool)
+            and OWNER_HEARTBEAT_MIN_S <= owner_life <= manifest["heartbeat_max_lifetime_s"],
+            "owner_heartbeat_lifetime_s must be an integer from %d to heartbeat_max_lifetime_s" % OWNER_HEARTBEAT_MIN_S)
+
+    def rule(value, label, owner_alone):
+        exact(value, ("threshold", "parties"), label)
+        parties = value["parties"]
+        require(isinstance(parties, list) and parties and all(isinstance(p, str) for p in parties), "%s.parties must be a non-empty list of names" % label)
+        require(len(set(parties)) == len(parties), "%s.parties must be distinct" % label)
+        for p in parties:
+            require(p == OWNER or p in by_id, "%s names %r, which is neither a node of this manifest nor %s" % (label, p, OWNER))
+        t = value["threshold"]
+        require(isinstance(t, int) and not isinstance(t, bool), "%s.threshold must be an integer" % label)
+        least = 1 if owner_alone and parties == [OWNER] else (NODE_RULE_FLOOR if owner_alone else HEARTBEAT_FLOOR)
+        require(least <= t <= len(parties), "%s.threshold must be from %d to the number of its parties (%d)" % (label, least, len(parties)))
+
+    for name in SINGLE_RULES:
+        rule(manifest[name], name, owner_alone=False)
+    rules = manifest["revocation_signers"]
+    require(isinstance(rules, list) and 1 <= len(rules) <= MAX_RULES, "revocation_signers must be a list of one to %d rules" % MAX_RULES)
+    for i, r in enumerate(rules):
+        rule(r, "revocation_signers[%d]" % i, owner_alone=True)
+
+
+def counting_parties(current, message, signatures, what):
+    """The parties whose signatures over `message` count under the CURRENT v4 manifest. Every signature must
+    name a party of that manifest with the key it gives that party (a node's signing_key, or one of
+    owner_keys), and must verify the way that key's entry says (a quorum may mix algorithms: P-256 nodes,
+    an Ed25519 owner). A party named twice is refused, never counted once. A node that is
+    RETIRED, REVOKED_STOLEN or QUARANTINED does not count, though its signature must still verify.
+    The same rule for manifests (here) and heartbeats (heartbeat.py)."""
+    require(current is not None and current["schema"] == SCHEMA_V4,
+            "a %s signed by a quorum needs a current %s manifest naming its signers" % (what, SCHEMA_V4))
+    require(isinstance(signatures, list) and 1 <= len(signatures) <= MAX_SIGNATURES,
+            "signatures must be a list of one to %d signatures" % MAX_SIGNATURES)
+    nodes, owners = validate(current), {key: alg for alg, key in (typed_key(e, "owner_keys", OWNER_KEY_ALGS) for e in current["owner_keys"])}
+    named, counting = set(), set()
+    for i, sig in enumerate(signatures):
+        exact(sig, ("party", "key", "sig"), "signatures[%d]" % i)
+        party = sig["party"]
+        require(isinstance(party, str) and party not in named, "signatures[%d]: party %r is named twice or is not a name" % (i, party))
+        named.add(party)
+        require(isinstance(sig["key"], str) and re.fullmatch(r"[0-9a-f]{64}|[0-9a-f]{130}", sig["key"]) is not None,
+                "signatures[%d].key must be 64 or 130 lowercase hex" % i)
+        if party == OWNER:
+            require(sig["key"] in owners, "signatures[%d]: the key is not one of the current manifest's owner_keys" % i)
+            alg = owners[sig["key"]]                         # from the manifest's entry, never from the signature
+        else:
+            require(party in nodes and "signing_key" in nodes[party], "signatures[%d]: %r is not a node of the current manifest with a signing_key" % (i, party))
+            require(sig["key"] == nodes[party]["signing_key"]["key"], "signatures[%d]: the key is not %s's signing_key" % (i, party))
+            alg = nodes[party]["signing_key"]["alg"]
+        verify_revocation(alg, sig["key"], message, sig["sig"], "%s (signatures[%d], %s)" % (what, i, party))
+        if party == OWNER or nodes[party]["state"] not in NOT_COUNTING:
+            counting.add(party)
+    return counting
+
+
+def meets(rule, parties):
+    """Whether the counting `parties` meet one signer rule ({"threshold", "parties"})."""
+    return len(parties & set(rule["parties"])) >= rule["threshold"]
 
 
 def validate(manifest):
     """Schema and uniqueness. Returns the manifest's nodes by ID."""
     require(isinstance(manifest, dict), "manifest must be an object")
     require(manifest.get("schema") in SCHEMAS, "schema must be %s" % " or ".join(SCHEMAS))
-    second = manifest["schema"] == SCHEMA_V2
-    exact(manifest, V2_MANIFEST_KEYS if second else MANIFEST_KEYS, "manifest")
-    node_keys = V2_NODE_KEYS if second else NODE_KEYS
+    fourth = manifest["schema"] == SCHEMA_V4
+    second = manifest["schema"] in (SCHEMA_V2, SCHEMA_V3, SCHEMA_V4)        # v3 and v4 have v2's fields
+    exact(manifest, V4_MANIFEST_KEYS if fourth else V2_MANIFEST_KEYS if second else MANIFEST_KEYS, "manifest")
+    node_keys = V4_NODE_KEYS if fourth else V2_NODE_KEYS if second else NODE_KEYS
+    # A tombstone keeps exactly the fields it had: one retired under an earlier schema may lack what later
+    # schemas added (ssh_host_pub from v2, signing_key from v4), and nothing is invented for it.
+    tombstone_shapes = (V4_NODE_KEYS, V2_NODE_KEYS, NODE_KEYS)[(V4_NODE_KEYS, V2_NODE_KEYS, NODE_KEYS).index(node_keys):]
     if second:
         life = manifest["heartbeat_max_lifetime_s"]
         require(isinstance(life, int) and HEARTBEAT_MIN_S <= life <= HEARTBEAT_HARD_MAX_S,
@@ -196,81 +577,124 @@ def validate(manifest):
     require(isinstance(manifest["policy_version"], str) and re.fullmatch(r"[A-Za-z0-9._-]{1,32}", manifest["policy_version"]),
             "policy_version must be a short name")
     try:
+        # the form first, in ASCII digits at full width: strptime alone takes "2026-1-3T1:2:3Z" and a year in
+        # any script's digits, which the pre-root Go reader refuses (#66)
+        if not (isinstance(manifest["issued_at"], str) and UTC_TIME.fullmatch(manifest["issued_at"])):
+            raise ValueError
         datetime.datetime.strptime(manifest["issued_at"], "%Y-%m-%dT%H:%M:%SZ")
     except (TypeError, ValueError):
         raise Refused("issued_at must be UTC, YYYY-MM-DDTHH:MM:SSZ")
-    keys = manifest["revocation_keys"]
-    require(isinstance(keys, list), "revocation_keys must be a list")
-    for k in keys:
-        hex_field(k, 64, "a revocation key")
-    require(len(set(keys)) == len(keys), "revocation_keys must be distinct")
+    if not fourth:
+        keys = manifest["revocation_keys"]
+        require(isinstance(keys, list), "revocation_keys must be a list")
+        named = [revocation_entry(k, "revocation_keys[%d]" % i)[1] for i, k in enumerate(keys)]
+        require(len(set(named)) == len(named), "revocation_keys must be distinct")
+        require(manifest["schema"] == SCHEMA_V3 or all(isinstance(k, str) for k in keys),
+                "a typed revocation key ({\"alg\": ...}) needs schema %s" % SCHEMA_V3)
     nodes = manifest["nodes"]
     require(isinstance(nodes, list) and nodes, "nodes must be a non-empty list")
     by_id, seen = {}, {}
     for i, node in enumerate(nodes):
-        # the one entry that may lack ssh_host_pub under v2: a tombstone (the transition rules keep it as it was)
-        bare = isinstance(node, dict) and "ssh_host_pub" not in node and node.get("state") in TERMINAL
-        exact(node, NODE_KEYS if bare else node_keys, "nodes[%d]" % i)
+        # the entries that may lack later fields: tombstones (the transition rules keep them as they were)
+        shape = next((s for s in tombstone_shapes if isinstance(node, dict) and node.get("state") in TERMINAL and set(node) == set(s)), node_keys)
+        exact(node, shape, "nodes[%d]" % i)
         require(isinstance(node["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node["node_id"]),
                 "nodes[%d].node_id must be a short lowercase name" % i)
+        require(not fourth or node["node_id"] != OWNER, "nodes[%d]: %r is the owner's party name under %s, never a node_id" % (i, OWNER, SCHEMA_V4))
         require(node["node_id"] not in by_id, "duplicate node_id %r" % node["node_id"])
-        require(node["state"] in CAPABILITIES, "nodes[%d].state %r is not a known state" % (i, node["state"]))
+        require(isinstance(node["state"], str) and node["state"] in CAPABILITIES, "nodes[%d].state %r is not a known state" % (i, node["state"]))
         hex_field(node["ek_name"], 68, "nodes[%d].ek_name" % i)
         hex_field(node["ak_name"], 68, "nodes[%d].ak_name" % i)
         hex_field(node["wg_boot_pub"], 64, "nodes[%d].wg_boot_pub" % i)
         hex_field(node["wg_service_pub"], 64, "nodes[%d].wg_service_pub" % i)
         if "ssh_host_pub" in node:
             hex_field(node["ssh_host_pub"], 64, "nodes[%d].ssh_host_pub" % i)
+        if "signing_key" in node:
+            typed_key(node["signing_key"], "nodes[%d].signing_key" % i, SIGNING_KEY_ALGS)
         require(isinstance(node["hsm_serials"], list) and all(isinstance(s, str) and re.fullmatch(r"[A-Za-z0-9]{1,32}", s)
                                                              for s in node["hsm_serials"]), "nodes[%d].hsm_serials" % i)
         # No identity may belong to two nodes: a substituted TPM, key or token would otherwise pass as another.
         # Compared by value across roles: one WireGuard key cannot be a boot key and a service key, on
         # one node or two, one TPM name cannot be an EK and an AK, and an SSH host key is no other key.
         for k in identity_keys(node):
-            require(node[k] not in seen, "%s of %s is already used (%s)" % (k, node["node_id"], seen.get(node[k])))
-            seen[node[k]] = "%s of %s" % (k, node["node_id"])
+            value = identity_value(node, k)
+            require(value not in seen, "%s of %s is already used (%s)" % (k, node["node_id"], seen.get(value)))
+            seen[value] = "%s of %s" % (k, node["node_id"])
         for s in node["hsm_serials"]:
             require(("hsm", s) not in seen, "HSM %s is listed twice" % s)
             seen[("hsm", s)] = node["node_id"]
         by_id[node["node_id"]] = node
+    if fourth:
+        _signer_rules(manifest, by_id, seen)
     return by_id
+
+
+def _apart_from_root(manifest, root_key):
+    """A v4 manifest's party keys (owner_keys, every signing_key) are none of the pinned root's: one device is
+    never both the payload root and a quorum party (D28). Only accept() knows the root, so it is checked here."""
+    if manifest["schema"] != SCHEMA_V4:
+        return
+    roots = {key for _, key in root_entries(root_key)}
+    keys = [("owner_keys[%d]" % i, e["key"]) for i, e in enumerate(manifest["owner_keys"])]
+    keys += [("signing_key of %s" % n["node_id"], n["signing_key"]["key"]) for n in manifest["nodes"] if "signing_key" in n]
+    for label, key in keys:
+        require(key not in roots, "%s is a pinned root key: the payload root is never a quorum party" % label)
 
 
 def verify_envelope(envelope, root_key, current=None):
     """The manifest inside an envelope, if its signature is by the pinned root key or by a revocation key
-    named in the CURRENT manifest (never one named by the candidate itself). Returns (manifest, signer)."""
+    named in the CURRENT manifest (never one named by the candidate itself), or, under v4, by a quorum of the
+    parties the CURRENT manifest names: one of its revocation_signers rules met (counting_parties). Returns
+    (manifest, signer), the signer "root", "revocation" or "quorum"."""
+    if isinstance(envelope, dict) and "signatures" in envelope:
+        exact(envelope, ("manifest", "signatures"), "envelope")
+        manifest = envelope["manifest"]
+        validate(manifest)
+        _apart_from_root(manifest, root_key)
+        parties = counting_parties(current, DOMAIN + canonical(manifest), envelope["signatures"], "manifest")
+        require(any(meets(rule, parties) for rule in current["revocation_signers"]),
+                "the manifest's signatures meet no revocation_signers rule of the current manifest (counting: %s)" % (", ".join(sorted(parties)) or "none"))
+        return manifest, "quorum"
     exact(envelope, ("manifest", "signature"), "envelope")
     sig = envelope["signature"]
     exact(sig, ("signer", "key", "sig"), "signature")
     require(sig["signer"] in ("root", "revocation"), "signer must be root or revocation")
-    hex_field(sig["key"], 64, "signature.key")
+    require(isinstance(sig["key"], str) and re.fullmatch(r"[0-9a-f]{64}|[0-9a-f]{130}", sig["key"]) is not None,
+            "signature.key must be 64 or 130 lowercase hex")
     hex_field(sig["sig"], 128, "signature.sig")
     if sig["signer"] == "root":
-        require(sig["key"] == root_key, "the signature names a root key that is not the pinned root")
+        algs = [alg for alg, key in root_entries(root_key) if key == sig["key"]]
+        require(algs, "the signature names a root key that is not the pinned root")
+        alg = algs[0]                                    # from the pinned entry, never from the signature
     else:
-        require(current is not None and sig["key"] in current["revocation_keys"],
-                "the signing revocation key is not named by the current manifest")
+        alg = revocation_alg(current, sig["key"]) if current is not None else None
+        require(alg is not None, "the signing revocation key is not named by the current manifest")
     manifest = envelope["manifest"]
     validate(manifest)
+    _apart_from_root(manifest, root_key)
+    require(alg == "ed25519" or manifest["schema"] in (SCHEMA_V3, SCHEMA_V4), "a manifest signed by a typed (%s) key needs schema %s"
+            % (alg, " or ".join((SCHEMA_V3, SCHEMA_V4))))
     try:
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(sig["key"])).verify(bytes.fromhex(sig["sig"]), DOMAIN + canonical(manifest))
-    except (InvalidSignature, ValueError):
-        raise Refused("the manifest signature does not verify")
+        verify_revocation(alg, sig["key"], DOMAIN + canonical(manifest), sig["sig"], "manifest")
+    except Refused:
+        raise Refused("the manifest signature does not verify") from None
     return manifest, sig["signer"]
 
 
-def _restrictive(current, candidate):
-    """A revocation-signed change: identities, policy and keys unchanged; capabilities only shrink.
-    (The schema too: accept() has already refused a schema change that the root did not sign.)"""
-    require(candidate["policy_version"] == current["policy_version"], "a revocation key cannot change the policy version")
-    require(candidate["revocation_keys"] == current["revocation_keys"], "a revocation key cannot change the revocation keys")
-    require(candidate.get("heartbeat_max_lifetime_s") == current.get("heartbeat_max_lifetime_s"),
-            "a revocation key cannot change heartbeat_max_lifetime_s")
+def _restrictive(current, candidate, signer="revocation"):
+    """A revocation-signed (v1-v3) or quorum-signed (v4) change: identities, policy, keys and signer rules
+    unchanged; capabilities only shrink. (The schema too: accept() has already refused a schema change that
+    the root did not sign.)"""
+    who = "a revocation key" if signer == "revocation" else "a revocation quorum"
+    names = {"policy_version": "the policy version", "revocation_keys": "the revocation keys"}
+    for k in ROOT_FIELDS:
+        require(candidate.get(k) == current.get(k), "%s cannot change %s" % (who, names.get(k, k)))
     old, new = validate(current), validate(candidate)
-    require(set(old) == set(new), "a revocation key cannot add or remove nodes")
+    require(set(old) == set(new), "%s cannot add or remove nodes" % who)
     for nid, node in new.items():
+        require(set(node) == set(old[nid]), "%s cannot add or drop fields of %s" % (who, nid))
         for k in identity_keys(node) + ("hsm_serials",):
-            require(node[k] == old[nid][k], "a revocation key cannot change %s of %s" % (k, nid))
+            require(node[k] == old[nid][k], "%s cannot change %s of %s" % (who, k, nid))
         require(CAPABILITIES[node["state"]] <= CAPABILITIES[old[nid]["state"]],
                 "%s: %s -> %s widens capabilities; only the root can do that" % (nid, old[nid]["state"], node["state"]))
 
@@ -317,6 +741,15 @@ def accept(current, envelope, root_key):
     """The next manifest, if `envelope` may follow `current` (None at enrollment, where only a
     root-signed epoch-1 manifest is accepted)."""
     candidate, signer = verify_envelope(envelope, root_key, current)
+    return transition(current, candidate, signer)
+
+
+def transition(current, candidate, signer):
+    """accept()'s rules for an already-verified candidate and its signer ("root", "revocation" or "quorum").
+    The manifest signer (manifest.py, #156) runs them BEFORE a signature exists, so nothing a node would
+    refuse is ever signed; accept() runs them after verifying one. One set of rules for both."""
+    require(signer in ("root", "revocation", "quorum"), "signer must be root, revocation or quorum")
+    validate(candidate)
     if current is None:
         require(signer == "root" and candidate["epoch"] == 1, "the first manifest must be the root-signed epoch 1")
         return candidate
@@ -331,9 +764,9 @@ def accept(current, envelope, root_key):
         require(SCHEMAS.index(candidate["schema"]) > SCHEMAS.index(current["schema"]), "schema %s cannot follow %s: the schema "
                 "only moves forward" % (candidate["schema"], current["schema"]))
         require(signer == "root", "only the root can change the schema (%s to %s)" % (current["schema"], candidate["schema"]))
-    _tombstones(current, candidate)        # both signers: the one rule the root cannot override
-    if signer == "revocation":
-        _restrictive(current, candidate)
+    _tombstones(current, candidate)        # every signer: the one rule the root cannot override
+    if signer != "root":
+        _restrictive(current, candidate, signer)
     return candidate
 
 
@@ -362,30 +795,144 @@ class HighWater:
     the running host, which this anchor does not defend against (it defends against a restored disk).
 
     THE RECORD. The counter says how far this node got, not by which chain: two validly signed chains can
-    reach one epoch if a key signed twice for it. So a third, ordinary index holds
-    `epoch (u64, big-endian) || SHA-256(canonical manifest at that epoch)`, 40 bytes. `define()` creates it
-    at epoch 0 with an all-zero digest. Only Store writes it, through `anchor()`, and always AFTER the
-    counter: for each epoch the counter is incremented, then the record written. The record's epoch is
-    therefore the counter's, or one below it after a crash between the two; `anchor()` and `verify()`
-    accept exactly those two, compare the digest with the chain they are given, and refuse anything else
-    (a record that cannot be read, another epoch, another digest). In the crash window the manifest AT the
-    counter's epoch is not yet recorded: `pinned()` is False until `anchor()` has repaired it.
-    The same limit as the counter: owner authorization on the running host can rewrite the record. And a
-    record whose write was torn by a power cut reads as neither epoch and fails closed, until an operator
-    redefines the anchor.
+    reach one epoch if a key signed twice for it. So the TPM also holds
+    `epoch (u64, big-endian) || SHA-256(canonical manifest at that epoch)`. `define()` creates it at epoch
+    0 with an all-zero digest. Only Store writes it, through `anchor()`, and always AFTER the counter: for
+    each epoch the counter is incremented, then the record written. The record's epoch is therefore the
+    counter's, or one below it after a crash between the two; `anchor()` and `verify()` accept exactly
+    those two, compare the digest with the chain they are given, and refuse anything else (another epoch,
+    another digest, no record at all). In the crash window the manifest AT the counter's epoch is not yet
+    recorded: `pinned()` is False until `anchor()` has repaired it.
+
+    TWO SLOTS, so that a power cut cannot strand the node. The record is kept in two ordinary indices of
+    48 bytes, each `epoch || digest || tag` (the tag is 8 bytes of a SHA-256 over the other 40). A write
+    goes to the slot that is not valid or, when both are, to the older one: never to the newest valid
+    slot. A write cut half-way leaves that slot with a tag that does not match; it is ignored, and the
+    other slot still holds the record for the epoch before, which is the crash window above. THE record
+    is the valid slot with the higher epoch. Only when NEITHER slot is valid, or an index is gone, is
+    there nothing to go by: that fails closed, and the way back is `Store.reanchor()`
+    (reanchor.py; MEMBERSHIP-RECOVERY.md), never a silent return to trusting the epoch alone.
+    THE LIMIT, STATED PLAINLY. Writes to all four indices need the TPM's OWNER authorization. That is a
+    protection only if the owner hierarchy has an authorization value: with the empty one a TPM has from the
+    factory, anyone who can open the TPM device (root, the tss group) has owner authorization, and can rewrite
+    the counter, the base and the record. Today this code itself uses the owner hierarchy with no password,
+    so it needs the empty value. The anchor therefore defends against a restored or substituted DISK, and
+    against nothing that can talk to the TPM. That is the decided trust boundary (#190): owner authorization
+    stays empty, and who may open /dev/tpmrm0 (root, a tss group holding only these units) is the gate. See
+    MEMBERSHIP-RECOVERY.md.
+
+    THE FORMAT ON THE TPM, for any other reader (the initrd reads it too). For counter index C (0x1500016
+    for membership):
+      * C: TPM_NT_COUNTER, 8 bytes, attributes ownerread|ownerwrite|authread.
+      * C + 1, the base: ordinary, 8 bytes, ownerread|ownerwrite|authread|writedefine; written
+        once and write-locked. The epoch is (counter - base), both read as unsigned 64-bit big-endian; a
+        counter below its base is refused.
+      * C + 4 and C + 5, the record slots: ordinary, EXACTLY 48 bytes, ownerread|ownerwrite|authread.
+      * EXACTLY THESE ATTRIBUTES, apart from "written" and the base's write lock: counter 0x60012, base
+        0x62002 (and write-locked), slots 0x60002 (and not write-locked), or the policy-written layout below.
+        A reader refuses any mask other than these two layouts: that covers authwrite, ppwrite and writeall
+        (others could write the index), policywrite without this node's approved-image policy, a missing
+        ownerread (the owner could not read it), and locks that clear at startup.
+      * OR THE POLICY-WRITTEN LAYOUT (#242), index by index: the counter 0x6001A and a slot 0x6000A (the same
+        plus policywrite), with authPolicy = PolicyAuthorize(system-phase PCR key) = the node's configured
+        approved-image policy (HighWater(policy=...)). Such an index with any other authPolicy, or on a node
+        with no policy configured, is Unusable ("the anchor's write policy is not this node's approved-image
+        policy"), which a re-anchor repairs. The base is never policy-written.
+        UNDER A v4 CHAIN TIP (production, #242 B3) the counter and the slots are policy-written ONLY: an owner-written
+        one is Unusable ("is owner-written: under regalia.membership/v4 the anchor is written by policy only"), which a
+        re-anchor repairs. Under v1-v3 (a lab image's chain) both layouts read. The tip's schema is the one fact this
+        reader and the Go initrd's both hold (HighWater(schema=...); a Store judges by its own verified chain's tip, and a
+        commit by the NEW tip, before the disk is written). A signed PolicyPCR cannot also
+        restrict the command code, so a session that satisfies the policy may write or increment the index;
+        it can neither delete it (no policydelete) nor lock it (no writedefine or write_stclear on these).
+        STATED LIMIT (#242, d9): the COUNTER is policy-writable too, not owner-only. Root on an approved, booted
+        image can increment it past the chain, or write a slot: a refusal the node inflicts on itself (the
+        chain no longer reaches the high-water), which recount and re-anchoring repair. It is never a rollback:
+        nothing lowers the counter, and a slot written out of step with it is refused as inconsistent.
+        WHO WRITES HOW (B2b): a DEFINER (enrolment, a re-anchor, a recount, a first heartbeat) chooses the layout
+        of new indices explicitly (HighWater(define_policy=...): the node's policy when its signed measurements
+        name a system-phase key for it, else owner-written), and its own writes at definition are the owner's,
+        so a re-anchor from a recovery boot (no approved image) works. Every later write of a policy-written
+        index (an advance, the record of an advance, a crash's repair) goes through a policy session for this
+        boot's approved image (signkey.policy_session), never the owner.
+        Reads are open (authread):
+        nothing here is secret, and every reader reads with the index's own empty authorization (nvread
+        <index> -C <index>), never the owner's, so a reader works whatever the owner authorization is (#242).
+        A slot holds  epoch (8 bytes, unsigned big-endian) || digest (32 bytes) || tag (8 bytes),  where
+        digest is the SHA-256 of the canonical JSON of the manifest at that epoch (membership.digest; 32 zero
+        bytes at epoch 0) and  tag = SHA-256(b"regalia-membership-record/v1\x00" || epoch || digest)[0:8].
+        A slot is a record when its index is written and its tag matches; otherwise (never written, or a
+        cut write) it holds no record. C + 2 and C + 3 are another counter's (the heartbeat's).
+      * THE record is the valid slot with the highest epoch. Two valid slots at that epoch must name the
+        same digest. No valid slot is NO RECORD. A slot index that is missing, not ordinary, or not 48
+        bytes is not a record slot at all.
+      * The anchor is usable when the counter and base read and the record's epoch is the counter's
+        epoch or the one below it. A chain is the anchored one when its manifest digest at the record's
+        epoch is the record's digest. (HighWater.verify(lock=False) is that check, for readers that cannot
+        take the writer's lock.)
+    The vectors of tests/test_baremetal_membership.py (RecordWrites.test_a_slot_is_a_record_only_if_its_tag_matches,
+    and slot_bytes) pin this layout.
     """
 
     MAX_JUMP = 1000
     RECORD = True                        # heartbeat.Counter is this counter without the record
-    RECORD_BYTES, ZERO = 40, "00" * 32
+    RECORD_BYTES, ZERO = 48, "00" * 32
+    RECORD_TAG = b"regalia-membership-record/v1\0"
     NT_MASK, NT_COUNTER, NT_ORDINARY = 0xF0, 0x10, 0x00
     WRITTEN, WRITELOCKED = 0x20000000, 0x800
+    OWNERWRITE, AUTHWRITE, POLICYWRITE, OWNERREAD, AUTHREAD = 0x2, 0x4, 0x8, 0x20000, 0x40000
+    # The attributes this software defines, exactly, apart from the two that change with use (written, and the
+    # base's write lock). Anything else (authwrite, policywrite, ppwrite, writeall, no ownerread, read or write
+    # locks that clear at startup, ...) is not this anchor's index: comparing the whole mask refuses them all.
+    STATE = WRITTEN | WRITELOCKED
+    ATTRIBUTES = {"counter": 0x00060012, "base": 0x00062002, "slot": 0x00060002}
+    # The policy-written layout (#242): the counter and the slots are ALSO written through their authPolicy,
+    # PolicyAuthorize(system-phase PCR key), so an approved image's booted system writes them with no owner
+    # authorization. Only with the node's own approved-image policy: an index of this layout whose authPolicy
+    # is anything else is Unusable. The base is written once, at definition, and has no policy in either layout.
+    POLICY_ATTRIBUTES = {"counter": 0x0006001A, "slot": 0x0006000A}
 
-    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_index=None):
+    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_indices=None, policy=None,
+                 image_key=None, signatures=None, define_policy=None, owner_auth=None, schema=None):
+        """`policy`: the node's approved-image write policy, PolicyAuthorize(system-phase PCR key), as 64 hex
+        (the digest a policy-written index must hold as its authPolicy), or a function that returns it (the
+        node's: measurements.approved_image_policy over its signed chain and the running image's key), called
+        only when a policy-written index is met and at most once. None on a node that has none. A function that
+        cannot establish the policy refuses (Refused): a TPM-side question is never answered by a guess.
+        `image_key`: a function that returns the running image's system-phase PCR public key (PEM), the key whose
+        signature authorizes a run-time write of a policy-written index (signkey.policy_session); `signatures` the
+        boot's parsed tpm2-pcr-signature.json, for a test (default: the boot's own). Both only for policy writes.
+        `define_policy`: what a DEFINER lays down (enrolment, a re-anchor, a recount): the approved-image policy (64 hex,
+        or a function that returns it) under which new counter and slot indices are defined in the policy-written
+        layout; None defines them owner-written. Never implied by `policy`, which is what a reader expects: the
+        node's services read and write the anchor and never define it. A definer's policy is also what it reads by,
+        unless `policy` is given.
+        `owner_auth`: the TPM's owner authorization (ownerauth.Auth, from the node's envelope, or a function that returns
+        one), for the OWNER-authorized calls only: a definition, a redefinition, an owner-written index's write, an
+        nvundefine (#242 step C). None: the owner authorization is empty (a lab TPM). Resolved once, at its first use,
+        and passed through ownerauth's one channel (a sealed memfd), never on the command line.
+        `schema`: the schema of this node's verified chain tip (or a function that returns it), asked for only when
+        an OWNER-written counter or slot is met (#242 B3): under regalia.membership/v4 the anchor is written by policy
+        only, and such an index is Unusable (a re-anchor repairs it); under v1-v3, a lab image's, both layouts read.
+        None: no chain to judge by (a lab tool, a test), and owner-written reads as before. A Store sets it to its own
+        verified chain's tip once it holds one."""
         self.index, self.run, self.env = index, run, ({"TPM2TOOLS_TCTI": tcti} if tcti else None)
+        if policy is not None and not callable(policy):
+            hex_field(policy, 64, "the approved-image write policy")
+        if define_policy is not None and not callable(define_policy):
+            hex_field(define_policy, 64, "the approved-image write policy to define under")
+        if policy is None and define_policy is not None:
+            # a definer reads by what it lays down: through the SAME single resolution, never asked twice
+            policy = (lambda: self._defining_policy()) if callable(define_policy) else define_policy
+        self._policy_source, self._policy = policy, (policy if not callable(policy) else None)
+        self._image_key, self._signatures, self._define_policy = image_key, signatures, define_policy
+        self._policy_asked = False
+        self._owner_auth = owner_auth
+        self._schema = schema
         self.base_index = base_index or "0x%x" % (int(index, 16) + 1)
         # index + 2 and + 3 are left to the heartbeat's pair (0x1500018/0x1500019 beside 0x1500016)
-        self.record_index = (record_index or "0x%x" % (int(index, 16) + 4)) if self.RECORD else None
+        self.record_indices = tuple(record_indices or ("0x%x" % (int(index, 16) + 4), "0x%x" % (int(index, 16) + 5))) if self.RECORD else ()
+        require(len(self.record_indices) in (0, 2) and len(set(self.record_indices)) == len(self.record_indices), "the record takes two different NV indices")
         # Two processes advancing at once could both increment and push the counter past any manifest.
         self.lock_path = lock_path or "/run/lock/regalia-highwater-%s.lock" % self.index
 
@@ -394,53 +941,271 @@ class HighWater:
         env = dict(os.environ, **self.env) if self.env else None
         return self.run(["tpm2_" + args[0], *args[1:]], capture_output=True, env=env, **kw)
 
+    def _owner(self, tool, index, *args, input=None):
+        """An OWNER-authorized call: `-C o` and the owner authorization through ownerauth's one channel (#242 C)."""
+        from deploy.baremetal import ownerauth         # here: ownerauth imports this module
+        self._owner_auth = ownerauth.resolve(self._owner_auth)     # a function is called once: its answer replaces it
+        with ownerauth.owner_call(self._owner_auth) as (argv, kw):
+            done = self._tpm(tool, index, *argv, *args, input=input, **kw)
+        if done.returncode != 0 and ownerauth.AUTH_FAILURE.search(ownerauth._tail(done.stderr)):
+            require(self._owner_auth is not None, "the TPM's owner authorization is set and none was given: give this node's "
+                    "(gpg --decrypt ownerauth-<node>.yk.gpg | ... --ownerauth ownerauth.record.json, #242)")
+            raise Refused("the TPM refused the owner authorization given: it is not this TPM's (another node's envelope?)")
+        return done
+
+    def _defined(self):
+        """The NV indices the TPM says it holds. Refused when the TPM does not answer: then nothing is known
+        about the anchor, and that is neither "usable" nor "unusable"."""
+        r = self._tpm("getcap", "handles-nv-index")
+        require(r.returncode == 0, "the TPM does not answer (tpm2_getcap handles-nv-index failed): the high-water anchor is "
+                "unavailable (fail closed)%s" % session_bus_hint((self.env or {}).get("TPM2TOOLS_TCTI")))
+        return {int(found, 16) for found in re.findall(rb"0x[0-9A-Fa-f]+", r.stdout)}
+
+    def _public(self, index):
+        """(TPMA_NV mask, size) of an index. Unusable if the TPM says the index is not defined; Refused if it
+        could not be read for any other reason (no TPM, a tool that failed)."""
+        r = self._tpm("nvreadpublic", index)
+        if r.returncode != 0:
+            missing = int(index, 16) not in self._defined()
+            raise (Unusable if missing else Refused)("cannot read NV index %s: the high-water anchor is unavailable (fail closed): %s"
+                                                     % (index, "the index is not defined" if missing else "the TPM lists it and did not give it"))
+        found = re.search(rb"attributes:\s*\n\s*friendly:[^\n]*\n\s*value:\s*0x([0-9A-Fa-f]+)", r.stdout)
+        size = re.search(rb"(?m)^\s*size:\s*([0-9]+)\s*$", r.stdout)
+        require(found is not None and size is not None, "unparseable nvreadpublic output for %s" % index)
+        return int(found.group(1), 16), int(size.group(1))
+
     def _attributes(self, index):
-        """The index's TPMA_NV mask; Refused if the index cannot be read (missing, or no TPM)."""
+        return self._public(index)[0]
+
+    @property
+    def policy(self):
+        """This node's approved-image write policy (64 hex), or None: resolved from a function at most once."""
+        if self._policy is None and callable(self._policy_source) and not self._policy_asked:
+            policy = self._policy_source()          # None: this node has none (its approved images are not signed)
+            if policy is not None:
+                hex_field(policy, 64, "the approved-image write policy")
+            self._policy, self._policy_asked = policy, True
+        return self._policy
+
+    # #242 B2b: the words an index of each kind is defined with, in each layout (the base has no policy in either)
+    OWNER_WORDS = {"counter": "nt=counter|ownerread|ownerwrite|authread", "slot": "ownerread|ownerwrite|authread",
+                   "base": "ownerread|ownerwrite|authread|writedefine"}
+    POLICY_WORDS = {"counter": "nt=counter|policywrite|ownerwrite|authread|ownerread", "slot": "policywrite|ownerwrite|authread|ownerread"}
+
+    def _nvdefine(self, index, size, kind):
+        """Define one index of this anchor: the counter and the record slots in the policy-written layout when the
+        definer gave a policy (define_policy, #242), with that policy as their authPolicy; otherwise, and the base
+        always, owner-written. They keep ownerwrite either way, so a re-anchor from a recovery boot (no approved
+        image, no policy session) still writes them with the owner's authorization."""
+        policy = self._defining_policy() if kind in self.POLICY_WORDS else None
+        if policy is not None:                  # None from a function: no policy for this node, owner-written
+            hex_field(policy, 64, "the approved-image write policy to define under")
+            with tempfile.TemporaryDirectory(prefix="regalia-highwater-") as d:
+                path = os.path.join(d, "policy")
+                with open(path, "wb") as f:
+                    f.write(bytes.fromhex(policy))
+                return self._owner("nvdefine", index, "-s", str(size), "-a", self.POLICY_WORDS[kind], "-L", path)
+        return self._owner("nvdefine", index, "-s", str(size), "-a", self.OWNER_WORDS[kind])
+
+    def _defining_policy(self):
+        """The definer's policy (define_policy), resolved once: every index of one definition is laid down alike."""
+        if callable(self._define_policy):
+            self._define_policy = self._define_policy()      # None: owner-written
+        return self._define_policy
+
+    def _write(self, tool, index, *args, input=None, owner=False):
+        """A run-time write (nvincrement, nvwrite) of an index of this anchor, as its layout says: with the owner's
+        authorization when it is owner-written or `owner` is asked (a definition, a re-anchor), else through a policy
+        session for this boot's approved image (signkey.policy_session: PolicyPCR of PCR 11, PolicyAuthorize with the
+        system-phase key's signature), the key first required to be the one this node's policy names."""
+        if owner or not self._attributes(index) & self.POLICYWRITE:
+            return self._owner(tool, index, *args, input=input)
+        from deploy.baremetal import signkey         # here: signkey imports this module
+        require(callable(self._image_key), "NV index %s is written by policy and this anchor has no image key to open a policy "
+                "session with" % index)
+        pem = self._image_key()
+        require(signkey.policy(pem).hex() == self.policy, "the running image's PCR key is not the one this node's write policy names: "
+                "NV index %s is not written" % index)
+        tcti = (self.env or {}).get("TPM2TOOLS_TCTI")
+        with signkey.policy_session(pem, tcti, self.run, self._signatures) as session:
+            return self._tpm(tool, index, "-C", index, "-P", "session:" + session, *args, input=input)
+
+    def tip_schema(self):
+        """The schema of this node's verified chain tip (`schema`), resolved once; None when there is none to judge by."""
+        if callable(self._schema):
+            self._schema = self._schema()
+        return self._schema
+
+    def _auth_policy(self, index):
+        """An index's authPolicy as tpm2_nvreadpublic reports it (64 lowercase hex), or "" when it has none."""
         r = self._tpm("nvreadpublic", index)
         require(r.returncode == 0, "cannot read NV index %s: the high-water anchor is unavailable (fail closed)" % index)
-        found = re.search(rb"attributes:\s*\n\s*friendly:[^\n]*\n\s*value:\s*0x([0-9A-Fa-f]+)", r.stdout)
-        require(found is not None, "unparseable nvreadpublic output for %s" % index)
-        return int(found.group(1), 16)
+        found = re.search(rb"(?m)^\s*authorization policy:\s*([0-9A-Fa-f]*)\s*$", r.stdout)
+        return found.group(1).decode().lower() if found else ""
 
     def _read8(self, index):
-        r = self._tpm("nvread", index, "-C", "o", "-s", "8")
-        require(r.returncode == 0 and len(r.stdout) == 8, "cannot read 8 bytes from NV index %s" % index)
+        r = self._tpm("nvread", index, "-C", index, "-s", "8")
+        if r.returncode != 0 or len(r.stdout) != 8:
+            _said("nvread", index, r)
+        require(r.returncode == 0 and len(r.stdout) == 8, "cannot read 8 bytes from NV index %s%s" % (index, _why(r, 8)))
         return int.from_bytes(r.stdout, "big")
 
     def define(self):
         with _exclusive(self.lock_path):
-            return self._define()
+            return self._define(0, self.ZERO)
 
-    def _define(self):
-        for index in filter(None, (self.index, self.base_index, self.record_index)):
+    def _indices(self):
+        return (self.index, self.base_index) + self.record_indices
+
+    def indices(self):
+        """Every NV index this anchor occupies, as integers: for a check that two anchors do not overlap."""
+        return {int(i, 16) for i in self._indices()}
+
+    def _define(self, epoch, manifest_digest):
+        """Defines the whole anchor AT `epoch`, recording `manifest_digest` (none of its indices may exist)."""
+        for index in self._indices():
             require(self._tpm("nvreadpublic", index).returncode != 0, "NV index %s already exists" % index)
-        r = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite")
-        require(r.returncode == 0, "cannot define the NV counter %s" % self.index)
-        require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
-        base = self._read8(self.index)
-        r = self._tpm("nvdefine", self.base_index, "-C", "o", "-s", "8", "-a", "ownerread|ownerwrite|authread|authwrite|writedefine")
-        require(r.returncode == 0, "cannot define the base index %s" % self.base_index)
-        r = self._tpm("nvwrite", self.base_index, "-C", "o", "-i", "-", input=base.to_bytes(8, "big"))
-        require(r.returncode == 0, "cannot write the base index")
-        require(self._tpm("nvwritelock", self.base_index, "-C", "o").returncode == 0, "cannot write-lock the base index")
-        if self.record_index:
-            r = self._tpm("nvdefine", self.record_index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread|authwrite")
-            require(r.returncode == 0, "cannot define the record index %s" % self.record_index)
-            self._write_record(0, self.ZERO)
+        base = self._define_counter(epoch)
+        for index in self.record_indices:
+            r = self._nvdefine(index, self.RECORD_BYTES, "slot")
+            require(r.returncode == 0, "cannot define the record index %s" % index)
+        for _ in self.record_indices:            # each write takes the slot that is not valid, else the older one
+            self._write_record(epoch, manifest_digest, owner=True)
         return base
+
+    def _define_counter(self, epoch):
+        """The counter and its base, the counter reading `epoch` from the moment the base exists: the base is
+        written as (where the counter landed) - epoch, the counter raised first on a TPM where it lands below."""
+        r = self._nvdefine(self.index, 8, "counter")
+        require(r.returncode == 0, "cannot define the NV counter %s" % self.index)
+        require(self._owner("nvincrement", self.index).returncode == 0, "cannot increment the NV counter")
+        landed = self._read8(self.index)
+        while landed < epoch:                    # a TPM that never held a counter this high: the base cannot be negative
+            require(self._owner("nvincrement", self.index).returncode == 0, "cannot increment the NV counter")
+            landed = self._read8(self.index)
+        base = landed - epoch
+        r = self._nvdefine(self.base_index, 8, "base")
+        require(r.returncode == 0, "cannot define the base index %s" % self.base_index)
+        r = self._owner("nvwrite", self.base_index, "-i", "-", input=base.to_bytes(8, "big"))
+        require(r.returncode == 0, "cannot write the base index")
+        require(self._owner("nvwritelock", self.base_index).returncode == 0, "cannot write-lock the base index")
+        return base
+
+    def redefine(self, epoch, manifest_digest):
+        """Define this anchor anew AT `epoch`, recording `manifest_digest`: the TPM half of a re-anchor. It
+        needs owner authorization and replaces the counter, so nothing calls it but Store.reanchor(), after
+        the chain was verified against everything the TPM still holds and written to disk.
+
+        THE NEW RECORD GOES IN FIRST: before the counter, and before any slot whose attributes are wrong (and
+        which is replaced) is deleted. Store.reanchor has already checked the chain against everything the TPM
+        holds (remains(), whatever the attributes), so the new record's epoch is at least every epoch held,
+        and writing it over ANY slot lowers nothing. In order:
+          1. into a slot this software defined (the one with no valid record, else the older), if there is one;
+          2. each other slot that is missing or has the wrong attributes is deleted, defined, and written at once;
+          3. the counter and its base are deleted and defined again at `epoch`;
+          4. any slot not yet holding the new record is written.
+        In step 2 a MISSING slot is defined and written first (nothing to lose), so the new record is in the TPM
+        before any defined slot is deleted; among wrong slots, the one holding nothing, else the lower record,
+        goes first. Interrupted anywhere, the node holds what it held, or the new record beside a counter not in
+        step with it (unusable, a floor at `epoch`), or the finished anchor. One case is weaker, stated: when
+        BOTH slots are defined with wrong attributes, the first deleted (the lower) is gone before anything new
+        is in the TPM; a cut there loses that lower record, while the higher one, and the counter, remain."""
+        hex_field(manifest_digest, 64, "a manifest digest")
+        with _exclusive(self.lock_path):
+            data = self.slot_bytes(epoch, manifest_digest)
+            defined = self._defined()
+            good = [index for index in self.record_indices if int(index, 16) in defined and self._is_slot(index)]
+            written = set()
+            if good:
+                held = {index: self._slot(index) for index in good}
+                first = min(good, key=lambda index: (held[index] is not None, held[index] or (0, "")))
+                self._put(first, data, epoch, manifest_digest)
+                written.add(first)
+            # a MISSING slot first (nothing to lose), then wrong ones holding nothing, then the lower record first
+            rest = [index for index in self.record_indices if index not in written and index not in good]
+            rest.sort(key=lambda index: (int(index, 16) in defined, self._held(index) if int(index, 16) in defined else None or (-1, "")))
+            for index in rest:
+                if int(index, 16) in defined:
+                    require(self._owner("nvundefine", index).returncode == 0, "cannot delete NV index %s" % index)
+                r = self._nvdefine(index, self.RECORD_BYTES, "slot")
+                require(r.returncode == 0, "cannot define the record index %s" % index)
+                self._put(index, data, epoch, manifest_digest)
+                written.add(index)
+            for index in (self.index, self.base_index):
+                if int(index, 16) in defined:
+                    require(self._owner("nvundefine", index).returncode == 0, "cannot delete NV index %s" % index)
+            base = self._define_counter(epoch)
+            for index in self.record_indices:
+                if index not in written:
+                    self._put(index, data, epoch, manifest_digest)
+            return base
+
+    def _held(self, index):
+        """The valid record a defined slot holds whatever its attributes, (-1, "") for none: what remains() reads."""
+        a, size = self._public(index)
+        if a & self.NT_MASK != self.NT_ORDINARY or size != self.RECORD_BYTES or not a & self.WRITTEN:
+            return (-1, "")
+        data = self._read_any(index, self.RECORD_BYTES, a)
+        held_epoch, held = int.from_bytes(data[:8], "big"), data[8:40].hex()
+        return (held_epoch, held) if data == self.slot_bytes(held_epoch, held) else (-1, "")
+
+    def _put(self, index, data, epoch, manifest_digest):
+        r = self._owner("nvwrite", index, "-i", "-", input=data)
+        require(r.returncode == 0, "cannot write the record index %s" % index)
+        require(self._slot(index) == (epoch, manifest_digest), "the record index %s did not take the write" % index)
+
+    def _is_slot(self, index):
+        """Whether `index` is a record slot as this software defines one, which redefine() keeps and writes into:
+        ordinary, RECORD_BYTES long, of either layout (_as_defined), not write-locked. Anything else holds no
+        record this anchor can use, and is replaced rather than left to make every attempt fail."""
+        attributes, size = self._public(index)
+        if size != self.RECORD_BYTES or attributes & self.NT_MASK != self.NT_ORDINARY:
+            return False
+        try:
+            self._as_defined(index, attributes, "slot")
+        except Unusable:
+            return False
+        return True
+
+    def _as_defined(self, index, attributes, kind):
+        """The index has exactly the attributes this software gives an index of that kind, in one of its two
+        layouts: written with the owner's authorization only, or (#242, counter and slots) also through its
+        authPolicy, which must then be this node's approved-image policy. Either way readable by the owner and
+        by its own empty authorization, no authwrite or ppwrite, no locks that come and go."""
+        want, mask = self.ATTRIBUTES[kind], attributes & ~self.STATE
+        if mask == self.POLICY_ATTRIBUTES.get(kind):
+            held, policy = self._auth_policy(index), self.policy
+            require_anchor(policy is not None and held == policy,
+                           "the anchor's write policy is not this node's approved-image policy: NV index %s is written by policy %s, %s"
+                           % (index, held or "(none)", "and this node has none configured" if policy is None else "not " + policy))
+        else:
+            require_anchor(mask == want, "NV index %s does not have this anchor's attributes (0x%x, not 0x%x): it can be written or read "
+                           "otherwise than this software defines" % (index, mask, want))
+            if kind in self.POLICY_ATTRIBUTES:
+                require_anchor(self.tip_schema() != SCHEMA_V4, "NV index %s is owner-written: under %s the anchor is written by "
+                               "policy only (re-anchor it)" % (index, SCHEMA_V4))
+        if kind == "base":
+            require_anchor(attributes & self.WRITELOCKED, "base index %s is not write-locked" % index)
+        else:
+            require_anchor(not attributes & self.WRITELOCKED, "NV index %s is write-locked: no record can be written to it" % index)
 
     def _base(self):
         """Checks both indices' attributes and returns the base (one call per value/advance/check)."""
-        a = self._attributes(self.index)
-        require(a & self.NT_MASK == self.NT_COUNTER and a & self.WRITTEN, "NV index %s is not a written counter" % self.index)
-        b = self._attributes(self.base_index)
-        require(b & self.NT_MASK == self.NT_ORDINARY and b & self.WRITTEN and b & self.WRITELOCKED,
-                "base index %s is not written and write-locked" % self.base_index)
+        a, a_size = self._public(self.index)
+        require_anchor(a & self.NT_MASK == self.NT_COUNTER and a & self.WRITTEN, "NV index %s is not a written counter" % self.index)
+        self._as_defined(self.index, a, "counter")
+        require_anchor(a_size == 8, "NV index %s is %d bytes, not 8" % (self.index, a_size))
+        b, b_size = self._public(self.base_index)
+        require_anchor(b & self.NT_MASK == self.NT_ORDINARY and b & self.WRITTEN and b & self.WRITELOCKED,
+                 "base index %s is not written and write-locked" % self.base_index)
+        self._as_defined(self.base_index, b, "base")
+        # a base of another size is not this anchor's (Unusable, which a re-anchor repairs), not a TPM that failed
+        require_anchor(b_size == 8, "NV index %s is %d bytes, not 8" % (self.base_index, b_size))
         return self._read8(self.base_index)
 
     def _epoch(self, base):
         counter = self._read8(self.index)
-        require(counter >= base, "the NV counter %d is below its base %d" % (counter, base))
+        require_anchor(counter >= base, "the NV counter %d is below its base %d" % (counter, base))
         return counter - base
 
     def value(self):
@@ -456,7 +1221,7 @@ class HighWater:
         require(epoch >= now, "refusing to accept epoch %d below the TPM high-water %d" % (epoch, now))
         require(epoch - now <= self.MAX_JUMP, "epoch jump %d exceeds the bound %d: anomaly" % (epoch - now, self.MAX_JUMP))
         while now < epoch:
-            r = self._tpm("nvincrement", self.index, "-C", "o")
+            r = self._write("nvincrement", self.index)
             require(r.returncode == 0, "cannot increment the NV counter")
             nxt = self._epoch(base)
             require(nxt == now + 1, "the NV counter did not advance by one (%d -> %d)" % (now, nxt))
@@ -465,35 +1230,129 @@ class HighWater:
                 self._write_record(now, digest_of(now))
         return now
 
-    def _record(self):
-        require(self.record_index is not None, "this counter keeps no record")
-        a = self._attributes(self.record_index)
-        require(a & self.NT_MASK == self.NT_ORDINARY and a & self.WRITTEN, "record index %s is not a written ordinary index" % self.record_index)
-        r = self._tpm("nvread", self.record_index, "-C", "o", "-s", str(self.RECORD_BYTES))
-        require(r.returncode == 0 and len(r.stdout) == self.RECORD_BYTES, "cannot read %d bytes from the record index %s: the anchor "
-                "is unavailable (fail closed)" % (self.RECORD_BYTES, self.record_index))
-        return int.from_bytes(r.stdout[:8], "big"), r.stdout[8:].hex()
-
-    def _write_record(self, epoch, manifest_digest):
+    @classmethod
+    def slot_bytes(cls, epoch, manifest_digest):
+        """What a record slot holds: epoch || digest || tag."""
         hex_field(manifest_digest, 64, "a manifest digest")
-        r = self._tpm("nvwrite", self.record_index, "-C", "o", "-i", "-", input=epoch.to_bytes(8, "big") + bytes.fromhex(manifest_digest))
-        require(r.returncode == 0, "cannot write the record index %s" % self.record_index)
-        require(self._record() == (epoch, manifest_digest), "the record index %s did not take the write" % self.record_index)
+        body = epoch.to_bytes(8, "big") + bytes.fromhex(manifest_digest)
+        return body + hashlib.sha256(cls.RECORD_TAG + body).digest()[:8]
+
+    def _slot(self, index):
+        """(epoch, digest) held by one record slot, or None when what it holds is not a record (never
+        written, or a write that was cut: the tag does not match). An index that is not defined, is not an
+        ordinary index or is not exactly RECORD_BYTES long is Unusable: that is not what a power cut leaves.
+        One that is as it should be and still cannot be read is Refused: the TPM, not the anchor."""
+        a, size = self._public(index)
+        require_anchor(a & self.NT_MASK == self.NT_ORDINARY, "record index %s is not an ordinary index" % index)
+        require_anchor(size == self.RECORD_BYTES, "record index %s is %d bytes, not %d" % (index, size, self.RECORD_BYTES))
+        self._as_defined(index, a, "slot")
+        if not a & self.WRITTEN:
+            return None
+        r = self._tpm("nvread", index, "-C", index, "-s", str(self.RECORD_BYTES))
+        if r.returncode != 0 or len(r.stdout) != self.RECORD_BYTES:
+            _said("nvread", index, r)
+        require(r.returncode == 0 and len(r.stdout) == self.RECORD_BYTES, "cannot read %d bytes from the record index %s: the anchor "
+                "is unavailable (fail closed)%s" % (self.RECORD_BYTES, index, _why(r, self.RECORD_BYTES)))
+        epoch, held = int.from_bytes(r.stdout[:8], "big"), r.stdout[8:40].hex()
+        return (epoch, held) if r.stdout == self.slot_bytes(epoch, held) else None
+
+    def _slots(self):
+        require(self.record_indices, "this counter keeps no record")
+        return [self._slot(index) for index in self.record_indices]
+
+    def _record(self):
+        valid = [slot for slot in self._slots() if slot is not None]
+        require_anchor(valid, "NO RECORD: neither record slot (%s) holds a valid record: the anchor cannot tell which chain this node "
+                 "accepted (fail closed); re-anchor it (MEMBERSHIP-RECOVERY.md)" % ", ".join(self.record_indices))
+        newest = max(valid)
+        require_anchor(all(slot == newest for slot in valid if slot[0] == newest[0]), "the two record slots name different manifests at "
+                 "epoch %d: the anchor is inconsistent (fail closed)" % newest[0])
+        return newest
+
+    def _write_record(self, epoch, manifest_digest, owner=False):
+        data = self.slot_bytes(epoch, manifest_digest)
+        slots = self._slots()
+        # the slot that holds no record, else the older one (the first when they are equal): the newest
+        # valid record is never the one being overwritten, so a cut write cannot lose it
+        target = min(range(len(slots)), key=lambda i: (slots[i] is not None, slots[i] or (0, "")))
+        index = self.record_indices[target]
+        r = self._write("nvwrite", index, "-i", "-", input=data, owner=owner)
+        require(r.returncode == 0, "cannot write the record index %s" % index)
+        require(self._slot(index) == (epoch, manifest_digest), "the record index %s did not take the write" % index)
+
+    def _in_step(self, hw):
+        """The record, which must be for the counter's epoch or the one below."""
+        epoch, held = self._record()
+        require_anchor(epoch in (hw, hw - 1), "the TPM record is for epoch %d but the TPM high-water is %d: the anchor is inconsistent "
+                 "(fail closed)" % (epoch, hw))
+        return epoch, held
 
     def _verify(self, hw, digest_of, repair):
         """The record against a chain (`digest_of(epoch)` is its manifest digest there, ZERO at epoch 0)."""
-        epoch, held = self._record()
-        require(epoch in (hw, hw - 1), "the TPM record is for epoch %d but the TPM high-water is %d: the anchor is inconsistent "
-                "(fail closed)" % (epoch, hw))
+        epoch, held = self._in_step(hw)
         require(held == digest_of(epoch), "CONFLICT: the manifest at epoch %d is not the one this node's TPM recorded: a substituted "
                 "chain is never anchored; record an incident" % epoch)
         if epoch != hw and repair:           # a crash after the counter moved and before the record was written
             self._write_record(hw, digest_of(hw))
 
+    def unusable(self):
+        """None while the anchor can do its work: the counter reads, and the record is valid and at the
+        counter's epoch or one below. Otherwise the reason, as text, when the ANCHOR is what is wrong (an
+        index not defined or not of the right kind, no valid record, counter and record out of step): what
+        Store.reanchor() is for. A TPM that does not answer, or a read that fails on an index that is as it
+        should be, is neither: that raises Refused, and re-anchoring is not the remedy."""
+        with _exclusive(self.lock_path):
+            try:
+                self._in_step(self._epoch(self._base()))
+            except Unusable as reason:
+                return str(reason)
+            return None
+
+    def _read_any(self, index, size, attributes):
+        """The index's bytes, read with its own authorization (authread) or, failing that, the owner's: for
+        remains(), which must see what an index holds whatever else is wrong with it. Refused if neither reads."""
+        r = self._tpm("nvread", index, "-C", index, "-s", str(size))
+        if (r.returncode != 0 or len(r.stdout) != size) and attributes & self.OWNERREAD:
+            r = self._owner("nvread", index, "-s", str(size))
+        if r.returncode != 0 or len(r.stdout) != size:
+            _said("nvread", index, r)
+        require(r.returncode == 0 and len(r.stdout) == size, "cannot read %d bytes from NV index %s: what the anchor holds cannot "
+                "be known (fail closed)%s" % (size, index, _why(r, size)))
+        return r.stdout
+
+    def remains(self):
+        """What the TPM still holds of this anchor, each part by itself and WHATEVER ITS ATTRIBUTES: (the
+        counter's epoch or None, every slot that holds a valid record). A re-anchor may forget none of it, and
+        it deletes indices whose attributes are wrong, so their contents must count here first: reading more
+        can only raise the floor, which fails closed. An index that is not defined, not written or of the
+        wrong type or size holds nothing. Refused if the TPM does not answer, or an index cannot be read."""
+        with _exclusive(self.lock_path):
+            defined = self._defined()
+            epoch = None
+            if int(self.index, 16) in defined and int(self.base_index, 16) in defined:
+                (a, a_size), (b, b_size) = self._public(self.index), self._public(self.base_index)
+                if a & self.NT_MASK == self.NT_COUNTER and a & self.WRITTEN and b & self.WRITTEN and (a_size, b_size) == (8, 8):
+                    counter = int.from_bytes(self._read_any(self.index, 8, a), "big")
+                    base = int.from_bytes(self._read_any(self.base_index, 8, b), "big")
+                    epoch = counter - base if counter >= base else None
+            records = []
+            for index in self.record_indices:
+                if int(index, 16) not in defined:
+                    continue
+                held = self._held(index)
+                if held[0] >= 0:
+                    records.append(held)
+            return epoch, records
+
     def record(self):
-        """(epoch, manifest digest) as last written."""
+        """(epoch, manifest digest) as last written: the valid slot with the higher epoch."""
         with _exclusive(self.lock_path):
             return self._record()
+
+    def slots(self):
+        """What each record slot holds, in index order: (epoch, digest), or None for a slot that holds no record."""
+        with _exclusive(self.lock_path):
+            return self._slots()
 
     def pinned(self):
         """Whether the record names the manifest AT the high-water epoch (False in the crash window, where
@@ -501,8 +1360,23 @@ class HighWater:
         with _exclusive(self.lock_path):
             return self._record()[0] == self._epoch(self._base())
 
-    def verify(self, digest_of):
-        """Refuses a chain that is not the anchored one; changes nothing. Returns the high-water epoch."""
+    def verify(self, digest_of, lock=True):
+        """Refuses a chain that is not the anchored one; changes nothing. Returns the high-water epoch.
+
+        lock=False is for a reader that cannot take the writer's lock (a service under another user, with
+        the lock's directory read-only to it). It reads without serializing against Store: a commit in
+        progress shows as the crash window (counter moved, record one behind) or as one slot being written
+        (its tag does not match yet), both of which this accepts as it accepts them after a crash. A
+        refusal from a lock-free read can be a commit racing it: read again before acting on it."""
+        if not lock:
+            base = self._base()
+            hw = self._epoch(base)
+            self._verify(hw, digest_of, repair=False)
+            # a redefinition between the reads would pair the old base with the new counter; two in quick
+            # succession could bring the base back, so the counter is compared too
+            again = self._base()
+            require((again, self._epoch(again)) == (base, hw), "this host's TPM anchor changed during the read: read again")
+            return hw
         with _exclusive(self.lock_path):
             hw = self._epoch(self._base())
             self._verify(hw, digest_of, repair=False)
@@ -543,6 +1417,9 @@ class Store:
     restore(chain)    replaces the stored chain by one fetched whole from a peer, when load() refuses with
                       ROLLBACK or CONFLICT: verified from the root, at least as new as the TPM high-water,
                       the recorded manifest at the recorded epoch, and a continuation of what is on disk.
+    reanchor(chain)   gives the node a new TPM anchor and installs the chain under it, when the anchor
+                      itself is unusable and restore() must refuse too. An operator's decision, taken on
+                      two other nodes that agree (reanchor.py; MEMBERSHIP-RECOVERY.md).
     commit(envelope)  accepts the next manifest onto the loaded chain, writes the file durably
                       (temp file, fsync, rename, fsync of the directory), THEN increments the TPM counter,
                       THEN writes the TPM record; a crash between any two is completed by the next load(),
@@ -556,8 +1433,19 @@ class Store:
     record existed.
     """
 
-    def __init__(self, path, root_key, highwater):
-        self.path, self.root_key, self.hw = path, root_key, highwater
+    def __init__(self, path, root_key, highwater, documents=None, anchors=True):
+        """`documents(manifest)`, when given, refuses (raises Refused) unless the document that manifest commits to is
+        held (measurements.Documents.require_for, #332): no epoch is committed, nor the TPM anchor moved to it,
+        without the reference values to judge it by. Generic here: membership does not know what a document is.
+
+        `anchors` False (#66 B3, the ESP advance): this store NEVER moves the TPM anchor. load() verifies the chain
+        against it (the manifest the TPM recorded, the chain at or above the high-water) without anchoring a newer
+        chain, and commit()/restore() write the disk only, refusing to run further ahead of the anchor than the
+        jump bound (the initrd and HighWater.advance() refuse a larger jump). The node's sync runs so: the anchor
+        is moved by the root ESP advance, which writes the boot chain to the ESP FIRST, so that no reboot ever
+        finds an ESP chain below its TPM anchor (the initrd refuses that as a ROLLBACK)."""
+        self.path, self.root_key, self.hw, self.documents = path, root_key, highwater, documents
+        self.anchors = anchors
         self.lock_path = path + ".lock"
 
     @staticmethod
@@ -592,14 +1480,37 @@ class Store:
             manifests.append(nxt)
             current = nxt
         epoch = current["epoch"] if current else 0
+        self._judge_by(manifests)
         hw = self.hw.value()
         require(epoch >= hw, "ROLLBACK: the membership on disk is epoch %d but the TPM high-water is %d; "
                 "fetch the chain from a peer" % (epoch, hw))
+        if not self.anchors:
+            # the recorded manifest, or refused; a newer chain on disk is left for the ESP advance to anchor. Read
+            # without the anchor's lock: its one writer (the ESP advance) takes its own, so this is a reader like
+            # node.published(), and as there a CONFLICT may be a write racing the read: it stands only if it stays
+            digest_of = self._digests(manifests)
+            try:
+                self.hw.verify(digest_of, lock=False)
+            except Refused as refused:
+                if str(refused).startswith("ROLLBACK"):
+                    raise
+                self.hw.verify(digest_of, lock=False)
+            require(epoch - hw <= self.hw.MAX_JUMP, "the membership on disk is epoch %d, %d above the TPM high-water: the jump "
+                    "exceeds the bound %d: anomaly" % (epoch, epoch - hw, self.hw.MAX_JUMP))
+            self.chain, self.manifests = chain, manifests
+            return current
         # the recorded manifest, or refused; then a record or a counter left behind by a crash is completed
         self.hw.anchor(epoch, self._digests(manifests))
         self.hw.check(epoch)
         self.chain, self.manifests = chain, manifests
         return current
+
+    def _judge_by(self, manifests):
+        """The anchor is judged by the schema of THIS verified chain's current tip (#242 B3: under v4 it is written by policy
+        only), whatever its caller named (HighWater(schema=...)): the chain the Store holds is the one the anchor guards.
+        A Store with no chain yet leaves the caller's."""
+        if manifests:
+            self.hw._schema = manifests[-1]["schema"]
 
     def envelopes(self, after_epoch=0):
         """The signed envelopes above `after_epoch`, in order: what a peer at that epoch lacks. Verified and
@@ -630,48 +1541,138 @@ class Store:
                 require(nxt is not current, "the fetched chain repeats epoch %d" % nxt["epoch"])
                 manifests.append(nxt)
                 current = nxt
-            hw = self.hw.value()
-            require(current["epoch"] >= hw, "the fetched chain ends at epoch %d, below the TPM high-water %d: "
-                    "fetch from a peer that is not behind" % (current["epoch"], hw))
-            # before anything is written: advance() would refuse this jump AFTER the file was replaced,
-            # leaving a disk ahead of the TPM that load() could never anchor
-            require(current["epoch"] - hw <= self.hw.MAX_JUMP, "the fetched chain ends at epoch %d, %d above the TPM high-water: "
-                    "the jump exceeds the bound %d: anomaly" % (current["epoch"], current["epoch"] - hw, self.hw.MAX_JUMP))
-            # also before anything is written: a chain that is not the anchored one never reaches the disk
-            self.hw.verify(self._digests(manifests))
-            # What is still on disk counts only as far as it is itself a valid chain: a corrupt or unsigned
-            # tail is what recovery is for, and must neither block it nor be compared.
-            held, previous = [], None
+            # judged by the FETCHED chain's tip (#242 B3, regalia-kms-ed): a v4 chain is never restored over an owner-written
+            # anchor (whatever the disk held, or did not), which only a re-anchor repairs
+            previous = self.hw._schema
+            self._judge_by(manifests)
             try:
-                for stored in self._read_chain():
-                    nxt = accept(previous, stored, self.root_key)
-                    if nxt is previous:
-                        break
-                    held.append(nxt)
-                    previous = nxt
-            except Refused:
-                pass
-            for mine, theirs in zip(held, envelopes):
-                require(digest(mine) == digest(theirs["manifest"]), "CONFLICT: the fetched chain differs from the "
-                        "stored one at epoch %d: record an incident" % mine["epoch"])
-            require(len(held) <= len(envelopes), "the fetched chain is shorter than the stored one: nothing to restore")
-            self._write(copy.deepcopy(envelopes))
-            self.hw.anchor(current["epoch"], self._digests(manifests))
+                hw = self.hw.value()
+                require(current["epoch"] >= hw, "the fetched chain ends at epoch %d, below the TPM high-water %d: "
+                        "fetch from a peer that is not behind" % (current["epoch"], hw))
+                # before anything is written: advance() would refuse this jump AFTER the file was replaced,
+                # leaving a disk ahead of the TPM that load() could never anchor
+                require(current["epoch"] - hw <= self.hw.MAX_JUMP, "the fetched chain ends at epoch %d, %d above the TPM high-water: "
+                        "the jump exceeds the bound %d: anomaly" % (current["epoch"], current["epoch"] - hw, self.hw.MAX_JUMP))
+                # also before anything is written: a chain that is not the anchored one never reaches the disk (read without
+                # the anchor's lock when this store is not its writer: see _load)
+                try:
+                    self.hw.verify(self._digests(manifests), lock=self.anchors)
+                except Refused as refused:              # lock-free (not the writer): a CONFLICT that does not stay is a write racing
+                    if self.anchors or str(refused).startswith("ROLLBACK"):
+                        raise
+                    self.hw.verify(self._digests(manifests), lock=False)
+                self._continues_disk(envelopes)
+                if self.documents is not None:              # #332: the epoch restored to is judged by its own document
+                    self.documents(current)
+                self._write(copy.deepcopy(envelopes))
+            except BaseException:
+                self.hw._schema = previous                 # refused before the disk holds it: judged by the chain held (regalia-kms-ed)
+                raise
+            if self.anchors:                            # else: the ESP advance anchors it, ESP first
+                self.hw.anchor(current["epoch"], self._digests(manifests))
+                self.hw.check(current["epoch"])
+            self.chain, self.manifests = copy.deepcopy(envelopes), manifests
+            return current
+
+    def reanchor(self, envelopes):
+        """Give this node a NEW anchor and install a chain under it: the recovery when the anchor itself is
+        unusable (no valid record, an index not defined, counter and record out of step), which no chain
+        from a peer can repair. It forgets what this TPM knew, so the caller must have established the
+        chain from more than this node's word: reanchor.py takes it from two other nodes that agree.
+
+        A usable anchor is never reset. A TPM that does not answer is not re-anchored either: nothing is
+        known about its anchor then. And NOTHING THE TPM STILL HOLDS IS FORGOTTEN: the chain must reach the
+        counter's epoch while the counter reads, must reach the epoch of every record slot that still holds
+        a valid record, and must carry that slot's manifest at that epoch. The valid chain still on disk
+        must agree, as for restore().
+
+        Order: everything is verified; the chain is written durably; the anchor is redefined AT the chain's
+        epoch with its manifest recorded (HighWater.redefine: no state in between is a usable anchor for any
+        other chain). `reanchor_began` is set before the file is written: a failure before it has changed
+        nothing; a failure after it is an operation to run again, and is reported as such."""
+        self.reanchor_began = False
+        with _exclusive(self.lock_path):
+            require(isinstance(envelopes, list) and envelopes, "a chain to re-anchor on is a non-empty list of envelopes")
+            require(len(canonical(envelopes)) <= MAX_CHAIN_BYTES, "the chain to re-anchor on is oversized")
+            current, manifests = None, []
+            for envelope in envelopes:
+                nxt = accept(current, envelope, self.root_key)
+                require(nxt is not current, "the fetched chain repeats epoch %d" % nxt["epoch"])
+                manifests.append(nxt)
+                current = nxt
+            digest_of = self._digests(manifests)
+            previous = self.hw._schema
+            self._judge_by(manifests)
+            try:
+                require(self.hw.unusable() is not None, "the TPM anchor is usable: it is not reset. A chain that is rolled back, lost or "
+                        "substituted is restored under the anchor it has (restore)")
+                counter, records = self.hw.remains()
+                for held, what in sorted([(counter, "its counter")] * (counter is not None) + [(epoch, "a record slot") for epoch, _ in records], reverse=True):
+                    require(current["epoch"] >= held, "the fetched chain ends at epoch %d, below epoch %d, which this node's TPM still holds "
+                            "(%s): re-anchoring does not go back" % (current["epoch"], held, what))
+                for epoch, recorded in records:
+                    require(digest_of(epoch) == recorded, "CONFLICT: a record slot that still reads names another manifest at epoch %d than "
+                            "the fetched chain: nothing is re-anchored; record an incident" % epoch)
+                self._continues_disk(envelopes)
+                self.reanchor_began = True
+                self._write(copy.deepcopy(envelopes))
+            except BaseException:
+                self.hw._schema = previous                 # refused before the disk holds it: judged by the chain held (regalia-kms-ed)
+                raise
+            self.hw.redefine(current["epoch"], digest_of(current["epoch"]))
             self.hw.check(current["epoch"])
             self.chain, self.manifests = copy.deepcopy(envelopes), manifests
             return current
 
-    def commit(self, envelope):
-        with _exclusive(self.lock_path):        # load, write and advance as one step
-            return self._commit(envelope)
+    def _continues_disk(self, envelopes):
+        """What is still on disk counts only as far as it is itself a valid chain: a corrupt or unsigned
+        tail is what recovery is for, and must neither block it nor be compared."""
+        held, previous = [], None
+        try:
+            for stored in self._read_chain():
+                nxt = accept(previous, stored, self.root_key)
+                if nxt is previous:
+                    break
+                held.append(nxt)
+                previous = nxt
+        except Refused:
+            pass
+        for mine, theirs in zip(held, envelopes):
+            require(digest(mine) == digest(theirs["manifest"]), "CONFLICT: the fetched chain differs from the "
+                    "stored one at epoch %d: record an incident" % mine["epoch"])
+        require(len(held) <= len(envelopes), "the fetched chain is shorter than the stored one: nothing to restore")
 
-    def _commit(self, envelope):
+    def commit(self, envelope, final=True):
+        """Accept `envelope` as the next epoch, write it durably and move the TPM anchor to it. `final` False marks an
+        epoch passed through on the way to a later one in the same batch (convergence.catch_up, enrolment): the
+        `documents` check is made for the epoch a batch leaves the node at, the only one it then judges by (#332)."""
+        with _exclusive(self.lock_path):        # load, write and advance as one step
+            return self._commit(envelope, final)
+
+    def _commit(self, envelope, final=True):
         current = self._load()
         nxt = accept(current, envelope, self.root_key)
         if nxt is current:
             return current
-        self._write(self.chain + [envelope])
-        self.hw.anchor(nxt["epoch"], self._digests(self.manifests + [nxt]))
+        if final and self.documents is not None:       # before the disk and the TPM: refused, nothing has moved
+            self.documents(nxt)
+        # judged by the NEW tip before the disk is written (#242 B3): a move to v4 over an owner-written anchor is refused
+        # here, with nothing moved, instead of leaving a v4 chain on the disk over an anchor it then refuses. The same for
+        # a store that never anchors (#66 B3): the ESP advance would refuse that anchor only after the disk had moved
+        previous = self.hw._schema
+        self._judge_by(self.manifests + [nxt])
+        try:
+            hw = self.hw.value()
+            self.hw._slots()
+            if not self.anchors:                        # the disk only: the ESP advance moves the anchor, ESP first
+                require(nxt["epoch"] - hw <= self.hw.MAX_JUMP, "epoch %d is %d above the TPM high-water: the jump exceeds the bound "
+                        "%d until the ESP advance anchors what is held" % (nxt["epoch"], nxt["epoch"] - hw, self.hw.MAX_JUMP))
+            self._write(self.chain + [envelope])
+        except BaseException:
+            self.hw._schema = previous                 # refused before the disk holds it: judged by the chain held (regalia-kms-ed)
+            raise
+        if self.anchors:
+            self.hw.anchor(nxt["epoch"], self._digests(self.manifests + [nxt]))
         self.chain, self.manifests = self.chain + [envelope], self.manifests + [nxt]
         return nxt
 

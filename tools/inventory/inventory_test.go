@@ -56,7 +56,7 @@ func exceptionRecord(expires string) map[string]any {
 	record["custody"] = "exception"
 	record["exception"] = map[string]any{
 		"expires":     expires,
-		"approved_by": "@jobordu",
+		"approved_by": "@owner",
 		"tracking":    "regalia#33",
 	}
 	return record

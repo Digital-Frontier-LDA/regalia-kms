@@ -199,3 +199,5 @@ func TestAnAbsentOrUnreadableTokenDoesNotStopTheDaemonAndIsReportedUnchecked(t *
 		t.Fatalf("an empty registry: err=%v unchecked=%v", err, unchecked)
 	}
 }
+
+func (*mechanismToken) Reader(context.Context) (string, bool, error) { return "", false, nil }

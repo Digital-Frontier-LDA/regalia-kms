@@ -8,10 +8,12 @@ package reauth
 
 import "context"
 
-// Gate says whether the node holds a runtime lease it asked for after a moment, given in this
-// host's CLOCK_BOOTTIME milliseconds. internal/admission.Gate is the one in the daemon.
+// Gate says whether a key may be served from the token with a serial: the node holds a runtime lease
+// it asked for after a moment, given in this host's CLOCK_BOOTTIME milliseconds, and the current
+// manifest lists that serial among the node's hardware tokens (regalia-kms#72, G1).
+// internal/admission.Gate is the one in the daemon.
 type Gate interface {
-	RequestedAfter(ctx context.Context, boottimeMs int64) bool
+	Admits(ctx context.Context, serial string, boottimeMs int64) bool
 }
 
 // Provider is a key provider that waits, after a token's absence and after a start of the daemon,

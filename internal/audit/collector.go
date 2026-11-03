@@ -30,7 +30,9 @@ package audit
 
 import (
 	"bufio"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -40,9 +42,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+	"unicode"
 )
 
 // maxCollectorEventBody mirrors the sink's own bound (Send refuses to marshal an event past
@@ -80,9 +85,38 @@ type Collector struct {
 	stateDir string
 	alarms   *os.File
 
+	// receiptKey signs receipts (handleReceipt); nil, and the collector signs none.
+	receiptKey ed25519.PrivateKey
+
+	// lock is the state directory's: one collector (or one operator command) at a time (#291).
+	lock *os.File
+	// clientRoots is the client CA a hand-over's old certificate must chain to (handover.go).
+	clientRoots *x509.CertPool
+	// successor maps a retired identity to the one that took over its streams; predecessor, the other
+	// way (handover.go).
+	successor, predecessor map[string]string
+
 	mu      sync.Mutex
 	streams map[string]*collectorStream
+	// reported counts each identity's client-reported alarms in the current window (handleReportedAlarm).
+	reported map[string]*reportedWindow
 }
+
+// reportedWindow is one identity's count of client-reported alarms since start.
+type reportedWindow struct {
+	start   time.Time
+	count   int
+	flooded bool
+}
+
+// A client may report at most reportedAlarmLimit alarms per reportedAlarmWindow. Variables, so a
+// test can shorten them. One alarm a minute for an hour is more than any honest shipper raises:
+// each instance stops after its first.
+var (
+	reportedAlarmLimit  = 20
+	reportedAlarmWindow = time.Hour
+	collectorNow        = time.Now
+)
 
 // collectorStream is one daemon's committed chain: identity (client certificate
 // fingerprint) plus site header, the key the protocol document names. The file is the
@@ -95,6 +129,12 @@ type collectorStream struct {
 	// hashes[i] is the committed hash of sequence i+1; verifyEvents' contiguity rule
 	// (sequence == index+1 from genesis) is what makes this an index rather than a search.
 	hashes []string
+	// lineHashes[i] is the line_sha256 that event i+1's trail detail names ("" for an event that is not a
+	// trail line): what a receipt binds (handleReceipt).
+	lineHashes []string
+	// lineChains[i] is the running digest of every line hash up to event i+1 (LineChain): what makes a
+	// receipt for one line a commitment to every line before it.
+	lineChains []string
 	// size is the file offset through which the stream is durably written; a failed append
 	// is truncated back to it so a torn line never survives a recoverable write error.
 	size int64
@@ -127,11 +167,28 @@ func OpenCollector(stateDir string) (*Collector, error) {
 	if err := os.MkdirAll(streamsRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("collector state directory: %w", err)
 	}
+	// One holder of this state at a time: a second collector, or an operator hand-over while one runs,
+	// would each write what the other does not see.
+	lock, err := os.OpenFile(filepath.Join(stateDir, lockFileName), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("collector state lock: %w", err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("collector state %s is held by another collector (or command): stop it first", stateDir)
+	}
 	alarms, err := os.OpenFile(filepath.Join(stateDir, alarmsFileName), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
+		lock.Close()
 		return nil, fmt.Errorf("collector alarm log: %w", err)
 	}
-	collector := &Collector{stateDir: stateDir, alarms: alarms, streams: map[string]*collectorStream{}}
+	collector := &Collector{stateDir: stateDir, alarms: alarms, lock: lock, streams: map[string]*collectorStream{}, reported: map[string]*reportedWindow{}}
+	opened := false
+	defer func() {
+		if !opened {
+			collector.Close() // every refusal below releases the files and the state directory's lock
+		}
+	}()
 	identities, err := os.ReadDir(streamsRoot)
 	if err != nil {
 		return nil, fmt.Errorf("collector state directory: %w", err)
@@ -157,6 +214,10 @@ func OpenCollector(stateDir string) (*Collector, error) {
 			}
 		}
 	}
+	if err := collector.loadHandovers(); err != nil {
+		return nil, err
+	}
+	opened = true
 	return collector, nil
 }
 
@@ -190,12 +251,15 @@ func (c *Collector) loadStream(identity, site string) error {
 	if err != nil {
 		return fmt.Errorf("collector stream: %w", err)
 	}
-	hashes := make([]string, len(events))
+	hashes, lineHashes, lineChains := make([]string, len(events)), make([]string, len(events)), make([]string, len(events))
+	chain := LineChainStart
 	for i, event := range events {
-		hashes[i] = event.Hash
+		hashes[i], lineHashes[i] = event.Hash, trailLineHash(event.Detail)
+		chain = LineChain(chain, lineHashes[i])
+		lineChains[i] = chain
 	}
 	c.streams[streamKey(identity, site)] = &collectorStream{
-		identity: identity, site: site, file: appendFile, hashes: hashes, size: info.Size(),
+		identity: identity, site: site, file: appendFile, hashes: hashes, lineHashes: lineHashes, lineChains: lineChains, size: info.Size(),
 	}
 	return nil
 }
@@ -224,6 +288,10 @@ func (c *Collector) Close() error {
 	if err := c.alarms.Close(); err != nil && firstErr == nil {
 		firstErr = err
 	}
+	if c.lock != nil {
+		c.lock.Close() // releases the state directory's lock
+		c.lock = nil
+	}
 	return firstErr
 }
 
@@ -233,6 +301,9 @@ func (c *Collector) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/events", c.handleEvent)
 	mux.HandleFunc("GET /v1/stream-position", c.handlePosition)
+	mux.HandleFunc("POST /v1/alarms", c.handleReportedAlarm)
+	mux.HandleFunc("GET /v1/receipt", c.handleReceipt)
+	mux.HandleFunc("POST /v1/handover", c.handleHandover)
 	mux.HandleFunc("HEAD /v1/health/ready", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -374,7 +445,15 @@ func (c *Collector) handleEvent(writer http.ResponseWriter, request *http.Reques
 		c.reject(request, writer, http.StatusBadRequest, alarm.withReason("the event fails the audit contract's own field validation: "+err.Error()))
 		return
 	}
-	status, ackHash, reason := c.commit(identity, site, event)
+	if err := validateDetail(event.Detail); err != nil {
+		c.reject(request, writer, http.StatusBadRequest, alarm.withReason("the event fails the audit contract's own field validation: "+err.Error()))
+		return
+	}
+	streamIdentity, ok := c.resolveCaller(request, writer, identity, commonName, site)
+	if !ok {
+		return
+	}
+	status, ackHash, reason := c.commit(streamIdentity, site, event)
 	if status != http.StatusNoContent {
 		alarm.Reason = reason
 		c.reject(request, writer, status, alarm)
@@ -493,6 +572,12 @@ func (stream *collectorStream) appendLocked(event Event) error {
 	}
 	stream.size += int64(written)
 	stream.hashes = append(stream.hashes, event.Hash)
+	lineHash, chain := trailLineHash(event.Detail), LineChainStart
+	if n := len(stream.lineChains); n > 0 {
+		chain = stream.lineChains[n-1]
+	}
+	stream.lineHashes = append(stream.lineHashes, lineHash)
+	stream.lineChains = append(stream.lineChains, LineChain(chain, lineHash))
 	return nil
 }
 
@@ -513,8 +598,12 @@ func (c *Collector) handlePosition(writer http.ResponseWriter, request *http.Req
 		})
 		return
 	}
+	streamIdentity, ok := c.resolveCaller(request, writer, identity, commonName, site)
+	if !ok {
+		return
+	}
 	c.mu.Lock()
-	stream := c.streams[streamKey(identity, site)]
+	stream := c.streams[streamKey(streamIdentity, site)]
 	var position struct {
 		Sequence uint64 `json:"sequence"`
 		Hash     string `json:"hash"`
@@ -529,6 +618,217 @@ func (c *Collector) handlePosition(writer http.ResponseWriter, request *http.Req
 	writer.Header().Set("Content-Type", "application/json")
 	encoded, _ := json.Marshal(position)
 	_, _ = writer.Write(encoded)
+}
+
+// SetReceiptKey makes the collector sign receipts with key (cmd/regalia-audit-collector -receipt-key).
+func (c *Collector) SetReceiptKey(key ed25519.PrivateKey) { c.receiptKey = key }
+
+// ReceiptDomain begins every receipt's signed bytes.
+const ReceiptDomain = "regalia.collector.receipt/v1"
+
+// ReceiptPreimage is what a receipt signs: that this collector holds, in the stream of this client
+// identity (the SHA-256 of its certificate) and site, at this position, the event of this hash, whose
+// trail detail names a line of this SHA-256, and that the running digest of every line up to it is this
+// (LineChain). deploy/baremetal/trails.py prune verifies it before it
+// removes an archive, so it removes only lines the collector holds (#288). One field a line; none can
+// hold a newline (the identity and hashes are hex, the site is collectorSitePattern's).
+func ReceiptPreimage(identity, site string, sequence uint64, eventHash, lineSHA256, lineChain string) []byte {
+	return []byte(fmt.Sprintf("%s\n%s\n%s\n%d\n%s\n%s\n%s", ReceiptDomain, identity, site, sequence, eventHash, lineSHA256, lineChain))
+}
+
+// LineChainStart is the running digest before a stream's first line.
+const LineChainStart = "0000000000000000000000000000000000000000000000000000000000000000"
+
+// LineChain extends the running digest of a stream's lines by one line hash: SHA-256 of the previous
+// digest's 32 bytes and the line hash's 32 bytes (32 zero bytes for an event that is not a trail line).
+// A receipt signs it, so a receipt for line k commits to every line from the first to k: a shipper that
+// posted placeholder lines before a real one gets a digest no honest trail on disk reproduces, and
+// trails.py prune, recomputing it over the archives, removes nothing (regalia-kms-51 on #288).
+func LineChain(previous, lineSHA256 string) string {
+	before, _ := hex.DecodeString(previous)
+	line, err := hex.DecodeString(lineSHA256)
+	if err != nil || len(line) != 32 {
+		line = make([]byte, 32)
+	}
+	sum := sha256.Sum256(append(before, line...))
+	return hex.EncodeToString(sum[:])
+}
+
+// Receipt is the collector's answer to GET /v1/receipt.
+type Receipt struct {
+	Sequence   uint64 `json:"sequence"`
+	EventHash  string `json:"event_hash"`
+	LineSHA256 string `json:"line_sha256"`
+	LineChain  string `json:"line_chain"` // the running digest of every line up to this one (LineChain)
+	Signature  string `json:"signature"`  // Ed25519 over ReceiptPreimage, hex
+}
+
+// trailLineHash is the line_sha256 a trail event's detail names, already held to its content by
+// validateTrailDetail; "" for any other event.
+func trailLineHash(detail json.RawMessage) string {
+	var line struct {
+		Format     string `json:"format"`
+		LineSHA256 string `json:"line_sha256"`
+	}
+	if detail == nil || json.Unmarshal(detail, &line) != nil || !strings.HasPrefix(line.Format, "regalia.trail/") {
+		return ""
+	}
+	return line.LineSHA256
+}
+
+// handleReceipt signs, for the asking client's own stream, what the collector holds at one position.
+// A client can ask only about its own stream (identity and site), and a receipt states only what is
+// committed: nothing past the head, and no position before the first.
+func (c *Collector) handleReceipt(writer http.ResponseWriter, request *http.Request) {
+	identity, commonName, authenticated := peerIdentity(request)
+	if !authenticated {
+		c.reject(request, writer, http.StatusUnauthorized, collectorAlarm{
+			Identity: "unauthenticated",
+			Reason:   "no client certificate was presented: receipts are given only to an identified client",
+		})
+		return
+	}
+	site, err := requestSite(request)
+	if err != nil {
+		c.reject(request, writer, http.StatusBadRequest, collectorAlarm{
+			Identity: identity, CommonName: commonName, Site: request.Header.Get("X-Regalia-Site"),
+			Reason: "invalid site header: " + err.Error(),
+		})
+		return
+	}
+	streamIdentity, ok := c.resolveCaller(request, writer, identity, commonName, site)
+	if !ok {
+		return
+	}
+	if c.receiptKey == nil {
+		http.Error(writer, "this collector signs no receipts", http.StatusNotFound)
+		return
+	}
+	sequence, err := strconv.ParseUint(request.URL.Query().Get("sequence"), 10, 64)
+	if err != nil || sequence == 0 {
+		http.Error(writer, "sequence must be a position from 1", http.StatusBadRequest)
+		return
+	}
+	c.mu.Lock()
+	stream := c.streams[streamKey(streamIdentity, site)] // the receipt still names the caller: its prune checks its own certificate
+	var receipt Receipt
+	held := stream != nil && sequence <= uint64(len(stream.hashes))
+	if held {
+		receipt = Receipt{Sequence: sequence, EventHash: stream.hashes[sequence-1], LineSHA256: stream.lineHashes[sequence-1],
+			LineChain: stream.lineChains[sequence-1]}
+	}
+	c.mu.Unlock()
+	if !held {
+		http.Error(writer, "this collector holds no such position of your stream", http.StatusNotFound)
+		return
+	}
+	receipt.Signature = hex.EncodeToString(ed25519.Sign(c.receiptKey, ReceiptPreimage(identity, site, sequence, receipt.EventHash, receipt.LineSHA256, receipt.LineChain)))
+	writer.Header().Set("Content-Type", "application/json")
+	encoded, _ := json.Marshal(receipt)
+	_, _ = writer.Write(encoded)
+}
+
+// maxReportedAlarmBody bounds a client-reported alarm: a reason, a sequence and a hash.
+const maxReportedAlarmBody = 4 << 10
+
+// handleReportedAlarm records an alarm a client raises about its own stream: the trail shipper
+// (trail.go) found the file under what this collector already committed cut short or
+// rewritten. Commit-time checks cannot see the first: a file cut short is a prefix of the
+// committed copy, and replaying a prefix is the idempotent case. So the client says so, and the
+// alarm lands where the collector's own do, keyed by the same identity and site, before the 204.
+// It commits nothing to the stream and answers no question: a client can only add alarms.
+func (c *Collector) handleReportedAlarm(writer http.ResponseWriter, request *http.Request) {
+	identity, commonName, authenticated := peerIdentity(request)
+	if !authenticated {
+		c.reject(request, writer, http.StatusUnauthorized, collectorAlarm{
+			Identity: "unauthenticated",
+			Reason:   "no client certificate was presented: alarms are accepted only from an identified client",
+		})
+		return
+	}
+	site, err := requestSite(request)
+	if err != nil {
+		c.reject(request, writer, http.StatusBadRequest, collectorAlarm{
+			Identity: identity, CommonName: commonName, Site: request.Header.Get("X-Regalia-Site"),
+			Reason: "invalid site header: " + err.Error(),
+		})
+		return
+	}
+	var reported struct {
+		Sequence uint64 `json:"sequence"`
+		Hash     string `json:"hash"`
+		Reason   string `json:"reason"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(request.Body, maxReportedAlarmBody))
+	decoder.DisallowUnknownFields()
+	var trailing any
+	if err := decoder.Decode(&reported); err != nil || !errors.Is(decoder.Decode(&trailing), io.EOF) ||
+		reported.Reason == "" || len(reported.Reason) > 512 || strings.IndexFunc(reported.Reason, unicode.IsControl) >= 0 ||
+		(reported.Hash != "" && !auditHashPattern.MatchString(reported.Hash)) {
+		c.reject(request, writer, http.StatusBadRequest, collectorAlarm{
+			Identity: identity, CommonName: commonName, Site: site,
+			Reason: "a reported alarm that is not {sequence, hash, reason} within bounds",
+		})
+		return
+	}
+	switch c.admitReportedAlarm(identity, commonName, site) {
+	case reportRefused:
+		http.Error(writer, "too many alarms reported by this client: refused until the window ends", http.StatusTooManyRequests)
+		return
+	case reportFlood:
+		c.reject(request, writer, http.StatusTooManyRequests, collectorAlarm{
+			Identity: identity, CommonName: commonName, Site: site,
+			Reason: fmt.Sprintf("alarm flood: this client reported more than %d alarms within %s; further reports are refused until the window ends", reportedAlarmLimit, reportedAlarmWindow),
+		})
+		return
+	}
+	alarm := collectorAlarm{
+		Timestamp: time.Now().UTC(), Identity: identity, CommonName: commonName, Site: site,
+		Sequence: reported.Sequence, EventHash: reported.Hash, Reason: "reported by the client: " + reported.Reason,
+	}
+	if err := c.appendAlarm(alarm); err != nil {
+		http.Error(writer, fmt.Sprintf("the alarm could not be recorded: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+const (
+	reportAdmitted = iota
+	reportFlood    // the first report past the limit: the collector records one alarm of its own
+	reportRefused  // every later one in the window: refused, nothing written
+)
+
+// admitReportedAlarm counts a client-reported alarm against its identity's window. A client
+// certificate that is compromised can otherwise fill the alarm log; this bounds it to
+// reportedAlarmLimit lines and one flood alarm a window. The table holds one entry per identity
+// seen in the window: identities are certificates this collector's CA issued, and expired windows
+// are dropped as it grows.
+func (c *Collector) admitReportedAlarm(identity, commonName, site string) int {
+	now := collectorNow()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.reported) >= 1024 {
+		for key, window := range c.reported {
+			if now.Sub(window.start) >= reportedAlarmWindow {
+				delete(c.reported, key)
+			}
+		}
+	}
+	window := c.reported[identity]
+	if window == nil || now.Sub(window.start) >= reportedAlarmWindow {
+		window = &reportedWindow{start: now}
+		c.reported[identity] = window
+	}
+	if window.count < reportedAlarmLimit {
+		window.count++
+		return reportAdmitted
+	}
+	if window.flooded {
+		return reportRefused
+	}
+	window.flooded = true
+	return reportFlood
 }
 
 // syncDir fsyncs a directory so newly created entries in it survive a crash. Data-only syncs

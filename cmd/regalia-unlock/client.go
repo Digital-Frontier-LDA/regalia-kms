@@ -27,6 +27,7 @@ type session struct {
 	ephemeralPublic []byte
 	consumed        bool
 	spokeVersion1   bool // a peer answered only version 1 (said once in the diagnostics)
+	unsteadyPCRs    bool // a quote went without values: its PCRs kept moving (said once in the diagnostics)
 }
 
 func newSession(nodeID string) (*session, error) {
@@ -87,6 +88,9 @@ func (s *session) ask(peer pin, pathEpoch uint64, send transport, quote quoter) 
 	attest, signature, values, err := quote(expected[:])
 	if err != nil {
 		return nil, fmt.Errorf("quote: %w", err)
+	}
+	if version == exchangeVersion && values == nil {
+		s.unsteadyPCRs = true
 	}
 	if version == 1 || values == nil {
 		version, values = 1, nil // version 1 carries no values (and a quote whose PCRs would not hold still goes)

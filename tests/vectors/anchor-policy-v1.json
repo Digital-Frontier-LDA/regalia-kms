@@ -1,0 +1,60 @@
+{
+ "approved": {
+  "6": "298412a102ac3abfe4935e445ffbc47d859bcf9178b43eb2732274beda70c6b3",
+  "7": "85b85314fccc918abfe8675066574d9038478d6273c0a94503161ca5a667b579"
+ },
+ "increment": {
+  "first": "0cdb3e65693b6a8a9f96dda9d216359b3a5b5208474f3427910bc05b70fe31a5",
+  "from": {
+   "6": "0e924ede006aa5daadf84fade9db5886c3743cae8890f6a6450fec664b768a75",
+   "7": "3b611f8c227d6538f201341f9cf8a81756b7a1d1c1bd32b01be9b6c55795517d"
+  }
+ },
+ "k_a": {
+  "name": "000bc9d3cee6dba58c575549750d02c05995f0e5dd4ca6a4044ea872b6d16f236514",
+  "point": "049d51373a8fa0defe9fb67b76efacec1ebcb970823f441071862e9a150c445bd1e996f2aa2281cd89b2674b037fe5972b3cbb36c38144ff20978f2da805d2e16d",
+  "tpmt_public": "00560023000b000600400000001000100003001000209d51373a8fa0defe9fb67b76efacec1ebcb970823f441071862e9a150c445bd10020e996f2aa2281cd89b2674b037fe5972b3cbb36c38144ff20978f2da805d2e16d"
+ },
+ "k_sys": {
+  "name": "000b4945b56aae9d010355a3430e70dd91fee31763c7e090f43bf8544e00f0d86799",
+  "pem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAosmTzOlmfFM68ca9yJ1H\nzWeY+B6Q25jxttSmG/3+gS0L/WbY/1FCAjnUe/wlNPDT3vMQ7VeDdark9PEZ6Sbd\nfDt9DE2QWcXNB9acvmfbJYb3HLgYnqSaQoDLbCA0EB8VZgqr9RyRIF5ad/7SC+Hg\nEBAvzyvgkIKmSruncCQR5rExELlBtMUbNbZ5x4Kvl0mauVJ96uFwihBo+CbGWVmE\nrFXCwe64MX/gOKtuvK1Hxbph5dBieVwsDc/bWvOKS84pM2dLMmYIpIFJmvzQoZ2w\nPcx30eZ40LJO3rMc2rQEer3OAT9lbM0hm5gV+3fVVEEfe9TC5mg5+YKQtIoq8QFF\nvwIDAQAB\n-----END PUBLIC KEY-----\n",
+  "policy_authorize": "f3dfbb5681cdf0cbcb079919cbffd460bd087ce40e2c7d7398820bb293b60a01",
+  "tpmt_public": "01160001000b000600400000001000100800000100010100a2c993cce9667c533af1c6bdc89d47cd6798f81e90db98f1b6d4a61bfdfe812d0bfd66d8ff51420239d47bfc2534f0d3def310ed578375aae4f4f119e926dd7c3b7d0c4d9059c5cd07d69cbe67db2586f71cb8189ea49a4280cb6c2034101f15660aabf51c91205e5a77fed20be1e010102fcf2be09082a64abba7702411e6b13110b941b4c51b35b679c782af97499ab9527deae1708a1068f826c6595984ac55c2c1eeb8317fe038ab6ebcad47c5ba61e5d062795c2c0dcfdb5af38a4bce2933674b326608a481499afcd0a19db03dcc77d1e678d0b24edeb31cdab4047abdce013f656ccd219b9815fb77d554411f7bd4c2e66839f98290b48a2af10145bf"
+ },
+ "measured_with": "swtpm, tpm2-tools 5.7",
+ "refs": {
+  "anchor": {
+   "auth_policy": "b3bd6b94c082c63fe0797e9064aead96e23e37d5b5c5c7a3b070724d2dbc1c37",
+   "policy_ref_hex": "616e63686f72"
+  },
+  "heartbeat": {
+   "auth_policy": "34f4871e4d1bcb8abfc0068742e6b0d6ecae3b70348f8eafe590f679badf3e4e",
+   "policy_ref_hex": "686561727462656174"
+  },
+  "rotation": {
+   "auth_policy": "c8937c2f016cda0c8d325ce7ed3d49851e45da6270d5e458ae1238ab71d7573a",
+   "policy_ref_hex": "726f746174696f6e"
+  },
+  "signing": {
+   "auth_policy": "83fd993384f08420cc36f06df726dc38a69104cf2609cebf985f32a1ddfc5817",
+   "policy_ref_hex": "7369676e696e67"
+  },
+  "signing-counter": {
+   "auth_policy": "7677748bb9ad8f9afd07f7d5e2d892bf00a2e50e006f919fdf719deb98397e42",
+   "policy_ref_hex": "7369676e696e672d636f756e746572"
+  },
+  "slots": {
+   "auth_policy": "04d0553819cd5f032d343502b7804fe1c9046082e1ab3a6c9e1e5bf946e9ce8b",
+   "policy_ref_hex": "736c6f7473"
+  }
+ },
+ "rotation": {
+  "attributes": "nt=counter|authread|policywrite|no_da",
+  "first_value": 6,
+  "index": "0x01500395",
+  "name_unwritten": "000b52273ff39f58476e68eb2535232e20e02e1a497ed8410d52b99c3bdad0f76824",
+  "name_written": "000b00ba45926082472c924006274ce3bbe113b9eb146dd06b30ea33c342e6736bff",
+  "size": 8
+ },
+ "schema": "regalia.anchor-policy-vectors/v1"
+}

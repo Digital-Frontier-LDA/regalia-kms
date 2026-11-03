@@ -1,10 +1,10 @@
 module github.com/Digital-Frontier-LDA/regalia-kms/adapters/gpgsign
 
-go 1.26.6
+go 1.26.10
 
 require (
 	github.com/ProtonMail/go-crypto v1.5.2
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 )
 
 require (

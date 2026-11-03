@@ -1,21 +1,23 @@
-# The pre-root unlock client (cmd/regalia-unlock), started by a connection on regalia-unlock-core.socket,
-# which only the relay on the key socket (regalia-unlock-relay.service) connects to.
+# The pre-root unlock client (cmd/regalia-unlock): a systemd PASSWORD AGENT for the root volume (#70, the
+# Clevis way). crypttab names no key file, so systemd-cryptsetup asks for the root volume's passphrase
+# through the ask-password protocol; the console shows that request from the start, and this program
+# answers the same request once a peer has given its half. Whichever answers first wins. Until a peer
+# helps it asks again, at a capped backoff (2 s doubling to 60 s), for as long as the initrd lasts: a node
+# that boots during a blackout unlocks by itself when a peer comes back, the recovery key at the console
+# all along. It answers ONLY the root volume's request (Id=cryptsetup:/dev/disk/by-partlabel/regalia-root),
+# and if it fails or is never started the console prompt is untouched: the two are independent agents.
 #
-# systemd does two things for it, and the program does neither itself:
-#   - it unseals the local half of the disk credential with the TPM (LoadCredentialEncrypted=). On
-#     another machine, or on a boot the TPM's policy refuses, that fails and the program never starts;
-#   - it passes the listening socket (socket activation).
-# The program runs no other program and writes no secret anywhere. It stays for as long as the initrd
-# lasts and answers each connection with the key or with nothing, always under the ONE boot session it
-# made when it started: a peer accepts one session per boot. systemd stops it before the root filesystem
-# takes over; it zeroes the local half and the key and ends. Started again in
-# the same boot (after a crash), it finds the first one's session on record and asks no peer.
+# systemd unseals the local half of the disk credential with the TPM (LoadCredentialEncrypted=). On another
+# machine, or on a boot the TPM's policy refuses, that fails and the program never starts; the console
+# prompt is the way then. The program runs no other program and writes no secret anywhere. It asks the
+# peers under ONE boot session (a peer accepts one per boot), stands down when /dev/mapper/root exists, and
+# systemd stops it before the root filesystem takes over; what it held is zeroed then. Started again in the
+# same boot (after a crash), it finds the first one's session on record and asks no peer.
 
 [Unit]
 Description=Give the root volume's key: TPM plus one peer
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
 DefaultDependencies=no
-Requires=regalia-unlock-core.socket
 # the local half is unsealed with the TPM: not before its device is there
 Wants=tpm2.target
 # and, in a measured boot, not before the initrd's phase is in PCR 11: the quote must show that phase
@@ -23,25 +25,32 @@ After=tpm2.target systemd-pcrphase-initrd.service
 # the boot mesh, when the initrd has it (#66); without that unit this line does nothing
 Wants=regalia-wg-boot.service
 After=regalia-wg-boot.service
+# its boot configuration, rendered from the verified membership chain (#66 B3)
+Requires=regalia-boot-render.service
+After=regalia-boot-render.service
 # it holds the local half and the boot session's private key: it does not outlive the initrd
 Conflicts=initrd-switch-root.target shutdown.target
 Before=initrd-switch-root.target shutdown.target
 
 [Service]
 Type=exec
+# Its lines on the console too, not only in the initrd's journal (#75, regalia-kms-d9): what an operator at the iLO
+# reads when a host does not come up — the initrd-phase PCR 11 it says first, each attempt and each refusal. None is
+# a secret (the key never leaves the process but into the request's answer).
+StandardOutput=journal+console
+StandardError=journal+console
 # Everything that differs per host comes from the ESP, none from the image: the image is the same for
 # every host (one PCR 11 to sign). systemd-stub packs the ESP's loader/credentials/<name>.cred files into
 # the initrd at /.extra/global_credentials/ and measures them into PCR 12, which the peers attest. The
 # image's command line carries systemd.import_credentials=no, so systemd imports NO credential from any
 # source (ESP, SMBIOS, fw_cfg, command line) and nothing in the initrd acts on one by name; this unit
-# reads exactly its two files, by these fixed paths, as data:
+# reads exactly its one file, by this fixed path:
 #   regalia.unlock-local   the local half, sealed to this TPM (decrypted here, never accepted in plain)
-#   regalia.unlock-config  the boot configuration (unlock.boot_config): not secret
-# With a path, a missing file is fatal: the unit does not start, and systemd-cryptsetup asks at the
-# console (the boot test times it).
-ExecStart=/usr/bin/regalia-unlock -config %d/regalia.unlock-config -budget 200s
+# and its boot configuration (unlock.boot_config: not secret), which regalia-boot-render.service rendered
+# from the verified membership chain into /run/regalia-boot (#66 B3). With a path, a missing file is
+# fatal: the unit does not start, and the console's prompt is the way.
+ExecStart=/usr/bin/regalia-unlock -config /run/regalia-boot/regalia.unlock-config
 LoadCredentialEncrypted=regalia.unlock-local:/.extra/global_credentials/regalia.unlock-local.cred
-LoadCredential=regalia.unlock-config:/.extra/global_credentials/regalia.unlock-config.cred
 # What it leaves for the running system: the boot session's ID and public key, and who opened the disk,
 # in /run/regalia. The directory is root's, 0755, and stays when this unit ends and across switch-root:
 # the lease service and the KMS daemon read and write there after boot.
@@ -77,3 +86,7 @@ DevicePolicy=closed
 DeviceAllow=/dev/tpmrm0 rw
 DeviceAllow=block-* r
 UMask=0077
+
+[Install]
+# beside systemd-cryptsetup, never in front of it: the request is answered by whichever agent answers first
+WantedBy=cryptsetup.target

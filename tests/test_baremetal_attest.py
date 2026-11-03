@@ -197,6 +197,19 @@ class Verification(unittest.TestCase):
     def verifier(self):
         return attest.Verifier(self.policy, os.path.join(self.d, "state.json"), now=lambda: self.clock[0], run=self.run_tool)
 
+    def test_the_state_holds_no_float_whatever_the_clock_reads(self):
+        """update.Host.own_state reads this file with the strict document loader, which refuses floats: an outstanding
+        nonce or enrolment challenge timed by a wall clock with a fraction made a node refuse its own state (#369's
+        rolling run: "floats are not allowed")."""
+        from deploy.baremetal import membership
+        self.clock[0] = 1791137837.396
+        self.v.nonce("site-a")
+        self.v.challenge("site-a", EK_PUB, self.ak_pub, replace=True)
+        with open(os.path.join(self.d, "state.json"), "rb") as f:
+            state = membership.load(f.read())
+        self.assertTrue(state["nonces"] and all(isinstance(v["expires"], int) for v in state["nonces"].values()))
+        self.assertIsInstance(state["nodes"]["site-a"]["pending"]["expires"], int)
+
     def run_tool(self, argv, **kw):
         """tpm2_makecredential, faked: it records the secret it was asked to wrap. OpenSSL is real."""
         if argv[0] != "tpm2_makecredential":
@@ -245,6 +258,32 @@ class Verification(unittest.TestCase):
         self.enroll(replace=True)
         self.assertNotEqual(self.secrets[0][1], self.secrets[1][1])
         self.assertEqual(len(self.secrets[1][1]), 32)
+
+    def test_the_ak_offered_must_be_the_one_the_manifest_names(self):
+        """#190: given the manifest's AK Name, the challenge refuses any other AK, before anything is wrapped or held."""
+        manifest_ak = attest.ak_identity(self.other_pub)[0].hex()
+        made = len(self.secrets)
+        with self.assertRaises(attest.Refused) as caught:
+            self.v.challenge("site-a", EK_PUB, self.ak_pub, replace=True, ak_name=manifest_ak)
+        self.assertIn("not the one the manifest names", str(caught.exception))
+        self.assertEqual(len(self.secrets), made, "no credential is made for an AK the manifest does not name")
+        for spelling in (manifest_ak.upper(), manifest_ak[:-2] + "\u00e9a", manifest_ak[:-2], None.__class__.__name__):
+            with self.assertRaises(attest.Refused) as caught:     # never a TypeError, never another spelling
+                self.v.challenge("site-a", EK_PUB, self.other_pub, replace=True, ak_name=spelling)
+            self.assertIn("must be 68 lowercase hex", str(caught.exception))
+        self.assertEqual(len(self.secrets), made)
+        self.v.challenge("site-a", EK_PUB, self.other_pub, replace=True, ak_name=manifest_ak)
+        self.assertEqual(self.secrets[-1][0], manifest_ak)
+        self.assertEqual(self.v.enroll("site-a", self.secrets[-1][1]).hex(), manifest_ak)
+
+    def test_enroll_refuses_an_ak_the_manifest_no_longer_names(self):
+        """regalia-kms-1e on #272: the manifest moved between the challenge and the answer."""
+        before = attest.ak_identity(self.other_pub)[0].hex()
+        self.v.challenge("site-a", EK_PUB, self.other_pub, replace=True, ak_name=before)
+        with self.assertRaises(attest.Refused) as caught:
+            self.v.enroll("site-a", self.secrets[-1][1], ak_name=attest.ak_identity(self.ak_pub)[0].hex())
+        self.assertIn("not the one the manifest names for this node now", str(caught.exception))
+        self.attempt()                                       # the first AK is still the enrolled one
 
     def test_enrollment_refusals(self):
         def refused(reason, fn, *args, **kw):
@@ -618,6 +657,27 @@ class Verification(unittest.TestCase):
             self.assertEqual((verdict["measurement"], verdict["phase"]), ("uki", phase))
         self.refused("the node is in the system phase of uki", phase="initrd", **self.boot(self.IMAGE2, "system"))
 
+    def test_a_signed_images_set_may_name_its_signing_keys(self):
+        """#190/#265: the keys a signed image's PCR policy and Secure Boot signature are made with, by fingerprint, so
+        that whoever seals to a PCR-signing key takes only one the approved set names. Peers never read them."""
+        def policy(*sets):
+            return {"schema": attest.POLICY_SCHEMA, "nodes": {"site-a": {"ek_name": self.ek_name.hex(), "accepted": list(sets)}}}
+        signing = {"initrd": "1a" * 32, "system": "5b" * 32, "secure_boot_cert": "5c" * 32}
+        attest.validate_policy(policy(dict(self.one("a", self.IMAGE1), signing=signing)))
+        cases = (
+            ("a field missing", "signing fields mismatch", dict(self.one("a", self.IMAGE1), signing={"initrd": "1a" * 32, "system": "5b" * 32})),
+            ("a field more", "signing fields mismatch", dict(self.one("a", self.IMAGE1), signing=dict(signing, pcrpkey="77" * 32))),
+            ("not hex", "signing.system must be 64 lowercase hex", dict(self.one("a", self.IMAGE1), signing=dict(signing, system="5B" * 32))),
+            ("one key for both phases", "the two phases' PCR keys must be two keys",
+             dict(self.one("a", self.IMAGE1), signing=dict(signing, system="1a" * 32))),
+            ("not an object", "signing must be an object", dict(self.one("a", self.IMAGE1), signing=[])),
+            ("on a set with no per-phase PCR 11", "only a set with per-phase PCR 11", dict(self.one("a", None), signing=signing)),
+        )
+        for label, reason, entry in cases:
+            with self.subTest(label), self.assertRaises(attest.Refused) as caught:
+                attest.validate_policy(policy(entry))
+            self.assertIn(reason, str(caught.exception))
+
     def test_what_a_per_phase_set_may_hold(self):
         def policy(*sets):
             return {"schema": attest.POLICY_SCHEMA, "nodes": {"site-a": {"ek_name": self.ek_name.hex(), "accepted": list(sets)}}}
@@ -855,6 +915,25 @@ class CommandLine(unittest.TestCase):
                 with self.subTest(argv[0]), contextlib.redirect_stderr(io.StringIO()) as err:
                     self.assertEqual(attest.main(argv), 1)
                     self.assertIn(reason, err.getvalue())
+
+
+class QuoteLabels(unittest.TestCase):
+    """#399 (regalia-kms-d9): every purpose a node's AK quotes for has its own label, so a quote made for one never
+    verifies for another by construction, not by every reader checking a schema. (The identity's qualifying data also
+    has a third field, the challenge secret's hash, so it could not equal a record's even under one label: the label
+    is the structural guard, the field count a second one.)"""
+
+    def test_the_labels_are_distinct(self):
+        labels = [attest.TRANSCRIPT_LABEL, attest.BINDING_LABEL, attest.RECORD_LABEL, attest.IDENTITY_LABEL]
+        self.assertEqual(len(set(labels)), len(labels), labels)
+
+    def test_an_identity_is_bound_to_its_challenge(self):
+        payload = b'{"schema":"regalia.enrol-identity/v1"}'
+        one, two = attest.identity_qualifying(payload, b"\x01" * 32), attest.identity_qualifying(payload, b"\x02" * 32)
+        self.assertNotEqual(one, two)
+        self.assertNotEqual(one, attest.record_qualifying(payload))
+        with self.assertRaisesRegex(attest.Refused, "the challenge secret's SHA-256 is 32 bytes"):
+            attest.identity_qualifying(payload, b"\x01" * 31)
 
 
 if __name__ == "__main__":

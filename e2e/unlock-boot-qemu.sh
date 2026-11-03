@@ -2,12 +2,14 @@
 # unlock-boot-qemu.sh — a KMS host BOOTS through a peer: a real initrd, a real encrypted root, the TPM
 # unsealing done by systemd, WireGuard before root (regalia-kms#66 PoC 6.1, 6.2, 6.5; #67 PoC 7.1, 7.4).
 #
-#   sudo REGALIA_UNLOCK_BIN=/path/to/regalia-unlock e2e/unlock-boot-qemu.sh
+#   sudo REGALIA_GO=/path/to/go REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/<TIME>/ \
+#        REGALIA_BOOT_SECURITY_MIRROR=https://snapshot.debian.org/archive/debian-security/<TIME>/ e2e/unlock-boot-qemu.sh
 #
 # A Debian 13 guest in QEMU (KVM when the machine has it) under UEFI (OVMF), with a software TPM as its
 # TPM. MEASURED BOOT: the guest boots a unified kernel image built and signed by deploy/baremetal/uki.py
-# (TEST keys made here), whose initrd is built by the guest's own dracut with the module
-# deploy/baremetal/initrd/dracut/90regalia-unlock and is the same for every host. Its disk: an ESP (the
+# (TEST keys made here), whose initrd is built REPRODUCIBLY by deploy/baremetal/initrd/build-initrd.sh (#248:
+# the archive snapshot of the guest, dracut with the module deploy/baremetal/initrd/dracut/90regalia-unlock,
+# the client compiled by the builder) and is the same for every host. Its disk: an ESP (the
 # image as EFI/BOOT/BOOTX64.EFI, and the host's credentials in loader/credentials, which systemd-stub
 # measures into PCR 12) and a GPT partition labelled regalia-root, a LUKS2 volume. The peers run on this
 # machine, in network namespaces, as in e2e/wg-boot-netns.sh; nothing is loaded outside a namespace.
@@ -16,12 +18,27 @@
 #           (PoC 6.5: the manual path works with no peer and no credential). The running guest seals
 #           the local half and the WG-BOOT key to its own TPM (PCR 7, and PCR 11 through the image's
 #           initrd-phase signature), and reports its PCRs: PCR 11 must be the build record's.
-#   boot 1b AN UNDECRYPTABLE SEALED CREDENTIAL: the real client cannot start; the relay on the key socket
-#           gives nothing, and the console asks for the recovery key, promptly.
+#   boot 1b AN UNDECRYPTABLE SEALED CREDENTIAL: the client cannot start; the console, which asks from the
+#           start whatever the client does, takes the recovery key, promptly.
 #   boot 2  UNATTENDED. Nobody types anything. systemd unseals both credentials in the initrd, the boot
 #           mesh comes up, a peer verifies the guest's quote and gives its half, systemd-cryptsetup maps
-#           the root volume with the key from the socket, the root filesystem comes up, and the boot
+#           the root volume with the key the client answered its request with, the root filesystem comes up, and the boot
 #           interface, its ruleset and its address are gone.
+#   boot 2e A FORKED CHAIN (#66 B3): another epoch 1, validly signed by the root the image trusts, on the ESP in
+#           place of the one the guest's TPM anchored: the initrd's render refuses it (CONFLICT), nothing is asked of
+#           a peer, and the console takes the recovery key.
+#   boot 2c AN OLDER SIGNED IMAGE, APPROVED (#135): a second image of the same build (one word more on its
+#           command line, so another PCR 11, signed by the same keys). The peers' document lists both: it boots
+#           unattended, as boot 2.
+#   boot 2k #75 TIER Q, Q1: AN IMAGE WHOSE KERNEL DIFFERS (the same kernel with bytes appended). Before booting: its
+#           measured .linux is the first image's plus the bytes, and they alone change its predicted PCR 11. Not
+#           approved, both peers refuse it naming PCR 11; approved, it boots unattended. Each time the client's console
+#           line gives the initrd-phase PCR 11 its own build record predicts. No journald forwarding on its command
+#           line (#413): the client's lines reach the console through its unit.
+#   boot 2d THE SAME IMAGE, RETIRED: the document lists the current image only. The TPM releases the local
+#           half all the same (its signed PCR 11 policy has no counter), both peers refuse the quote naming
+#           PCR 11, nothing is given; the client keeps asking, and the recovery key typed at the console opens.
+#           Boot 2b then boots the current image again: retiring one image strands nothing.
 #   boot 2b A CREDENTIAL FROM SMBIOS (a unit drop-in, as the firmware could pass one): not acted on, since
 #           the image's command line stops systemd importing credentials; the unlock goes on.
 #   boots 3-6  A PLANTED CREDENTIAL on the ESP (a unit drop-in, an extra unit, a tmpfiles line, an empty
@@ -29,8 +46,17 @@
 #   boot 7  A COMMAND LINE FROM SMBIOS (io.systemd.stub.kernel-cmdline-extra, switching credential import
 #           back on, and an extra unit): either the stub ignores it, or PCR 12 moves and the peers refuse;
 #           nothing planted runs.
-#   boot 8  NO PEER. The peers are unreachable: after its bounded rounds the client gives nothing, the
-#           console asks for the recovery key, and the key opens the volume.
+#   boot 8  NO PEER, FOR LONGER THAN ANY DEFAULT TIMEOUT (#70). The peers are unreachable; the client keeps
+#           asking, at the backoff's schedule and past its cap; after 150 s a wrong key only brings the
+#           prompt back (tries=0), and the recovery key still opens: neither systemd-cryptsetup nor the
+#           root's device wait gave up, and nothing ended in a shell. Boots 8 and 9 need KVM.
+#   boot 9  THE PEERS COME BACK (#70, a blackout). Unreachable for 150 s and past the backoff's cap, then
+#           back: nobody types anything, and the host unlocks by itself.
+#   boots 10-12  A NEW MANIFEST (#66 B3, the ESP advance). The ESP at epoch 2 with the TPM anchor still at 1
+#           (a crash between regalia-esp-advance's two steps): rendered under epoch 2. Both at 2: rendered.
+#           The order reversed, the ESP at 1 under an anchor at 2: a ROLLBACK, the recovery key. The ESP is
+#           written here by the test, not by node.esp_advance (tests/test_baremetal_esp_advance.py), and the
+#           peers stay at epoch 1, so these boots show the render, not an unlock under epoch 2.
 #
 # The guest is built here from Debian's own packages (mmdebstrap). REGALIA_BOOT_ROOTFS names a directory
 # to use instead: the one variable to change when the appliance image of #61 exists.
@@ -41,7 +67,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export LC_ALL=C PATH="$PATH:/usr/sbin:/sbin"
 [ "$(id -u)" = 0 ] || { echo "unlock-boot-qemu: run as root"; exit 2; }
-BIN="${REGALIA_UNLOCK_BIN:?set REGALIA_UNLOCK_BIN to a built cmd/regalia-unlock (static: CGO_ENABLED=0)}"
+GO="${REGALIA_GO:?set REGALIA_GO to a go (from 1.21: it launches the release go.mod pins, which builds the client)}"
 OVMF="${REGALIA_OVMF:-/usr/share/OVMF}"
 [ -r "$OVMF/OVMF_CODE_4M.fd" ] && [ -r "$OVMF/OVMF_VARS_4M.fd" ] || { echo "unlock-boot-qemu: OVMF is required ($OVMF/OVMF_CODE_4M.fd)"; exit 2; }
 for t in qemu-system-x86_64 swtpm tpm2_createek cryptsetup mkfs.ext4 mkfs.vfat sfdisk openssl wg nft ip python3; do
@@ -70,11 +96,43 @@ if [ -n "${REGALIA_BOOT_ROOTFS:-}" ]; then
   cp -a "$REGALIA_BOOT_ROOTFS" "$ROOT"
 else
   command -v mmdebstrap >/dev/null || { echo "unlock-boot-qemu: mmdebstrap is required (or REGALIA_BOOT_ROOTFS)"; exit 2; }
-  mmdebstrap --variant=minbase \
-    --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography \
-    "$SUITE" "$ROOT" "${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}" >"$W/mmdebstrap.log" 2>&1 \
+  # a snapshot of the archive (REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/<time>/ in CI) gives
+  # the same packages on every run, so the initrd matches its reviewed inventory (#198); its Release file is
+  # past its Valid-Until, which only a snapshot may be
+  APTOPT=()
+  case "${REGALIA_BOOT_MIRROR:-}" in *snapshot.debian.org*) APTOPT=(--aptopt='Acquire::Check-Valid-Until "false"') ;; esac
+  # the main suite, its updates and its SECURITY suite (REGALIA_BOOT_SECURITY_MIRROR, the security archive's
+  # snapshot at the same time in CI): a reviewed baseline without security updates is not one to ship (#198)
+  MIRROR="${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}"
+  # (explicit lines name their keyring: mmdebstrap only picks one by itself for a bare mirror URL)
+  KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")"      # Debian's own, pinned: the runner's predates trixie's keys
+  SOURCES=("deb [signed-by=$KEYRING] $MIRROR $SUITE main" "deb [signed-by=$KEYRING] $MIRROR $SUITE-updates main"
+           "deb [signed-by=$KEYRING] ${REGALIA_BOOT_SECURITY_MIRROR:-http://deb.debian.org/debian-security} $SUITE-security main")
+  mmdebstrap --variant=minbase "${APTOPT[@]}" \
+    --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography,git \
+    "$SUITE" "$ROOT" "${SOURCES[@]}" >"$W/mmdebstrap.log" 2>&1 \
     || { tail -40 "$W/mmdebstrap.log"; echo "unlock-boot-qemu: mmdebstrap failed"; exit 2; }
+  # the guest's own apt reads the same lines: the keyring at the same path inside it
+  install -D -m 0644 "$KEYRING" "$ROOT$KEYRING"
 fi
+echo "### the initrd, built reproducibly by deploy/baremetal/initrd/build-initrd.sh (#248), at the guest's snapshot"
+# the same archive snapshot as the guest's tree: the builder takes its time from the mirror's URL
+SNAPSHOT="${REGALIA_BOOT_SNAPSHOT:-}"
+if [ -z "$SNAPSHOT" ] && [[ "${REGALIA_BOOT_MIRROR:-}" =~ snapshot\.debian\.org/archive/debian/([0-9]{8}T[0-9]{6}Z) ]]; then SNAPSHOT="${BASH_REMATCH[1]}"; fi
+[ -n "$SNAPSHOT" ] || { echo "unlock-boot-qemu: the initrd is built from a pinned archive snapshot: set REGALIA_BOOT_MIRROR to a snapshot.debian.org URL, or REGALIA_BOOT_SNAPSHOT"; exit 2; }
+[ -n "${KEYRING:-}" ] || KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")"
+# the membership root the initrd trusts (#156): the fixed TEST root whose chains tests/vectors/highwater-v1.json
+# holds, as its canonical file (the JSON string, no newline), as a ceremony record would give the real one
+python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))["root_public"]; open(sys.argv[2],"wb").write(json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode())' \
+  tests/vectors/highwater-v1.json "$W/root-key.json"
+deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --keyring "$KEYRING" --root-key "$W/root-key.json" --out "$W/initrd-build" \
+  || { echo "unlock-boot-qemu: the initrd builder failed"
+       # a mismatched inventory leaves its three files in --out: keep them with the diagnostics CI uploads (#620's run)
+       if [ -n "${REGALIA_DIAG_DIR:-}" ]; then
+         mkdir -p "$REGALIA_DIAG_DIR"; cp -- "$W"/initrd-build/initrd-inventory.* "$W"/initrd-build/initrd-dracut.log "$REGALIA_DIAG_DIR"/ 2>/dev/null || true
+       fi
+       exit 2; }
+BIN="$W/initrd-build/regalia-unlock"          # the client the builder compiled: the initrd's, and the host's
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
 cp /etc/resolv.conf "$ROOT/etc/resolv.conf"
 # what systemd needs to talk to a TPM, and is only suggested by its package
@@ -84,8 +142,8 @@ chroot "$ROOT" apt-get install -y -qq --no-install-recommends 'libtss2-tcti-devi
 # What a KMS host has installed: the client, the units, the script, the dracut module.
 install -D -m 0755 "$BIN" "$ROOT/usr/bin/regalia-unlock"
 install -D -m 0755 deploy/baremetal/initrd/wg-boot "$ROOT/usr/lib/regalia/wg-boot"
-install -m 0644 deploy/baremetal/initrd/regalia-unlock.service \
-  deploy/baremetal/initrd/regalia-unlock-relay.service deploy/baremetal/initrd/regalia-unlock-core.socket deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
+install -m 0644 deploy/baremetal/initrd/regalia-boot-render.service deploy/baremetal/initrd/regalia-unlock.service \
+  deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
 install -D -m 0755 deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/module-setup.sh"
 install -m 0644 deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"
 # And what only the test adds, in the real root: the enrolment step and the report.
@@ -94,15 +152,15 @@ install -m 0644 e2e/lib/boot-guest/regalia-e2e-enrol.service e2e/lib/boot-guest/
 mkdir -p "$ROOT/etc/systemd/system/multi-user.target.wants"
 for u in regalia-e2e-enrol.service regalia-e2e-report.service; do ln -sf "/etc/systemd/system/$u" "$ROOT/etc/systemd/system/multi-user.target.wants/$u"; done
 echo "/dev/mapper/root / ext4 defaults 0 1" > "$ROOT/etc/fstab"
-echo "lisbon" > "$ROOT/etc/hostname"
+echo "alder" > "$ROOT/etc/hostname"
 
-echo "### the initrd, by the guest's own dracut, with the module"
+echo "### the initrd the builder made, beside the guest's kernel of the same snapshot"
 KVER="$(ls "$ROOT/lib/modules" | sort -V | tail -1)"
-chroot "$ROOT" dracut --force --no-hostonly --no-hostonly-cmdline --add regalia-unlock --kver "$KVER" /boot/initrd.e2e >"$W/dracut.log" 2>&1 \
-  || { tail -40 "$W/dracut.log"; echo "unlock-boot-qemu: dracut failed"; exit 2; }
-grep -i "regalia" "$W/dracut.log" | head -5 || true
+BUILT_KVER="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["kernel"])' "$W/initrd-build/initrd-build.json")"
+[ "$BUILT_KVER" = "$KVER" ] || { echo "unlock-boot-qemu: the initrd was built for kernel $BUILT_KVER, the guest has $KVER"; exit 2; }
+cp "$W/initrd-build/initrd.img" "$ROOT/boot/initrd.e2e"
 chroot "$ROOT" lsinitrd /boot/initrd.e2e > "$W/lsinitrd.txt" 2>/dev/null || true
-for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.service$' 'regalia-unlock-relay\.service$' 'regalia-unlock-core\.socket$' 'regalia-wg-boot\.service$' \
+for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.service$' 'cryptsetup\.target\.wants/regalia-unlock\.service' 'regalia-wg-boot\.service$' \
          'systemd-pcrphase-initrd\.service$' 'initrd\.target\.wants/systemd-pcrphase-initrd\.service' 'systemd-pcrextend$' \
          'bin/wg$' 'bin/nft$' 'bin/ip$' 'wireguard\.ko' 'nf_tables\.ko' 'nft_ct\.ko' 'virtio_net\.ko'; do
   grep -q "$f" "$W/lsinitrd.txt" || { echo "unlock-boot-qemu: the initrd lacks $f"; grep -c . "$W/lsinitrd.txt"; exit 2; }
@@ -146,20 +204,75 @@ for k in initrd system secure-boot; do
   openssl req -new -x509 -key "$W/keys/TEST-$k.key" -out "$W/keys/TEST-$k.crt" -subj "/CN=TEST $k key, not for production/" -days 30 2>/dev/null
 done
 mkdir -p "$ROOT/tmp/uki/src" "$ROOT/tmp/uki/out"
-cp -r deploy "$ROOT/tmp/uki/src/"; cp -r "$W/keys" "$ROOT/tmp/uki/"
-printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1}" > "$ROOT/tmp/uki/cmdline"
+# #266: uki.py builds and signs only from a clean checkout at the commit the initrd was built from, and holds the
+# build record's files to it: the guest gets a clone of this checkout's HEAD (git in the guest root), never a copy
+git -C "$ROOT/tmp/uki/src" init --quiet
+git -c safe.directory="$PWD" -C "$ROOT/tmp/uki/src" fetch --quiet --depth=1 "$PWD" HEAD     # CI's checkout is shallow
+git -C "$ROOT/tmp/uki/src" checkout --quiet --detach FETCH_HEAD
+[ "$(git -C "$ROOT/tmp/uki/src" rev-parse HEAD)" = "$(git -c safe.directory="$PWD" rev-parse HEAD)" ] || { echo "the guest's clone is not at HEAD"; exit 1; }
+cp -r "$W/keys" "$ROOT/tmp/uki/"
+cp "$W/initrd-build/initrd-build.json" "$ROOT/tmp/uki/initrd-build.json"      # the initrd's build record, an input (#248)
+cp "$W/root-key.json" "$ROOT/tmp/uki/root-key.json"                           # the membership root it trusts, an input (#156)
+printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0}" > "$ROOT/tmp/uki/cmdline"
 IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmdline --os-release /usr/lib/os-release --uname $KVER"
-IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub"
+IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub --initrd-build /tmp/uki/initrd-build.json --root-key /tmp/uki/root-key.json"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"
 KEYS="$KEYS --system-cert /tmp/uki/keys/TEST-system.crt --secure-boot-key /tmp/uki/keys/TEST-secure-boot.key --secure-boot-cert /tmp/uki/keys/TEST-secure-boot.crt"
+# #198: the review build records, run alone first, so that a refusal says what. The image is checked
+# against deploy/baremetal/initrd/initrd-inventory.txt, every entry pinned; on a difference the lines that
+# differ are printed (from `uki initrd-inventory --root /`, classed by the chroot's dpkg database), to read
+# before a pull request changes the inventory.
+cp "$BIN" "$ROOT/tmp/uki/regalia-unlock.compiled"
+if ! chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-review --initrd /boot/initrd.e2e --unlock-client /tmp/uki/regalia-unlock.compiled --root-key /tmp/uki/root-key.json" >"$W/review.json" 2>&1; then
+  python3 -I -c 'import json,sys; [print(f) for f in json.load(open(sys.argv[1]))["findings"] if not f.startswith("inventory: ")]' "$W/review.json" 2>/dev/null \
+    || cat "$W/review.json"
+  chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.e2e --root /" > "$W/inventory.txt" 2>&1 || true
+  { grep -v '^#' deploy/baremetal/initrd/initrd-inventory.txt || true; } | sed '/^$/d' | sort > "$W/pinned.txt"
+  sort "$W/inventory.txt" > "$W/found.txt"
+  echo "### the image's inventory lines the reviewed inventory does not hold (+) and the reverse (-):"
+  comm -23 "$W/found.txt" "$W/pinned.txt" | sed 's/^/INVENTORY+ /' || true
+  comm -13 "$W/found.txt" "$W/pinned.txt" | sed 's/^/INVENTORY- /' || true
+  echo "unlock-boot-qemu: the image's initrd does not pass uki.py's review"; exit 2
+fi
+echo "the initrd passes uki.py's review (#198): inventory $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["inventory_sha256"][:16])' "$W/review.json")"
 # shellcheck disable=SC2086  # the two lists are words on purpose
 # two builds (the signer requires a second builder's identical record), then the signature
-chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/out \
-  && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/second \
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
   && python3 -Es -m deploy.baremetal.uki sign $IN --record /tmp/uki/out/e2e.record.json --second-record /tmp/uki/second/e2e.record.json --out /tmp/uki/out $KEYS" >"$W/uki.log" 2>&1 \
   || { cat "$W/uki.log"; echo "unlock-boot-qemu: the image did not build or sign"; exit 2; }
 grep 'PCR 11' "$W/uki.log" || true
+# A SECOND SIGNED IMAGE of the same build (#135): the same initrd and kernel, one inert word more on its command
+# line, so another PCR 11, signed by the same keys. The TPM's signed PCR 11 policy accepts both; only the peers'
+# measurement document tells them apart. Boots 2c and 2d approve it and then retire it.
+printf '%s regalia.e2e-image=old\n' "$(cat "$ROOT/tmp/uki/cmdline")" > "$ROOT/tmp/uki/cmdline-old"
+IN_OLD="${IN/--cmdline \/tmp\/uki\/cmdline /--cmdline /tmp/uki/cmdline-old }"
+# shellcheck disable=SC2086  # the two lists are words on purpose
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki sign $IN_OLD --record /tmp/uki/out/e2e-old.record.json --second-record /tmp/uki/second/e2e-old.record.json --out /tmp/uki/out $KEYS" >"$W/uki-old.log" 2>&1 \
+  || { cat "$W/uki-old.log"; echo "unlock-boot-qemu: the second image did not build or sign"; exit 2; }
+# #75 TIER Q, Q1: AN IMAGE WHOSE KERNEL DIFFERS. The same kernel with bytes appended after its PE image, which the
+# loader ignores (it boots identically) and systemd-stub measures with the whole .linux section into PCR 11: only the
+# measurement differs, the property under test (regalia-kms-d9). A real second kernel would not do: the initrd's
+# modules are built for this one. Its command line has no systemd.journald.forward_to_console=1, as the default
+# REGALIA_BOOT_CMDLINE has none since #413 (nor a production image's); the sed below strips it from this image's
+# command line even when an override of REGALIA_BOOT_CMDLINE adds it back. The other boots take an override as given.
+{ cat "$ROOT/boot/vmlinuz-$KVER"; head -c 4096 /dev/zero | tr '\0' 'R'; } > "$ROOT/tmp/uki/vmlinuz-k2"
+sed 's/ systemd\.journald\.forward_to_console=1//' "$ROOT/tmp/uki/cmdline" > "$ROOT/tmp/uki/cmdline-k2"
+IN_K2="${IN/--linux \/boot\/vmlinuz-$KVER /--linux /tmp/uki/vmlinuz-k2 }"
+IN_K2="${IN_K2/--cmdline \/tmp\/uki\/cmdline /--cmdline /tmp/uki/cmdline-k2 }"
+[ "$IN_K2" != "$IN" ] || { echo "unlock-boot-qemu: the Q1 image's inputs are the first image's"; exit 2; }
+# shellcheck disable=SC2086  # the two lists are words on purpose
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN_K2 --name e2e-k2 --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki build $IN_K2 --name e2e-k2 --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki sign $IN_K2 --record /tmp/uki/out/e2e-k2.record.json --second-record /tmp/uki/second/e2e-k2.record.json --out /tmp/uki/out $KEYS" >"$W/uki-k2.log" 2>&1 \
+  || { cat "$W/uki-k2.log"; echo "unlock-boot-qemu: the Q1 image (another kernel) did not build or sign"; exit 2; }
+cp "$ROOT/tmp/uki/out/e2e-k2.efi" "$W/e2e-k2.efi"; cp "$ROOT/tmp/uki/out/e2e-k2.signed.json" "$W/e2e-k2.record.json"
 cp "$ROOT/tmp/uki/out/e2e.efi" "$W/e2e.efi"; cp "$ROOT/tmp/uki/out/e2e.signed.json" "$W/e2e.record.json"; cp "$W/keys/TEST-initrd.pub" "$W/initrd.pub"
+cp "$ROOT/tmp/uki/out/e2e-old.efi" "$W/e2e-old.efi"; cp "$ROOT/tmp/uki/out/e2e-old.signed.json" "$W/e2e-old.record.json"
+cmp -s "$W/e2e.efi" "$W/e2e-old.efi" && { echo "unlock-boot-qemu: the two images are the same file"; exit 2; }
+cmp -s "$W/e2e.efi" "$W/e2e-k2.efi" && { echo "unlock-boot-qemu: the Q1 image is the first image's file"; exit 2; }
 rm -rf "$ROOT/tmp/uki" "$W/keys"
 for fs in dev sys proc; do umount -R "$ROOT/$fs"; done; MOUNTED=()
 
@@ -186,15 +299,27 @@ cryptsetup close regalia-boot-build
 losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 
-echo "### ten boots"
-out="$(REGALIA_EXPECT_QEMU=1 REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot </dev/null 2>&1)" && rc=0 || rc=$?
+python3 -BI -c 'import sys; sys.path.insert(0, "e2e/lib"); import tpmdiag; print(tpmdiag.versions())' || true
+echo "### twelve boots"
+out="$(REGALIA_EXPECT_QEMU=1 REGALIA_EXPECT_KVM="${REGALIA_EXPECT_KVM:-0}" REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot.OnQemu </dev/null 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out"
 if [ "$rc" != 0 ]; then
   for log in "$W"/console-*.log; do [ -e "$log" ] && { echo "----- $(basename "$log") (last 80 lines)"; tail -80 "$log"; }; done
+  # regalia-zga/a0y: $W is removed on exit, so a failing run's consoles and swtpm logs (level 20) are copied out first,
+  # for the job to upload (.github/actions/tpm-diagnostics)
+  if [ -n "${REGALIA_DIAG_DIR:-}" ]; then
+    mkdir -p "$REGALIA_DIAG_DIR"; cp -- "$W"/console-*.log "$W"/swtpm-*.log "$REGALIA_DIAG_DIR"/ 2>/dev/null || true
+  fi
+  # regalia-a0y: a boot whose firmware could not measure is the host's QEMU/swtpm, named apart from a product failure
+  faulted="$(grep -l 'Failed to measure data for event [0-9]*: 0x8000000000000007' "$W"/console-*.log 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "$faulted" != 0 ]; then
+    echo "unlock-boot-qemu: FAILED: HOST TPM EMULATION FAULT (regalia-a0y) in $faulted boot(s): the host's QEMU/swtpm dropped a measurement, not the product"
+    exit 1
+  fi
   echo "unlock-boot-qemu: FAILED"; exit 1
 fi
 # (the test prints each boot's console digest between its name and its "ok", so the two are not on one line)
 if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: 10 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer and the recovery key)"
+echo "unlock-boot-qemu: 17 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, a forked chain refused by the TPM anchor, an older signed image approved and then retired (refused: the recovery key), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock, a new epoch on the ESP ahead of the anchor and with it, the ESP behind the anchor refused)"

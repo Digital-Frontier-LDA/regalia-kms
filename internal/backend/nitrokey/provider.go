@@ -80,6 +80,11 @@ type Session interface {
 	// safety check is one a new implementation silently skips, and the skip is invisible.
 	AssertKEKGeneratedOnToken(context.Context, string) error
 	AssertKEKNonExportable(context.Context, string) error
+	// Reader is the PC/SC reader the token sits in and whether its slot is removable
+	// (CK_SLOT_INFO: OpenSC's slot description is the reader's name, CKF_REMOVABLE_DEVICE the flag).
+	// On the interface for the reason above: a removable token whose reader is not known is not
+	// served where reauthorization is required (regalia-kms#72, G2).
+	Reader(context.Context) (name string, removable bool, err error)
 	Close() error
 }
 
@@ -105,13 +110,17 @@ type Provider struct {
 	// the rest of the daemon stay up.
 	reauthorizer Reauthorizer
 	boottime     func() (int64, error)
+	// presence notices a token pulled and put back between two operations, which no operation saw,
+	// from the PC/SC reader watcher (regalia-kms#72, G2). Asked only where reauthorization is required.
+	presence reauth.Presence
 	// absences is keyed by device id. An entry with returned == false is a token last seen
 	// missing; with returned == true it is back and waiting for the lease.
 	absences map[string]tokenAbsence
 }
 
-// Reauthorizer says whether the node holds a runtime lease it asked for after a moment, given in
-// this host's CLOCK_BOOTTIME milliseconds (internal/admission.Gate.RequestedAfter). It is the gate
+// Reauthorizer says whether a token may serve: the node holds a runtime lease it asked for after a
+// moment, given in this host's CLOCK_BOOTTIME milliseconds, and the manifest lists the token's serial
+// (internal/admission.Gate.Admits). It is the gate
 // every provider takes (internal/backend/reauth), under the name this package has always used.
 type Reauthorizer = reauth.Gate
 
@@ -190,6 +199,34 @@ func (provider *Provider) RequireReauthorization(gate Reauthorizer, boottime fun
 	return nil
 }
 
+// WatchReaders gives the provider the PC/SC reader watcher (regalia-kms#72, G2). Without one, where
+// reauthorization is required, no token on a removable slot is served.
+func (provider *Provider) WatchReaders(readers reauth.Readers) {
+	provider.presence.Watch(readers)
+}
+
+// present reports whether a token that has proved to be the right one may go on, as far as its reader
+// says: always where reauthorization is not required, and for a slot that cannot be removed; for a
+// removable one, only while its reader is watched. A reader whose generation moved since the token was
+// last let through means the token was away, though no operation saw it: it is recorded as gone, and
+// then waits for a lease asked for after this moment (reauthorized). A warm reset moves no generation
+// and is let through: the sealed PIN is presented on every operation under the current lease, so the
+// card's own login state never authorized anything.
+func (provider *Provider) present(ctx context.Context, session Session, deviceID string) bool {
+	if !provider.gates() {
+		return true
+	}
+	reader, removable, err := session.Reader(ctx)
+	if err != nil {
+		return false
+	}
+	serve, away := provider.presence.Check(deviceID, reader, removable)
+	if away {
+		provider.tokenGone(deviceID)
+	}
+	return serve
+}
+
 // gates reports whether reauthorization is required at all.
 func (provider *Provider) gates() bool {
 	provider.mu.RLock()
@@ -241,9 +278,10 @@ func (provider *Provider) tokenGone(deviceID string) {
 }
 
 // reauthorized reports whether a token that has just been opened, and has proved to be the right
-// one, may serve. The first time it is seen back, that moment is recorded; it serves once the node
-// holds a lease asked for after it.
-func (provider *Provider) reauthorized(ctx context.Context, deviceID string) bool {
+// one (its serial is `serial`), may serve. The first time it is seen back, that moment is recorded;
+// it serves once the node holds a lease asked for after it, and while the manifest lists the serial
+// as one of the node's tokens (G1: asked on every operation, before the PIN).
+func (provider *Provider) reauthorized(ctx context.Context, deviceID, serial string) bool {
 	provider.mu.Lock()
 	gate := provider.reauthorizer
 	if gate == nil {
@@ -269,7 +307,7 @@ func (provider *Provider) reauthorized(ctx context.Context, deviceID string) boo
 	}
 	provider.absences[deviceID] = absence
 	provider.mu.Unlock()
-	if !gate.RequestedAfter(ctx, absence.returnedAtMs) {
+	if !gate.Admits(ctx, serial, absence.returnedAtMs) {
 		return false
 	}
 	provider.mu.Lock()
@@ -361,7 +399,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	// A TOKEN THAT WAS GONE WAITS FOR A FRESH LEASE (#72 PoC 12.4). Checked after the identity and
 	// the pinned key, so that a different card in the slot is still quarantined as a swap and only
 	// the RIGHT token, back, is what waits; and before anything is done with it, the PIN included.
-	if !provider.reauthorized(ctx, binding.DeviceID) {
+	if !provider.present(ctx, session, binding.DeviceID) || !provider.reauthorized(ctx, binding.DeviceID, binding.DeviceSerial) {
 		return nil, "", ErrUnavailable
 	}
 	gated = provider.gates()
@@ -579,7 +617,7 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	}
 	// Present, the right token, and not yet vouched for again: not healthy, so routing and
 	// readiness say so, and this is also where its return is first noticed.
-	if !provider.reauthorized(ctx, binding.DeviceID) {
+	if !provider.present(ctx, session, binding.DeviceID) || !provider.reauthorized(ctx, binding.DeviceID, binding.DeviceSerial) {
 		return false
 	}
 	gated = provider.gates()

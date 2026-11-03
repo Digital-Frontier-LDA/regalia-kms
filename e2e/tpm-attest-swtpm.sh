@@ -23,16 +23,24 @@ pass=0; fail=0
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; pass=$((pass+1)); }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; fail=$((fail+1)); }
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; }
-for t in swtpm tpm2_createek tpm2_createak tpm2_makecredential tpm2_quote openssl python3; do
+for t in swtpm tpm2_shutdown tpm2_createek tpm2_createak tpm2_makecredential tpm2_quote openssl python3; do
   command -v "$t" >/dev/null || { echo "tpm-attest-swtpm: $t is required (swtpm, tpm2-tools, openssl, python3)"; exit 2; }
 done
 W="$(mktemp -d)"   # private sockets under it, no fixed ports: runs beside any other swtpm test
 [ "${#W}" -le 80 ] || { echo "tpm-attest-swtpm: $W is too long for a unix socket path; set TMPDIR to a shorter one"; exit 2; }
 stop(){ [ -f "$W/$1.pid" ] && kill "$(cat "$W/$1.pid")" 2>/dev/null; rm -f "$W/$1.pid"; sleep 0.3; }
+# How the boot ends decides what the next TPM2_Startup(CLEAR) is, so the test says it, not swtpm: with
+# ubuntu-26.04's swtpm a bare kill then Startup(CLEAR) read as a TPM Restart (restartCount + 1, resetCount
+# unchanged; run 39688555471), with 24.04's as a Reset (regalia-kms#549).
+#   reboot: TPM2_Shutdown(CLEAR), as Linux sends at reboot and poweroff; Startup is a TPM Reset, resetCount + 1
+#   hibernate: TPM2_Shutdown(STATE), as Linux sends before hibernating; Startup is a TPM Restart, restartCount + 1
+reboot(){ TPM2TOOLS_TCTI="$(tcti "$1")" tpm2_shutdown -c || F "TPM $1: no TPM2_Shutdown(CLEAR)"; stop "$1"; }
+hibernate(){ TPM2TOOLS_TCTI="$(tcti "$1")" tpm2_shutdown || F "TPM $1: no TPM2_Shutdown(STATE)"; stop "$1"; }
 trap 'stop A; stop B; rm -rf "$W"' EXIT
 tcti(){ printf 'swtpm:path=%s' "$W/$1.sock"; }
 M0="$(printf 'firmware stand-in' | sha256sum | cut -d' ' -f1)"; M7="$(printf 'secure boot stand-in' | sha256sum | cut -d' ' -f1)"
-# one boot: TPM2_Startup(CLEAR) (resetCount + 1, PCRs zeroed), then the same measurements every time
+# one boot: TPM2_Startup(CLEAR) (PCRs zeroed; a Reset or a Restart, by how the last boot ended), then the
+# same measurements every time
 boot(){ mkdir -p "$W/$1"; swtpm socket --tpm2 --tpmstate "dir=$W/$1" --server "type=unixio,path=$W/$1.sock" \
   --ctrl "type=unixio,path=$W/$1.sock.ctrl" --flags not-need-init,startup-clear --daemon --pid "file=$W/$1.pid"; sleep 0.5
   TPM2TOOLS_TCTI="$(tcti "$1")" tpm2_pcrextend "0:sha256=$M0" "7:sha256=$M7"; }
@@ -142,7 +150,7 @@ N="$(ver nonce --node-id site-a)"; quote A site-a "$EPOCH" "$S1" "$W/k1.der" "$N
 refused "changed PCR values are refused" 'not the expected PCR values' verify "$EPOCH" "$S1" "$W/k1.der" "$N"
 
 hdr "4  reboots: the TPM's reset counter (TPMS_CLOCK_INFO)"
-stop A; cp -a "$W/A" "$W/A.boot1"; boot A   # second boot; A.boot1 is the TPM's state as it was before it
+reboot A; cp -a "$W/A" "$W/A.boot1"; boot A   # second boot; A.boot1 is the TPM's state as it was before it
 N="$(ver nonce --node-id site-a)"; quote A site-a "$EPOCH" "$S1" "$W/k1.der" "$N"
 refused "the previous boot's session and ephemeral key are refused after a reboot" 'from an earlier boot' verify "$EPOCH" "$S1" "$W/k1.der" "$N"
 S2="$(rnd)"; ephemeral "$W/k2.der"
@@ -152,10 +160,17 @@ out="$(verify "$EPOCH" "$S2" "$W/k2.der" "$N")" && grep -q '"reset_count": 2' <<
 S3="$(rnd)"; ephemeral "$W/k3.der"
 N="$(ver nonce --node-id site-a)"; quote A site-a "$EPOCH" "$S3" "$W/k3.der" "$N"
 refused "a second boot session in the same boot is refused" 'second boot session in the same boot' verify "$EPOCH" "$S3" "$W/k3.der" "$N"
-stop A; boot A   # third boot
+reboot A; boot A   # third boot
 N="$(ver nonce --node-id site-a)"; quote A site-a "$EPOCH" "$S3" "$W/k3.der" "$N"
 out="$(verify "$EPOCH" "$S3" "$W/k3.der" "$N")" && grep -q '"reset_count": 3' <<< "$out" && P "third boot accepted (resetCount 3)" || F "third boot refused: $out"
-stop A; rm -rf "$W/A"; mv "$W/A.boot1" "$W/A"; boot A   # the TPM's state rolled back to before boot 2
+hibernate A; boot A   # a resume from hibernation: the boot chain runs again, a new boot to the verifier
+N="$(ver nonce --node-id site-a)"; quote A site-a "$EPOCH" "$S3" "$W/k3.der" "$N"
+refused "after a resume from hibernation, the session from before it is refused" 'from an earlier boot' verify "$EPOCH" "$S3" "$W/k3.der" "$N"
+S5="$(rnd)"; ephemeral "$W/k5.der"
+N="$(ver nonce --node-id site-a)"; quote A site-a "$EPOCH" "$S5" "$W/k5.der" "$N"
+out="$(verify "$EPOCH" "$S5" "$W/k5.der" "$N")" && grep -q '"reset_count": 3, "restart_count": 1' <<< "$out" \
+  && P "a new session after the resume is accepted (resetCount 3, restartCount 1)" || F "the session after the resume: $out"
+reboot A; rm -rf "$W/A"; mv "$W/A.boot1" "$W/A"; boot A   # the TPM's state rolled back to before boot 2
 S4="$(rnd)"; ephemeral "$W/k4.der"
 N="$(ver nonce --node-id site-a)"; quote A site-a "$EPOCH" "$S4" "$W/k4.der" "$N"
 refused "rolled-back TPM state is refused (resetCount 2 after 3)" 'counters went backwards' verify "$EPOCH" "$S4" "$W/k4.der" "$N"

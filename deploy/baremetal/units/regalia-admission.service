@@ -23,7 +23,8 @@ RestartSec=5s
 User=regalia-admission
 Group=regalia-admission
 # the TPM (its quotes, the anchor) is the tss group's
-SupplementaryGroups=tss
+# regalia-audit-admission: the reader group of this service's audit trail, which it gives the file (#286)
+SupplementaryGroups=tss regalia-audit-admission
 CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
@@ -31,8 +32,13 @@ ProtectSystem=strict
 # Its own directory under root's /run/regalia, made by tmpfiles and never declared as this unit's
 # RuntimeDirectory: systemd would remove it when this unit stops, and the last admission file must
 # stand until it runs out by itself (admission.py).
-ReadWritePaths=/run/regalia/admission
+# Its audit trail (audit.jsonl, 0640 to regalia-audit-admission, #286) in a directory of its own (#349):
+# /var/log/regalia-admission, regalia-admission:regalia-audit-admission 0750 (tmpfiles; node.json admission_log_dir),
+# which regalia-audit-ship@admission, holding that group and no capability, LISTS for the trail's rotated archives
+# (cmd/regalia-audit-ship: os.ReadDir).
+ReadWritePaths=/run/regalia/admission /var/log/regalia-admission -/run/regalia-metrics/admission
 StateDirectory=regalia-admission
+# 0700 (#349): with the trail elsewhere, nothing here is any other user's to list (lease.json and its lock, 0600).
 StateDirectoryMode=0700
 ProtectHome=yes
 PrivateTmp=yes

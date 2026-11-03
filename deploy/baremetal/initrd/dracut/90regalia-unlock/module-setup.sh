@@ -1,11 +1,14 @@
 #!/bin/bash
-# dracut module: the pre-root disk unlock of a KMS host (regalia-kms#66, #67).
+# dracut module: the pre-root disk unlock of a KMS host (regalia-kms#66, #67, #70).
 #
-# What it puts in the initrd: the unlock client and its socket-activated unit, the boot mesh unit and
-# its script, the three tools the script runs (ip, wg, nft), and one crypttab line. The image is the
-# same for every host: what differs per host and per manifest (the boot configuration, the two
-# TPM-sealed credentials, the WireGuard configuration, the ruleset, boot.env) comes at boot as system
-# credentials, from the ESP through systemd-stub.
+# What it puts in the initrd: the unlock client (a password agent, enabled beside systemd-cryptsetup) and
+# its unit, the unit that renders the boot configuration from the signed membership chain (the same
+# binary, -render; #66 B3), the boot mesh unit and its script, the three tools the script runs (ip, wg,
+# nft), the FAT driver the ESP is read with, one crypttab line, and the membership root it trusts
+# (/usr/lib/regalia/root-key.json, a build input: deploy/baremetal/initrd/build-initrd.sh --root-key, #156).
+# The image is the same for every host: what differs per host comes at boot from the ESP: the measured
+# site document and the two TPM-sealed credentials as system credentials through systemd-stub, and the
+# signed membership chain, verified here.
 #
 # Not included by default: add it with `dracut --add regalia-unlock` (or add_dracutmodules+=).
 #
@@ -39,6 +42,10 @@ check() {
         derror "regalia-unlock: $moddir/crypttab is missing: install the whole module directory"
         return 1
     fi
+    if [ ! -s "${dracutsysrootdir-}/usr/lib/regalia/root-key.json" ]; then
+        derror "regalia-unlock: /usr/lib/regalia/root-key.json is missing: the image would trust no membership root"
+        return 1
+    fi
     # The client and its unit come from the host separately. The client stays for the whole initrd phase
     # and records the boot session: under a unit that gives it nowhere to write, or does not stop it before
     # the root filesystem takes over, the host would boot with its leases refused or the client left behind.
@@ -63,6 +70,8 @@ depends() {
 
 installkernel() {
     hostonly='' instmods wireguard nf_tables nft_ct nf_conntrack tpm_tis tpm_crb
+    # the ESP, mounted read-only to read the membership chain (#66 B3): FAT, and the code pages its names use
+    hostonly='' instmods vfat nls_cp437 nls_ascii nls_utf8 nls_iso8859-1
     # The network card's driver. Nothing else in the initrd asks for the network, so nothing else brings
     # it; dracut's own kernel-network-modules is in a separate package (dracut-network) on Debian.
     hostonly='' instmods virtio_net '=drivers/net/ethernet' '=drivers/net/phy' '=drivers/net/mdio'
@@ -72,7 +81,8 @@ installkernel() {
 install() {
     inst_multiple regalia-unlock wg nft ip sed cat sleep
     inst_simple /usr/lib/regalia/wg-boot
-    for unit in regalia-unlock-relay.service regalia-unlock-core.socket regalia-unlock.service regalia-wg-boot.service; do
+    inst_simple /usr/lib/regalia/root-key.json
+    for unit in regalia-boot-render.service regalia-unlock.service regalia-wg-boot.service; do
         inst_simple "${systemdsystemunitdir:?}/$unit"
     done
     # The one crypttab line, the same on every host: the root partition is found by its GPT label. Nothing
@@ -106,10 +116,7 @@ install() {
         printf '[Service]\nImportCredential=\nLoadCredential=\nLoadCredentialEncrypted=\n' \
             > "${initdir:?}${systemdsystemunitdir:?}/$unit.d/99-regalia-no-credentials.conf"
     done
-    # systemd-cryptsetup waits for the relay's socket to listen, and does not need the relay to start: if it
-    # does not, the key file is missing and systemd-cryptsetup asks for the recovery key
-    mkdir -p "${initdir:?}${systemdsystemunitdir:?}/systemd-cryptsetup@.service.d"
-    printf '[Unit]\nWants=regalia-unlock-relay.service\nAfter=regalia-unlock-relay.service\n' \
-        > "${initdir:?}${systemdsystemunitdir:?}/systemd-cryptsetup@.service.d/50-regalia-relay.conf"
-    "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock-relay.service regalia-unlock-core.socket
+    # The client answers systemd-cryptsetup's request beside the console; nothing orders one after the other,
+    # so a client that never starts leaves the prompt as it is (#70).
+    "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock.service
 }

@@ -14,9 +14,15 @@ type lease struct {
 	requestedMs int64
 	asked       []int64
 	during      func()
+	unlisted    map[string]bool // serials the manifest does not list; nil: every serial is listed
+	serials     []string        // the serials asked about
 }
 
-func (gate *lease) RequestedAfter(_ context.Context, boottimeMs int64) bool {
+func (gate *lease) Admits(_ context.Context, serial string, boottimeMs int64) bool {
+	gate.serials = append(gate.serials, serial)
+	if serial == "" || gate.unlisted[serial] {
+		return false
+	}
 	gate.asked = append(gate.asked, boottimeMs)
 	if gate.during != nil {
 		gate.during()
@@ -44,7 +50,7 @@ func newWorld(t *testing.T) *world {
 func TestTheZeroTrackerRequiresNothing(t *testing.T) {
 	var tracker Tracker
 	tracker.Gone("card")
-	if !tracker.Serves(context.Background(), "card") {
+	if !tracker.Serves(context.Background(), "card", "SERIAL1") {
 		t.Fatal("a tracker nobody turned on kept a token out")
 	}
 	if waiting := tracker.Awaiting(); len(waiting) != 0 {
@@ -55,18 +61,18 @@ func TestTheZeroTrackerRequiresNothing(t *testing.T) {
 func TestATokenServesOnlyUnderALeaseAskedForAfterTheProcessStarted(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
-	if w.tracker.Serves(ctx, "card") {
+	if w.tracker.Serves(ctx, "card", "SERIAL1") {
 		t.Fatal("served under a lease asked for before the process started")
 	}
 	if want := map[string]int64{"card": 1_000}; !reflect.DeepEqual(w.tracker.Awaiting(), want) {
 		t.Fatalf("awaiting %v, want %v", w.tracker.Awaiting(), want)
 	}
 	w.gate.requestedMs = 1_000 // asked for AT the start is not after it
-	if w.tracker.Serves(ctx, "card") {
+	if w.tracker.Serves(ctx, "card", "SERIAL1") {
 		t.Fatal("served under a lease asked for at the very moment of the start")
 	}
 	w.gate.requestedMs = 1_001
-	if !w.tracker.Serves(ctx, "card") {
+	if !w.tracker.Serves(ctx, "card", "SERIAL1") {
 		t.Fatal("refused under a lease asked for after the start")
 	}
 	if len(w.tracker.Awaiting()) != 0 {
@@ -74,7 +80,7 @@ func TestATokenServesOnlyUnderALeaseAskedForAfterTheProcessStarted(t *testing.T)
 	}
 	// once vouched for, the token serves under any later lease, and under this one
 	w.gate.requestedMs = 5
-	if !w.tracker.Serves(ctx, "card") {
+	if !w.tracker.Serves(ctx, "card", "SERIAL1") {
 		t.Fatal("a token already serving was held back")
 	}
 }
@@ -83,7 +89,7 @@ func TestATokenThatWasGoneWaitsForALeaseAskedForAfterItWasSeenBack(t *testing.T)
 	w := newWorld(t)
 	ctx := context.Background()
 	w.gate.requestedMs = 1_500
-	if !w.tracker.Serves(ctx, "card") {
+	if !w.tracker.Serves(ctx, "card", "SERIAL1") {
 		t.Fatal("setup: the token should serve")
 	}
 	w.now = 2_000
@@ -92,7 +98,7 @@ func TestATokenThatWasGoneWaitsForALeaseAskedForAfterItWasSeenBack(t *testing.T)
 		t.Fatalf("awaiting %v, want %v", w.tracker.Awaiting(), want)
 	}
 	w.now = 3_000 // first seen back now: the return is dated here, not when it left
-	if w.tracker.Serves(ctx, "card") {
+	if w.tracker.Serves(ctx, "card", "SERIAL1") {
 		t.Fatal("a returned token served on the lease held before it left")
 	}
 	if last := w.gate.asked[len(w.gate.asked)-1]; last != 3_000 {
@@ -100,19 +106,19 @@ func TestATokenThatWasGoneWaitsForALeaseAskedForAfterItWasSeenBack(t *testing.T)
 	}
 	w.gate.requestedMs = 2_500 // asked for while it was away: before the return
 	w.now = 3_200
-	if w.tracker.Serves(ctx, "card") {
+	if w.tracker.Serves(ctx, "card", "SERIAL1") {
 		t.Fatal("a returned token served on a lease asked for while it was away")
 	}
 	if last := w.gate.asked[len(w.gate.asked)-1]; last != 3_000 {
 		t.Fatalf("the return moved to %d on a later look; it is dated by the first", last)
 	}
 	w.gate.requestedMs = 3_001
-	if !w.tracker.Serves(ctx, "card") {
+	if !w.tracker.Serves(ctx, "card", "SERIAL1") {
 		t.Fatal("refused under a lease asked for after the return")
 	}
 	// another device is not affected by this one's absence
 	w.tracker.Gone("card")
-	if !w.tracker.Serves(ctx, "other") {
+	if !w.tracker.Serves(ctx, "other", "SERIAL1") {
 		t.Fatal("one token's absence kept another out")
 	}
 }
@@ -123,7 +129,7 @@ func TestTheNamelessDeviceIsNeitherServedNorRecorded(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
 	w.gate.requestedMs = 1_500
-	if w.tracker.Serves(ctx, "") {
+	if w.tracker.Serves(ctx, "", "SERIAL1") {
 		t.Fatal("a device with no name was served")
 	}
 	w.tracker.Gone("")
@@ -131,7 +137,7 @@ func TestTheNamelessDeviceIsNeitherServedNorRecorded(t *testing.T) {
 		t.Fatalf("a device with no name was recorded: %v", w.tracker.Awaiting())
 	}
 	w.gate.requestedMs = 900 // before the start: a device never seen must still wait
-	if w.tracker.Serves(ctx, "card") {
+	if w.tracker.Serves(ctx, "card", "SERIAL1") {
 		t.Fatal("after the nameless device was asked about, a device never seen served on a lease from before the start")
 	}
 	if !w.tracker.Required() || (&Tracker{}).Required() {
@@ -142,7 +148,7 @@ func TestTheNamelessDeviceIsNeitherServedNorRecorded(t *testing.T) {
 func TestANodeThatIsNotAdmittedServesNothing(t *testing.T) {
 	w := newWorld(t)
 	w.gate.requestedMs, w.gate.admitted = 9_999, false
-	if w.tracker.Serves(context.Background(), "card") {
+	if w.tracker.Serves(context.Background(), "card", "SERIAL1") {
 		t.Fatal("served on a node that is not admitted")
 	}
 }
@@ -152,13 +158,13 @@ func TestATokenThatLeavesDuringTheCheckStaysMarked(t *testing.T) {
 	ctx := context.Background()
 	w.gate.requestedMs = 1_500
 	w.gate.during = func() { w.tracker.Gone("card") } // it goes while the gate is being asked
-	w.tracker.Serves(ctx, "card")
+	w.tracker.Serves(ctx, "card", "SERIAL1")
 	w.gate.during = nil
 	if want := map[string]int64{"card": -1}; !reflect.DeepEqual(w.tracker.Awaiting(), want) {
 		t.Fatalf("the absence seen during the check was cleared: awaiting %v", w.tracker.Awaiting())
 	}
 	w.now = 2_000
-	if w.tracker.Serves(ctx, "card") {
+	if w.tracker.Serves(ctx, "card", "SERIAL1") {
 		t.Fatal("served on the old lease after an absence seen during the check")
 	}
 }
@@ -168,12 +174,12 @@ func TestAnUnreadableBootClockKeepsAReturnedTokenOut(t *testing.T) {
 	w.gate.requestedMs = 9_999
 	w.tracker.Gone("card")
 	w.clockErr = errors.New("clock")
-	if w.tracker.Serves(context.Background(), "card") {
+	if w.tracker.Serves(context.Background(), "card", "SERIAL1") {
 		t.Fatal("served although the return could not be dated")
 	}
 	w.clockErr = nil
 	w.now = 9_000
-	if !w.tracker.Serves(context.Background(), "card") {
+	if !w.tracker.Serves(context.Background(), "card", "SERIAL1") {
 		t.Fatal("refused once the clock reads again and the lease is after the return")
 	}
 }
@@ -184,7 +190,7 @@ func TestRequireCalledAgainForgetsWhatWasSeen(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
 	w.gate.requestedMs = 1_500
-	if !w.tracker.Serves(ctx, "card") {
+	if !w.tracker.Serves(ctx, "card", "SERIAL1") {
 		t.Fatal("setup: the token should serve")
 	}
 	w.tracker.Gone("other")
@@ -195,7 +201,7 @@ func TestRequireCalledAgainForgetsWhatWasSeen(t *testing.T) {
 	if len(w.tracker.Awaiting()) != 0 {
 		t.Fatalf("marks survived a second Require: %v", w.tracker.Awaiting())
 	}
-	if w.tracker.Serves(ctx, "card") {
+	if w.tracker.Serves(ctx, "card", "SERIAL1") {
 		t.Fatal("a token served on a lease asked for before the second start")
 	}
 }
@@ -218,5 +224,30 @@ func TestRequireNeedsItsParts(t *testing.T) {
 	}
 	if err := (&Tracker{}).Require(gate, clock, 1_000); err != nil {
 		t.Errorf("a start at the present moment was refused: %v", err)
+	}
+}
+
+// THE SERIAL IS ASKED ON EVERY OPERATION (regalia-kms#72, G1), also once a token serves: a token the
+// manifest stops listing is refused at once, and served again when it is listed again.
+func TestATokenServesOnlyWhileTheManifestListsIt(t *testing.T) {
+	w := newWorld(t)
+	w.gate.admitted, w.gate.requestedMs = true, w.now+1
+	ctx := context.Background()
+	if !w.tracker.Serves(ctx, "card", "SERIAL1") {
+		t.Fatal("a listed token under a lease asked for since does not serve")
+	}
+	w.gate.unlisted = map[string]bool{"SERIAL1": true}
+	if w.tracker.Serves(ctx, "card", "SERIAL1") {
+		t.Fatal("a token de-listed while serving still serves")
+	}
+	if got := w.gate.serials[len(w.gate.serials)-1]; got != "SERIAL1" {
+		t.Fatalf("the gate was asked about %q", got)
+	}
+	w.gate.unlisted = nil
+	if !w.tracker.Serves(ctx, "card", "SERIAL1") {
+		t.Fatal("a token listed again does not serve")
+	}
+	if w.tracker.Serves(ctx, "card", "") {
+		t.Fatal("a token with no serial serves")
 	}
 }

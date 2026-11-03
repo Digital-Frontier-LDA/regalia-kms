@@ -16,6 +16,15 @@ re-seals the PINs and so needs opensc-tool and pkcs11-tool.
 PLATFORM AND TPM, measured:
   uefi_boot                 booted through UEFI (/sys/firmware/efi): TPM 2.0 measured boot needs it
   secure_boot_enabled       the SecureBoot EFI variable is 1
+  secure_boot_db_has_image_cert
+                            the firmware's db holds the certificate the signed image's record names
+                            (secure_boot_cert_sha256, the SHA-256 of its DER), as an X.509 entry. The
+                            UKI is booted directly, with no shim, and carries OUR Secure Boot signature
+                            (uki.py sign): a Gen9's factory db (HPE's and Microsoft's keys) refuses it
+                            (kms#543). The certificate is appended in RBSU before the first seal, since
+                            a db change moves PCR 7. Compared with the evidence's
+                            host.secure_boot_cert_sha256, or without evidence --secure-boot-cert-sha256
+                            (with evidence an argument must agree, else the run fails)
   tpm2_present              a TPM whose major version is 2, behind the kernel resource manager
                             (/dev/tpmrm0): seal-hsm-pin.sh refuses the raw /dev/tpm0
   tpm_sha256_bank           the TPM exposes an active SHA-256 PCR bank (/sys/class/tpm/tpm0/pcr-sha256)
@@ -50,9 +59,9 @@ PLATFORM AND TPM, measured:
                             and --unlock-peer (this node, and exactly the peers that hold a path), each
                             path's local share sealed to the TPM alone under the binding RECORDED for the
                             PIN credentials (PCR 7, and the signed PCR 11 policy when the PINs have it).
-                            Its crypttab entry takes the key from the unlock client's socket
-                            (/run/regalia-unlock/key.sock), carries only options known to leave the
-                            unlock alone, and the kernel command line has no rd.luks.* setting. NOT
+                            Its crypttab entry names no key file (the unlock client answers the
+                            password request, #70), carries tries=0 and only options known to leave
+                            the unlock alone, and the kernel command line has no rd.luks.* setting. NOT
                             measured: the root volume is opened in the initrd, by the crypttab the
                             initrd was BUILT with; /etc/crypttab is what that was copied from, not
                             necessarily what it holds (an edit with no initrd rebuild is invisible here),
@@ -79,7 +88,8 @@ PLATFORM AND TPM, measured:
                             the PIN is not sealed to the IMA PCR (README, section 3)
   pin_import_key_present    the persistent key at the import handle (default 0x81000101) IS the one
                             recorded at --init-import-key: the sha256 of its DER public key starts with
-                            --import-key-sha256 (or the evidence's host.pin_import_key_sha256), and it
+                            the evidence's host.pin_import_key_sha256 (without evidence,
+                            --import-key-sha256; with evidence an argument must agree), and it
                             is RSA-3072 with EXACTLY the attributes --init-import-key sets:
                             fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda
   pin_credentials_sealed_as_recorded
@@ -98,6 +108,19 @@ PLATFORM AND TPM, measured:
                             WHY NOT THE TPM ALONE: a signed PCR 11 policy has no counter, so every image
                             the PCR-signing key ever signed opens a TPM-only credential for ever. With
                             the host key in the seal, an image must also unlock the root disk
+                            THE SIGNED PCR 11 POLICY IS REQUIRED (#198): a binding without it fails, even
+                            sealed as recorded and opening. With it, a credential that opens is the TPM
+                            saying this boot's PCR 11 carries a signature of the system-phase key, and
+                            `uki sign` signs only an image whose initrd passed its review (the crypttab,
+                            the command line, the unlock units, nothing from outside the image). So this
+                            boot is an image whose initrd was reviewed: what /etc/crypttab and
+                            /proc/cmdline cannot show about the initrd (root_disk_unlock_revocable). TWO
+                            LIMITS: (1) it holds only if every system-phase signature comes from `uki
+                            sign`; whoever holds that offline key could sign an unreviewed image by hand,
+                            so the key's custody (the owner, #156) is part of this guarantee. (2) It shows
+                            an image that passed the review WHEN IT WAS SIGNED, not the current one: a
+                            retired image that once passed still opens until it is retired, which is
+                            #135's (pcrlock retirement)
   hsm_token_attached        a Nitrokey HSM 2 (USB 20a0:4230) is on the bus (sysfs; no token client
                             needed); its USB path is reported so the evidence can pin the INTERNAL port
   firewall_default_deny     the table `inet regalia_kms` (deploy/baremetal/firewall.py) is loaded, with its
@@ -130,6 +153,7 @@ import json
 import os
 import re
 import struct
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -138,6 +162,16 @@ import os_probe  # noqa: E402  (the Host and the OS-hardening probes)
 import evidence as evidence_mod  # noqa: E402
 
 SECURE_BOOT_VAR = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+DB_VAR = "/sys/firmware/efi/efivars/db-d719b2cb-3d3a-4596-a3bc-dad00e67656f"
+EFI_CERT_X509 = bytes.fromhex("a159c0a5e494a74a87b5ab155c2bf072")   # a5c059a1-94e4-4aa7-87b5-ab155c2bf072, as stored
+DBX_VAR = "/sys/firmware/efi/efivars/dbx-d719b2cb-3d3a-4596-a3bc-dad00e67656f"
+EFI_CERT_X509_SHA256 = bytes.fromhex("92a4d23bc0967940b420fcf98ef103ed")   # 3bd2a492-96c0-4079-b420-fcf98ef103ed, as stored
+EFI_CERT_X509_SHA384 = bytes.fromhex("6e877670c280e64eaad228b349a6865b")   # 7076876e-80c2-4ee6-aad2-28b349a6865b, as stored
+EFI_CERT_X509_SHA512 = bytes.fromhex("63bf6d440225da4cbcfa2465d2b0fe9d")   # 446dbf63-2502-4cda-bcfa-2465d2b0fe9d, as stored
+# dbx revokes a certificate by the hash of its tbsCertificate under any of these (UEFI 2.10, 32.4.1; edk2
+# ImageAuthentication.h): each entry is that hash, then an EFI_TIME of 16 bytes
+TBS_HASHES = {EFI_CERT_X509_SHA256: ("SHA-256", hashlib.sha256), EFI_CERT_X509_SHA384: ("SHA-384", hashlib.sha384),
+              EFI_CERT_X509_SHA512: ("SHA-512", hashlib.sha512)}
 IMPORT_HANDLE = os.environ.get("REGALIA_PIN_IMPORT_HANDLE", "0x81000101")
 IMA_LOG = "/sys/kernel/security/ima/ascii_runtime_measurements"
 KMS_BINARY = os_probe.ALLOWED_TOKEN_CLIENT_EXES[0]
@@ -162,7 +196,7 @@ CRED_REFUSED = {"5a1c6a86df9d4096b1d5a65e0862f19a": "the host key alone (bench o
 HOST_KEY = "/var/lib/systemd/credential.secret"
 TPM2_ALG_SHA256 = 0x000B
 RSA_ALGORITHM = bytes.fromhex("300d06092a864886f70d0101010500")   # AlgorithmIdentifier: rsaEncryption, NULL
-PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank", "tpm_lockout_policy",
+PLATFORM = ("uefi_boot", "secure_boot_enabled", "secure_boot_db_has_image_cert", "tpm2_present", "tpm_sha256_bank", "tpm_lockout_policy",
             "root_disk_tpm_unlocked", "root_disk_unlock_revocable", "root_disk_recovery_keyslot", "ima_policy_loaded",
             "pin_import_key_present",
             "pin_credentials_sealed_as_recorded", "hsm_token_attached",
@@ -172,6 +206,10 @@ UNMEASURED = evidence_mod.ATTESTED + evidence_mod.RECORDS
 
 
 class Host(os_probe.Host):
+    # efibootmgr, as deploy/baremetal/bootnext.py runs it, and the ESP checks' own readers (next_boot)
+    boot_run = staticmethod(subprocess.run)
+    boot_where = {}
+
     def read_bytes(self, path):
         try:
             with open(path, "rb") as f:
@@ -181,6 +219,18 @@ class Host(os_probe.Host):
 
     def exists(self, path):
         return os.path.exists(path)
+
+    def missing(self, path):
+        """True only when the path is not there. os.path.exists is False for a path it may not stat (EACCES on a
+        directory above it): that is not absence, and a check that passes on absence must not pass on it (CodeRabbit
+        on kms#644)."""
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return False
 
     def which_all(self, tool):
         """Every executable named tool on PATH or in the standard system directories, by real path."""
@@ -213,6 +263,333 @@ def secure_boot(host):
         return False, "the SecureBoot EFI variable is unreadable or absent"
     # efivarfs: 4 bytes of attributes, then the value byte
     return (True, "SecureBoot = 1") if raw[-1:] == b"\x01" else (False, "SecureBoot = %d" % raw[-1])
+
+
+def signature_entries(data):
+    """Each entry of an EFI_SIGNATURE_LIST sequence (UEFI 2.10, 32.4.1) as (list type, data after its owner GUID), in
+    order. A list whose sizes do not add up is refused, never read past."""
+    out, at = [], 0
+    while at < len(data):
+        if len(data) - at < 28:
+            raise ValueError("a signature list header is cut short at byte %d" % at)
+        kind = data[at:at + 16]
+        size, header, entry = struct.unpack_from("<III", data, at + 16)
+        if size > len(data) - at or entry < 16 or (size - 28 - header) < 0 or (size - 28 - header) % entry:
+            raise ValueError("the signature list at byte %d has inconsistent sizes" % at)
+        if kind == EFI_CERT_X509 and entry <= 16:
+            raise ValueError("the certificate list at byte %d has entries with no room for a certificate" % at)
+        if kind in TBS_HASHES and entry != 16 + TBS_HASHES[kind][1]().digest_size + 16:
+            raise ValueError("the certificate-hash list at byte %d does not hold a %s and a time per entry" % (at, TBS_HASHES[kind][0]))
+        for e in range(at + 28 + header, at + size, entry):
+            out.append((kind, data[e + 16:e + entry]))
+        at += size
+    return out
+
+
+def db_x509_sha256(data):
+    """The SHA-256 of each X.509 certificate in an EFI_SIGNATURE_LIST sequence, in order. Lists of other types (hashes)
+    are skipped."""
+    return [hashlib.sha256(der).hexdigest() for kind, der in signature_entries(data) if kind == EFI_CERT_X509]
+
+
+def tbs_certificate(der):
+    """The DER of a certificate's tbsCertificate (its first element): what an EFI_CERT_X509_SHA256 entry hashes."""
+    def tlv(at):
+        if at + 2 > len(der):
+            raise ValueError("the certificate is cut short")
+        n, at = der[at + 1], at + 2
+        if n & 0x80:
+            k = n & 0x7f
+            if not 1 <= k <= 4 or at + k > len(der):
+                raise ValueError("the certificate has an unreadable length")
+            n, at = int.from_bytes(der[at:at + k], "big"), at + k
+        if at + n > len(der):
+            raise ValueError("the certificate is cut short")
+        return at, at + n
+    if der[:1] != b"\x30":
+        raise ValueError("the certificate is not a DER SEQUENCE")
+    body, end = tlv(0)
+    if end != len(der) or der[body:body + 1] != b"\x30":
+        raise ValueError("the certificate does not start with a tbsCertificate SEQUENCE")
+    _, tbs_end = tlv(body)
+    return der[body:tbs_end]
+
+
+def der_element(der, at, end=None):
+    """The DER element at `at`, within der[:end]: (tag, start of its content, end of its content). One-octet tags, and
+    definite lengths in up to four octets; anything else (an indefinite length, which DER forbids, a high tag number), or
+    an element past `end`, is refused."""
+    end = len(der) if end is None else end
+    if at + 2 > end:
+        raise ValueError("a DER element is cut short")
+    tag, n, at = der[at], der[at + 1], at + 2
+    if tag & 0x1f == 0x1f:
+        raise ValueError("a DER element has a high tag number")
+    if n & 0x80:
+        k = n & 0x7f
+        if not 1 <= k <= 4 or at + k > end:
+            raise ValueError("a DER element has an indefinite or unreadable length")
+        n, at = int.from_bytes(der[at:at + k], "big"), at + k
+    if at + n > end:
+        raise ValueError("a DER element is cut short")
+    return tag, at, at + n
+
+
+def der_children(der, start, end):
+    """Each element directly inside der[start:end], as (tag, whole element's start, its content's start, its end)."""
+    out, at = [], start
+    while at < end:
+        tag, body, stop = der_element(der, at, end)
+        out.append((tag, at, body, stop))
+        at = stop
+    return out
+
+
+def authenticode_signers(image):
+    """For each Authenticode signature a PE image carries (every WIN_CERTIFICATE in its security directory), the SHA-256
+    of each signer's certificate: the one of SignedData's `certificates` its SignerInfo names (by issuer and serial
+    number, or by subject key identifier), or None when it carries no such certificate. Nothing is verified: the firmware
+    does that; this names which certificate it will verify. [] for an image with no signature; a directory, an entry
+    of another type or a signature that does not parse is refused."""
+    try:
+        return _authenticode_signers(image)
+    except struct.error:
+        raise ValueError("the image's PE headers are cut short")
+
+
+def _authenticode_signers(image):
+    if image[:2] != b"MZ" or len(image) < 0x40:
+        raise ValueError("the image is not a PE file")
+    pe = struct.unpack_from("<I", image, 0x3c)[0]
+    if image[pe:pe + 4] != b"PE\x00\x00":
+        raise ValueError("the image has no PE header")
+    optional = pe + 24
+    magic = struct.unpack_from("<H", image, optional)[0]
+    if magic not in (0x10b, 0x20b):
+        raise ValueError("the image's optional header is neither PE32 nor PE32+")
+    directories = optional + (96 if magic == 0x10b else 112)
+    if struct.unpack_from("<I", image, directories - 4)[0] <= 4:
+        return []
+    at, size = struct.unpack_from("<II", image, directories + 4 * 8)   # IMAGE_DIRECTORY_ENTRY_SECURITY: a file offset
+    if size == 0:
+        return []
+    if at + size > len(image):
+        raise ValueError("the image's security directory runs past its end")
+    out, end = [], at + size
+    while at < end:
+        if end - at < 8:
+            raise ValueError("a WIN_CERTIFICATE header is cut short")
+        length, _, kind = struct.unpack_from("<IHH", image, at)
+        if length < 8 or at + length > end:
+            raise ValueError("a WIN_CERTIFICATE has an inconsistent length")
+        if kind != 0x0002:
+            raise ValueError("a WIN_CERTIFICATE is of type %#06x, not PKCS signed data" % kind)
+        out += signed_data_signers(image[at + 8:at + length])
+        at += (length + 7) & ~7                             # each entry is 8-byte aligned
+    return out
+
+
+def _certificate_ids(der, at, end):
+    """A certificate's (issuer DER + serialNumber DER, subject key identifier or None), from its tbsCertificate."""
+    tag, body, stop = der_element(der, at, end)
+    if tag != 0x30:
+        raise ValueError("a carried certificate is not a SEQUENCE")
+    tag, _, tbs, tbs_end = (der_children(der, body, stop) or [(None, 0, 0, 0)])[0]
+    if tag != 0x30:
+        raise ValueError("a carried certificate has no tbsCertificate")
+    fields = der_children(der, tbs, tbs_end)
+    if fields and fields[0][0] == 0xa0:                     # [0] EXPLICIT version
+        fields = fields[1:]
+    if len(fields) < 6 or [f[0] for f in fields[:6]] != [0x02, 0x30, 0x30, 0x30, 0x30, 0x30]:
+        raise ValueError("a carried certificate's tbsCertificate is out of order")
+    serial, issuer = fields[0], fields[2]
+    ski = None
+    for tag, _, body, stop in fields[6:]:
+        if tag != 0xa3:                                     # [3] EXPLICIT extensions
+            continue
+        wrapped = der_children(der, body, stop)
+        if len(wrapped) != 1 or wrapped[0][0] != 0x30:
+            raise ValueError("a carried certificate's extensions are not a SEQUENCE")
+        for _, _, e_body, e_end in der_children(der, wrapped[0][2], wrapped[0][3]):
+            parts = der_children(der, e_body, e_end)
+            if parts and parts[0][0] == 0x06 and der[parts[0][2]:parts[0][3]] == b"\x55\x1d\x0e" and parts[-1][0] == 0x04:
+                inner = der_children(der, parts[-1][2], parts[-1][3])
+                if len(inner) != 1 or inner[0][0] != 0x04:
+                    raise ValueError("a carried certificate's subject key identifier is malformed")
+                ski = der[inner[0][2]:inner[0][3]]
+    return der[issuer[1]:issuer[3]] + der[serial[1]:serial[3]], ski
+
+
+def signed_data_signers(blob):
+    """For each SignerInfo of a DER PKCS#7 ContentInfo holding SignedData (RFC 5652, 5.1 and 5.3), the SHA-256 of the
+    carried certificate its sid names, or None. Authenticode pads its entries, so bytes after the ContentInfo are
+    ignored."""
+    tag, body, end = der_element(blob, 0)
+    if tag != 0x30:
+        raise ValueError("a signature is not a DER SEQUENCE")
+    tag, oid, oid_end = der_element(blob, body, end)
+    if tag != 0x06 or blob[oid:oid_end] != bytes.fromhex("2a864886f70d010702"):
+        raise ValueError("a signature is not PKCS#7 SignedData")
+    tag, inner, inner_end = der_element(blob, oid_end, end)
+    if tag != 0xa0:
+        raise ValueError("a signature's SignedData is missing")
+    tag, sd, sd_end = der_element(blob, inner, inner_end)
+    if tag != 0x30:
+        raise ValueError("a signature's SignedData is not a SEQUENCE")
+    parts = der_children(blob, sd, sd_end)
+    tags = [p[0] for p in parts]
+    if tags[:3] != [0x02, 0x31, 0x30] or tags[-1:] != [0x31] or not set(tags[3:-1]) <= {0xa0, 0xa1} or len(tags) > 6:
+        raise ValueError("a signature's SignedData is out of order")
+    certs = []
+    for tag, _, c_body, c_end in parts[3:-1]:
+        if tag == 0xa0:                                     # certificates [0] IMPLICIT; other CertificateChoices skipped
+            for c_tag, c_at, _, c_stop in der_children(blob, c_body, c_end):
+                if c_tag == 0x30:
+                    certs.append((hashlib.sha256(blob[c_at:c_stop]).hexdigest(), _certificate_ids(blob, c_at, c_stop)))
+    signers = der_children(blob, parts[-1][2], parts[-1][3])
+    if not signers:
+        raise ValueError("a signature has no SignerInfo")
+    out = []
+    for s_tag, _, s_body, s_end in signers:
+        fields = der_children(blob, s_body, s_end)
+        layout = [f[0] for f in fields[2:]]                 # RFC 5652 5.3, after version and sid
+        if layout[1:2] == [0xa0]:                           # signedAttrs [0], optional
+            del layout[1]
+        if layout[3:] == [0xa1]:                            # unsignedAttrs [1], optional
+            del layout[3]
+        # digestAlgorithm, signatureAlgorithm, signature, and nothing else
+        if s_tag != 0x30 or layout != [0x30, 0x30, 0x04] or fields[0][0] != 0x02:
+            raise ValueError("a SignerInfo is malformed")
+        sid_tag, sid_at, sid_body, sid_end = fields[1]
+        if sid_tag == 0x30:                                 # issuerAndSerialNumber
+            named = der_children(blob, sid_body, sid_end)
+            if [n[0] for n in named] != [0x30, 0x02]:
+                raise ValueError("a SignerInfo's issuerAndSerialNumber is malformed")
+            key = blob[named[0][1]:named[0][3]] + blob[named[1][1]:named[1][3]]
+            found = [sha for sha, (ids, _) in certs if ids == key]
+        elif sid_tag == 0x80:                               # [0] IMPLICIT SubjectKeyIdentifier
+            key = blob[sid_body:sid_end]
+            found = [sha for sha, (_, ski) in certs if ski == key]
+        else:
+            raise ValueError("a SignerInfo names its signer in a form this probe does not read")
+        out.append(found[0] if len(set(found)) == 1 else None)
+    return out
+
+
+def secure_boot_db(host, expected=None):
+    want = (expected or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", want):
+        return False, "no recorded Secure Boot certificate to look for (pass --secure-boot-cert-sha256: the signed " \
+            "image record's secure_boot_cert_sha256, 64 hex)"
+    raw = host.read_bytes(DB_VAR)
+    if not raw or len(raw) < 4:
+        return False, "the db EFI variable is unreadable or absent"
+    try:
+        certs = db_x509_sha256(raw[4:])           # efivarfs: 4 bytes of attributes, then the variable
+    except ValueError as error:
+        return False, "the db EFI variable is malformed: %s" % error
+    if want not in certs:
+        return False, "db holds %d certificate(s) (%s), and none is the image's Secure Boot certificate (%s): this host " \
+            "refuses the image under Secure Boot. Append it to db in RBSU, before the first seal (kms#543)" % (
+                len(certs), ", ".join(c[:16] for c in certs) or "none", want[:16])
+    # dbx overrides db: the firmware refuses a certificate it revokes, by the whole certificate or by the hash of its
+    # tbsCertificate (regalia-3ts). The image's own Authenticode hash is not checked here: that needs the image.
+    dbx = host.read_bytes(DBX_VAR)
+    if dbx is None and not host.missing(DBX_VAR):
+        return False, "the dbx EFI variable is unreadable, and not absent: a revocation cannot be ruled out"
+    if dbx is None:
+        return True, "db holds the image's Secure Boot certificate (%s), among %d; there is no dbx" % (want[:16], len(certs))
+    try:
+        if len(dbx) < 4:
+            raise ValueError("it is shorter than its attributes")
+        revoked = signature_entries(dbx[4:])
+    except ValueError as error:
+        return False, "the dbx EFI variable is malformed: %s" % error
+    tbs = None
+    if any(kind in TBS_HASHES for kind, _ in revoked):
+        der = next(d for k, d in signature_entries(raw[4:]) if k == EFI_CERT_X509 and hashlib.sha256(d).hexdigest() == want)
+        try:
+            tbs = tbs_certificate(der)
+        except ValueError as error:
+            return False, "dbx revokes certificates by their tbsCertificate, and the one in db cannot be read: %s" % error
+    for kind, entry in revoked:
+        if kind == EFI_CERT_X509:
+            how = "" if hashlib.sha256(entry).hexdigest() == want else None
+        elif kind in TBS_HASHES:
+            name, hasher = TBS_HASHES[kind]
+            digest = hasher(tbs).digest()
+            how = ", by the %s hash of its tbsCertificate" % name if entry[:len(digest)] == digest else None
+        else:
+            how = None                                  # an image hash (EFI_CERT_SHA256), or a type this probe does not read
+        if how is not None:
+            return False, "dbx revokes the image's Secure Boot certificate (%s)%s: the firmware refuses the image whatever db " \
+                "holds. Sign the image with a certificate dbx does not list (kms#543)" % (want[:16], how)
+    return True, "db holds the image's Secure Boot certificate (%s), among %d, and dbx (%d entries) does not revoke it" % (
+        want[:16], len(certs), len(revoked))
+
+
+def signed_by(data, label, expected):
+    """regalia-xqx: the recorded Secure Boot certificate (the evidence's, or the argument's) is the one that signed the
+    image `data` (a signer of one of its Authenticode signatures; a certificate merely carried is not). db is judged
+    against the record; this ties the record to the image, so a digest left from the image before a rotation is found
+    before the firmware refuses the new one."""
+    want = (expected or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", want):
+        return {"value": False, "why": "no recorded Secure Boot certificate to compare the image with"}
+    if data is None:
+        return {"value": False, "why": "the image %s is unreadable or absent" % label}
+    try:
+        signers = authenticode_signers(data)
+    except ValueError as error:
+        return {"value": False, "why": "the image %s is malformed: %s" % (label, error)}
+    if not signers:
+        return {"value": False, "why": "the image %s carries no Authenticode signature" % label}
+    if want not in signers:
+        return {"value": False, "why": "the image %s is signed by %s, and none is the recorded Secure Boot certificate (%s): "
+                "the record is not this image's (a digest from before a rotation?)" % (
+                    label, ", ".join(c[:16] if c else "a certificate it does not carry" for c in signers), want[:16])}
+    return {"value": True, "why": "the image %s is signed by the recorded Secure Boot certificate (%s)" % (label, want[:16])}
+
+
+def next_boot(host, esp):
+    """regalia-t7g: (a label, the bytes) of the image the firmware boots next: BootNext's entry, else BootOrder's
+    first, read by deploy/baremetal/bootnext.py as a rollout reads it (the entry must be on the partition BootCurrent's
+    is on, `esp` must be that partition's vfat mount, the one systemd-stub was loaded from, and no component of the
+    path is followed through a link). Anything it cannot establish raises ValueError."""
+    root = os.path.dirname(os.path.dirname(HERE))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    try:
+        from deploy.baremetal import bootnext
+    except Exception as error:      # noqa: BLE001  without bootnext nothing names the image the firmware boots next
+        raise ValueError("deploy/baremetal/bootnext.py cannot be loaded (%s: %s)" % (type(error).__name__, error))
+    try:
+        boot = bootnext.state(host.boot_run)
+        entry = boot["next"] or (boot["order"] or [None])[0]
+        if entry is None:
+            raise ValueError("BootNext is unset and BootOrder is empty: the firmware names no image to boot")
+        which = "BootNext" if boot["next"] else "first in BootOrder"
+        # the firmware skips an inactive entry, and which one it boots then is not this probe's guess (regalia-c6, #647)
+        if entry in boot["entries"] and not boot["entries"][entry]["active"]:
+            raise ValueError("Boot%s (%s) is not active: the firmware would skip it" % (entry, which))
+        data = bootnext.image(esp, entry, boot, **host.boot_where)
+    except (bootnext.Refused, OSError) as error:
+        raise ValueError(str(error))
+    path = os.path.join(esp, *boot["entries"][entry]["path"].split("\\")[1:])
+    return "%s (Boot%s, %s)" % (path, entry, which), data
+
+
+def image_cert(host, esp, image, expected):
+    """The image the firmware boots next (next_boot) must be signed by the recorded certificate (signed_by). An
+    --image is the operator's word for which image that is: one that is not those same bytes fails."""
+    try:
+        label, data = next_boot(host, esp)
+    except ValueError as error:
+        return {"value": False, "why": "the image the firmware boots next cannot be read: %s" % error}
+    if image is not None and host.read_bytes(image) != data:
+        return {"value": False, "why": "--image %s is not the image the firmware boots next, %s: the image judged is the "
+                "firmware's, and the two disagree" % (image, label)}
+    return signed_by(data, label, expected)
 
 
 def tpm2(host):
@@ -280,19 +657,20 @@ def token_keyslots(token, meta):
 
 
 PEER_TOKEN = "regalia-peer-unlock"      # deploy/baremetal/unlock.py: one token per peer path
-# The socket the unlock client gives the volume key on: the key-file field of the root volume's crypttab
-# entry (unlock.KEY_SOCKET, and the ListenStream of initrd/regalia-unlock.socket; a test holds the two equal).
-PEER_KEY_SOCKET = "/run/regalia-unlock/key.sock"
+# The key-file field of a peer-shaped volume's crypttab entry: none (crypttab's "none" or "-"). The unlock
+# client is a password agent (#70): it answers systemd-cryptsetup's request for the passphrase, beside the
+# console, and a key file would be read instead of asking.
+PEER_KEY_FILES = ("none", "-", "")      # "": the field left out, which crypttab takes as none
 # The crypttab options a peer-shaped volume may carry: the ones known to leave WHAT opens the volume, and
 # where its key goes, alone. An allowlist, because the other kind keeps growing: tpm2-device, fido2-device
 # and pkcs11-uri open it another way; header= makes systemd-cryptsetup read keyslots and tokens from a
 # detached header, not the one on the device that this probe judges; link-volume-key= (systemd 257) puts the
 # volume key in a kernel keyring; plain, tcrypt, bitlk, swap and tmp are not LUKS at all; try-empty-password
-# and noauto change whether and how it is opened. headless is left out on purpose too: with it, a boot with no
-# key from the socket gives up instead of asking at the console, and the console is where the recovery key
-# is typed after a total outage (#77).
+# and noauto change whether and how it is opened. headless is left out on purpose too: with it, nothing is
+# asked at the console, and the console is where the recovery key is typed after a total outage (#77).
+# x-systemd.device-timeout only sets how long the partition is waited for (0: for as long as it takes, #70).
 PEER_CRYPTTAB_OPTIONS = frozenset({
-    "luks", "x-initrd.attach", "discard", "tries", "timeout", "token-timeout",
+    "luks", "x-initrd.attach", "discard", "tries", "timeout", "token-timeout", "x-systemd.device-timeout",
     "no-read-workqueue", "no-write-workqueue", "same-cpu-crypt", "submit-from-crypt-cpus",
     "tpm2-measure-pcr", "tpm2-measure-bank"})      # the last two only measure the volume key into a PCR
 
@@ -359,8 +737,8 @@ def root_unlock(host, unlock_record=None, binding=None):
         # else: the crypttab entry names that socket as its key file and asks for no other way in.
         if any(t.get("type") == PEER_TOKEN for t in tokens.values()):
             if name not in entries:
-                return False, "%s (%s) carries %s tokens, but it is not listed in /etc/crypttab: nothing asks the unlock " \
-                    "client for its key at boot (key file %s)" % (name, dev, PEER_TOKEN, PEER_KEY_SOCKET)
+                return False, "%s (%s) carries %s tokens, but it is not listed in /etc/crypttab: nothing asks for its " \
+                    "passphrase at boot for the unlock client to answer" % (name, dev, PEER_TOKEN)
             other = sorted(o for o in opts if o not in PEER_CRYPTTAB_OPTIONS)
             if other:
                 return False, "%s (%s) carries %s tokens, but its crypttab entry has %s: not among the options known to leave " \
@@ -376,9 +754,14 @@ def root_unlock(host, unlock_record=None, binding=None):
             if on_cmdline:
                 return False, "%s (%s) carries %s tokens, but the kernel command line configures LUKS (%s): the initrd did " \
                     "not open it as /etc/crypttab says" % (name, dev, PEER_TOKEN, ", ".join(on_cmdline))
-            if key_files[name] != PEER_KEY_SOCKET:
-                return False, "%s (%s) carries %s tokens, but its crypttab key file is %r, not the unlock client's socket %s" % (
-                    name, dev, PEER_TOKEN, key_files[name] or "none", PEER_KEY_SOCKET)
+            if key_files[name] not in PEER_KEY_FILES:
+                return False, "%s (%s) carries %s tokens, but its crypttab entry names the key file %r: it would be read instead " \
+                    "of asking, and the unlock client answers only the request (key file: none)" % (name, dev, PEER_TOKEN, key_files[name])
+            # a mistyped recovery key must be asked again, never end the prompt (the default, 3, ends in emergency)
+            if opts.get("tries") != "0":
+                return False, "%s (%s) carries %s tokens, but its crypttab entry has tries=%s: a recovery key mistyped %s times would " \
+                    "end the prompt in emergency, and so in a reboot (tries=0)" % (name, dev, PEER_TOKEN, opts.get("tries", "3 (the default)"),
+                                                                                    opts.get("tries", "3"))
             ok, why = peer_paths(meta, "%s (%s)" % (name, dev), unlock_record, binding)
             if not ok:
                 return False, why
@@ -953,6 +1336,12 @@ def pin_credentials(host, expected=None):
     ok, detail = host_key_protected(host)
     if not ok:
         return False, detail
+    # #198: the boot is an image whose initrd passed review only if the TPM checked this boot's PCR 11
+    # against a signature of the system-phase key, so a binding without the signed PCR 11 policy fails
+    if 11 not in expected[1]:
+        return False, "the PIN credentials open, but under %s: with no signed PCR 11 policy nothing ties this boot to an " \
+            "image `uki sign` signed, so nothing shows its initrd was reviewed (#198). Reseal them with seal-hsm-pin.sh " \
+            "under the signed PCR 11 policy, and record credential_tpm2_signed_pcrs 11 and its key" % binding_text(*expected)
     return True, "%d PIN credential(s) open on this boot, sealed to the host key and the TPM under %s, as recorded (%s); %s" % (
         len(names), binding_text(*expected), ", ".join(names), detail)
 
@@ -1007,17 +1396,19 @@ def firewall(host):
     return True, "inet regalia_kms loaded; input, output and forward default to drop"
 
 
-PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot,
+PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot, secure_boot_db_has_image_cert=secure_boot_db,
               tpm2_present=tpm2, tpm_sha256_bank=sha256_bank, tpm_lockout_policy=lockout_policy, root_disk_tpm_unlocked=root_unlock,
               root_disk_unlock_revocable=unlock_revocable, root_disk_recovery_keyslot=recovery_keyslot, ima_policy_loaded=ima,
               pin_import_key_present=import_key, pin_credentials_sealed_as_recorded=pin_credentials,
               hsm_token_attached=hsm_token, token_clients_root_only=token_clients_root_only, firewall_default_deny=firewall)
 
 
-def measure(host, import_key_sha256=None, credential_binding=None, unlock_record=None):
+def measure(host, import_key_sha256=None, credential_binding=None, unlock_record=None, secure_boot_cert_sha256=None):
     def run(name):
         if name == "pin_import_key_present":
             return import_key(host, import_key_sha256)
+        if name == "secure_boot_db_has_image_cert":
+            return secure_boot_db(host, secure_boot_cert_sha256)
         if name == "pin_credentials_sealed_as_recorded":
             return pin_credentials(host, credential_binding)
         if name in ("root_disk_tpm_unlocked", "root_disk_unlock_revocable"):
@@ -1049,8 +1440,16 @@ def main(argv=None, host=None, run=None):
     ap.add_argument("--signature", help="its detached signature (openssl dgst -sha256 -sign)")
     ap.add_argument("--evidence-key", help="the commissioning evidence public key (P-256 PEM)")
     ap.add_argument("--evidence-key-sha256", help="that key's recorded SHA-256 (DER), from the commissioning record")
-    ap.add_argument("--import-key-sha256", help="without evidence: the import key fingerprint written down at "
-                    "--init-import-key (at least 16 hex)")
+    ap.add_argument("--import-key-sha256", help="the import key fingerprint written down at --init-import-key (at "
+                    "least 16 hex); with evidence it comes from host.pin_import_key_sha256, and an argument must agree with it")
+    ap.add_argument("--secure-boot-cert-sha256", help="the signed image record's secure_boot_cert_sha256 (uki.py sign), "
+                    "which db must hold; with evidence it comes from host.secure_boot_cert_sha256, and an argument must agree with it")
+    ap.add_argument("--esp", default="/efi", help="where the ESP this host booted from is mounted (default %(default)s). "
+                    "With --evidence, the image the firmware boots next (BootNext, else BootOrder's first) is read from it, "
+                    "and the Secure Boot certificate that signed it must be the recorded one, so a digest left over from the "
+                    "previous image fails here and not at the next boot (regalia-xqx, regalia-t7g)")
+    ap.add_argument("--image", help="optional: the image you expect the firmware to boot next, as a file. It must be those "
+                    "same bytes; the image judged is always the firmware's")
     ap.add_argument("--credential-pcrs", help="without evidence: the PCRs the PIN credentials are bound to directly, "
                     "as given to seal-hsm-pin.sh --pcrs (e.g. 7)")
     ap.add_argument("--credential-signed-pcrs", default="", help="without evidence: 11 if the PINs were sealed with "
@@ -1065,7 +1464,7 @@ def main(argv=None, host=None, run=None):
     args = ap.parse_args(argv)
     host = host or Host()
     report = {"attested_not_measured": list(UNMEASURED)}
-    problems, want, binding = [], args.import_key_sha256, None
+    problems, want, binding, sb_cert = [], args.import_key_sha256, None, args.secure_boot_cert_sha256
     if args.unlock_peer and not args.node_id:
         ap.error("--unlock-peer needs --node-id")
     unlock_record = None
@@ -1089,7 +1488,19 @@ def main(argv=None, host=None, run=None):
                 ev_host = evidence_mod.validate(evidence_mod.load(snap.data["evidence"]), MEASURED)
                 evidence_mod.verify_signature(snap.paths["evidence"], snap.paths["signature"], snap.paths["key"],
                                               args.evidence_key_sha256, **({"run": run} if run else {}))
-            want = ev_host["pin_import_key_sha256"]
+            want, sb_cert = ev_host["pin_import_key_sha256"], ev_host["secure_boot_cert_sha256"]
+            # Arguments may repeat the record; one that disagrees is an operator holding the wrong record, refused
+            # rather than silently outvoted (kms#639, regalia-t2h). The host is still measured against the evidence.
+            given = re.sub(r"[\s:]", "", args.import_key_sha256 or "").lower()
+            if given and not re.fullmatch(r"[0-9a-f]{16,64}", given):
+                problems.append("--import-key-sha256 %r is not a fingerprint (at least 16 hex): it agrees with nothing" % given)
+            elif given and not want.startswith(given):
+                problems.append("--import-key-sha256 %s is not the evidence's pin_import_key_sha256 %s: they disagree, and the "
+                                "import key is judged against the evidence" % (given, want))
+            given = (args.secure_boot_cert_sha256 or "").lower()
+            if given and given != sb_cert:
+                problems.append("--secure-boot-cert-sha256 %s is not the evidence's secure_boot_cert_sha256 %s: they disagree, "
+                                "and db is judged against the evidence" % (given, sb_cert))
             binding = evidence_mod.credential_binding(ev_host["credential_tpm2_pcrs"], ev_host["credential_tpm2_signed_pcrs"],
                                                       ev_host["credential_tpm2_pcr_key_pkfp"])
             # The root disk is judged against the SIGNED record of which node this is and who its peers are
@@ -1105,8 +1516,10 @@ def main(argv=None, host=None, run=None):
         except (OSError, evidence_mod.InvalidEvidence) as error:
             problems.append("evidence REFUSED: %s" % error)
             ev_host = None
-    measured = measure(host, want, binding, unlock_record)
+    measured = measure(host, want, binding, unlock_record, sb_cert)
     report["measured"] = measured
+    if args.evidence or args.image:
+        report["image_signed_by_recorded_cert"] = image_cert(host, args.esp, args.image, sb_cert)
     if args.evidence:
         if ev_host is not None:
             problems += compare(measured, ev_host, hsm_ports(host))
@@ -1114,7 +1527,7 @@ def main(argv=None, host=None, run=None):
     print(json.dumps(report, indent=2))
     # Evidence never lowers the bar: every measured control must be true, AND, when given, the evidence
     # must be well-formed, signed by the recorded key, attest every firmware setting, and agree.
-    ok = all(v["value"] for v in measured.values()) and not problems
+    ok = all(v["value"] for v in measured.values()) and not problems and report.get("image_signed_by_recorded_cert", {"value": True})["value"]
     return 0 if ok else 1
 
 

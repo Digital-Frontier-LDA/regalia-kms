@@ -1,0 +1,26 @@
+{
+ "about": "Writes tests/vectors/pcr-key-policy-v1.json: for each fixed system-phase PCR public key in tests/fixtures/pcr-keys,\nthe TPM Name it loads under, systemd's fingerprint (pkfp), and the write policy of the TPM anchor and the node's\nsigning key, PolicyAuthorize(Name) with an empty policyRef (#242, #357). signkey.py computes them, and every one\nis checked here against a REAL TPM (swtpm) before it is written: tpm2_loadexternal gives the same Name, as it does\nfor the writer and as it does with signkey's explicit attributes, and a tpm2_policyauthorize trial session gives\nthe same digest. The Go initrd (cmd/regalia-unlock) and the Python both replay this file, so neither can drift\nfrom the digest the TPM enforces.",
+ "cases": [
+  {
+   "name": "system-1.pub.pem",
+   "pem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvVex0iT85L3xLGPZkTE/\nODHAxim6yDd8jTGFAEnPBZzojitFG/IqIjOJNO3X5sR58E7vJt/Y/2MAnyfvbNJ+\nXzTe8chV2Ic4EnlqOPsq1i+bmTnyxe1GbI2/sYLqP7EjfxpLIQt0Xl03UbznJJM1\n8kioHihYHN/b03IE7qWgG5DOGwKqHSZvbGbmyh3c6aKoKq3ZJ9N73G4Nh/9qZ4/E\n3OY4RHGb3bx5FExfsmzZzMJLek+YN03QcU2RJxxtMbeUX87Bh0BgW0aVvUa9bmxy\nlEb2s7gUYUFkXfsUO/DKpw7Dlj3o7pAsvxNxK9pDFZyRxcxejj6HeCAyRf3hulLG\nrQIDAQAB\n-----END PUBLIC KEY-----\n",
+   "pkfp": "944b14c84c8a92ecaee82753713c001b09789ffeb15b765ea8365aba466e4ccb",
+   "policy": "f3500b7854fd58ea081dd282320490dffa744b2dd0eab7b79cbcfade2f43f8c6",
+   "tpm_name": "000b8b62d7a62cc4f33508c2728f5711325090ff29f70f3bee085bcd2a0e32ceab61"
+  },
+  {
+   "name": "system-2.pub.pem",
+   "pem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnI3q7prxFmJt5IifiNDA\n+ObM8wAS7zz17tX83eFsLUfZ/5nm8ndj90Nm5hEh5iUk0ijni1tuMCtGz9vKWmzy\nGnAdWCUpEN3u4qOEPcP0n+GCZdXAohRonkZ39n3F4mCSfG3Q0X2RdwmDekSCdNgl\ni7+Hu6RwW4DjqprbR/9hpxsf2St51dcaL7iy/MKPydDZMIGfWvz/4f0yMXT3CtIN\nOP9Xyp8ZEunv8G5OXAfxOmxgikkKtby9eXyY9F5hB5fj5gi/AgIw//6wh2OKqcb5\nUwH8fcJjx9apGxQqK3GoyF6wBA+OQ3rsvlcCxWhHQA3v9s+EEHY6Z1oenPp6noiO\n7wIDAQAB\n-----END PUBLIC KEY-----\n",
+   "pkfp": "115755323ae4dcaf2d7ec3d8041273d600b0b325fec9fa9dba0a2584e20bbc11",
+   "policy": "f8940a091cea078e949427c5cf70011ea122df048b9f6c002f3f31e3b6a8100f",
+   "tpm_name": "000bde016bb04d8a3a12f95e4bf49c6ab7c16cc4440d7c5321cfd8bdd336d0a98c10"
+  },
+  {
+   "name": "system-3.pub.pem",
+   "pem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAySBu8rciI3nlDsUE+s2d\nq90BkDVfXcoM2A9+EZSbRyrFu6iXB5vZrz6pHbukuiSLLzT2tGB7jNEY+zxz1lqM\n13dt7VLxHYHb93ixqMhCeEoO14xoBvQXH8j8Ay5iQIvE/jFkHX0D4iZN6e0adyWk\nJURiy3HQeDEHmJLWzuaR4B1rqgK366BDtPHHb0ngyIqq6eFBDA1/GVIkEtC6ELSO\nTYUvuvbFaE3SSaZqZ1pSsSoMb5hZiFcd44nGizVuUg/w6Uy3zf+rnp4/0xv+HGg8\n3KOIDIXc79Dl1/7FLeGER+ztaiQEkohvUqknRKlYw+pALNCJL0UAhCMZEWgUHWSr\nGQIDAQAB\n-----END PUBLIC KEY-----\n",
+   "pkfp": "b34c829b5ce73bfdc0d41be1e669068622af1732a9b3f0252a75ae9a16f170d6",
+   "policy": "bfcf412dd69348b3da00715efd5983b83ce8c7e08a7a6ef048a72b581ae6877b",
+   "tpm_name": "000bba717b5f96dbe1d2c916eb5818e2dc10a7c8ebf33019f5e93f6507e1cb4b7366"
+  }
+ ]
+}

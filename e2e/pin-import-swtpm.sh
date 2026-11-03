@@ -81,5 +81,27 @@ for p in 7+10 7+11 11; do
   [ "$rc" != 0 ] && grep -q 'must not include 10 (IMA) or 11' <<< "$out" && P "--pcrs $p refused (exit $rc)" || F "--pcrs $p: $out"
 done
 
+hdr "5  #242: with the TPM's owner authorization set, the import key only with the envelope's value (--ownerauth-stdin)"
+tpm C; TC="swtpm:path=$W/C.sock"
+hex(){ python3 -I -c 'import secrets; print(secrets.token_hex(32))'; }
+OA="$(hex)"                                                     # a throwaway owner authorization, set as enrol ownerauth would
+printf 'hex:%s' "$OA" > "$W/oa.auth"
+TPM2TOOLS_TCTI="$TC" tpm2_changeauth -c o "file:$W/oa.auth" || F "could not set TPM C's owner authorization"
+rm -f "$W/oa.auth"
+out="$(seal "$TC" --init-import-key --import-pub "$W/C.pem" </dev/null)"; rc=$?
+[ "$rc" != 0 ] && grep -q 'tpm2_createprimary failed' <<< "$out" && P "without the value, the TPM refuses the owner hierarchy (exit $rc)" || F "no value: $out"
+out="$(printf '%s\n' "$OA" | seal "$TC" --init-import-key --import-pub "$W/C.pem" --ownerauth-stdin)"
+grep -q 'IMPORT KEY CREATED' <<< "$out" && P "with the envelope's value on standard input, the key is made" || F "with the value: $out"
+grep -qF "$OA" <<< "$out" && F "the owner authorization appeared in the output" || P "the owner authorization never appears in the output"
+fpc="$(fp "$W/C.pem")"
+out="$(printf '%s\n' "$(hex)" | seal "$TC" --init-import-key --replace-import-key --import-pub "$W/C2.pem" --ownerauth-stdin)"; rc=$?
+[ "$rc" != 0 ] && grep -q 'cannot remove the old key' <<< "$out" && P "a wrong value is refused by the TPM (exit $rc)" || F "wrong value: $out"
+TPM2TOOLS_TCTI="$TC" tpm2_readpublic -Q -c 0x81000101 -f pem -o "$W/C-after.pem" 2>/dev/null
+[ "$(fp "$W/C-after.pem")" = "$fpc" ] && P "the key made with the right value is still there" || F "the key changed after a wrong value"
+out="$(printf 'not-hex\n' | seal "$TC" --init-import-key --replace-import-key --import-pub "$W/C3.pem" --ownerauth-stdin)"; rc=$?
+[ "$rc" != 0 ] && grep -q 'does not hold 64 lowercase hex' <<< "$out" && P "a value not in the envelope's form is refused before the TPM (exit $rc)" || F "bad form: $out"
+left="$(sudo sh -c 'ls -d /run/regalia-ownerauth.* 2>/dev/null')"
+[ -z "$left" ] && P "no owner-authorization file is left on /run" || F "left on /run: $left"
+
 echo; echo "pin-import-swtpm: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

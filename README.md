@@ -40,7 +40,7 @@ One device serving every cryptographic role a small company actually has:
   bearer tokens, no shared secrets — and a declarative registry decides who may do what, to which
   object, for which purpose. ([`IDENTITY.md`](IDENTITY.md), [`POLICY.md`](POLICY.md), [`config/REGISTRY.md`](config/REGISTRY.md))
 - **Tamper-evident audit** — a hash-chained journal, shippable off-host. ([`AUDIT.md`](AUDIT.md))
-- **Single-signer fencing** — never two active signers across sites. ([`FENCING.md`](FENCING.md))
+- **Serving by majority lease** (decided, ADR-0002 D32, not built): every server serves while it holds its own lease, which 2 of the 3 servers co-sign. Stateful operations commit on a majority before the HSM is used. Today's code still runs the superseded single-signer fence. ([`FENCING.md`](FENCING.md))
 - **SOPS sidecar** — a local Unix-socket adapter makes Regalia the decryption authority; clients
   hold no age/PGP identities. ([`SOPS-TRANSPORT.md`](SOPS-TRANSPORT.md))
 
@@ -78,6 +78,7 @@ YubiKey. What each can serve, and which are qualified, is in [`CONFIGURATIONS.md
   ceremony-controlled workflows ([regalia-ceremony](https://github.com/Digital-Frontier-LDA/regalia-ceremony)).
 
 **Not yet**
+- ⚠️ **The full list of current limitations** (not built, not measured, accepted risks) is in [`LIMITATIONS.md`](LIMITATIONS.md).
 - ⚠️ **Not production-qualified** — Nitrokey HSM 2 hardware qualification is open.
 - ⚠️ **No OpenBao plugin yet** — the contract it will meet is [`OPENBAO-COMPATIBILITY.md`](OPENBAO-COMPATIBILITY.md); nothing in it is a support claim until its real-server tests pass.
 - ⚠️ **Not a KMIP server** — Regalia exposes its own minimal mTLS API ([`api/openapi.json`](api/openapi.json)), not KMIP.
@@ -128,7 +129,7 @@ strict JSON object (≤32 KiB) with **no** fields for PINs, credentials, or key 
 | `api/` | OpenAPI contract |
 | `config/` | Example configs and the custody-manifest JSON schema |
 | `tools/` | Developer tooling (mutation-guard enumerator, inventory, PKCS#11 throughput benchmark) |
-| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `CONFIGURATIONS`, `OPENPGP-COMPATIBILITY`, `OPENBAO-COMPATIBILITY`, `CERTIFICATES`, `TESTING`) |
+| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `CONFIGURATIONS`, `OPENPGP-COMPATIBILITY`, `OPENBAO-COMPATIBILITY`, `CERTIFICATES`, `TESTING`, `LIMITATIONS`) |
 
 ## Security
 

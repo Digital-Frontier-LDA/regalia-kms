@@ -161,3 +161,5 @@ func TestHealthDetectsASwapWithoutAnOperation(t *testing.T) {
 }
 
 func (*swappableSession) OffersMechanism(context.Context, string, string) error { return nil }
+
+func (*swappableSession) Reader(context.Context) (string, bool, error) { return "", false, nil }

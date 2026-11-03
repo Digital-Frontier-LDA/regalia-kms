@@ -1,0 +1,71 @@
+{
+  "date": "2026-10-02",
+  "development_only": true,
+  "platform": "linux/arm64",
+  "tools_image": "sha256:d1eaa43878780eaa7ca5f7ad2f34e57917be9caf82e270933e656dabd8d457a1",
+  "unsigned_development_image": true,
+  "results": [
+    {
+      "schema": "regalia.recovery-crash-matrix/v1",
+      "status": "completed-with-findings",
+      "production_approved": false,
+      "script_sha256": "5ec4b74c9c39842cae24a93365fcacef2f879fac11c8491d247ae6cf9c6f5eb4",
+      "cryptsetup": "cryptsetup 2.7.5 flags: UDEV BLKID KEYRING KERNEL_CAPI HW_OPAL",
+      "scope": "Every cryptsetup call on successful and single-failure cleanup paths; command boundaries, not internal sector writes",
+      "finding_cases": 46,
+      "cases_executed": 152,
+      "fault_points_reached": 152,
+      "release_admissible": false,
+      "elapsed_seconds": 112.404,
+      "target_commit": "098ec6d",
+      "report_sha256": "9ece9059f3e39cb3c294572cd1d134ba916f8cf0a25f8a222ba2982341b9ad39",
+      "findings": {
+        "unchanged_claim_contradicts_header": 7,
+        "header_needs_reconciliation": 46,
+        "ordinary_retry_does_not_reconcile": 46
+      },
+      "all_unlock_paths_preserved": true,
+      "all_fixture_reconciliations_clean": true
+    },
+    {
+      "schema": "regalia.recovery-crash-matrix/v1",
+      "status": "completed-with-findings",
+      "production_approved": false,
+      "script_sha256": "539194a8aef54f3d2a86adb080cf638ffd7d52539d3af1205df812f2d9107ef6",
+      "cryptsetup": "cryptsetup 2.7.5 flags: UDEV BLKID KEYRING KERNEL_CAPI HW_OPAL",
+      "scope": "Every cryptsetup call on successful and single-failure cleanup paths; command boundaries, not internal sector writes",
+      "finding_cases": 174,
+      "cases_executed": 582,
+      "fault_points_reached": 582,
+      "release_admissible": false,
+      "elapsed_seconds": 534.164,
+      "target_commit": "2fda5946beb51b9de0322d019182fba0a00da749",
+      "report_sha256": "021b7da890b7752e63b6f1a6748b13159b2917313224d3471a61ec4a1d7621a7",
+      "findings": {
+        "header_needs_reconciliation": 174,
+        "ordinary_retry_does_not_reconcile": 68
+      },
+      "all_unlock_paths_preserved": true,
+      "all_fixture_reconciliations_clean": true
+    },
+    {
+      "schema": "regalia.recovery-crash-matrix/v1",
+      "status": "completed-with-findings",
+      "production_approved": false,
+      "script_sha256": "47e08272c808863fff8b524faa5146620e3375db7af5810ffa20aacb6e77afab",
+      "cryptsetup": "cryptsetup 2.7.5 flags: UDEV BLKID KEYRING KERNEL_CAPI HW_OPAL",
+      "scope": "Every cryptsetup call on successful and single-failure cleanup paths; command boundaries, not internal sector writes",
+      "finding_cases": 172,
+      "cases_executed": 622,
+      "fault_points_reached": 622,
+      "release_admissible": false,
+      "elapsed_seconds": 580.017,
+      "target_commit": "55b8600",
+      "report_sha256": "d9a9e37f8ca54dfaa82e8512aabccdb5328e8a290e55f7cd52eaa50ad5dd3148",
+      "findings": {
+        "header_needs_reconciliation": 172,
+        "ordinary_retry_does_not_reconcile": 68
+      }
+    }
+  ]
+}

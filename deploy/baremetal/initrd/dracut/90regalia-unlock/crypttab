@@ -1,3 +1,9 @@
-# The root volume of a KMS host (regalia-kms#66): opened in the initrd with the key the unlock client gives
-# on its socket. The same line on every host; the partition is found by its GPT label.
-root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach
+# The root volume of a KMS host (regalia-kms#66, #70): no key file, so systemd-cryptsetup asks for the
+# passphrase through the ask-password protocol. The console shows the request from the start, and the
+# unlock client (a password agent) answers it once a peer has given its half: whichever answers first wins.
+#   tries=0                       a mistyped recovery key is asked again, never the end of the prompt (the
+#                                 default, 3, would end in emergency, and so in a reboot)
+#   timeout=0                     the prompt waits for as long as it takes (the default, made explicit)
+#   x-systemd.device-timeout=0    the partition is waited for as long as it takes (the default is 90 s)
+# The same line on every host; the partition is found by its GPT label.
+root PARTLABEL=regalia-root none luks,x-initrd.attach,tries=0,timeout=0,x-systemd.device-timeout=0

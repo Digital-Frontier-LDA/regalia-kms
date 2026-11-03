@@ -148,15 +148,18 @@ disk's to enforce, in one place.
 image it was sealed on and on an updated one; with another disk's host key, or none, it does not
 open on either; and a TPM-only credential opens with no host key at all.
 
-**BLOCKING FOR PRODUCTION, not done:** this moves the question to the root disk, and today the root
-disk is unlocked by the local TPM alone, bound to PCR 7 (`root_disk_tpm_unlocked`). An old signed
-image with the same Secure Boot state unlocks it, reaches the host key, and opens the PIN. The seal
-is only as revocable as the disk unlock. The disk must need something a retired image cannot get: a
-peer's contribution, given only to an image the membership manifest currently accepts (#66, #67), or
-an NV-backed local policy. Until then a retired image is retired in name only. Tracked as #135, and
-measured on every host: `host_probe.py` (`root_disk_unlock_revocable`) fails while a keyslot of the
-root volume is released by a TPM token bound to PCR values or to a signed policy, and it cannot be
-skipped.
+**So the seal is only as revocable as the disk unlock (#135).** The root disk opens only with the TPM
+**and** a peer: each keyslot needs a half sealed to this TPM, which every signed image gets, and a half
+a peer gives only to an image its current, root-signed manifest still lists (#67, `deploy/baremetal/unlock.py`).
+A retired image therefore leaves the disk locked, cannot reach the host key, and cannot open the PIN.
+`host_probe.py` (`root_disk_unlock_revocable`) fails any host whose root volume a TPM token bound to PCR
+values or to a signed policy opens alone, and it cannot be skipped.
+
+*Verified by:* `e2e/unlock-boot-qemu.sh`, boots 2c and 2d (a real boot: QEMU, OVMF, a software TPM, a
+signed UKI, a dracut initrd). An older image signed by the same keys boots while the peers' document
+lists it. Once retired, its TPM still releases the local half, both peers refuse it naming PCR 11, and
+the disk stays locked; the current image then boots (boot 2b). Also `e2e/peer-unlock-swtpm.sh` section 4.
+**Not verified on a DL360** (the #65 checklist, section D): that run is still owed.
 
 ### Migrating a credential sealed before this change
 
@@ -251,6 +254,14 @@ Decisions (#77, 2026-10-02; regalia-kms-24 under the owner's delegation):
   still in the HSM, the HSM PIN is still sealed to the TPM (or typed from the PIN card), membership
   still decides whether peers accept the node, and serving still needs a lease. The recovery key
   restores a disk; it is not signing authority, membership authority or an HSM credential.
+- **After a total outage, an open disk may not be enough.** If the host's membership anchor is unusable
+  (no valid record slot, an index gone, the TPM replaced), its own sync refuses its membership, and it
+  does not serve again until it is re-anchored from its two peers' chains, with those peers opened the
+  same way first. The procedure, step by step: [MEMBERSHIP-RECOVERY.md, "In a total
+  outage"](deploy/baremetal/MEMBERSHIP-RECOVERY.md#in-a-total-outage-388) (#388, rehearsed by
+  `e2e/three-node-reanchor.py`). With only one peer left, the owner's signature over that peer's chain is
+  the second source (`--one-source`, the same section). A host whose two peers are both destroyed is a
+  root ceremony, not this.
 - **One per host**, so one envelope reaches one host. It is generated at the ceremony (step 0), in
   systemd's recovery-key format: 256 bits as 8 groups of 8 letters from `cbdefghijklnrtuv`, with a
   dash between groups. Those letters sit on the same keys of the common keyboard layouts, which
@@ -270,7 +281,9 @@ Decisions (#77, 2026-10-02; regalia-kms-24 under the owner's delegation):
   names remains.
 
 *Verified by:* `tests/test_baremetal_recovery_key.py` (a real LUKS2 header in a file: enrolment, the
-refusals, replacement, no secret on a command line) and `e2e/luks-recovery-key.sh` in CI (a real
+refusals, replacement, no secret on a command line), `lab/recovery/matrix.py` (every cryptsetup call
+and every header sync inside it under KILL, TERM and a failing write: a key on a card always opens,
+the state printed is the header's, and the same command finishes the run) and `e2e/luks-recovery-key.sh` in CI (a real
 dm-crypt volume on a loop device: every other keyslot destroyed, the recovery key alone opens and
 mounts it; a wrong key, one wrong letter, no dashes, other grouping and capitals do not);
 `host_probe.py` (`root_disk_recovery_keyslot`) on the host. **Not verified: any KMS host, a real boot

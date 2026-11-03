@@ -25,6 +25,9 @@ var packagesAllowedToTouchTokens = []string{
 	"internal/backend/nitrokey",
 	"internal/backend/yubikey",
 	"internal/backend/openpgp/pcsc",
+	// the PC/SC reader watcher (#72, G2): it reads reader states only, and never connects to a card
+	// (pcscwatch's own test holds it to that)
+	"internal/backend/pcscwatch",
 }
 
 // deviceLibraries reach hardware directly. An import of one outside the allowed packages is a

@@ -1,0 +1,53 @@
+# The rootfs site configuration against the site document this boot measured (#615; deploy/baremetal/node.py
+# site_check). The initrd builds the boot tunnel from loader/credentials/regalia.site.cred on the ESP, measured into
+# PCR 12; wg-apply builds the tunnels from node.json's "site" on the rootfs. A node's move rewrites only the ESP's
+# document (site-advance), so a rootfs file left from the old site would bring up the old site's tunnels. This
+# oneshot compares the keys both hold and refuses on any difference, or when the document is missing or unreadable:
+# regalia-wg-apply Requires= it, so the tunnels stay down. It reads, and writes only its metric.
+[Unit]
+Description=Regalia KMS: the site configuration against the measured site document
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+# the ESP at /efi (systemd-gpt-auto-generator's automount, or fstab): mounted before this runs
+RequiresMountsFor=/efi
+
+[Service]
+Type=oneshot
+# once per boot: the measured document changes only with a boot, and wg-apply's later runs keep this result
+RemainAfterExit=yes
+WorkingDirectory=/usr/lib/regalia-kms
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json site-check --esp /efi
+User=root
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+# the measured document, read-only and NOT optional (no "-"): a missing one fails the unit at setup, never starts
+# it without the file. The process refuses a missing or unreadable one too.
+BindReadOnlyPaths=/efi/loader/credentials/regalia.site.cred
+# the one place it writes, its node_exporter textfile directory (deploy/baremetal/metrics.py), under /run: a run
+# that never happened this boot leaves no file, never the last boot's 1
+ReadWritePaths=-/run/regalia-metrics/site-check
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX
+TimeoutStartSec=30
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0022
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

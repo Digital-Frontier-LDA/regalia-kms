@@ -6,7 +6,7 @@ until a phase's evidence and a recorded decision exist, [PIN-CUSTODY.md](PIN-CUS
 TPM-sealed user PINs, no runtime PKA), [FENCING.md](FENCING.md) (one independent activation
 signer) and `deploy/baremetal/` (single-site commissioning, TPM-only disk unlock as the interim
 baseline) remain authoritative. The secrets and their lifecycles are in
-[THREE-SITE-SECRETS.md](THREE-SITE-SECRETS.md).
+the operators' secrets inventory, kept in their private repository.
 
 ## The goal, stated as invariants
 
@@ -16,12 +16,18 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 - **A3.** A total outage (all three down) is restored by one manual recovery at one node, after which
   A1/A2 restore the rest.
 - **A4.** No single provider, datacenter, network path or device failure stops the cluster from
-  serving (one serving site at a time under fencing; the others are standby) **provided the fencing
-  authority is reachable from a surviving site.** Every site needs a short-lived lease, and recovery
-  does not grant one (FENCING.md), so the authority must sit in a failure domain independent of both
-  providers (its own host outside providers X and Y, with its state backed up off-host). If it is
-  lost, the surviving site stops serving at lease expiry until the authority is restored: an explicit
-  availability limit, not a gap.
+  serving. **Since ADR-0002 D32 (2026-10-05), every server serves** under its own majority-co-signed lease,
+  and stateful operations commit on a majority (FENCING.md). What follows is the single-active design D32
+  supersedes: one serving site at a time under fencing, the others standby. Every site needs a
+  short-lived activation lease, and recovery does not grant one (FENCING.md). **Decided (ADR-0002 D28 and #351, 2026-10-04), not
+  built:** the lease's issuer is **majority agreement**, not a separate authority host: an activation lease
+  needs two signatures from {node a, node b, node c, the owner}, two of the three servers being the normal
+  path and the owner's touch-required key the recovery path, so a total-outage recovery (one server
+  opened by hand plus the operator) can issue one, the owner alone cannot, and no lease may overlap
+  another site's. A partition minority cannot activate itself. Two compromised servers could, the same
+  bound D28 accepts for heartbeats. *Until it is built*, the issuer is `regalia-fence`, a single key
+  that must sit in a failure domain independent of both providers; if it is lost, the surviving site
+  stops serving at lease expiry.
 
 **Security.**
 - **S1.** In unattended bootstrap, no single location holds what unlocks a node's disk: the node's
@@ -36,7 +42,8 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 - **S3.** A captured bootstrap exchange cannot be replayed: every contribution is bound to one boot
   session's fresh ephemeral key and the peer's nonce.
 - **S4.** Unlocking a disk grants nothing else: serving needs a fencing lease from the independent
-  authority (FENCING.md); key use needs the HSM's own authorization; neither is a bootstrap result.
+  authority (FENCING.md; the current single-active contract. Under ADR-0002 D32, decided and not built, serving
+  needs the server's own runtime lease, co-signed by two of the three servers); key use needs the HSM's own authorization; neither is a bootstrap result.
 - **S5.** Long-term service private keys never leave hardware; no online bundle carries an SO PIN,
   a YubiKey PUK or management key, a membership-root key or a recovery credential.
 - **S6.** Every security decision (quote verdicts, contributions issued or denied, manifests,
@@ -47,10 +54,10 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 | Domain | What compromising it gives | What still holds |
 |---|---|---|
 | One server, powered off, stolen | Its disks, TPM, HSM (if attached), WG-BOOT key sealed in the TPM | S1: no peer contribution once revoked or once away from the datacenter networks (peers accept WG-BOOT only from the declared datacenter addresses); HSM keys need the HSM PIN, sealed to that TPM's measured boot |
-| One server, running, root compromised | Its unlocked disk, its HSM session, its WG-SERVICE identity | S4: no activation lease unless it is the fenced active site; S5: no exportable key; revocation (#69) and lease expiry (#74) bound the window; detection is the audit trail and attestation drift |
+| One server, running, root compromised | Its unlocked disk, its HSM session, its WG-SERVICE identity | S4: no activation lease unless it is the fenced active site (current; under D32, decided and not built, no runtime lease without two co-signers, and every server is active); S5: no exportable key; revocation (#69) and lease expiry (#74) bound the window; detection is the audit trail and attestation drift |
 | One datacenter (physical) | Every server in it; staff cannot open the locked drawers (custody plan) | Other sites; chassis-intrusion and access logs as detection |
 | One provider (two sites may share provider X) | Both of its sites' power, network and remote hands: **one administrative failure domain** | The site at provider Y; A3 manual recovery |
-| Network partition | Peers cannot reach each other or the revocation authority | Fail closed: a peer whose membership is older than the freshness bound authorizes nothing (design question 1); serving continues only under a valid lease |
+| Network partition | Peers cannot reach each other | Fail closed: a peer whose membership is older than the freshness bound authorizes nothing (design question 1); serving continues only under a valid lease |
 | A malicious or compromised peer | It can refuse to help (availability) or try to help the wrong node | The alternate peer path (A1); it holds only its own contribution, never a whole unlock credential (S1); it cannot mint membership (offline root) |
 | Stale membership on one peer | It may still help a node revoked elsewhere | Freshness bound (question 1); revocation is restrictive-only and propagates to every reachable peer |
 | Rollback of a node's disk, or of its manifest | Old manifest, old epoch | Highest accepted epoch kept in physical TPM NV, which disk restore cannot roll back, checked at every decision. Beside it the TPM keeps the digest of the manifest accepted at that epoch, so a substituted chain of the same length (possible only if a key signed two manifests for one epoch) is refused as well, on disk or fetched from a single peer. **Rolling back the TPM NV itself** (a physical attack on the TPM) defeats that node's own anchor; the independent anchor is its peers, which each keep their own highest epoch and refuse a requester whose transcript names an older one. A whole-cluster NV rollback is out of scope |
@@ -86,10 +93,13 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 
 **1. Freshness of restrictive membership updates under partition.** A newer manifest proves only
 *ordering*, not that no restrictive update happened since. Freshness therefore comes from a
-**heartbeat** the revocation authority signs: it carries the current manifest epoch, a monotonic
+**heartbeat**: it carries the current manifest epoch, a monotonic
 sequence number, an issue time and an **expiry** (at most 24 hours after issue under a v1 manifest; a
 v2 manifest states the bound, `heartbeat_max_lifetime_s`, root-signed, from one hour to seven days). A peer authorizes a
-bootstrap only while it holds an unexpired heartbeat for its manifest's epoch, and it checks:
+bootstrap only while it holds an unexpired heartbeat for its manifest's epoch. *Who signs it* (ADR-0002 D28 and #351, 2026-10-04;
+built by #199, which retired the revocation authority's single key): two signatures from {node a, node b, node c, the owner}, each node signing with a TPM key usable
+only under the approved image's PCR policy, the owner with any of the owner's YubiKey 5 approval keys, and
+no separate authority host. The peer checks:
 - the expiry against **authenticated time** (NTS-authenticated NTP, with the TPM clock as a monotonic
   floor between syncs). FENCING.md already requires authenticated time for the same reason: an
   attacker who controls the clock can make an old proof look current;
@@ -97,8 +107,8 @@ bootstrap only while it holds an unexpired heartbeat for its manifest's epoch, a
   state, so a captured older heartbeat cannot be replayed after a rollback.
 Without authenticated time, or past the expiry, the peer fails closed: availability yields to
 security, and A3 covers the gap. The bound is the explicit trade: it is both how long a partitioned
-peer goes on helping a node revoked meanwhile and how long the authority may be down before every reboot
-needs the recovery key. The owner sets it in the manifest; `heartbeat_watch.py` warns while it runs out.
+peer goes on helping a node revoked meanwhile and how long the nodes may go without a quorum (or the owner's
+hand recovery, `owner.py beat`) before every reboot needs the recovery key. The owner sets it in the manifest; `heartbeat_watch.py` warns while it runs out.
 
 **2. The powered-off theft claim before revocation.** As case 1: denied away from the datacenter
 networks; inside them, bounded by detection plus the heartbeat expiry (question 1). Not "immediately
@@ -107,7 +117,8 @@ global", and only as strong as the peers' authenticated time.
 **3. Bootstrap eligibility versus service signing authority.** Different capabilities with different
 issuers. ACTIVE (or MAINTENANCE) membership makes a node *eligible to be unlocked*; ACTIVE makes a
 peer *eligible to authorize*; neither makes a node a signer. Serving needs the fencing authority's
-lease (FENCING.md: one independent signer, no overlapping sites); key use needs the HSM's own
+lease (FENCING.md; since D32, each server's own lease, co-signed by 2 of the 3 servers and non-exclusive,
+not built; today one independent signer); key use needs the HSM's own
 authorization. Peer runtime leases (#74) must not become a second activation authority.
 
 ## Device profiles and their assurance
@@ -130,15 +141,15 @@ assumed.
 
 | Item | State |
 |---|---|
-| Nitrokey HSM 2 DENK0404144 (staging) | attached; firmware 4.1, hardware 24.13; PKCS#11 contract 14/0 (#62) |
-| Nitrokey HSM 2 DENK0404380, DENK0404547 (staging) | on the bench, not attached |
-| PicoHSM staging units (ESP2202E14A, ESP41D722E2) | not attached; firmware under disclosure GHSA-wq3w-g2fj-q2jq |
-| YubiKeys 36345471, 36344616, 35718625 (staging) | not attached |
+| One Nitrokey HSM 2 (staging) | attached; firmware 4.1, hardware 24.13; PKCS#11 contract 14/0 (#62) |
+| Two more Nitrokey HSM 2 (staging) | on the bench, not attached |
+| Two PicoHSM staging units | not attached; firmware under disclosure GHSA-wq3w-g2fj-q2jq |
+| Three YubiKeys (staging) | not attached |
 | ACS ACR40U (SLE-4442) | attached; validated (regalia#43) |
 | HPE DL360 Gen9 ×3 with TPM 2.0 | **not delivered** (expected mid-October): every TPM, PCR, initramfs and LUKS phase on real hardware waits for them |
 | Software | Debian 13, OpenSC 0.26.1, pcscd 2.3.3, libccid 1.6.2, OpenSSL 3.5.1, cryptsetup 2.7.5, nftables 1.1.3, swtpm (kernel vTPM via tpm_vtpm_proxy for harness work) |
 
-Invariants under test are A1–A4 and S1–S6 above. Evidence format: each phase records device serials,
+Invariants under test are A1–A4 and S1–S6 above. Evidence format: each phase records device serials (in the operators' private records),
 firmware and software versions, the exact commands, positive and negative outcomes, sanitized logs
 and stated limits on its issue; harness evidence (swtpm, SoftHSM, network namespaces) is labelled as
 such.

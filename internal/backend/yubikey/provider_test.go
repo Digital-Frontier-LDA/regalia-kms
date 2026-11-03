@@ -210,3 +210,8 @@ func TestALegibleNearLockoutCountOverridesAStaleCachedReading(t *testing.T) {
 		t.Fatal("Healthy=true for a card reporting 1 retry left; readiness is reading the stale cache too")
 	}
 }
+
+// testReader is the reader every fake card sits in (regalia-kms#72, G2).
+const testReader = "Yubico YubiKey OTP+FIDO+CCID 00 00"
+
+func (s *fakeSession) Reader() string { return testReader }

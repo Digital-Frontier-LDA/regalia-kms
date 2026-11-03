@@ -23,7 +23,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 export LC_ALL=C PATH="$PATH:/usr/sbin:/sbin"
 [ "$(id -u)" = 0 ] || { echo "luks-recovery-key: run as root (it makes a loop device and a dm-crypt mapping)"; exit 2; }
-for t in cryptsetup losetup mkfs.ext4 mount umount python3; do
+for t in cryptsetup losetup mkfs.ext4 mount umount python3 flock; do
   command -v "$t" >/dev/null || { echo "luks-recovery-key: $t is required (cryptsetup-bin, util-linux, e2fsprogs, python3)"; exit 2; }
 done
 S=deploy/baremetal/recovery-key.sh
@@ -67,7 +67,7 @@ out="$(printf '%s\n' "$KEY" | bash "$S" --check "$LOOP" 2>&1)" && P "2: --check:
 why="$(judge)" && F "2: the probe passed while the installer's passphrase is still enrolled: $why" || P "2: the probe refuses while the installer's passphrase remains ($why)"
 cryptsetup luksKillSlot --batch-mode "$LOOP" 0 </dev/null 2>/dev/null
 why="$(judge)" && P "2: root_disk_recovery_keyslot on the real header: $why" || F "2: the probe refuses a commissioned header: $why"
-bash "$S" --status "$LOOP" >/dev/null 2>&1 && P "2: --status: one recovery keyslot, no unlabelled passphrase" || F "2: --status failed on a commissioned header"
+out="$(bash "$S" --status "$LOOP" 2>&1)" && grep -q "^STATE: clean" <<< "$out" && P "2: --status: STATE: clean (one recovery keyslot, every keyslot named by a token)" || F "2: --status failed on a commissioned header"
 
 # 3 ------------------------------------------------------------------------------------------------
 cryptsetup luksKillSlot --batch-mode "$LOOP" 1 </dev/null 2>/dev/null
@@ -102,10 +102,45 @@ else F "5: the new key did not open the volume"; fi
 mountpoint -q "$W/mnt" && umount "$W/mnt"; [ -e "/dev/mapper/$NAME" ] && cryptsetup close "$NAME"
 why="$(judge)" && P "5: the probe still measures one recovery keyslot: $why" || F "5: after --replace the probe refuses: $why"
 
+# 6 ------------------------------------------------------------------------------------------------
+# #278: every run above that took a key is on the real audit trail, hash-chained, and no key is in it.
+TRAIL=/var/log/regalia/recovery-key.jsonl
+if [ -f "$TRAIL" ] && python3 -Es deploy/baremetal/trails.py verify "$TRAIL" >"$W/verify.json" 2>&1; then
+  P "6: the recovery-key trail's chain verifies ($(cat "$W/verify.json"))"
+else F "6: the recovery-key trail does not verify: $(cat "$W/verify.json" 2>/dev/null)"; fi
+ok=1; for k in "$KEY" "$NEW_KEY" "$INSTALLER"; do grep -qF -- "$k" "$TRAIL" 2>/dev/null && ok=0; done
+[ "$ok" = 1 ] && P "6: no key and no passphrase is in the trail" || F "6: a secret is in $TRAIL"
+outcomes="$(python3 -I -c 'import json, sys
+print(" ".join("%s:%s" % (e["mode"], e["outcome"]) for e in map(json.loads, open(sys.argv[1])) if e.get("device") == sys.argv[2]))' "$TRAIL" "$LOOP")"
+[ "$outcomes" = "enrol:REQUESTED enrol:ALLOW check:REQUESTED check:ALLOW replace:REQUESTED replace:ALLOW" ] \
+  && P "6: each run is on the trail, requested before and its outcome after: $outcomes" || F "6: the trail for $LOOP reads: $outcomes"
+# every request answered exactly once, by an outcome naming its seq
+pairs() { python3 -I -c 'import json, sys
+events = [e for e in map(json.loads, open(sys.argv[1])) if e.get("device") == sys.argv[2]]
+asked = [e["seq"] for e in events if e["outcome"] == "REQUESTED"]
+answered = [e.get("request") for e in events if e["outcome"] != "REQUESTED"]
+sys.exit(0 if asked and sorted(answered) == sorted(asked) else 1)' "$1" "$2"; }
+pairs "$TRAIL" "$LOOP" && P "6: every request on the trail is answered exactly once" || F "6: a request on $TRAIL is unanswered or answered twice"
+
+# 7 ------------------------------------------------------------------------------------------------
+# #278: recovery-reconcile.py on the real trail. After step 3 only the recovery keyslot is left: keeping it
+# (proven with the new key's card) changes nothing, and the run is recorded, requested then ALLOW.
+RTRAIL=/var/log/regalia/recovery-reconcile.jsonl
+slot="$(cryptsetup luksDump --dump-json-metadata "$LOOP" | python3 -I -c 'import json, sys
+print(next(t["keyslots"][0] for t in json.load(sys.stdin)["tokens"].values() if t["type"] == "systemd-recovery"))')"
+out="$(printf '%s\n' "$NEW_KEY" | python3 -I deploy/baremetal/recovery-reconcile.py "$LOOP" --keep-slot "$slot" 2>&1)" \
+  && P "7: recovery-reconcile.py kept keyslot $slot with the new key's card" || F "7: recovery-reconcile.py: $out"
+if [ -f "$RTRAIL" ] && python3 -Es deploy/baremetal/trails.py verify "$RTRAIL" >"$W/rverify.json" 2>&1; then
+  P "7: the reconcile trail's chain verifies ($(cat "$W/rverify.json"))"
+else F "7: the reconcile trail does not verify: $(cat "$W/rverify.json" 2>/dev/null)"; fi
+pairs "$RTRAIL" "$LOOP" && P "7: its request is answered exactly once" || F "7: a reconcile request is unanswered or answered twice"
+grep -qF -- "$NEW_KEY" "$RTRAIL" && F "7: the card's key is in $RTRAIL" || P "7: no key is in the reconcile trail"
+
+
 # the file-backed half, where a skip is a failure
 out="$(REGALIA_EXPECT_CRYPTSETUP=1 python3 -BEs -m unittest -v tests.test_baremetal_recovery_key 2>&1)"; rc=$?
-[ "$rc" = 0 ] && grep -q '^Ran 37 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
-  && P "the 37 file-backed tests of recovery-key.sh ran and passed (the failure paths are there: a rollback that fails, a replace that stops half way, a signal)" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
+[ "$rc" = 0 ] && grep -q '^Ran 39 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
+  && P "the 39 file-backed tests of recovery-key.sh ran and passed (the failure paths are there: a step that fails, a replace that stops half way, a signal during the writes; every header sync is lab/recovery/matrix.py)" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
 
 echo "luks-recovery-key: $pass passed, $failed failed"
 [ "$failed" = 0 ]

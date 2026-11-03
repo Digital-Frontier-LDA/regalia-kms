@@ -13,8 +13,10 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -40,6 +42,9 @@ func main() {
 }
 
 func run(arguments []string, out *os.File) error {
+	if len(arguments) > 0 && arguments[0] == "handover" {
+		return operatorHandover(arguments[1:], out)
+	}
 	flags := flag.NewFlagSet("regalia-audit-collector", flag.ContinueOnError)
 	flags.SetOutput(out)
 	stateDir := flags.String("state", "", "directory holding the committed streams and the alarm log; this is the collector's durable memory, so put it on storage whose loss is its own incident")
@@ -47,6 +52,7 @@ func run(arguments []string, out *os.File) error {
 	tlsCert := flags.String("tls-cert", "", "PEM server certificate for the mTLS listener")
 	tlsKey := flags.String("tls-key", "", "PEM private key for the mTLS listener")
 	clientCA := flags.String("client-ca", "", "PEM CA bundle audit clients are verified against; a connection without a chain-verified client certificate never reaches a handler")
+	receiptKey := flags.String("receipt-key", "", "PEM (PKCS#8) Ed25519 key that signs receipts, root 0600, generated on this host (optional: without it no receipts are signed, and no trail archive is ever pruned)")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -58,10 +64,19 @@ func run(arguments []string, out *os.File) error {
 		return err
 	}
 	defer collector.Close()
+	if *receiptKey != "" {
+		key, err := loadReceiptKey(*receiptKey)
+		if err != nil {
+			return err
+		}
+		collector.SetReceiptKey(key)
+	}
 	server, err := buildServer(*listen, *tlsCert, *tlsKey, *clientCA, collector.Handler())
 	if err != nil {
 		return err
 	}
+	// a hand-over's old certificate is held to the roots the listener holds every client to (#291)
+	collector.SetClientRoots(server.TLSConfig.ClientCAs)
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", *listen, err)
@@ -111,4 +126,64 @@ func buildServer(listen, certificatePath, keyPath, clientCAPath string, handler 
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}, nil
+}
+
+// loadReceiptKey reads the receipt key: a PEM PKCS#8 Ed25519 private key in a regular file that only
+// its owner can read. Its loss only stops trail archives from being pruned (they wait); it signs
+// receipts and nothing else.
+func loadReceiptKey(path string) (ed25519.PrivateKey, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("receipt key: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("receipt key %s must be a regular file only its owner can read (0600)", path)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("receipt key: %w", err)
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil || block.Type != "PRIVATE KEY" {
+		return nil, errors.New("receipt key: not a PEM PKCS#8 private key")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("receipt key: %w", err)
+	}
+	key, ok := parsed.(ed25519.PrivateKey)
+	if !ok {
+		return nil, errors.New("receipt key: not an Ed25519 key")
+	}
+	return key, nil
+}
+
+// operatorHandover is `regalia-audit-collector handover`: the operator's hand-over of a retired client
+// certificate's streams to its replacement, for when the old key is lost and cannot sign one (#291;
+// internal/audit/handover.go). The collector must be stopped: opening its state takes the lock a
+// running collector holds.
+func operatorHandover(arguments []string, out *os.File) error {
+	flags := flag.NewFlagSet("regalia-audit-collector handover", flag.ContinueOnError)
+	flags.SetOutput(out)
+	stateDir := flags.String("state", "", "the collector's state directory")
+	old := flags.String("old", "", "the retired client certificate's fingerprint: SHA-256 of its DER, hex")
+	replacement := flags.String("new", "", "its replacement's fingerprint")
+	reason := flags.String("reason", "", "why the old certificate cannot sign the hand-over itself (recorded)")
+	discard := flags.Bool("discard-new-streams", false, "the new certificate shipped before its hand-over: move its own streams aside, allowed only when each is a prefix of the old certificate's on the same site")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if *stateDir == "" || *old == "" || *replacement == "" || *reason == "" {
+		return errors.New("handover needs -state, -old, -new and -reason")
+	}
+	collector, err := audit.OpenCollector(*stateDir)
+	if err != nil {
+		return err
+	}
+	defer collector.Close()
+	if err := collector.RecordOperatorHandover(*old, *replacement, *reason, *discard); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "regalia-audit-collector: the streams of %s now continue under %s; %s is retired\n", *old, *replacement, *old)
+	return nil
 }

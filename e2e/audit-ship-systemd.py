@@ -1,0 +1,394 @@
+#!/usr/bin/env python3
+"""The trail shipper (#278) under the runner's real systemd, against the real audit collector.
+
+    REGALIA_E2E_BIN=<dir with regalia-audit-ship, regalia-audit-collector> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN \\
+        python3 -Es e2e/audit-ship-systemd.py
+
+IT CHANGES THE MACHINE (a binary in /usr/bin, a unit, /etc/regalia/audit-ship*, /etc/regalia/node.json, trails.py at
+/usr/lib/regalia-kms, users from the shipped sysusers files, which stay), so it runs only on a
+GitHub-hosted runner (RUNNER_ENVIRONMENT=github-hosted), or on a throwaway host whose /etc/machine-id is in
+REGALIA_SHIP_HOST_OK.
+
+  0a no trail path is hand-provisioned (#580): the unit's ExecStart resolves it from the registry and the node's
+     configuration (trails.py exec-ship). With no /etc/regalia/node.json the instance refuses, and ships nothing;
+  0  the shipper runs as its own user with no capability: without its instance's drop-in (the trail's own
+     reader group, regalia-audit-sync, #286) it cannot read the trail regalia-sync wrote, 0640, and ships nothing;
+  1  with units/regalia-audit-ship@sync.service.d as shipped, it reads it through the group and ships it;
+  1c the enrol trail (#278): an `enrol` event written as enrol.py writes it, by root at the registry's own path
+     (trails.where("enrol"), /var/log/regalia, root:regalia-audit 2750), ships with
+     units/regalia-audit-ship@enrol.service.d as shipped: the collector's enrol stream holds that line;
+  2  a line appended later ships on the next pass, and the collector's stream holds every line;
+  2b the client certificate is rotated (#291). Swapped before the hand-over, the shipper refuses to send.
+     After `regalia-audit-ship handover` (the old key signs, the new certificate presents it) and a restart,
+     the same stream goes on, and the old certificate is refused;
+  3  the trail cut short under what was shipped: the instance ends with status 3, systemd does NOT restart
+     it, the collector's alarm log holds the shipper's alarm, and the metrics say tampered;
+  4  a manual start repeats the refusal: it never quietly resumes.
+"""
+import grp
+import json
+import os
+import pathlib
+import pwd
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import time
+
+HERE = pathlib.Path(__file__).resolve().parent
+UNIT = HERE.parent / "deploy" / "baremetal" / "units" / "regalia-audit-ship@.service"
+TRAILS = HERE.parent / "deploy" / "baremetal" / "trails.py"
+LIB = pathlib.Path("/usr/lib/regalia-kms")                       # the unit runs trails.py from here (exec-ship, #580)
+NODE_JSON = pathlib.Path("/etc/regalia/node.json")             # trails.NODE_CONFIG: state_dir and admission_log_dir are read from it
+INSTANCE = "regalia-audit-ship@sync.service"
+COLLECTOR_UNIT = "regalia-e2e-collector.service"
+BIN = pathlib.Path("/usr/bin/regalia-audit-ship")
+ETC = pathlib.Path("/etc/regalia/audit-ship")
+ENV = pathlib.Path("/etc/regalia/audit-ship.env")
+INSTALLED = pathlib.Path("/etc/systemd/system/regalia-audit-ship@.service")
+DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@sync.service.d")
+ADM_INSTANCE = "regalia-audit-ship@admission.service"
+ADM_DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@admission.service.d")
+ENROL_INSTANCE = "regalia-audit-ship@enrol.service"
+ENROL_DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@enrol.service.d")
+ENROL_TRAIL = pathlib.Path("/var/log/regalia/enrol.jsonl")      # trails.where("enrol"); 1c asserts the registry names it
+UNITS = HERE.parent / "deploy" / "baremetal" / "units"
+METRICS = pathlib.Path("/run/regalia-metrics/audit-ship/sync.prom")      # node_exporter's textfile directory (#305)
+HEAD = pathlib.Path("/var/lib/regalia-audit-ship/sync.head.json")      # the unit's -head, for prune
+ADM_HEAD = HEAD.with_name("admission.head.json")
+PORT = 18443
+WORK = pathlib.Path("/var/lib/audit-ship-e2e")   # not under /tmp: the unit has PrivateTmp=yes and would not see it
+passed, failed = 0, 0
+
+
+def ok(condition, text, detail=""):
+    global passed, failed
+    if condition:
+        passed += 1
+        print("  \033[32mPASS\033[0m %s" % text)
+    else:
+        failed += 1
+        print("  \033[31mFAIL\033[0m %s%s" % (text, (": %s" % (detail,)) if detail != "" else ""))
+    sys.stdout.flush()
+
+
+def sh(*argv, check=True, **kw):
+    done = subprocess.run(list(argv), capture_output=True, text=True, **kw)
+    if check and done.returncode != 0:
+        raise SystemExit("audit-ship-systemd: %s failed (%d): %s %s" % (" ".join(argv[:3]), done.returncode, done.stdout.strip()[-800:], done.stderr.strip()[-800:]))
+    return done
+
+
+def metrics_say(*wanted):
+    """Whether the shipper's metrics file holds every one of `wanted` (it writes it after the receipt
+    comes back, so later than the collector's stream grows: waited on, never read once)."""
+    held = METRICS.read_text() if METRICS.exists() else ""
+    return all(w in held for w in wanted)
+
+
+def until(what, seconds, interval=1.0):
+    deadline, last = time.monotonic() + seconds, None
+    while time.monotonic() < deadline:
+        last = what()
+        if last:
+            return last
+        time.sleep(interval)
+    return last
+
+
+def show(unit, *properties):
+    out = sh("systemctl", "show", unit, "-p", ",".join(properties), check=False).stdout
+    return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
+
+def journal(unit, lines=30):
+    return sh("journalctl", "-u", unit, "-n", str(lines), "--no-pager", check=False).stdout
+
+
+def append_as_writer(path, n, start, writer="regalia-sync", trail="sync"):
+    """trails.append, run as the trail's writer (regalia-sync for sync, regalia-admission for admission): never the shipper."""
+    script = ("import sys; sys.path.insert(0, sys.argv[1]); import trails\nfor i in range(int(sys.argv[3])): "
+              "trails.append(sys.argv[2], {'event': sys.argv[5] + '-e2e', 'outcome': 'ALLOW', 'i': int(sys.argv[4]) + i}, group='regalia-audit-' + sys.argv[5])")
+    # as its service runs it: its user, and the trail's reader group beside its own (#286)
+    sh("setpriv", "--reuid=" + writer, "--regid=" + writer, "--groups=regalia-audit-" + trail, "--", sys.executable, "-Es", "-c", script,
+       str(WORK / "lib"), str(path), str(n), str(start), trail)
+
+
+def certificates(work):
+    """A one-run CA, the collector's certificate for 127.0.0.1 and the shipper's client certificate."""
+    def issue(name, extensions):
+        sh("openssl", "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", str(work / (name + ".key")),
+           "-out", str(work / (name + ".csr")), "-subj", "/CN=" + name)
+        (work / (name + ".ext")).write_text(extensions)
+        sh("openssl", "x509", "-req", "-in", str(work / (name + ".csr")), "-CA", str(work / "ca.pem"), "-CAkey", str(work / "ca.key"),
+           "-CAcreateserial", "-days", "1", "-out", str(work / (name + ".pem")), "-extfile", str(work / (name + ".ext")))
+    sh("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", str(work / "ca.key"),
+       "-out", str(work / "ca.pem"), "-subj", "/CN=audit-ship-e2e-ca", "-days", "1",
+       "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign")
+    issue("collector", "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n")
+    issue("shipper", "extendedKeyUsage=clientAuth\n")
+    issue("shipper2", "extendedKeyUsage=clientAuth\n")                # the rotation's new certificate (#291)
+    # the collector's receipt key (Ed25519, PKCS#8, 0600), and its public half as a host pins it (#351)
+    sh("openssl", "genpkey", "-algorithm", "ed25519", "-out", str(work / "receipt.key"))
+    os.chmod(work / "receipt.key", 0o600)
+    der = subprocess.run(["openssl", "pkey", "-in", str(work / "receipt.key"), "-pubout", "-outform", "DER"], capture_output=True, check=True).stdout
+    (work / "collector-receipt.pub").write_text("# the e2e collector's receipt key\n%s\n" % der[-32:].hex())
+
+
+def stream_lines(state, trail="sync"):
+    streams = list((state / "streams").glob("*/site-sitea.%s.jsonl" % trail))
+    if len(streams) != 1:
+        return 0
+    return len(streams[0].read_text().splitlines())
+
+
+def scenario(work, binaries):
+    certificates(work)
+    (work / "lib").mkdir()
+    shutil.copy(TRAILS, work / "lib" / "trails.py")             # the writer may not traverse the checkout: a copy it can read
+    state = work / "collector"
+    sh("systemd-sysusers", str(UNITS / "regalia.sysusers.conf"), str(UNITS / "regalia-audit-ship.sysusers.conf"))
+    sh("systemd-tmpfiles", "--create", str(UNITS / "regalia-audit-ship.tmpfiles.conf"))      # its metrics directory (#305)
+    trail_dir = work / "regalia-sync"                          # as its StateDirectory: regalia-sync's, 0755
+    trail_dir.mkdir()
+    shutil.chown(trail_dir, "regalia-sync", "regalia-sync")
+    os.chmod(trail_dir, 0o755)
+    trail = trail_dir / "sync-audit.jsonl"
+
+    sh("systemd-run", "--unit", COLLECTOR_UNIT, "--collect", str(binaries / "regalia-audit-collector"), "-state", str(state),
+       "-listen", "127.0.0.1:%d" % PORT, "-tls-cert", str(work / "collector.pem"), "-tls-key", str(work / "collector.key"),
+       "-client-ca", str(work / "ca.pem"), "-receipt-key", str(work / "receipt.key"))
+    shutil.copy(binaries / "regalia-audit-ship", BIN)
+    os.chmod(BIN, 0o755)
+    ETC.mkdir(parents=True)
+    for source, target, mode in (("shipper.pem", "client.crt", 0o644), ("shipper.key", "client.key", 0o640), ("ca.pem", "collector-ca.pem", 0o644),
+                                 ("collector-receipt.pub", "collector-receipt.pub", 0o644)):
+        shutil.copy(work / source, ETC / target)
+        shutil.chown(ETC / target, "root", "regalia-audit-ship")
+        os.chmod(ETC / target, mode)
+    ENV.write_text("COLLECTOR=https://127.0.0.1:%d\nSITE=sitea\n" % PORT)
+    installed_trails = LIB / "deploy" / "baremetal" / "trails.py"
+    installed_trails.parent.mkdir(parents=True)
+    for directory in (LIB, LIB / "deploy", installed_trails.parent):
+        os.chmod(directory, 0o755)
+    shutil.copy(TRAILS, installed_trails)                      # as the package installs it: root's, 0644
+    os.chmod(installed_trails, 0o644)
+    shutil.copy(UNIT, INSTALLED)
+    sh("systemctl", "daemon-reload")
+
+    print("\n### 0a  nothing names the trail but the registry: with no node.json the instance refuses (#580)")
+    append_as_writer(trail, 3, 0)
+    sh("systemctl", "start", INSTANCE)
+    refused = until(lambda: "REFUSED" in journal(INSTANCE) and str(NODE_JSON) in journal(INSTANCE), 30)
+    ok(refused and stream_lines(state) == 0, "exec-ship cannot read %s: the instance refuses and ships nothing" % NODE_JSON,
+       journal(INSTANCE, 5))
+    sh("systemctl", "stop", INSTANCE)
+    sh("systemctl", "reset-failed", INSTANCE, check=False)
+    # the node's configuration, as enrol installs it (root's, 0644), with the keys the registry reads
+    NODE_JSON.write_text(json.dumps({"state_dir": str(trail_dir), "admission_log_dir": str(work / "regalia-admission-log")}) + "\n")
+    os.chmod(NODE_JSON, 0o644)
+
+    print("\n### 0  its own user, no capability: outside the trail's group it reads nothing")
+    info = trail.stat()
+    ok((info.st_mode & 0o777, info.st_uid, info.st_gid) == (0o640, pwd.getpwnam("regalia-sync").pw_uid, grp.getgrnam("regalia-audit-sync").gr_gid),
+       "the trail is regalia-sync's, 0640, in its own reader group regalia-audit-sync (#286)", oct(info.st_mode))
+    sh("systemctl", "start", INSTANCE)
+    time.sleep(8)
+    unit = show(INSTANCE, "ActiveState", "CapabilityBoundingSet", "User")
+    ok(unit.get("User") == "regalia-audit-ship" and unit.get("CapabilityBoundingSet") == "" and unit.get("ActiveState") == "active",
+       "it runs as regalia-audit-ship with no capability", unit)
+    ok(stream_lines(state) == 0 and "permission denied" in journal(INSTANCE), "without the drop-in it cannot read the trail, and ships nothing",
+       journal(INSTANCE, 5))
+    sh("systemctl", "stop", INSTANCE)
+
+    print("\n### 1  with its drop-in it reads through the trail's group, and ships")
+    DROPIN.mkdir()
+    shutil.copy(UNITS / "regalia-audit-ship@sync.service.d" / "reader.conf", DROPIN / "reader.conf")
+    sh("systemctl", "daemon-reload")
+    sh("systemctl", "start", INSTANCE)
+    ok(until(lambda: stream_lines(state) == 3, 60), "the collector's stream holds the trail's 3 lines", stream_lines(state))
+
+    print("\n### 1b  the admission trail, in its own directory as tmpfiles makes /var/log/regalia-admission (#340, #345, #349)")
+    # the directory's mode and owners from the shipped tmpfiles line: the e2e holds the file, not a copy of its numbers
+    made = re.search(r"^d /var/log/regalia-admission (\d+) (\S+) (\S+) -$", (UNITS / "regalia.tmpfiles.conf").read_text(), re.M)
+    shipped, owner, group = int(made.group(1), 8), made.group(2), made.group(3)
+    adm_dir = work / "regalia-admission-log"
+    adm_dir.mkdir()
+    shutil.chown(adm_dir, owner, group)
+    adm_trail = adm_dir / "audit.jsonl"
+    os.chmod(adm_dir, shipped)
+    append_as_writer(adm_trail, 3, 0, writer="regalia-admission", trail="admission")
+    adm_instance, adm_dropin = ADM_INSTANCE, ADM_DROPIN
+    adm_dropin.mkdir()
+    shutil.copy(UNITS / "regalia-audit-ship@admission.service.d" / "reader.conf", adm_dropin / "reader.conf")
+    sh("systemctl", "daemon-reload")
+    os.chmod(adm_dir, 0o700)                                   # closed to its group too: the shipper cannot pass it
+    sh("systemctl", "start", adm_instance)
+    time.sleep(8)
+    ok(stream_lines(state, "admission") == 0 and "permission denied" in journal(adm_instance),
+       "with the admission trail's directory at 0700, it cannot be read: nothing ships", journal(adm_instance, 5))
+    sh("systemctl", "stop", adm_instance)
+    os.chmod(adm_dir, shipped)
+    sh("systemctl", "start", adm_instance)
+    ok(until(lambda: stream_lines(state, "admission") == 3, 60),
+       "at tmpfiles' mode (%s, %s:%s) the admission trail ships: the collector's stream holds its 3 lines" % (oct(shipped), owner, group),
+       (stream_lines(state, "admission"), journal(adm_instance, 5)))
+    sh("systemctl", "stop", adm_instance)
+
+    print("\n### 1c  the enrol trail (#278): root's, at the registry's own path, shipped with its drop-in as shipped")
+    # as enrol.py writes it (node.Trail(trails.where("enrol"))): root, at the one path the registry names, which
+    # trails.append makes /var/log/regalia root:regalia-audit 2750 for, so the line takes that group
+    record = "%064x" % 278
+    script = ("import sys, json; sys.path.insert(0, sys.argv[1]); import trails\n"
+              "path = trails.where('enrol')\n"
+              "trails.append(path, {'event': 'enrol', 'node': 'a', 'epoch': 1, 'manifest_digest': sys.argv[2], 'outcome': 'ALLOW', "
+              "'record_sha256': sys.argv[2]})\nprint(path)")
+    enrol_trail = pathlib.Path(sh(sys.executable, "-Es", "-c", script, str(work / "lib"), record).stdout.strip())
+    if enrol_trail != ENROL_TRAIL:                              # the path the preflight and the cleanup hold
+        ok(False, "the registry names the enrol trail at %s, not %s" % (enrol_trail, ENROL_TRAIL))
+    tool_dir, info = enrol_trail.parent.stat(), enrol_trail.stat()
+    ok(stat.S_IMODE(tool_dir.st_mode) == 0o2750 and grp.getgrgid(tool_dir.st_gid).gr_name == "regalia-audit" and tool_dir.st_uid == 0
+       and (info.st_mode & 0o777, info.st_uid, grp.getgrgid(info.st_gid).gr_name) == (0o640, 0, "regalia-audit"),
+       "the enrol trail is root's, 0640, in the operator tools' directory %s (root:regalia-audit 2750)" % enrol_trail.parent,
+       (oct(tool_dir.st_mode), oct(info.st_mode)))
+    ENROL_DROPIN.mkdir()
+    shutil.copy(UNITS / "regalia-audit-ship@enrol.service.d" / "reader.conf", ENROL_DROPIN / "reader.conf")
+    sh("systemctl", "daemon-reload")
+    sh("systemctl", "start", ENROL_INSTANCE)
+
+    def enrol_shipped():
+        streams = list((state / "streams").glob("*/site-sitea.enrol.jsonl"))
+        if len(streams) != 1:
+            return None
+        events = [json.loads(line) for line in streams[0].read_text().splitlines()]
+        lines = [json.loads((e.get("detail") or {}).get("line") or "{}") for e in events]
+        return lines if any(l.get("event") == "enrol" and l.get("record_sha256") == record for l in lines) else None
+    shipped_enrol = until(enrol_shipped, 60)
+    ok(bool(shipped_enrol), "with regalia-audit-ship@enrol.service.d as shipped, the enrol line reaches the collector's enrol stream, its "
+       "record's digest intact", (shipped_enrol, journal(ENROL_INSTANCE, 5)))
+    sh("systemctl", "stop", ENROL_INSTANCE)
+
+    print("\n### 2  a line appended later ships on the next pass")
+    append_as_writer(trail, 2, 3)
+    ok(until(lambda: stream_lines(state) == 5, 75), "the stream holds 5 lines after the next pass", stream_lines(state))
+    ok(until(lambda: metrics_say('regalia_audit_trail_committed{trail="sync"} 5', 'regalia_audit_trail_tampered{trail="sync"} 0'), 30),
+       "the metrics say 5 committed, not tampered", METRICS.read_text() if METRICS.exists() else "")
+    # The directory is the control: 2750, group regalia-metrics, so nobody outside the group can reach the file,
+    # which cmd/regalia-audit-ship/main.go's replaceFile makes 0644 (its Chmod) and which takes the group from the
+    # setgid bit.
+    info, held = (METRICS.stat(), METRICS.parent.stat()) if METRICS.exists() else (None, None)
+    ok(info is not None and stat.S_IMODE(held.st_mode) == 0o2750 and grp.getgrgid(held.st_gid).gr_name == "regalia-metrics"
+       and grp.getgrgid(info.st_gid).gr_name == "regalia-metrics",
+       "in its 2750 directory, group regalia-metrics: only node_exporter's group can read it (#305)",
+       (oct(stat.S_IMODE(held.st_mode)), grp.getgrgid(info.st_gid).gr_name) if info else "absent")
+
+    print("\n### 2b  the client certificate rotated: a hand-over, and the stream goes on (#291)")
+    # first the order error: the files swapped and the unit restarted BEFORE the hand-over (regalia-kms-51)
+    for source, target, mode in (("shipper2.pem", "client.crt", 0o644), ("shipper2.key", "client.key", 0o640)):
+        shutil.copy(work / source, ETC / target)
+        shutil.chown(ETC / target, "root", "regalia-audit-ship")
+        os.chmod(ETC / target, mode)
+    sh("systemctl", "restart", INSTANCE)
+    append_as_writer(trail, 1, 5)
+    pending = until(lambda: "hand-over pending" in journal(INSTANCE, 20), 45)
+    ok(pending and stream_lines(state) == 5, "shipping as the new certificate before the hand-over is refused: nothing sent",
+       (stream_lines(state), journal(INSTANCE, 5)))
+    done = sh(str(BIN), "handover", "-collector", "https://127.0.0.1:%d" % PORT, "-old-cert", str(work / "shipper.pem"),
+              "-old-key", str(work / "shipper.key"), "-tls-cert", str(work / "shipper2.pem"), "-tls-key", str(work / "shipper2.key"),
+              "-server-ca", str(work / "ca.pem"), check=False)
+    ok(done.returncode == 0, "regalia-audit-ship handover: the old key signs, the new certificate presents it", done.stdout + done.stderr)
+    sh("systemctl", "restart", INSTANCE)
+    ok(until(lambda: stream_lines(state) == 6, 75)
+       and until(lambda: metrics_say('regalia_audit_trail_committed{trail="sync"} 6', 'regalia_audit_trail_tampered{trail="sync"} 0'), 30),
+       "under the new certificate the same stream goes on to 6 lines, not tampered", (stream_lines(state), journal(INSTANCE, 5)))
+    refused = sh("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--cert", str(work / "shipper.pem"), "--key", str(work / "shipper.key"),
+                 "--cacert", str(work / "ca.pem"), "-H", "X-Regalia-Site: sitea.sync", "https://127.0.0.1:%d/v1/stream-position" % PORT, check=False)
+    ok(refused.stdout.strip() == "403", "the old certificate is retired: the collector refuses it", refused.stdout)
+
+    print("\n### 3  the trail cut short: an alarm, status 3, and no restart")
+    lines = trail.read_bytes().splitlines(keepends=True)
+    trail.write_bytes(b"".join(lines[:2]))                     # root rewrites it in place: still regalia-sync's, 0640
+    stopped = until(lambda: show(INSTANCE, "ActiveState").get("ActiveState") == "failed", 75)
+    status = show(INSTANCE, "ActiveState", "ExecMainStatus", "NRestarts")
+    ok(stopped and status.get("ExecMainStatus") == "3", "the instance failed with status 3", status)
+    time.sleep(40)                                              # longer than RestartSec=30s
+    status = show(INSTANCE, "ActiveState", "NRestarts")
+    ok(status.get("ActiveState") == "failed" and status.get("NRestarts") == "0", "systemd did not restart it", status)
+    alarms = [json.loads(line) for line in (state / "alarms.jsonl").read_text().splitlines()]
+    ours = [a for a in alarms if a.get("site") == "sitea.sync" and "reported by the client" in a.get("reason", "")]
+    ok(len(ours) == 1 and "cut short" in ours[0]["reason"], "the collector's alarm log holds the shipper's alarm", alarms)
+    ok(stream_lines(state) == 6, "the collector's stream still holds the 6 committed lines", stream_lines(state))
+    ok(until(lambda: metrics_say('regalia_audit_trail_tampered{trail="sync"} 1'), 30), "the metrics say tampered",
+       METRICS.read_text() if METRICS.exists() else "")
+
+    print("\n### 4  a manual start repeats the refusal")
+    sh("systemctl", "start", INSTANCE, check=False)
+    until(lambda: show(INSTANCE, "ActiveState").get("ActiveState") == "failed", 30)
+    status = show(INSTANCE, "ActiveState", "ExecMainStatus")
+    alarms = [line for line in (state / "alarms.jsonl").read_text().splitlines() if "reported by the client" in line]
+    ok(status.get("ActiveState") == "failed" and status.get("ExecMainStatus") == "3" and len(alarms) == 2,
+       "started by hand, it refuses again with a second alarm", (status, len(alarms)))
+    ok(stream_lines(state) == 6, "and ships nothing", stream_lines(state))
+
+    print("\n### 5  the collector meets the contract an external one must (#351, deploy/baremetal/AUDIT-COLLECTOR.md)")
+    # the real regalia-audit-collector binary, checked as any candidate service is: through the shippers' own client,
+    # against the documented contract only, on a stream of its own. Last, so its alarm and stream touch no step above.
+    done = subprocess.run([str(BIN), "conformance", "-collector", "https://127.0.0.1:%d" % PORT, "-site", "sitea",
+                           "-tls-cert", str(ETC / "client.crt"), "-tls-key", str(ETC / "client.key"), "-server-ca", str(ETC / "collector-ca.pem"),
+                           "-receipt-keys", str(ETC / "collector-receipt.pub")], capture_output=True, text=True)
+    ok(done.returncode == 0 and "meets the audit collector contract: 13 rules" in done.stdout and "FAIL" not in done.stdout,
+       "regalia-audit-ship conformance: every rule of the contract holds", done.stdout[-1500:] + done.stderr[-500:])
+    if failed:
+        print(journal(INSTANCE))
+        print(journal(COLLECTOR_UNIT))
+    return 1 if failed else 0
+
+
+def main():
+    try:
+        machine = pathlib.Path("/etc/machine-id").read_text().strip()
+    except OSError:
+        machine = None
+    if os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" and (not machine or os.environ.get("REGALIA_SHIP_HOST_OK") != machine):
+        print("audit-ship-systemd: refused: this changes the machine (/usr/bin, a unit, /etc/regalia). It runs on a GitHub-hosted "
+              "runner; on another throwaway host set REGALIA_SHIP_HOST_OK to its /etc/machine-id.")
+        return 2
+    present = [str(p) for p in (BIN, ETC, ENV, NODE_JSON, LIB, INSTALLED, DROPIN, ADM_DROPIN, ENROL_DROPIN, ENROL_TRAIL, METRICS.parent, WORK) if p.exists()]
+    if present:
+        print("audit-ship-systemd: refused: %s exists: this looks like a host where the shipper is installed" % ", ".join(present))
+        return 2
+    if os.geteuid() != 0:
+        print("audit-ship-systemd: run as root")
+        return 2
+    binaries = pathlib.Path(os.environ.get("REGALIA_E2E_BIN", "/nonexistent"))
+    if not all((binaries / name).is_file() for name in ("regalia-audit-ship", "regalia-audit-collector")):
+        print("audit-ship-systemd: REGALIA_E2E_BIN must name a directory with regalia-audit-ship and regalia-audit-collector built")
+        return 2
+    work = WORK
+    work.mkdir(mode=0o755)
+    os.chmod(work, 0o755)
+    try:
+        return scenario(work, binaries)
+    finally:
+        for unit in (INSTANCE, ADM_INSTANCE, ENROL_INSTANCE, COLLECTOR_UNIT):
+            sh("systemctl", "stop", unit, check=False)
+            sh("systemctl", "reset-failed", unit, check=False)
+        for path in (DROPIN / "reader.conf", ADM_DROPIN / "reader.conf", ADM_HEAD, METRICS.with_name("admission.prom"),
+                     ENROL_DROPIN / "reader.conf", HEAD.with_name("enrol.head.json"), METRICS.with_name("enrol.prom"), ENROL_TRAIL,
+                     INSTALLED, BIN, ENV, NODE_JSON, ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem",
+                     ETC / "collector-receipt.pub", METRICS, HEAD):
+            if path.exists():
+                path.unlink()
+        for directory in (DROPIN, ADM_DROPIN, ENROL_DROPIN, ETC, METRICS.parent):
+            if directory.exists():
+                directory.rmdir()
+        sh("systemctl", "daemon-reload", check=False)
+        shutil.rmtree(LIB, ignore_errors=True)
+        shutil.rmtree(work, ignore_errors=True)
+        print("\naudit-ship-systemd: %d passed, %d failed" % (passed, failed))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

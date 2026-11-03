@@ -13,9 +13,10 @@ package yubikey
 // the guards; the seam tests use a card-shaped value that NEVER panics, because
 // the seams ARE the card surface in this process.
 //
-// The guards below now live at :43, :47, :51, :56, :57, :64, :67, :72, :79,
-// :86, :90 — the seam insertion shifted the surrounding file by one line.
-// Tests name the guard line, not the assignment that precedes it.
+// The guards below are cited by function and anchor, as sweeptext.ResolveCitation
+// reads them (#294), not by line: the seam insertion
+// once shifted the whole file by a line and every short reference with it.
+// Each names the guard, not the assignment that precedes it.
 //
 // SHAPE:
 //
@@ -81,16 +82,16 @@ func newDriver(devices map[string]string) *PIVDriver {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:43 op1 — driver == nil in Open
+// piv_driver.go:(*PIVDriver).Open{err := ctx.Err()}[1] — driver == nil in Open
 // ----------------------------------------------------------------------------
 
 // Open must not dereference a nil driver. A nil-driver dereference would crash
 // the daemon on the discovery path of an operation; the guard is the only
 // thing standing between the call and `driver.devices[deviceID]`.
 //
-// Falsifier: :43 op1 -> `(false && driver == nil)`. The expression becomes
-// `err != nil || false`, so a non-cancelled context proceeds past :43 and the
-// `driver.devices` access on :46 panics.
+// Falsifier: piv_driver.go:(*PIVDriver).Open{driver == nil} op1 -> `(false && driver == nil)`. The expression becomes
+// `err != nil || false`, so a non-cancelled context proceeds past piv_driver.go:(*PIVDriver).Open{driver == nil} and the
+// `driver.devices` access on piv_driver.go:(*PIVDriver).Open{driver.devices} panics.
 func TestOpenRefusesBeforeTouchingADriverThatIsNil(t *testing.T) {
 	var driver *PIVDriver
 	ctx := context.Background()
@@ -110,15 +111,15 @@ func TestOpenRefusesBeforeTouchingADriverThatIsNil(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:47 — target == "" (deviceID not commissioned)
+// piv_driver.go:(*PIVDriver).Open{target == ""} — target == "" (deviceID not commissioned)
 // ----------------------------------------------------------------------------
 
 // Open must refuse a deviceID that is not in the commissioned map. The fixture
-// returns (cards, nil) from pivCards so that pivOpen WOULD be called if :47
+// returns (cards, nil) from pivCards so that pivOpen WOULD be called if piv_driver.go:(*PIVDriver).Open{target == ""}
 // were missing; the assertion that it was NOT is what makes this test falsify
 // the operand in isolation.
 //
-// Falsifier: :47 -> `(false && target == "")`. Open proceeds to pivCards,
+// Falsifier: piv_driver.go:(*PIVDriver).Open{target == ""} -> `(false && target == "")`. Open proceeds to pivCards,
 // which returns ["x","y"], and pivOpen is called for the first card name.
 func TestOpenDoesNotEnumerateReadersForADeviceIDThatIsNotCommissioned(t *testing.T) {
 	driver := newDriver(map[string]string{"commissioned": "12345678"})
@@ -140,15 +141,15 @@ func TestOpenDoesNotEnumerateReadersForADeviceIDThatIsNotCommissioned(t *testing
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:51 — err != nil from pivCards
+// piv_driver.go:(*PIVDriver).Open{pivCards() then err != nil} — err != nil from pivCards
 // ----------------------------------------------------------------------------
 
 // Open must refuse when pivCards itself errors. The error is the reader
 // surface's signal that PC/SC could not enumerate; passing it through to
 // pivOpen would have no reader to open.
 //
-// Falsifier: :51 -> `(false && err != nil)`. pivCards's error is hidden; Open
-// proceeds to the loop body and reads `len(cards)` (which is zero), then :79
+// Falsifier: piv_driver.go:(*PIVDriver).Open{pivCards then err != nil} -> `(false && err != nil)`. pivCards's error is hidden; Open
+// proceeds to the loop body and reads `len(cards)` (which is zero), then piv_driver.go:(*PIVDriver).Open{selected == nil}
 // returns ErrUnavailable. The OUTCOME is unchanged — that is the test for
 // SOLE-refusable: the only way to detect the mutation is to assert pivOpen
 // was called.
@@ -157,49 +158,49 @@ func TestOpenDoesNotEnumerateReadersForADeviceIDThatIsNotCommissioned(t *testing
 // under the falsifier, the loop iterates once with the empty `cards`, but
 // len-0 means the body never executes, so pivOpen is still never called.
 //
-// The mutation is therefore detected by the spies on :47 and :79 below, not
-// here. :51 is RECORDED as cannot-be-sole-refuser — pivCards's error and the
+// The mutation is therefore detected by the spies on piv_driver.go:(*PIVDriver).Open{target == ""} and piv_driver.go:(*PIVDriver).Open{selected == nil} below, not
+// here. piv_driver.go:(*PIVDriver).Open{pivCards then err != nil} is RECORDED as cannot-be-sole-refuser — pivCards's error and the
 // empty-cards loop outcome both refuse the same way, and the loop body never
 // runs to disambiguate them.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:56 — ctx.Err() in the loop  ::  RECORDED, MASKED BY :43 op0
+// piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil} — ctx.Err() in the loop  ::  RECORDED, MASKED BY piv_driver.go:(*PIVDriver).Open{driver == nil} op0
 // ----------------------------------------------------------------------------
 
-// :56 checks ctx.Err() at the top of every loop iteration. A cancelled context
-// first hits :43 op0 on the way into Open, so :56 only runs under a context
-// that was live at :43 and was then cancelled. With the seam this is reachable
+// piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil} checks ctx.Err() at the top of every loop iteration. A cancelled context
+// first hits piv_driver.go:(*PIVDriver).Open{driver == nil} op0 on the way into Open, so piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil} only runs under a context
+// that was live at piv_driver.go:(*PIVDriver).Open{driver == nil} and was then cancelled. With the seam this is reachable
 // if pivOpen blocks long enough for ctx to be cancelled — which it does not,
 // because pivOpen is a synchronous seam function. A real PC/SC transmit CAN
 // observe context cancellation; the seam cannot, because it does not transmit.
 //
-// :56 is therefore recorded as masked by :43 op0 in the seam fixture. Its
+// piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil} is therefore recorded as masked by piv_driver.go:(*PIVDriver).Open{driver == nil} op0 in the seam fixture. Its
 // falsifier would require pivOpen to consult ctx, which the seam does not.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:57 — selected != nil mid-loop  ::  RECORDED, NEEDS PRE-SET SELECTED
+// piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil then selected != nil} — selected != nil mid-loop  ::  RECORDED, NEEDS PRE-SET SELECTED
 // ----------------------------------------------------------------------------
 
-// :57 closes the previously-selected card when ctx.Err() is observed mid-loop.
+// piv_driver.go:(*PIVDriver).Open{selected != nil#1} closes the previously-selected card when ctx.Err() is observed mid-loop.
 // To fire it, the loop must have set `selected` in a prior iteration, then
 // observed ctx.Err() in the next. With the seam, this needs pivCards to return
 // at least two names AND pivOpen to return a successful candidate on the first
 // (one whose Serial() matches the target). The fixture's pivOpen returns an
-// error, so the loop never sets `selected`, and :57 is unreachable through
+// error, so the loop never sets `selected`, and piv_driver.go:(*PIVDriver).Open{selected != nil#1} is unreachable through
 // any seam arrangement that does not also drive Serial().
 //
 // Recorded as: cannot-be-sole-refuser in the seam fixture; would require a
 // seam for Serial() too, which #237 round two did not introduce.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:64 — openErr != nil from pivOpen
+// piv_driver.go:(*PIVDriver).Open{openErr != nil} — openErr != nil from pivOpen
 // ----------------------------------------------------------------------------
 
 // Open must refuse on a per-card open error and continue to the next card.
-// Without :64, the open error short-circuits to `candidate.Serial()`, which
-// panics on a nil-handed card — the same panic that :64 was added to prevent.
+// Without piv_driver.go:(*PIVDriver).Open{openErr != nil}, the open error short-circuits to `candidate.Serial()`, which
+// panics on a nil-handed card — the same panic that piv_driver.go:(*PIVDriver).Open{openErr != nil} was added to prevent.
 //
-// Falsifier: :64 -> `(false && openErr != nil)`. The error is hidden, candidate
+// Falsifier: piv_driver.go:(*PIVDriver).Open{openErr != nil} -> `(false && openErr != nil)`. The error is hidden, candidate
 // is nil, `candidate.Serial()` panics.
 func TestOpenContinuesPastACardThatFailsToOpen(t *testing.T) {
 	driver := newDriver(map[string]string{"y": "12345678"})
@@ -215,7 +216,7 @@ func TestOpenContinuesPastACardThatFailsToOpen(t *testing.T) {
 	if !errors.Is(result.err, ErrUnavailable) {
 		t.Fatalf("Open: err = %v, want ErrUnavailable", result.err)
 	}
-	// The control: pivOpen was called once, and :79 then refused because no
+	// The control: pivOpen was called once, and piv_driver.go:(*PIVDriver).Open{selected == nil} then refused because no
 	// card produced a matching serial.
 	if result.contact != refusedBeforeTheCard {
 		t.Fatalf("Open reached the card after pivOpen errored — :64 must filter the error before any card call")
@@ -223,10 +224,10 @@ func TestOpenContinuesPastACardThatFailsToOpen(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:67 op0, :67 op1  ::  RECORDED, MASKED BY THE NIL-HANDED CARD
+// piv_driver.go:(*PIVDriver).Open{serialErr != nil}[0] and [1]  ::  RECORDED, MASKED BY THE NIL-HANDED CARD
 // ----------------------------------------------------------------------------
 
-// :67 op0 (serialErr != nil) and :67 op1 (format != target) check the result
+// piv_driver.go:(*PIVDriver).Open{serialErr != nil} op0 (serialErr != nil) and piv_driver.go:(*PIVDriver).Open{serialErr != nil} op1 (format != target) check the result
 // of candidate.Serial(). Reaching them requires Serial() to return
 // (uint32, error); on a nil-handed card Serial() panics before returning.
 // The seam returns an error from pivOpen rather than a card, so the loop
@@ -237,10 +238,10 @@ func TestOpenContinuesPastACardThatFailsToOpen(t *testing.T) {
 // introduced.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:72 — selected != nil (duplicate serial)  ::  RECORDED
+// piv_driver.go:(*PIVDriver).Open{selected != nil#2} — selected != nil (duplicate serial)  ::  RECORDED
 // ----------------------------------------------------------------------------
 
-// :72 refuses when a SECOND card answers to the same commissioned serial.
+// piv_driver.go:(*PIVDriver).Open{selected != nil#2} refuses when a SECOND card answers to the same commissioned serial.
 // Constructing two distinct pivCards() results whose Serial() both match
 // the target needs either two physical YubiKeys with the same serial
 // (impossible) or a seam that controls Serial() (out of scope).
@@ -248,15 +249,15 @@ func TestOpenContinuesPastACardThatFailsToOpen(t *testing.T) {
 // Recorded as: cannot-be-sole-refuser in this fixture.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:79 — selected == nil at end of loop
+// piv_driver.go:(*PIVDriver).Open{selected == nil} — selected == nil at end of loop
 // ----------------------------------------------------------------------------
 
 // Open must refuse when no card in pivCards() matched the commissioned
-// serial. Without :79, Open returns &pivSession{card: nil, serial: target}
+// serial. Without piv_driver.go:(*PIVDriver).Open{selected == nil}, Open returns &pivSession{card: nil, serial: target}
 // and the caller gets a Session whose usable() guard fires on the next call,
 // but the session itself is non-nil and indistinguishable from a real one.
 //
-// Falsifier: :79 -> `(false && selected == nil)`. Open returns
+// Falsifier: piv_driver.go:(*PIVDriver).Open{selected == nil} -> `(false && selected == nil)`. Open returns
 // (non-nil Session, nil error) — a usable-shaped value that is not actually
 // usable. The falsifier's symptom is the return shape; this test asserts
 // the shape.
@@ -276,10 +277,10 @@ func TestOpenRefusesWhenNoCardMatchesTheCommissionedSerial(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:86 op0 — driver == nil in Ready
+// piv_driver.go:(*PIVDriver).Ready{driver == nil || ctx.Err() != nil}[0] — driver == nil in Ready
 // ----------------------------------------------------------------------------
 
-// Ready must refuse a nil driver. Without :86 op0, Ready falls through to
+// Ready must refuse a nil driver. Without piv_driver.go:(*PIVDriver).Ready{driver == nil} op0, Ready falls through to
 // pivCards and returns whatever pivCards says — and on a real machine with a
 // card present, that is `true`, which is the falsifier's symptom.
 //
@@ -297,14 +298,14 @@ func TestReadyRefusesBeforeTouchingADriverThatIsNil(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:86 op1 — ctx.Err() in Ready
+// piv_driver.go:(*PIVDriver).Ready{driver == nil || ctx.Err() != nil}[1] — ctx.Err() in Ready
 // ----------------------------------------------------------------------------
 
 // Ready must report false on a cancelled context, regardless of what pivCards
 // would have returned. A live context that produces cards must not have
 // Ready stick at true after the context is cancelled.
 //
-// Falsifier: :86 op1 -> `(false && ctx.Err() != nil)`. The expression becomes
+// Falsifier: piv_driver.go:(*PIVDriver).Ready{driver == nil} op1 -> `(false && ctx.Err() != nil)`. The expression becomes
 // `driver == nil || false`; with a non-nil driver, Ready continues to
 // pivCards and returns whatever it says.
 func TestReadyRefusesACancelledContextEvenWhenCardsArePresent(t *testing.T) {
@@ -321,7 +322,7 @@ func TestReadyRefusesACancelledContextEvenWhenCardsArePresent(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:90 op0, :90 op1 — the return-value halves of Ready
+// piv_driver.go:(*PIVDriver).Ready{len(cards) > 0}[0] and [1] — the return-value halves of Ready
 // ----------------------------------------------------------------------------
 
 // Ready's return value is `err == nil && len(cards) > 0`. Each operand is the
@@ -332,10 +333,10 @@ func TestReadyRefusesACancelledContextEvenWhenCardsArePresent(t *testing.T) {
 //
 // Falsifiers, each the sole failure:
 //
-//   - :90 op0 -> `(false && err == nil)`  Ready returns false even on a healthy
+//   - piv_driver.go:(*PIVDriver).Ready{len(cards) > 0} op0 -> `(false && err == nil)`  Ready returns false even on a healthy
 //     pivCards. The admission direction (Ready must report true when cards are
 //     present) is what this test pins.
-//   - :90 op1 -> `(false && len(cards) > 0)`  Ready reports true on an empty
+//   - piv_driver.go:(*PIVDriver).Ready{len(cards) > 0} op1 -> `(false && len(cards) > 0)`  Ready reports true on an empty
 //     pivCards — a phantom "yes, there is a reader", which is the falsifier's
 //     symptom.
 func TestReadyReportsTruthfullyAcrossBothHalvesOfItsReturn(t *testing.T) {
@@ -359,7 +360,7 @@ func TestReadyReportsTruthfullyAcrossBothHalvesOfItsReturn(t *testing.T) {
 			t.Fatal("Ready = true with pivCards returning (nil, nil) — :90 op1 is the only guard that catches an empty card list")
 		}
 	})
-	// :90 op0 falsifier. With err != nil and cards non-empty, the original
+	// piv_driver.go:(*PIVDriver).Ready{len(cards) > 0} op0 falsifier. With err != nil and cards non-empty, the original
 	// expression evaluates false; under mutation (err == nil operand dropped)
 	// the expression becomes `len(cards) > 0` and returns true. The fixture
 	// forces both halves present so the operand under test is the only thing
@@ -377,15 +378,15 @@ func TestReadyReportsTruthfullyAcrossBothHalvesOfItsReturn(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:139 op0 — usable in Login
+// piv_driver.go:(*pivSession).Login{len(pin) < 6}[0] — usable in Login
 // ----------------------------------------------------------------------------
 
 // Login must refuse a session that is not usable, before presenting a PIN to
 // the card. Presenting a PIN to a card this session has no right to speak to
-// spends one of the three retries the YubiKey holds; :139 op0 is the only
+// spends one of the three retries the YubiKey holds; piv_driver.go:(*pivSession).Login{session.usable(ctx)} op0 is the only
 // refusal that catches a closed or context-cancelled session.
 //
-// Falsifier: :139 op0 -> `(false && err != nil)`. The session reaches
+// Falsifier: piv_driver.go:(*pivSession).Login{session.usable(ctx)} op0 -> `(false && err != nil)`. The session reaches
 // VerifyPIN, which on a nil-handed card panics.
 func TestLoginRefusesBeforeVerifyingOnASessionThatIsNotUsable(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())

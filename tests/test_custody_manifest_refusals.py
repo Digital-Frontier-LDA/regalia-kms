@@ -189,7 +189,7 @@ class ManifestRefusalTests(unittest.TestCase):
 
     # ADR-0002 D5: a YubiKey key is generated on the device, so it cannot be Shamir-recovered;
     # continuity is multi-enrollment. Only for YubiKey PIV, and only with separate custody.
-    def _yubikey_pair(self, sites=("lisbon", "porto")):
+    def _yubikey_pair(self, sites=("alder", "birch")):
         obj = direct_key()
         obj["algorithm"] = "p256"
         obj["recovery"] = {"mode": "multi-enrollment", "status": "planned"}
@@ -204,7 +204,7 @@ class ManifestRefusalTests(unittest.TestCase):
         validate_manifest(manifest_with(self._yubikey_pair()))
 
     def test_yubikey_multi_enrollment_needs_two_sites(self):
-        self.assert_refused(self._yubikey_pair(sites=("lisbon", "lisbon")), "two distinct sites")
+        self.assert_refused(self._yubikey_pair(sites=("alder", "alder")), "two distinct sites")
 
     def test_multi_enrollment_is_not_a_way_around_shamir_for_other_hardware(self):
         obj = direct_key()   # two Nitrokeys: DKEK/seed-recoverable, so Shamir stays mandatory
@@ -213,7 +213,7 @@ class ManifestRefusalTests(unittest.TestCase):
 
     def test_a_mixed_yubikey_and_nitrokey_object_cannot_use_multi_enrollment(self):
         obj = self._yubikey_pair()
-        obj["bindings"][1].update(backend="nitrokey-pkcs11", device_id="nitrokey-porto", object_id="01")
+        obj["bindings"][1].update(backend="nitrokey-pkcs11", device_id="nitrokey-birch", object_id="01")
         obj["bindings"][1].pop("pin_policy"); obj["bindings"][1].pop("touch_policy")
         self.assert_refused(obj, "only for YubiKey PIV keys generated on the device")
 

@@ -14,9 +14,9 @@ and what a node does with what it receives. Three rules.
      has at that epoch, is a CONFLICT: two manifests were signed for one epoch. Nothing is applied and an
      incident is raised. Peers already talk at every lease renewal, so two connected peers converge
      within one renewal, or one renewal per 1000 epochs the receiver is behind (MAX_ENVELOPES a message).
-  2  THE HEARTBEAT FORCES IT. A heartbeat is for one manifest. After a revoking manifest the authority
-     issues heartbeats for the new one only, so a peer that is behind cannot take them, and the one it
-     holds runs out. The authority ships a BUNDLE, the envelopes and the heartbeat together; apply_bundle
+  2  THE HEARTBEAT FORCES IT. A heartbeat is for one manifest. After a revoking manifest the nodes sign
+     heartbeats for the new one only (beat.py, #199), so a peer that is behind cannot take them, and the
+     one it holds runs out. A peer ships a BUNDLE, the envelopes and the heartbeat together; apply_bundle
      commits the manifests, then accepts the heartbeat for the manifest it now holds.
   3  A PEER THAT HEARS NOTHING STOPS BY ITSELF: its heartbeat expires (heartbeat.py), and from then it
      authorizes no unlock and issues no lease.
@@ -29,9 +29,9 @@ THE BOUNDS, for a node revoked as stolen:
     heartbeat bound and 5 minutes after it accepted its last heartbeat (heartbeat.max_lifetime: 24 hours
     under a v1 manifest, what a v2 manifest states, never above 7 days; a heartbeat lives that long from
     its issue time, and one issued up to 5 minutes ahead of the peer's clock is accepted:
-    heartbeat.FUTURE_SKEW), or less if the authority issues shorter-lived heartbeats. exposure() is that
+    heartbeat.FUTURE_SKEW), or less if the nodes sign shorter-lived heartbeats. exposure() is that
     number for a peer, now;
-  * a stolen node that was running stops 300 s after its issuing peers hold the manifest (lease.py).
+  * a stolen node that was running stops 30 s (lease.MAX_LIFETIME) after its issuing peers hold the manifest (lease.py).
 
 Nothing here weakens a check: every envelope goes through Store.commit (signature, chain, tombstones, the
 TPM anchor) and every heartbeat through Freshness.accept (signer, manifest, time, the TPM counter).
@@ -92,14 +92,23 @@ def missing(store, theirs, limit=MAX_ENVELOPES):
 
 
 def catch_up(store, envelopes):
-    """Apply envelopes received from a peer or the authority, in order, through the store. An envelope for
+    """Apply envelopes received from a peer, in order, through the store. An envelope for
     an epoch this node already holds is verified like any other (its signature, against the manifest
     before it) and must then be the same manifest; a different one is a CONFLICT. Each accepted manifest
     is durable and anchored before the next is looked at, so a refusal part-way leaves the node at the
     last good epoch. Returns the summary afterwards."""
     require(isinstance(envelopes, list) and len(envelopes) <= MAX_ENVELOPES, "at most %d envelopes at a time" % MAX_ENVELOPES)
     current = store.load()
-    for envelope in envelopes:
+    # the epoch this batch leaves the node at: the last envelope above the epoch held (one resent after it is compared,
+    # not committed), whose measurements must be held when it is committed (#332, regalia-kms-d9's read)
+    top, new = current["epoch"] if current else 0, []
+    for i, e in enumerate(envelopes):
+        epoch = e.get("manifest", {}).get("epoch") if isinstance(e, dict) and isinstance(e.get("manifest"), dict) else None
+        if isinstance(epoch, int) and not isinstance(epoch, bool) and epoch > top:     # above everything before it
+            top = epoch
+            new.append(i)
+    last_new = new[-1] if new else None
+    for index, envelope in enumerate(envelopes):
         require(isinstance(envelope, dict) and isinstance(envelope.get("manifest"), dict), "an envelope must hold a manifest")
         epoch = envelope["manifest"].get("epoch")
         held = current["epoch"] if current else 0
@@ -112,13 +121,41 @@ def catch_up(store, envelopes):
             require(membership.digest(received) == membership.digest(mine["manifest"]),
                     "CONFLICT: a different manifest at epoch %d: two manifests were signed for one epoch; record an incident" % epoch)
             continue
-        current = store.commit(envelope)
+        # only an epoch passed through on the way to `last_new` skips the measurements check; anything else is held
+        # to it (an envelope whose epoch is not even a number included: accept refuses it either way)
+        current = store.commit(envelope, final=index == last_new or index not in new)
     return summary(store)
 
 
-# The revocation authority as a source of chains. Every other source is a node ID, and this is not one:
-# "@" is outside the node-ID grammar, so no node, revoked or not, can be filed as the authority by its name.
-AUTHORITY = "@authority"
+def agreed(root_key, sources, minimum, anchored):
+    """The chain that `sources` ({who: the whole chain they gave}) agree on, and its newest manifest: each
+    chain verified from the pinned root at epoch 1 and reaching epoch `anchored`, at least `minimum` of
+    them, no two differing at an epoch they share, and every source a node the newest manifest lets authorize.
+    The longest is returned. Nothing is installed here."""
+    require(isinstance(sources, dict) and all(isinstance(k, str) and isinstance(c, list) and c for k, c in sources.items()),
+            "sources must map each source (a node ID) to the non-empty chain it gave")
+    require(len(sources) >= minimum, "recovery needs whole chains from %d different sources that agree (%d given)" % (minimum, len(sources)))
+    verified, last = {}, {}
+    for source, chain in sources.items():
+        require(len(chain) <= MAX_ENVELOPES * 100, "a chain is oversized")
+        digests, current = [], None
+        for envelope in chain:
+            nxt = membership.accept(current, envelope, root_key)
+            require(nxt is not current, "a fetched chain repeats epoch %d" % nxt["epoch"])
+            digests.append(membership.digest(nxt))
+            current = nxt
+        require(len(digests) >= anchored, "a fetched chain ends at epoch %d, below the TPM high-water %d: that source is behind "
+                "and cannot vouch for the anchored epochs" % (len(digests), anchored))
+        verified[source], last[source] = digests, current
+    longest = max(sources, key=lambda source: len(verified[source]))
+    for digests in verified.values():
+        for epoch, (one, other) in enumerate(zip(digests, verified[longest]), 1):
+            require(one == other, "CONFLICT: the sources' chains differ at epoch %d: two manifests were signed for one epoch; "
+                    "nothing is restored; record an incident" % epoch)
+    for source in sources:
+        require(membership.may(last[longest], source, "authorize"),
+                "%r is not a source this chain trusts: not a node it lets authorize" % source)
+    return sources[longest], last[longest]
 
 
 def recover(store, sources, minimum=None):
@@ -127,7 +164,7 @@ def recover(store, sources, minimum=None):
     Returns the summary.
 
     `sources` maps WHO a chain came from to the whole chain it gave (peer_store.envelopes()): a peer's node
-    ID, or AUTHORITY. The TPM anchors the epoch and, beside it, the digest of the manifest at that epoch
+    ID. The TPM anchors the epoch and, beside it, the digest of the manifest at that epoch
     (membership.HighWater's record). While the record names the manifest at the anchored epoch
     (store.pinned()), Store.restore refuses every chain but the one this node accepted, so ONE source is
     enough and `minimum` defaults to 1. After a crash between the counter and the record, the record names
@@ -144,36 +181,13 @@ def recover(store, sources, minimum=None):
     if minimum is None:
         minimum = 1 if store.pinned() else 2
     require(isinstance(minimum, int) and not isinstance(minimum, bool) and minimum >= 1, "minimum must be an integer >= 1")
-    require(isinstance(sources, dict) and all(isinstance(k, str) and isinstance(c, list) and c for k, c in sources.items()),
-            "sources must map each source (a node ID, or %r) to the non-empty chain it gave" % AUTHORITY)
-    require(len(sources) >= minimum, "recovery needs whole chains from %d different sources that agree (%d given)" % (minimum, len(sources)))
-    anchored = store.hw.value()
-    verified, last = {}, {}
-    for source, chain in sources.items():
-        require(len(chain) <= MAX_ENVELOPES * 100, "a chain is oversized")
-        digests, current = [], None
-        for envelope in chain:
-            nxt = membership.accept(current, envelope, store.root_key)
-            require(nxt is not current, "a fetched chain repeats epoch %d" % nxt["epoch"])
-            digests.append(membership.digest(nxt))
-            current = nxt
-        require(len(digests) >= anchored, "a fetched chain ends at epoch %d, below the TPM high-water %d: that source is behind "
-                "and cannot vouch for the anchored epochs" % (len(digests), anchored))
-        verified[source], last[source] = digests, current
-    longest = max(sources, key=lambda source: len(verified[source]))
-    for digests in verified.values():
-        for epoch, (one, other) in enumerate(zip(digests, verified[longest]), 1):
-            require(one == other, "CONFLICT: the sources' chains differ at epoch %d: two manifests were signed for one epoch; "
-                    "nothing is restored; record an incident" % epoch)
-    for source in sources:
-        require(source == AUTHORITY or membership.may(last[longest], source, "authorize"),
-                "%r is not a source this chain trusts: neither the authority nor a node it lets authorize" % source)
-    store.restore(sources[longest])
+    chain, _ = agreed(store.root_key, sources, minimum, store.hw.value())
+    store.restore(chain)
     return summary(store)
 
 
 def bundle(store, theirs, heartbeat_envelope, limit=MAX_ENVELOPES):
-    """What the authority, or a peer passing it on, sends a node with summary `theirs`: up to `limit`
+    """What a peer sends a node with summary `theirs`: up to `limit`
     envelopes, and the heartbeat only if they bring the node to this store's current manifest (a heartbeat
     is for one manifest; a node still on the way gets None and asks again)."""
     envelopes = missing(store, theirs, limit)

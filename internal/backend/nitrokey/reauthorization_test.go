@@ -41,9 +41,15 @@ type leaseGate struct {
 	admitted    bool
 	requestedMs int64
 	asked       []int64
+	unlisted    map[string]bool // serials the manifest does not list; nil: every serial is listed
+	serials     []string        // the serials asked about
 }
 
-func (gate *leaseGate) RequestedAfter(_ context.Context, boottimeMs int64) bool {
+func (gate *leaseGate) Admits(_ context.Context, serial string, boottimeMs int64) bool {
+	gate.serials = append(gate.serials, serial)
+	if serial == "" || gate.unlisted[serial] {
+		return false
+	}
 	gate.asked = append(gate.asked, boottimeMs)
 	return gate.admitted && gate.requestedMs > boottimeMs
 }
@@ -637,7 +643,7 @@ func TestAnEmptyDeviceIDNeverTouchesTheBaseline(t *testing.T) {
 	w := newReauthWorld(t)
 	w.gate.requestedMs = 1_001
 	w.now = 5_000
-	if w.provider.reauthorized(context.Background(), "") {
+	if w.provider.reauthorized(context.Background(), "", "") {
 		t.Fatal("the empty device ID was served")
 	}
 	w.provider.tokenGone("")
@@ -650,12 +656,153 @@ func TestAnEmptyDeviceIDNeverTouchesTheBaseline(t *testing.T) {
 	}
 	late := newReauthWorld(t)
 	late.gate.requestedMs = 999 // a lease from BEFORE the process started
-	_ = late.provider.reauthorized(context.Background(), "")
+	_ = late.provider.reauthorized(context.Background(), "", "")
 	late.provider.tokenGone("")
 	if late.serves() {
 		t.Fatal("after the empty device ID was touched, a never-seen token served on a lease from before the start")
 	}
 	if !reflect.DeepEqual(late.waiting(), map[string]int64{"hsm-sitea": 1_000}) {
 		t.Fatalf("waiting = %v, want the process's start", late.waiting())
+	}
+}
+
+// readerGenerations stands for the PC/SC watcher (internal/backend/pcscwatch): each reader's generation,
+// and whether it is watched now.
+type readerGenerations map[string]uint64
+
+func (readers readerGenerations) Generation(name string) (uint64, bool) {
+	generation, ok := readers[name]
+	return generation, ok
+}
+
+const usbReader = "Nitrokey Nitrokey HSM (DENK04041440000         ) 00 00"
+
+// removableWorld is a reauthWorld whose token sits in a removable USB reader, watched.
+func removableWorld(t *testing.T) (*reauthWorld, readerGenerations) {
+	w := newReauthWorld(t)
+	w.gate.requestedMs = 1_001 // a lease asked for after the daemon started
+	w.driver.session.reader, w.driver.session.removable = usbReader, true
+	readers := readerGenerations{usbReader: 1}
+	w.provider.WatchReaders(readers)
+	return w, readers
+}
+
+// A TOKEN PULLED AND PUT BACK BETWEEN TWO OPERATIONS WAITS FOR A FRESH LEASE (regalia-kms#72, G2): no
+// operation saw it go, but its reader's generation moved. It is refused before any PIN until the node
+// holds a lease asked for after that moment.
+func TestATokenAwayBetweenTwoOperationsWaitsForAFreshLease(t *testing.T) {
+	w, readers := removableWorld(t)
+	if !w.serves() {
+		t.Fatal("a watched token, under a lease asked for since the daemon started, does not serve")
+	}
+	readers[usbReader] = 3 // pulled and back between two operations
+	w.now = 5_000
+	fetched, logins := w.pins.calls, w.driver.session.loginCalls
+	if w.serves() || w.pins.calls != fetched || w.driver.session.loginCalls != logins {
+		t.Fatal("a token whose reader moved served on the old lease, or its PIN was fetched or presented")
+	}
+	if w.healthy() {
+		t.Fatal("it reports healthy")
+	}
+	if !reflect.DeepEqual(w.waiting(), map[string]int64{"hsm-sitea": 5_000}) {
+		t.Fatalf("waiting = %v, want the absence dated 5000", w.waiting())
+	}
+	w.gate.requestedMs = 5_001 // a peer vouched for the node since
+	if !w.serves() {
+		t.Fatal("under a lease asked for after the absence it does not serve")
+	}
+}
+
+// Fail closed: where reauthorization is required, a removable token is refused before any PIN while its
+// reader is not watched (no watcher in this build, pcscd lost, a reader the watcher does not know) or
+// its slot cannot be read. pcscd back means a new generation: the token waits for a fresh lease.
+func TestARemovableTokenIsRefusedWhileItsReaderIsNotWatched(t *testing.T) {
+	unwatched := newReauthWorld(t)
+	unwatched.gate.requestedMs = 1_001
+	unwatched.driver.session.reader, unwatched.driver.session.removable = usbReader, true
+	if unwatched.serves() || unwatched.pins.calls != 0 || unwatched.healthy() {
+		t.Fatal("a removable token was served, or its PIN fetched, with no watcher")
+	}
+
+	w, readers := removableWorld(t)
+	if !w.serves() {
+		t.Fatal("the fixture does not serve")
+	}
+	delete(readers, usbReader) // pcscd lost: nothing is known
+	logins := w.driver.session.loginCalls
+	if w.serves() || w.driver.session.loginCalls != logins {
+		t.Fatal("served, or the PIN presented, while the reader is not watched")
+	}
+	readers[usbReader], w.now = 2, 6_000 // pcscd back: every reader has a new generation
+	if w.serves() {
+		t.Fatal("after the watcher came back, it served on the lease from before")
+	}
+	w.gate.requestedMs = 6_001
+	if !w.serves() {
+		t.Fatal("under a fresh lease it does not serve")
+	}
+
+	w.driver.session.readerErr = errors.New("CKR_SLOT_ID_INVALID")
+	if w.serves() {
+		t.Fatal("a token whose slot cannot be read was served")
+	}
+}
+
+// Where reauthorization is not required, nothing about readers is asked: a removable token serves as
+// before, watched or not.
+func TestWithoutReauthorizationTheReaderIsNotAsked(t *testing.T) {
+	session := &fakeSession{serial: "serial-1", devaut: binding().DevAuthFingerprint, reader: usbReader, removable: true,
+		readerErr: errors.New("never asked")}
+	provider, err := New(&removableDriver{session: session}, &fakePIN{value: []byte("123456")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := provider.Execute(context.Background(), registry.Route{Algorithm: "rsa2048", Binding: binding()}, "unwrap",
+		"regalia-envelope-v2", "application/vnd.regalia.data-key", []byte("wrapped"), []byte("context")); err != nil {
+		t.Fatalf("a removable token on a host without required reauthorization: %v", err)
+	}
+}
+
+// A TOKEN THE MANIFEST DOES NOT LIST IS NOT SERVED (regalia-kms#72, G1). The root replacing a stolen or
+// retired HSM in the manifest takes the old one out of service at the next operation, with no change to
+// the daemon's configuration: every operation is refused before the PIN is fetched or presented, the
+// binding is unhealthy, and nothing is quarantined (listed again, it serves).
+func TestATokenTheManifestDoesNotListIsRefusedBeforeAnyPIN(t *testing.T) {
+	for _, operation := range []string{"public-key", "wrap", "unwrap", "sign"} {
+		t.Run(operation, func(t *testing.T) {
+			w := newReauthWorld(t)
+			w.gate.requestedMs = 1_001 // a lease asked for since the daemon started: only the listing is missing
+			w.gate.unlisted = map[string]bool{"serial-1": true}
+			if err := w.execute(operation); !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("%s on a token the manifest does not list: %v", operation, err)
+			}
+			if w.pins.calls != 0 || w.driver.session.loginCalls != 0 {
+				t.Fatal("the PIN was fetched or presented for a token the manifest does not list")
+			}
+			if w.healthy() {
+				t.Fatal("a token the manifest does not list reports healthy")
+			}
+			if len(w.gate.serials) == 0 || w.gate.serials[len(w.gate.serials)-1] != "serial-1" {
+				t.Fatalf("the gate was asked about %v, not the token's own serial", w.gate.serials)
+			}
+			w.gate.unlisted = nil // listed again: it serves (unwrap, the fixture's operation that completes)
+			if !w.serves() {
+				t.Fatal("a token listed again does not serve: it was quarantined, not merely refused")
+			}
+		})
+	}
+}
+
+// Listed and serving, then de-listed: the next operation is refused.
+func TestATokenDeListedWhileServingStopsAtTheNextOperation(t *testing.T) {
+	w := newReauthWorld(t)
+	w.gate.requestedMs = 1_001
+	if !w.serves() {
+		t.Fatal("the fixture does not serve")
+	}
+	w.gate.unlisted = map[string]bool{"serial-1": true}
+	logins := w.driver.session.loginCalls
+	if w.serves() || w.driver.session.loginCalls != logins {
+		t.Fatal("a token de-listed while serving was served again, or its PIN presented")
 	}
 }

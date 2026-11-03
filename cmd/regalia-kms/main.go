@@ -11,16 +11,22 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/zap"
+
+	"github.com/Digital-Frontier-LDA/regalia-kms/cmd/regalia-unlock/membership"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/admission"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/nitrokey"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/pcscwatch"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/reauth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/certs"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/controlplane"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/executor"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/fencing"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/operations"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/opstate"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/pin"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/secrets"
 	"io"
@@ -349,6 +355,13 @@ func run() error {
 	if admissionErr != nil {
 		return admissionErr
 	}
+	// THE OPERATIONAL STATE (D32): watched from here on; its gate joins the fence once the serving lease
+	// names its revision and the session key (#432, the runtime lease v2).
+	_, _, stopState, stateErr := watchOperationalState(ctx, settings)
+	if stateErr != nil {
+		return stateErr
+	}
+	defer stopState()
 	var admissionProbe server.ReadinessProbe
 	if admissionGate != nil {
 		admissionProbe = admissionGate
@@ -372,7 +385,19 @@ func run() error {
 		tokenObserver = observer
 		// A TOKEN THAT WAS GONE WAITS FOR A FRESH LEASE (regalia-kms#72 PoC 12.4). Only where runtime
 		// admission is required: without a lease service there is no lease to wait for.
-		if err := requireReauthorization(manager, admissionGate, admission.ProcessStart); err != nil {
+		// A TOKEN AWAY BETWEEN TWO OPERATIONS is seen by the PC/SC reader watcher (#72, G2), which runs for the
+		// daemon's life. In a build without PC/SC (no -tags piv) it never runs, and no removable token is served
+		// where admission is required.
+		var readers reauth.Readers
+		if err := requirePCSCWatch(manager, admissionGate, pcscwatch.Built()); err != nil {
+			return err
+		}
+		if admissionGate != nil {
+			readers = pcscwatch.Start(ctx, pcscwatch.System(), func(err error) {
+				slog.Warn("KMS reader watcher lost PC/SC: removable tokens are refused until it runs again, then wait for a fresh lease", "error", err)
+			})
+		}
+		if err := requireReauthorization(manager, admissionGate, admission.ProcessStart, readers); err != nil {
 			return err
 		}
 
@@ -408,6 +433,7 @@ func run() error {
 		if admissionGate != nil {
 			coordinator.RequireAdmission(admissionGate)
 		}
+		coordinator.SetNodeID(settings.NodeID) // the one signer approvals are verified for (#432 G3)
 		slog.Info("KMS hardware backend ready", "module", settings.PKCS11ModulePath)
 	}
 
@@ -797,6 +823,75 @@ func fenceRunner(settings config.Config, registryDigest string, base operations.
 	return fencing.NewRunner(standby, base), standby, nil
 }
 
+// OPERATIONAL STATE (ADR-0002 D32, #432). Timing derived from the 30 s serving lease: the cache asks for a
+// progress notification every stateProgressEvery, so a quiet store still confirms itself well inside a lease.
+const (
+	stateProgressEvery = 5 * time.Second
+	stateRetry         = time.Second
+	stateDialTimeout   = 5 * time.Second
+)
+
+// watchOperationalState starts the watch of the operational state through the local etcd member's unix
+// socket, publishes the revision it applies (applied.json) for admission's lease request and sync's revision
+// floor, and makes and publishes this daemon instance's session key. Nothing when it is not configured.
+// It returns the cache, the key and a function that stops the watch and closes the client.
+//
+// Callable for the reason fenceRunner is: a wiring step nothing can call is one nothing notices missing.
+func watchOperationalState(ctx context.Context, settings config.Config) (*opstate.Cache, *opstate.SessionKey, func(), error) {
+	if settings.OperationalStateEndpoint == "" {
+		return nil, nil, func() {}, nil
+	}
+	bootID, err := admission.KernelBootID()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("operational state: the kernel's boot ID: %w", err)
+	}
+	started, err := admission.ProcessStart()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("operational state: this process's start time: %w", err)
+	}
+	key, err := opstate.NewSessionKey(bootID, started)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := key.Publish(settings.SessionKeyDir); err != nil {
+		return nil, nil, nil, fmt.Errorf("operational state: %w", err)
+	}
+	publisher, err := opstate.NewPublisher(settings.OperationalStateDir, bootID, stateProgressEvery)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	publisher.Err = func(err error) {
+		slog.Warn("KMS operational state: the applied revision could not be published", "error", err)
+	}
+	client, err := clientv3.New(clientv3.Config{Endpoints: []string{"unix://" + settings.OperationalStateEndpoint},
+		DialTimeout: stateDialTimeout, Logger: zap.NewNop()})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("operational state: the etcd client: %w", err)
+	}
+	source, err := opstate.NewEtcdSource(client)
+	if err != nil {
+		client.Close()
+		return nil, nil, nil, err
+	}
+	cache, err := opstate.New(opstate.Options{Source: source, Prefix: opstate.Prefix, Boottime: opstate.KernelBoottime,
+		ProgressEvery: stateProgressEvery, Retry: stateRetry, OnApplied: publisher.Applied,
+		OnState: func(live bool, reason string) {
+			if live {
+				slog.Info("KMS operational state watched", "endpoint", settings.OperationalStateEndpoint)
+			} else {
+				slog.Warn("KMS operational state not watched: this server serves on no state newer than its last confirmation", "reason", reason)
+			}
+		}})
+	if err != nil {
+		client.Close()
+		return nil, nil, nil, err
+	}
+	watch, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { cache.Run(watch); close(done) }()
+	return cache, key, func() { cancel(); <-done; client.Close() }, nil
+}
+
 // tokenConfigured reports whether the daemon gets a cryptographic backend, and with it a
 // coordinator. Without one there is nothing to route a key operation to and every one of them is
 // refused (api.Handler answers DEPENDENCY_UNAVAILABLE).
@@ -827,10 +922,29 @@ func admitRunner(settings config.Config, base operations.Runner, onTransition fu
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime admission: %w", err)
 	}
-	gate, err := admission.Open(admission.Options{
+	options := admission.Options{
 		Path: settings.RuntimeAdmissionPath, NodeID: settings.NodeID, SessionPath: settings.BootSessionPath,
 		OwnerUID: owner, OnTransition: onTransition,
-	})
+		// a lone survivor refuses the keys the owner's directives disabled, and every key when it cannot read them
+		DirectivesPath: admission.DirectivesPath,
+	}
+	// AN ADMISSION IS GOOD ONLY FOR THE EPOCH IT WAS JUDGED UNDER (#432): judged against the published chain
+	if settings.MembershipChainPath != "" {
+		chainOwner, err := lookupAdmissionOwner(settings.MembershipChainOwner)
+		if err != nil {
+			return nil, nil, fmt.Errorf("membership chain: %w", err)
+		}
+		rootPath := settings.MembershipRootKeyPath
+		if rootPath == "" {
+			rootPath = membership.RootKeyPath
+		}
+		root, _, err := membership.LoadRoot(os.ReadFile, rootPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("membership chain: %w", err)
+		}
+		options.ChainPath, options.ChainOwnerUID, options.Root = settings.MembershipChainPath, chainOwner, root
+	}
+	gate, err := admission.Open(options)
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime admission: %w", err)
 	}
@@ -862,6 +976,19 @@ var lookupAdmissionOwner = func(name string) (uint32, error) {
 // It is empty: the PKCS#11 provider (the HSM and the OpenPGP applet) and the PIV provider all wait.
 var awaitingReauthorization = map[string]string{}
 
+// requirePCSCWatch refuses to start a daemon that could not see a token pulled between two operations
+// (regalia-kms#72, G2): runtime admission required, a token configured, and a build without PC/SC (no
+// -tags piv). Such a daemon would refuse every removable token on every operation and look broken; it is
+// stopped here, at start, with the reason. The production build is the piv build.
+func requirePCSCWatch(manager *backend.Manager, gate *admission.Gate, built bool) error {
+	if manager == nil || gate == nil || built || len(manager.Providers()) == 0 {
+		return nil
+	}
+	return errors.New("runtime admission is required and a token is configured, but this daemon was built without PC/SC " +
+		"(-tags piv): it could not see a token pulled and put back between two operations, and would refuse every " +
+		"removable token. Build it with -tags piv, the production build (regalia-kms#72)")
+}
+
 // requireReauthorization makes EVERY key provider wait, after a token's absence and after a start of
 // this daemon, for a runtime lease asked for since (regalia-kms#72, PoC 12.4). The rule is for every
 // key the daemon serves, so the providers are walked, not named: one that can execute a key
@@ -872,7 +999,12 @@ var awaitingReauthorization = map[string]string{}
 // service reads that same time for the daemon's PID and asks at once, so a restart of the daemon
 // costs one renewal and not the wait for the next scheduled one. If the start time cannot be read,
 // "now" stands in: later, so never weaker, and the cost is that wait.
-func requireReauthorization(manager *backend.Manager, gate *admission.Gate, processStart func() (int64, error)) error {
+//
+// Every such provider also takes the PC/SC reader watcher (reauth.Watched; regalia-kms#72, G2), so that a
+// token pulled and put back between two operations, which no operation saw, waits for a fresh lease too.
+// One that cannot take it stops the daemon. A nil watcher (a build without PC/SC) is given as it is:
+// the providers then refuse every removable token.
+func requireReauthorization(manager *backend.Manager, gate *admission.Gate, processStart func() (int64, error), readers reauth.Readers) error {
 	if manager == nil || gate == nil {
 		return nil
 	}
@@ -919,9 +1051,15 @@ func requireReauthorization(manager *backend.Manager, gate *admission.Gate, proc
 			continue
 		}
 		told[provider] = true
+		// and every one sees the reader watcher: a token away between two operations is seen too (#72, G2)
+		watched, watches := provider.(reauth.Watched)
+		if !watches {
+			return fmt.Errorf("token reauthorization: the %s backend cannot be told when a token is away between two operations", name)
+		}
 		if err := provider.RequireReauthorization(gate, admission.Boottime, since); err != nil {
 			return fmt.Errorf("token reauthorization (%s): %w", name, err)
 		}
+		watched.WatchReaders(readers)
 	}
 	slog.Info("KMS token reauthorization required: a token that was absent serves again only under a runtime lease asked for after its return")
 	return nil

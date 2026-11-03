@@ -23,7 +23,8 @@ ADDRESS = {"a": "fd72:6567:616c::a", "b": "fd72:6567:616c::b", "c": "fd72:6567:6
 
 
 class Held:
-    """The revocation authority's side: it holds its latest heartbeat and issues no leases."""
+    """A source with no attester and no lease signer (sync.Server takes None for both): it holds a heartbeat and
+    issues no leases. Here it serves the fixtures' seed chain."""
 
     def __init__(self):
         self.envelope = None
@@ -39,9 +40,9 @@ class Case(ct.Case):
         self.keys_at[ADDRESS["a2"]] = self.entry("a2")["wg_service_pub"]
         self.tick = 0.0
         self.servers = {name: self.server(name) for name in ("b", "c")}
-        self.authority = Held()
-        self.servers["authority"] = sync.Server(convergence.AUTHORITY, self.stores["authority"], self.authority, None, None,
-                                                self.identify, self.events.append, sync.Buckets(clock=lambda: self.tick), clock=lambda: self.now)
+        self.held = Held()
+        self.servers["seed"] = sync.Server("seed", self.stores["seed"], self.held, None, None,
+                                           self.identify, self.events.append, sync.Buckets(clock=lambda: self.tick), clock=lambda: self.now)
         # node a's own store and freshness, and its asking side
         self.stores["a"] = self.store("a")
         self.own = self.peer("a", tag="-own")["freshness"]
@@ -54,10 +55,11 @@ class Case(ct.Case):
     def server(self, name):
         p = self.peers[name]
         return sync.Server(name, self.stores[name], p["freshness"], p["attester"], p["signer"], self.identify, self.events.append,
-                           sync.Buckets(clock=lambda: self.tick), clock=lambda: self.now)
+                           sync.Buckets(clock=lambda: self.tick), clock=lambda: self.now,
+                           floor=p["floor"], applied=lambda: (lt.CLUSTER, lt.STATE_EPOCH, self.revision))      # D32: the issuer's floor
 
-    def client_of(self, name, store, freshness, sources=("b", "c", "authority")):
-        transports = {(convergence.AUTHORITY if s == "authority" else s): self.wire(s, name) for s in sources}
+    def client_of(self, name, store, freshness, sources=("b", "c", "seed")):
+        transports = {s: self.wire(s, name) for s in sources}
         return sync.Client(name, store, freshness, transports, self.events.append)
 
     def wire(self, server, caller):
@@ -86,15 +88,17 @@ class Case(ct.Case):
         self.assertEqual(self.last()["outcome"], "DENY")
         self.assertIn(reason, self.last()["reason"])
 
-    def quote(self, nonce, manifest, session=lt.SESSION, node="a"):
-        """Node a's fresh quote over a nonce a peer issued."""
+    def quote(self, nonce, manifest, binding="state", session=lt.SESSION, node="a"):
+        """Node a's fresh quote over a nonce a peer issued, binding its request's state (D32: lease.request_binding)."""
+        if binding == "state":
+            binding = lease.request_binding(dict(lt.STATE, state_revision=self.revision))
         key = b"ephemeral key of boot " + bytes.fromhex(session)
         signed = self.keys[node].signer(ek_name=self.keys[node].ek_name)(
-            attest.qualifying_data(node, manifest["epoch"], bytes.fromhex(session), key, bytes.fromhex(nonce)))
+            attest.qualifying_data(node, manifest["epoch"], bytes.fromhex(session), key, bytes.fromhex(nonce), binding=binding))
         return {"ephemeral_public": key.hex(), "nonce": nonce, "quote": signed["quote"], "signature": signed["sig"]}
 
-    def advance(self, epochs, store="authority", **change):
-        """`epochs` more root-signed manifests in the authority's chain; returns the last."""
+    def advance(self, epochs, store="seed", **change):
+        """`epochs` more root-signed manifests in the seed's chain; returns the last."""
         manifest = self.stores[store].load()
         for _ in range(epochs):
             manifest = dict(self.chain(manifest, manifest["nodes"]), **change)
@@ -332,23 +336,28 @@ class Bounds(Case):
         named = [e for e in self.events if e["subject"] == "a"]
         self.assertEqual(([e["reason"][:4] for e in named].count("a is"), len(named)), (20, 21))   # twenty by name and one RATE report, over 75 requests
 
-    def test_a_node_has_twenty_requests_a_minute_whatever_address_it_comes_from_and_six_may_ask_for_a_lease(self):
+    def test_a_node_has_its_requests_a_minute_whatever_address_it_comes_from_and_its_lease_asks_apart(self):
+        any_count, lease_count = sync.RATE["any"][0], sync.RATE["lease"][0]
+        self.assertGreaterEqual(lease_count, 2 * 6)            # D32: a renewal every 10 s is two asks (#485), retries on top
+        self.assertLessEqual(lease_count, any_count)           # every lease ask spends the node's "any" too
         self.keys_at["fd72:6567:616c::a:2"] = self.entry("a")["wg_service_pub"]      # a second address of node a's key
-        for _ in range(20):
+        for _ in range(any_count):
             self.assertTrue(self.pull("b")["ok"])
-        self.refusal("RATE: more than 20 any requests in 60 s from a", self.pull("b", caller="fd72:6567:616c::a:2"))   # an admitted node: told why
+        self.refusal("RATE: more than %d any requests in 60 s from a" % any_count, self.pull("b", caller="fd72:6567:616c::a:2"))   # told why
         self.assertEqual(self.last()["subject"], "a")
         self.tick += 3600
-        for _ in range(6):
+        for _ in range(lease_count):
             self.assertTrue(self.ask("b", v=1, op="lease-nonce", node_id="a")["ok"])
-        self.refusal("RATE: more than 6 lease requests in 60 s from a", self.ask("b", v=1, op="lease-nonce", node_id="a"))   # identified: told why
+        self.refusal("RATE: more than %d lease requests in 60 s from a" % lease_count, self.ask("b", v=1, op="lease-nonce", node_id="a"))
         self.assertTrue(self.pull("b")["ok"])                                       # the lease limit does not stop a pull
         self.tick += 3600
+        for _ in range(lease_count - 6):                                            # the bucket, less three nonce-and-lease pairs
+            self.assertTrue(self.ask("b", v=1, op="lease-nonce", node_id="a")["ok"])
         nonces = [self.ask("b", v=1, op="lease-nonce", node_id="a")["nonce"] for _ in range(3)]
-        for nonce in nonces:                                                        # three nonces and three leases: six
+        for nonce in nonces:                                                        # (the verifier holds a few nonces at once)
             self.assertTrue(self.ask("b", v=1, op="lease", request=self.holder.request(), evidence=self.quote(nonce, self.m1))["ok"])
-        nonce = self.peers["b"]["attester"].nonce("a").hex()                        # a seventh, with a nonce b did issue
-        self.refusal("RATE: more than 6 lease requests", self.ask("b", v=1, op="lease", request=self.holder.request(), evidence=self.quote(nonce, self.m1)))
+        nonce = self.peers["b"]["attester"].nonce("a").hex()                        # one more, with a nonce b did issue
+        self.refusal("RATE: more than %d lease requests" % lease_count, self.ask("b", v=1, op="lease", request=self.holder.request(), evidence=self.quote(nonce, self.m1)))
 
     def test_addresses_cannot_crowd_a_node_out_and_a_full_table_is_one_event_a_minute(self):
         """Found by the confirming read: with the address table full, an honest node that had been idle was
@@ -467,7 +476,7 @@ class Bounds(Case):
 
     def test_a_bundle_is_at_most_64_envelopes_and_a_node_far_behind_catches_up_in_rounds(self):
         self.advance(130)
-        self.stores["b"].restore(self.stores["authority"].envelopes())
+        self.stores["b"].restore(self.stores["seed"].envelopes())
         self.beat(self.stores["b"].load(), peers=("b",), issued=self.now)
         first = self.pull("b")
         self.assertEqual(([e["manifest"]["epoch"] for e in first["bundle"]["envelopes"]], first["bundle"]["heartbeat"], first["summary"]["epoch"]),
@@ -482,7 +491,7 @@ class Bounds(Case):
     def test_an_answer_is_at_most_a_mebibyte_so_large_manifests_come_fewer_at_a_time(self):
         padding = [("%064x" % i) for i in range(1, 3000)]                                       # about 200 KiB a manifest
         self.advance(7, revocation_keys=[hbt.pub(hbt.REVOKE)] + padding)
-        self.stores["b"].restore(self.stores["authority"].envelopes())
+        self.stores["b"].restore(self.stores["seed"].envelopes())
         raw = self.servers["b"].handle(m.canonical({"v": 1, "op": "pull", "summary": dict(convergence.NOT_ENROLLED), "sequence": 0}), ADDRESS["a"])
         self.assertLessEqual(len(raw), sync.MAX_ANSWER)
         answer = json.loads(raw)
@@ -497,7 +506,7 @@ class Pull(Case):
         now_at, fresh = self.client.pull("b")
         self.assertEqual((now_at, fresh), ({"epoch": 1, "manifest_digest": m.digest(self.m1)}, hb.MAX_LIFETIME - 60))
         revoked = self.revoke(self.m1, node="c")["manifest"]
-        self.stores["b"].restore(self.stores["authority"].envelopes())
+        self.stores["b"].restore(self.stores["seed"].envelopes())
         self.later(100)
         self.beat(revoked, peers=("b",), issued=self.now)
         self.assertEqual(self.client.pull("b"), ({"epoch": 2, "manifest_digest": m.digest(revoked)}, hb.MAX_LIFETIME))
@@ -510,7 +519,7 @@ class Pull(Case):
         self.assertEqual(self.client.pull("c"), (convergence.summary(self.stores["a"]), None))    # c holds the same heartbeat
         self.assertEqual([e["outcome"] for e in self.events], ["ALLOW"] * 4)
         self.later(3600)
-        self.beat(self.m1, peers=("c",), issued=self.now)                                          # the authority reached c only
+        self.beat(self.m1, peers=("c",), issued=self.now)                                          # a newer heartbeat reached c only
         self.assertEqual(self.client.pull("b")[1], None)
         self.assertEqual(self.client.pull("c")[1], hb.MAX_LIFETIME)                                # a newer one travels peer to peer
         answer = self.pull("c", summary=convergence.summary(self.stores["a"]), sequence=2)
@@ -578,21 +587,21 @@ class Pull(Case):
         self.assertEqual((self.last()["event"], self.last()["outcome"], self.last()["subject"], self.last()["peer"]), ("sync-apply", "DENY", "a", "b"))
         self.assertEqual(convergence.summary(self.stores["a"])["manifest_digest"], m.digest(fork["manifest"]))   # and a keeps what it holds
 
-    def test_the_authority_is_a_source_like_any_other_and_issues_no_leases(self):
+    def test_a_source_without_a_lease_signer_hands_over_chain_and_heartbeat_and_issues_no_leases(self):
         revoked = self.revoke(self.m1, node="c")["manifest"]
         self.sequence += 1
-        self.authority.envelope = hbt.beat(revoked, self.sequence, issued=self.now)
-        now_at, fresh = self.client.pull(convergence.AUTHORITY)
+        self.held.envelope = hbt.beat(revoked, self.sequence, issued=self.now)
+        now_at, fresh = self.client.pull("seed")
         self.assertEqual((now_at["epoch"], fresh), (2, hb.MAX_LIFETIME))
-        self.assertEqual((self.last()["peer"], self.last()["subject"]), (convergence.AUTHORITY, "a"))
-        self.refusal("this source issues no leases", self.ask("authority", v=1, op="lease-nonce", node_id="a"))
-        self.refusal("this source issues no leases", self.ask("authority", v=1, op="lease", request=self.holder.request(),
-                                                               evidence=self.quote("00" * 32, revoked)))
+        self.assertEqual((self.last()["peer"], self.last()["subject"]), ("seed", "a"))
+        self.refusal("this source issues no leases", self.ask("seed", v=1, op="lease-nonce", node_id="a"))
+        self.refusal("this source issues no leases", self.ask("seed", v=1, op="lease", request=self.holder.request(),
+                                                          evidence=self.quote("00" * 32, revoked)))
 
     def test_a_source_that_holds_no_heartbeat_still_hands_over_the_manifests(self):
         self.revoke(self.m1, node="c")
-        self.assertIsNone(self.authority.held())
-        answer = self.pull("authority")
+        self.assertIsNone(self.held.held())
+        answer = self.pull("seed")
         self.assertEqual(([e["manifest"]["epoch"] for e in answer["bundle"]["envelopes"]], answer["bundle"]["heartbeat"]), ([1, 2], None))
         self.assertEqual(self.last()["outcome"], "ALLOW")
 
@@ -613,7 +622,7 @@ class Pull(Case):
         self.assertEqual(self.pull("b", summary=convergence.summary(self.stores["a"]))["bundle"]["heartbeat"], None)
 
 class Lying(Case):
-    """A source can delay. It cannot make the node accept what the authority did not sign."""
+    """A source can delay. It cannot make the node accept what its chain's keys did not sign."""
 
     def source(self, answer):
         self.client.transports["liar"] = lambda raw: m.canonical(answer) if not isinstance(answer, bytes) else answer
@@ -677,7 +686,7 @@ class Lying(Case):
             self.refused_pull("the round failed (PermissionError)", self.source(self.answer([e2])))
         self.assertEqual(self.last()["epoch"], 0)                       # the event's header could not name a manifest either
 
-        def full(envelope):
+        def full(envelope, final=True):
             raise OSError(28, "No space left on device")
         with unittest.mock.patch.object(self.stores["a"], "commit", full):
             self.refused_pull("the round failed (OSError)", self.source(self.answer([e2])))
@@ -739,9 +748,10 @@ class Lying(Case):
         self.client.transports["liar"] = lambda raw: deep
         with self.assertRaises(m.Refused) as caught:
             self.client.renewer("liar", self.quote)(self.holder.request())
-        self.assertIn("the lease could not be asked for (RecursionError)", str(caught.exception))
+        # membership.load refuses it itself since #182 ("nested too deeply"); before, the RecursionError reached this caller
+        self.assertIn("nested too deeply", str(caught.exception))
 
-        def broken_quote(nonce, manifest):
+        def broken_quote(nonce, manifest, binding=None):
             raise KeyError("tpm")
         with self.assertRaises(m.Refused):
             self.client.renewer("b", broken_quote)(self.holder.request())
@@ -776,11 +786,11 @@ class Leases(Case):
     def test_a_quote_over_another_nonce_or_by_another_node_is_refused_by_the_peer(self):
         self.client.pull("b")
         with self.assertRaises(m.Refused) as caught:
-            self.client.renewer("b", lambda nonce, manifest: self.quote("11" * 32, manifest))(self.holder.request())
+            self.client.renewer("b", lambda nonce, manifest, binding=None: self.quote("11" * 32, manifest, binding))(self.holder.request())
         self.assertIn("the source refused", str(caught.exception))
         self.assertEqual((self.last()["event"], self.last()["outcome"]), ("sync-lease", "DENY"))
         with self.assertRaises(m.Refused):
-            self.client.renewer("b", lambda nonce, manifest: self.quote(nonce, manifest, node="c"))(self.holder.request())
+            self.client.renewer("b", lambda nonce, manifest, binding=None: self.quote(nonce, manifest, binding, node="c"))(self.holder.request())
 
     def test_a_revoked_node_gets_no_lease_from_a_peer_that_knows(self):
         self.client.pull("b")

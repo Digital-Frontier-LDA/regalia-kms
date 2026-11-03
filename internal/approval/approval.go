@@ -73,6 +73,13 @@ type Binding struct {
 	Nonce       string
 	ExpiresAt   time.Time
 	Payload     []byte
+	// Signer is the ONE node that may spend this approval (ADR-0002 D32, #432 G3: regalia-kms-d9's
+	// full-scope safety read). The coordinator fills it with its own node ID, never the caller,
+	// so an approval an approver gave for another node does not verify here: every node refuses
+	// every other node's approvals, and a lone survivor under a full-scope authorization accepts
+	// only those naming it. That closes a double spend even when the owner's fencing attestation
+	// is wrong. Empty only where no node ID is configured (a single-node deployment).
+	Signer string
 }
 
 // CanonicalBytes is what an approver signs.
@@ -107,7 +114,10 @@ type Binding struct {
 // line. An implementation that counted UTF-16 code units, runes, or included the newline
 // would produce different signed bytes, and its approvals would silently not count.
 //
-// The domain separator moves to v2 with the framing. The bytes an approver signs have
+// v3 (#432 G3) adds a seventh record, the signer node, after the payload digest: the bytes an
+// approver signs changed again, so the label moved again.
+//
+// The domain separator moved to v2 with the framing. The bytes an approver signs have
 // changed, and two incompatible serializations must not share a label -- that is the
 // confusion the label exists to prevent. See TestShiftingContentAcrossAFieldBoundaryIsNotTheSameBinding.
 //
@@ -119,7 +129,7 @@ type Binding struct {
 func (binding Binding) CanonicalBytes() []byte {
 	digest := sha256.Sum256(binding.Payload)
 	canonical := strings.Builder{}
-	canonical.WriteString("regalia-approval-v2\n")
+	canonical.WriteString("regalia-approval-v3\n")
 	for _, field := range []string{
 		binding.ObjectID,
 		binding.Purpose,
@@ -127,6 +137,7 @@ func (binding Binding) CanonicalBytes() []byte {
 		binding.Nonce,
 		binding.ExpiresAt.UTC().Format(time.RFC3339Nano),
 		hex.EncodeToString(digest[:]),
+		binding.Signer,
 	} {
 		canonical.WriteString(strconv.Itoa(len(field)))
 		canonical.WriteString(":")

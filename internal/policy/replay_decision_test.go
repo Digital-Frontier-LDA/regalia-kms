@@ -20,7 +20,7 @@ package policy
 // where it is as the record of what that change measured; what it now carries is
 // the date, which is the only thing that makes a count in a comment checkable.
 //
-// The other is audit.go:304 -- `case statErr != nil:` in the shipped-versus-mark
+// The other is audit.go:VerifyIntegrity{statErr != nil} -- `case statErr != nil:` in the shipped-versus-mark
 // classification -- and it is unreachable by any fixture rather than untested:
 // readMark refuses every non-NOT-EXIST failure while reading the mark's CONTENTS,
 // one call before its EXISTENCE is classified, and the first classification's own

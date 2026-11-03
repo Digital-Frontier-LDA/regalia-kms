@@ -79,7 +79,7 @@ def raw_host_key(line):
 def known_hosts(manifest):
     """The known_hosts text for a v2 manifest (see the module docstring). Deterministic."""
     nodes = membership.validate(manifest)
-    require(manifest["schema"] == membership.SCHEMA_V2, "a %s manifest names no SSH host keys: the chain must have moved to %s"
+    require(manifest["schema"] in membership.SCHEMAS[1:], "a %s manifest names no SSH host keys: the chain must have moved to %s"
             % (manifest["schema"], membership.SCHEMA_V2))
     note = "regalia-kms epoch %d" % manifest["epoch"]
     lines = [HEADER % (manifest["epoch"], membership.digest(manifest))]
@@ -106,7 +106,7 @@ def ssh_config(manifest, addresses, known_hosts_path, port=22):
     known_hosts only, under the node's own name; and a closing `Host *`, so that every OTHER name is held
     to the same file and the same strictness instead of ssh's defaults."""
     nodes = membership.validate(manifest)
-    require(manifest["schema"] == membership.SCHEMA_V2, "a %s manifest names no SSH host keys" % manifest["schema"])
+    require(manifest["schema"] in membership.SCHEMAS[1:], "a %s manifest names no SSH host keys" % manifest["schema"])
     _plain_path(known_hosts_path, "the known_hosts path")
     require(isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535, "the SSH port must be 1 to 65535")
     require(isinstance(addresses, dict), "addresses must map node IDs to IPv4 addresses")

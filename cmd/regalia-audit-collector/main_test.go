@@ -3,14 +3,18 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,4 +244,62 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return contents
+}
+
+// TestTheOperatorHandover: `regalia-audit-collector handover` (#291) needs its four flags, refuses
+// while a collector holds the state, and then records the hand-over a restarted collector applies.
+func TestTheOperatorHandover(t *testing.T) {
+	selfSigned := func(name string) *x509.Certificate {
+		public, private, _ := ed25519.GenerateKey(rand.Reader)
+		template := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: name},
+			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+		der, err := x509.CreateCertificate(rand.Reader, template, template, public, private)
+		if err != nil {
+			t.Fatal(err)
+		}
+		certificate, _ := x509.ParseCertificate(der)
+		return certificate
+	}
+	fingerprint := func(c *x509.Certificate) string { sum := sha256.Sum256(c.Raw); return hex.EncodeToString(sum[:]) }
+	old, replacement := selfSigned("old"), selfSigned("new")
+	stateDir := t.TempDir()
+	collector, err := audit.OpenCollector(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, _ := audit.TrailEvents("sync", []byte(`{"at":1790000000,"event":"e","prev":"","seq":1}`+"\n"))
+	body, _ := json.Marshal(events[0])
+	request := httptest.NewRequest("POST", "/v1/events", strings.NewReader(string(body)))
+	request.Header.Set("X-Regalia-Site", "sitea.sync")
+	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{old}}
+	recorder := httptest.NewRecorder()
+	collector.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != 204 {
+		t.Fatalf("the old certificate's event: %d %s", recorder.Code, recorder.Body.String())
+	}
+	argv := []string{"handover", "-state", stateDir, "-old", fingerprint(old), "-new", fingerprint(replacement), "-reason", "the old key was lost"}
+	if err := run(argv[:len(argv)-2], os.Stderr); err == nil {
+		t.Fatal("a hand-over without a reason was taken")
+	}
+	if err := run(argv, os.Stderr); err == nil || !strings.Contains(err.Error(), "held by another collector") {
+		t.Fatalf("a hand-over while a collector holds the state: %v", err)
+	}
+	collector.Close()
+	out, _ := os.CreateTemp(t.TempDir(), "out")
+	if err := run(argv, out); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := audit.OpenCollector(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	request = httptest.NewRequest("GET", "/v1/stream-position", nil)
+	request.Header.Set("X-Regalia-Site", "sitea.sync")
+	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{replacement}}
+	recorder = httptest.NewRecorder()
+	reopened.Handler().ServeHTTP(recorder, request)
+	if !strings.Contains(recorder.Body.String(), `"sequence":1`) {
+		t.Fatalf("the replacement does not see the old stream: %s", recorder.Body.String())
+	}
 }

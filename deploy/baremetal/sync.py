@@ -13,11 +13,25 @@ and HOW MUCH of it is accepted.
     lease-nonce   the caller's node_id                     a nonce                     attest.Verifier.nonce
     lease         the caller's lease request and its       a lease                     lease.issue
                   fresh quote over that nonce
+    ak-challenge  the caller's EK and AK public areas      a credential, or null if    enrolpeer.challenge
+                                                           its AK (the manifest's) is
+                                                           enrolled here already
+    ak-enroll     the activated secret                     the AK Name enrolled        attest.Verifier.enroll
+    ak-public     -                                        this node's EK and AK       (its own TPM)
+    ak-activate   a credential made to this node's EK/AK   the secret it releases      attest.node_activate
+    path-nonce    -                                        a nonce                     attest.Verifier.nonce
+    path          its boot session, a quote binding an     this node's contribution    enrolpeer.contribution
+                  enrolment key, and that key              wrapped to that key
+    beat-sign     a heartbeat body the caller proposes,    this node's signature       beat.cosign (#199)
+                  and the caller's signature over it       over it
 
-PULL ONLY. Nobody pushes. A node asks each peer and the authority on a timer (Client.pull) and applies
+THE ENROLMENT OPERATIONS (#190) need the node's enrolpeer.Peer; a server without one refuses them. They are spent from their own rate class, so a node enrolling cannot use up its
+pulls, and another node is not touched at all.
+
+PULL ONLY. Nobody pushes. A node asks each peer on a timer (Client.pull) and applies
 what it gets through convergence.apply_bundle. A source that lies or withholds can DELAY a node and
 nothing more: every envelope and heartbeat is verified against the node's own TPM anchors as if a
-stranger had sent it. That holds for the revocation authority's channel too.
+stranger had sent it.
 
 WHO. The caller is the node whose WireGuard key the CURRENT manifest pins (peer_of), and nothing the
 caller says in-band identifies it. `identify(manifest, source)` is injected: it answers which WireGuard
@@ -65,8 +79,7 @@ nothing and is no incident here. The caller is sent this node's chain from that 
 holds another SIGNED manifest there, its own catch-up proves the conflict, with the signature, and
 records it.
 
-A SOURCE THAT ISSUES NO LEASES (the revocation authority) runs the same Server with no attester: it
-answers pull, and refuses the two lease operations.
+A SERVER WITH NO ATTESTER answers pull, and refuses the two lease operations.
 
 NO TLS. WireGuard authenticates both ends by the pinned keys and encrypts; every payload that matters is
 signed or attested end to end. See #80.
@@ -75,11 +88,12 @@ NOT HERE: the WireGuard interface (wgsvc.py); units, firewall rules and probes (
 convergence.recover over this transport.
 """
 import copy
+import re
 import socket
 import threading
 import time
 
-from deploy.baremetal import convergence, heartbeat, lease, membership
+from deploy.baremetal import convergence, heartbeat, lease, measurements, membership
 
 Refused, require = membership.Refused, membership.require
 
@@ -90,13 +104,37 @@ MAX_ANSWER = 1024 * 1024
 MAX_ENVELOPES = 64               # per bundle; convergence allows 1000, which an answer of 1 MiB does not
 REQUEST_FIELDS = {"pull": ("v", "op", "summary", "sequence"),
                   "lease-nonce": ("v", "op", "node_id"),
-                  "lease": ("v", "op", "request", "evidence")}
+                  "lease": ("v", "op", "request", "evidence"),
+                  # a node's enrolment (#190, enrolpeer.py): its AK into this node's verifier, this node's AK into
+                  # its verifier, and this node's half of its LUKS path
+                  "ak-challenge": ("v", "op", "ek_public", "ak_public"),
+                  "ak-enroll": ("v", "op", "secret"),
+                  "ak-public": ("v", "op"),
+                  "ak-activate": ("v", "op", "credential"),
+                  "path-nonce": ("v", "op"),
+                  "path": ("v", "op", "session_id", "evidence", "binding"),
+                  # the measurement document a manifest commits to, by its policy_version (#332)
+                  "measurements": ("v", "op", "version"),
+                  # #199: co-sign a heartbeat the caller proposes and has signed (beat.py)
+                  "beat-sign": ("v", "op", "heartbeat", "signature")}
 ANSWER_FIELDS = {"pull": ("v", "ok", "summary", "bundle"),
                  "lease-nonce": ("v", "ok", "nonce"),
-                 "lease": ("v", "ok", "lease")}
+                 "lease": ("v", "ok", "lease"),
+                 "ak-challenge": ("v", "ok", "credential"),
+                 "ak-enroll": ("v", "ok", "ak_name"),
+                 "ak-public": ("v", "ok", "ek_public", "ak_public"),
+                 "ak-activate": ("v", "ok", "secret"),
+                 "path-nonce": ("v", "ok", "nonce"),
+                 "path": ("v", "ok", "enrolment"),
+                 "measurements": ("v", "ok", "document"),
+                 "beat-sign": ("v", "ok", "signature")}
+ENROL_OPS = ("ak-challenge", "ak-enroll", "ak-public", "ak-activate", "path-nonce", "path")
 REFUSAL_FIELDS = ("v", "ok", "refused")
 EVIDENCE_FIELDS = ("ephemeral_public", "nonce", "quote", "signature")
-RATE = {"address": (30, 60), "any": (20, 60), "lease": (6, 60), "drop": (1, 60), "listener": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
+# class -> (requests, per seconds); the bucket holds that many. "lease" is sized for D32's 30 s lease renewed every 10 s
+# (#485): two asks a renewal (nonce, lease) at one peer when the other is down is 12 a minute, and 6 for retries; it
+# stays within "any" (every request spends that too), which also carries a pull a minute and the heartbeat rounds
+RATE = {"address": (30, 60), "any": (20, 60), "lease": (18, 60), "beat": (6, 60), "enrol": (12, 60), "drop": (1, 60), "listener": (1, 60)}
 OPEN = ("address", "drop")       # the classes keyed by a source address: anybody who can connect makes a key
 MAX_BUCKETS = 4096               # address-keyed buckets remembered at once; idle ones are forgotten first
 EVERYBODY = "*"                  # the one key the "too many callers" refusal is counted under
@@ -250,10 +288,26 @@ class Server:
     takes each audit event; `clock()` is this node's wall clock, used only to spare a caller a heartbeat
     that has already expired."""
 
-    def __init__(self, node_id, store, freshness, attester, signer, identify, sink, buckets=None, clock=time.time):
+    def __init__(self, node_id, store, freshness, attester, signer, identify, sink, buckets=None, clock=time.time, enrol=None,
+                 documents=None, cosigner=None, floor=None, applied=None):
+        """`enrol`: an enrolpeer.Peer, for the enrolment operations (None: they are refused).
+        `cosigner(manifest, caller, heartbeat, signature)`: this node's co-signature of a proposed heartbeat (beat.cosign,
+        #199), or None: beat-sign is refused."""
         self.node_id, self.store, self.freshness, self.attester, self.signer = node_id, store, freshness, attester, signer
+        self.documents = documents        # measurements.Documents: what a `measurements` request is answered from (#332)
+        self.cosigner = cosigner
+        # D32 (#432): the issuer's RevisionFloor, fed from its own fresh reads of the etcd watch's file (`applied()`,
+        # lease.read_applied): without both this node issues no lease
+        self.floor, self.applied = floor, applied
+        self.enrol, self._offered, self._offered_lock = enrol, {}, threading.Lock()   # ak-public given: caller -> when
         self.identify, self.sink, self.buckets, self.clock = identify, sink, buckets or Buckets(), clock
         self._seen = None       # the manifest of the last request that read the store: see _is_a_node
+
+    def _verifier(self, manifest):
+        """The attest.Verifier to judge by under `manifest`: `attester` itself, or, when it is a function
+        (node.Node.attester_for), the one built from the document THAT manifest commits to (#332), so an epoch moved
+        while this server runs is judged by its own measurements."""
+        return self.attester(manifest) if callable(self.attester) else self.attester
 
     def _record(self, event):
         try:
@@ -373,6 +427,11 @@ class Server:
         require(isinstance(op, str) and op in REQUEST_FIELDS, "unknown operation")
         known["kind"] = "sync-" + op
         membership.exact(message, REQUEST_FIELDS[op], op)
+        if op in ENROL_OPS:
+            require(self.enrol is not None and self.attester is not None, "this source takes no enrolments")
+            self._spend(view.late, caller, "enrol")              # its own class: the enrolment ops cannot use up a pull's
+            # every enrolment op, not only the path: a quarantined or revoked node enrols nothing here
+            require(membership.may(manifest, caller, "request"), "%s may not request under epoch %d: no enrolment" % (caller, manifest["epoch"]))
         answer = getattr(self, "_" + op.replace("-", "_"))(view, manifest, caller, message)
         encoded = membership.canonical(dict({"v": VERSION, "ok": True}, **answer))
         require(len(encoded) <= MAX_ANSWER, "the answer would exceed %d bytes" % MAX_ANSWER)
@@ -441,7 +500,10 @@ class Server:
         require(self.attester is not None, "this source issues no leases")
         require(message["node_id"] == caller, "the request names %s; the tunnel is %s's" % (convergence._printable(message["node_id"]), caller))
         self._spend(view.late, caller, "lease")
-        return {"nonce": self.attester.nonce(caller).hex()}
+        # lease.issue's own refusal, before a verifier is asked: one built for the manifest held now (#332) does not list
+        # a node that may not serve, and its "unknown node" would hide why
+        require(membership.may(manifest, caller, "serve"), "%s may not serve under epoch %d: no lease" % (caller, manifest["epoch"]))
+        return {"nonce": self._verifier(manifest).nonce(caller).hex()}
 
     def _lease(self, view, manifest, caller, message):
         require(self.attester is not None, "this source issues no leases")
@@ -451,7 +513,88 @@ class Server:
         require(request["node_id"] == caller, "the request names %s; the tunnel is %s's" % (request["node_id"], caller))
         membership.exact(evidence, EVIDENCE_FIELDS, "evidence")
         self._spend(view.late, caller, "lease")
-        return {"lease": lease.issue(manifest, self.node_id, request, self.attester, evidence, self.freshness, self.signer)}
+        return {"lease": lease.issue(manifest, self.node_id, request, self._verifier(manifest), evidence, self.freshness, self.signer,
+                                     self.observe_state())}
+
+    def observe_state(self):
+        """This issuer's RevisionFloor after a fresh read of its own etcd watch's file (D32): every lease request, and
+        each round of the service (node.Sync), feed it. A stale or absent file is a refusal, and records nothing."""
+        require(self.floor is not None and self.applied is not None, "this node issues no lease: it has no etcd state to judge by (D32)")
+        self.floor.applied(*self.applied())
+        return self.floor
+
+
+    def _measurements(self, view, manifest, caller, message):
+        """The measurement document of `version`, whole, as this node holds it: what the caller needs to commit an
+        epoch that commits to it (#332). Any held document may be asked for; each is public reference values, and
+        the asker checks it against its own manifest's policy_version before using it."""
+        require(self.documents is not None, "this source holds no measurement documents")
+        wanted = message["version"]
+        require(isinstance(wanted, str) and re.fullmatch(r"m1-[A-Za-z0-9_-]{29}", wanted) is not None, "version must be a policy_version")
+        document = self.documents.get(wanted)
+        require(document is not None, "this source does not hold measurements %s" % wanted)
+        return {"document": document}
+
+    def _beat_sign(self, view, manifest, caller, message):
+        """#199: this node's signature over a heartbeat `caller` proposes (beat.cosign decides). Its own rate class,
+        spent before the TPM is touched: a node asking too often cannot run this node's signing counter."""
+        require(self.cosigner is not None, "this node co-signs no heartbeats")
+        require(isinstance(message["heartbeat"], dict) and isinstance(message["signature"], dict), "heartbeat and signature are objects")
+        self._spend(view.late, caller, "beat")
+        return {"signature": self.cosigner(manifest, caller, message["heartbeat"], message["signature"])}
+
+    # ---- a node's enrolment (#190): every one of these is from the node the tunnel identified, as above ----
+
+    @staticmethod
+    def _hex(value, limit, label):
+        require(isinstance(value, str) and 2 <= len(value) <= 2 * limit and len(value) % 2 == 0
+                and all(c in "0123456789abcdef" for c in value), "%s must be lowercase hex, at most %d bytes" % (label, limit))
+        return bytes.fromhex(value)
+
+    def _ak_challenge(self, view, manifest, caller, message):
+        from deploy.baremetal import enrolpeer
+        credential = enrolpeer.challenge(self._verifier(manifest), manifest, caller, self._hex(message["ek_public"], 1024, "ek_public"),
+                                         self._hex(message["ak_public"], 1024, "ak_public"))
+        return {"credential": None if credential is None else credential.hex()}
+
+    def _ak_enroll(self, view, manifest, caller, message):
+        # the manifest read for THIS request: an AK it no longer names is not enrolled (attest.Verifier.enroll)
+        name = self._verifier(manifest).enroll(caller, self._hex(message["secret"], 32, "secret"), ak_name=pinned_node(manifest, caller)["ak_name"])
+        return {"ak_name": name.hex()}
+
+    def _ak_public(self, view, manifest, caller, message):
+        ek_public, ak_public = self.enrol.identity()
+        with self._offered_lock:
+            self._offered[caller] = time.monotonic()
+        return {"ek_public": ek_public.hex(), "ak_public": ak_public.hex()}
+
+    def _ak_activate(self, view, manifest, caller, message):
+        """This node's TPM opens a credential for the caller: an oracle for whatever a credential to its EK and AK
+        carries (attest.make_credential's invariant: only an AK enrolment challenge). Answered once, and only
+        within NONCE_TTL of this node giving the same caller its public areas, as an enrolment does."""
+        from deploy.baremetal import attest
+        with self._offered_lock:
+            given = self._offered.pop(caller, None)
+        require(given is not None and time.monotonic() - given <= attest.NONCE_TTL,
+                "an activation is answered only just after this node gave %s its AK (ak-public)" % caller)
+        return {"secret": self.enrol.activate(self._hex(message["credential"], 1024, "credential")).hex()}
+
+    def _path_nonce(self, view, manifest, caller, message):
+        return {"nonce": self._verifier(manifest).nonce(caller).hex()}
+
+    def _path(self, view, manifest, caller, message):
+        from deploy.baremetal import enrolpeer
+        require(isinstance(message["evidence"], dict), "evidence is an object")
+        return {"enrolment": enrolpeer.contribution(manifest, self.node_id, caller, message["session_id"], message["evidence"],
+                                                    self._hex(message["binding"], 1024, "binding"), self._verifier(manifest), self.freshness,
+                                                    self.enrol.contributions, self.enrol.wraps)}
+
+
+def pinned_node(manifest, node_id):
+    """The manifest's entry for `node_id`."""
+    found = [n for n in manifest["nodes"] if n["node_id"] == node_id]
+    require(len(found) == 1, "%s is not in the manifest" % node_id)
+    return found[0]
 
 
 # ---- the asking side ----
@@ -471,11 +614,47 @@ def _answer(raw, op):
 
 
 class Client:
-    """One node's asking side. `transports` maps a source's name (a node ID, or convergence.AUTHORITY) to a
+    """One node's asking side. `transports` maps a source's name (a node ID) to a
     callable taking the request bytes and returning the answer bytes (tcp_transport over the tunnel)."""
 
-    def __init__(self, node_id, store, freshness, transports, sink):
+    def __init__(self, node_id, store, freshness, transports, sink, documents=None):
+        """`documents` (measurements.Documents): where the measurement document of an epoch about to be committed is
+        put, fetched from the same source first when it is not held (#332)."""
         self.node_id, self.store, self.freshness, self.transports, self.sink = node_id, store, freshness, transports, sink
+        self.documents = documents
+
+    def _fetch_document(self, source, manifest):
+        """The document `manifest` (verified) commits to, into this node's store, from `source`, unless held already.
+        The answer is taken only if it IS that document: its own version is the manifest's policy_version."""
+        wanted = manifest["policy_version"]
+        if self.documents is None or self.documents.holds(wanted):
+            return
+        document = self._ask(source, "measurements", version=wanted)["document"]
+        require(len(membership.canonical(document)) <= measurements.MAX_BYTES, "the document exceeds %d bytes" % measurements.MAX_BYTES)
+        got = measurements.version(document)
+        require(got == wanted, "%s answered measurements %s for %s: not the document epoch %d commits to" % (source, got, wanted, manifest["epoch"]))
+        self.documents.put(document)
+
+    def _documents_for(self, source, envelopes):
+        """Before a batch is applied: the document of the epoch it would leave this node at, and of the epoch held now
+        (a lost or never-installed document heals itself), each fetched only for a manifest that verifies from the
+        one held, so a source cannot make this node store documents no epoch names."""
+        if self.documents is None:
+            return
+        current = self.store.load()
+        if current is not None:
+            self._fetch_document(source, current)
+        last = None
+        for envelope in envelopes:
+            epoch = envelope.get("manifest", {}).get("epoch") if isinstance(envelope, dict) and isinstance(envelope.get("manifest"), dict) else None
+            if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch <= (current["epoch"] if current else 0):
+                continue                                   # a resent epoch: catch_up compares it, nothing to fetch
+            try:
+                current = last = membership.accept(current, envelope, self.store.root_key)
+            except Refused:
+                break                                      # catch_up refuses it, and says why
+        if last is not None:
+            self._fetch_document(source, last)
 
     def _record(self, event):
         try:
@@ -508,6 +687,16 @@ class Client:
                 raise Refused("%s (%s)" % (what, type(failure).__name__)) from None
         return run
 
+    def beat_sign(self, source, body, signature):
+        """`source`'s co-signature of the heartbeat `body` this node proposes and signed (`signature`), or Refused.
+        Only its shape is checked here: the proposer verifies the assembled envelope (beat.Proposer)."""
+        answer = self._ask(source, "beat-sign", heartbeat=body, signature=signature)
+        theirs = answer["signature"]
+        require(isinstance(theirs, dict), "the co-signature is not an object")
+        membership.exact(theirs, ("party", "key", "sig"), "co-signature")
+        require(theirs["party"] == source, "%s answered with a signature by %s" % (source, convergence._printable(theirs["party"])))
+        return theirs
+
     def pull(self, source):
         """Ask `source` for what this node lacks and apply it, round after round until it has nothing more
         (at most MAX_ROUNDS). Returns (summary, seconds of freshness or None). Raises Refused, or SinkFailed
@@ -531,6 +720,7 @@ class Client:
                 require(isinstance(bundle, dict) and isinstance(bundle.get("envelopes"), list)
                         and len(bundle["envelopes"]) <= MAX_ENVELOPES, "a bundle carries at most %d envelopes" % MAX_ENVELOPES)
                 membership.exact(bundle, ("envelopes", "heartbeat"), "bundle")
+                self._documents_for(source, bundle["envelopes"])          # #332: the measurements travel with the epoch
                 try:
                     now_at = self._safely(lambda: convergence.catch_up(self.store, bundle["envelopes"]))()
                 except Refused as refused:
@@ -569,7 +759,8 @@ class Client:
             def asked():
                 nonce = self._ask(source, "lease-nonce", node_id=self.node_id)["nonce"]
                 membership.hex_field(nonce, 64, "nonce")
-                evidence = quote(nonce, self.store.load())
+                # D32: the quote binds the request's state and session key (lease.request_binding)
+                evidence = quote(nonce, self.store.load(), lease.request_binding(request))
                 return self._ask(source, "lease", request=request, evidence=evidence)["lease"]
             return self._safely(asked, "the lease could not be asked for")()
         return renew

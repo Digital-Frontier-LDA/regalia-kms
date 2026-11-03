@@ -21,7 +21,8 @@
 # NOT HERE: a boot. That the firmware and systemd-stub of a real machine measure these sections in this
 # order is systemd's documented behaviour and this script's assumption; the first boot of such an image
 # is the unlock test's (#66) and then a DL360 (#65). No hardware token is used: SoftHSM stands for it.
-# The initrd is whatever INITRD names, or a stand-in: the real one is built by #66's dracut module.
+# The initrd is whatever INITRD names (with UNLOCK_CLIENT, the client it holds), or a stand-in: the real one is
+# built by #66's dracut module.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 pass=0; fail=0
@@ -31,7 +32,8 @@ hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; }
 MEASURE="$(command -v systemd-measure || echo /usr/lib/systemd/systemd-measure)"
 STUB="${STUB:-/usr/lib/systemd/boot/efi/linuxx64.efi.stub}"
 ENGINE="${ENGINE:-$(ls /usr/lib/x86_64-linux-gnu/engines-3/pkcs11.so 2>/dev/null)}"
-SOFTHSM="${SOFTHSM:-$(ls /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so 2>/dev/null | head -1)}"
+# SoftHSM only, from its fixed install paths: no variable may point this script at another module (#225)
+SOFTHSM="$(ls /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so 2>/dev/null | head -1)"
 for t in ukify sbsign sbverify openssl softhsm2-util swtpm tpm2_pcrextend tpm2_pcrread systemd-creds "$MEASURE" python3; do
   command -v "$t" >/dev/null || { echo "uki-build: $t is required (systemd-ukify, sbsigntool, softhsm2, swtpm, tpm2-tools, systemd)"; exit 2; }
 done
@@ -44,23 +46,64 @@ W="$(mktemp -d)"; cd "$HERE" || exit 2
 stop(){ [ -f "$W/tpm.pid" ] || return 0; TPM2TOOLS_TCTI="$D" tpm2_shutdown -c >/dev/null 2>&1; kill "$(cat "$W/tpm.pid")" 2>/dev/null; rm -f "$W/tpm.pid"; }
 trap 'stop; $SUDO rm -rf "$W"' EXIT
 D="swtpm:path=$W/tpm.sock"
-uki(){ python3 -Es -m deploy.baremetal.uki "$@"; }
+# build, sign and verify review the initrd against an inventory (#198): here, the stand-in's own (written
+# below), since the reviewed image's inventory is e2e/unlock-boot-qemu.sh's to check
+uki(){ case "$1" in build) python3 -Es -m deploy.baremetal.uki "$@" --initrd-inventory "$W/initrd-inventory.txt" --unlock-client "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" ;;
+                    sign|verify) python3 -Es -m deploy.baremetal.uki "$@" --initrd-inventory "$W/initrd-inventory.txt" ;;
+                    *) python3 -Es -m deploy.baremetal.uki "$@" ;; esac; }
 field(){ python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))
 for k in sys.argv[2].split("."): v=v[k]
 print(v)' "$1" "$2"; }
 
 # ---- inputs and TEST keys ------------------------------------------------------------------------------
 UNAME="$(basename "$LINUX" | sed 's/^vmlinuz-//')"
+# the membership root the initrd trusts (#156): the TEST root of tests/vectors/highwater-v1.json, canonical
+python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))["root_public"]; open(sys.argv[2],"wb").write(json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode())' \
+  tests/vectors/highwater-v1.json "$W/root-key.json"
 if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
-  mkdir "$W/ird"; printf '#!/bin/sh\n' > "$W/ird/init"; (cd "$W/ird" && printf 'init\n' | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
-printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n' > "$W/cmdline"
+  # a stand-in that passes uki.py's initrd review (#198): the module's crypttab, this repository's unlock
+  # units and script, a stand-in client, and the client's enable link. Nothing in it boots.
+  I="$W/ird"; U="$I/usr/lib/systemd/system"; E="$I/etc/systemd/system"
+  mkdir -p "$U" "$E/cryptsetup.target.wants" "$I/usr/bin" "$I/usr/lib/regalia" "$I/etc"
+  printf '#!/bin/sh\n' > "$I/init"; printf 'stand-in\n' | tee "$I/usr/bin/regalia-unlock" > "$I/usr/bin/sh"; chmod 0755 "$I/init" "$I/usr/bin/regalia-unlock" "$I/usr/bin/sh"
+  ln -s usr/bin "$I/bin"; ln -s usr/lib "$I/lib"
+  cp deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$I/etc/crypttab"
+  cp deploy/baremetal/initrd/regalia-boot-render.service deploy/baremetal/initrd/regalia-unlock.service deploy/baremetal/initrd/regalia-wg-boot.service "$U/"
+  install -m 0755 deploy/baremetal/initrd/wg-boot "$I/usr/lib/regalia/wg-boot"
+  install -m 0644 "$W/root-key.json" "$I/usr/lib/regalia/root-key.json"
+  ln -s /usr/lib/systemd/system/regalia-unlock.service "$E/cryptsetup.target.wants/regalia-unlock.service"
+  (cd "$I" && find . -mindepth 1 | LC_ALL=C sort | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
+python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/initrd" > "$W/initrd-inventory.txt"
+# the initrd's build record (#248), as deploy/baremetal/initrd/build-initrd.sh writes one: here a stand-in that
+# names this initrd and this client, and this checkout's commit and the files build-initrd.sh records, as uki.py
+# holds it to (#266: `uki provenance` reads them from this checkout; the real record is e2e/unlock-boot-qemu.sh's)
+python3 -Es -m deploy.baremetal.uki provenance > "$W/provenance.json"
+PINNED_KEYRING="$(sed -n 's/^KEYRING_SHA256 = "\([0-9a-f]\{64\}\)"$/\1/p' deploy/baremetal/debverify.py)"
+# the client is built with go.mod's Go release (its toolchain line, else its go line), and uki.py refuses
+# a record that names another: ask uki.py, so the two cannot read go.mod differently
+GO_RELEASE="$(python3 -IB -c 'import sys; sys.path.append(sys.argv.pop(1)); from deploy.baremetal.uki import Checkout; print(Checkout().go_release())' "$PWD")"
+python3 -I - "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/initrd-build.json" "$W/initrd-inventory.txt" "$PINNED_KEYRING" "$W/provenance.json" "$W/root-key.json" "$GO_RELEASE" <<'PY'
+import hashlib, json, sys
+digest = lambda path: hashlib.sha256(open(path, "rb").read()).hexdigest()
+provenance = json.load(open(sys.argv[6]))
+json.dump({"schema": "regalia.initrd-build/v1", "commit": provenance["commit"], "go": sys.argv[8], "snapshot": "20261023T210712Z",
+           "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "stand-in", "dracut": "stand-in", "packages_requested": [],
+           "client_sha256": digest(sys.argv[2]), "root_key_sha256": digest(sys.argv[7]), "repository_files": provenance["repository_files"], "packages_sha256": "0" * 64, "packages": [],
+           "initrd_sha256": digest(sys.argv[1]), "initrd_size": 0, "initrd_entries": 0,
+           # the stand-in's inventory names no package: the builder verified none of it, with the pinned keyring (#246)
+           "verified_packages": {"schema": "regalia.initrd-packages/v1", "packages": {}, "releases": {},
+                                 "keyring_sha256": sys.argv[5], "inventory_sha256": digest(sys.argv[4]),
+                                 "entries": 0, "dracut_over": 0}}, open(sys.argv[3], "w"))
+PY
+printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n' > "$W/cmdline"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"
 for k in initrd system secure-boot other; do
   openssl genrsa -out "$W/TEST-$k.key" 2048 2>/dev/null
   openssl rsa -in "$W/TEST-$k.key" -pubout -out "$W/TEST-$k.pub" 2>/dev/null
   openssl req -new -x509 -key "$W/TEST-$k.key" -out "$W/TEST-$k.crt" -subj "/CN=TEST $k key, not for production/" -days 30 2>/dev/null
 done
-IN=(--linux "$LINUX" --initrd "$W/initrd" --cmdline "$W/cmdline" --os-release "$W/os-release" --uname "$UNAME" --stub "$STUB" --pcrpkey "$W/TEST-system.pub")
+IN=(--linux "$LINUX" --initrd "$W/initrd" --cmdline "$W/cmdline" --os-release "$W/os-release" --uname "$UNAME" --stub "$STUB" --pcrpkey "$W/TEST-system.pub"
+    --initrd-build "$W/initrd-build.json" --root-key "$W/root-key.json")
 FILEKEYS=(--initrd-key "$W/TEST-initrd.key" --initrd-cert "$W/TEST-initrd.crt" --system-key "$W/TEST-system.key" --system-cert "$W/TEST-system.crt"
           --secure-boot-key "$W/TEST-secure-boot.key" --secure-boot-cert "$W/TEST-secure-boot.crt")
 
@@ -75,11 +118,11 @@ REC="$W/a/test-image.record.json"
 i11="$(field "$REC" pcr11.initrd)"; s11="$(field "$REC" pcr11.system)"
 [ "${#i11}" = 64 ] && [ "${#s11}" = 64 ] && [ "$i11" != "$s11" ] && P "one image, two PCR 11 values: initrd ${i11:0:16}…, system ${s11:0:16}…" || F "the record's PCR 11 values: '$i11' '$s11'"
 # the same prediction, asked of ukify itself (its --measure runs systemd-measure over the image it builds, for every phase)
-theirs="$(ukify build --config /dev/null --linux "$LINUX" --initrd "$W/initrd" --cmdline "root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1" --os-release "@$W/os-release" \
+theirs="$(ukify build --config /dev/null --linux "$LINUX" --initrd "$W/initrd" --cmdline "root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0" --os-release "@$W/os-release" \
   --uname "$UNAME" --stub "$STUB" --pcrpkey "$W/TEST-system.pub" --tools "$(dirname "$MEASURE")" --measure --output "$W/ukify-own.efi" 2>/dev/null | sed -n 's/^11:sha256=//p')"
 grep -qx "$i11" <<< "$theirs" && grep -qx "$s11" <<< "$theirs" && P "ukify --measure predicts both values for the image it builds from the same inputs" \
   || F "ukify --measure says '$(tr '\n' ' ' <<< "$theirs")', the record $i11 and $s11"
-printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.luks.uuid=0\n' > "$W/cmdline-bad"
+printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0 rd.luks.uuid=0\n' > "$W/cmdline-bad"
 out="$(uki build "${IN[@]:0:4}" --cmdline "$W/cmdline-bad" "${IN[@]:6}" --name x --out "$W/x" 2>&1)"; rc=$?
 [ "$rc" = 1 ] && grep -q "holds 'rd.luks.uuid=0'" <<< "$out" && [ ! -e "$W/x/x.unsigned.efi" ] && P "a command line that unlocks a disk by itself is refused, nothing built" || F "bad command line: exit $rc: $out"
 

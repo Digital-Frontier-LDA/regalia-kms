@@ -21,6 +21,7 @@ def site(node="a", **mesh):
     doc = json.loads(EXAMPLE.read_text())
     doc["host_ipv4"] = WHERE[node][0]
     doc["boot_mesh"] = dict({"node_id": node, "interface": "wg-unlock", "listen_port": 51820, "address": WHERE[node][1], "unlock_port": 7443,
+                             "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                              "peers": [{"node_id": n, "underlay": u, "address": t} for n, (u, t) in WHERE.items() if n != node]}, **mesh)
     return doc
 
@@ -130,11 +131,11 @@ class Mesh(Case):
         order = [text.index(rule) for rule in ("ct state established,related accept", unlock_rule, 'iifname "wg-unlock" drop',
                                                "tcp dport 8443", "tcp dport 22", "icmp type echo-request")]
         self.assertEqual(order, sorted(order))
-        self.assertEqual(text.count(" dport "), 6)                    # kms, ssh, audit, ntp, and the two of the mesh
+        self.assertEqual(text.count(" dport "), 13)                   # kms, node metrics (#305), ssh, audit, dns, 2 per NTS server (#303), and the two of the mesh
         self.assertEqual(text.count("7443"), 1)                       # the unlock port is open inside the tunnel and nowhere else
         plain = firewall.render(sitecfg.validate(json.loads(EXAMPLE.read_text())))
         self.assertNotIn("boot mesh", plain)
-        self.assertEqual(plain.count(" dport "), 4)
+        self.assertEqual(plain.count(" dport "), 11)                  # kms, node metrics (#305), ssh, audit, dns, 2 per NTS server (#303)
 
     @unittest.skipUnless(shutil.which("nft", path="/usr/sbin:/sbin:/usr/bin"), "nft not installed")
     def test_nft_accepts_both_rulesets(self):
@@ -147,6 +148,12 @@ class Mesh(Case):
 
 
 class SiteMesh(Case):
+    def test_the_initrd_card_prefix_and_gateway(self):
+        self.assertEqual({k: self.cfg["boot_mesh"][k] for k in ("nic_mac", "prefix", "gateway")}, {"nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None})
+        routed = sitecfg.validate(site(prefix=24, gateway="192.0.2.1"))["boot_mesh"]
+        self.assertEqual((routed["prefix"], routed["gateway"]), (24, "192.0.2.1"))
+        self.assertEqual(sitecfg.validate(site(prefix=31, gateway="192.0.2.11"))["boot_mesh"]["gateway"], "192.0.2.11")   # a /31: both addresses are hosts
+
     def test_the_boot_mesh_is_null_or_exact(self):
         self.assertIsNone(sitecfg.validate(json.loads(EXAMPLE.read_text()))["boot_mesh"])
         self.assertEqual(self.cfg["boot_mesh"]["peers"][0], {"node_id": "b", "underlay": "198.51.100.7", "address": "10.89.0.2"})
@@ -155,7 +162,7 @@ class SiteMesh(Case):
             "absent": (lambda d: d.pop("boot_mesh"), "fields mismatch"),
             "not an object": (lambda d: d.__setitem__("boot_mesh", []), "boot_mesh must be null or hold exactly"),
             "unknown field": (lambda d: d["boot_mesh"].__setitem__("psk", "x"), "boot_mesh must be null or hold exactly"),
-            "node id": (lambda d: d["boot_mesh"].__setitem__("node_id", "Lisbon"), "boot_mesh.node_id is not a node ID"),
+            "node id": (lambda d: d["boot_mesh"].__setitem__("node_id", "Alder"), "boot_mesh.node_id is not a node ID"),
             "interface": (lambda d: d["boot_mesh"].__setitem__("interface", "wg-unlock-too-long"), "a WireGuard interface of its own"),
             "interface quote": (lambda d: d["boot_mesh"].__setitem__("interface", 'wg-" accept'), "a WireGuard interface of its own"),
             "a physical interface": (lambda d: d["boot_mesh"].__setitem__("interface", "eth0"), "a WireGuard interface of its own"),
@@ -171,7 +178,7 @@ class SiteMesh(Case):
             "link-local": (lambda d: d["boot_mesh"]["peers"][0].__setitem__("underlay", "169.254.1.1"), "must be a host address"),
             "one address for both": (lambda d: d["boot_mesh"]["peers"][0].__setitem__("address", "198.51.100.7"), "no address is both"),
             "port": (lambda d: d["boot_mesh"].__setitem__("listen_port", 0), "boot_mesh.listen_port must be a port"),
-            "unlock on the KMS port": (lambda d: d["boot_mesh"].__setitem__("unlock_port", 8443), "must differ from kms_port and ssh_port"),
+            "unlock on the KMS port": (lambda d: d["boot_mesh"].__setitem__("unlock_port", 8443), "must differ from kms_port, ssh_port and node_exporter's 9100"),
             "address": (lambda d: d["boot_mesh"].__setitem__("address", "10.89.0.0/24"), "boot_mesh.address must be an IPv4 address"),
             "address is the host's": (lambda d: d["boot_mesh"].__setitem__("address", "192.0.2.10"), "the tunnel's address, not host_ipv4"),
             "no peers": (lambda d: d["boot_mesh"].__setitem__("peers", []), "must list 1 to 8 nodes"),
@@ -182,6 +189,23 @@ class SiteMesh(Case):
             "shared underlay": (lambda d: d["boot_mesh"]["peers"][1].__setitem__("underlay", "198.51.100.7"), "no two nodes share an address"),
             "the host's own underlay": (lambda d: d["boot_mesh"]["peers"][0].__setitem__("underlay", "192.0.2.10"), "no two nodes share an address"),
             "IPv6 underlay": (lambda d: d["boot_mesh"]["peers"][0].__setitem__("underlay", "2001:db8::7"), "underlay must be an IPv4 address"),
+            # the initrd's card, prefix and gateway (#66, regalia.boot-env)
+            "no nic_mac": (lambda d: d["boot_mesh"].pop("nic_mac"), "boot_mesh must be null or hold exactly"),
+            "a MAC in upper case": (lambda d: d["boot_mesh"].__setitem__("nic_mac", "52:54:00:AB:CD:01"), "nic_mac must be a unicast MAC"),
+            "a MAC with dashes": (lambda d: d["boot_mesh"].__setitem__("nic_mac", "52-54-00-12-34-56"), "nic_mac must be a unicast MAC"),
+            "an interface name": (lambda d: d["boot_mesh"].__setitem__("nic_mac", "eno1"), "nic_mac must be a unicast MAC"),
+            "a multicast MAC": (lambda d: d["boot_mesh"].__setitem__("nic_mac", "01:00:5e:00:00:01"), "nic_mac must be a unicast MAC"),
+            "an all-zero MAC": (lambda d: d["boot_mesh"].__setitem__("nic_mac", "00:00:00:00:00:00"), "nic_mac must be a unicast MAC"),
+            "prefix 0": (lambda d: d["boot_mesh"].__setitem__("prefix", 0), "prefix must be a prefix length from 1 to 32"),
+            "prefix 33": (lambda d: d["boot_mesh"].__setitem__("prefix", 33), "prefix must be a prefix length from 1 to 32"),
+            "prefix true": (lambda d: d["boot_mesh"].__setitem__("prefix", True), "prefix must be a prefix length from 1 to 32"),
+            "prefix as text": (lambda d: d["boot_mesh"].__setitem__("prefix", "24"), "prefix must be a prefix length from 1 to 32"),
+            "a gateway off the link": (lambda d: d["boot_mesh"].update(prefix=24, gateway="192.0.3.1"), "gateway must be another address inside 192.0.2.0/24"),
+            "the host as its gateway": (lambda d: d["boot_mesh"].update(prefix=24, gateway="192.0.2.10"), "gateway must be another address inside"),
+            "the network as gateway": (lambda d: d["boot_mesh"].update(prefix=24, gateway="192.0.2.0"), "not its network or broadcast address"),
+            "the broadcast as gateway": (lambda d: d["boot_mesh"].update(prefix=24, gateway="192.0.2.255"), "not its network or broadcast address"),
+            "a gateway under /32": (lambda d: d["boot_mesh"].update(gateway="192.0.2.1"), "gateway must be another address inside 192.0.2.10/32"),
+            "a gateway as a network": (lambda d: d["boot_mesh"].update(prefix=24, gateway="192.0.2.1/24"), "boot_mesh.gateway must be an IPv4 address"),
         }
         for label, (breakit, why) in cases.items():
             with self.subTest(label):
