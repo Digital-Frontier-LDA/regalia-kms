@@ -1,0 +1,131 @@
+name: OpenBao development conformance
+
+on:
+  pull_request:
+    paths:
+      - 'adapters/openbao/**'
+      - 'adapters/sops/**'
+      - 'tools/package_openbao.py'
+      - 'OPENBAO-COMPATIBILITY.md'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/openbao-poc.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'adapters/openbao/**'
+      - 'adapters/sops/**'
+      - 'tools/package_openbao.py'
+      - 'OPENBAO-COMPATIBILITY.md'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/openbao-poc.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-server:
+    name: ${{ matrix.check_name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            machine: x86_64
+            check_name: real-server-amd64
+            bao_sha256: 0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            machine: aarch64
+            check_name: real-server-arm64
+            bao_sha256: 2b3807d90f224df05d4fe1fdede7f052d2227596c648a56bd291381f8fd01840
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: adapters/openbao
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: adapters/openbao/go.mod
+          cache-dependency-path: adapters/openbao/go.sum
+      - name: Require native Linux runner and Go architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: |
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = "$EXPECTED_MACHINE"
+          test "$(go env GOHOSTARCH)" = "$EXPECTED_ARCH"
+          test "$(go env GOARCH)" = "$EXPECTED_ARCH"
+      - name: Install checksum-pinned OpenBao 2.7.1
+        env:
+          OPENBAO_SHA256: ${{ matrix.bao_sha256 }}
+          OPENBAO_ARCH: ${{ matrix.arch }}
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/openbao.tar.gz" \
+            "https://github.com/openbao/openbao/releases/download/v2.7.1/openbao_2.7.1_linux_${OPENBAO_ARCH}.tar.gz"
+          echo "$OPENBAO_SHA256  $RUNNER_TEMP/openbao.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/openbao.tar.gz" --directory "$RUNNER_TEMP" bao
+          "$RUNNER_TEMP/bao" version
+      - name: Format, vet and build the development plugin
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go build -o "$RUNNER_TEMP/openbao-plugin-kms-regalia-poc" ./cmd/openbao-plugin-kms-regalia-poc
+          go build -o "$RUNNER_TEMP/openbao-plugin-kms-regalia" ./cmd/openbao-plugin-kms-regalia
+      - name: Scan the adapter module for reachable vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - name: Build the pinned earlier native plugin for upgrade and rollback
+        env:
+          PREVIOUS_COMMIT: c16a52f8dd5abbecbc5a7497fb21fe3796526165
+        run: |
+          git fetch --no-tags --depth=1 origin "$PREVIOUS_COMMIT"
+          mkdir -m 700 "$RUNNER_TEMP/openbao-native-baseline"
+          git -C "$GITHUB_WORKSPACE" archive "$PREVIOUS_COMMIT" | tar --extract --directory "$RUNNER_TEMP/openbao-native-baseline"
+          cd "$RUNNER_TEMP/openbao-native-baseline/adapters/openbao"
+          go build -mod=readonly -trimpath -buildvcs=false \
+            -o "$RUNNER_TEMP/openbao-native-baseline-plugin" ./cmd/openbao-plugin-kms-regalia
+          baseline_checksum=$(sha256sum "$RUNNER_TEMP/openbao-native-baseline-plugin")
+          echo "OPENBAO_POC_PREVIOUS_PLUGIN=$RUNNER_TEMP/openbao-native-baseline-plugin" >> "$GITHUB_ENV"
+          echo "OPENBAO_POC_PREVIOUS_SHA256=${baseline_checksum%% *}" >> "$GITHUB_ENV"
+      - name: Unit and real-server tests (absence is a failure)
+        env:
+          OPENBAO_POC_REQUIRE_E2E: '1'
+        run: |
+          umask 002
+          OPENBAO_POC_BAO="$RUNNER_TEMP/bao" go test -race -count=1 -v -timeout 8m ./...
+      - name: Build and verify reproducible development packages
+        working-directory: .
+        run: |
+          python3 -I tools/package_openbao.py --output "$RUNNER_TEMP/openbao-packages"
+          python3 -I tools/package_openbao.py --output "$RUNNER_TEMP/openbao-packages-repeat"
+          cmp "$RUNNER_TEMP/openbao-packages/checksums.txt" "$RUNNER_TEMP/openbao-packages-repeat/checksums.txt"
+          python3 -I tools/package_openbao.py --verify --output "$RUNNER_TEMP/openbao-packages"
+      - name: Upload development packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openbao-regalia-development-${{ github.sha }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/openbao-packages/
+          if-no-files-found: error
+          retention-days: 14
+
+  conformance-gate:
+    # Preserve the existing required check while requiring both architectures.
+    name: real-server
+    needs: real-server
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every native matrix entry to pass
+        env:
+          MATRIX_RESULT: ${{ needs.real-server.result }}
+        run: test "$MATRIX_RESULT" = success
