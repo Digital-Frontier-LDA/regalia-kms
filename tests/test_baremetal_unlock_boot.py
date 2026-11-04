@@ -221,6 +221,44 @@ class EspMountFailure(unittest.TestCase):
         self.assertIn(["losetup", "-d", "/dev/loop7"], calls)
         self.assertNotIn(["umount", d + "/esp"], calls)   # it never mounted
 
+    def test_esp_itself_passes_a_late_partition_that_mounts_and_says_it_was_late(self):
+        """regalia-01 F1, on the wiring: p1 not seen within the bound, then mounted; that passed on main, and does."""
+        import contextlib
+        import io
+        import tempfile
+        from unittest import mock
+        calls, d, boot = [], tempfile.mkdtemp(), tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        self.addCleanup(shutil.rmtree, boot, True)
+        for sub in ("esp/loader/credentials", "esp/EFI/BOOT"):
+            os.makedirs(os.path.join(d, sub))
+        with open(os.path.join(boot, "e2e.efi"), "wb") as f:
+            f.write(b"stub")
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            out = {"--find": "/dev/loop7\n", "-O": "/w/disk.img\n"}
+            key = next((a for a in argv if a in out), None)
+            return subprocess.CompletedProcess(argv, 0, out.get(key, ""), "")
+
+        class Host(unittest.TestCase):
+            partition, esp = OnQemu.partition, OnQemu.esp
+
+            def runTest(self):
+                pass
+
+        host = Host()
+        host.image, host.d, host.chain = "/w/disk.img", d, {}
+        module, said = sys.modules[__name__], io.StringIO()
+        with mock.patch.object(module, "run", fake_run), mock.patch.object(module, "BOOT", boot), \
+                mock.patch.object(module, "wait_for_partition", lambda loop, number: (loop + "p%d" % number, None)), \
+                mock.patch.object(module.os.path, "realpath", lambda path: path), contextlib.redirect_stderr(said):
+            files = host.esp({"x": b"1"})
+            host.doCleanups()
+        self.assertEqual(files, {"x.cred": b"1"})
+        self.assertIn("was not seen within 5.0 s; mount succeeded anyway", said.getvalue())
+        self.assertIn(["umount", d + "/esp"], calls)
+
     def test_a_mounted_esp_is_no_failure_even_when_its_partition_was_seen_late(self):
         self.assertIsNone(esp_mount_failure("/dev/loop7p1", 0.1, 0, "", "", ""))
         self.assertIsNone(esp_mount_failure("/dev/loop7p1", None, 0, "", "", ""))   # regalia-01 F1: passed on main, still passes
