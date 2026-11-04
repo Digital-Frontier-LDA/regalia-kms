@@ -1,6 +1,6 @@
 module github.com/Digital-Frontier-LDA/regalia-kms/adapters/openbao
 
-go 1.26.6
+go 1.26.10
 
 require (
 	github.com/Digital-Frontier-LDA/regalia-kms/adapters/sops v0.0.0
