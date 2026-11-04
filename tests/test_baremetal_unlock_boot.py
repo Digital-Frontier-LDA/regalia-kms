@@ -52,6 +52,38 @@ def host_tpm_fault(console):
     """The firmware's own line when the host's TPM emulation dropped a measurement (regalia-a0y), or None."""
     found = HOST_TPM_FAULT.search(console)
     return found.group(0) if found else None
+
+
+# regalia-kms-a0g: main's run 41741497644 attempt 1 (5ff5fa23) failed with "the ESP did not mount" while passing on the
+# same tree before (job 126164147549) and after (job 126285443219). The mount is the HOST's, before QEMU starts, and the
+# old helper waited a fixed 5 s for <loop>p1, then returned in silence and dropped mount's stderr, so nothing said why.
+# The wait is NOT lengthened and nothing retries: the setup fails as soon as it fails, by name, with what it measured.
+PARTITION_WAIT = 5.0
+
+
+def wait_for_partition(loop, number, timeout=PARTITION_WAIT, exists=None, clock=None, sleep=None):
+    """Polls for <loop>p<number> after `losetup --partscan`. Returns (path, seconds it took to appear, or None if
+    it never did within `timeout`)."""
+    exists, clock, sleep = exists or os.path.exists, clock or time.monotonic, sleep or time.sleep
+    path, start = "%sp%d" % (loop, number), clock()
+    while True:
+        if exists(path):
+            return path, clock() - start
+        if clock() - start >= timeout:
+            return path, None
+        sleep(0.1)
+
+
+def esp_mount_failure(part, appeared_after, mount_rc, mount_stderr, losetup_list, lsblk):
+    """Why the host could not mount the guest's ESP, by name and with what was measured, or None if it mounted."""
+    if appeared_after is not None and mount_rc == 0:
+        return None
+    if appeared_after is None:
+        head = "HOST LOOP PARTITION NOT READY: %s did not appear within %.1f s of losetup --partscan" % (part, PARTITION_WAIT)
+    else:
+        head = "HOST ESP MOUNT FAILED: %s appeared after %.2f s, then mount -t vfat exited %d" % (part, appeared_after, mount_rc)
+    return "%s\n mount rc=%s stderr: %s\n losetup -l:\n%s\n lsblk:\n%s" % (
+        head, mount_rc, (mount_stderr or "").strip() or "(empty)", losetup_list.rstrip(), lsblk.rstrip())
 run = tub.run
 
 
@@ -108,6 +140,89 @@ class HostTpmFault(unittest.TestCase):
     def test_a_good_boot_and_another_error_are_not_it(self):
         self.assertIsNone(host_tpm_fault("EFI stub: Measured initrd data into PCR 9.\nWelcome to Debian\n"))
         self.assertIsNone(host_tpm_fault("Failed to measure data for event 1: 0x8000000000000002\n"))   # another status
+
+
+class EspMountFailure(unittest.TestCase):
+    """regalia-kms-a0g, judged without a guest: the host-side ESP setup fails by name, with its measurements."""
+
+    class Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def __call__(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    def test_a_partition_that_never_appears_is_measured_as_none_after_the_bound(self):
+        clock = self.Clock()
+        part, after = wait_for_partition("/dev/loop7", 1, exists=lambda path: False, clock=clock, sleep=clock.sleep)
+        self.assertEqual(part, "/dev/loop7p1")
+        self.assertIsNone(after)
+        self.assertGreaterEqual(clock.now, PARTITION_WAIT)
+        self.assertLess(clock.now, PARTITION_WAIT + 0.2)   # the bound is not lengthened
+
+    def test_a_partition_that_appears_late_reports_how_long_it_took(self):
+        clock = self.Clock()
+        part, after = wait_for_partition("/dev/loop7", 1, exists=lambda path: clock.now >= 0.3, clock=clock, sleep=clock.sleep)
+        self.assertAlmostEqual(after, 0.3, places=6)
+
+    def test_a_missing_partition_is_named_with_mount_s_answer_and_the_loop_state(self):
+        why = esp_mount_failure("/dev/loop7p1", None, 32, "mount: /x: special device /dev/loop7p1 does not exist.\n",
+                                "NAME       SIZELIMIT OFFSET BACK-FILE\n/dev/loop7 0 0 /w/disk.img\n", "loop7 7:7 2G loop\n")
+        self.assertTrue(why.startswith("HOST LOOP PARTITION NOT READY: /dev/loop7p1 did not appear within 5.0 s"), why)
+        for measured in ("mount rc=32", "special device /dev/loop7p1 does not exist", "/dev/loop7 0 0 /w/disk.img", "loop7 7:7 2G loop"):
+            self.assertIn(measured, why)
+
+    def test_a_partition_that_appeared_but_did_not_mount_is_named_apart(self):
+        why = esp_mount_failure("/dev/loop7p1", 0.42, 32, "mount: wrong fs type\n", "", "")
+        self.assertTrue(why.startswith("HOST ESP MOUNT FAILED: /dev/loop7p1 appeared after 0.42 s, then mount -t vfat exited 32"), why)
+        self.assertIn("wrong fs type", why)
+        self.assertIn("stderr: mount: wrong fs type", why)
+
+    def test_esp_itself_fails_by_name_when_the_partition_never_appears_and_still_detaches(self):
+        """The wiring, not only the helpers: OnQemu's own partition() and esp(), with the host's commands faked."""
+        from unittest import mock
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            out = {"--find": "/dev/loop7\n", "-l": "/dev/loop7 0 0 /w/disk.img\n", "-O": "/w/disk.img\n"}
+            if argv[0] == "mount":
+                return subprocess.CompletedProcess(argv, 32, "", "mount: special device /dev/loop7p1 does not exist.\n")
+            if argv[0] == "lsblk":
+                return subprocess.CompletedProcess(argv, 0, "loop7 7:7 2G loop\n", "")
+            key = next((a for a in argv if a in out), None)
+            return subprocess.CompletedProcess(argv, 0, out.get(key, ""), "")
+
+        class Host(unittest.TestCase):
+            partition, esp = OnQemu.partition, OnQemu.esp
+
+            def runTest(self):
+                pass
+
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        host = Host()
+        host.image, host.d = "/w/disk.img", d
+        module = sys.modules[__name__]
+        with mock.patch.object(module, "run", fake_run), \
+                mock.patch.object(module, "wait_for_partition", lambda loop, number: (loop + "p%d" % number, None)), \
+                mock.patch.object(module.os.path, "realpath", lambda path: path):
+            with self.assertRaises(host.failureException) as raised:
+                host.esp({})
+            host.doCleanups()
+        self.assertTrue(str(raised.exception).startswith("HOST LOOP PARTITION NOT READY: /dev/loop7p1"), raised.exception)
+        for measured in ("mount rc=32", "special device /dev/loop7p1", "/dev/loop7 0 0 /w/disk.img", "loop7 7:7 2G loop"):
+            self.assertIn(measured, str(raised.exception))
+        self.assertIn(["losetup", "-d", "/dev/loop7"], calls)
+        self.assertNotIn(["umount", d + "/esp"], calls)   # it never mounted
+
+    def test_a_mounted_esp_is_no_failure_and_an_empty_stderr_still_says_so(self):
+        self.assertIsNone(esp_mount_failure("/dev/loop7p1", 0.1, 0, "", "", ""))
+        self.assertIn("stderr: (empty)", esp_mount_failure("/dev/loop7p1", None, 0, "", "", ""))
 
 
 @unittest.skipUnless(os.environ.get("REGALIA_EXPECT_QEMU") == "1", "needs a guest built by e2e/unlock-boot-qemu.sh")
@@ -252,11 +367,8 @@ class OnQemu(tub.OnSwtpm):
             if os.path.realpath(run(["losetup", "-n", "-O", "BACK-FILE", loop], capture_output=True, text=True).stdout.strip() or "/") == os.path.realpath(self.image):
                 run(["losetup", "-d", loop], capture_output=True)
         self.addCleanup(detach)
-        for _ in range(50):
-            if os.path.exists("%sp%d" % (loop, number)):
-                break
-            time.sleep(0.1)
-        return loop, "%sp%d" % (loop, number)
+        part, self.partition_appeared_after = wait_for_partition(loop, number)
+        return loop, part
 
     def esp(self, named, image="e2e"):
         """Puts exactly these credentials ({name: bytes}) in the ESP's loader/credentials, as <name>.cred, and
@@ -266,9 +378,16 @@ class OnQemu(tub.OnSwtpm):
         loop, part = self.partition(1)
         mnt = self.d + "/esp"
         os.makedirs(mnt, exist_ok=True)
-        mounted = run(["mount", "-t", "vfat", part, mnt], capture_output=True).returncode == 0
+        mount = run(["mount", "-t", "vfat", part, mnt], capture_output=True, text=True)
+        mounted = mount.returncode == 0
         try:
-            self.assertTrue(mounted, "the ESP did not mount")
+            if not mounted or self.partition_appeared_after is None:
+                why = esp_mount_failure(part, self.partition_appeared_after, mount.returncode, mount.stderr,
+                                        run(["losetup", "-l"], capture_output=True, text=True).stdout,
+                                        run(["lsblk", "-o", "NAME,MAJ:MIN,SIZE,TYPE,FSTYPE", loop], capture_output=True, text=True).stdout)
+                self.fail(why or "the ESP mounted although %s never appeared" % part)
+            if self.partition_appeared_after >= 1.0:
+                print("the ESP's partition %s appeared after %.2f s" % (part, self.partition_appeared_after), file=sys.stderr)
             where = mnt + "/loader/credentials"
             for name in os.listdir(where):
                 os.unlink(os.path.join(where, name))
