@@ -146,7 +146,7 @@ assumed.
 | Two PicoHSM staging units | not attached; firmware under disclosure GHSA-wq3w-g2fj-q2jq |
 | Three YubiKeys (staging) | not attached |
 | ACS ACR40U (SLE-4442) | attached; validated (regalia#43) |
-| HPE DL360 Gen9 ×3 with TPM 2.0 | **not delivered** (expected mid-October): every TPM, PCR, initramfs and LUKS phase on real hardware waits for them |
+| HPE DL360 Gen9 ×3 with TPM 2.0 | **not delivered** at this baseline (expected mid-October). Since then: on 2026-11-03 one host's TPM EK certificates were measured with standard tooling (tpm2-tools and openssl), not this software (`LIMITATIONS.md`, #190); the other two are not measured. Every TPM, PCR, initramfs and LUKS phase of this software on real hardware is still open |
 | Software | Debian 13, OpenSC 0.26.1, pcscd 2.3.3, libccid 1.6.2, OpenSSL 3.5.1, cryptsetup 2.7.5, nftables 1.1.3, swtpm (kernel vTPM via tpm_vtpm_proxy for harness work) |
 
 Invariants under test are A1–A4 and S1–S6 above. Evidence format: each phase records device serials (in the operators' private records),

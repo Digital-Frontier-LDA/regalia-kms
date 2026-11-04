@@ -10,20 +10,20 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 
 ## Overall
 
-- **Nothing has run in a ceremony or on the production hardware.** No key ceremony has been held, and
-  no Shamir share set exists yet. The three production hosts (HPE DL360 Gen9 with TPM 2.0) have not run
-  this software (#253). **EK certificates: measured on one of the three (2026-11-03), unknown on the
-  other two** (#190). The first host's TPM 2.0 (Infineon, manufacturer `IFX`, firmware 5.62) carries
-  both an RSA EK certificate (NV 0x1c00002) and an ECC one (NV 0x1c0000a). Each verifies against the
-  issuing CA named in its AIA, Infineon OPTIGA(TM) RSA / ECC Manufacturing CA 029; the EK certificates
-  are valid to 2032. The verification is `openssl verify -partial_chain` against that issuing CA; the
-  chain to Infineon's root was not pinned. On the same TPM, the RSA EK's public key equals the RSA
-  certificate's, and an AK under the EK quoted sha256 PCRs 0-7 over a fresh nonce: `tpm2_checkquote`
-  passed, and the same quote against a different nonce was refused. Evidence (both EK certificates, both
-  issuing CAs as fetched, the verbatim command transcript with exit codes, SHA256SUMS): the private
-  regalia repository, `doc/drills/2026-11-03-first-dl360-tpm-ek-and-quote.md` (regalia#595, merged
-  26a2adbb). The other two hosts' TPMs have not been read. Every three-node scenario so far runs on a
-  software TPM (swtpm) in CI.
+- **Neither this software nor a key ceremony has run on the production hardware.** No key ceremony has
+  been held, and no Shamir share set exists yet. The three production hosts (HPE DL360 Gen9 with TPM
+  2.0) have not run this software (#253). **EK certificates: measured on one of the three (2026-11-03),
+  with standard tooling (tpm2-tools and openssl), not this software; unknown on the other two** (#190).
+  The first host's TPM 2.0 (Infineon, manufacturer `IFX`, firmware 5.62) carries both an RSA EK
+  certificate (NV 0x1c00002) and an ECC one (NV 0x1c0000a). Each verifies against the issuing CA named
+  in its AIA, Infineon OPTIGA(TM) RSA / ECC Manufacturing CA 029; the EK certificates are valid to 2032.
+  The verification is `openssl verify -partial_chain` against that issuing CA; the chain to Infineon's
+  root was not pinned. On the same TPM, the RSA EK's public key equals the RSA certificate's, and an AK
+  under the EK quoted sha256 PCRs 0-7 over a fresh nonce: `tpm2_checkquote` passed, and the same quote
+  against a different nonce was refused. Evidence (both EK certificates, both issuing CAs as fetched,
+  the verbatim command transcript with exit codes, SHA256SUMS): the private regalia repository,
+  `doc/drills/2026-11-03-first-dl360-tpm-ek-and-quote.md` (regalia#595, merged 26a2adbb). The other two
+  hosts' TPMs have not been read. Every three-node scenario so far runs on a software TPM (swtpm) in CI.
 - **Hardware qualification is open**: Nitrokey HSM 2 for production; the Pico HSM is supported but
   not qualified ([`CONFIGURATIONS.md`](CONFIGURATIONS.md)).
 
