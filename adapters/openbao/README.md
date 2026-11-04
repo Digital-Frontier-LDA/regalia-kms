@@ -146,7 +146,7 @@ qualification work.
 
 ## Run
 
-Use Linux and Go 1.26.6, and a checkout containing the sibling SOPS and root
+Use Linux and Go 1.26.10, and a checkout containing the sibling SOPS and root
 modules (the replacements in go.mod are intentionally local for this PoC).
 The HTTP fixtures import the daemon's Linux-specific admission code. The plugin
 entrypoints themselves do not import the admission or hardware implementations.

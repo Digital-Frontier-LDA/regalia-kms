@@ -75,8 +75,8 @@ def main():
     commit = run("git", "rev-parse", "HEAD")
     epoch = int(run("git", "show", "-s", "--format=%ct", "HEAD"))
     go_version = run("go", "env", "GOVERSION", cwd=MODULE)
-    if go_version != "go1.26.6":
-        raise SystemExit("Reproducible packages require Go 1.26.6")
+    if go_version != "go1.26.10":
+        raise SystemExit("Reproducible packages require Go 1.26.10")
     version = "v0.1.0-dev." + commit[:12]
     output.mkdir(parents=True, exist_ok=False)
     artifacts = []

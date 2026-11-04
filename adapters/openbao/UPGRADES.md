@@ -37,7 +37,7 @@ reload or automatic rotation service is exercised.
 
 ## Run the pinned pair
 
-Use Linux and Go 1.26.6 on the target architecture. From the repository root,
+Use Linux and Go 1.26.10 on the target architecture. From the repository root,
 prepare the trusted, fixed predecessor source in a new private directory:
 
 ```sh

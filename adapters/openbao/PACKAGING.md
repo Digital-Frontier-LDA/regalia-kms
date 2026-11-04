@@ -1,7 +1,7 @@
 # Development packages
 
 `tools/package_openbao.py` builds the native seal/External Keys binary for
-Linux amd64 and arm64 from a **clean committed checkout**, with Go 1.26.6,
+Linux amd64 and arm64 from a **clean committed checkout**, with Go 1.26.10,
 CGO disabled, readonly modules, trimmed source paths and embedded source/version
 identities. It never publishes a release or installs a plugin.
 

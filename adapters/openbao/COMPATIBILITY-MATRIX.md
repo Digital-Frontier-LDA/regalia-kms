@@ -8,8 +8,8 @@ checks the ELF architecture of OpenBao and both plugin revisions.
 
 | Native target | Runner | OpenBao | Go | Wrapping SDK / plugin SDK | Required check |
 | --- | --- | --- | --- | --- | --- |
-| Linux amd64 | ubuntu-24.04 | 2.7.1 | 1.26.6 | 2.9.0 / 2.4.0 | real-server-amd64 |
-| Linux arm64 | ubuntu-24.04-arm | 2.7.1 | 1.26.6 | 2.9.0 / 2.4.0 | real-server-arm64 |
+| Linux amd64 | ubuntu-24.04 | 2.7.1 | 1.26.10 | 2.9.0 / 2.4.0 | real-server-amd64 |
+| Linux arm64 | ubuntu-24.04-arm | 2.7.1 | 1.26.10 | 2.9.0 / 2.4.0 | real-server-arm64 |
 
 Both checks require the complete unit/race suite and seven real-server drills:
 initialization/outage/identity/restore, legacy generation recovery, native
