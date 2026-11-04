@@ -15,14 +15,15 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   this software (#253). **EK certificates: measured on one of the three (2026-11-03), unknown on the
   other two** (#190). The first host's TPM 2.0 (Infineon, manufacturer `IFX`, firmware 5.62) carries
   both an RSA EK certificate (NV 0x1c00002) and an ECC one (NV 0x1c0000a). Each verifies against the
-  issuing CA named in its AIA, Infineon OPTIGA(TM) RSA / ECC Manufacturing CA 029, both valid to 2032.
-  The verification is `openssl verify -partial_chain` against that issuing CA; the chain to Infineon's
-  root was not pinned. On the same TPM, the RSA EK's public key equals the RSA certificate's, and an AK
-  under the EK quoted sha256 PCRs 0-7 over a fresh nonce: `tpm2_checkquote` passed, and the same quote
-  against a different nonce was refused. Evidence (both EK certificates, both issuing CAs as fetched, the
-  verbatim command transcript with exit codes, SHA256SUMS): the private regalia repository,
-  `doc/drills/2026-11-03-first-dl360-tpm-ek-and-quote.md` (regalia#595). The other two hosts' TPMs have
-  not been read. Every three-node scenario so far runs on a software TPM (swtpm) in CI.
+  issuing CA named in its AIA, Infineon OPTIGA(TM) RSA / ECC Manufacturing CA 029; the EK certificates
+  are valid to 2032. The verification is `openssl verify -partial_chain` against that issuing CA; the
+  chain to Infineon's root was not pinned. On the same TPM, the RSA EK's public key equals the RSA
+  certificate's, and an AK under the EK quoted sha256 PCRs 0-7 over a fresh nonce: `tpm2_checkquote`
+  passed, and the same quote against a different nonce was refused. Evidence (both EK certificates, both
+  issuing CAs as fetched, the verbatim command transcript with exit codes, SHA256SUMS): the private
+  regalia repository, `doc/drills/2026-11-03-first-dl360-tpm-ek-and-quote.md` (regalia#595, merged
+  26a2adbb). The other two hosts' TPMs have not been read. Every three-node scenario so far runs on a
+  software TPM (swtpm) in CI.
 - **Hardware qualification is open**: Nitrokey HSM 2 for production; the Pico HSM is supported but
   not qualified ([`CONFIGURATIONS.md`](CONFIGURATIONS.md)).
 
