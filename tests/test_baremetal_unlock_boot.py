@@ -75,8 +75,9 @@ def wait_for_partition(loop, number, timeout=PARTITION_WAIT, exists=None, clock=
 
 
 def esp_mount_failure(part, appeared_after, mount_rc, mount_stderr, losetup_list, lsblk):
-    """Why the host could not mount the guest's ESP, by name and with what was measured, or None if it mounted."""
-    if appeared_after is not None and mount_rc == 0:
+    """Why the host could not mount the guest's ESP, by name and with what was measured, or None if it mounted.
+    A partition seen late (after the bound) that still mounted is no failure: it passed before, and must still."""
+    if mount_rc == 0:
         return None
     if appeared_after is None:
         head = "HOST LOOP PARTITION NOT READY: %s did not appear within %.1f s of losetup --partscan" % (part, PARTITION_WAIT)
@@ -220,9 +221,12 @@ class EspMountFailure(unittest.TestCase):
         self.assertIn(["losetup", "-d", "/dev/loop7"], calls)
         self.assertNotIn(["umount", d + "/esp"], calls)   # it never mounted
 
-    def test_a_mounted_esp_is_no_failure_and_an_empty_stderr_still_says_so(self):
+    def test_a_mounted_esp_is_no_failure_even_when_its_partition_was_seen_late(self):
         self.assertIsNone(esp_mount_failure("/dev/loop7p1", 0.1, 0, "", "", ""))
-        self.assertIn("stderr: (empty)", esp_mount_failure("/dev/loop7p1", None, 0, "", "", ""))
+        self.assertIsNone(esp_mount_failure("/dev/loop7p1", None, 0, "", "", ""))   # regalia-01 F1: passed on main, still passes
+
+    def test_an_empty_stderr_still_says_so(self):
+        self.assertIn("stderr: (empty)", esp_mount_failure("/dev/loop7p1", None, 32, "", "", ""))
 
 
 @unittest.skipUnless(os.environ.get("REGALIA_EXPECT_QEMU") == "1", "needs a guest built by e2e/unlock-boot-qemu.sh")
@@ -381,12 +385,13 @@ class OnQemu(tub.OnSwtpm):
         mount = run(["mount", "-t", "vfat", part, mnt], capture_output=True, text=True)
         mounted = mount.returncode == 0
         try:
-            if not mounted or self.partition_appeared_after is None:
-                why = esp_mount_failure(part, self.partition_appeared_after, mount.returncode, mount.stderr,
-                                        run(["losetup", "-l"], capture_output=True, text=True).stdout,
-                                        run(["lsblk", "-o", "NAME,MAJ:MIN,SIZE,TYPE,FSTYPE", loop], capture_output=True, text=True).stdout)
-                self.fail(why or "the ESP mounted although %s never appeared" % part)
-            if self.partition_appeared_after >= 1.0:
+            if not mounted:
+                self.fail(esp_mount_failure(part, self.partition_appeared_after, mount.returncode, mount.stderr,
+                                            run(["losetup", "-l"], capture_output=True, text=True).stdout,
+                                            run(["lsblk", "-o", "NAME,MAJ:MIN,SIZE,TYPE,FSTYPE", loop], capture_output=True, text=True).stdout))
+            if self.partition_appeared_after is None:
+                print("the ESP's partition %s was not seen within %.1f s; mount succeeded anyway" % (part, PARTITION_WAIT), file=sys.stderr)
+            elif self.partition_appeared_after >= 1.0:
                 print("the ESP's partition %s appeared after %.2f s" % (part, self.partition_appeared_after), file=sys.stderr)
             where = mnt + "/loader/credentials"
             for name in os.listdir(where):
