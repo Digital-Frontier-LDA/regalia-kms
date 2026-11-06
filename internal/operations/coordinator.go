@@ -18,6 +18,7 @@ import (
 	api "github.com/Digital-Frontier-LDA/regalia-kms/internal/api"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/approval"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/auth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/envelope"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/executor"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/policy"
@@ -163,6 +164,13 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 	}
 	started := coordinator.now()
+	// An agent principal is never served release-secret, whatever the RBAC policy says (regalia-kms-sv3.2): checked
+	// before the grant, so the trail records this rule and not a generic rbac-denied, and so a policy loaded by some
+	// other path than auth.LoadPolicy still cannot hand an agent a secret.
+	if auth.AgentRefuses(request.Principal, request.Operation) {
+		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", auth.AgentReleaseRefused, started, false, nil)
+		return api.Result{}, failure("DENIED", http.StatusForbidden, false)
+	}
 	if !coordinator.authorizer.Allowed(request.Principal, request.ObjectID, request.Operation, request.Context.Environment) {
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "rbac-denied", started, false, nil)
 		return api.Result{}, failure("DENIED", http.StatusForbidden, false)
