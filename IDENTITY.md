@@ -11,6 +11,18 @@ every other path unless Go's TLS verifier produced a verified chain. Server cert
 `crypto.Signer`, allowing the private key operation to remain on the HSM or unattended YubiKey.
 Do not add a convenience PEM-key fallback.
 
+## Agent principals get operations, never the secret
+
+An AI agent's workload identity sits under `spiffe://regalia/agent/`. Such a principal may be granted
+`sign`, `unwrap` and the other key operations, whose key never leaves the token, but never
+`release-secret`: an agent that can release an opaque secret (an API token, a password) holds the
+long-lived credential itself, which the CB4A draft (draft-hartman-credential-broker-4-agents, §3.3)
+calls NOT RECOMMENDED. A policy granting it does not load, naming the principal. A
+`release-secret` request by an agent is refused whatever the policy says, before routing and
+before any policy state is spent, and audited with its own outcome, `agent-release-refused`.
+Because the class is read from the URI SAN, the workload CA decides it: issue an agent's
+certificate under `agent/`, never under `workload/`.
+
 ## Issue, rotate, and revoke
 
 1. Issue from a dedicated workload CA using a short lifetime, one Regalia URI SAN, ClientAuth EKU,

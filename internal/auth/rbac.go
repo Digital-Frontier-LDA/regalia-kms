@@ -16,6 +16,31 @@ import (
 
 const maxPolicyBytes = 512 << 10
 
+// AGENT PRINCIPALS GET OPERATIONS, NEVER THE SECRET (regalia-kms-sv3.2; CB4A draft-hartman-credential-broker-4-agents
+// §3.3, "Model C"). An AI agent that can call release-secret holds the real long-lived credential (an API token, a
+// password), which the draft calls NOT RECOMMENDED: everything it then does with that credential is outside this
+// service's audit and revocation. An agent is identified by its URI SAN, under AgentIdentityPrefix, so the class comes
+// from the workload CA that issued the certificate rather than from a policy field an author could leave out. Sign,
+// wrap, unwrap and the other operations stay grantable to an agent: the key never leaves the token.
+const (
+	AgentIdentityPrefix = "spiffe://regalia/agent/"
+	// AgentRefusedOperation is the one operation an agent may never be granted or served.
+	AgentRefusedOperation = "release-secret"
+	// AgentReleaseRefused is the audit outcome of a release-secret request by an agent principal: its own rule id,
+	// so the trail tells "an agent asked for a secret" apart from an ordinary missing grant (rbac-denied).
+	AgentReleaseRefused = "agent-release-refused"
+)
+
+// IsAgent reports whether principal is an agent identity (AgentIdentityPrefix and at least one more character).
+func IsAgent(principal string) bool {
+	return len(principal) > len(AgentIdentityPrefix) && principal[:len(AgentIdentityPrefix)] == AgentIdentityPrefix
+}
+
+// AgentRefuses reports whether the request is one an agent principal is never served, whatever the policy grants.
+func AgentRefuses(principal, operation string) bool {
+	return operation == AgentRefusedOperation && IsAgent(principal)
+}
+
 type policyDocument struct {
 	SchemaVersion int                 `json:"schema_version"`
 	Principals    []principalDocument `json:"principals"`
@@ -138,6 +163,13 @@ func LoadPolicy(reader io.Reader) (*Policy, error) {
 		case !canonicalURISAN(identity, identityPrefix):
 			return nil, fmt.Errorf("RBAC principal %q: URI is not a canonical workload identity under %q",
 				principal.URI, identityPrefix.String())
+		case identity.String() != principal.URI:
+			// The authenticator keys a request by the parsed URI's String() (auth.go), so a grant under any other
+			// spelling of the same identity could never match one -- and every check below that reads principal.URI
+			// (IsAgent above all) would judge the spelling, not the identity: "SPIFFE://regalia/agent/x" passed the
+			// agent release-secret refusal while naming an agent (regalia-kms#668 review, B1). One spelling loads.
+			return nil, fmt.Errorf("RBAC principal %q: URI is not in its canonical spelling (want %q)",
+				principal.URI, identity.String())
 		case len(principal.Grants) == 0:
 			return nil, fmt.Errorf("RBAC principal %q: no grants", principal.URI)
 		}
@@ -148,6 +180,12 @@ func LoadPolicy(reader io.Reader) (*Policy, error) {
 			compiled, err := compileGrant(input)
 			if err != nil {
 				return nil, fmt.Errorf("principal %q: %w", principal.URI, err)
+			}
+			// A grant that can never be served is config that says something untrue (see GrantedObjects): refuse it
+			// here, naming the principal, rather than load a policy whose author believes the agent can release.
+			if _, releases := compiled.operations[AgentRefusedOperation]; releases && IsAgent(principal.URI) {
+				return nil, fmt.Errorf("RBAC principal %q: an agent principal may not be granted %s (CB4A Model C: agents get operations, never the secret)",
+					principal.URI, AgentRefusedOperation)
 			}
 			result.grants[principal.URI] = append(result.grants[principal.URI], compiled)
 		}
