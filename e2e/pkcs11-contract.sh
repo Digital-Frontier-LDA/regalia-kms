@@ -135,7 +135,12 @@ for b in text.split("Private Key Object")[1:]:
     P "$id: pkcs11-tool reports Access = $acc"
   else F "$id: Access = ${acc:-not reported}"; fi
   # pkcs11-tool will not read a private key at all, so ask the TOKEN directly (C_GetAttributeValue).
-  out="$(python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"; rc=$?; log "extract probe $id: $out"
+  # The probe logs in on its own, so it gets the PIN the way p11l does: only once the slot holds this
+  # serial alone, and through its environment, never argv. Since Q_PIN stopped being exported (#225)
+  # it had no PIN at all, and this check failed on every card with "REGALIA_Q_PIN is not set".
+  if target_ok; then out="$(REGALIA_Q_PIN="$Q_PIN" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"; rc=$?
+  else out="slot $SLOT does not hold $SERIAL alone right now: no login, no PIN"; rc=97; fi
+  log "extract probe $id: $out"
   [ "$rc" = 0 ] && P "$id: the token refuses its secret attributes ($(python3 -I -c 'import json,sys; d=json.loads(sys.stdin.read()); print("CKA_VALUE "+d["CKA_VALUE"]["rv"]+", PRIVATE_EXPONENT "+d["CKA_PRIVATE_EXPONENT"]["rv"])' <<< "$out" 2>/dev/null))" \
     || F "$id: extraction probe: $out"
 done

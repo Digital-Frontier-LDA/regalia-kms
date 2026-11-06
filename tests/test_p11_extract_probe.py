@@ -10,7 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-PROBE = Path(__file__).resolve().parents[1] / "e2e" / "lib" / "p11_extract_probe.py"
+ROOT = Path(__file__).resolve().parents[1]
+PROBE = ROOT / "e2e" / "lib" / "p11_extract_probe.py"
 MODULE = next((m for m in ("/usr/lib/softhsm/libsofthsm2.so", "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so")
                if os.path.exists(m)), None)
 PIN, SO = "7310048261", "1234567890"
@@ -107,6 +108,27 @@ class ExtractProbe(unittest.TestCase):
     def test_the_pin_never_reaches_argv(self):
         self.assertNotIn("sys.argv[4]", PROBE.read_text())
         self.assertIn('os.environ.get("REGALIA_Q_PIN"', PROBE.read_text())
+
+
+class ScriptsHandTheProbeItsPIN(unittest.TestCase):
+    """Static, so it runs everywhere: no SoftHSM needed to read a script."""
+
+    def test_every_script_that_runs_the_probe_hands_it_the_pin(self):
+        # The probe reads REGALIA_Q_PIN and nothing else. pkcs11-contract.sh stopped exporting its PIN
+        # (#225) and kept calling the probe, which then refused on every card with "REGALIA_Q_PIN is
+        # not set": the secret-attribute check could never pass. Each call must carry it in its own
+        # environment prefix, on the same line, since the PIN is deliberately not exported.
+        calls = []
+        for script in sorted((ROOT / "e2e").glob("*.sh")):
+            for number, line in enumerate(script.read_text().splitlines(), 1):
+                code = line.split("#", 1)[0] if not line.lstrip().startswith("#") else ""
+                if "p11_extract_probe.py" in code:
+                    calls.append((script.name, number, code))
+        self.assertTrue(calls, "no script runs p11_extract_probe.py: this check would pass by finding nothing")
+        for name, number, code in calls:
+            with self.subTest(script=name, line=number):
+                before = code[:code.index("p11_extract_probe.py")]
+                self.assertRegex(before, r"\bREGALIA_Q_PIN=\"\$\w+\"\s", f"{name}:{number} runs the probe without REGALIA_Q_PIN in its environment")
 
 
 if __name__ == "__main__":
