@@ -52,12 +52,17 @@ func TestTheAgentRuleRefusesNothingElse(t *testing.T) {
 			request := operationRequest()
 			request.Principal, request.Operation = c.principal, c.operation
 			_, _ = coordinator.Execute(context.Background(), request)
+			if len(recorder.drafts) == 0 {
+				t.Fatal("no audit event: the request was not judged at all")
+			}
 			for _, draft := range recorder.drafts {
 				if draft.Outcome == auth.AgentReleaseRefused {
 					t.Fatalf("refused by the agent rule: %#v", recorder.drafts)
 				}
 			}
-			if router.calls == 0 {
+			// The fixture's envelope is not a release-secret payload, so a release is refused later as malformed-envelope:
+			// a refusal after the agent rule, which is what this case needs. The key operations reach routing.
+			if c.operation != "release-secret" && router.calls == 0 {
 				t.Fatalf("never reached routing: %#v", recorder.drafts)
 			}
 		})
