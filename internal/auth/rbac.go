@@ -163,6 +163,13 @@ func LoadPolicy(reader io.Reader) (*Policy, error) {
 		case !canonicalURISAN(identity, identityPrefix):
 			return nil, fmt.Errorf("RBAC principal %q: URI is not a canonical workload identity under %q",
 				principal.URI, identityPrefix.String())
+		case identity.String() != principal.URI:
+			// The authenticator keys a request by the parsed URI's String() (auth.go), so a grant under any other
+			// spelling of the same identity could never match one -- and every check below that reads principal.URI
+			// (IsAgent above all) would judge the spelling, not the identity: "SPIFFE://regalia/agent/x" passed the
+			// agent release-secret refusal while naming an agent (regalia-kms#668 review, B1). One spelling loads.
+			return nil, fmt.Errorf("RBAC principal %q: URI is not in its canonical spelling (want %q)",
+				principal.URI, identity.String())
 		case len(principal.Grants) == 0:
 			return nil, fmt.Errorf("RBAC principal %q: no grants", principal.URI)
 		}
