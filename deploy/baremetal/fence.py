@@ -122,7 +122,7 @@ def _restore_policy(transport, node_id):
     system = _get(transport, redfish.SYSTEM, node_id)
     if isinstance(system.get("PowerRestorePolicy"), str):
         return system["PowerRestorePolicy"]
-    status, bios = transport.request("GET", redfish.SYSTEM + "/Bios/")
+    status, bios = transport.request("GET", redfish.SYSTEM + "Bios/")
     if status == 200 and isinstance(bios, dict):
         found = (bios.get("Attributes") or {}).get("AutoPowerOn", bios.get("AutoPowerOn"))
         if isinstance(found, str):

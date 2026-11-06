@@ -55,6 +55,9 @@ def self_signed(directory):
     return paths, hashlib.sha256(cert.public_bytes(serialization.Encoding.DER)).hexdigest()
 
 
+REDIRECT = object()   # an answer the fake HTTP server sends as 308 + Location, as iLO 4 does
+
+
 class Ilo:
     """An iLO 4's Redfish, as much as the fence reads: accounts, Systems/1, its BIOS, the reset action."""
 
@@ -68,7 +71,8 @@ class Ilo:
 
     def answer(self, method, path, body, auth):
         self.requests.append((method, path, auth))
-        path = path.rstrip("/") + "/"                                  # redfish.py asks without the slash, the links have it
+        if path.startswith("/redfish/") and not path.endswith("/"):
+            return REDIRECT                                             # what iLO 4 answers a slash-less path (#670); never followed
         if path == "/redfish/v1/Managers/1/":
             return {"FirmwareVersion": "2.82 Feb 06 2023"}
         if path == "/redfish/v1/AccountService/Accounts/":
@@ -124,6 +128,12 @@ class Stand(unittest.TestCase):
                 length = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(length)) if length else None
                 got = ilo.answer(method, self.path, body, self.headers.get("Authorization"))
+                if got is REDIRECT:
+                    self.send_response(308)
+                    self.send_header("Location", self.path + "/")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 raw = json.dumps(got).encode() if got is not None else b"{}"
                 self.send_response(200 if got is not None else 404)
                 self.send_header("Content-Type", "application/json")

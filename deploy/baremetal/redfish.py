@@ -57,8 +57,10 @@ Refused, require = membership.Refused, membership.require
 class WrongServer(Refused):
     """The iLO reports another server than the one named: never retried, never waited out."""
 
-SYSTEM = "/redfish/v1/Systems/1"
-MANAGER = "/redfish/v1/Managers/1"
+# WITH the trailing slash. iLO 4 (measured on 2.82) answers the slash-less form with 308 Permanent Redirect, and a
+# redirect is never followed here, so without it every subcommand was refused before reading anything (#670).
+SYSTEM = "/redfish/v1/Systems/1/"
+MANAGER = "/redfish/v1/Managers/1/"
 RESET_ACTION = "#ComputerSystem.Reset"
 MIN_FIRMWARE = (2, 30)                      # iLO 4: Redfish from 2.30
 POWER_TIMEOUT_S = {"Off": 60, "On": 120}
