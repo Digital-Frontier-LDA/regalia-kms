@@ -85,12 +85,12 @@ def deaf_tools(d, *names):
 def removal_prelude(*names, bound_from=30, expect=1):
     """The definitions pkcs11-removal.sh's checks rely on, with bounds cut to BOUND, run against stand-ins on $1."""
     text = REMOVAL.read_text()
-    defs = [definition(text, n) for n in ("P", "F", "log", "hung", "listed")]
+    defs = [definition(text, n) for n in ("P", "F", "H", "log", "hung", "listed")]
     # under bash -c, $0 is "bash": the helper's path is put where the script finds it from its own
     own = '"$(dirname "$0")/lib/bounded.py"'
     assert definition(text, "bounded").count(own) == 1, "bounded() does not run lib/bounded.py next to the script"
     defs.append(definition(text, "bounded").replace(own, '"%s"' % HELPER))
-    parts = ["set -u", 'PATH="$1:$PATH" SLOT=0 MODULE=m SERIAL=s STALE=0 ID_EC=01 W="$2" pass=0 fail=0 Q_PIN= EVID=/dev/null',
+    parts = ["set -u", 'PATH="$1:$PATH" SLOT=0 MODULE=m SERIAL=s STALE=0 ID_EC=01 W="$2" pass=0 fail=0 hungs=0 Q_PIN= EVID=/dev/null',
              assignment(text, "KILL_GRACE"), assignment(text, "HUNG")] + defs
     for n in names:
         parts.append(shorten(definition(text, n), "bounded", bound_from if n != "p11" else 60, expect))
@@ -213,19 +213,43 @@ class ANegativeCheckFailsOnAHang(unittest.TestCase):
     """67 on #684 (5): a call its bound ended must never pass a NEGATIVE check. "No slot listed" from a hung listing
     is not "the token is gone"."""
 
-    def check(self, name, body, *extra):
+    def check(self, name, body, *extra, raw=()):
         with tempfile.TemporaryDirectory() as d:
-            script = "\n".join(removal_prelude(*extra) + [definition(REMOVAL.read_text(), name), name])
+            text = REMOVAL.read_text()
+            script = "\n".join(removal_prelude(*extra) + [definition(text, n) for n in raw]
+                               + [definition(text, name), name, 'echo "counts $pass $fail $hungs"'])
             result = run_bounded(script, tools(d, body, "pkcs11-tool"), d)
         self.assertFalse(result.hung, result.stdout)
         self.assertEqual(result.leftovers, [], result.stdout)
         return result.stdout
 
-    def test_a_hung_listing_fails_gone_while_removed(self):
-        out = self.check("gone_while_removed", DEAF_TO_TERM, "slot_of")
-        self.assertIn("FAIL", out, out)
-        self.assertIn("hung", out, out)
+    def assert_hung_error(self, out):
+        # a third outcome: HUNG/ERROR, counted as hung, neither a PASS nor a FAIL
+        self.assertIn("HUNG/ERROR", out, out)
+        self.assertIn("not measured", out, out)
         self.assertNotIn("PASS", out, out)
+        self.assertNotIn("FAIL", out, out)
+        self.assertIn("counts 0 0 1", out, out)
+
+    def test_a_hung_listing_fails_gone_while_removed(self):
+        self.assert_hung_error(self.check("gone_while_removed", DEAF_TO_TERM, "slot_of"))
+
+    def test_every_hung_path_is_hung_error(self):
+        # every check #684 bounds, against a tool deaf to SIGTERM: the read and sign through their real p11 / p11l
+        # (p11l's slot gate hangs first, so its 124 is what the sign check sees)
+        text = REMOVAL.read_text()
+        for name, extra, raw in (("gone_while_removed", ("slot_of",), ()), ("absent_read_fails", ("p11",), ()),
+                                 ("absent_sign_fails", ("target_ok", "p11"), ("p11l",))):
+            with self.subTest(check=name):
+                self.assert_hung_error(self.check(name, DEAF_TO_TERM, *extra, raw=raw))
+
+    def test_no_verdict_on_a_hang_is_a_fail_or_a_pass(self):
+        # structural: every verdict that names a hang is H, in the functions and in section 4's inline gate
+        lines = code(REMOVAL.read_text())
+        named = [(n, line.strip()) for n, line in enumerate(lines, 1) if re.search(r'\b[PF] "[^"]*\bhung\b', line)]
+        self.assertEqual(named, [], "a hang reported as a pass or a failure")
+        self.assertGreaterEqual(sum(bool(re.search(r'(?:^|[;&|(]|then|else|\))\s*H "', line)) for line in lines), 5,
+                                "fewer H verdicts than hung paths: the scan went blind")
 
     def test_an_empty_listing_passes_gone_while_removed(self):
         # control: the same check passes on a listing the tool really gave, with no slot in it
@@ -234,14 +258,79 @@ class ANegativeCheckFailsOnAHang(unittest.TestCase):
 
     def test_a_hung_read_fails_absent_read_fails(self):
         out = self.check("absent_read_fails", DEAF_TO_TERM, "p11")
-        self.assertIn("FAIL", out, out)
+        self.assert_hung_error(out)
         self.assertIn("rc=137", out, out)
-        self.assertNotIn("PASS", out, out)
 
     def test_a_refused_read_passes_absent_read_fails(self):
         out = self.check("absent_read_fails", "import sys; sys.exit(1)\n", "p11")
         self.assertIn("PASS", out, out)
         self.assertNotIn("FAIL", out, out)
+
+
+class AStreamVerdictIgnoresAHang(unittest.TestCase):
+    """de on #684: sections 2 and 3 counted a call their bound ended as "failed in flight", which fed the PASS
+    "the removal interrupted the stream". A hung call feeds no verdict, positive or negative: it fails the section."""
+
+    def run_removal(self, *lines, body=None):
+        with tempfile.TemporaryDirectory() as d:
+            text = REMOVAL.read_text()
+            script = "\n".join(removal_prelude() + [definition(text, "stream_line"), definition(text, "stream_verdict")]
+                               + [line.replace("@D", d) for line in lines])
+            if body is None:
+                return subprocess.run(["bash", "-c", script, "bash", d, d], capture_output=True, text=True, timeout=30).stdout
+            result = run_bounded(script, tools(d, body, "pkcs11-tool"), d)
+        self.assertFalse(result.hung, result.stdout)
+        self.assertEqual(result.leftovers, [], result.stdout)
+        return result.stdout
+
+    def test_a_call_its_bound_ended_is_a_hung_line(self):
+        # the real bound against a stand-in deaf to SIGTERM: 137, read as hung, not as failed in flight
+        out = self.run_removal('bounded 1 pkcs11-tool --sign; stream_line "$?" 7', body=DEAF_TO_TERM)
+        self.assertIn("hung 7", out, out)
+        self.assertNotIn("err 7", out, out)
+
+    def test_each_status_maps_to_its_outcome(self):
+        out = self.run_removal(*['stream_line %s %s' % (rc, rc) for rc in (0, 97, 124, 137, 1, 125)])
+        self.assertEqual(out.split("\n")[:6], ["ok 0", "skip 97", "hung 124", "hung 137", "err 1", "err 125"], out)
+
+    def test_a_hung_call_fails_the_stream_however_the_rest_went(self):
+        for stream in ("ok 1\\nhung 2\\nerr 3", "ok 1\\nhung 2\\nskip 3", "hung 1", "ok 1\\nok 2\\nhung 3"):
+            with self.subTest(stream=stream):
+                out = self.run_removal('printf "%s\\n" > "@D/s"' % stream, 'stream_verdict "@D/s" stream',
+                                       'echo "counts $pass $fail $hungs"')
+                # its own outcome: neither a PASS nor a FAIL, so "it hung" never reads as "not interrupted"
+                self.assertIn("HUNG/ERROR", out, out)
+                self.assertIn("interruption not measured", out, out)
+                self.assertNotIn("PASS", out, out)
+                self.assertNotIn("FAIL", out, out)
+                self.assertIn("counts 0 0 1", out, out)
+
+    def test_a_stream_with_both_outcomes_and_no_hang_passes(self):
+        # control: the same verdict passes when the removal really interrupted the stream
+        for stream in ("ok 1\\nerr 2", "ok 1\\nskip 2"):
+            with self.subTest(stream=stream):
+                out = self.run_removal('printf "%s\\n" > "@D/s"' % stream, 'stream_verdict "@D/s" stream')
+                self.assertIn("PASS", out, out)
+                self.assertIn("interrupted the stream", out, out)
+                self.assertNotIn("FAIL", out, out)
+
+    def test_a_hung_run_exits_3_whatever_passed_or_failed(self):
+        # the run's status tells a hang apart from a failed check: 3 if anything hung, else 1 on a failure, else 0
+        text = REMOVAL.read_text()
+        self.assertEqual(code(text)[-1].strip(), "result", "the drill's last command is not result")
+        for counts, rc in (("pass=5 fail=0 hungs=0", 0), ("pass=5 fail=2 hungs=0", 1), ("pass=5 fail=0 hungs=1", 3),
+                           ("pass=0 fail=4 hungs=2", 3)):
+            with self.subTest(counts=counts):
+                out = self.run_removal(counts, definition(text, "result"), 'result; echo "rc=$?"')
+                self.assertIn("rc=%d" % rc, out, out)
+                self.assertIn("%s hung" % counts.split("hungs=")[1], out, out)
+
+    def test_both_streams_use_the_shared_outcome_and_verdict(self):
+        lines = code(REMOVAL.read_text())
+        self.assertEqual(sum('stream_line "$?" "$i"' in line for line in lines), 2, "a stream maps statuses itself")
+        self.assertEqual(sum(line.strip().startswith("stream_verdict ") for line in lines), 2, "a section judges itself")
+        self.assertEqual([n for n, line in enumerate(lines, 1) if 'echo "err' in line and "stream_line(){" not in line], [],
+                         "a status is mapped to err outside stream_line")
 
 
 @unittest.skipUnless(hang_guard.HAVE_PROC, "needs /proc")

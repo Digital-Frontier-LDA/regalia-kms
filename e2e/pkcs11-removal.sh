@@ -11,6 +11,9 @@
 #   3  during decryption: the same with RSA decryptions, each checked against the plaintext
 #   4  startup without the token: operations fail outright (no fallback), then work once it is back
 #   5  shared state: the same key (same public key) is there after every removal; then it is deleted
+#
+#   exit 0 all passed; 1 a check failed; 2 the drill could not run; 3 a call hung (its bound ended it): what that
+#   call was to measure is NOT measured, whatever passed or failed around it (#684)
 set -uo pipefail
 MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
 SERIAL=""; VIDPID="${HSM_USB_ID:-}"
@@ -38,12 +41,14 @@ if [ -z "${OPENSC_CONF:-}" ]; then
   printf 'app default {\n  ignored_readers = %s;\n}\n' "$IGN" > "$W/opensc.conf"
   export OPENSC_CONF="$W/opensc.conf"; OWN_OPENSC_CONF=1
 fi
-pass=0; fail=0
+pass=0; fail=0; hungs=0
 # Literal redaction, the PIN read from the environment by Python: never on any command line (a sed
 # program would carry it in argv) and never interpreted as regex syntax.
 log(){ printf '%s\n' "$*" | python3 -I -c 'import os, sys; p = os.fdopen(3).read().rstrip("\n"); t = sys.stdin.read(); sys.stdout.write(t.replace(p, "<pin>") if p else t)' 3<<< "$Q_PIN" >> "$EVID"; }
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; log "PASS $1"; pass=$((pass+1)); }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; log "FAIL $1"; fail=$((fail+1)); }
+# A third outcome, never a FAIL (#684): an operator must not read "it hung" as "the removal did not interrupt it"
+H(){ printf '  \033[33mHUNG/ERROR\033[0m %s\n' "$1"; log "HUNG/ERROR $1"; hungs=$((hungs+1)); }
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
 # The kernel's own disconnect/reconnect (USB "authorized" 0/1): a real remove then add, which pcscd's
 # hotplug sees. A driver unbind/bind does not emit an add event, so pcscd never re-detects the reader:
@@ -146,20 +151,29 @@ same_keys(){ p11 --read-object --type pubkey --id "$ID_EC" -o "$W/ec2.der" >/dev
   && [ "$(sha256sum < "$W/ec2.der")" = "$EC_FP" ] && [ "$(sha256sum < "$W/rsa2.der")" = "$RSA_FP" ]; }
 sign_once(){ printf 'm %s' "$1" > "$W/m$1"; openssl dgst -sha256 -binary "$W/m$1" > "$W/h$1"
   p11l --sign --mechanism ECDSA --id "$ID_EC" --signature-format openssl -i "$W/h$1" -o "$W/s$1" 2>>"$W/sign.err" >/dev/null; }
+# A stream's calls: done (0), not attempted (97, the gate found no token), hung (124/137: the bound ended the call),
+# failed in flight (anything else). A hung call is no outcome at all (#684): it feeds neither verdict. Any hung call
+# makes the section HUNG/ERROR (H), not a FAIL, and the run exits 3.
+stream_line(){ if hung "$1"; then echo "hung $2"; else case $1 in 0) echo "ok $2";; 97) echo "skip $2";; *) echo "err $2";; esac; fi; }
+stream_verdict(){ local ok er sk hu; ok=$(grep -c '^ok' "$1"); er=$(grep -c '^err' "$1"); sk=$(grep -c '^skip' "$1"); hu=$(grep -c '^hung' "$1")
+  if [ "$hu" -gt 0 ]; then H "$hu call(s) in the $2 hung (their bound ended them): interruption not measured"
+  elif [ "$ok" -gt 0 ] && [ $((er + sk)) -gt 0 ]; then P "the removal interrupted the $2 ($ok done, $er failed in flight, $sk not attempted)"
+  else F "both outcomes are needed in the $2: $ok done, $er failed in flight, $sk not attempted"; fi; }
 log "device $SERIAL usb $USBDEV module $MODULE $(opensc-tool --info 2>&1 | head -1)"
 
-# The NEGATIVE checks: each passes only on an answer the tool gave, never on a call its bound ended (#684).
+# The NEGATIVE checks: each passes only on an answer the tool gave, never on a call its bound ended (#684). A hung
+# call is HUNG/ERROR (H): neither a pass nor a failure.
 gone_while_removed(){ local s; s="$(slot_of)"; case $? in
-    "$HUNG") F "the slot listing hung while the token was removed: a hang is no answer, so 'gone' is not measured";;
+    "$HUNG") H "the slot listing hung while the token was removed: 'gone' not measured";;
     *) [ -z "$s" ] && P "the token is gone while removed" || F "the token is still listed while removed";; esac; }
 absent_read_fails(){ local out rc; out="$(p11 --read-object --type pubkey --id "$ID_EC" -o "$W/px" 2>&1)"; rc=$?
   log "no-login read without token (slot $STALE): rc=$rc $out"
-  if hung "$rc"; then F "the read on the absent token's slot hung (rc=$rc): a hang is no failure of the read"
+  if hung "$rc"; then H "the read on the absent token's slot hung (rc=$rc): its failure not measured"
   elif [ "$rc" != 0 ] && [ ! -s "$W/px" ]; then P "the PKCS#11 layer finds nothing on the absent token's slot (no fallback; no PIN involved)"
   else F "a read on the absent token's slot returned data"; fi; }
 absent_sign_fails(){ local out rc; out="$(p11l --sign --mechanism ECDSA --id "$ID_EC" -i "$W/h1" -o "$W/sx" 2>&1)"; rc=$?
   log "startup without token (slot $STALE, empty): rc=$rc $out"
-  if hung "$rc"; then F "the sign on the absent token's slot hung (rc=$rc): a hang is no failure of the sign"
+  if hung "$rc"; then H "the sign on the absent token's slot hung (rc=$rc): its failure not measured"
   elif [ "$rc" != 0 ] && [ ! -s "$W/sx" ] && ! grep -q 'CKR_PIN' <<< "$out"; then
     P "an operation with the token absent fails outright (no fallback, no output, no PIN presented)"
   else F "an operation with the token absent did not fail cleanly: $(tail -1 <<< "$out")"; fi; }
@@ -175,15 +189,14 @@ hdr "2  removal during a stream of signatures"
 # operation costs (~2.6 s with one reader visible, ~20 s when OpenSC probed every card; a failure can return
 # at once). The last error line of each failure is kept for the evidence.
 ( end=$((SECONDS+15)); i=0; while [ "$SECONDS" -lt "$end" ]; do i=$((i+1))
-    sign_once "$i"; case $? in 0) echo "ok $i";; 97) echo "skip $i";; *) echo "err $i";; esac; sleep 0.5; done ) > "$W/stream" 2>&1 &
+    sign_once "$i"; stream_line "$?" "$i"; sleep 0.5; done ) > "$W/stream" 2>&1 &
 sp=$!; sleep 3; remove; sleep 3; restore; wait "$sp"
-ok=$(grep -c '^ok' "$W/stream"); er=$(grep -c '^err' "$W/stream"); sk=$(grep -c '^skip' "$W/stream"); log "stream: $ok ok, $er err, $sk skip ($(tr '\n' ' ' < "$W/stream"))"
+ok=$(grep -c '^ok' "$W/stream"); log "stream: $(tr '\n' ' ' < "$W/stream")"
 [ -s "$W/sign.err" ] && log "first signing error: $(head -1 "$W/sign.err")"
 bad=0; for i in $(sed -n 's/^ok //p' "$W/stream"); do openssl dgst -sha256 -verify "$W/ec.pem" -signature "$W/s$i" "$W/m$i" >/dev/null 2>&1 || bad=$((bad+1)); done
 # What was SEEN: done, failed in flight (the token went away during the call), not attempted (the gate
 # found no token and sent nothing). A removal needs some done and some that did not complete.
-[ "$ok" -gt 0 ] && [ $((er + sk)) -gt 0 ] && P "the removal interrupted the stream ($ok done, $er failed in flight, $sk not attempted)" \
-  || F "the stream needs both outcomes: $ok done, $er failed in flight, $sk not attempted"
+stream_verdict "$W/stream" "stream"
 [ "$bad" = 0 ] && P "every signature reported as done verifies ($ok of $ok)" || F "$bad signature(s) reported done do not verify"
 wait_back && sign_once after && openssl dgst -sha256 -verify "$W/ec.pem" -signature "$W/safter" "$W/mafter" >/dev/null 2>&1 \
   && P "signing resumes after restore" || F "signing does not resume"
@@ -207,14 +220,13 @@ done
 if [ "${#MECH[@]}" -gt 0 ]; then
   ( end=$((SECONDS+15)); i=0; while [ "$SECONDS" -lt "$end" ]; do i=$((i+1))
       p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/d$i" 2>>"$W/decrypt.err" >/dev/null
-      case $? in 0) echo "ok $i";; 97) echo "skip $i";; *) echo "err $i";; esac
+      stream_line "$?" "$i"
       sleep 0.5; done ) > "$W/dstream" 2>&1 &
   dp=$!; sleep 3; remove; sleep 3; restore; wait "$dp"
-  ok=$(grep -c '^ok' "$W/dstream"); er=$(grep -c '^err' "$W/dstream"); sk=$(grep -c '^skip' "$W/dstream"); log "decrypt stream (${MECH[1]}): $ok ok, $er err, $sk skip ($(tr '\n' ' ' < "$W/dstream"))"
+  ok=$(grep -c '^ok' "$W/dstream"); log "decrypt stream (${MECH[1]}): $(tr '\n' ' ' < "$W/dstream")"
   [ -s "$W/decrypt.err" ] && log "first decryption error: $(head -1 "$W/decrypt.err")"
   bad=0; for i in $(sed -n 's/^ok //p' "$W/dstream"); do cmp -s "$W/pt" "$W/d$i" || bad=$((bad+1)); done
-  [ "$ok" -gt 0 ] && [ $((er + sk)) -gt 0 ] && P "the removal interrupted the decryptions ($ok done, $er failed in flight, $sk not attempted)" \
-    || F "the stream needs both outcomes: $ok done, $er failed in flight, $sk not attempted"
+  stream_verdict "$W/dstream" "decryptions"
   [ "$bad" = 0 ] && P "every decryption reported as done is exact ($ok of $ok)" || F "$bad decryption(s) reported done are wrong"
   wait_back && p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/dafter" >/dev/null 2>&1 && cmp -s "$W/pt" "$W/dafter" \
     && P "after reinsertion, decryption is exact again" || F "no exact decryption after reinsertion"
@@ -245,7 +257,7 @@ sys.exit(0 if hit else 1)' "$1"; listed "${PIPESTATUS[@]}"; }
 LISTED="$(slot_of)"; LISTED_RC=$?
 slot_has_token "$STALE"; HELD=$?
 if [ "$LISTED_RC" = "$HUNG" ] || [ "$HELD" = "$HUNG" ]; then
-  F "a slot listing hung after the removal: a hang is no answer, so no startup test"
+  H "a slot listing hung after the removal: startup without the token not measured"
 elif [ -n "$LISTED" ]; then
   F "the token is still listed while removed: no startup test"
 elif [ "$HELD" = 0 ]; then
@@ -269,5 +281,5 @@ else
   F "cannot list the token to confirm the test keys are gone: $(tail -1 <<< "$listing")"
 fi
 
-echo; echo "pkcs11-removal $SERIAL: $pass passed, $fail failed (evidence: $EVID)"; log "RESULT $pass passed, $fail failed"
-[ "$fail" -eq 0 ]
+result(){ echo; echo "pkcs11-removal $SERIAL: $pass passed, $fail failed, $hungs hung (evidence: $EVID)"; log "RESULT $pass passed, $fail failed, $hungs hung"; [ "$hungs" -eq 0 ] || return 3; [ "$fail" -eq 0 ]; }
+result
