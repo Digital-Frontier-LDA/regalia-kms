@@ -266,6 +266,20 @@ class ANegativeCheckFailsOnAHang(unittest.TestCase):
         self.assertIn("PASS", out, out)
         self.assertNotIn("FAIL", out, out)
 
+    def test_a_sign_its_bound_ended_is_hung_error_in_absent_sign_fails(self):
+        # de/a0f4 on #684 (R2): the sign ITSELF hangs, past a slot gate that answered (the gate's own hang, rc 124, is
+        # test_every_hung_path_is_hung_error): the real p11l and p11 against a tool deaf to SIGTERM, ended by its bound
+        with tempfile.TemporaryDirectory() as d:
+            text = REMOVAL.read_text()
+            script = "\n".join(removal_prelude("p11") + [definition(text, "p11l"), "target_ok(){ return 0; }",
+                                                       definition(text, "absent_sign_fails"), "absent_sign_fails",
+                                                       'echo "counts $pass $fail $hungs"'])
+            result = run_bounded(script, tools(d, DEAF_TO_TERM, "pkcs11-tool"), d)
+        self.assertFalse(result.hung, result.stdout)
+        self.assertEqual(result.leftovers, [], result.stdout)
+        self.assert_hung_error(result.stdout)
+        self.assertIn("rc=137", result.stdout, result.stdout)
+
     def test_a_hung_slot_check_reads_as_hung_not_as_empty(self):
         # de on #684 (R3, CodeRabbit :209): the check that the removed token's slot holds nothing, against a tool deaf
         # to SIGTERM, is HUNG: "nothing answered" is never "nothing there"
