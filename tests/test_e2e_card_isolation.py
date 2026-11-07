@@ -140,8 +140,32 @@ def quoted_blanked(lines):
     return "".join(out).split("\n")
 
 
+# A prefix command's options that take an argument, in each spelling getopt accepts: -k5, -k 5, --kill-after=5 and
+# --kill-after 5 (#685). Read as a flag alone, the argument was taken for the next command word, and the refused word
+# after it went unseen: timeout -k 5 30 env NK_PIN=1 … passed.
+# An option's argument: one quoted string (exec -a "a b") or one unquoted word. The unquoted form never starts with a
+# quote, so the alternatives cannot both match (py/redos).
+OPTION_ARGUMENT = r"""(?:"[^"]*"|'[^']*'|[^\s"']\S*)"""
+
+
+def _with_argument(short, long):
+    longs = r"|--(?:%s)(?:=|\s+)%s" % ("|".join(long), OPTION_ARGUMENT) if long else ""
+    return r"(?:-[%s]\s*%s%s)" % (short, OPTION_ARGUMENT, longs)
+
+
+# timeout's options, then its duration (never an option); nice's; env's, then any other flag.
+TIMEOUT_PREFIX = (r"timeout(?:\s+(?:" + _with_argument("ks", ("kill-after", "signal"))
+                  + r"|--foreground|--preserve-status|-v|--verbose))*\s+[^\s-]\S*")
+NICE_PREFIX = r"nice(?:\s+(?:" + _with_argument("n", ("adjustment",)) + r"|-\d+))*"
+# exec's -a NAME (the name the command is run under) takes an argument; -c and -l do not (65 on #686).
+EXEC_PREFIX = r"exec(?:\s+(?:" + _with_argument("a", ()) + r"|-[cl]+))*"
+# The catch-all flag never starts like an option with an argument (or -S, refused on its own), so the two
+# alternatives cannot both match a word: overlapping ones backtrack exponentially on a long refused line (py/redos).
+ENV_OPTIONS = (r"(?:\s+(?:" + _with_argument("uC", ("unset", "chdir"))
+               + r"|-(?![uCS-])\S*|--(?!(?:unset|chdir|split-string)\b)\S*))*")
 # CALL_START past command-word prefixes (builtin enable, command unset, env X=1 trap …): for the refused words
-REFUSED_START = CALL_START + r"(?:(?:builtin|command|exec|nice|nohup|time|timeout\s+\S+|env(?:\s+-\S+|\s+\w+=\S*)*)\s+(?:-\S+\s+)*)*"
+REFUSED_START = (CALL_START + r"(?:(?:builtin|command|" + EXEC_PREFIX + r"|nohup|time|" + NICE_PREFIX + "|" + TIMEOUT_PREFIX
+                 + r"|env" + ENV_OPTIONS + r"(?:\s+\w+=\S*)*)\s+(?:-\S+\s+)*)*")
 # CALL_START, with a "(" a command start only after a line start, a blank or an operator (a subshell), not
 # after a quote: the blanked view is not nesting-aware, and s="($SERIAL" inside "$(…)" is not a subshell.
 COMMAND_START = r"(?:^|[;&|]|(?:^|(?<=[\s;&|]))\(|(?<!\$)\{|\bthen\b|\bdo\b|\belse\b|\bif\b|\b!)\s*"
@@ -229,8 +253,12 @@ def script_problems(text, script=None):
                 continue
             found.append((n, "a variable (or a command's output) used as a command: not on the allow-list"))
             break
-        if re.search(r"\benv\s+(?:-\S+\s+)*-S", line):
+        if re.search(r"\benv" + ENV_OPTIONS + r"\s+(?:-S|--split-string)\b", line):
             found.append((n, "env -S: it runs a whole command line given as a string"))
+        # a timeout, nice or exec prefix whose options this grammar cannot read: the command after it would go unchecked
+        for m in re.finditer(CALL_START + r"(timeout|nice|exec)\s+-", b):
+            if not re.match(r"(?:" + TIMEOUT_PREFIX + "|" + NICE_PREFIX + "|" + EXEC_PREFIX + r")\s+[^\s-]", b[m.start(1):]):
+                found.append((n, "a %s prefix with options this check cannot read: what it runs is not checked" % m.group(1)))
         # code taken from a string by an interpreter other than a shell (51)
         for m in re.finditer(r"(?<![\w.-])python[\d.]*\s+(?:-\w+\s+)*-\w*c\s+(\S)", line):
             if not line[m.start(1):].startswith("'"):          # a single-quoted literal, closed here or lines below
@@ -280,7 +308,10 @@ def script_problems(text, script=None):
         if re.search(r"\bset\s+(?:-\w*a\w*\b|-o\s+allexport\b)", b):
             found.append((n, "allexport: every variable set later, a PIN too, is exported"))
         for m in re.finditer(r"(?:" + REFUSED_START + r"|\bsudo\s+(?:-\S+\s+)*)(export|declare|typeset|readonly|local|env)\b(.*)", line):
-            words = re.findall(r"\"[^\"]*\"|'[^']*'|[^\s;&|]+", re.split(r"[;&|]", m.group(2))[0])
+            rest = re.split(r"[;&|]", m.group(2))[0]
+            if m.group(1) == "env":                          # its options and their arguments are neither assignments
+                rest = re.sub(r"^" + ENV_OPTIONS, "", rest)  # nor its command: env -u X NK_PIN=1 … still exports
+            words = re.findall(r"\"[^\"]*\"|'[^']*'|[^\s;&|]+", rest)
             flags = [w for w in words if w.startswith("-")]
             if m.group(1) in ("declare", "typeset", "readonly", "local") and not any("x" in f for f in flags):
                 continue                                     # not exported
@@ -740,6 +771,64 @@ class TheCheckItself(unittest.TestCase):
         for script, why in cases.items():
             with self.subTest(script):
                 self.assertTrue(any(why in w for w in self.problems(script)), self.problems(script))
+
+    def test_an_option_argument_does_not_hide_the_command_after_it(self):
+        # #685: a prefix's option that takes an argument (timeout -k 5, nice -n 5, env -u X) was read as a flag alone,
+        # its argument taken for the command, and the refused word after it went unseen.
+        refused = {
+            # controls, refused before #685 too
+            "timeout 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout -k 5 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            'timeout -k "$KILL_GRACE" 30 env FOO=1 pkcs11-tool -L\n': "exports FOO",
+            "timeout -k5 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout --kill-after=5 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout --kill-after 5 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout -s KILL 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout --signal=KILL 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout --signal KILL 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout --foreground -k 5 -s TERM 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout -k 5 30 unset -f bench_gate\n": "unset of a function",
+            "nice -n 5 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "nice -n5 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "nice --adjustment=5 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "env -u X FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "env --unset=X FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "env -C /tmp FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "env -u X -S 'bash -c x'\n": "env -S",
+            "exec -a x env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "exec -ax env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "exec -c -a x env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            'exec -a "a b" env FOO=1 pkcs11-tool -L\n': "exports FOO",
+            "exec -a 'a b' env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            'timeout -k "$G" -s "KILL" 30 env FOO=1 pkcs11-tool -L\n': "exports FOO",
+            "timeout -k 5 30 env -u X FOO=1 pkcs11-tool -L\n": "exports FOO",
+            # a prefix whose options the grammar cannot read is refused, not skipped
+            "timeout --bogus 30 pkcs11-tool -L\n": "timeout prefix with options this check cannot read",
+            "nice --bogus pkcs11-tool -L\n": "nice prefix with options this check cannot read",
+            "exec --bogus pkcs11-tool -L\n": "exec prefix with options this check cannot read",
+        }
+        for script, why in refused.items():
+            with self.subTest(refused=script):
+                self.assertTrue(any(why in w for w in self.problems(script)), self.problems(script))
+        # Controls: the same prefixes over allowed names and plain commands stay clean.
+        for fine in ("timeout -k 5 30 env LANG=C pkcs11-tool -L\n", 'timeout -k "$KILL_GRACE" 30 pkcs11-tool -L\n',
+                     "timeout 30 pkcs11-tool -L\n", "timeout --kill-after=5 --signal=TERM 30 pkcs11-tool -L\n",
+                     "nice -n 5 pkcs11-tool -L\n", "nice -5 pkcs11-tool -L\n", "env -u X pkcs11-tool -L\n",
+                     "env -i LANG=C pkcs11-tool -L\n", "exec -a x pkcs11-tool -L\n", "exec -c pkcs11-tool -L\n",
+                     'exec -a "a b" pkcs11-tool -L\n', "exec -l -c pkcs11-tool -L\n"):
+            with self.subTest(fine=fine):
+                self.assertEqual(self.problems(fine), [])
+
+    def test_a_long_prefix_is_read_in_linear_time(self):
+        # The option grammar is repeated; overlapping alternatives would make a refused line take exponential time.
+        import time
+        # "-uX" is a word an option-with-argument and a catch-all flag could both match, if they overlapped.
+        for line in ("env " + "-uX " * 22 + "\x00\n", "env " + "-i " * 40 + "-u X " * 40 + "\x00\n", "timeout " + "-k 5 " * 40 + "-\n",
+                     "nice " + "-n 5 " * 40 + "-\n", "exec " + "-a x " * 40 + "-\n", "env " + "--unset=X " * 40 + "-S\n"):
+            t0 = time.perf_counter()
+            self.problems(line)
+            self.assertLess(time.perf_counter() - t0, 1.0, line[:40])
 
     def test_the_known_good_forms_pass(self):
         for fine in ("export -n NK_PIN\n", "export PATH=\"$PATH:/sbin\"\n", "declare -A SLOT\n",
