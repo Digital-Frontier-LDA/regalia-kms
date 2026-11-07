@@ -65,6 +65,19 @@ NO_REAL_CARD = {
     "pcr-signed-policy-swtpm.sh": "pkcs11-tool and opensc-tool are replaced by stubs written in the script",
 }
 
+# Every tracked script falls in exactly one bucket by what it does with a card (#690): a real-card drill, a drill
+# excused above or as SoftHSM-only, a script outside the drills that names a card tool (declared here, with why),
+# or a script that names no card tool. A new script outside the drills that names one fails until it is decided.
+CARD_TOOL_ELSEWHERE = {
+    "e2e/lib/bench_cards.sh": "the bench gate library the drills source: it runs the card tools for bench_gate and bench_isolate",
+    "deploy/seal-hsm-pin.sh": "production commissioning, card attached by design: it checks the serial itself, not through the bench gate",
+}
+# Scripts decided to drive no card, with the evidence (#690): each must go on naming no card tool, or be decided again.
+NOT_A_CARD_SCRIPT = {
+    "e2e/unlock-boot-qemu.sh": "a QEMU guest whose TPM is swtpm; its header excludes any physical TPM; no card tool in its code",
+    "deploy/baremetal/image/build-rootfs.sh": "builds the host image: links the daemon against PC/SC, runs no card tool",
+}
+
 
 def softhsm_only(text):
     return "libsofthsm2" in text and "opensc-pkcs11" not in text
@@ -565,6 +578,33 @@ def real_card_scripts():
         yield path, text, lines
 
 
+def card_buckets(rel, text):
+    """The buckets one script (its path relative to the repository) falls in: exactly one is right (#690)."""
+    drill = rel.startswith("e2e/") and rel.count("/") == 1
+    tool = any(TOOLS.search(line) for line in code_lines(text))
+    excused = rel.rsplit("/", 1)[-1] in NO_REAL_CARD or bool(softhsm_only(text))
+    found = set()
+    if drill and tool and not excused:
+        found.add("real card")
+    if drill and tool and excused:
+        found.add("excused")
+    if rel in CARD_TOOL_ELSEWHERE:
+        found.add("card tool, declared")
+    if not tool:
+        found.add("no card tool")
+    return found
+
+
+def misfiled(scripts):
+    """[(script, buckets)] for each (relative path, text) that is not in exactly one bucket."""
+    return [(rel, sorted(found)) for rel, text in scripts for found in [card_buckets(rel, text)] if len(found) != 1]
+
+
+def declared_no_card_with_a_card_tool(scripts):
+    """The scripts decided to drive no card that now name a card tool."""
+    return [rel for rel, text in scripts if rel in NOT_A_CARD_SCRIPT and "no card tool" not in card_buckets(rel, text)]
+
+
 # A PIN line that reaches a card through OpenSC: a YubiKey on the bus (ykman's view) is no gate for it (#225).
 OPENSC_PIN = re.compile(TOOLS.pattern + r"|--login\b|--so-pin\b|--pin\b|\$P11\b|\$\{P11\}|sc-hsm-pty|\s-l\b")
 
@@ -673,6 +713,42 @@ class EveryScriptCanBeScanned(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "checked"):
                 quoted_blanked(["a", "b"])
         check.assert_called_once()
+
+
+class EveryScriptHasOneCardDecision(unittest.TestCase):
+    # #690: what each script does with a card is decided, once, and a change to it is a named failure.
+
+    def scripts(self):
+        return [(path.relative_to(ROOT).as_posix(), path.read_text()) for path in tracked_scripts()]
+
+    def test_every_tracked_script_is_in_exactly_one_card_bucket(self):
+        scripts = self.scripts()
+        for rel, found in misfiled(scripts):
+            with self.subTest(script=rel):
+                self.fail("%s is in %s: it must be in exactly one card bucket (a card tool outside the drills is declared in "
+                          "CARD_TOOL_ELSEWHERE, with why)" % (rel, found or "no bucket"))
+        # the real-card bucket is the set the isolation and gate checks read, not a second opinion
+        self.assertEqual({rel for rel, text in scripts if "real card" in card_buckets(rel, text)},
+                         {"e2e/" + path.name for path, _, _ in real_card_scripts()})
+        tracked = {rel for rel, _ in scripts}
+        for rel in list(CARD_TOOL_ELSEWHERE) + list(NOT_A_CARD_SCRIPT):
+            self.assertIn(rel, tracked, "%s is declared but is not a tracked script" % rel)
+
+    def test_a_declared_no_card_script_names_no_card_tool(self):
+        for rel in declared_no_card_with_a_card_tool(self.scripts()):
+            with self.subTest(script=rel):
+                self.fail("%s was decided to drive no card (%s), and now names a card tool: decide it again" % (rel, NOT_A_CARD_SCRIPT[rel]))
+
+    def test_a_card_tool_outside_the_drills_needs_a_decision(self):
+        self.assertEqual(misfiled([("e2e/lib/planted.sh", "pkcs11-tool -L\n")]), [("e2e/lib/planted.sh", [])])
+        self.assertEqual(misfiled([("e2e/lib/bench_cards.sh", "true\n")]),
+                         [("e2e/lib/bench_cards.sh", ["card tool, declared", "no card tool"])])
+        self.assertEqual(misfiled([("e2e/planted.sh", "pkcs11-tool -L\n"), ("deploy/planted.sh", "true\n")]), [])
+
+    def test_a_no_card_script_that_gains_a_card_tool_is_named(self):
+        self.assertEqual(declared_no_card_with_a_card_tool([("e2e/unlock-boot-qemu.sh", "pkcs11-tool -L\n"),
+                                                            ("deploy/baremetal/image/build-rootfs.sh", "true\n")]),
+                         ["e2e/unlock-boot-qemu.sh"])
 
 
 class RealCardScriptsAreIsolatedAndGated(unittest.TestCase):
