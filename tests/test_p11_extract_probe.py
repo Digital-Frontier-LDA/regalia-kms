@@ -117,7 +117,7 @@ class ExtractProbe(unittest.TestCase):
 # Each value is EITHER one quoted string OR an unquoted token that does not start with a quote, so the two never
 # overlap: an ambiguous alternation here made rejection time exponential in the number of quoted tokens (CodeQL).
 _SEPARATOR = re.compile(r"[;&|(){}`]")
-_HANDS_PIN = re.compile(r'^\s*(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*REGALIA_Q_PIN="\$\w+"\s+(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*python3(?:\s+-\w+)*\s+\S*$')
+_HANDS_PIN = re.compile(r'^\s*(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*REGALIA_Q_PIN="\$\w+"\s+(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*(?:timeout\s+(?:\d+|"\$\w+")\s+)?python3(?:\s+-\w+)*\s+\S*$')
 
 
 def probe_command_hands_it_the_pin(code):
@@ -131,12 +131,16 @@ class ScriptsHandTheProbeItsPIN(unittest.TestCase):
 
     def test_the_check_accepts_only_a_pin_in_the_probes_own_prefix(self):
         good = ['  REGALIA_Q_PIN="$Q_PIN" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$@"; }',
+                '  local rc; REGALIA_Q_PIN="$Q_PIN" timeout "$PROBE_BOUND" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE"',
+                'REGALIA_Q_PIN="$Q_PIN" timeout 60 python3 -Es "$HERE/lib/p11_extract_probe.py"',
                 'out="$(REGALIA_Q_PIN="$Q_PIN" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"']
         bad = ['REGALIA_Q_PIN="$Q_PIN" true; python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE"',
                'REGALIA_Q_PIN="$Q_PIN" true && python3 "$HERE/lib/p11_extract_probe.py"',
                'out="$(python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"',
                'python3 -Es "$HERE/lib/p11_extract_probe.py" REGALIA_Q_PIN="$Q_PIN"',
-               'REGALIA_Q_PIN="$Q_PIN" echo x | python3 "$HERE/lib/p11_extract_probe.py"']
+               'REGALIA_Q_PIN="$Q_PIN" echo x | python3 "$HERE/lib/p11_extract_probe.py"',
+               'REGALIA_Q_PIN="$Q_PIN" timeout 60 true; python3 "$HERE/lib/p11_extract_probe.py"',
+               'timeout 60 REGALIA_Q_PIN="$Q_PIN" python3 "$HERE/lib/p11_extract_probe.py"']
         for line in good:
             with self.subTest(good=line):
                 self.assertTrue(probe_command_hands_it_the_pin(line), line)
@@ -160,6 +164,54 @@ class ScriptsHandTheProbeItsPIN(unittest.TestCase):
             with self.subTest(script=name, line=number):
                 self.assertTrue(probe_command_hands_it_the_pin(code),
                                 f"{name}:{number} runs the probe without REGALIA_Q_PIN in its own environment prefix")
+
+
+CONTRACT = ROOT / "e2e" / "pkcs11-contract.sh"
+
+
+def p11probe_definition(text):
+    """The p11probe function's source, from its opening line to the line that closes it."""
+    lines, out = text.splitlines(), []
+    for line in lines:
+        if out or line.startswith("p11probe(){"):
+            out.append(line)
+            if line.rstrip().endswith("; }") and len(out) > 1:
+                return "\n".join(out)
+    raise AssertionError("pkcs11-contract.sh defines no p11probe(){ ... }")
+
+
+class TheProbeIsBounded(unittest.TestCase):
+    """#676: the script promises every token call is bounded; the extraction probe must be too."""
+
+    def test_the_bound_is_set_and_no_looser_than_pkcs11_tools(self):
+        text = CONTRACT.read_text()
+        bound = re.search(r"^PROBE_BOUND=(\d+)$", text, re.M)
+        self.assertIsNotNone(bound, "pkcs11-contract.sh sets no PROBE_BOUND")
+        self.assertGreater(int(bound.group(1)), 0)
+        self.assertLessEqual(int(bound.group(1)), 60, "the probe may not wait longer than pkcs11-tool's own 60 s bound")
+        self.assertRegex(p11probe_definition(text), r'\btimeout "\$PROBE_BOUND" python3\b', "p11probe does not run the probe under PROBE_BOUND")
+
+    def test_a_probe_that_hangs_fails_within_the_bound_and_says_so(self):
+        # The REAL p11probe, with the gate stubbed open and a probe that never answers. Unbounded, it would sit for
+        # 600 s; the outer timeout turns that into a named failure instead of a hung suite.
+        with tempfile.TemporaryDirectory() as d:
+            lib = Path(d, "lib"); lib.mkdir()
+            (lib / "p11_extract_probe.py").write_text("import time\ntime.sleep(600)\n")
+            script = "\n".join(["set -u", "target_ok(){ return 0; }", 'SLOT=0 SERIAL=s MODULE=m Q_PIN=p HERE="$1"',
+                                 "PROBE_BOUND=2", p11probe_definition(CONTRACT.read_text()),
+                                 'out="$(p11probe x 2>&1)"; rc=$?; printf "rc=%s\\n%s\\n" "$rc" "$out"'])
+            # Its own session, so a hang is killed as a whole group: killing bash alone would leave the sleeping probe
+            # holding the pipes, and communicate() would then wait the full 600 s.
+            proc = subprocess.Popen(["bash", "-c", script, "bash", d], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, start_new_session=True)
+            try:
+                stdout, _ = proc.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, 9)
+                proc.communicate()
+                self.fail("p11probe did not return within 30 s against a probe that never answers: it is unbounded")
+        self.assertIn("rc=124", stdout, "a timed-out probe must return timeout's status, not swallow it: " + stdout)
+        self.assertIn("did not answer within 2 s", stdout, stdout)
 
 
 if __name__ == "__main__":
