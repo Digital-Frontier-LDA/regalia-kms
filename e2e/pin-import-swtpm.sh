@@ -117,6 +117,18 @@ printf '12ab5' | pin_blob_v2 "$APUB" "$W/notpin.blob" "$W/cer" || F "the not-a-P
 out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/notpin.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'is not a SmartCard-HSM user PIN' <<< "$out" && ! grep -q 'no card DENK0000001' <<< "$out" && ! grep -qF '12ab5' <<< "$out" \
   && P "a blob sealing a value that is not a PIN is refused before the card check, the value not printed (exit $rc)" || F "not a PIN: $out"
+# the YubiKey branch: 9 digits is a SmartCard-HSM PIN but not a PIV PIN (6-8), so only the --yubikey rule
+# refuses it. CI has no yubikey-manager or ykcs11: a stub ykman that only logs its calls, and a dummy
+# module, satisfy the prerequisite checks; the log must stay empty (no card was looked for)
+mkdir -p "$W/yk"; : > "$W/yk/calls"; : > "$W/yk/libykcs11.so"
+printf '#!/bin/sh\necho "$*" >> %s\nexit 1\n' "$W/yk/calls" > "$W/yk/ykman"; chmod 755 "$W/yk/ykman"
+printf '739104826' | pin_blob_v2 "$APUB" "$W/notpiv.blob" "$W/cer" || F "the not-a-PIV-PIN blob could not be made"
+out="$(sudo env PATH="$W/yk:$PATH" YKCS11_MODULE="$W/yk/libykcs11.so" TPM2TOOLS_TCTI="$TA" REGALIA_CREDSTORE="$W/cred" \
+  OPENSC_CONF="$W/opensc-none.conf" "$SEAL" --id t --yubikey 36345471 --bench-host-key --from-blob "$W/notpiv.blob" 2>&1)"; rc=$?
+[ "$rc" != 0 ] && grep -q 'is not a YubiKey PIV PIN (6-8 digits)' <<< "$out" && [ ! -s "$W/yk/calls" ] && ! grep -q 'no YubiKey' <<< "$out" \
+  && ! grep -qF '739104826' <<< "$out" \
+  && P "--yubikey: a blob sealing a value that is not a PIV PIN is refused before any card is looked for, the value not printed (exit $rc)" \
+  || F "not a PIV PIN: $out (ykman calls: $(cat "$W/yk/calls"))"
 
 hdr "3  wrong, altered and old blobs are refused before any card is looked at"
 enc "$W/B.pem" "$W/b.blob"
