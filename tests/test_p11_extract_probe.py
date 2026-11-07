@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -117,7 +118,7 @@ class ExtractProbe(unittest.TestCase):
 # Each value is EITHER one quoted string OR an unquoted token that does not start with a quote, so the two never
 # overlap: an ambiguous alternation here made rejection time exponential in the number of quoted tokens (CodeQL).
 _SEPARATOR = re.compile(r"[;&|(){}`]")
-_HANDS_PIN = re.compile(r'^\s*(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*REGALIA_Q_PIN="\$\w+"\s+(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*(?:timeout\s+(?:\d+|"\$\w+")\s+)?python3(?:\s+-\w+)*\s+\S*$')
+_HANDS_PIN = re.compile(r'^\s*(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*REGALIA_Q_PIN="\$\w+"\s+(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*(?:timeout\s+(?:-k\s+(?:\d+|"\$\w+")\s+)?(?:\d+|"\$\w+")\s+)?python3(?:\s+-\w+)*\s+\S*$')
 
 
 def probe_command_hands_it_the_pin(code):
@@ -133,6 +134,8 @@ class ScriptsHandTheProbeItsPIN(unittest.TestCase):
         good = ['  REGALIA_Q_PIN="$Q_PIN" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$@"; }',
                 '  local rc; REGALIA_Q_PIN="$Q_PIN" timeout "$PROBE_BOUND" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE"',
                 'REGALIA_Q_PIN="$Q_PIN" timeout 60 python3 -Es "$HERE/lib/p11_extract_probe.py"',
+                '  local rc; REGALIA_Q_PIN="$Q_PIN" timeout -k "$KILL_GRACE" "$PROBE_BOUND" python3 -Es "$HERE/lib/p11_extract_probe.py"',
+                'REGALIA_Q_PIN="$Q_PIN" timeout -k 5 60 python3 -Es "$HERE/lib/p11_extract_probe.py"',
                 'out="$(REGALIA_Q_PIN="$Q_PIN" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"']
         bad = ['REGALIA_Q_PIN="$Q_PIN" true; python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE"',
                'REGALIA_Q_PIN="$Q_PIN" true && python3 "$HERE/lib/p11_extract_probe.py"',
@@ -140,7 +143,10 @@ class ScriptsHandTheProbeItsPIN(unittest.TestCase):
                'python3 -Es "$HERE/lib/p11_extract_probe.py" REGALIA_Q_PIN="$Q_PIN"',
                'REGALIA_Q_PIN="$Q_PIN" echo x | python3 "$HERE/lib/p11_extract_probe.py"',
                'REGALIA_Q_PIN="$Q_PIN" timeout 60 true; python3 "$HERE/lib/p11_extract_probe.py"',
-               'timeout 60 REGALIA_Q_PIN="$Q_PIN" python3 "$HERE/lib/p11_extract_probe.py"']
+               'timeout 60 REGALIA_Q_PIN="$Q_PIN" python3 "$HERE/lib/p11_extract_probe.py"',
+               'REGALIA_Q_PIN="$Q_PIN" timeout -k 5 60 true; python3 "$HERE/lib/p11_extract_probe.py"',
+               'timeout -k 5 60 REGALIA_Q_PIN="$Q_PIN" python3 "$HERE/lib/p11_extract_probe.py"',
+               'REGALIA_Q_PIN="$Q_PIN" timeout -k python3 "$HERE/lib/p11_extract_probe.py"']
         for line in good:
             with self.subTest(good=line):
                 self.assertTrue(probe_command_hands_it_the_pin(line), line)
@@ -189,7 +195,7 @@ class TheProbeIsBounded(unittest.TestCase):
         self.assertIsNotNone(bound, "pkcs11-contract.sh sets no PROBE_BOUND")
         self.assertGreater(int(bound.group(1)), 0)
         self.assertLessEqual(int(bound.group(1)), 60, "the probe may not wait longer than pkcs11-tool's own 60 s bound")
-        self.assertRegex(p11probe_definition(text), r'\btimeout "\$PROBE_BOUND" python3\b', "p11probe does not run the probe under PROBE_BOUND")
+        self.assertRegex(p11probe_definition(text), r'\btimeout -k "\$KILL_GRACE" "\$PROBE_BOUND" python3\b', "p11probe does not run the probe under PROBE_BOUND")
 
     def test_a_probe_that_hangs_fails_within_the_bound_and_says_so(self):
         # The REAL p11probe, with the gate stubbed open and a probe that never answers. Unbounded, it would sit for
@@ -198,7 +204,7 @@ class TheProbeIsBounded(unittest.TestCase):
             lib = Path(d, "lib"); lib.mkdir()
             (lib / "p11_extract_probe.py").write_text("import time\ntime.sleep(600)\n")
             script = "\n".join(["set -u", "target_ok(){ return 0; }", 'SLOT=0 SERIAL=s MODULE=m Q_PIN=p HERE="$1"',
-                                 "PROBE_BOUND=2", p11probe_definition(CONTRACT.read_text()),
+                                 "PROBE_BOUND=2", "KILL_GRACE=1", p11probe_definition(CONTRACT.read_text()),
                                  'out="$(p11probe x 2>&1)"; rc=$?; printf "rc=%s\\n%s\\n" "$rc" "$out"'])
             # Its own session, so a hang is killed as a whole group: killing bash alone would leave the sleeping probe
             # holding the pipes, and communicate() would then wait the full 600 s.
@@ -212,6 +218,94 @@ class TheProbeIsBounded(unittest.TestCase):
                 self.fail("p11probe did not return within 30 s against a probe that never answers: it is unbounded")
         self.assertIn("rc=124", stdout, "a timed-out probe must return timeout's status, not swallow it: " + stdout)
         self.assertIn("did not answer within 2 s", stdout, stdout)
+
+
+# A stand-in that ignores SIGTERM, as a PKCS#11 module stuck in a driver call can: only SIGKILL ends it.
+# It writes its pid next to itself: timeout(1) moves into its own process group, so killing the test's group on a hang
+# would miss it, and it would hold the pipes for its full 600 s.
+DEAF_TO_TERM = ("import os, signal, sys, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                "open(os.environ['DEAF_PIDS'], 'a').write(f'{os.getpid()}\\n')\ntime.sleep(600)\n")
+BOUND, GRACE = 2, 1
+
+
+def run_bounded(script, d, limit=30):
+    """Run SCRIPT in its own session, so a hang is killed as a whole group; returns (stdout, seconds) or None on a hang."""
+    pids = Path(d, "deaf.pids")
+    proc = subprocess.Popen(["bash", "-c", script, "bash", d], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, start_new_session=True, env={**os.environ, "DEAF_PIDS": str(pids)})
+    t0 = time.monotonic()
+    try:
+        stdout, _ = proc.communicate(timeout=limit)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, 9)
+        for pid in (pids.read_text().split() if pids.exists() else []):
+            try:
+                os.kill(int(pid), 9)
+            except ProcessLookupError:
+                pass
+        proc.communicate(timeout=10)
+        return None
+    return stdout, time.monotonic() - t0
+
+
+def bounded_calls(text):
+    """(line number, code) for every executable line of TEXT that runs timeout(1); comment lines are skipped."""
+    return [(n, line) for n, line in enumerate(text.splitlines(), 1)
+            if not line.lstrip().startswith("#") and re.search(r"\btimeout\s", line.split(" #", 1)[0])]
+
+
+class EveryBoundEscalatesToKill(unittest.TestCase):
+    """#679: `timeout N` only sends SIGTERM. A call that ignores it still hangs; each bound must end in SIGKILL."""
+
+    def test_the_grace_is_set_and_short(self):
+        grace = re.search(r"^KILL_GRACE=(\d+)$", CONTRACT.read_text(), re.M)
+        self.assertIsNotNone(grace, "pkcs11-contract.sh sets no KILL_GRACE")
+        self.assertGreater(int(grace.group(1)), 0)
+        self.assertLessEqual(int(grace.group(1)), 10, "a grace this long makes the bound a suggestion: at most 10 s")
+
+    def test_every_timeout_call_in_the_script_escalates(self):
+        calls = bounded_calls(CONTRACT.read_text())
+        # Positive control: slot_of, the isolation count, target_ok, p11 and p11probe. Fewer means the scan went blind.
+        self.assertGreaterEqual(len(calls), 5, f"found only {len(calls)} timeout calls: the scan is not seeing the script")
+        for number, line in calls:
+            with self.subTest(line=number):
+                self.assertRegex(line, r'\btimeout -k "\$KILL_GRACE" (?:\d+|"\$\w+") ',
+                                 f"pkcs11-contract.sh:{number} has a timeout with no SIGKILL escalation: {line.strip()}")
+
+    def test_the_scan_sees_a_call_without_escalation(self):
+        # The check above, fed a line it must refuse, so it cannot pass by matching nothing.
+        calls = bounded_calls('# timeout 9 in a comment\nx(){ timeout 30 pkcs11-tool -L; }\ny(){ timeout -k "$KILL_GRACE" 30 z; }\n')
+        self.assertEqual([n for n, _ in calls], [2, 3])
+        self.assertNotRegex(calls[0][1], r'\btimeout -k "\$KILL_GRACE" (?:\d+|"\$\w+") ')
+
+    def test_a_probe_deaf_to_term_is_killed_within_bound_and_grace(self):
+        with tempfile.TemporaryDirectory() as d:
+            lib = Path(d, "lib"); lib.mkdir()
+            (lib / "p11_extract_probe.py").write_text(DEAF_TO_TERM)
+            script = "\n".join(["set -u", "target_ok(){ return 0; }", 'SLOT=0 SERIAL=s MODULE=m Q_PIN=p HERE="$1"',
+                                 f"PROBE_BOUND={BOUND}", f"KILL_GRACE={GRACE}", p11probe_definition(CONTRACT.read_text()),
+                                 'out="$(p11probe x 2>&1)"; rc=$?; printf "rc=%s\\n%s\\n" "$rc" "$out"'])
+            got = run_bounded(script, d)
+        self.assertIsNotNone(got, "p11probe did not return within 30 s against a probe that ignores SIGTERM: no SIGKILL")
+        stdout, took = got
+        self.assertIn("rc=137", stdout, "a probe killed after the grace must return SIGKILL's status: " + stdout)
+        self.assertIn(f"did not answer within {BOUND} s", stdout, stdout)
+        self.assertLess(took, BOUND + GRACE + 5, f"took {took:.1f} s against a bound of {BOUND} s and a grace of {GRACE} s")
+
+    def test_a_token_call_deaf_to_term_is_killed_within_bound_and_grace(self):
+        # p11 with its 60 s bound shortened to BOUND, and a pkcs11-tool that ignores SIGTERM.
+        line = next(l for l in CONTRACT.read_text().splitlines() if l.startswith("p11(){"))
+        self.assertIn(" 60 pkcs11-tool ", line)
+        with tempfile.TemporaryDirectory() as d:
+            tool = Path(d, "pkcs11-tool"); tool.write_text("#!/usr/bin/env python3\n" + DEAF_TO_TERM); tool.chmod(0o755)
+            script = "\n".join(["set -u", 'PATH="$1:$PATH" SLOT=0 MODULE=m', f"KILL_GRACE={GRACE}",
+                                 line.replace(" 60 pkcs11-tool ", f" {BOUND} pkcs11-tool "),
+                                 'p11 -L; printf "rc=%s\\n" "$?"'])
+            got = run_bounded(script, d)
+        self.assertIsNotNone(got, "p11 did not return within 30 s against a pkcs11-tool that ignores SIGTERM: no SIGKILL")
+        stdout, took = got
+        self.assertIn("rc=137", stdout, stdout)
+        self.assertLess(took, BOUND + GRACE + 5, f"took {took:.1f} s against a bound of {BOUND} s and a grace of {GRACE} s")
 
 
 if __name__ == "__main__":
