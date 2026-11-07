@@ -28,6 +28,10 @@ on:
       - e2e/three-node-replace.py
       - cmd/regalia-unlock/**
       - e2e/lib/threenode.py
+      - e2e/lib/tpmdiag.py
+      - e2e/lib/apt-install-netem.sh
+      - tests/test_baremetal_heartbeat.py
+      - deploy/systemd/regalia-kms.sysusers.conf
   push:
     branches: [main]
     paths:
@@ -53,6 +57,10 @@ on:
       - e2e/three-node-replace.py
       - cmd/regalia-unlock/**
       - e2e/lib/threenode.py
+      - e2e/lib/tpmdiag.py
+      - e2e/lib/apt-install-netem.sh
+      - tests/test_baremetal_heartbeat.py
+      - deploy/systemd/regalia-kms.sysusers.conf
 
 permissions:
   contents: read
