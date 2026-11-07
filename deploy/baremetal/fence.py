@@ -33,7 +33,7 @@ FOR EACH NODE, in order, every step refused unless the one before it held:
      login (Oem.Hp on iLO 4, Oem.Hpe on iLO 5). An account the fence cannot see is refused. UNMEASURED (05): that an
      iLO 4 lets a login-and-power-only account read the Accounts listing at all. If it does not, every correct account is
      refused here, and the fence is the typed fallback until this check is changed to what the iLO does show.
-  3. The box: /redfish/v1/Systems/1's SerialNumber and UUID equal the inventory's, so the right server goes off.
+  3. The box: /redfish/v1/Systems/1/'s SerialNumber and UUID equal the inventory's, so the right server goes off.
   4. ForceOff at the discovered Reset target (unless it already reads Off), read back until Off (redfish.Client).
   5. PowerState read Off, then read Off AGAIN at least REREAD_S later: the evidence carries both times.
   6. The power-restore policy is recorded as the iLO reports it: anyone with the iLO's power right can turn the server

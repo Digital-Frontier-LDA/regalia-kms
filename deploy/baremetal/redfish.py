@@ -11,9 +11,9 @@ in a recovery. Run from the operator workstation on the management network, neve
     descriptor (refused as "empty" or "holds nothing"), so read gpg's stderr when it is.
 
 The mainstream reference is Pacemaker's fence_redfish: reset, then poll PowerState until it reads the target. Here:
-  * DISCOVERED, NEVER ASSUMED. Each action first reads the system (/redfish/v1/Systems/1: PowerState, SerialNumber,
+  * DISCOVERED, NEVER ASSUMED. Each action first reads the system (/redfish/v1/Systems/1/: PowerState, SerialNumber,
     Model, the Reset action's target and its ResetType@Redfish.AllowableValues) and the iLO's firmware
-    (/redfish/v1/Managers/1). A ResetType the iLO does not list is refused before anything is sent. iLO 4 (the Gen9s)
+    (/redfish/v1/Managers/1/). A ResetType the iLO does not list is refused before anything is sent. iLO 4 (the Gen9s)
     is expected to list On, ForceOff, ForceRestart, Nmi and PushPowerButton, and no GracefulRestart (iLO 5's): a
     graceful restart is in-band (systemctl reboot over SSH), not this client's.
   * THE RIGHT BOX. The iLO's SerialNumber must be the --serial given: fencing the wrong server is the classic failure.

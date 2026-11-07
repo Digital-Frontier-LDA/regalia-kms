@@ -56,6 +56,10 @@ def self_signed(directory):
 
 
 REDIRECT = object()   # an answer the fake HTTP server sends as 308 + Location, as iLO 4 does
+# Where each redirect points. The Location is always one of these constants, never built from the request path, so the
+# fake cannot echo a request into a header. Anything not listed is pointed at the service root.
+REDIRECT_TO = {p.rstrip("/"): p for p in ("/redfish/v1/Systems/1/", "/redfish/v1/Managers/1/", "/redfish/v1/Systems/1/Bios/",
+                                         "/redfish/v1/AccountService/Accounts/")}
 
 
 class Ilo:
@@ -130,7 +134,7 @@ class Stand(unittest.TestCase):
                 got = ilo.answer(method, self.path, body, self.headers.get("Authorization"))
                 if got is REDIRECT:
                     self.send_response(308)
-                    self.send_header("Location", self.path + "/")
+                    self.send_header("Location", REDIRECT_TO.get(self.path, "/redfish/v1/"))
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
