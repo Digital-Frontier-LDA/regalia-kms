@@ -38,6 +38,31 @@ def job_conditions(text):
     return found
 
 
+# What a step's `if:` may test: its job's outcome so far. Anything else (an event, a ref, an input) could keep the
+# step off the nightly, and is refused until it is reviewed here (#696 review, B1).
+STEP_CONDITIONS = {"failure()", "always()", "cancelled()", "success()"}
+# Each scheduled run must be a group of its own: a push to main must not replace a pending nightly (#696 review, B2).
+GROUP = "${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}"
+
+
+def step_conditions(text):
+    """[(line number, condition)] for every `if:` below job level, with any ${{ }} wrapper removed."""
+    body_start = text.index("\njobs:\n") if "\njobs:\n" in text else len(text)
+    found = []
+    for n, line in enumerate(text.splitlines(), 1):
+        m = re.match(r"^( {5,})(?:- )?if:\s*(.+?)\s*$", line)
+        if m and sum(len(x) + 1 for x in text.splitlines()[:n - 1]) >= body_start:
+            cond = m.group(2)
+            inner = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", cond)
+            found.append((n, inner.group(1) if inner else cond))
+    return found
+
+
+def concurrency_group(text):
+    m = re.search(r"^concurrency:\n(?:  .*\n)*?  group:\s*(.+)$", text, re.M)
+    return m.group(1).strip() if m else None
+
+
 def cancels(text):
     """The workflow's concurrency cancel-in-progress expression."""
     m = re.search(r"^concurrency:\n(?:  .*\n)*?  cancel-in-progress:\s*(.+)$", text, re.M)
@@ -63,6 +88,19 @@ class TheNightlyRunsEveryNodeUnitsJob(unittest.TestCase):
     def test_a_scheduled_run_is_never_cancelled_by_another(self):
         self.assertEqual(cancels(self.text), "${{ github.event_name == 'pull_request' }}")
 
+    def test_no_step_is_kept_off_the_schedule(self):
+        conditions = step_conditions(self.text)
+        self.assertGreaterEqual(len(conditions), 10, conditions)
+        for n, condition in conditions:
+            if condition not in STEP_CONDITIONS:
+                with self.subTest(line=n):
+                    self.fail("node-units.yml:%d: a step runs only when %s: a step may test only its job's outcome "
+                              "(%s), or the nightly may skip it" % (n, condition, ", ".join(sorted(STEP_CONDITIONS))))
+
+    def test_a_scheduled_run_is_a_group_of_its_own(self):
+        self.assertEqual(concurrency_group(self.text), GROUP,
+                         "a scheduled run must fall back to its own run_id, or a push can replace a pending nightly")
+
     def test_the_readers_see_a_planted_workflow(self):
         planted = ("on:\n  # c\n  schedule:\n    - cron: '23 2 * * *'\n  push:\n    paths:\n      - a/**\n"
                    "concurrency:\n  group: g\n  cancel-in-progress: true\n\njobs:\n  a:\n    runs-on: x\n"
@@ -72,6 +110,10 @@ class TheNightlyRunsEveryNodeUnitsJob(unittest.TestCase):
         self.assertEqual(schedules(planted.replace("'23 2 * * *'", "'nightly'")), [])
         self.assertEqual(job_conditions(planted), {"a": None, "b": "github.event_name == 'push'"})
         self.assertEqual(cancels(planted), "true")
+        self.assertEqual(concurrency_group(planted), "g")
+        steps = planted + "    steps:\n      - if: failure()\n        run: x\n      - name: y\n        if: ${{ github.event_name != 'schedule' }}\n"
+        self.assertEqual(step_conditions(steps), [(19, "failure()"), (22, "github.event_name != 'schedule'")])
+        self.assertEqual(step_conditions("on:\n  push:\n        if: x\njobs:\n"), [])
 
 
 if __name__ == "__main__":
