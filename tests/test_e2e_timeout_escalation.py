@@ -266,6 +266,43 @@ class ANegativeCheckFailsOnAHang(unittest.TestCase):
         self.assertIn("PASS", out, out)
         self.assertNotIn("FAIL", out, out)
 
+    def test_a_hung_slot_check_reads_as_hung_not_as_empty(self):
+        # de on #684 (R3, CodeRabbit :209): the check that the removed token's slot holds nothing, against a tool deaf
+        # to SIGTERM, is HUNG: "nothing answered" is never "nothing there"
+        with tempfile.TemporaryDirectory() as d:
+            text = REMOVAL.read_text()
+            script = "\n".join(removal_prelude("slot_has_token") + ['slot_has_token 0; echo "held=$?"'])
+            result = run_bounded(script, tools(d, DEAF_TO_TERM, "pkcs11-tool"), d)
+        self.assertFalse(result.hung, result.stdout)
+        self.assertEqual(result.leftovers, [], result.stdout)
+        self.assertIn("held=%s" % assignment(text, "HUNG").split("=", 1)[1], result.stdout, result.stdout)
+
+    def test_startup_without_the_token_is_tried_only_on_a_slot_both_listings_answered_for(self):
+        # section 4 makes no attempt on the removed token's slot unless the token is not listed AND the slot is seen to
+        # hold nothing: a hung listing gates it off like a token found there (2026-10-02: another card got the PIN)
+        text = REMOVAL.read_text()
+        hung = assignment(text, "HUNG").split("=", 1)[1]
+        cases = (("hung slot check", ":", hung, "HUNG/ERROR", "counts 0 0 1"),
+                 ("hung token listing", "return %s" % hung, "1", "HUNG/ERROR", "counts 0 0 1"),
+                 ("another token in the slot", ":", "0", "FAIL", "counts 0 1 0"),
+                 ("the token still listed", "echo 3", "1", "FAIL", "counts 0 1 0"))
+        for label, listing, held, verdict, counts in cases + (("control: an empty slot", ":", "1", None, "counts 0 0 0"),):
+            with self.subTest(case=label):
+                script = "\n".join(removal_prelude() + [definition(text, "startup_without_token"),
+                                    "slot_of(){ %s; }" % listing, "slot_has_token(){ return %s; }" % held,
+                                    'absent_read_fails(){ echo "ATTEMPTED read"; }', 'absent_sign_fails(){ echo "ATTEMPTED sign"; }',
+                                    "startup_without_token", 'echo "counts $pass $fail $hungs"'])
+                out = subprocess.run(["bash", "-c", script, "bash", "/nonexistent", "/nonexistent"],
+                                     capture_output=True, text=True, timeout=30).stdout
+                self.assertIn(counts, out, out)
+                if verdict is None:
+                    self.assertIn("ATTEMPTED read\nATTEMPTED sign", out, out)
+                else:
+                    self.assertIn(verdict, out, out)
+                    self.assertNotIn("ATTEMPTED", out, out)
+        self.assertEqual(sum(line.strip() == "startup_without_token" for line in code(text)), 1,
+                         "section 4 does not run its gate exactly once")
+
 
 class AStreamVerdictIgnoresAHang(unittest.TestCase):
     """de on #684: sections 2 and 3 counted a call their bound ended as "failed in flight", which fed the PASS

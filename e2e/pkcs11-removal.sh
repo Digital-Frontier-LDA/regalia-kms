@@ -254,20 +254,24 @@ for line in sys.stdin:
     elif cur == want and "token label" in line:
         hit = True
 sys.exit(0 if hit else 1)' "$1"; listed "${PIPESTATUS[@]}"; }
-LISTED="$(slot_of)"; LISTED_RC=$?
-slot_has_token "$STALE"; HELD=$?
-if [ "$LISTED_RC" = "$HUNG" ] || [ "$HELD" = "$HUNG" ]; then
-  H "a slot listing hung after the removal: startup without the token not measured"
-elif [ -n "$LISTED" ]; then
-  F "the token is still listed while removed: no startup test"
-elif [ "$HELD" = 0 ]; then
-  F "slot $STALE holds another token after the removal: not presenting this token's PIN to it"
-else
-  # The PKCS#11 layer itself, with NO login and therefore no PIN: reading the key's public object on the
-  # removed token's slot must fail and produce nothing (no fallback to another token).
-  absent_read_fails
-  absent_sign_fails
-fi
+# Only a slot both listings ANSWERED for (the token not listed, the slot holding nothing) is tried: a hung
+# listing says nothing about what is in the slot, so it gates the attempt off like a token found there.
+startup_without_token(){ local listed listed_rc held
+  listed="$(slot_of)"; listed_rc=$?
+  slot_has_token "$STALE"; held=$?
+  if [ "$listed_rc" = "$HUNG" ] || [ "$held" = "$HUNG" ]; then
+    H "a slot listing hung after the removal: startup without the token not measured"
+  elif [ -n "$listed" ]; then
+    F "the token is still listed while removed: no startup test"
+  elif [ "$held" = 0 ]; then
+    F "slot $STALE holds another token after the removal: not presenting this token's PIN to it"
+  else
+    # The PKCS#11 layer itself, with NO login and therefore no PIN: reading the key's public object on the
+    # removed token's slot must fail and produce nothing (no fallback to another token).
+    absent_read_fails
+    absent_sign_fails
+  fi; }
+startup_without_token
 restore; wait_back && sign_once start && P "it works once the token is back" || F "no recovery after restore"
 
 hdr "5  cleanup"
