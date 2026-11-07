@@ -3,6 +3,7 @@ call an exposed key exposed, or its verdict on real hardware (#62) proves nothin
 import ctypes
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -110,8 +111,36 @@ class ExtractProbe(unittest.TestCase):
         self.assertIn('os.environ.get("REGALIA_Q_PIN"', PROBE.read_text())
 
 
+# The probe's OWN simple command: the text after the last shell separator before the probe's path. An assignment
+# scoped to an earlier command (`REGALIA_Q_PIN="$Q_PIN" true; python3 .../p11_extract_probe.py`) hands the probe
+# nothing, so the assignment must be in this command's prefix, before the interpreter.
+_SEPARATOR = re.compile(r"[;&|(){}`]")
+_HANDS_PIN = re.compile(r'^\s*(?:\w+=(?:"[^"]*"|\S+)\s+)*REGALIA_Q_PIN="\$\w+"\s+(?:\w+=(?:"[^"]*"|\S+)\s+)*python3(?:\s+-\w+)*\s+\S*$')
+
+
+def probe_command_hands_it_the_pin(code):
+    before = code[:code.index("p11_extract_probe.py")]
+    own = _SEPARATOR.split(before)[-1]
+    return bool(_HANDS_PIN.match(own))
+
+
 class ScriptsHandTheProbeItsPIN(unittest.TestCase):
     """Static, so it runs everywhere: no SoftHSM needed to read a script."""
+
+    def test_the_check_accepts_only_a_pin_in_the_probes_own_prefix(self):
+        good = ['  REGALIA_Q_PIN="$Q_PIN" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$@"; }',
+                'out="$(REGALIA_Q_PIN="$Q_PIN" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"']
+        bad = ['REGALIA_Q_PIN="$Q_PIN" true; python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE"',
+               'REGALIA_Q_PIN="$Q_PIN" true && python3 "$HERE/lib/p11_extract_probe.py"',
+               'out="$(python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"',
+               'python3 -Es "$HERE/lib/p11_extract_probe.py" REGALIA_Q_PIN="$Q_PIN"',
+               'REGALIA_Q_PIN="$Q_PIN" echo x | python3 "$HERE/lib/p11_extract_probe.py"']
+        for line in good:
+            with self.subTest(good=line):
+                self.assertTrue(probe_command_hands_it_the_pin(line), line)
+        for line in bad:
+            with self.subTest(bad=line):
+                self.assertFalse(probe_command_hands_it_the_pin(line), line)
 
     def test_every_script_that_runs_the_probe_hands_it_the_pin(self):
         # The probe reads REGALIA_Q_PIN and nothing else. pkcs11-contract.sh stopped exporting its PIN
@@ -127,8 +156,8 @@ class ScriptsHandTheProbeItsPIN(unittest.TestCase):
         self.assertTrue(calls, "no script runs p11_extract_probe.py: this check would pass by finding nothing")
         for name, number, code in calls:
             with self.subTest(script=name, line=number):
-                before = code[:code.index("p11_extract_probe.py")]
-                self.assertRegex(before, r"\bREGALIA_Q_PIN=\"\$\w+\"\s", f"{name}:{number} runs the probe without REGALIA_Q_PIN in its environment")
+                self.assertTrue(probe_command_hands_it_the_pin(code),
+                                f"{name}:{number} runs the probe without REGALIA_Q_PIN in its own environment prefix")
 
 
 if __name__ == "__main__":
