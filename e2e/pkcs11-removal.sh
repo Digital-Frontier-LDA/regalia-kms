@@ -188,15 +188,18 @@ hdr "2  removal during a stream of signatures"
 # TIME-BOUNDED STREAMS: operations are paced over 15 s so the stream straddles the 3 s removal whatever one
 # operation costs (~2.6 s with one reader visible, ~20 s when OpenSC probed every card; a failure can return
 # at once). The last error line of each failure is kept for the evidence.
-( end=$((SECONDS+15)); i=0; while [ "$SECONDS" -lt "$end" ]; do i=$((i+1))
-    sign_once "$i"; stream_line "$?" "$i"; sleep 0.5; done ) > "$W/stream" 2>&1 &
-sp=$!; sleep 3; remove; sleep 3; restore; wait "$sp"
-ok=$(grep -c '^ok' "$W/stream"); log "stream: $(tr '\n' ' ' < "$W/stream")"
-[ -s "$W/sign.err" ] && log "first signing error: $(head -1 "$W/sign.err")"
-bad=0; for i in $(sed -n 's/^ok //p' "$W/stream"); do openssl dgst -sha256 -verify "$W/ec.pem" -signature "$W/s$i" "$W/m$i" >/dev/null 2>&1 || bad=$((bad+1)); done
-# What was SEEN: done, failed in flight (the token went away during the call), not attempted (the gate
-# found no token and sent nothing). A removal needs some done and some that did not complete.
-stream_verdict "$W/stream" "stream"
+# The stream and its verdict, a function so a test can run it (#684); sets ok and bad for the lines after it.
+stream_signatures(){
+  ( end=$((SECONDS+15)); i=0; while [ "$SECONDS" -lt "$end" ]; do i=$((i+1))
+      sign_once "$i"; stream_line "$?" "$i"; sleep 0.5; done ) > "$W/stream" 2>&1 &
+  sp=$!; sleep 3; remove; sleep 3; restore; wait "$sp"
+  ok=$(grep -c '^ok' "$W/stream"); log "stream: $(tr '\n' ' ' < "$W/stream")"
+  [ -s "$W/sign.err" ] && log "first signing error: $(head -1 "$W/sign.err")"
+  bad=0; for i in $(sed -n 's/^ok //p' "$W/stream"); do openssl dgst -sha256 -verify "$W/ec.pem" -signature "$W/s$i" "$W/m$i" >/dev/null 2>&1 || bad=$((bad+1)); done
+  # What was SEEN: done, failed in flight (the token went away during the call), not attempted (the gate
+  # found no token and sent nothing). A removal needs some done and some that did not complete.
+  stream_verdict "$W/stream" "stream"; }
+stream_signatures
 [ "$bad" = 0 ] && P "every signature reported as done verifies ($ok of $ok)" || F "$bad signature(s) reported done do not verify"
 wait_back && sign_once after && openssl dgst -sha256 -verify "$W/ec.pem" -signature "$W/safter" "$W/mafter" >/dev/null 2>&1 \
   && P "signing resumes after restore" || F "signing does not resume"
@@ -217,7 +220,8 @@ MECH=(); for m in OAEP PKCS; do
   if p11l --decrypt "${try[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/d0" >/dev/null 2>&1 && cmp -s "$W/pt" "$W/d0"; then MECH=("${try[@]}"); break; fi
 done
 [ "${#MECH[@]}" -gt 0 ] && P "before the removal, ${MECH[1]} decrypts exactly" || F "no RSA mechanism decrypts before the removal: section 3 cannot test anything"
-if [ "${#MECH[@]}" -gt 0 ]; then
+# The stream and its verdict, a function so a test can run it (#684); sets ok and bad for the lines after it.
+stream_decryptions(){
   ( end=$((SECONDS+15)); i=0; while [ "$SECONDS" -lt "$end" ]; do i=$((i+1))
       p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/d$i" 2>>"$W/decrypt.err" >/dev/null
       stream_line "$?" "$i"
@@ -226,7 +230,9 @@ if [ "${#MECH[@]}" -gt 0 ]; then
   ok=$(grep -c '^ok' "$W/dstream"); log "decrypt stream (${MECH[1]}): $(tr '\n' ' ' < "$W/dstream")"
   [ -s "$W/decrypt.err" ] && log "first decryption error: $(head -1 "$W/decrypt.err")"
   bad=0; for i in $(sed -n 's/^ok //p' "$W/dstream"); do cmp -s "$W/pt" "$W/d$i" || bad=$((bad+1)); done
-  stream_verdict "$W/dstream" "decryptions"
+  stream_verdict "$W/dstream" "decryptions"; }
+if [ "${#MECH[@]}" -gt 0 ]; then
+  stream_decryptions
   [ "$bad" = 0 ] && P "every decryption reported as done is exact ($ok of $ok)" || F "$bad decryption(s) reported done are wrong"
   wait_back && p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/dafter" >/dev/null 2>&1 && cmp -s "$W/pt" "$W/dafter" \
     && P "after reinsertion, decryption is exact again" || F "no exact decryption after reinsertion"

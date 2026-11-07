@@ -376,6 +376,38 @@ class AStreamVerdictIgnoresAHang(unittest.TestCase):
                 self.assertIn("rc=%d" % rc, out, out)
                 self.assertIn("%s hung" % counts.split("hungs=")[1], out, out)
 
+    def run_section(self, fn):
+        """Section FN (stream_signatures / stream_decryptions) as the drill runs it, every call through the real p11l and
+        p11 against a pkcs11-tool deaf to SIGTERM (the slot gate answers; remove/restore touch nothing), then result."""
+        with tempfile.TemporaryDirectory() as d:
+            text = REMOVAL.read_text()
+            script = "\n".join(removal_prelude("p11") + [
+                "MECH=(--mechanism RSA-PKCS) ID_RSA=02", "target_ok(){ return 0; }", "remove(){ :; }", "restore(){ :; }",
+                definition(text, "p11l"), definition(text, "sign_once"), definition(text, "stream_line"),
+                definition(text, "stream_verdict"), definition(text, "result"), definition(text, fn), fn,
+                'echo "counts $pass $fail $hungs"', 'result; echo "rc=$?"'])
+            tools(d, DEAF_TO_TERM, "pkcs11-tool")
+            tools(d, "import sys; sys.exit(0)\n", "openssl")
+            result = run_bounded(script, d, d, limit=90)
+        self.assertFalse(result.hung, result.stdout)
+        self.assertEqual(result.leftovers, [], result.stdout)
+        out = result.stdout
+        # every call hung: HUNG/ERROR, neither a PASS ("interrupted") nor a FAIL ("both outcomes are needed"), exit 3
+        self.assertIn("HUNG/ERROR", out, out)
+        self.assertIn("interruption not measured", out, out)
+        self.assertNotIn("PASS", out, out)
+        self.assertNotIn("FAIL", out, out)
+        self.assertIn("counts 0 0 1", out, out)
+        self.assertIn("rc=3", out, out)
+
+    def test_section_2_with_every_signature_hung_is_hung_error_and_exits_3(self):
+        # de on #684 (B1, :178/:185): a call its bound ended fed "failed in flight", so section 2 PASSED
+        self.run_section("stream_signatures")
+
+    def test_section_3_with_every_decryption_hung_is_hung_error_and_exits_3(self):
+        # de on #684 (B1, :210/:216): the same, in the decryption stream
+        self.run_section("stream_decryptions")
+
     def test_both_streams_use_the_shared_outcome_and_verdict(self):
         lines = code(REMOVAL.read_text())
         self.assertEqual(sum('stream_line "$?" "$i"' in line for line in lines), 2, "a stream maps statuses itself")
