@@ -114,8 +114,10 @@ class ExtractProbe(unittest.TestCase):
 # The probe's OWN simple command: the text after the last shell separator before the probe's path. An assignment
 # scoped to an earlier command (`REGALIA_Q_PIN="$Q_PIN" true; python3 .../p11_extract_probe.py`) hands the probe
 # nothing, so the assignment must be in this command's prefix, before the interpreter.
+# Each value is EITHER one quoted string OR an unquoted token that does not start with a quote, so the two never
+# overlap: an ambiguous alternation here made rejection time exponential in the number of quoted tokens (CodeQL).
 _SEPARATOR = re.compile(r"[;&|(){}`]")
-_HANDS_PIN = re.compile(r'^\s*(?:\w+=(?:"[^"]*"|\S+)\s+)*REGALIA_Q_PIN="\$\w+"\s+(?:\w+=(?:"[^"]*"|\S+)\s+)*python3(?:\s+-\w+)*\s+\S*$')
+_HANDS_PIN = re.compile(r'^\s*(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*REGALIA_Q_PIN="\$\w+"\s+(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*python3(?:\s+-\w+)*\s+\S*$')
 
 
 def probe_command_hands_it_the_pin(code):
