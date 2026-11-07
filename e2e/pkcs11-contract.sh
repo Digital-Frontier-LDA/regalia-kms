@@ -61,8 +61,11 @@ P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; log "PASS $1"; pass=$((pass+1)); 
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; log "FAIL $1"; fail=$((fail+1)); }
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
 
+# Every bounded call escalates (#679): plain `timeout N` only sends SIGTERM, and a PKCS#11 module stuck in a driver
+# call can ignore it, so the call would still hang. After KILL_GRACE more seconds it gets SIGKILL (status 137).
+KILL_GRACE=5
 # The slot holding the token with this serial; exactly one, or refuse.
-slot_of(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
+slot_of(){ timeout -k "$KILL_GRACE" 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 serial = sys.argv[1]; slot = None; hits = []
 for line in sys.stdin:
@@ -77,14 +80,14 @@ if [ "${OWN_OPENSC_CONF:-0}" = 1 ]; then
   HSM_IGNORE_READERS="${HSM_IGNORE_READERS:-Yubico}" python3 -Es "$(dirname "$0")/lib/opensc_isolate.py" "$SLOT" "$W/opensc.conf" "$MODULE" >/dev/null \
     || die "cannot isolate this token's reader in OpenSC"
   SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "the token is not visible after isolating its reader"
-  [ "$(timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | grep -c '^Slot')" = 1 ] || die "more than one slot is visible after isolation"
+  [ "$(timeout -k "$KILL_GRACE" 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | grep -c '^Slot')" = 1 ] || die "more than one slot is visible after isolation"
 fi
 # EVERY LOGIN IS GATED ON WHAT IS IN THE SLOT NOW (review of #152): slot $SLOT must hold the token with
 # serial $SERIAL, no other slot may hold that serial, and under the suite's own isolated config it must
 # be the ONLY slot. During a removal the check fails and no PIN is sent; a reader that arrived later and
 # took this slot ID fails it too. Residual: the token removed AND another arriving in the milliseconds
-# between this check and pkcs11-tool's own login. Every call is bounded (timeout 60 s).
-target_ok(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
+# between this check and pkcs11-tool's own login. Every call is bounded (timeout 60 s, then SIGKILL).
+target_ok(){ timeout -k "$KILL_GRACE" 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 slot, serial, isolated = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 cur, slots, hits = None, 0, []
@@ -96,7 +99,7 @@ for line in sys.stdin:
         hits.append(cur)
 ok = hits == [slot] and (slots == 1 or not isolated)
 sys.exit(0 if ok else 1)' "$SLOT" "$SERIAL" "${OWN_OPENSC_CONF:-0}"; }
-p11(){ timeout 60 pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
+p11(){ timeout -k "$KILL_GRACE" 60 pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
 p11l(){ target_ok || { echo "p11l: slot $SLOT does not hold $SERIAL alone right now: no login, no PIN" >&2; return 97; }
   REGALIA_Q_PIN="$Q_PIN" p11 --login --pin env:REGALIA_Q_PIN "$@"; }
 # The extraction probe logs in on its own, so it is gated like p11l: the PIN reaches it only once the slot holds
@@ -106,8 +109,8 @@ p11l(){ target_ok || { echo "p11l: slot $SLOT does not hold $SERIAL alone right 
 # with a reason instead of hanging the run, and its status is returned, never swallowed.
 PROBE_BOUND=60
 p11probe(){ target_ok || { echo "slot $SLOT does not hold $SERIAL alone right now: no login, no PIN"; return 97; }
-  local rc; REGALIA_Q_PIN="$Q_PIN" timeout "$PROBE_BOUND" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$@"; rc=$?
-  [ "$rc" = 124 ] && echo "the probe did not answer within $PROBE_BOUND s: no verdict"; return "$rc"; }
+  local rc; REGALIA_Q_PIN="$Q_PIN" timeout -k "$KILL_GRACE" "$PROBE_BOUND" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$@"; rc=$?
+  case "$rc" in 124|137) echo "the probe did not answer within $PROBE_BOUND s: no verdict";; esac; return "$rc"; }
 # Fresh ids: refuse any id already on the token (PKCS#11 does not make CKA_ID unique), and remember
 # only the objects THIS run created, so cleanup can never delete a key that was there before.
 # An id counts as free only against a listing that SUCCEEDED (an absent token lists nothing).
