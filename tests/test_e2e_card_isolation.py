@@ -65,6 +65,19 @@ NO_REAL_CARD = {
     "pcr-signed-policy-swtpm.sh": "pkcs11-tool and opensc-tool are replaced by stubs written in the script",
 }
 
+# Every tracked script falls in exactly one bucket by what it does with a card (#690): a real-card drill, a drill
+# excused above or as SoftHSM-only, a script outside the drills that names a card tool (declared here, with why),
+# or a script that names no card tool. A new script outside the drills that names one fails until it is decided.
+CARD_TOOL_ELSEWHERE = {
+    "e2e/lib/bench_cards.sh": "the bench gate library the drills source: it runs the card tools for bench_gate and bench_isolate",
+    "deploy/seal-hsm-pin.sh": "production commissioning, card attached by design: it checks the serial itself, not through the bench gate",
+}
+# Scripts decided to drive no card, with the evidence (#690): each must go on naming no card tool, or be decided again.
+NOT_A_CARD_SCRIPT = {
+    "e2e/unlock-boot-qemu.sh": "a QEMU guest whose TPM is swtpm; its header excludes any physical TPM; no card tool in its code",
+    "deploy/baremetal/image/build-rootfs.sh": "builds the host image: links the daemon against PC/SC, runs no card tool",
+}
+
 
 def softhsm_only(text):
     return "libsofthsm2" in text and "opensc-pkcs11" not in text
@@ -79,7 +92,18 @@ ALLOWED_LINES = {
         "shreds the PIN files this drill wrote under /etc: a fixed literal, its only input the directory as $1",
     ("kms-two-token-systemd.sh", "if sudo sh -c 'ls /etc/polkit-1/rules.d/ /usr/share/polkit-1/rules.d/ 2>/dev/null' | grep -q qubes; then"):
         "lists two fixed polkit directories as root: a fixed literal, no input",
+    ("nitrokey-pin-import-drill.sh", "| grep -oE 'SW1=0x63, SW2=0xC[0-9A-F]' | tail -1 | sed 's/.*0xC//' | xargs -I{} printf '%d' 0x{}; }"):
+        "xargs turns the counter's one hex digit, as grep matched it, into decimal through printf's fixed format (#688)",
 }
+
+# Commands that run another command (#688). What they run is not read as a command by these checks, so in a
+# real-card script each is refused unless its exact line is allowed. The prefixes REFUSED_START models (builtin,
+# command, exec, nohup, time, nice, timeout, env) and sudo are read through; systemd-run is a PIN use. Every
+# other wrapper is refused: a list of the wrappers that pass would lose to the next one (the #225 lesson).
+WRAPPERS = ("stdbuf|setsid|ionice|chrt|taskset|unshare|nsenter|flock|setpriv|runuser|chroot|xargs|doas|su|sg|newgrp|"
+            "watch|parallel|faketime|strace|ltrace|unbuffer|script|busybox|setarch|linux32|linux64|numactl|prlimit|"
+            "chpst|pkexec|firejail|bwrap|nocache|eatmydata|daemonize|start-stop-daemon|catchsegv|valgrind|trickle|"
+            "torsocks|proxychains4?")
 # Variables a drill may run as a command, each with what it holds. Anything else in a command word's place
 # ("$X", $X, "$(…)") is refused, except a path under the drill's own directories ("$W/…", "$STATE/…",
 # "$ROOT/…", "$HERE/…": a binary it built or this repository's own script).
@@ -104,7 +128,9 @@ def quoted_blanked(lines):
                 stack.pop()
         elif top == "D":
             if c == "\\" and i + 1 < len(text):
-                out.append("__")
+                # a backslash-newline inside "…" continues the string on the next line: the newline is kept, or the
+                # two lines merge and every later line is off by one (#687: unlock-boot-qemu.sh, build-rootfs.sh)
+                out.append("_\n" if text[i + 1] == "\n" else "__")
                 i += 2
                 continue
             if c == '"':
@@ -137,11 +163,64 @@ def quoted_blanked(lines):
                 stack.pop()
             out.append(c)
         i += 1
-    return "".join(out).split("\n")
+    return _check_line_count("".join(out).split("\n"), lines)
 
 
+def _check_line_count(blanked, lines):
+    """The per-line checks index one view by the other's line numbers: a lexer that loses a line fails here, by name."""
+    if len(blanked) != len(lines):
+        raise AssertionError("the quote lexer saw %d lines, the script has %d" % (len(blanked), len(lines)))
+    return blanked
+
+
+# A prefix command's options that take an argument, in each spelling getopt accepts: -k5, -k 5, --kill-after=5 and
+# --kill-after 5 (#685). Read as a flag alone, the argument was taken for the next command word, and the refused word
+# after it went unseen: timeout -k 5 30 env NK_PIN=1 … passed.
+# An option's argument: one quoted string (exec -a "a b") or one unquoted word. The unquoted form never starts with a
+# quote, so the alternatives cannot both match (py/redos).
+OPTION_ARGUMENT = r"""(?:"[^"]*"|'[^']*'|[^\s"']\S*)"""
+
+
+def _with_argument(short, long):
+    longs = r"|--(?:%s)(?:=|\s+)%s" % ("|".join(long), OPTION_ARGUMENT) if long else ""
+    return r"(?:-[%s]\s*%s%s)" % (short, OPTION_ARGUMENT, longs)
+
+
+# timeout's options, then its duration (never an option); nice's; env's, then any other flag.
+TIMEOUT_PREFIX = (r"timeout(?:\s+(?:" + _with_argument("ks", ("kill-after", "signal"))
+                  + r"|--foreground|--preserve-status|-v|--verbose))*\s+[^\s-]\S*")
+NICE_PREFIX = r"nice(?:\s+(?:" + _with_argument("n", ("adjustment",)) + r"|-\d+))*"
+# exec's -a NAME (the name the command is run under) takes an argument; -c and -l do not (65 on #686).
+EXEC_PREFIX = r"exec(?:\s+(?:" + _with_argument("a", ()) + r"|-[cl]+))*"
+# The catch-all flag never starts like an option with an argument (or -S, refused on its own), so the two
+# alternatives cannot both match a word: overlapping ones backtrack exponentially on a long refused line (py/redos).
+ENV_OPTIONS = (r"(?:\s+(?:" + _with_argument("uC", ("unset", "chdir"))
+               + r"|-(?![uCS-])\S*|--(?!(?:unset|chdir|split-string)\b)\S*))*")
 # CALL_START past command-word prefixes (builtin enable, command unset, env X=1 trap …): for the refused words
-REFUSED_START = CALL_START + r"(?:(?:builtin|command|exec|nice|nohup|time|timeout\s+\S+|env(?:\s+-\S+|\s+\w+=\S*)*)\s+(?:-\S+\s+)*)*"
+PREFIXES = (r"builtin|command|" + EXEC_PREFIX + r"|nohup|time|" + NICE_PREFIX + "|" + TIMEOUT_PREFIX
+            + r"|env" + ENV_OPTIONS + r"(?:\s+\w+=\S*)*")
+REFUSED_START = CALL_START + r"(?:(?:" + PREFIXES + r")\s+(?:-\S+\s+)*)*"
+# sudo's options that take an argument (sudo -u root stdbuf …): read as a flag alone, the user would be taken for the
+# command word and the wrapper after it go unseen (#697 review, B1)
+SUDO_LONGS = ("user", "group", "close-from", "chdir", "host", "prompt", "chroot", "role", "type", "command-timeout",
+              "other-user")
+# as env's: the catch-all flag never starts like an option with an argument, so two alternatives never match one word
+SUDO_PREFIX = (r"sudo(?:\s+(?:" + _with_argument("ugCDhpRrTU", SUDO_LONGS) + r"|-(?![ugCDhpRrTU-])\S*|--(?!(?:"
+               + "|".join(SUDO_LONGS) + r")\b)\S*))*")
+# A command position for the wrapper check: past the prefixes, and past sudo (#697 review, B1)
+WRAPPER_START = CALL_START + r"(?:(?:" + PREFIXES + "|" + SUDO_PREFIX + r")\s+(?:-\S+\s+)*)*(?=\S)"
+# One shell word as written: unquoted characters, '…', "…" and backslash escapes, joined
+SHELL_WORD_AS_WRITTEN = re.compile(r"""(?:[^\s'"\\;&|()<>]|\\.|'[^']*'|"[^"]*")+""")
+# A wrapper's name as the shell runs it, once quotes and escapes are removed: bare, or by an absolute path
+WRAPPER_WORD = re.compile(r"(?:/[\w.+-]+)*/(?:" + WRAPPERS + r")|(?:" + WRAPPERS + r")")
+
+
+def wrapper_named(word):
+    """The wrapper a command word runs, or None: "stdbuf", std''buf, \\stdbuf and /usr/bin/stdbuf all run stdbuf."""
+    plain = re.sub(r"\\(.)|'([^']*)'|\"([^\"]*)\"", lambda m: "".join(g or "" for g in m.groups()), word)
+    return plain.rsplit("/", 1)[-1] if WRAPPER_WORD.fullmatch(plain) else None
+
+
 # CALL_START, with a "(" a command start only after a line start, a blank or an operator (a subshell), not
 # after a quote: the blanked view is not nesting-aware, and s="($SERIAL" inside "$(…)" is not a subshell.
 COMMAND_START = r"(?:^|[;&|]|(?:^|(?<=[\s;&|]))\(|(?<!\$)\{|\bthen\b|\bdo\b|\belse\b|\bif\b|\b!)\s*"
@@ -212,6 +291,13 @@ def script_problems(text, script=None):
         allowed = (script, line.strip()) in ALLOWED_LINES
         if SHELL_WORD.search(b) and not allowed:
             found.append((n, "invokes a shell (by name, by path, piped into, or with -c): not on the allow-list"))
+        # a command position found on the lexed view, where code inside "$(…)" is code (#697 review, B1), and the
+        # word there read in the line itself, quotes and escapes and all
+        for m in re.finditer(WRAPPER_START, lexed[n - 1]):
+            word = SHELL_WORD_AS_WRITTEN.match(line, m.end())
+            wrapper = wrapper_named(word.group(0)) if word else None
+            if wrapper and not allowed:
+                found.append((n, "%s runs another command: what it runs is not checked (not on the allow-list)" % wrapper))
         # a command word that is a variable or a command's output ("$X", $X, "$(…)"): found at a command
         # position on the blanked view (a "(" or "|" in a quoted pattern or a [[ =~ ]] regex is not one),
         # then read in the line itself at the same position
@@ -229,8 +315,13 @@ def script_problems(text, script=None):
                 continue
             found.append((n, "a variable (or a command's output) used as a command: not on the allow-list"))
             break
-        if re.search(r"\benv\s+(?:-\S+\s+)*-S", line):
+        if re.search(r"\benv" + ENV_OPTIONS + r"\s+(?:-S|--split-string)\b", line):
             found.append((n, "env -S: it runs a whole command line given as a string"))
+        # a timeout, nice or exec prefix whose options this grammar cannot read: the command after it would go unchecked
+        for m in re.finditer(CALL_START + r"(timeout|nice|exec)\s+-", b):
+            if not re.match(r"(?:" + TIMEOUT_PREFIX + "|" + NICE_PREFIX + "|" + EXEC_PREFIX + r")\s+[^\s-]", b[m.start(1):]):
+                found.append((n, "%s %s prefix with options this check cannot read: what it runs is not checked"
+                              % ("an" if m.group(1)[0] in "aeiou" else "a", m.group(1))))
         # code taken from a string by an interpreter other than a shell (51)
         for m in re.finditer(r"(?<![\w.-])python[\d.]*\s+(?:-\w+\s+)*-\w*c\s+(\S)", line):
             if not line[m.start(1):].startswith("'"):          # a single-quoted literal, closed here or lines below
@@ -280,7 +371,10 @@ def script_problems(text, script=None):
         if re.search(r"\bset\s+(?:-\w*a\w*\b|-o\s+allexport\b)", b):
             found.append((n, "allexport: every variable set later, a PIN too, is exported"))
         for m in re.finditer(r"(?:" + REFUSED_START + r"|\bsudo\s+(?:-\S+\s+)*)(export|declare|typeset|readonly|local|env)\b(.*)", line):
-            words = re.findall(r"\"[^\"]*\"|'[^']*'|[^\s;&|]+", re.split(r"[;&|]", m.group(2))[0])
+            rest = re.split(r"[;&|]", m.group(2))[0]
+            if m.group(1) == "env":                          # its options and their arguments are neither assignments
+                rest = re.sub(r"^" + ENV_OPTIONS, "", rest)  # nor its command: env -u X NK_PIN=1 … still exports
+            words = re.findall(r"\"[^\"]*\"|'[^']*'|[^\s;&|]+", rest)
             flags = [w for w in words if w.startswith("-")]
             if m.group(1) in ("declare", "typeset", "readonly", "local") and not any("x" in f for f in flags):
                 continue                                     # not exported
@@ -484,6 +578,33 @@ def real_card_scripts():
         yield path, text, lines
 
 
+def card_buckets(rel, text):
+    """The buckets one script (its path relative to the repository) falls in: exactly one is right (#690)."""
+    drill = rel.startswith("e2e/") and rel.count("/") == 1
+    tool = any(TOOLS.search(line) for line in code_lines(text))
+    excused = rel.rsplit("/", 1)[-1] in NO_REAL_CARD or bool(softhsm_only(text))
+    found = set()
+    if drill and tool and not excused:
+        found.add("real card")
+    if drill and tool and excused:
+        found.add("excused")
+    if rel in CARD_TOOL_ELSEWHERE:
+        found.add("card tool, declared")
+    if not tool:
+        found.add("no card tool")
+    return found
+
+
+def misfiled(scripts):
+    """[(script, buckets)] for each (relative path, text) that is not in exactly one bucket."""
+    return [(rel, sorted(found)) for rel, text in scripts for found in [card_buckets(rel, text)] if len(found) != 1]
+
+
+def declared_no_card_with_a_card_tool(scripts):
+    """The scripts decided to drive no card that now name a card tool."""
+    return [rel for rel, text in scripts if rel in NOT_A_CARD_SCRIPT and "no card tool" not in card_buckets(rel, text)]
+
+
 # A PIN line that reaches a card through OpenSC: a YubiKey on the bus (ykman's view) is no gate for it (#225).
 OPENSC_PIN = re.compile(TOOLS.pattern + r"|--login\b|--so-pin\b|--pin\b|\$P11\b|\$\{P11\}|sc-hsm-pty|\s-l\b")
 
@@ -526,6 +647,108 @@ def ungated_pin_lines(lines, raw=None):
         if i > 0 and raw[i - 1].strip().startswith(EMULATED) and re.search(r"softhsm", raw[i], re.I):
             continue
         yield i + 1, line.strip()
+
+
+def tracked_scripts():
+    """Every shell script in the repository: git's list in a checkout, else (an exported tree) every *.sh in it."""
+    try:
+        listed = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--", "*.sh"], capture_output=True, text=True)
+    except OSError:                                    # no git at all (a slim image): the tree is all there is
+        listed = None
+    if listed is not None and listed.returncode == 0 and listed.stdout:
+        return sorted(ROOT / p for p in listed.stdout.split("\0") if p)
+    return sorted(p for p in ROOT.rglob("*.sh") if not any(part.startswith(".") for part in p.relative_to(ROOT).parts))
+
+
+def unscannable(paths):
+    """[(script, error)] for each of PATHS that script_problems() raises on: recorded, never skipped."""
+    failed = []
+    for path in paths:
+        try:
+            script_problems(path.read_text(), path.name)
+        except Exception as e:
+            failed.append((str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else path.name, f"{type(e).__name__}: {e}"))
+    return failed
+
+
+class EveryScriptCanBeScanned(unittest.TestCase):
+    """#687: script_problems() raised on two repository scripts, so they could not be scanned at all. Uncaught that
+    fails closed (an ERROR); a caller that catches it would skip the script and call it clean."""
+
+    def test_every_tracked_script_scans_without_raising(self):
+        scripts = tracked_scripts()
+        self.assertGreaterEqual(len(scripts), 57, f"found only {len(scripts)} scripts: the walk is not seeing the repository")
+        for name, error in unscannable(scripts):       # named here, not an ERROR: the script is what failed
+            with self.subTest(script=name):
+                self.fail(f"{name} cannot be scanned: {error}")
+
+    def test_the_walk_names_a_script_it_cannot_scan(self):
+        # Red control for the walk: a scan that raises is reported with the script's name, never swallowed.
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            planted = Path(d, "planted.sh"); planted.write_text("true\n")
+            with mock.patch(__name__ + ".script_problems", side_effect=IndexError("planted")):
+                self.assertEqual(unscannable([planted]), [("planted.sh", "IndexError: planted")])
+
+    def test_a_backslash_newline_inside_double_quotes_keeps_every_line(self):
+        lines = ['x "a \\', 'b" && y', "z"]
+        self.assertEqual(len(quoted_blanked(lines)), 3)
+        self.assertEqual(quoted_blanked(lines)[2], "z")
+
+    def test_a_continued_string_keeps_the_next_line_in_its_columns(self):
+        # 65's mutant MF kept the line count and shifted line 2 by one column: the variable used as a command after
+        # the continued string was then read as quoted, and nothing was found (#689 review).
+        found = script_problems('x="a \\\nb"; $CMD arg\n')
+        self.assertTrue(any(n == 2 and "used as a command" in why for n, why in found), found)
+
+    def test_the_lexer_refuses_to_drift_from_the_script(self):
+        # The check at its source: a lexer that loses a line is a named failure, not an IndexError far away.
+        with self.assertRaisesRegex(AssertionError, "saw 1 lines, the script has 2"):
+            _check_line_count(["a"], ["a", "b"])
+        self.assertEqual(_check_line_count(["a", "b"], ["x", "y"]), ["a", "b"])
+        # ...and the lexer goes through it: a check nothing calls guards nothing.
+        from unittest import mock
+        with mock.patch(__name__ + "._check_line_count", side_effect=AssertionError("checked")) as check:
+            with self.assertRaisesRegex(AssertionError, "checked"):
+                quoted_blanked(["a", "b"])
+        check.assert_called_once()
+
+
+class EveryScriptHasOneCardDecision(unittest.TestCase):
+    # #690: what each script does with a card is decided, once, and a change to it is a named failure.
+
+    def scripts(self):
+        return [(path.relative_to(ROOT).as_posix(), path.read_text()) for path in tracked_scripts()]
+
+    def test_every_tracked_script_is_in_exactly_one_card_bucket(self):
+        scripts = self.scripts()
+        for rel, found in misfiled(scripts):
+            with self.subTest(script=rel):
+                self.fail("%s is in %s: it must be in exactly one card bucket (a card tool outside the drills is declared in "
+                          "CARD_TOOL_ELSEWHERE, with why)" % (rel, found or "no bucket"))
+        # the real-card bucket is the set the isolation and gate checks read, not a second opinion
+        self.assertEqual({rel for rel, text in scripts if "real card" in card_buckets(rel, text)},
+                         {"e2e/" + path.name for path, _, _ in real_card_scripts()})
+        tracked = {rel for rel, _ in scripts}
+        for rel in list(CARD_TOOL_ELSEWHERE) + list(NOT_A_CARD_SCRIPT):
+            self.assertIn(rel, tracked, "%s is declared but is not a tracked script" % rel)
+
+    def test_a_declared_no_card_script_names_no_card_tool(self):
+        for rel in declared_no_card_with_a_card_tool(self.scripts()):
+            with self.subTest(script=rel):
+                self.fail("%s was decided to drive no card (%s), and now names a card tool: decide it again" % (rel, NOT_A_CARD_SCRIPT[rel]))
+
+    def test_a_card_tool_outside_the_drills_needs_a_decision(self):
+        self.assertEqual(misfiled([("e2e/lib/planted.sh", "pkcs11-tool -L\n")]), [("e2e/lib/planted.sh", [])])
+        self.assertEqual(misfiled([("e2e/lib/bench_cards.sh", "true\n")]),
+                         [("e2e/lib/bench_cards.sh", ["card tool, declared", "no card tool"])])
+        self.assertEqual(misfiled([("e2e/planted.sh", "pkcs11-tool -L\n"), ("deploy/planted.sh", "true\n")]), [])
+
+    def test_a_no_card_script_that_gains_a_card_tool_is_named(self):
+        self.assertEqual(declared_no_card_with_a_card_tool([("e2e/unlock-boot-qemu.sh", "pkcs11-tool -L\n"),
+                                                            ("deploy/baremetal/image/build-rootfs.sh", "true\n")]),
+                         ["e2e/unlock-boot-qemu.sh"])
 
 
 class RealCardScriptsAreIsolatedAndGated(unittest.TestCase):
@@ -740,6 +963,104 @@ class TheCheckItself(unittest.TestCase):
         for script, why in cases.items():
             with self.subTest(script):
                 self.assertTrue(any(why in w for w in self.problems(script)), self.problems(script))
+
+    def test_an_option_argument_does_not_hide_the_command_after_it(self):
+        # #685: a prefix's option that takes an argument (timeout -k 5, nice -n 5, env -u X) was read as a flag alone,
+        # its argument taken for the command, and the refused word after it went unseen.
+        refused = {
+            # controls, refused before #685 too
+            "timeout 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout -k 5 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            'timeout -k "$KILL_GRACE" 30 env FOO=1 pkcs11-tool -L\n': "exports FOO",
+            "timeout -k5 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout --kill-after=5 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout --kill-after 5 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout -s KILL 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout --signal=KILL 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout --signal KILL 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout --foreground -k 5 -s TERM 30 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "timeout -k 5 30 unset -f bench_gate\n": "unset of a function",
+            "nice -n 5 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "nice -n5 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "nice --adjustment=5 env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "env -u X FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "env --unset=X FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "env -C /tmp FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "env -u X -S 'bash -c x'\n": "env -S",
+            "exec -a x env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "exec -ax env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            "exec -c -a x env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            'exec -a "a b" env FOO=1 pkcs11-tool -L\n': "exports FOO",
+            "exec -a 'a b' env FOO=1 pkcs11-tool -L\n": "exports FOO",
+            'timeout -k "$G" -s "KILL" 30 env FOO=1 pkcs11-tool -L\n': "exports FOO",
+            "timeout -k 5 30 env -u X FOO=1 pkcs11-tool -L\n": "exports FOO",
+            # a prefix whose options the grammar cannot read is refused, not skipped
+            "timeout --bogus 30 pkcs11-tool -L\n": "timeout prefix with options this check cannot read",
+            "nice --bogus pkcs11-tool -L\n": "nice prefix with options this check cannot read",
+            "exec --bogus pkcs11-tool -L\n": "exec prefix with options this check cannot read",
+        }
+        for script, why in refused.items():
+            with self.subTest(refused=script):
+                self.assertTrue(any(why in w for w in self.problems(script)), self.problems(script))
+        # Controls: the same prefixes over allowed names and plain commands stay clean.
+        for fine in ("timeout -k 5 30 env LANG=C pkcs11-tool -L\n", 'timeout -k "$KILL_GRACE" 30 pkcs11-tool -L\n',
+                     "timeout 30 pkcs11-tool -L\n", "timeout --kill-after=5 --signal=TERM 30 pkcs11-tool -L\n",
+                     "nice -n 5 pkcs11-tool -L\n", "nice -5 pkcs11-tool -L\n", "env -u X pkcs11-tool -L\n",
+                     "env -i LANG=C pkcs11-tool -L\n", "exec -a x pkcs11-tool -L\n", "exec -c pkcs11-tool -L\n",
+                     'exec -a "a b" pkcs11-tool -L\n', "exec -l -c pkcs11-tool -L\n"):
+            with self.subTest(fine=fine):
+                self.assertEqual(self.problems(fine), [])
+
+    def test_a_long_prefix_is_read_in_linear_time(self):
+        # The option grammar is repeated; overlapping alternatives would make a refused line take exponential time.
+        import time
+        # "-uX" is a word an option-with-argument and a catch-all flag could both match, if they overlapped.
+        for line in ("env " + "-uX " * 22 + "\x00\n", "env " + "-i " * 40 + "-u X " * 40 + "\x00\n", "timeout " + "-k 5 " * 40 + "-\n",
+                     "nice " + "-n 5 " * 40 + "-\n", "exec " + "-a x " * 40 + "-\n", "env " + "--unset=X " * 40 + "-S\n"):
+            t0 = time.perf_counter()
+            self.problems(line)
+            self.assertLess(time.perf_counter() - t0, 1.0, line[:40])
+
+    def test_a_command_that_runs_another_is_refused(self):
+        # #688: each wrapper 65 measured, and the issue named, ahead of a refused export and ahead of a plain tool
+        for wrapper in ("stdbuf -oL", "setsid", "ionice -c 3", "chrt -o 0", "taskset -c 0", 'flock "$W/l"',
+                        "setpriv --reuid 1000", "xargs", "unshare -n", "nsenter -t 1 -n", "runuser -u u --", "chroot /x",
+                        "doas", "nohup setsid", "timeout 5 stdbuf -oL"):
+            for after in ("env FOO=1 pkcs11-tool -L", "pkcs11-tool -L"):
+                with self.subTest(wrapper=wrapper, after=after):
+                    found = self.problems("%s %s\n" % (wrapper, after))
+                    self.assertTrue(any("runs another command" in why for why in found), found)
+        self.assertTrue(any("runs another command" in why for why in self.problems("pkcs11-tool -L | xargs echo\n")))
+
+    def test_a_wrapper_in_a_substitution_after_sudo_or_spelled_otherwise_is_refused(self):
+        # #697 review B1: regalia-dc's two forms, inside "$(…)" and after sudo; then the same name spelled so that a
+        # name match misses it: by path, escaped, quoted, split by an empty quote
+        for line in ('x="$(stdbuf -oL env NK_PIN=1 pkcs11-tool -L)"', 'sudo stdbuf -oL env NK_PIN=1 pkcs11-tool -L',
+                     'sudo -u root -E stdbuf -oL pkcs11-tool -L', 'sudo --user=root -n setsid pkcs11-tool -L',
+                     'timeout 5 sudo -n stdbuf -oL pkcs11-tool -L', 'r=$(sudo setsid pkcs11-tool -L)',
+                     '/usr/bin/stdbuf -oL pkcs11-tool -L', '\\stdbuf -oL pkcs11-tool -L', '"stdbuf" -oL pkcs11-tool -L',
+                     "'stdbuf' -oL pkcs11-tool -L", "std''buf -oL pkcs11-tool -L", 's"et"sid pkcs11-tool -L',
+                     'x="$(/usr/bin/setsid pkcs11-tool -L)"'):
+            with self.subTest(line=line):
+                found = self.problems(line + "\n")
+                self.assertTrue(any("runs another command" in why for why in found), found)
+        # the wrapper is named, as the shell would run it
+        self.assertIn("stdbuf runs another command", " ".join(self.problems("std''buf -oL pkcs11-tool -L\n")))
+
+    def test_a_wrapper_name_that_is_not_the_command_is_not_one(self):
+        # an option's argument, a substitution's text, an assignment's value, a relative path: not a wrapper run
+        for fine in ("sudo -u stdbuf pkcs11-tool -L", "sudo --user stdbuf pkcs11-tool -L", 'x="$(printf stdbuf)"',
+                     "W=/x/stdbuf", "echo /usr/bin/stdbuf", "./stdbuf.d/run", "/usr/bin/stdbuffer x", "sudo pkcs11-tool -L"):
+            with self.subTest(fine=fine):
+                self.assertFalse(any("runs another command" in why for why in self.problems(fine + "\n")), self.problems(fine + "\n"))
+
+    def test_a_wrapper_name_inside_a_word_or_a_string_is_not_one(self):
+        # in a string, a ";" or "|" is no command boundary: the wrapper's name after one is text (strings are blanked)
+        for fine in ('echo "run it under stdbuf"\n', 'echo "a; stdbuf x"\n', "printf '%s' \"x | xargs y\"\n", "stdbuffer x\n",
+                     "my-setsid x\n", "./xargs.d/x\n", "W=/su/x\n"):
+            with self.subTest(fine=fine.strip()):
+                self.assertFalse(any("runs another command" in why for why in self.problems(fine)), self.problems(fine))
 
     def test_the_known_good_forms_pass(self):
         for fine in ("export -n NK_PIN\n", "export PATH=\"$PATH:/sbin\"\n", "declare -A SLOT\n",

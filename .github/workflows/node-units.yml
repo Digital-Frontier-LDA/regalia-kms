@@ -4,6 +4,11 @@
 name: node units
 
 on:
+  # #694: the paths below skip these jobs when only a Go package outside them changes (22 internal/ packages, by
+  # GA ruling: a full run per PR costs too much). The nightly runs every job unfiltered, as the backstop: GitHub
+  # applies `paths` to push and pull_request only. Hosted for now; owned runners once regalia-kms has a profile (#691).
+  schedule:
+    - cron: '23 2 * * *'
   pull_request:
     paths:
       - deploy/baremetal/**
@@ -28,6 +33,10 @@ on:
       - e2e/three-node-replace.py
       - cmd/regalia-unlock/**
       - e2e/lib/threenode.py
+      - e2e/lib/tpmdiag.py
+      - e2e/lib/apt-install-netem.sh
+      - tests/test_baremetal_heartbeat.py
+      - deploy/systemd/regalia-kms.sysusers.conf
   push:
     branches: [main]
     paths:
@@ -53,6 +62,10 @@ on:
       - e2e/three-node-replace.py
       - cmd/regalia-unlock/**
       - e2e/lib/threenode.py
+      - e2e/lib/tpmdiag.py
+      - e2e/lib/apt-install-netem.sh
+      - tests/test_baremetal_heartbeat.py
+      - deploy/systemd/regalia-kms.sysusers.conf
 
 permissions:
   contents: read
