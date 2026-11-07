@@ -104,7 +104,9 @@ def quoted_blanked(lines):
                 stack.pop()
         elif top == "D":
             if c == "\\" and i + 1 < len(text):
-                out.append("__")
+                # a backslash-newline inside "…" continues the string on the next line: the newline is kept, or the
+                # two lines merge and every later line is off by one (#687: unlock-boot-qemu.sh, build-rootfs.sh)
+                out.append("_\n" if text[i + 1] == "\n" else "__")
                 i += 2
                 continue
             if c == '"':
@@ -137,7 +139,14 @@ def quoted_blanked(lines):
                 stack.pop()
             out.append(c)
         i += 1
-    return "".join(out).split("\n")
+    return _check_line_count("".join(out).split("\n"), lines)
+
+
+def _check_line_count(blanked, lines):
+    """The per-line checks index one view by the other's line numbers: a lexer that loses a line fails here, by name."""
+    if len(blanked) != len(lines):
+        raise AssertionError("the quote lexer saw %d lines, the script has %d" % (len(blanked), len(lines)))
+    return blanked
 
 
 # A prefix command's options that take an argument, in each spelling getopt accepts: -k5, -k 5, --kill-after=5 and
@@ -258,7 +267,8 @@ def script_problems(text, script=None):
         # a timeout, nice or exec prefix whose options this grammar cannot read: the command after it would go unchecked
         for m in re.finditer(CALL_START + r"(timeout|nice|exec)\s+-", b):
             if not re.match(r"(?:" + TIMEOUT_PREFIX + "|" + NICE_PREFIX + "|" + EXEC_PREFIX + r")\s+[^\s-]", b[m.start(1):]):
-                found.append((n, "a %s prefix with options this check cannot read: what it runs is not checked" % m.group(1)))
+                found.append((n, "%s %s prefix with options this check cannot read: what it runs is not checked"
+                              % ("an" if m.group(1)[0] in "aeiou" else "a", m.group(1))))
         # code taken from a string by an interpreter other than a shell (51)
         for m in re.finditer(r"(?<![\w.-])python[\d.]*\s+(?:-\w+\s+)*-\w*c\s+(\S)", line):
             if not line[m.start(1):].startswith("'"):          # a single-quoted literal, closed here or lines below
@@ -557,6 +567,72 @@ def ungated_pin_lines(lines, raw=None):
         if i > 0 and raw[i - 1].strip().startswith(EMULATED) and re.search(r"softhsm", raw[i], re.I):
             continue
         yield i + 1, line.strip()
+
+
+def tracked_scripts():
+    """Every shell script in the repository: git's list in a checkout, else (an exported tree) every *.sh in it."""
+    try:
+        listed = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--", "*.sh"], capture_output=True, text=True)
+    except OSError:                                    # no git at all (a slim image): the tree is all there is
+        listed = None
+    if listed is not None and listed.returncode == 0 and listed.stdout:
+        return sorted(ROOT / p for p in listed.stdout.split("\0") if p)
+    return sorted(p for p in ROOT.rglob("*.sh") if not any(part.startswith(".") for part in p.relative_to(ROOT).parts))
+
+
+def unscannable(paths):
+    """[(script, error)] for each of PATHS that script_problems() raises on: recorded, never skipped."""
+    failed = []
+    for path in paths:
+        try:
+            script_problems(path.read_text(), path.name)
+        except Exception as e:
+            failed.append((str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else path.name, f"{type(e).__name__}: {e}"))
+    return failed
+
+
+class EveryScriptCanBeScanned(unittest.TestCase):
+    """#687: script_problems() raised on two repository scripts, so they could not be scanned at all. Uncaught that
+    fails closed (an ERROR); a caller that catches it would skip the script and call it clean."""
+
+    def test_every_tracked_script_scans_without_raising(self):
+        scripts = tracked_scripts()
+        self.assertGreaterEqual(len(scripts), 57, f"found only {len(scripts)} scripts: the walk is not seeing the repository")
+        for name, error in unscannable(scripts):       # named here, not an ERROR: the script is what failed
+            with self.subTest(script=name):
+                self.fail(f"{name} cannot be scanned: {error}")
+
+    def test_the_walk_names_a_script_it_cannot_scan(self):
+        # Red control for the walk: a scan that raises is reported with the script's name, never swallowed.
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            planted = Path(d, "planted.sh"); planted.write_text("true\n")
+            with mock.patch(__name__ + ".script_problems", side_effect=IndexError("planted")):
+                self.assertEqual(unscannable([planted]), [("planted.sh", "IndexError: planted")])
+
+    def test_a_backslash_newline_inside_double_quotes_keeps_every_line(self):
+        lines = ['x "a \\', 'b" && y', "z"]
+        self.assertEqual(len(quoted_blanked(lines)), 3)
+        self.assertEqual(quoted_blanked(lines)[2], "z")
+
+    def test_a_continued_string_keeps_the_next_line_in_its_columns(self):
+        # 65's mutant MF kept the line count and shifted line 2 by one column: the variable used as a command after
+        # the continued string was then read as quoted, and nothing was found (#689 review).
+        found = script_problems('x="a \\\nb"; $CMD arg\n')
+        self.assertTrue(any(n == 2 and "used as a command" in why for n, why in found), found)
+
+    def test_the_lexer_refuses_to_drift_from_the_script(self):
+        # The check at its source: a lexer that loses a line is a named failure, not an IndexError far away.
+        with self.assertRaisesRegex(AssertionError, "saw 1 lines, the script has 2"):
+            _check_line_count(["a"], ["a", "b"])
+        self.assertEqual(_check_line_count(["a", "b"], ["x", "y"]), ["a", "b"])
+        # ...and the lexer goes through it: a check nothing calls guards nothing.
+        from unittest import mock
+        with mock.patch(__name__ + "._check_line_count", side_effect=AssertionError("checked")) as check:
+            with self.assertRaisesRegex(AssertionError, "checked"):
+                quoted_blanked(["a", "b"])
+        check.assert_called_once()
 
 
 class RealCardScriptsAreIsolatedAndGated(unittest.TestCase):
