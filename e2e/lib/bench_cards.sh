@@ -35,9 +35,11 @@
 # with the default 16, a fifth reader gets no slot at all (measured 2026-09-24).
 
 BENCH_CARDS=()
+# Each token-tool call is bounded and escalates (#682): `timeout N` alone only sends SIGTERM, which a tool stuck in a
+# driver call can ignore; `-k 5` sends SIGKILL 5 s later. A literal, so sourcing this file still sets nothing.
 
 bench_slot(){ # <serial>
-  timeout 30 pkcs11-tool --module "$BENCH_MODULE" -L 2>/dev/null | python3 -I -c '
+  timeout -k 5 30 pkcs11-tool --module "$BENCH_MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 serial, slot, hits = sys.argv[1], None, []
 for line in sys.stdin:
@@ -50,7 +52,7 @@ print(hits[0] if len(hits) == 1 else "")' "$1"; }
 
 bench_gate(){ # <serial> [slot]
   [ "${#BENCH_CARDS[@]}" -gt 0 ] || { echo "bench_gate: bench_isolate was not called: no PIN" >&2; return 97; }
-  timeout 30 pkcs11-tool --module "$BENCH_MODULE" -L 2>/dev/null | python3 -I -c '
+  timeout -k 5 30 pkcs11-tool --module "$BENCH_MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 serial, want_slot, expected = sys.argv[1], sys.argv[2], int(sys.argv[3])
 cur, slots, hits = None, 0, []
@@ -100,7 +102,7 @@ bench_reader_gate(){ # <serial> <reader index>: the PC/SC reader at that index i
   # among the isolated ones (two cards can swap places). A Nitrokey's reader name carries its serial.
   [ "${#BENCH_CARDS[@]}" -gt 0 ] || { echo "bench_reader_gate: bench_isolate was not called: no PIN" >&2; return 97; }
   bench_gate "$1" || return 97
-  timeout 30 opensc-tool -l 2>/dev/null | python3 -I -c '
+  timeout -k 5 30 opensc-tool -l 2>/dev/null | python3 -I -c '
 import re, sys
 serial, index = sys.argv[1], sys.argv[2]
 for line in sys.stdin:

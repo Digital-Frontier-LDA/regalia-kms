@@ -12,6 +12,8 @@ import time
 import unittest
 from pathlib import Path
 
+from tests.hang_guard import DEAF_TO_TERM, run_bounded
+
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / "e2e" / "lib" / "p11_extract_probe.py"
 MODULE = next((m for m in ("/usr/lib/softhsm/libsofthsm2.so", "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so")
@@ -206,46 +208,16 @@ class TheProbeIsBounded(unittest.TestCase):
             script = "\n".join(["set -u", "target_ok(){ return 0; }", 'SLOT=0 SERIAL=s MODULE=m Q_PIN=p HERE="$1"',
                                  "PROBE_BOUND=2", "KILL_GRACE=1", p11probe_definition(CONTRACT.read_text()),
                                  'out="$(p11probe x 2>&1)"; rc=$?; printf "rc=%s\\n%s\\n" "$rc" "$out"'])
-            # Its own session, so a hang is killed as a whole group: killing bash alone would leave the sleeping probe
-            # holding the pipes, and communicate() would then wait the full 600 s.
-            proc = subprocess.Popen(["bash", "-c", script, "bash", d], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    text=True, start_new_session=True)
-            try:
-                stdout, _ = proc.communicate(timeout=30)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, 9)
-                proc.communicate()
-                self.fail("p11probe did not return within 30 s against a probe that never answers: it is unbounded")
+            # A hang is cleaned up whole (tests/hang_guard.py): timeout(1) leaves the session's own process group.
+            result = run_bounded(script, d)
+        self.assertFalse(result.hung, "p11probe did not return within 30 s against a probe that never answers: it is unbounded")
+        self.assertEqual(result.leftovers, [], "p11probe left processes running")
+        stdout = result.stdout
         self.assertIn("rc=124", stdout, "a timed-out probe must return timeout's status, not swallow it: " + stdout)
         self.assertIn("did not answer within 2 s", stdout, stdout)
 
 
-# A stand-in that ignores SIGTERM, as a PKCS#11 module stuck in a driver call can: only SIGKILL ends it.
-# It writes its pid next to itself: timeout(1) moves into its own process group, so killing the test's group on a hang
-# would miss it, and it would hold the pipes for its full 600 s.
-DEAF_TO_TERM = ("import os, signal, sys, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                "open(os.environ['DEAF_PIDS'], 'a').write(f'{os.getpid()}\\n')\ntime.sleep(600)\n")
 BOUND, GRACE = 2, 1
-
-
-def run_bounded(script, d, limit=30):
-    """Run SCRIPT in its own session, so a hang is killed as a whole group; returns (stdout, seconds) or None on a hang."""
-    pids = Path(d, "deaf.pids")
-    proc = subprocess.Popen(["bash", "-c", script, "bash", d], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, start_new_session=True, env={**os.environ, "DEAF_PIDS": str(pids)})
-    t0 = time.monotonic()
-    try:
-        stdout, _ = proc.communicate(timeout=limit)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, 9)
-        for pid in (pids.read_text().split() if pids.exists() else []):
-            try:
-                os.kill(int(pid), 9)
-            except ProcessLookupError:
-                pass
-        proc.communicate(timeout=10)
-        return None
-    return stdout, time.monotonic() - t0
 
 
 def bounded_calls(text):
@@ -286,8 +258,9 @@ class EveryBoundEscalatesToKill(unittest.TestCase):
                                  f"PROBE_BOUND={BOUND}", f"KILL_GRACE={GRACE}", p11probe_definition(CONTRACT.read_text()),
                                  'out="$(p11probe x 2>&1)"; rc=$?; printf "rc=%s\\n%s\\n" "$rc" "$out"'])
             got = run_bounded(script, d)
-        self.assertIsNotNone(got, "p11probe did not return within 30 s against a probe that ignores SIGTERM: no SIGKILL")
-        stdout, took = got
+        self.assertFalse(got.hung, "p11probe did not return within 30 s against a probe that ignores SIGTERM: no SIGKILL")
+        self.assertEqual(got.leftovers, [], "p11probe left processes running")
+        stdout, took = got.stdout, got.seconds
         self.assertIn("rc=137", stdout, "a probe killed after the grace must return SIGKILL's status: " + stdout)
         self.assertIn(f"did not answer within {BOUND} s", stdout, stdout)
         self.assertLess(took, BOUND + GRACE + 5, f"took {took:.1f} s against a bound of {BOUND} s and a grace of {GRACE} s")
@@ -302,8 +275,9 @@ class EveryBoundEscalatesToKill(unittest.TestCase):
                                  line.replace(" 60 pkcs11-tool ", f" {BOUND} pkcs11-tool "),
                                  'p11 -L; printf "rc=%s\\n" "$?"'])
             got = run_bounded(script, d)
-        self.assertIsNotNone(got, "p11 did not return within 30 s against a pkcs11-tool that ignores SIGTERM: no SIGKILL")
-        stdout, took = got
+        self.assertFalse(got.hung, "p11 did not return within 30 s against a pkcs11-tool that ignores SIGTERM: no SIGKILL")
+        self.assertEqual(got.leftovers, [], "p11 left processes running")
+        stdout, took = got.stdout, got.seconds
         self.assertIn("rc=137", stdout, stdout)
         self.assertLess(took, BOUND + GRACE + 5, f"took {took:.1f} s against a bound of {BOUND} s and a grace of {GRACE} s")
 
