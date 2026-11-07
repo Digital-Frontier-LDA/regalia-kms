@@ -326,10 +326,15 @@ if [ -e "$DEST" ] && [ "$REPLACE" = 0 ]; then fail "$DEST exists; pass --replace
 # the sealed object's name and its encrypted contents.
 BLOB_V2_RE='^regalia-pin-blob v2 tpm2-import nist-p256 sha256=([0-9a-f]{64})$'
 open_blob(){
-  local f="$1" size head ver want fp total off part sz
-  size="$(stat -c %s "$f" 2>/dev/null)" || fail "--from-blob: cannot read $f"
+  local f="$1" c size head ver want fp total off part sz
+  # ONE copy, read once (at most 4097 bytes): everything below reads the copy, so the header that is
+  # checked and the body that is imported are the same bytes even if the file changes meanwhile
+  bw="$(mktemp -d)" || fail "cannot create a temporary directory"
+  c="$bw/blob"
+  head -c 4097 -- "$f" > "$c" 2>/dev/null || fail "--from-blob: cannot read $f"
+  size="$(stat -c %s "$c" 2>/dev/null)" || fail "--from-blob: cannot read $f"
   # an unprintable byte becomes '?': the header is ASCII, and a binary blob must not reach the terminal
-  head="$(head -c 113 "$f" | tr -c '[:print:]' '?')"
+  head="$(head -c 113 "$c" | tr -c '[:print:]' '?')"
   case "$head" in
     "regalia-pin-blob v2 "*) ;;
     "regalia-pin-blob v"*) ver="${head#regalia-pin-blob v}"; ver="${ver%% *}"
@@ -339,16 +344,15 @@ open_blob(){
        fi
        fail "$f is not a PIN blob (no 'regalia-pin-blob v2' header). No card was touched; nothing was sealed" ;;
   esac
-  [ "$size" -le 4096 ] || fail "$f is $size bytes, too large for a v2 PIN blob. No card was touched; nothing was sealed"
+  [ "$size" -le 4096 ] || fail "$f is over 4096 bytes, too large for a v2 PIN blob. No card was touched; nothing was sealed"
   [[ "$head" =~ $BLOB_V2_RE ]] || fail "$f has a malformed v2 header. No card was touched; nothing was sealed"
   want="${BASH_REMATCH[1]}"
-  [ "$(tail -c +114 "$f" | head -c 1 | od -An -tx1 | tr -d ' \n')" = 0a ] || fail "$f has a malformed v2 header. No card was touched; nothing was sealed"
+  [ "$(tail -c +114 "$c" | head -c 1 | od -An -tx1 | tr -d ' \n')" = 0a ] || fail "$f has a malformed v2 header. No card was touched; nothing was sealed"
   fp="$(tpm2_readpublic -Q -c "$IMPORT_HANDLE" -f pem -o /dev/stdout 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | sha256sum | cut -d' ' -f1)" || fp=""
   [ -n "$fp" ] && [ "$fp" != "$(: | sha256sum | cut -d' ' -f1)" ] \
     || fail "this TPM has no import key at $IMPORT_HANDLE (seal-hsm-pin.sh --init-import-key). No card was touched; nothing was sealed"
   [ "$fp" = "$want" ] || fail "$f was made for the import key sha256 $want; this TPM's key at $IMPORT_HANDLE is $fp: a blob for another host, or for a key since replaced. No card was touched; nothing was sealed"
-  bw="$(mktemp -d)" || fail "cannot create a temporary directory"
-  tail -c +115 "$f" > "$bw/body" || fail "cannot read $f"
+  tail -c +115 "$c" > "$bw/body" || fail "cannot read $f"
   total=$((size - 114)); off=0
   for part in pub dpriv seed; do
     [ $((off + 2)) -le "$total" ] || fail "$f is truncated (no $part). No card was touched; nothing was sealed"
@@ -369,6 +373,13 @@ open_blob(){
   PIN="$(tpm2_unseal -c "$bw/pin.ctx" 2>/dev/null)" || PIN=""
   flush_in "$bw"; rm -rf "$bw"; bw=""
   [ -n "$PIN" ] || fail "the TPM could not unseal $f (not a sealed PIN object). No card was touched; nothing was sealed"
+  # The PIN's form, checked here too (the same rule as below), so that a well-made blob of a malformed
+  # PIN stops before any card is looked for; the PIN itself is never printed
+  if [ "$KIND" = yubikey ]; then
+    [[ "$PIN" =~ ^[0-9]{6,8}$ ]] || { PIN=""; fail "the value sealed in $f is not a YubiKey PIV PIN (6-8 digits). No card was touched; nothing was sealed"; }
+  else
+    [[ "$PIN" =~ ^[0-9]{6,16}$ ]] || { PIN=""; fail "the value sealed in $f is not a SmartCard-HSM user PIN (6-16 digits). No card was touched; nothing was sealed"; }
+  fi
 }
 PIN=""; PIN2=""; bw=""; trap 'PIN=""; PIN2=""; [ -n "$bw" ] && rm -rf "$bw"' EXIT
 if [ -n "$FROM_BLOB" ]; then

@@ -13,7 +13,8 @@
 #   4  under it, a child with EXACTLY the import key's template (ECC P-256, AES-128-CFB,
 #      fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt|noda), loaded, NOT persisted
 #   5  a v2 blob of a TEST value (not a PIN) made the ceremony's way, offline (tpm2_duplicate --tcti none),
-#      from the child's PEM and the pinned template; the rebuilt parent compared with the TPM's, byte for byte
+#      from the child's PEM and the pinned template; the rebuilt parent compared with the TPM's, byte for byte;
+#      the sealed object's public unique is not SHA-256 of the value, and differs between two blobs of it
 #   6  TPM2_Import + TPM2_Load + TPM2_Unseal under the child: the test value back, exactly
 #   7  a relabelled and an altered blob: TPM2_Import must refuse both
 #   8  TPM2_PT_LOCKOUT_COUNTER read again: it must not have moved
@@ -77,6 +78,17 @@ pin_parent_tpm2b "$W/k.pem" "$W/k.rebuilt" && cmp -s "$W/k.tss" "$W/k.rebuilt" \
   && P "the pinned template rebuilt from the PEM is this TPM's public area, byte for byte" || F "the rebuilt parent differs from this TPM's"
 VALUE="0123456789"     # a test value, never a real PIN
 printf '%s' "$VALUE" | pin_blob_v2 "$W/k.pem" "$W/t.blob" "$W/cer" && P "blob made ($(wc -c < "$W/t.blob") bytes)" || F "blob not made"
+# the sealed object's public area travels in the clear: its unique is H(seedValue || value), so it is not
+# SHA-256(value) and differs between two blobs of the same value (offline: tpm2_duplicate --tcti none, no TPM)
+uniq(){ python3 -I -c '
+import sys; b=open(sys.argv[1],"rb").read()[114:]
+assert b[2:6]==bytes.fromhex("0008000b") and b[10:16]==bytes.fromhex("000000100020"), "not a sealed object public area"
+print(b[16:48].hex())' "$1" 2>/dev/null; }
+printf '%s' "$VALUE" | pin_blob_v2 "$W/k.pem" "$W/t2.blob" "$W/cer" || F "a second blob not made"
+u1="$(uniq "$W/t.blob")"; u2="$(uniq "$W/t2.blob")"
+[ "${#u1}" = 64 ] && [ "$u1" != "$(printf '%s' "$VALUE" | sha256sum | cut -d' ' -f1)" ] \
+  && P "the sealed object's public unique is not SHA-256 of the value" || F "unique: ${u1:-unreadable}"
+[ "${#u2}" = 64 ] && [ "$u1" != "$u2" ] && P "two blobs of the same value have different unique values" || F "unique $u1 and ${u2:-unreadable}"
 
 split(){ python3 -I -c '
 import sys; b=open(sys.argv[1],"rb").read()[114:]; o=0

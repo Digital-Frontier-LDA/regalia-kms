@@ -46,9 +46,10 @@ ECC P-256 (about 128-bit), AES-128 (128-bit), SHA-256 and HMAC-SHA-256 (at least
 128-bit overall**. That meets the requirement and matches RSA-3072 (also about 128-bit). The import
 key is generated in the TPM (`sensitiveDataOrigin`) and is `fixedTPM|fixedParent`, as before.
 
-### No inner wrap: a departure from the brief
+### Outer wrap only (the owner's decision, 2026-11-07)
 
-The brief asked for "an outer seed + inner wrap". This design uses the **outer wrap only**:
+The original brief asked for "an outer seed + inner wrap". The owner decided on 2026-11-07 that the
+blob uses the **outer wrap only**, for these reasons:
 
 - The inner wrap's key (`encryptionKey`) is a **clear parameter** of TPM2_Import. If it travelled in
   the blob, it would add no confidentiality: whoever holds the blob would hold the key. It adds
@@ -59,8 +60,8 @@ The brief asked for "an outer seed + inner wrap". This design uses the **outer w
 - tpm2-tools 5.7 cannot make an inner wrap when it duplicates an external object (`-o` is refused
   with `-k`; measured 2026-11-07). An inner wrap would need code of our own, which the brief rules out.
 
-**This needs the owner's agreement.** If an inner wrap is still wanted, say which channel its key
-would travel on.
+Decided: outer wrap only. An inner wrap would be reconsidered only together with a separate channel
+for its key.
 
 ## The import key (the parent)
 
@@ -196,8 +197,8 @@ run**), commissioning on that module types the PIN from the sealed PIN card (sea
 
 ## Not covered here
 
-- **TPM2_Certify of the import key by the EK-bound AK**: the brief says to keep it, but **no such
-  certification of the import key exists in this tree** (only `signkey.py` certifies the #199
-  signing key). Nothing was added or removed. The import key is trusted by the hand-copied
-  fingerprint alone, as before.
+- **TPM2_Certify of the import key by the EK-bound AK** (ADR-0002 D21 point 2): required, and **not
+  yet built**. It is regalia-kms#702. Today only `signkey.py` certifies a key (the #199 signing key);
+  the import key is trusted by the hand-copied fingerprint alone. No host is commissioned on this
+  path until #702 lands.
 - The SLB9665's TPM2_PT_MAX_AUTH_FAIL of 31 (not 32) from #671 is not addressed here.

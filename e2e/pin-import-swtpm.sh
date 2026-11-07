@@ -10,7 +10,9 @@
 #      makes a DIFFERENT key; the parent public area the ceremony rebuilds from the PEM is the TPM's,
 #      byte for byte
 #   2  a v2 blob made the ceremony's way (tpm2_duplicate --tcti none, no TPM) for THIS TPM imports,
-#      loads and unseals, and the script goes on to look for the card (and stops there: there is none)
+#      loads and unseals, and the script goes on to look for the card (and stops there: there is none);
+#      the sealed object's public unique is not SHA-256(PIN) and differs between two blobs of one PIN;
+#      a blob sealing a value that is not a PIN is refused before the card is looked for
 #   3  refused BEFORE any card is looked at: a blob for ANOTHER TPM (by its label, and relabelled as
 #      this host's), an altered, truncated or padded blob, an RSA-OAEP blob from before #671 (with a
 #      message saying so), and an unknown format version
@@ -96,6 +98,25 @@ for n in ("pub","dpriv","seed"):
 got="$(export TPM2TOOLS_TCTI="$TA"; tpm2_import -Q -C 0x81000101 -u "$d/pub" -i "$d/dpriv" -s "$d/seed" -r "$d/priv" && tpm2_flushcontext -t \
   && tpm2_load -Q -C 0x81000101 -u "$d/pub" -r "$d/priv" -c "$d/o.ctx" && tpm2_unseal -c "$d/o.ctx" | od -An -tx1 | tr -d ' \n'; tpm2_flushcontext -t)"
 [ "$got" = "$(printf '%s' "$PIN" | od -An -tx1 | tr -d ' \n')" ] && P "TPM2_Unseal gives exactly the PIN's bytes, no newline" || F "unsealed bytes $got"
+# the sealed object's public area is in the clear in the blob: its `unique` must not let a PIN be checked
+# against it (it is H(seedValue || PIN), the seedValue being secret and fresh in each blob), so it is not
+# SHA-256(PIN), and two blobs of the same PIN carry different values
+uniq(){ python3 -I -c '
+import sys; b=open(sys.argv[1],"rb").read()[114:]
+# TPM2B_PUBLIC: size, type KEYEDHASH, nameAlg SHA-256, attributes, empty authPolicy, scheme NULL, unique (32)
+assert b[2:6]==bytes.fromhex("0008000b") and b[10:16]==bytes.fromhex("000000100020"), "not a sealed object public area"
+print(b[16:48].hex())' "$1"; }
+enc "$APUB" "$W/a2.blob" || F "a second blob of the same PIN could not be made"
+ua="$(uniq "$W/a.blob")"; ua2="$(uniq "$W/a2.blob")"
+[ "${#ua}" = 64 ] && [ "$ua" != "$(printf '%s' "$PIN" | sha256sum | cut -d' ' -f1)" ] \
+  && [ "$ua" != "$(printf '%s\n' "$PIN" | sha256sum | cut -d' ' -f1)" ] \
+  && P "the sealed object's public unique is not SHA-256(PIN)" || F "unique: ${ua:-unreadable} (SHA-256(PIN) or not parsed)"
+[ "${#ua2}" = 64 ] && [ "$ua" != "$ua2" ] && P "two blobs of the same PIN have different unique values" || F "two blobs, unique $ua and ${ua2:-unreadable}"
+# a well-made blob of a value that is not a PIN: refused once unsealed, before the card is looked for
+printf '12ab5' | pin_blob_v2 "$APUB" "$W/notpin.blob" "$W/cer" || F "the not-a-PIN blob could not be made"
+out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/notpin.blob")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'is not a SmartCard-HSM user PIN' <<< "$out" && ! grep -q 'no card DENK0000001' <<< "$out" && ! grep -qF '12ab5' <<< "$out" \
+  && P "a blob sealing a value that is not a PIN is refused before the card check, the value not printed (exit $rc)" || F "not a PIN: $out"
 
 hdr "3  wrong, altered and old blobs are refused before any card is looked at"
 enc "$W/B.pem" "$W/b.blob"

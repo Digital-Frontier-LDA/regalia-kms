@@ -1153,6 +1153,10 @@ def import_key(host, expected=None):
         return ((m.group(2) if m and m.group(2) is not None else m.group(1) if m else None) or "?").strip()
     got = {name: field(name) for name in IMPORT_KEY_TEMPLATE}
     wrong = ["%s %s (not %s)" % (n, got[n], want) for n, want in IMPORT_KEY_TEMPLATE.items() if got[n] != want]
+    # --init-import-key sets no authPolicy; tpm2_readpublic prints this line only for a non-empty one
+    policy = re.search(r"^authorization policy:[ \t]*(\S+)", yaml, re.M)
+    if policy:
+        wrong.append("authorization policy %s (not empty)" % policy.group(1)[:16])
     if wrong or attrs != IMPORT_KEY_ATTRS:
         if attrs != IMPORT_KEY_ATTRS:
             wrong.append("attributes %s (not %s)" % ("|".join(sorted(attrs)), "|".join(sorted(IMPORT_KEY_ATTRS))))

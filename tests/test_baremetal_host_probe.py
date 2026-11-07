@@ -1109,7 +1109,10 @@ class HostProbe(unittest.TestCase):
                 ("an ECDH scheme", IMPORT_YAML.replace("scheme:\n  value: null", "scheme:\n  value: ecdh"), "scheme ecdh (not null)"),
                 ("SHA-1 names", IMPORT_YAML.replace("name-alg:\n  value: sha256", "name-alg:\n  value: sha1"), "name-alg sha1 (not sha256)"),
                 ("a KDF", IMPORT_YAML.replace("kdfa-alg:\n  value: null", "kdfa-alg:\n  value: kdf1_sp800_56a"), "kdfa-alg kdf1_sp800_56a"),
-                ("no curve line", IMPORT_YAML.replace("curve-id:\n  value: NIST p256\n  raw: 0x3\n", ""), "curve-id ? (not NIST p256)")):
+                ("no curve line", IMPORT_YAML.replace("curve-id:\n  value: NIST p256\n  raw: 0x3\n", ""), "curve-id ? (not NIST p256)"),
+                # tpm2_readpublic prints this line only when the key has a policy; --init-import-key sets none
+                ("an authPolicy", IMPORT_YAML + "authorization policy: ae7f391387f5e2e0fc16e46e2dc0f5f431205b7b978bcfac0d8ab0c0a0016434\n",
+                 "authorization policy ae7f391387f5e2e0 (not empty)")):
             with self.subTest(label):
                 h = FakeHost()
                 h.runs[("tpm2_readpublic", "-c", host_probe.IMPORT_HANDLE)] = (0, yaml)
