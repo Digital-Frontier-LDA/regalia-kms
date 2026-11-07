@@ -56,24 +56,32 @@ cleanup_keys(){ local id; wait_back 2>/dev/null || return 0; for id in "${CREATE
   p11l --delete-object --type privkey --id "$id" >/dev/null 2>&1; p11l --delete-object --type pubkey --id "$id" >/dev/null 2>&1; done; }
 trap 'restore; cleanup_keys; rm -rf "$W"' EXIT
 
-# Every bounded call escalates (#682, as #679 did for pkcs11-contract.sh): plain `timeout N` only sends SIGTERM,
-# which a PKCS#11 module stuck in a driver call can ignore. After KILL_GRACE more seconds it gets SIGKILL (137).
+# Every token call is bounded by lib/bounded.py (#684), not timeout(1): its -k reaches the whole process group only
+# with GNU coreutils (uutils' timeout signals the tool alone, and a forked child outlives the bound). bounded.py sends
+# SIGTERM to the tool's process group, and KILL_GRACE s later SIGKILL if anything is left (status 124, or 137).
 KILL_GRACE=5
-slot_of(){ timeout -k "$KILL_GRACE" 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
+bounded(){ python3 -I "$(dirname "$0")/lib/bounded.py" "$1" "$KILL_GRACE" "${@:2}"; }
+# A call its bound ended is an ERROR, never a negative answer (#684): a hung listing prints no slot, which reads
+# as "the token is gone" and would make a hang a silent PASS. Listings return HUNG for it, and checks fail on it.
+HUNG=3
+hung(){ [ "$1" = 124 ] || [ "$1" = 137 ]; }
+# listed takes the PIPESTATUS of "bounded … | python3 …": HUNG if the bound ended the listing, else the parser's status
+listed(){ hung "$1" && return "$HUNG"; return "$2"; }
+slot_of(){ bounded 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 serial = sys.argv[1]; slot = None; hits = []
 for line in sys.stdin:
     m = re.match(r"Slot (\d+) \((0x[0-9a-f]+)\)", line)
     if m: slot = m.group(2)
     if "serial num" in line and line.split(":", 1)[1].strip() == serial: hits.append(slot)
-print(hits[0] if len(hits) == 1 else "")' "$SERIAL"; }
+print(hits[0] if len(hits) == 1 else "")' "$SERIAL"; listed "${PIPESTATUS[@]}"; }
 wait_back(){ local i; for i in $(seq 1 30); do SLOT="$(slot_of)"; [ -n "$SLOT" ] && return 0; sleep 1; done; return 1; }
 # EVERY LOGIN IS GATED ON WHAT IS IN THE SLOT NOW (review of #152): slot $SLOT must hold the token with
 # serial $SERIAL, no other slot may hold that serial, and under the suite's own isolated config it must
 # be the ONLY slot. During a removal the check fails and no PIN is sent; a reader that arrived later and
 # took this slot ID fails it too. Residual: the token removed AND another arriving in the milliseconds
-# between this check and pkcs11-tool's own login. Every call is bounded (timeout 60 s, then SIGKILL).
-target_ok(){ timeout -k "$KILL_GRACE" 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
+# between this check and pkcs11-tool's own login. Every call is bounded (bounded.py: 30 s, then SIGKILL).
+target_ok(){ bounded 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 slot, serial, isolated = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 cur, slots, hits = None, 0, []
@@ -84,9 +92,11 @@ for line in sys.stdin:
     elif "serial num" in line and line.split(":", 1)[1].strip() == serial:
         hits.append(cur)
 ok = hits == [slot] and (slots == 1 or not isolated)
-sys.exit(0 if ok else 1)' "$SLOT" "$SERIAL" "${OWN_OPENSC_CONF:-0}"; }
-p11(){ timeout -k "$KILL_GRACE" 60 pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
-p11l(){ target_ok || { echo "p11l: slot $SLOT does not hold $SERIAL alone right now: no login, no PIN" >&2; return 97; }
+sys.exit(0 if ok else 1)' "$SLOT" "$SERIAL" "${OWN_OPENSC_CONF:-0}"; listed "${PIPESTATUS[@]}"; }
+p11(){ bounded 60 pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
+p11l(){ target_ok || { [ $? = "$HUNG" ] && { echo "p11l: the slot listing hung: no login, no PIN" >&2; return 124; }
+    echo "p11l: slot $SLOT does not hold $SERIAL alone right now: no login, no PIN" >&2; return 97
+  }
   REGALIA_Q_PIN="$Q_PIN" p11 --login --pin env:REGALIA_Q_PIN "$@"; }
 SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "no single token with serial $SERIAL"
 # ONE READER ONLY from here on (e2e/lib/opensc_isolate.py): another token can no longer take this
@@ -95,12 +105,12 @@ if [ "${OWN_OPENSC_CONF:-0}" = 1 ]; then
   HSM_IGNORE_READERS="${HSM_IGNORE_READERS:-Yubico}" python3 -Es "$(dirname "$0")/lib/opensc_isolate.py" "$SLOT" "$W/opensc.conf" "$MODULE" >/dev/null \
     || die "cannot isolate this token's reader in OpenSC"
   SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "the token is not visible after isolating its reader"
-  [ "$(timeout -k "$KILL_GRACE" 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | grep -c '^Slot')" = 1 ] || die "more than one slot is visible after isolation"
+  [ "$(bounded 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | grep -c '^Slot')" = 1 ] || die "more than one slot is visible after isolation"
 fi
 # The USB device to remove is the one BEHIND THIS TOKEN: the serial pcscd puts in the slot's reader
 # name (the last parenthesised group, from the device's iSerialNumber), matched to exactly one device
 # in sysfs. A default vendor:product once removed the Nitrokey while the Pico was under test.
-USB_SERIAL="$(timeout -k "$KILL_GRACE" 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
+USB_SERIAL="$(bounded 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 slot = sys.argv[1]
 for line in sys.stdin:
@@ -138,9 +148,25 @@ sign_once(){ printf 'm %s' "$1" > "$W/m$1"; openssl dgst -sha256 -binary "$W/m$1
   p11l --sign --mechanism ECDSA --id "$ID_EC" --signature-format openssl -i "$W/h$1" -o "$W/s$1" 2>>"$W/sign.err" >/dev/null; }
 log "device $SERIAL usb $USBDEV module $MODULE $(opensc-tool --info 2>&1 | head -1)"
 
+# The NEGATIVE checks: each passes only on an answer the tool gave, never on a call its bound ended (#684).
+gone_while_removed(){ local s; s="$(slot_of)"; case $? in
+    "$HUNG") F "the slot listing hung while the token was removed: a hang is no answer, so 'gone' is not measured";;
+    *) [ -z "$s" ] && P "the token is gone while removed" || F "the token is still listed while removed";; esac; }
+absent_read_fails(){ local out rc; out="$(p11 --read-object --type pubkey --id "$ID_EC" -o "$W/px" 2>&1)"; rc=$?
+  log "no-login read without token (slot $STALE): rc=$rc $out"
+  if hung "$rc"; then F "the read on the absent token's slot hung (rc=$rc): a hang is no failure of the read"
+  elif [ "$rc" != 0 ] && [ ! -s "$W/px" ]; then P "the PKCS#11 layer finds nothing on the absent token's slot (no fallback; no PIN involved)"
+  else F "a read on the absent token's slot returned data"; fi; }
+absent_sign_fails(){ local out rc; out="$(p11l --sign --mechanism ECDSA --id "$ID_EC" -i "$W/h1" -o "$W/sx" 2>&1)"; rc=$?
+  log "startup without token (slot $STALE, empty): rc=$rc $out"
+  if hung "$rc"; then F "the sign on the absent token's slot hung (rc=$rc): a hang is no failure of the sign"
+  elif [ "$rc" != 0 ] && [ ! -s "$W/sx" ] && ! grep -q 'CKR_PIN' <<< "$out"; then
+    P "an operation with the token absent fails outright (no fallback, no output, no PIN presented)"
+  else F "an operation with the token absent did not fail cleanly: $(tail -1 <<< "$out")"; fi; }
+
 hdr "1  idle removal"
 remove; sleep 2
-[ -z "$(slot_of)" ] && P "the token is gone while removed" || F "the token is still listed while removed"
+gone_while_removed
 restore; wait_back && P "restored and found again by serial (slot $SLOT)" || F "not back after restore"
 same_keys && P "the same keys are there" || F "keys changed or missing after idle removal"
 
@@ -206,7 +232,7 @@ hdr "4  startup without the token"
 # the attempt is not made.
 STALE="$SLOT"
 remove; sleep 2
-slot_has_token(){ timeout -k "$KILL_GRACE" 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
+slot_has_token(){ bounded 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 want, cur, hit = sys.argv[1], None, False
 for line in sys.stdin:
@@ -215,21 +241,20 @@ for line in sys.stdin:
         cur = m.group(1)
     elif cur == want and "token label" in line:
         hit = True
-sys.exit(0 if hit else 1)' "$1"; }
-if [ -n "$(slot_of)" ]; then
+sys.exit(0 if hit else 1)' "$1"; listed "${PIPESTATUS[@]}"; }
+LISTED="$(slot_of)"; LISTED_RC=$?
+slot_has_token "$STALE"; HELD=$?
+if [ "$LISTED_RC" = "$HUNG" ] || [ "$HELD" = "$HUNG" ]; then
+  F "a slot listing hung after the removal: a hang is no answer, so no startup test"
+elif [ -n "$LISTED" ]; then
   F "the token is still listed while removed: no startup test"
-elif slot_has_token "$STALE"; then
+elif [ "$HELD" = 0 ]; then
   F "slot $STALE holds another token after the removal: not presenting this token's PIN to it"
 else
   # The PKCS#11 layer itself, with NO login and therefore no PIN: reading the key's public object on the
   # removed token's slot must fail and produce nothing (no fallback to another token).
-  out0="$(p11 --read-object --type pubkey --id "$ID_EC" -o "$W/px" 2>&1)"; rc0=$?; log "no-login read without token (slot $STALE): rc=$rc0 $out0"
-  [ "$rc0" != 0 ] && [ ! -s "$W/px" ] && P "the PKCS#11 layer finds nothing on the absent token's slot (no fallback; no PIN involved)" \
-    || F "a read on the absent token's slot returned data"
-  out="$(p11l --sign --mechanism ECDSA --id "$ID_EC" -i "$W/h1" -o "$W/sx" 2>&1)"; rc=$?; log "startup without token (slot $STALE, empty): rc=$rc $out"
-  [ "$rc" != 0 ] && [ ! -s "$W/sx" ] && ! grep -q 'CKR_PIN' <<< "$out" \
-    && P "an operation with the token absent fails outright (no fallback, no output, no PIN presented)" \
-    || F "an operation with the token absent did not fail cleanly: $(tail -1 <<< "$out")"
+  absent_read_fails
+  absent_sign_fails
 fi
 restore; wait_back && sign_once start && P "it works once the token is back" || F "no recovery after restore"
 

@@ -21,6 +21,14 @@ DEAF_TO_TERM = ("import os, signal, time\n"
                 "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
                 "os.fork()\n"
                 "time.sleep(600)\n")
+# The case timeout -k gets wrong (#684): the LEADER exits on SIGTERM, and the child it forked ignores SIGTERM. A
+# cleanup that stops once the leader is reaped leaves the child running.
+LEADER_EXITS_CHILD_DEAF = ("import os, signal, sys, time\n"
+                           "if os.fork() == 0:\n"
+                           "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                           "    time.sleep(600)\n"
+                           "    sys.exit(0)\n"
+                           "time.sleep(600)\n")
 
 
 def session_members(sid):
@@ -60,13 +68,16 @@ def kill_session(sid):
 
 
 class Result:
-    def __init__(self, stdout, seconds, hung, leftovers):
-        self.stdout, self.seconds, self.hung, self.leftovers = stdout, seconds, hung, leftovers
+    def __init__(self, stdout, seconds, hung, leftovers, survivors):
+        self.stdout, self.seconds, self.hung = stdout, seconds, hung
+        self.leftovers, self.survivors = leftovers, survivors
 
 
 def run_bounded(script, *args, limit=30, env=None):
-    """Run `bash -c SCRIPT bash ARGS…` for at most LIMIT s. Whatever it left in its session afterwards, hung or
-    not, is killed, and what was still alive just before that is reported in .leftovers (a test asserts it empty)."""
+    """Run `bash -c SCRIPT bash ARGS…` for at most LIMIT s, then kill whatever is left in its session.
+
+    .leftovers: what was alive in the session when the command returned, or when LIMIT expired. It is read BEFORE
+    the kill (#684: read after it, it was always []). .survivors: what the kill did not end (always [] if it works)."""
     if not HAVE_PROC:
         raise unittest.SkipTest("needs /proc to find a hung command's process groups")
     proc = subprocess.Popen(["bash", "-c", script, "bash", *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -80,16 +91,19 @@ def run_bounded(script, *args, limit=30, env=None):
         stdout, _ = proc.communicate(timeout=limit)
     except subprocess.TimeoutExpired:
         hung = True
+        leftovers = session_members(proc.pid)
         kill_session(proc.pid)
         try:
             stdout, _ = proc.communicate(timeout=10)
         except subprocess.TimeoutExpired:
             stdout = ""          # something the cleanup missed still holds the pipe: reported below, not raised
+    else:
+        leftovers = session_members(proc.pid)
     seconds = time.monotonic() - t0
-    leftovers = session_members(proc.pid)
     kill_session(proc.pid)
+    survivors = session_members(proc.pid)
     if proc.poll() is None:
         proc.kill()
     proc.stdout.close()
     proc.wait(timeout=10)
-    return Result(stdout, seconds, hung, leftovers)
+    return Result(stdout, seconds, hung, leftovers, survivors)
