@@ -92,7 +92,18 @@ ALLOWED_LINES = {
         "shreds the PIN files this drill wrote under /etc: a fixed literal, its only input the directory as $1",
     ("kms-two-token-systemd.sh", "if sudo sh -c 'ls /etc/polkit-1/rules.d/ /usr/share/polkit-1/rules.d/ 2>/dev/null' | grep -q qubes; then"):
         "lists two fixed polkit directories as root: a fixed literal, no input",
+    ("nitrokey-pin-import-drill.sh", "| grep -oE 'SW1=0x63, SW2=0xC[0-9A-F]' | tail -1 | sed 's/.*0xC//' | xargs -I{} printf '%d' 0x{}; }"):
+        "xargs turns the counter's one hex digit, as grep matched it, into decimal through printf's fixed format (#688)",
 }
+
+# Commands that run another command (#688). What they run is not read as a command by these checks, so in a
+# real-card script each is refused unless its exact line is allowed. The prefixes REFUSED_START models (builtin,
+# command, exec, nohup, time, nice, timeout, env) and sudo are read through; systemd-run is a PIN use. Every
+# other wrapper is refused: a list of the wrappers that pass would lose to the next one (the #225 lesson).
+WRAPPERS = ("stdbuf|setsid|ionice|chrt|taskset|unshare|nsenter|flock|setpriv|runuser|chroot|xargs|doas|su|sg|newgrp|"
+            "watch|parallel|faketime|strace|ltrace|unbuffer|script|busybox|setarch|linux32|linux64|numactl|prlimit|"
+            "chpst|pkexec|firejail|bwrap|nocache|eatmydata|daemonize|start-stop-daemon|catchsegv|valgrind|trickle|"
+            "torsocks|proxychains4?")
 # Variables a drill may run as a command, each with what it holds. Anything else in a command word's place
 # ("$X", $X, "$(…)") is refused, except a path under the drill's own directories ("$W/…", "$STATE/…",
 # "$ROOT/…", "$HERE/…": a binary it built or this repository's own script).
@@ -186,8 +197,30 @@ EXEC_PREFIX = r"exec(?:\s+(?:" + _with_argument("a", ()) + r"|-[cl]+))*"
 ENV_OPTIONS = (r"(?:\s+(?:" + _with_argument("uC", ("unset", "chdir"))
                + r"|-(?![uCS-])\S*|--(?!(?:unset|chdir|split-string)\b)\S*))*")
 # CALL_START past command-word prefixes (builtin enable, command unset, env X=1 trap …): for the refused words
-REFUSED_START = (CALL_START + r"(?:(?:builtin|command|" + EXEC_PREFIX + r"|nohup|time|" + NICE_PREFIX + "|" + TIMEOUT_PREFIX
-                 + r"|env" + ENV_OPTIONS + r"(?:\s+\w+=\S*)*)\s+(?:-\S+\s+)*)*")
+PREFIXES = (r"builtin|command|" + EXEC_PREFIX + r"|nohup|time|" + NICE_PREFIX + "|" + TIMEOUT_PREFIX
+            + r"|env" + ENV_OPTIONS + r"(?:\s+\w+=\S*)*")
+REFUSED_START = CALL_START + r"(?:(?:" + PREFIXES + r")\s+(?:-\S+\s+)*)*"
+# sudo's options that take an argument (sudo -u root stdbuf …): read as a flag alone, the user would be taken for the
+# command word and the wrapper after it go unseen (#697 review, B1)
+SUDO_LONGS = ("user", "group", "close-from", "chdir", "host", "prompt", "chroot", "role", "type", "command-timeout",
+              "other-user")
+# as env's: the catch-all flag never starts like an option with an argument, so two alternatives never match one word
+SUDO_PREFIX = (r"sudo(?:\s+(?:" + _with_argument("ugCDhpRrTU", SUDO_LONGS) + r"|-(?![ugCDhpRrTU-])\S*|--(?!(?:"
+               + "|".join(SUDO_LONGS) + r")\b)\S*))*")
+# A command position for the wrapper check: past the prefixes, and past sudo (#697 review, B1)
+WRAPPER_START = CALL_START + r"(?:(?:" + PREFIXES + "|" + SUDO_PREFIX + r")\s+(?:-\S+\s+)*)*(?=\S)"
+# One shell word as written: unquoted characters, '…', "…" and backslash escapes, joined
+SHELL_WORD_AS_WRITTEN = re.compile(r"""(?:[^\s'"\\;&|()<>]|\\.|'[^']*'|"[^"]*")+""")
+# A wrapper's name as the shell runs it, once quotes and escapes are removed: bare, or by an absolute path
+WRAPPER_WORD = re.compile(r"(?:/[\w.+-]+)*/(?:" + WRAPPERS + r")|(?:" + WRAPPERS + r")")
+
+
+def wrapper_named(word):
+    """The wrapper a command word runs, or None: "stdbuf", std''buf, \\stdbuf and /usr/bin/stdbuf all run stdbuf."""
+    plain = re.sub(r"\\(.)|'([^']*)'|\"([^\"]*)\"", lambda m: "".join(g or "" for g in m.groups()), word)
+    return plain.rsplit("/", 1)[-1] if WRAPPER_WORD.fullmatch(plain) else None
+
+
 # CALL_START, with a "(" a command start only after a line start, a blank or an operator (a subshell), not
 # after a quote: the blanked view is not nesting-aware, and s="($SERIAL" inside "$(…)" is not a subshell.
 COMMAND_START = r"(?:^|[;&|]|(?:^|(?<=[\s;&|]))\(|(?<!\$)\{|\bthen\b|\bdo\b|\belse\b|\bif\b|\b!)\s*"
@@ -258,6 +291,13 @@ def script_problems(text, script=None):
         allowed = (script, line.strip()) in ALLOWED_LINES
         if SHELL_WORD.search(b) and not allowed:
             found.append((n, "invokes a shell (by name, by path, piped into, or with -c): not on the allow-list"))
+        # a command position found on the lexed view, where code inside "$(…)" is code (#697 review, B1), and the
+        # word there read in the line itself, quotes and escapes and all
+        for m in re.finditer(WRAPPER_START, lexed[n - 1]):
+            word = SHELL_WORD_AS_WRITTEN.match(line, m.end())
+            wrapper = wrapper_named(word.group(0)) if word else None
+            if wrapper and not allowed:
+                found.append((n, "%s runs another command: what it runs is not checked (not on the allow-list)" % wrapper))
         # a command word that is a variable or a command's output ("$X", $X, "$(…)"): found at a command
         # position on the blanked view (a "(" or "|" in a quoted pattern or a [[ =~ ]] regex is not one),
         # then read in the line itself at the same position
@@ -981,6 +1021,46 @@ class TheCheckItself(unittest.TestCase):
             t0 = time.perf_counter()
             self.problems(line)
             self.assertLess(time.perf_counter() - t0, 1.0, line[:40])
+
+    def test_a_command_that_runs_another_is_refused(self):
+        # #688: each wrapper 65 measured, and the issue named, ahead of a refused export and ahead of a plain tool
+        for wrapper in ("stdbuf -oL", "setsid", "ionice -c 3", "chrt -o 0", "taskset -c 0", 'flock "$W/l"',
+                        "setpriv --reuid 1000", "xargs", "unshare -n", "nsenter -t 1 -n", "runuser -u u --", "chroot /x",
+                        "doas", "nohup setsid", "timeout 5 stdbuf -oL"):
+            for after in ("env FOO=1 pkcs11-tool -L", "pkcs11-tool -L"):
+                with self.subTest(wrapper=wrapper, after=after):
+                    found = self.problems("%s %s\n" % (wrapper, after))
+                    self.assertTrue(any("runs another command" in why for why in found), found)
+        self.assertTrue(any("runs another command" in why for why in self.problems("pkcs11-tool -L | xargs echo\n")))
+
+    def test_a_wrapper_in_a_substitution_after_sudo_or_spelled_otherwise_is_refused(self):
+        # #697 review B1: regalia-dc's two forms, inside "$(…)" and after sudo; then the same name spelled so that a
+        # name match misses it: by path, escaped, quoted, split by an empty quote
+        for line in ('x="$(stdbuf -oL env NK_PIN=1 pkcs11-tool -L)"', 'sudo stdbuf -oL env NK_PIN=1 pkcs11-tool -L',
+                     'sudo -u root -E stdbuf -oL pkcs11-tool -L', 'sudo --user=root -n setsid pkcs11-tool -L',
+                     'timeout 5 sudo -n stdbuf -oL pkcs11-tool -L', 'r=$(sudo setsid pkcs11-tool -L)',
+                     '/usr/bin/stdbuf -oL pkcs11-tool -L', '\\stdbuf -oL pkcs11-tool -L', '"stdbuf" -oL pkcs11-tool -L',
+                     "'stdbuf' -oL pkcs11-tool -L", "std''buf -oL pkcs11-tool -L", 's"et"sid pkcs11-tool -L',
+                     'x="$(/usr/bin/setsid pkcs11-tool -L)"'):
+            with self.subTest(line=line):
+                found = self.problems(line + "\n")
+                self.assertTrue(any("runs another command" in why for why in found), found)
+        # the wrapper is named, as the shell would run it
+        self.assertIn("stdbuf runs another command", " ".join(self.problems("std''buf -oL pkcs11-tool -L\n")))
+
+    def test_a_wrapper_name_that_is_not_the_command_is_not_one(self):
+        # an option's argument, a substitution's text, an assignment's value, a relative path: not a wrapper run
+        for fine in ("sudo -u stdbuf pkcs11-tool -L", "sudo --user stdbuf pkcs11-tool -L", 'x="$(printf stdbuf)"',
+                     "W=/x/stdbuf", "echo /usr/bin/stdbuf", "./stdbuf.d/run", "/usr/bin/stdbuffer x", "sudo pkcs11-tool -L"):
+            with self.subTest(fine=fine):
+                self.assertFalse(any("runs another command" in why for why in self.problems(fine + "\n")), self.problems(fine + "\n"))
+
+    def test_a_wrapper_name_inside_a_word_or_a_string_is_not_one(self):
+        # in a string, a ";" or "|" is no command boundary: the wrapper's name after one is text (strings are blanked)
+        for fine in ('echo "run it under stdbuf"\n', 'echo "a; stdbuf x"\n', "printf '%s' \"x | xargs y\"\n", "stdbuffer x\n",
+                     "my-setsid x\n", "./xargs.d/x\n", "W=/su/x\n"):
+            with self.subTest(fine=fine.strip()):
+                self.assertFalse(any("runs another command" in why for why in self.problems(fine)), self.problems(fine))
 
     def test_the_known_good_forms_pass(self):
         for fine in ("export -n NK_PIN\n", "export PATH=\"$PATH:/sbin\"\n", "declare -A SLOT\n",
