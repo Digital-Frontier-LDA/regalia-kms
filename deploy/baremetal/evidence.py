@@ -12,7 +12,7 @@ evidence.
       "site": "site-a", "host_serial": "<server serial>", "captured_at": "2026-09-30T10:00:00Z",
       "host": {
         "<every control host_probe measures>": true,
-        "pin_import_key_sha256": "<64 hex>",           # written by hand at --init-import-key
+        "pin_import_key_sha256": "<64 hex>",           # written by hand at --init-import-key (ECC P-256 since #671)
         "secure_boot_cert_sha256": "<64 hex>",         # the signed image record's (uki.py sign), in db (kms#543)
         "hsm_usb_path": "<sysfs USB path>",             # the INTERNAL port
         "credential_tpm2_pcrs": "7",                    # bound directly; never 10 or 11
