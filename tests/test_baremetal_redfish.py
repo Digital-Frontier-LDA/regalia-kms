@@ -30,7 +30,11 @@ class StandIn:
         self.posts, self.pending = [], None
 
     def request(self, method, path, body=None):
-        if method == "GET" and path == redfish.SYSTEM:
+        # The iLO's own spelling, NOT redfish.SYSTEM: comparing against the constant would accept whatever it says.
+        # A slash-less path gets the 308 iLO 4 answers (#670).
+        if not path.endswith("/"):
+            return 308, None
+        if method == "GET" and path == "/redfish/v1/Systems/1/":
             if self.pending:
                 self.pending[1] -= 1
                 if self.pending[1] <= 0:
@@ -40,7 +44,7 @@ class StandIn:
                 action["ResetType@Redfish.AllowableValues"] = self.types
             return 200, {"SerialNumber": self.serial, "Model": "ProLiant DL360 Gen9", "Manufacturer": "HPE", "PowerState": self.power,
                          "Actions": {"#ComputerSystem.Reset": action}}
-        if method == "GET" and path == redfish.MANAGER:
+        if method == "GET" and path == "/redfish/v1/Managers/1/":
             return 200, {"FirmwareVersion": self.firmware}
         if method == "POST" and path.endswith("ComputerSystem.Reset/"):
             self.posts.append(body)
