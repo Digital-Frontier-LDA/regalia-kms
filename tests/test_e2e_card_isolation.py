@@ -616,6 +616,12 @@ class EveryScriptCanBeScanned(unittest.TestCase):
         self.assertEqual(len(quoted_blanked(lines)), 3)
         self.assertEqual(quoted_blanked(lines)[2], "z")
 
+    def test_a_continued_string_keeps_the_next_line_in_its_columns(self):
+        # 65's mutant MF kept the line count and shifted line 2 by one column: the variable used as a command after
+        # the continued string was then read as quoted, and nothing was found (#689 review).
+        found = script_problems('x="a \\\nb"; $CMD arg\n')
+        self.assertTrue(any(n == 2 and "used as a command" in why for n, why in found), found)
+
     def test_the_lexer_refuses_to_drift_from_the_script(self):
         # The check at its source: a lexer that loses a line is a named failure, not an IndexError far away.
         with self.assertRaisesRegex(AssertionError, "saw 1 lines, the script has 2"):
