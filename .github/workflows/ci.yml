@@ -430,7 +430,7 @@ jobs:
 
       - name: Keep what the fuzzers found
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-crashers
           path: internal/*/testdata/fuzz/
@@ -714,13 +714,13 @@ jobs:
       - name: Make the builds readable
         if: always()
         run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/repro" || true
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: initrd-${{ matrix.builder }}
           path: ${{ runner.temp }}/repro/build-1
           retention-days: 7
       # on a difference, every build, to diff offline (#248: two builds once differed by 161 bytes with the same files)
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: initrd-${{ matrix.builder }}-every-build
@@ -751,7 +751,7 @@ jobs:
       - name: Make the builds readable
         if: always()
         run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/rootfs" || true
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: rootfs-listing-and-record
@@ -795,12 +795,12 @@ jobs:
           go-version-file: go.mod
       - name: Build the initrd three times from nothing, on Debian 13; all must be identical
         run: REGALIA_GO="$(command -v go)" bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 3
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: initrd-debian
           path: ${{ runner.temp }}/repro/build-1
           retention-days: 7
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: initrd-debian-every-build
