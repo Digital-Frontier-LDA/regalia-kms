@@ -197,7 +197,17 @@ EXEC_PREFIX = r"exec(?:\s+(?:" + _with_argument("a", ()) + r"|-[cl]+))*"
 ENV_OPTIONS = (r"(?:\s+(?:" + _with_argument("uC", ("unset", "chdir"))
                + r"|-(?![uCS-])\S*|--(?!(?:unset|chdir|split-string)\b)\S*))*")
 # CALL_START past command-word prefixes (builtin enable, command unset, env X=1 trap …): for the refused words
-PREFIXES = (r"builtin|command|" + EXEC_PREFIX + r"|nohup|time|" + NICE_PREFIX + "|" + TIMEOUT_PREFIX
+# One shell word on the lexed view: "…" is blanked there but "$( … )" stays code, so a word can hold a space.
+# The four alternatives start with different characters and cannot overlap (no backtracking blow-up, py/redos).
+LEXED_WORD = r'(?:[^\s"$]|"[^"\n]*"|\$\([^)\n]*\)|\$(?!\())+'
+# The drills' own bounds (#684): bounded SECONDS COMMAND (pkcs11-removal.sh, pkcs11-contract.sh) and
+# bench_bounded SECONDS COMMAND (lib/bench_cards.sh) run COMMAND as timeout does, so what follows them is checked.
+# Each takes exactly ONE word before COMMAND (test_e2e_timeout_escalation pins it); a first word that starts with
+# "-" makes the helper refuse to run anything (125), so it is no form to model.
+BOUNDED_PREFIX = r"(?:bounded|bench_bounded)\s+(?!-)" + LEXED_WORD
+# NAME=VALUE words before the command word (REGALIA_Q_PIN="$Q_PIN" bounded … in pkcs11-contract.sh)
+ASSIGNMENTS = r"(?:[A-Za-z_]\w*=(?:" + LEXED_WORD + r")?\s+)*"
+PREFIXES = (r"builtin|command|" + EXEC_PREFIX + r"|nohup|time|" + NICE_PREFIX + "|" + TIMEOUT_PREFIX + "|" + BOUNDED_PREFIX
             + r"|env" + ENV_OPTIONS + r"(?:\s+\w+=\S*)*")
 REFUSED_START = CALL_START + r"(?:(?:" + PREFIXES + r")\s+(?:-\S+\s+)*)*"
 # sudo's options that take an argument (sudo -u root stdbuf …): read as a flag alone, the user would be taken for the
@@ -208,7 +218,7 @@ SUDO_LONGS = ("user", "group", "close-from", "chdir", "host", "prompt", "chroot"
 SUDO_PREFIX = (r"sudo(?:\s+(?:" + _with_argument("ugCDhpRrTU", SUDO_LONGS) + r"|-(?![ugCDhpRrTU-])\S*|--(?!(?:"
                + "|".join(SUDO_LONGS) + r")\b)\S*))*")
 # A command position for the wrapper check: past the prefixes, and past sudo (#697 review, B1)
-WRAPPER_START = CALL_START + r"(?:(?:" + PREFIXES + "|" + SUDO_PREFIX + r")\s+(?:-\S+\s+)*)*(?=\S)"
+WRAPPER_START = CALL_START + ASSIGNMENTS + r"(?:(?:" + PREFIXES + "|" + SUDO_PREFIX + r")\s+(?:-\S+\s+)*)*(?=\S)"
 # One shell word as written: unquoted characters, '…', "…" and backslash escapes, joined
 SHELL_WORD_AS_WRITTEN = re.compile(r"""(?:[^\s'"\\;&|()<>]|\\.|'[^']*'|"[^"]*")+""")
 # A wrapper's name as the shell runs it, once quotes and escapes are removed: bare, or by an absolute path
@@ -1047,6 +1057,33 @@ class TheCheckItself(unittest.TestCase):
                 self.assertTrue(any("runs another command" in why for why in found), found)
         # the wrapper is named, as the shell would run it
         self.assertIn("stdbuf runs another command", " ".join(self.problems("std''buf -oL pkcs11-tool -L\n")))
+
+    def test_what_a_drill_bound_runs_is_checked_like_what_timeout_runs(self):
+        # #684 moves token calls from timeout N to bounded N / bench_bounded N: a wrapper, an env or an unset after
+        # either is refused as it is after timeout N, and a plain bounded tool call stays fine
+        # each takes one word before the command: a number, a variable, a substitution, quoted or not; and an
+        # assignment may come first, as pkcs11-contract.sh writes it (the widest form a caller writes)
+        for line in ("bounded 60 setsid pkcs11-tool -L", "bench_bounded 5 stdbuf -oL pkcs11-tool -L",
+                     'x="$(bounded 60 /usr/bin/setsid pkcs11-tool -L)"', "bounded 60 sudo -n stdbuf -oL pkcs11-tool -L",
+                     "timeout 60 setsid pkcs11-tool -L", 'bounded "$PROBE_BOUND" setsid pkcs11-tool -L',
+                     'bench_bounded "${BOUND}" stdbuf -oL pkcs11-tool -L', "bounded ${B:-60} setsid pkcs11-tool -L",
+                     'bounded "$(bound_for p11)" setsid pkcs11-tool -L', "bounded $(bound_for p11) setsid pkcs11-tool -L",
+                     'REGALIA_Q_PIN="$Q_PIN" bounded "$PROBE_BOUND" setsid pkcs11-tool -L',
+                     'A=1 B= bench_bounded 5 stdbuf -oL pkcs11-tool -L', "X=1 timeout 60 setsid pkcs11-tool -L",
+                     "X=1 setsid pkcs11-tool -L"):
+            with self.subTest(line=line):
+                found = self.problems(line + "\n")
+                self.assertTrue(any("runs another command" in why for why in found), found)
+        for pre in ("", "timeout 60 ", "bounded 60 ", "bench_bounded 5 "):
+            with self.subTest(env_after=pre):
+                self.assertEqual(bool(self.problems(pre + "env NK_PIN=1 pkcs11-tool -L\n")),
+                                 bool(self.problems("env NK_PIN=1 pkcs11-tool -L\n")))
+        for fine in ('bounded 60 pkcs11-tool --module "$MOD" -L', "bench_bounded 5 pkcs11-tool -L", "echo bounded 60 setsid",
+                     'REGALIA_Q_PIN="$Q_PIN" bounded "$PROBE_BOUND" python3 -Es "$HERE/lib/p11_extract_probe.py"',
+                     "X=setsid pkcs11-tool -L", "bounded 60 echo setsid"):
+            with self.subTest(fine=fine):
+                self.assertFalse(any("runs another command" in why for why in self.problems(fine + "\n")),
+                                 self.problems(fine + "\n"))
 
     def test_a_wrapper_name_that_is_not_the_command_is_not_one(self):
         # an option's argument, a substitution's text, an assignment's value, a relative path: not a wrapper run

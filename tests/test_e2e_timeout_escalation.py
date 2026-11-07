@@ -133,6 +133,35 @@ class EveryTokenCallIsBoundedByTheHelper(unittest.TestCase):
                 self.assertEqual(len(re.findall(r"bounded\.py", line)), len(ISOLATED_RUN.findall(line)),
                                  f"{name}:{n} runs bounded.py another way: {line.strip()}")
 
+    def test_each_drill_bound_takes_one_word_before_the_command(self):
+        # The card-isolation scan reads "bounded WORD COMMAND" / "bench_bounded WORD COMMAND" (#684): exactly one word
+        # before the command. Every run of the helper is one of these definitions, passing "$1" then "${@:2}"; a second
+        # grace word, or a caller of the helper outside them, would put a word the scan takes for the command first.
+        shape = re.compile(r'^(bounded|bench_bounded)\(\)\{ ' + ISOLATED_RUN.pattern + r'"\$1" (?:"\$KILL_GRACE"|\d+) '
+                           r'"\$\{@:2\}"; \}$')
+        names = []
+        for path in sorted((ROOT / "e2e").rglob("*.sh")):
+            for n, line in enumerate(code(path.read_text()), 1):
+                if "bounded.py" in line:
+                    with self.subTest(script=path.name, line=n):
+                        m = shape.match(line.strip())
+                        self.assertIsNotNone(m, f"{path.name}:{n} runs bounded.py, not as a one-word bound: {line.strip()}")
+                        names.append(m and m.group(1))
+        self.assertEqual(sorted(set(names)), ["bench_bounded", "bounded"], names)
+
+    def test_a_second_number_or_an_option_runs_nothing(self):
+        # what the scan does not model runs nothing: "bounded 60 5 touch F" runs a command named 5 (127), and a bound
+        # that starts with "-" is refused before anything runs (125)
+        with tempfile.TemporaryDirectory() as d:
+            ran = Path(d, "ran")
+            for call, rc in (('bounded 1 5 touch "%s"' % ran, 127), ('bounded -k 5 touch "%s"' % ran, 125),
+                             ('bounded -1 touch "%s"' % ran, 125), ('bounded --signal=KILL touch "%s"' % ran, 125)):
+                with self.subTest(call=call):
+                    script = "\n".join(removal_prelude() + [call + ' 2>/dev/null; printf "rc=%s\\n" "$?"'])
+                    out = subprocess.run(["bash", "-c", script, "bash", d, d], capture_output=True, text=True, timeout=30)
+                    self.assertIn("rc=%d" % rc, out.stdout, out.stdout + out.stderr)
+                    self.assertFalse(ran.exists(), f"{call} ran its command")
+
     def test_the_isolated_run_check_refuses_other_spellings(self):
         for fine in ('python3 -I "$(dirname "$0")/lib/bounded.py" 30 x', 'python3 -I "$HERE/lib/bounded.py" 1 x',
                      'python3 -I "${BASH_SOURCE[0]%/*}/bounded.py" 3 x'):
