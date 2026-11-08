@@ -54,6 +54,7 @@ type fakeKMS struct {
 
 type seenRequest struct {
 	requestID, idempotencyKey string
+	approvals                 string // the X-Verified-Approvals header, as sent
 	document                  operationRequest
 	payload                   []byte
 }
@@ -81,7 +82,8 @@ func (kms *fakeKMS) serve(writer http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		kms.t.Errorf("payload_base64: %v", err)
 	}
-	seen := seenRequest{requestID: request.Header.Get("X-Request-ID"), idempotencyKey: request.Header.Get("Idempotency-Key"), document: document, payload: payload}
+	seen := seenRequest{requestID: request.Header.Get("X-Request-ID"), idempotencyKey: request.Header.Get("Idempotency-Key"),
+		approvals: request.Header.Get("X-Verified-Approvals"), document: document, payload: payload}
 	kms.mu.Lock()
 	kms.requests = append(kms.requests, seen)
 	respond := kms.respond

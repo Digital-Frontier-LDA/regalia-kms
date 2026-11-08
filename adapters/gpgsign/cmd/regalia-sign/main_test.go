@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -26,6 +27,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Digital-Frontier-LDA/regalia-kms/adapters/gpgsign"
 )
 
 // A signature dated after GnuPG's own clock is refused, so the tool's clock in these tests is the
@@ -46,6 +49,40 @@ type deployment struct {
 	mu       sync.Mutex
 	requests int
 	refuse   string // when set, the KMS answers with this error code
+	// approver, when set, is the one key whose approval this KMS's policy requires: a request
+	// without that key's signature over its own binding is DENIED, as the daemon would deny it.
+	approver ed25519.PublicKey
+}
+
+const releaseApprover = "spiffe://regalia/approver/release"
+
+// approved verifies the evidence the way internal/approval does: against the binding of the request
+// that actually arrived, never against anything the evidence says about itself.
+func (d *deployment) approved(header, objectID, purpose, environment, nonce, expiresAt string, payload []byte) bool {
+	decoded, err := base64.StdEncoding.DecodeString(header)
+	if err != nil {
+		return false
+	}
+	var approvals []gpgsign.Approval
+	if json.Unmarshal(decoded, &approvals) != nil {
+		return false
+	}
+	digest := sha256.Sum256(payload)
+	binding, err := gpgsign.Pending{Version: 1, ObjectID: objectID, Purpose: purpose, Environment: environment, Nonce: nonce,
+		ExpiresAt: expiresAt, Created: "2026-01-01T00:00:00Z", PayloadSHA256: hex.EncodeToString(digest[:])}.Binding()
+	if err != nil {
+		return false
+	}
+	for _, approval := range approvals {
+		signature, err := base64.StdEncoding.DecodeString(approval.Signature)
+		// As internal/approval counts one: the evidence must also carry THIS request's nonce, expiry
+		// and payload digest, not only a signature that verifies.
+		if err == nil && approval.ApproverID == releaseApprover && approval.Nonce == nonce && approval.ExpiresAt == expiresAt &&
+			approval.PayloadDigest == hex.EncodeToString(digest[:]) && ed25519.Verify(d.approver, binding, signature) {
+			return true
+		}
+	}
+	return false
 }
 
 func newDeployment(t *testing.T) *deployment {
@@ -132,9 +169,22 @@ func (d *deployment) serve(writer http.ResponseWriter, request *http.Request) {
 	var document struct {
 		ObjectID string `json:"object_id"`
 		Payload  string `json:"payload_base64"`
+		Context  struct {
+			Environment string `json:"environment"`
+			Purpose     string `json:"purpose"`
+			ExpiresAt   string `json:"expires_at"`
+			Nonce       string `json:"nonce"`
+		} `json:"context"`
 	}
 	_ = json.NewDecoder(request.Body).Decode(&document)
 	writer.Header().Set("Content-Type", "application/json")
+	if d.approver != nil && refuse == "" {
+		payload, _ := base64.StdEncoding.DecodeString(document.Payload)
+		if !d.approved(request.Header.Get("X-Verified-Approvals"), document.ObjectID, document.Context.Purpose, document.Context.Environment,
+			document.Context.Nonce, document.Context.ExpiresAt, payload) {
+			refuse = "DENIED"
+		}
+	}
 	if refuse != "" {
 		writer.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(writer).Encode(map[string]any{"request_id": request.Header.Get("X-Request-ID"), "code": refuse, "message": "request failed", "retryable": false})
@@ -574,6 +624,9 @@ func TestTheCommandLineIsStrict(t *testing.T) {
 		{"--config", "c", "--fingerprint"}, {"--status-fd=2", "-bsau", "KEY"}, {"-b", "-s", "-a", "-u", "KEY"},
 		{"--detach-sign", "--sign", "--armor", "--local-user", "KEY", "--status-fd", "2"}, {"--verify", "sig", "-"},
 		{"--keyid-format=long", "--status-fd=1", "--verify", "sig", "-"},
+		{"--prepare", "p", "--detach", "f"}, {"--prepare=p", "--valid-for", "5m", "--clearsign", "f"}, {"--prepare", "p", "--export-key"},
+		{"--complete", "p", "--approval", "a", "--detach", "f", "--binary"}, {"--complete", "p", "--approval", "a", "--approval", "b", "--clearsign", "f", "--output", "o"},
+		{"--complete", "p", "--approval", "a", "--export-key", "--output", "o"},
 	}
 	for _, args := range good {
 		if _, err := parse(args); err != nil {
@@ -584,6 +637,12 @@ func TestTheCommandLineIsStrict(t *testing.T) {
 		{}, {"--detach"}, {"--detach", "f", "--export-key"}, {"--output", "o"}, {"--binary", "--fingerprint"},
 		{"--frobnicate"}, {"file"}, {"-bsa"}, {"-bsua", "KEY"}, {"-bsx", "KEY"}, {"-sau", "KEY"}, {"-bsu", "KEY"},
 		{"--status-fd=3", "-bsau", "KEY"}, {"--status-fd=2"}, {"--clearsign"}, {"-bsau"},
+		{"--prepare", "p"}, {"--prepare", "p", "--fingerprint"}, {"--prepare", "p", "--complete", "p", "--approval", "a", "--detach", "f"},
+		{"--complete", "p", "--detach", "f"}, {"--approval", "a", "--detach", "f"}, {"--valid-for", "5m", "--detach", "f"},
+		{"--prepare", "p", "--detach", "f", "--output", "o"}, {"--prepare", "p", "--status-fd=2", "-bsau", "KEY"},
+		{"--complete", "p", "--approval", "a"}, {"--export-key", "--output", "o"},
+		// An empty value is not an absent option: these would otherwise be the one-step command.
+		{"--prepare=", "--detach", "f"}, {"--prepare", "", "--detach", "f"}, {"--complete=", "--detach", "f"}, {"--detach="}, {"--detach", "f", "--output="},
 	}
 	for _, args := range bad {
 		if _, err := parse(args); err == nil {
@@ -725,5 +784,163 @@ func aptAcceptsTheRepository(t *testing.T, d *deployment) {
 	write(key, "")
 	if output, err := update(); err == nil {
 		t.Fatalf("apt-get update accepted the repository with an empty keyring:\n%s", output)
+	}
+}
+
+// UNDER A POLICY THAT REQUIRES APPROVAL the one-step commands are denied, and the two-step form
+// produces the same kind of signature: --prepare contacts nobody, the approver signs the record, and
+// --complete sends exactly the prepared request. GnuPG judges the result.
+func TestPrepareThenCompleteSignsUnderAnApprovalPolicy(t *testing.T) {
+	for name, build := range map[string]func(*testing.T) *deployment{"P-384": newDeployment, "Ed25519": newEd25519Deployment} {
+		t.Run(name, func(t *testing.T) {
+			d := build(t)
+			approverPublic, approverPrivate, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.approver = approverPublic
+			sums := d.write("SHA256SUMS", []byte("0f3a…  regalia-kms_1.0.0_linux_amd64.tar.gz\n"), 0o644)
+
+			// One step: denied, and nothing is written.
+			if code, _, stderr := d.invoke("", "--detach", sums); code != 1 || !strings.Contains(stderr, "DENIED") {
+				t.Fatalf("an unapproved signature: exit %d, stderr %q", code, stderr)
+			}
+			if _, err := os.Stat(sums + ".asc"); !os.IsNotExist(err) {
+				t.Fatal("a denied request left a signature")
+			}
+
+			approve := func(pendingPath string) string {
+				t.Helper()
+				record, err := os.ReadFile(pendingPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pending, err := gpgsign.ReadPending(record)
+				if err != nil {
+					t.Fatal(err)
+				}
+				approval, err := gpgsign.Approve(pending, releaseApprover, approverPrivate, time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				encoded, _ := json.Marshal(approval)
+				return d.write(filepath.Base(pendingPath)+".approval", encoded, 0o644)
+			}
+
+			// The key export is a signature too (the self-certification), so it takes the same path.
+			before := d.seen()
+			keyPending := filepath.Join(d.directory, "key.pending")
+			if code, _, stderr := d.invoke("", "--prepare", keyPending, "--export-key"); code != 0 || d.seen() != before {
+				t.Fatalf("--prepare --export-key: exit %d, %d KMS requests, stderr %q", code, d.seen()-before, stderr)
+			}
+			code, exported, stderr := d.invoke("", "--complete", keyPending, "--approval", approve(keyPending), "--export-key")
+			if code != 0 || !strings.HasPrefix(exported, "-----BEGIN PGP PUBLIC KEY BLOCK-----") {
+				t.Fatalf("--complete --export-key: exit %d, stderr %q", code, stderr)
+			}
+
+			before = d.seen()
+			pendingPath := filepath.Join(d.directory, "SHA256SUMS.pending")
+			code, stdout, stderr := d.invoke("", "--prepare", pendingPath, "--detach", sums)
+			contents, _ := os.ReadFile(sums)
+			fileHash := sha256.Sum256(contents)
+			if code != 0 || d.seen() != before || !strings.Contains(stdout, "prepared, not signed") || !strings.Contains(stdout, hex.EncodeToString(fileHash[:])) {
+				t.Fatalf("--prepare: exit %d, %d KMS requests, stdout %q, stderr %q", code, d.seen()-before, stdout, stderr)
+			}
+			if _, err := os.Stat(sums + ".asc"); !os.IsNotExist(err) {
+				t.Fatal("--prepare wrote a signature")
+			}
+			// A record is never replaced: preparing twice to one name would leave an approver unsure
+			// which request they are approving.
+			if code, _, _ := d.invoke("", "--prepare", pendingPath, "--detach", sums); code != 1 {
+				t.Fatal("--prepare replaced an existing pending record")
+			}
+			approvalPath := approve(pendingPath)
+
+			// The wrong kind of signature for this record, and a file that changed since: refused
+			// here, with the KMS never asked.
+			if code, _, stderr := d.invoke("", "--complete", pendingPath, "--approval", approvalPath, "--clearsign", sums); code != 1 || !strings.Contains(stderr, "pending signature is a detach") {
+				t.Fatalf("a clearsign completion of a detach record: exit %d, stderr %q", code, stderr)
+			}
+			changed := d.write("changed", append(append([]byte(nil), contents...), []byte("deadbeef  extra\n")...), 0o644)
+			if code, _, stderr := d.invoke("", "--complete", pendingPath, "--approval", approvalPath, "--detach", changed); code != 1 || !strings.Contains(stderr, "not what was prepared and approved") {
+				t.Fatalf("a changed file: exit %d, stderr %q", code, stderr)
+			}
+			if d.seen() != before {
+				t.Fatalf("a refused completion reached the KMS %d times", d.seen()-before)
+			}
+			// An approval for the other record does not count for this one.
+			if code, _, stderr := d.invoke("", "--complete", pendingPath, "--approval", filepath.Join(d.directory, "key.pending.approval"), "--detach", sums); code != 1 || !strings.Contains(stderr, "for another request") {
+				t.Fatalf("another record's approval: exit %d, stderr %q", code, stderr)
+			}
+
+			if code, stdout, stderr := d.invoke("", "--complete", pendingPath, "--approval", approvalPath, "--detach", sums); code != 0 || stdout != "" {
+				t.Fatalf("--complete: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+			}
+			if d.seen() != before+1 {
+				t.Fatalf("--complete made %d KMS requests, want exactly 1", d.seen()-before)
+			}
+			gpg := requireTool(t, "gpg")
+			home := gnupgHome(t, gpg, exported)
+			output, err := exec.Command(gpg, "--homedir", home, "--batch", "--no-tty", "--status-fd", "1", "--verify", sums+".asc", sums).CombinedOutput()
+			if err != nil || !strings.Contains(string(output), "[GNUPG:] VALIDSIG ") {
+				t.Fatalf("gpg --verify of the approved signature: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
+// --prepare= (an unset variable in a release script) must not turn into the one-step command.
+func TestAnEmptyPrepareValueNeverReachesTheKMS(t *testing.T) {
+	d := newDeployment(t)
+	sums := d.write("SHA256SUMS", []byte("x\n"), 0o644)
+	for _, args := range [][]string{{"--prepare=", "--detach", sums}, {"--prepare", "", "--detach", sums}, {"--complete=", "--approval", "a", "--detach", sums}} {
+		if code, _, stderr := d.invoke("", args...); code != 2 || !strings.Contains(stderr, "not empty") {
+			t.Errorf("%v: exit %d, stderr %q", args, code, stderr)
+		}
+	}
+	if _, err := os.Stat(sums + ".asc"); !os.IsNotExist(err) || d.seen() != 0 {
+		t.Fatalf("an empty option value signed: %d KMS requests", d.seen())
+	}
+}
+
+// --complete is given the exact file that was prepared, or it refuses. For a cleartext signature
+// this guards the RECORD, not the output: the text that is emitted is the canonical one either way
+// (trailing whitespace and carriage returns are dropped by the framing), so two such files would
+// produce the same document. What the refusal keeps true is that the file hash in the record, which
+// the approver compared with their own copy, is the hash of the file this step was run on.
+func TestCompleteRefusesAFileThatIsNotByteForByteTheOnePrepared(t *testing.T) {
+	d := newDeployment(t)
+	_, approverPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.approver = approverPrivate.Public().(ed25519.PublicKey)
+	release := d.write("Release", []byte("Origin: Regalia\nSuite: stable\n"), 0o644)
+	variant := d.write("Release.variant", []byte("Origin: Regalia   \nSuite: stable\n"), 0o644)
+	pendingPath := filepath.Join(d.directory, "Release.pending")
+	if code, _, stderr := d.invoke("", "--prepare", pendingPath, "--clearsign", release); code != 0 {
+		t.Fatalf("--prepare: exit %d, stderr %q", code, stderr)
+	}
+	record, _ := os.ReadFile(pendingPath)
+	pending, err := gpgsign.ReadPending(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := gpgsign.Approve(pending, releaseApprover, approverPrivate, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(approval)
+	approvalPath := d.write("Release.approval", encoded, 0o644)
+	before := d.seen()
+	out := filepath.Join(d.directory, "InRelease")
+	if code, _, stderr := d.invoke("", "--complete", pendingPath, "--approval", approvalPath, "--clearsign", variant, "--output", out); code != 1 || !strings.Contains(stderr, "its SHA-256 is not the record's") {
+		t.Fatalf("a file with the same canonical text and other bytes: exit %d, stderr %q", code, stderr)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) || d.seen() != before {
+		t.Fatal("the variant was signed or the KMS was asked")
+	}
+	if code, _, stderr := d.invoke("", "--complete", pendingPath, "--approval", approvalPath, "--clearsign", release, "--output", out); code != 0 {
+		t.Fatalf("the exact file: exit %d, stderr %q", code, stderr)
 	}
 }

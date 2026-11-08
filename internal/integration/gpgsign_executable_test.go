@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/api"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/approval"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/auth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend"
@@ -45,7 +46,7 @@ func TestDeployedRegaliaSignExecutableThroughMTLS(t *testing.T) {
 	gpg := requireGPG(t)
 	binary := buildRegaliaSign(t)
 	pki := newSidecarPKI(t)
-	daemon := newReleaseSigningDaemon(t, modulePath, serial, pki)
+	daemon := newReleaseSigningDaemon(t, modulePath, serial, pki, nil)
 
 	for _, key := range []struct{ name, objectID, tokenID string }{
 		{"P-384", "release-signing-p384", "0b"},
@@ -243,18 +244,20 @@ func requireGPG(t *testing.T) string {
 
 // buildRegaliaSign compiles the deployable binary from the adapter module: the artifact a release
 // job runs, not the adapter linked into this test.
-func buildRegaliaSign(t *testing.T) string {
+func buildRegaliaSign(t *testing.T) string { return buildGPGSignCommand(t, "regalia-sign") }
+
+func buildGPGSignCommand(t *testing.T, name string) string {
 	t.Helper()
-	source, err := filepath.Abs(filepath.Join("..", "..", "adapters", "gpgsign", "cmd", "regalia-sign"))
+	source, err := filepath.Abs(filepath.Join("..", "..", "adapters", "gpgsign", "cmd", name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	binary := filepath.Join(t.TempDir(), "regalia-sign")
+	binary := filepath.Join(t.TempDir(), name)
 	build := exec.Command("go", "build", "-o", binary, ".")
 	build.Dir = source
 	build.Env = append(os.Environ(), "GOWORK=off")
 	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build regalia-sign: %v\n%s", err, output)
+		t.Fatalf("build %s: %v\n%s", name, err, output)
 	}
 	return binary
 }
@@ -356,7 +359,13 @@ func writeSignDeployment(t *testing.T, directory string, cfg signConfig) string 
 // newReleaseSigningDaemon is the daemon half: the concrete SoftHSM provider behind the registry,
 // RBAC, one sign policy per release object, the audit journal, and a real TLS 1.3 mTLS endpoint.
 // The workload identity is the one newSidecarPKI issues.
-func newReleaseSigningDaemon(t *testing.T, modulePath, serial string, pki *sidecarPKI) *sopsDaemon {
+const (
+	approvedObject    = "release-signing-approved"
+	releaseApproverID = "spiffe://regalia/approver/release"
+)
+
+// approvers is the daemon's approver key set, or nil for a daemon with no approval policy.
+func newReleaseSigningDaemon(t *testing.T, modulePath, serial string, pki *sidecarPKI, approvers *approval.KeySet) *sopsDaemon {
 	t.Helper()
 	principal := "spiffe://regalia/workload/sops-e2e"
 	devAuth := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -386,20 +395,31 @@ func newReleaseSigningDaemon(t *testing.T, modulePath, serial string, pki *sidec
 		{"release-signing-ed25519", "ed25519", "0f", 32},
 		{"release-signing-p384b", "p384", "0d", 48},
 		{"release-signing-ungranted", "p384", "0e", 48},
+		// A release key whose policy requires one approval (ADR-0002 D25). Its token key and the
+		// approver's exist only in the SoftHSM battery, so the daemon serves it only when asked to.
+		{approvedObject, "p384", "11", 48},
 	}
 	var manifestObjects, granted []string
 	var policies []policy.Policy
 	for _, object := range objects {
+		if object.id == approvedObject && approvers == nil {
+			continue
+		}
 		manifestObjects = append(manifestObjects, fmt.Sprintf(`{"id":%q,"name":"Release signing E2E","kind":"asymmetric-key","classification":"restricted","environment":"development","owner":"security","purpose":"release-artifact","custody":"direct-hardware","algorithm":%q,"operations":["sign"],"policy_id":%q,"bindings":[{"site":"e2e-site","backend":"nitrokey-pkcs11","device_id":"hsm-e2e","device_serial":%q,"devaut_fingerprint":%q,"object_id":%q,"public_fingerprint":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"active"}],"recovery":{},"rotation":{},"migration":{},"verification":{"status":"verified"}}`,
 			object.id, object.algorithm, object.id+"-policy", serial, devAuth, object.tokenID))
 		if object.id != "release-signing-ungranted" {
 			granted = append(granted, strconv.Quote(object.id))
 		}
-		policies = append(policies, policy.Policy{
+		rule := policy.Policy{
 			ID: object.id + "-policy", ObjectID: object.id, Purpose: "release-artifact", Environment: "development",
 			Operation: "sign", Algorithm: object.algorithm, ContentTypes: []string{"application/vnd.regalia.digest"},
 			MaxPayloadBytes: object.payload, MaxFuture: 2 * time.Minute,
-		})
+		}
+		if object.id == approvedObject {
+			// The example policy's shape for release signing: one approval, five minutes.
+			rule.RequiredApprovals, rule.Approvers, rule.MaxFuture = 1, []string{releaseApproverID}, 5*time.Minute
+		}
+		policies = append(policies, rule)
 	}
 	manifest := fmt.Sprintf(`{"schema_version":1,"manifest_id":"release-e2e","generated_at":"2026-10-02T00:00:00Z","objects":[%s]}`, strings.Join(manifestObjects, ","))
 	router, err := registry.Load(bytes.NewBufferString(manifest), "e2e-site", hardware)
@@ -425,7 +445,7 @@ func newReleaseSigningDaemon(t *testing.T, modulePath, serial string, pki *sidec
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = recorder.Close() })
-	coordinator, err := operations.New(rbac, router, engine, recorder, executor.New(1, 10*time.Second), hardware, "sha256:release-e2e", nil, time.Now)
+	coordinator, err := operations.New(rbac, router, engine, recorder, executor.New(1, 10*time.Second), hardware, "sha256:release-e2e", approvers, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
