@@ -12,6 +12,8 @@ import time
 import unittest
 from pathlib import Path
 
+from tests.hang_guard import DEAF_TO_TERM, run_bounded
+
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / "e2e" / "lib" / "p11_extract_probe.py"
 MODULE = next((m for m in ("/usr/lib/softhsm/libsofthsm2.so", "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so")
@@ -118,7 +120,7 @@ class ExtractProbe(unittest.TestCase):
 # Each value is EITHER one quoted string OR an unquoted token that does not start with a quote, so the two never
 # overlap: an ambiguous alternation here made rejection time exponential in the number of quoted tokens (CodeQL).
 _SEPARATOR = re.compile(r"[;&|(){}`]")
-_HANDS_PIN = re.compile(r'^\s*(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*REGALIA_Q_PIN="\$\w+"\s+(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*(?:timeout\s+(?:-k\s+(?:\d+|"\$\w+")\s+)?(?:\d+|"\$\w+")\s+)?python3(?:\s+-\w+)*\s+\S*$')
+_HANDS_PIN = re.compile(r'^\s*(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*REGALIA_Q_PIN="\$\w+"\s+(?:\w+=(?:"[^"]*"|[^\s"]\S*)\s+)*(?:timeout\s+(?:-k\s+(?:\d+|"\$\w+")\s+)?(?:\d+|"\$\w+")\s+|bounded\s+(?:\d+|"\$\w+")\s+)?python3(?:\s+-\w+)*\s+\S*$')
 
 
 def probe_command_hands_it_the_pin(code):
@@ -136,7 +138,9 @@ class ScriptsHandTheProbeItsPIN(unittest.TestCase):
                 'REGALIA_Q_PIN="$Q_PIN" timeout 60 python3 -Es "$HERE/lib/p11_extract_probe.py"',
                 '  local rc; REGALIA_Q_PIN="$Q_PIN" timeout -k "$KILL_GRACE" "$PROBE_BOUND" python3 -Es "$HERE/lib/p11_extract_probe.py"',
                 'REGALIA_Q_PIN="$Q_PIN" timeout -k 5 60 python3 -Es "$HERE/lib/p11_extract_probe.py"',
-                'out="$(REGALIA_Q_PIN="$Q_PIN" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"']
+                'out="$(REGALIA_Q_PIN="$Q_PIN" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"',
+                '  local rc; REGALIA_Q_PIN="$Q_PIN" bounded "$PROBE_BOUND" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE"',
+                'REGALIA_Q_PIN="$Q_PIN" bounded 60 python3 -Es "$HERE/lib/p11_extract_probe.py"']
         bad = ['REGALIA_Q_PIN="$Q_PIN" true; python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE"',
                'REGALIA_Q_PIN="$Q_PIN" true && python3 "$HERE/lib/p11_extract_probe.py"',
                'out="$(python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"',
@@ -146,7 +150,10 @@ class ScriptsHandTheProbeItsPIN(unittest.TestCase):
                'timeout 60 REGALIA_Q_PIN="$Q_PIN" python3 "$HERE/lib/p11_extract_probe.py"',
                'REGALIA_Q_PIN="$Q_PIN" timeout -k 5 60 true; python3 "$HERE/lib/p11_extract_probe.py"',
                'timeout -k 5 60 REGALIA_Q_PIN="$Q_PIN" python3 "$HERE/lib/p11_extract_probe.py"',
-               'REGALIA_Q_PIN="$Q_PIN" timeout -k python3 "$HERE/lib/p11_extract_probe.py"']
+               'REGALIA_Q_PIN="$Q_PIN" timeout -k python3 "$HERE/lib/p11_extract_probe.py"',
+               'REGALIA_Q_PIN="$Q_PIN" bounded 60 true; python3 "$HERE/lib/p11_extract_probe.py"',
+               'bounded 60 REGALIA_Q_PIN="$Q_PIN" python3 "$HERE/lib/p11_extract_probe.py"',
+               'REGALIA_Q_PIN="$Q_PIN" bounded python3 "$HERE/lib/p11_extract_probe.py"']
         for line in good:
             with self.subTest(good=line):
                 self.assertTrue(probe_command_hands_it_the_pin(line), line)
@@ -186,6 +193,32 @@ def p11probe_definition(text):
     raise AssertionError("pkcs11-contract.sh defines no p11probe(){ ... }")
 
 
+def definition(text, name):
+    """The shell function NAME's source, from `NAME(){` to the first line after it that ends in `; }`."""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith(name + "(){")), None)
+    assert start is not None, f"no {name}(){{ in pkcs11-contract.sh"
+    for end in range(start, len(lines)):
+        if lines[end].rstrip().endswith("; }") and (end > start or lines[start].count("{") == lines[start].count("}")):
+            return "\n".join(lines[start:end + 1])
+    raise AssertionError(f"{name}(){{ never closes")
+
+
+def contract_prelude(d, grace=None):
+    """The bounding definitions pkcs11-contract.sh's calls rely on, with lib/bounded.py under HERE=D."""
+    text = CONTRACT.read_text()
+    Path(d, "lib").mkdir(exist_ok=True)
+    Path(d, "lib", "bounded.py").write_text((ROOT / "e2e" / "lib" / "bounded.py").read_text())
+    grace_line = f"KILL_GRACE={grace}" if grace else re.search(r"^KILL_GRACE=\d+$", text, re.M).group(0)
+    return ["set -u", 'HERE="%s"' % d, grace_line, re.search(r"^HUNG=\d+$", text, re.M).group(0),
+            'die(){ echo "die: $*"; exit 2; }'] + [definition(text, n) for n in ("bounded", "hung", "listed")]
+
+
+def deaf_tool(d, name="pkcs11-tool"):
+    tool = Path(d, name); tool.write_text("#!/usr/bin/env python3\n" + DEAF_TO_TERM); tool.chmod(0o755)
+    return d
+
+
 class TheProbeIsBounded(unittest.TestCase):
     """#676: the script promises every token call is bounded; the extraction probe must be too."""
 
@@ -195,7 +228,7 @@ class TheProbeIsBounded(unittest.TestCase):
         self.assertIsNotNone(bound, "pkcs11-contract.sh sets no PROBE_BOUND")
         self.assertGreater(int(bound.group(1)), 0)
         self.assertLessEqual(int(bound.group(1)), 60, "the probe may not wait longer than pkcs11-tool's own 60 s bound")
-        self.assertRegex(p11probe_definition(text), r'\btimeout -k "\$KILL_GRACE" "\$PROBE_BOUND" python3\b', "p11probe does not run the probe under PROBE_BOUND")
+        self.assertRegex(p11probe_definition(text), r'\bbounded "\$PROBE_BOUND" python3\b', "p11probe does not run the probe under PROBE_BOUND")
 
     def test_a_probe_that_hangs_fails_within_the_bound_and_says_so(self):
         # The REAL p11probe, with the gate stubbed open and a probe that never answers. Unbounded, it would sit for
@@ -203,59 +236,37 @@ class TheProbeIsBounded(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             lib = Path(d, "lib"); lib.mkdir()
             (lib / "p11_extract_probe.py").write_text("import time\ntime.sleep(600)\n")
-            script = "\n".join(["set -u", "target_ok(){ return 0; }", 'SLOT=0 SERIAL=s MODULE=m Q_PIN=p HERE="$1"',
-                                 "PROBE_BOUND=2", "KILL_GRACE=1", p11probe_definition(CONTRACT.read_text()),
+            script = "\n".join(contract_prelude(d, grace=1) + ["target_ok(){ return 0; }", "SLOT=0 SERIAL=s MODULE=m Q_PIN=p",
+                                 "PROBE_BOUND=2", p11probe_definition(CONTRACT.read_text()),
                                  'out="$(p11probe x 2>&1)"; rc=$?; printf "rc=%s\\n%s\\n" "$rc" "$out"'])
-            # Its own session, so a hang is killed as a whole group: killing bash alone would leave the sleeping probe
-            # holding the pipes, and communicate() would then wait the full 600 s.
-            proc = subprocess.Popen(["bash", "-c", script, "bash", d], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    text=True, start_new_session=True)
-            try:
-                stdout, _ = proc.communicate(timeout=30)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, 9)
-                proc.communicate()
-                self.fail("p11probe did not return within 30 s against a probe that never answers: it is unbounded")
+            result = run_bounded(script, d)
+        self.assertFalse(result.hung, "p11probe did not return within 30 s against a probe that never answers: it is unbounded")
+        self.assertEqual(result.leftovers, [], "p11probe left processes running")
+        stdout = result.stdout
         self.assertIn("rc=124", stdout, "a timed-out probe must return timeout's status, not swallow it: " + stdout)
         self.assertIn("did not answer within 2 s", stdout, stdout)
 
 
-# A stand-in that ignores SIGTERM, as a PKCS#11 module stuck in a driver call can: only SIGKILL ends it.
-# It writes its pid next to itself: timeout(1) moves into its own process group, so killing the test's group on a hang
-# would miss it, and it would hold the pipes for its full 600 s.
-DEAF_TO_TERM = ("import os, signal, sys, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                "open(os.environ['DEAF_PIDS'], 'a').write(f'{os.getpid()}\\n')\ntime.sleep(600)\n")
 BOUND, GRACE = 2, 1
 
 
-def run_bounded(script, d, limit=30):
-    """Run SCRIPT in its own session, so a hang is killed as a whole group; returns (stdout, seconds) or None on a hang."""
-    pids = Path(d, "deaf.pids")
-    proc = subprocess.Popen(["bash", "-c", script, "bash", d], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, start_new_session=True, env={**os.environ, "DEAF_PIDS": str(pids)})
-    t0 = time.monotonic()
-    try:
-        stdout, _ = proc.communicate(timeout=limit)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, 9)
-        for pid in (pids.read_text().split() if pids.exists() else []):
-            try:
-                os.kill(int(pid), 9)
-            except ProcessLookupError:
-                pass
-        proc.communicate(timeout=10)
-        return None
-    return stdout, time.monotonic() - t0
+def code_lines(text):
+    return ["" if line.lstrip().startswith("#") else line for line in text.splitlines()]
+
+
+def timeout_calls(text):
+    """(line number, code) for every executable line of TEXT that still runs timeout(1)."""
+    return [(n, line) for n, line in enumerate(code_lines(text), 1) if re.search(r"(?<![\w-])timeout\s", line)]
 
 
 def bounded_calls(text):
-    """(line number, code) for every executable line of TEXT that runs timeout(1); comment lines are skipped."""
-    return [(n, line) for n, line in enumerate(text.splitlines(), 1)
-            if not line.lstrip().startswith("#") and re.search(r"\btimeout\s", line.split(" #", 1)[0])]
+    """(line number, code) for every executable line of TEXT that calls bounded with a duration."""
+    return [(n, line) for n, line in enumerate(code_lines(text), 1) if re.search(r'\bbounded (?:\d+|"\$\w+") ', line)]
 
 
-class EveryBoundEscalatesToKill(unittest.TestCase):
-    """#679: `timeout N` only sends SIGTERM. A call that ignores it still hangs; each bound must end in SIGKILL."""
+class EveryBoundEndsTheWholeGroup(unittest.TestCase):
+    """#679 then #684: each token call is bounded by lib/bounded.py, which ends the tool's whole process group;
+    timeout -k does that only with GNU coreutils."""
 
     def test_the_grace_is_set_and_short(self):
         grace = re.search(r"^KILL_GRACE=(\d+)$", CONTRACT.read_text(), re.M)
@@ -263,31 +274,28 @@ class EveryBoundEscalatesToKill(unittest.TestCase):
         self.assertGreater(int(grace.group(1)), 0)
         self.assertLessEqual(int(grace.group(1)), 10, "a grace this long makes the bound a suggestion: at most 10 s")
 
-    def test_every_timeout_call_in_the_script_escalates(self):
-        calls = bounded_calls(CONTRACT.read_text())
+    def test_no_timeout_call_is_left_and_every_token_call_is_bounded(self):
+        text = CONTRACT.read_text()
+        self.assertEqual(timeout_calls(text), [], "pkcs11-contract.sh still runs timeout(1), whose -k is not portable")
         # Positive control: slot_of, the isolation count, target_ok, p11 and p11probe. Fewer means the scan went blind.
-        self.assertGreaterEqual(len(calls), 5, f"found only {len(calls)} timeout calls: the scan is not seeing the script")
-        for number, line in calls:
-            with self.subTest(line=number):
-                self.assertRegex(line, r'\btimeout -k "\$KILL_GRACE" (?:\d+|"\$\w+") ',
-                                 f"pkcs11-contract.sh:{number} has a timeout with no SIGKILL escalation: {line.strip()}")
+        self.assertGreaterEqual(len(bounded_calls(text)), 5, bounded_calls(text))
 
-    def test_the_scan_sees_a_call_without_escalation(self):
-        # The check above, fed a line it must refuse, so it cannot pass by matching nothing.
-        calls = bounded_calls('# timeout 9 in a comment\nx(){ timeout 30 pkcs11-tool -L; }\ny(){ timeout -k "$KILL_GRACE" 30 z; }\n')
-        self.assertEqual([n for n, _ in calls], [2, 3])
-        self.assertNotRegex(calls[0][1], r'\btimeout -k "\$KILL_GRACE" (?:\d+|"\$\w+") ')
+    def test_the_scans_see_what_they_look_for(self):
+        planted = '# timeout 9 in a comment\nx(){ timeout -k 5 30 pkcs11-tool -L; }\ny(){ bounded "$PROBE_BOUND" z; }\n'
+        self.assertEqual([n for n, _ in timeout_calls(planted)], [2])
+        self.assertEqual([n for n, _ in bounded_calls(planted)], [3])
 
     def test_a_probe_deaf_to_term_is_killed_within_bound_and_grace(self):
         with tempfile.TemporaryDirectory() as d:
             lib = Path(d, "lib"); lib.mkdir()
             (lib / "p11_extract_probe.py").write_text(DEAF_TO_TERM)
-            script = "\n".join(["set -u", "target_ok(){ return 0; }", 'SLOT=0 SERIAL=s MODULE=m Q_PIN=p HERE="$1"',
-                                 f"PROBE_BOUND={BOUND}", f"KILL_GRACE={GRACE}", p11probe_definition(CONTRACT.read_text()),
+            script = "\n".join(contract_prelude(d, grace=GRACE) + ["target_ok(){ return 0; }", "SLOT=0 SERIAL=s MODULE=m Q_PIN=p",
+                                 f"PROBE_BOUND={BOUND}", p11probe_definition(CONTRACT.read_text()),
                                  'out="$(p11probe x 2>&1)"; rc=$?; printf "rc=%s\\n%s\\n" "$rc" "$out"'])
             got = run_bounded(script, d)
-        self.assertIsNotNone(got, "p11probe did not return within 30 s against a probe that ignores SIGTERM: no SIGKILL")
-        stdout, took = got
+        self.assertFalse(got.hung, "p11probe did not return within 30 s against a probe that ignores SIGTERM: no SIGKILL")
+        self.assertEqual(got.leftovers, [], "p11probe left processes running")
+        stdout, took = got.stdout, got.seconds
         self.assertIn("rc=137", stdout, "a probe killed after the grace must return SIGKILL's status: " + stdout)
         self.assertIn(f"did not answer within {BOUND} s", stdout, stdout)
         self.assertLess(took, BOUND + GRACE + 5, f"took {took:.1f} s against a bound of {BOUND} s and a grace of {GRACE} s")
@@ -297,15 +305,55 @@ class EveryBoundEscalatesToKill(unittest.TestCase):
         line = next(l for l in CONTRACT.read_text().splitlines() if l.startswith("p11(){"))
         self.assertIn(" 60 pkcs11-tool ", line)
         with tempfile.TemporaryDirectory() as d:
-            tool = Path(d, "pkcs11-tool"); tool.write_text("#!/usr/bin/env python3\n" + DEAF_TO_TERM); tool.chmod(0o755)
-            script = "\n".join(["set -u", 'PATH="$1:$PATH" SLOT=0 MODULE=m', f"KILL_GRACE={GRACE}",
+            deaf_tool(d)
+            script = "\n".join(contract_prelude(d, grace=GRACE) + ['PATH="%s:$PATH" SLOT=0 MODULE=m' % d,
                                  line.replace(" 60 pkcs11-tool ", f" {BOUND} pkcs11-tool "),
                                  'p11 -L; printf "rc=%s\\n" "$?"'])
             got = run_bounded(script, d)
-        self.assertIsNotNone(got, "p11 did not return within 30 s against a pkcs11-tool that ignores SIGTERM: no SIGKILL")
-        stdout, took = got
+        self.assertFalse(got.hung, "p11 did not return within 30 s against a pkcs11-tool that ignores SIGTERM: no SIGKILL")
+        self.assertEqual(got.leftovers, [], "p11 left processes running")
+        stdout, took = got.stdout, got.seconds
         self.assertIn("rc=137", stdout, stdout)
         self.assertLess(took, BOUND + GRACE + 5, f"took {took:.1f} s against a bound of {BOUND} s and a grace of {GRACE} s")
+
+
+
+class AHungCallIsAnError(unittest.TestCase):
+    """67 on #684: a call its bound ended is never an answer. Each path pkcs11-contract.sh handles it on says so."""
+
+    def run_contract(self, *lines, names=("slot_of",)):
+        text = CONTRACT.read_text()
+        with tempfile.TemporaryDirectory() as d:
+            deaf_tool(d)
+            defs = []
+            for n in names:
+                src = definition(text, n)
+                defs.append(re.sub(r"\bbounded 30 ", "bounded %d " % BOUND, src))
+            script = "\n".join(contract_prelude(d, grace=GRACE) + ['PATH="%s:$PATH" SLOT=0x1 MODULE=m SERIAL=s Q_PIN=p' % d,
+                                                                    "PROBE_BOUND=%d" % BOUND] + defs + list(lines))
+            got = run_bounded(script, d)
+        self.assertFalse(got.hung, got.stdout)
+        self.assertEqual(got.leftovers, [], got.stdout)
+        return got.stdout
+
+    def test_a_hung_listing_returns_hung_not_no_slot(self):
+        out = self.run_contract('s="$(slot_of)"; printf "slot=[%s] rc=%s\\n" "$s" "$?"')
+        self.assertIn("slot=[] rc=3", out, out)
+
+    def test_a_hung_listing_kills_the_run_saying_so(self):
+        out = self.run_contract('find_slot "no single token"; echo "went on"', names=("slot_of", "find_slot"))
+        self.assertIn("die: the slot listing hung", out, out)
+        self.assertNotIn("went on", out, out)
+
+    def test_a_hung_gate_is_no_login_and_no_refusal(self):
+        out = self.run_contract('p11l -L; printf "rc=%s\\n" "$?"', names=("target_ok", "p11", "p11l"))
+        self.assertIn("p11l: the slot listing hung", out, out)
+        self.assertIn("rc=124", out, out)
+
+    def test_a_hung_gate_gives_the_probe_no_verdict(self):
+        out = self.run_contract('p11probe x; printf "rc=%s\\n" "$?"', names=("target_ok", "p11probe"))
+        self.assertIn("the slot listing hung: no login, no PIN, no verdict", out, out)
+        self.assertIn("rc=124", out, out)
 
 
 if __name__ == "__main__":
