@@ -276,12 +276,11 @@ class OwnerFence(Stand):
         inventory = os.path.join(self.dir, "inv.json")
         with open(inventory, "w") as f:
             json.dump({"schema": fe.INVENTORY_SCHEMA, "nodes": self.boxes}, f)
+        held = self.hold_fd(9)                                         # a runner's fd 9 (a wrapper, a lock) must survive
         read, write = os.pipe()
         os.write(write, json.dumps(self.creds).encode())
         os.close(write)
-        fd = os.dup2(read, 9) if read != 9 else read
-        if read != 9:
-            os.close(read)
+        fd = read                                                      # owner.py takes any fd: never dup2 over a fixed number
         out = os.path.join(self.dir, "fence.json")
         sleeps, clock = [], [1791201540.0]
 
@@ -302,6 +301,29 @@ class OwnerFence(Stand):
         self.assertIn(fe.REREAD_S, sleeps)
         with self.assertRaises(OSError):
             os.fstat(fd)                                               # the descriptor is closed after its read
+        self.assertEqual(self.fd_identity(9), held, "fd 9, open before the test, was closed or replaced")
+
+    def hold_fd(self, n):
+        """Keep descriptor n open for the whole test, as a runner might: a file of our own if n is free, else whatever the
+        runner already has there. Returns its (st_dev, st_ino)."""
+        held = self.fd_identity(n)
+        if held is None:
+            d = tempfile.mkdtemp()
+            self.addCleanup(__import__("shutil").rmtree, d, True)
+            own = os.open(os.path.join(d, "held"), os.O_CREAT | os.O_RDWR, 0o600)
+            os.dup2(own, n)
+            os.close(own)
+            held = self.fd_identity(n)
+            self.addCleanup(lambda: self.fd_identity(n) == held and os.close(n))   # only ever our own file
+        return held
+
+    @staticmethod
+    def fd_identity(n):
+        try:
+            st = os.fstat(n)
+        except OSError:
+            return None
+        return st.st_dev, st.st_ino
 
 
 import unittest.mock  # noqa: E402,F811
