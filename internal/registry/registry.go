@@ -457,7 +457,7 @@ func Load(reader io.Reader, site string, health BackendHealth) (*Registry, error
 			rotateBy:   rotateBy,
 		}
 	}
-	return result, nil
+	return unlessASecretKEKIsAnUnwrapKey(result, document.Objects)
 }
 
 // THE DAEMON ENFORCES THE CUSTODY RULES, NOT ONLY CI.
