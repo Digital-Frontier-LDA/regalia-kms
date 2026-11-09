@@ -311,9 +311,11 @@ class OwnerFence(Stand):
             d = tempfile.mkdtemp()
             self.addCleanup(__import__("shutil").rmtree, d, True)
             own = os.open(os.path.join(d, "held"), os.O_CREAT | os.O_RDWR, 0o600)
-            os.dup2(own, n)
-            os.close(own)
+            if own != n:                                               # n the lowest free fd: the open already landed there
+                os.dup2(own, n)
+                os.close(own)
             held = self.fd_identity(n)
+            self.assertIsNotNone(held, f"could not hold fd {n}")
             self.addCleanup(lambda: self.fd_identity(n) == held and os.close(n))   # only ever our own file
         return held
 
@@ -324,6 +326,43 @@ class OwnerFence(Stand):
         except OSError:
             return None
         return st.st_dev, st.st_ino
+
+
+class HoldFd(unittest.TestCase):
+    """OwnerFence.hold_fd keeps its sentinel open even when the descriptor it wants is the lowest free one, so os.open
+    lands on it directly (CodeRabbit on #704): closing that "copy" would close the sentinel itself."""
+
+    def test_the_sentinel_survives_when_it_is_the_lowest_free_fd(self):
+        import subprocess
+        import sys
+        import textwrap
+        child = textwrap.dedent("""
+            import os
+            from tests.test_baremetal_fence import OwnerFence
+            for n in range(9):                                         # fill every hole below 9, in order
+                try:
+                    os.fstat(n)
+                except OSError:
+                    assert os.open(os.devnull, os.O_RDONLY) == n
+            probe = os.dup(0)
+            assert probe == 9, f"lowest free fd is {probe}, not 9: the case did not set up"
+            os.close(probe)
+
+            class T(OwnerFence):
+                def runTest(self):
+                    pass
+
+            t = T()
+            held = t.hold_fd(9)
+            assert held is not None and OwnerFence.fd_identity(9) == held, "the sentinel on fd 9 was closed"
+            t.doCleanups()
+            assert OwnerFence.fd_identity(9) is None, "the cleanup left the sentinel open"
+            print("HOLD_FD_OK")
+        """)
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        got = subprocess.run([sys.executable, "-c", child], cwd=root, capture_output=True, text=True, timeout=60)
+        self.assertEqual(got.returncode, 0, got.stdout + got.stderr)
+        self.assertIn("HOLD_FD_OK", got.stdout)
 
 
 import unittest.mock  # noqa: E402,F811
