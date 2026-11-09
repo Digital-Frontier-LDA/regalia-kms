@@ -20,6 +20,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; LOCKOUT="$HERE/deploy/baremetal/tpm-lockout.sh"; SEAL="$HERE/deploy/seal-hsm-pin.sh"
 # shellcheck source=e2e/lib/pin-blob-v2.sh
 . "$HERE/e2e/lib/pin-blob-v2.sh"
+# shellcheck source=e2e/lib/import-key-cert.sh
+. "$HERE/e2e/lib/import-key-cert.sh"
 pass=0; fail=0
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; pass=$((pass+1)); }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; fail=$((fail+1)); }
@@ -148,7 +150,9 @@ down
 
 hdr "4  the PIN import key is not subject to the counter"
 up b
-out="$(sudo env TPM2TOOLS_TCTI="$D" "$SEAL" --init-import-key --import-pub "$W/import.pem" 2>&1)" && grep -q 'IMPORT KEY CREATED' <<< "$out" || F "--init-import-key failed: $out"
+ikc_ready "$D" "$W/id" || F "cannot make the EK and AK the import key is certified by (#702)"
+out="$(sudo env TPM2TOOLS_TCTI="$D" "$SEAL" --init-import-key --ak-credential "$W/id/cred.bin" --certification "$W/import.cert.json" \
+  --import-pub "$W/import.pem" 2>&1)" && grep -q 'IMPORT KEY CREATED' <<< "$out" || F "--init-import-key failed: $out"
 attrs="$(tpm2_readpublic -c 0x81000101 2>/dev/null | awk '/^attributes:/{getline; print $2}')"
 grep -q noda <<< "$attrs" && P "the key seal-hsm-pin.sh creates carries noda ($attrs)" || F "import key attributes: $attrs"
 mkdir -p "$W/cer"; printf 7310048261 | pin_blob_v2 "$W/import.pem" "$W/pin.blob" "$W/cer" || F "cannot make the v2 blob"
@@ -159,12 +163,16 @@ for n in ("pub","dpriv","seed"):
     s=int.from_bytes(b[o:o+2],"big"); open(sys.argv[2]+"/"+n,"wb").write(b[o:o+2+s]); o+=2+s' "$1" "$d"
   tpm2_import -Q -C 0x81000101 -u "$d/pub" -i "$d/dpriv" -s "$d/seed" -r "$d/priv" 2>/dev/null && tpm2_flushcontext -t \
     && tpm2_load -Q -C 0x81000101 -u "$d/pub" -r "$d/priv" -c "$d/o.ctx" 2>/dev/null && tpm2_unseal -c "$d/o.ctx" 2>/dev/null; tpm2_flushcontext -t; }
+# #702: --init-import-key also uses the AK (ActivateCredential, then Certify), and the AK is not noda (tpm2_createak's
+# template, as for every quote it signs): a power cut before an orderly shutdown counts that ONE try at the next
+# start. The import key itself counts none, which is what the four cuts below hold it to.
 cut_power; base="$(get TPM2_PT_LOCKOUT_COUNTER)"
-[ "$base" = 0 ] && P "creating it, then a power cut: 0 tries counted" || F "creating the key and cutting the power counted $base"
+[ "$base" = 1 ] && P "creating and certifying it, then a power cut: 1 try counted, the AK's (#702), and nothing for the import key" \
+  || F "creating and certifying the key, then cutting the power, counted ${base:-?} (expected 1: the AK's)"
 ok=1; for _ in 1 2 3 4; do
   [ "$(open_blob "$W/pin.blob")" = 7310048261 ] || ok=0; cut_power; done
-[ "$ok" = 1 ] && [ "$(get TPM2_PT_LOCKOUT_COUNTER)" = 0 ] && P "used (import, load, unseal), then the power cut, four times: it still unseals and 0 tries are counted" \
-  || F "import key after 4 cuts: unseals=$ok, counter $(get TPM2_PT_LOCKOUT_COUNTER)"
+[ "$ok" = 1 ] && [ "$(get TPM2_PT_LOCKOUT_COUNTER)" = "$base" ] && P "used (import, load, unseal), then the power cut, four times: it still unseals and no try is added" \
+  || F "import key after 4 cuts: unseals=$ok, counter $(get TPM2_PT_LOCKOUT_COUNTER) (was $base)"
 down; up c
 # control: the same storage key WITHOUT noda (the template before #57), and a sealed object without it
 tpm2_createprimary -Q -C o -g sha256 -G ecc256:aes128cfb -c "$W/p.ctx"

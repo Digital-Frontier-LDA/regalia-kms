@@ -95,6 +95,46 @@ too, for the same reason (`e2e/tpm-lockout-swtpm.sh` section 4, with a control t
 `--init-import-key` prints it, `host.pin_import_key_sha256` records it, and `host_probe.py` and the
 ceremony check it. For P-256 the SPKI is 91 bytes: a fixed 26-byte prefix, `04`, X, Y.
 
+## The import key's certification (#702)
+
+The fingerprint pins WHICH key the ceremony wraps to; it cannot say that the key lives in this host's
+TPM. So the node's EK-bound AK certifies it (TPM2_Certify), with the machinery the node's other keys
+already use: the AK is bound to the EK by credential activation (attest.py's
+TPM2_MakeCredential/ActivateCredential, as `enrol challenge`/`activate` do), and the certification
+is checked as `signkey.verify_certification` checks the #199 signing key's. Module:
+`deploy/baremetal/importkey.py`.
+
+1. The verifier, on a machine with no TPM: `importkey challenge --ek-public --ak-public` makes a
+   credential to the host's EK and AK Name and keeps only the secret's SHA-256.
+2. The host: `seal-hsm-pin.sh --init-import-key --ak-credential CRED.bin` needs the EK and AK
+   already in the TPM (`enrol init`, 0x81010001 and 0x81010002) and opens the credential **before**
+   anything is made, so a credential for another TPM changes nothing. It then makes the key, has the
+   AK certify it, and writes the certification document: the key's public area, the EK's and AK's,
+   the TPMS_ATTEST and its signature, and the answer to the challenge.
+3. The verifier: `importkey verify --certification --keep --ek-name --fingerprint`, with no TPM.
+   Each refusal names its check: `missing`, `template`, `attributes` (fixedTPM, fixedParent,
+   sensitiveDataOrigin), `fingerprint` (the console copy), `ek` (the EK recorded at intake), `binding`
+   (the answer opens the challenge made for this EK and this AK), `signature`, `signer` (the AK under
+   that EK), `name` (the certified Name is the key's) and `parent` (a child of a storage key, not an
+   object at a hierarchy, which is what TPM2_LoadExternal would make of a software key).
+4. The commissioning evidence records the certification and the verifier's challenge
+   (`host.pin_import_key_certification`); `evidence.py` holds them to their shapes and to the
+   recorded fingerprint. The cryptography is the verifier's, against the intake EK.
+
+`e2e/import-key-certify-swtpm.sh` runs this on two software TPMs: a certified key passes, and a
+software key with a matching fingerprint (`binding`), another TPM's certification (`ek`), a
+certification of another object (`name`) and no certification (`missing`) are each refused by
+name. `e2e/import-key-certify-mutants.sh` disables each of those four checks in turn in a copy of
+the tree and shows its case then fails. Its probe (e) loads the software key's public area with
+TPM2_LoadExternal (null and owner hierarchies) and asks A's AK to certify it: swtpm 0.10.1 loads it
+and then refuses TPM2_Certify in both. The `parent` check is defence in depth for a TPM that would
+certify it; that is measured on swtpm only.
+
+**One dictionary-attack try at commissioning.** The AK is not `noda` (tpm2_createak's template, as
+for every quote it signs), so a power cut after `--init-import-key` and before an orderly shutdown
+counts one try at the next start: the AK's, as any AK use costs. The import key itself still counts
+none (`e2e/tpm-lockout-swtpm.sh` section 4 measures both).
+
 ## The sealed object (made at the ceremony)
 
 A keyedhash object holding the PIN's bytes exactly (no newline): nameAlg SHA-256, scheme NULL,
@@ -197,8 +237,13 @@ run**), commissioning on that module types the PIN from the sealed PIN card (sea
 
 ## Not covered here
 
-- **TPM2_Certify of the import key by the EK-bound AK** (ADR-0002 D21 point 2): required, and **not
-  yet built**. It is regalia-kms#702. Today only `signkey.py` certifies a key (the #199 signing key);
-  the import key is trusted by the hand-copied fingerprint alone. No host is commissioned on this
-  path until #702 lands.
+- **TPM2_Certify of the import key by the EK-bound AK** (ADR-0002 D21 point 2) is built here
+  (regalia-kms#702, above), **measured on swtpm only**. Still open:
+  - the ceremony's step 0 does not yet refuse an uncertified key: that is regalia-ceremony#182's next
+    round. Until it does, the certification is checked only where `importkey verify` is run;
+  - the EK's chain to the TPM manufacturer is intake's (#65 PoC 5.2): `--ek-name` is that record, and
+    the verifier trusts it. The swtpm EK has no certificate;
+  - no physical TPM has run it: the SLB9665 run waits, like the PoC, for the owner's authorisation;
+  - `host_probe.py` checks the key at the handle against the fingerprint and the template, not
+    against the certification.
 - The SLB9665's TPM2_PT_MAX_AUTH_FAIL of 31 (not 32) from #671 is not addressed here.

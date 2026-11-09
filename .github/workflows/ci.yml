@@ -76,6 +76,15 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools opensc
           bash e2e/pin-import-swtpm.sh
 
+      - name: the PIN import key certified by the EK-bound AK, against software TPMs (swtpm; #702)
+        # --init-import-key opens the verifier's credential, makes the key and has the AK certify it; importkey.py
+        # verify accepts that with no TPM, and refuses by name a software key with a matching fingerprint, another
+        # TPM's certification, a certification of another object and a missing one. The mutants then disable each of
+        # those four checks in a copy of the tree and require its case to fail. swtpm is installed above.
+        run: |
+          bash e2e/import-key-certify-swtpm.sh
+          bash e2e/import-key-certify-mutants.sh
+
       - name: signed PCR 11 policy for the PIN, against a software TPM (swtpm; stub card)
         # seal-hsm-pin.sh --tpm2-public-key/--tpm2-public-key-pcrs 11 (#57): sealed under PCR 7 plus a
         # systemd-measure-signed PCR 11, opened across a signed kernel update without re-sealing, and

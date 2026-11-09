@@ -39,6 +39,15 @@ tpm(){ local name="$1"; mkdir -p "$W/$name"
     --flags not-need-init,startup-clear --daemon --pid "file=$W/swtpm-$name.pid" || die "swtpm $name did not start"; }
 tpm A; tpm B; sleep 1
 TA="swtpm:path=$W/A.sock"; TB="swtpm:path=$W/B.sock"
+# #702: each software TPM gets its EK and AK (as enrol init makes them) and the verifier's credential to them, with no
+# TPM; --init-import-key opens it, then has the AK certify the key. Inline (e2e/lib/import-key-cert.sh's ikc_ready): a
+# drill sources no script but the bench gate library (tests/test_e2e_card_isolation.py)
+for h in A B; do mkdir -p "$W/id$h"
+  TPM2TOOLS_TCTI="swtpm:path=$W/$h.sock" python3 -Es "$HERE/deploy/baremetal/attest.py" node-init --out "$W/id$h" >/dev/null 2>&1 \
+    && (cd "$HERE" && python3 -Es -m deploy.baremetal.importkey challenge --ek-public "$W/id$h/ek.pub" --ak-public "$W/id$h/ak.pub" \
+      --credential "$W/id$h/cred.bin" --keep "$W/id$h/keep.json") >/dev/null || die "host $h: cannot make the EK, AK and credential (#702)"
+done
+CA=(--ak-credential "$W/idA/cred.bin" --certification "$W/A.cert.json"); CB=(--ak-credential "$W/idB/cred.bin" --certification "$W/B.cert.json")
 # shellcheck source=lib/bench_cards.sh
 . "$HERE/e2e/lib/bench_cards.sh"
 if [ "${DEV[0]}" = --serial ]; then
@@ -97,12 +106,12 @@ encrypt(){ printf '%s' "$NK_PIN" | pin_blob_v2 "$1" "$2" "$W/cer"; }
 [ "$(tries)" = "$RETRIES" ] || die "$SERIAL is not at its full $RETRIES tries ($(tries)); investigate first"
 
 hdr "commissioning: an import key inside each host's TPM"
-out="$(seal "$TA" --init-import-key --import-pub "$W/A.pub.pem")" && grep -q 'IMPORT KEY CREATED' <<< "$out" \
+out="$(seal "$TA" --init-import-key "${CA[@]}" --import-pub "$W/A.pub.pem")" && grep -q 'IMPORT KEY CREATED' <<< "$out" \
   && P "host A: import key created, public key exported" || F "host A init failed: $out"
-out="$(seal "$TB" --init-import-key --import-pub "$W/B.pub.pem")" && P "host B: import key created" || F "host B init failed: $out"
+out="$(seal "$TB" --init-import-key "${CB[@]}" --import-pub "$W/B.pub.pem")" && P "host B: import key created" || F "host B init failed: $out"
 fpA="$(openssl pkey -pubin -in "$W/A.pub.pem" -outform der | sha256sum | cut -d' ' -f1)"
-grep -q "$fpA" <<< "$(seal "$TA" --init-import-key --import-pub "$W/A2.pub.pem" 2>&1; true)" && F "D: a second init replaced the key silently" \
-  || { out="$(seal "$TA" --init-import-key --import-pub "$W/A2.pub.pem")"; grep -q 'already holds a key' <<< "$out" && P "D: a second --init-import-key is refused without --replace-import-key" || F "D: no refusal: $out"; }
+grep -q "$fpA" <<< "$(seal "$TA" --init-import-key "${CA[@]}" --import-pub "$W/A2.pub.pem" 2>&1; true)" && F "D: a second init replaced the key silently" \
+  || { out="$(seal "$TA" --init-import-key "${CA[@]}" --import-pub "$W/A2.pub.pem")"; grep -q 'already holds a key' <<< "$out" && P "D: a second --init-import-key is refused without --replace-import-key" || F "D: no refusal: $out"; }
 
 hdr "the ceremony side: the PIN wrapped to each host's import key (v2 blob)"
 encrypt "$W/A.pub.pem" "$W/pin-A.blob" && encrypt "$W/B.pub.pem" "$W/pin-B.blob" && P "blobs made (v2, TPM2 duplication to P-256, $(wc -c < "$W/pin-A.blob") bytes)" || F "wrapping failed"

@@ -602,6 +602,20 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **No release-signing tool for the card-held release key** (planned).
 - **No Kubernetes KMS provider** (planned).
 
+## The PIN import key's certification (#702)
+
+- Built and run on **swtpm only**: `seal-hsm-pin.sh --init-import-key` opens the verifier's credential to the
+  EK and AK, makes the import key and has the AK certify it; `deploy/baremetal/importkey.py verify` checks the
+  certification with no TPM; the evidence records it (`host.pin_import_key_certification`).
+  `e2e/import-key-certify-swtpm.sh`, `e2e/import-key-certify-mutants.sh`. No physical TPM has run it.
+- Not enforced by the ceremony yet: regalia-ceremony step 0 still checks the hand-copied fingerprint only. Its
+  refusal of a missing or failing certification is regalia-ceremony#182's next round.
+- The EK's manufacturer chain is not checked here: `--ek-name` is the intake record (#65 PoC 5.2), trusted.
+- `--init-import-key` now needs `enrol init` first (the EK and AK) and a credential from the verifier; a host
+  commissioned before #702 has an uncertified key and needs `--init-import-key --replace-import-key` with one.
+- A power cut between `--init-import-key` and an orderly shutdown counts one dictionary-attack try: the AK's
+  (not `noda`), as for any AK use. The import key adds none.
+
 ## Tests
 
 - `moved_by_sync` (the sync round that moved a node to an epoch) cannot see how many envelopes a round received:
