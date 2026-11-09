@@ -29,12 +29,18 @@
 #
 # TPM IMPORT (ADR-0002 D21): the PIN can arrive ENCRYPTED to this host's TPM, so it is never typed here
 # or carried in clear. Two extra modes:
-#   sudo deploy/seal-hsm-pin.sh --init-import-key [--import-handle 0x81000101] [--import-pub FILE]
+#   sudo deploy/seal-hsm-pin.sh --init-import-key --ak-credential CRED.bin [--certification FILE]
+#                               [--import-handle 0x81000101] [--import-pub FILE]
 #       once, at commissioning: creates an ECC P-256 STORAGE key INSIDE the TPM (fixedTPM, fixedParent,
 #       sensitiveDataOrigin: generated there, never leaves; restricted|decrypt, AES-128-CFB: the parent
 #       TPM2_Import needs), persists it at the handle, and writes its public key (PEM) and SHA-256
 #       fingerprint. Copy the fingerprint BY HAND at the console: the ceremony checks the public key
 #       against it before wrapping a PIN to it. About 128-bit security (P-256, AES-128, SHA-256).
+#       CERTIFIED (#702): the node's EK and AK must already be in the TPM (enrol init, 0x81010001 and
+#       0x81010002). The verifier's credential (deploy/baremetal/importkey.py challenge, on a machine with no
+#       TPM) is opened FIRST, so a credential for another TPM makes nothing; then the AK certifies the new key
+#       (TPM2_Certify) and the certification is written (default /root/regalia-pin-import.certification.json):
+#       it goes, with the public key, to the verifier (importkey.py verify) and into the commissioning evidence.
 #   sudo deploy/seal-hsm-pin.sh --id … --serial … --pcrs … --from-blob pin-<site>.blob
 #       the ceremony's blob (format v2, PIN-IMPORT-DESIGN.md): a TPM2 duplication of a sealed object
 #       holding the PIN, wrapped to this TPM's import key. The TPM imports, loads and unseals it, then
@@ -101,6 +107,7 @@ CREDSTORE="${REGALIA_CREDSTORE:-/etc/credstore.encrypted}"
 fail(){ printf 'seal-hsm-pin: FAIL: %s\n' "$*" >&2; exit 1; }
 say(){ printf 'seal-hsm-pin: %s\n' "$*" >&2; }
 INIT_IMPORT=0; FROM_BLOB=""; IMPORT_HANDLE="0x81000101"; IMPORT_PUB="/root/regalia-pin-import.pub.pem"; REPLACE_IMPORT=0
+AK_CREDENTIAL=""; CERTIFICATION="/root/regalia-pin-import.certification.json"
 OWNERAUTH_STDIN=0; OWNER_P=()
 # A value-taking option with no value must fail, not loop: without set -e a failed `shift 2` would
 # leave the argument in place and the loop would spin forever.
@@ -112,6 +119,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --init-import-key) INIT_IMPORT=1; shift;; --replace-import-key) REPLACE_IMPORT=1; shift;;
   --from-blob) need "$@"; FROM_BLOB="$2"; shift 2;; --import-handle) need "$@"; IMPORT_HANDLE="$2"; shift 2;;
   --import-pub) need "$@"; IMPORT_PUB="$2"; shift 2;; --ownerauth-stdin) OWNERAUTH_STDIN=1; shift;;
+  --ak-credential) need "$@"; AK_CREDENTIAL="$2"; shift 2;; --certification) need "$@"; CERTIFICATION="$2"; shift 2;;
   --tpm2-public-key) need "$@"; PUBKEY="$2"; shift 2;; --tpm2-public-key-pcrs) need "$@"; PUBKEY_PCRS="$2"; shift 2;;
   --tpm2-signature) need "$@"; SIGNATURE="$2"; shift 2;;
   -h|--help) sed -n '2,/^set -uo pipefail$/{/^set -uo pipefail$/!p}' "$0"; exit 0;; *) fail "unknown argument '$1' (see --help)";; esac; done
@@ -135,9 +143,18 @@ flush_in(){ local c; for c in "$1"/*.ctx; do [ -f "$c" ] && tpm2_flushcontext "$
 # ---- commissioning: the TPM-resident import key ---------------------------------------------------
 if [ "$INIT_IMPORT" = 1 ]; then
   [ "$(id -u)" = 0 ] || fail "run as root (sudo)"
-  for t in tpm2_createprimary tpm2_create tpm2_load tpm2_evictcontrol tpm2_readpublic tpm2_flushcontext openssl; do
-    command -v "$t" >/dev/null || fail "$t is required (tpm2-tools, openssl)"; done
+  for t in tpm2_createprimary tpm2_create tpm2_load tpm2_evictcontrol tpm2_readpublic tpm2_flushcontext tpm2_certify \
+           tpm2_activatecredential tpm2_startauthsession tpm2_policysecret openssl python3; do
+    command -v "$t" >/dev/null || fail "$t is required (tpm2-tools, openssl, python3)"; done
   refuse_raw_tpm
+  # #702: the import key is certified by the EK-bound AK, or it is not made. Checked before anything is touched.
+  [ -n "$AK_CREDENTIAL" ] || fail "--init-import-key needs --ak-credential: the verifier's credential to this TPM's EK and AK (the importkey module's challenge command). The import key is certified by the AK (#702); an uncertified key cannot be commissioned. Nothing was done"
+  [ -f "$AK_CREDENTIAL" ] && [ -r "$AK_CREDENTIAL" ] || fail "--ak-credential: cannot read $AK_CREDENTIAL. Nothing was done"
+  tpm2_readpublic -Q -c 0x81010001 >/dev/null 2>&1 && tpm2_readpublic -Q -c 0x81010002 >/dev/null 2>&1 \
+    || fail "this TPM has no EK at 0x81010001 and AK at 0x81010002: run enrol init first (the AK certifies the import key, #702). Nothing was done"
+  root_dir="$(cd "$(dirname "$0")/.." && pwd)"
+  [ -f "$root_dir/deploy/baremetal/importkey.py" ] || fail "cannot find deploy/baremetal/importkey.py beside this script. Nothing was done"
+  importkey(){ (cd "$root_dir" && python3 -Es -m deploy.baremetal.importkey "$@"); }
   work="$(mktemp -d)"
   flush_own(){ flush_in "$work"; }
   oa_dir=""
@@ -164,6 +181,12 @@ if [ "$INIT_IMPORT" = 1 ]; then
     oa=""
     OWNER_P=(-P "file:$oa_dir/auth")
   fi
+  # the credential FIRST: only the TPM holding the EK and the AK it was made for can open it, so a credential for
+  # another TPM (or another AK) stops here with nothing made or removed. The answer is not a lasting secret: it
+  # opens this one challenge, whose keep holds only its hash.
+  (umask 077; importkey host-activate --credential "$AK_CREDENTIAL" > "$work/answer") \
+    || fail "this TPM could not open --ak-credential: it was made for another TPM's EK or AK. Nothing was done"
+  flush_own
   if tpm2_readpublic -Q -c "$IMPORT_HANDLE" >/dev/null 2>&1; then
     [ "$REPLACE_IMPORT" = 1 ] || fail "the TPM already holds a key at $IMPORT_HANDLE; pass --replace-import-key to make a new one (PIN blobs made for the old key stop working)"
     tpm2_evictcontrol -Q -C o "${OWNER_P[@]}" -c "$IMPORT_HANDLE" >/dev/null || fail "cannot remove the old key at $IMPORT_HANDLE"
@@ -192,11 +215,17 @@ if [ "$INIT_IMPORT" = 1 ]; then
   # tpm2_readpublic creates the file 0660 whatever the umask; it is a public key, readable by anyone.
   tpm2_readpublic -Q -c "$IMPORT_HANDLE" -f pem -o "$IMPORT_PUB" && chmod 0644 "$IMPORT_PUB" || fail "cannot export the public key"
   fp="$(openssl pkey -pubin -in "$IMPORT_PUB" -outform der | sha256sum | cut -d' ' -f1)"
+  # TPM2_Certify by the AK, checked as the verifier will check it (but for the intake EK and the keep, which only
+  # the verifier holds)
+  importkey host-certify --answer-file "$work/answer" --handle "$IMPORT_HANDLE" --out "$CERTIFICATION" >/dev/null \
+    || fail "the key at $IMPORT_HANDLE was made but NOT certified by the AK: it cannot be commissioned. Run --init-import-key --replace-import-key again"
+  flush_own
   cat <<REC
 IMPORT KEY CREATED (inside this TPM; the private half never leaves it)
   handle        : $IMPORT_HANDLE
   public key    : $IMPORT_PUB   (copy it to the ceremony laptop; it is not secret)
   sha256 (DER)  : $fp
+  certification : $CERTIFICATION   (TPM2_Certify by the AK, #702: to the verifier and the evidence; not secret)
 Write the fingerprint down BY HAND from this console. The ceremony refuses a public key whose
 fingerprint does not match what you wrote.
 REC

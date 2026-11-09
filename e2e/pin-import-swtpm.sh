@@ -4,7 +4,9 @@
 #
 #   sudo -v && e2e/pin-import-swtpm.sh
 #
-#   1  --init-import-key creates a persistent ECC P-256 storage key inside the TPM (exactly the import
+#   1  --init-import-key (#702: only with a verifier's credential to the TPM's EK and AK, opened before
+#      anything is made; then the AK certifies the key, and the certification verifies with no TPM)
+#      creates a persistent ECC P-256 storage key inside the TPM (exactly the import
 #      template: restricted|decrypt, AES-128-CFB, noda) and exports its public key (0644) and SHA-256
 #      fingerprint; a second run is refused without --replace-import-key, and --replace-import-key
 #      makes a DIFFERENT key; the parent public area the ceremony rebuilds from the PEM is the TPM's,
@@ -23,6 +25,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; SEAL="$HERE/deploy/seal-hsm-pin.sh"
 # shellcheck source=e2e/lib/pin-blob-v2.sh
 . "$HERE/e2e/lib/pin-blob-v2.sh"
+# shellcheck source=e2e/lib/import-key-cert.sh
+. "$HERE/e2e/lib/import-key-cert.sh"
 pass=0; fail=0
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; pass=$((pass+1)); }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; fail=$((fail+1)); }
@@ -43,6 +47,10 @@ tpm(){ mkdir -p "$W/$1"; swtpm socket --tpm2 --tpmstate "dir=$W/$1" --server "ty
   echo "pin-import-swtpm: swtpm $1's socket never appeared"; exit 2; }
 tpm A; tpm B
 TA="swtpm:path=$W/A.sock"; TB="swtpm:path=$W/B.sock"
+# #702: each TPM gets its EK and AK (as enrol init makes them) and a verifier's credential to them, which
+# --init-import-key opens before making the key, then has the AK certify it
+ikc_ready "$TA" "$W/idA" && ikc_ready "$TB" "$W/idB" || { echo "pin-import-swtpm: cannot make the EK and AK"; exit 2; }
+CA=(--ak-credential "$W/idA/cred.bin" --certification "$W/A.cert.json"); CB=(--ak-credential "$W/idB/cred.bin" --certification "$W/B.cert.json")
 # NO CARD, AND NO BENCH: seal-hsm-pin.sh goes on to look for the card (opensc-tool, pkcs11-tool, as root).
 # In CI there is no reader; on a machine with tokens attached, a default OpenSC config would enumerate
 # every card as root and leave a YubiKey's PIV applet selected (that cost three PIV PIN tries on
@@ -59,7 +67,17 @@ enc(){ printf '%s' "$PIN" | pin_blob_v2 "$1" "$2" "$W/cer"; }
 nocard(){ ! grep -q 'no card' <<< "$1"; }
 
 hdr "1  the import key"
-out="$(seal "$TA" --init-import-key --import-pub "$W/A.pem")" && grep -q 'IMPORT KEY CREATED' <<< "$out" \
+out="$(seal "$TA" --init-import-key --import-pub "$W/A.pem")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'needs --ak-credential' <<< "$out" && ! TPM2TOOLS_TCTI="$TA" tpm2_readpublic -Q -c 0x81000101 >/dev/null 2>&1 \
+  && P "#702: without --ak-credential, --init-import-key is refused and makes nothing (exit $rc)" || F "no credential: $out"
+out="$(seal "$TA" --init-import-key --ak-credential "$W/idB/cred.bin" --certification "$W/x.cert.json" --import-pub "$W/A.pem")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'could not open --ak-credential' <<< "$out" && ! TPM2TOOLS_TCTI="$TA" tpm2_readpublic -Q -c 0x81000101 >/dev/null 2>&1 \
+  && [ ! -e "$W/x.cert.json" ] && P "#702: a credential made for another TPM's EK and AK is refused before anything is made (exit $rc)" || F "B's credential on A: $out"
+tpm N; TN="swtpm:path=$W/N.sock"          # a TPM with no EK and no AK: enrol init has not run
+out="$(seal "$TN" --init-import-key "${CA[@]}" --import-pub "$W/N.pem")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'run enrol init first' <<< "$out" && ! TPM2TOOLS_TCTI="$TN" tpm2_readpublic -Q -c 0x81000101 >/dev/null 2>&1 \
+  && P "#702: a TPM with no EK and AK is refused before anything is made (exit $rc)" || F "no AK: $out"
+out="$(seal "$TA" --init-import-key "${CA[@]}" --import-pub "$W/A.pem")" && grep -q 'IMPORT KEY CREATED' <<< "$out" \
   && P "created inside TPM A" || F "init failed: $out"
 y="$(TPM2TOOLS_TCTI="$TA" tpm2_readpublic -c 0x81000101 2>/dev/null)"
 attrs="$(awk '/^attributes:/{getline; print $2}' <<< "$y" | tr '|' '\n' | sort | paste -sd'|' -)"
@@ -68,13 +86,16 @@ attrs="$(awk '/^attributes:/{getline; print $2}' <<< "$y" | tr '|' '\n' | sort |
   && P "ECC P-256 storage key, AES-128-CFB, exactly $attrs" || F "template: $y"
 [ "$(stat -c %a "$W/A.pem")" = 644 ] && P "public key exported 0644" || F "public key mode $(stat -c %a "$W/A.pem")"
 grep -q "$(fp "$W/A.pem")" <<< "$out" && P "the printed fingerprint is the sha256 of the exported key" || F "fingerprint mismatch"
-out="$(seal "$TA" --init-import-key --import-pub "$W/A2.pem")"; rc=$?
+out="$(seal "$TA" --init-import-key "${CA[@]}" --import-pub "$W/A2.pem")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'already holds a key' <<< "$out" && P "a second init is refused (exit $rc)" || F "a second init was not refused: $out"
 fp1="$(fp "$W/A.pem")"
-out="$(seal "$TA" --init-import-key --replace-import-key --import-pub "$W/A3.pem")"
+out="$(seal "$TA" --init-import-key "${CA[@]}" --replace-import-key --import-pub "$W/A3.pem")"
 [ "$(fp "$W/A3.pem")" != "$fp1" ] && P "--replace-import-key makes a different key" || F "replace kept the same key"
 APUB="$W/A3.pem"   # the current key of TPM A (the files are root-owned; never copy over them)
-seal "$TB" --init-import-key --import-pub "$W/B.pem" >/dev/null || F "TPM B init failed"
+ver(){ (cd "$HERE" && python3 -Es -m deploy.baremetal.importkey verify "$@" 2>&1); }
+out="$(ver --certification "$W/A.cert.json" --keep "$W/idA/keep.json" --ek-name "$(cat "$W/idA/ek.name")" --fingerprint "$(fp "$APUB")")"
+grep -q '^VERIFIED ' <<< "$out" && P "#702: the AK's certification of the current key verifies with no TPM (signature, AK-EK binding, Name, template)" || F "certification: $out"
+seal "$TB" --init-import-key "${CB[@]}" --import-pub "$W/B.pem" >/dev/null || F "TPM B init failed"
 TPM2TOOLS_TCTI="$TA" tpm2_readpublic -Q -c 0x81000101 -f tss -o "$W/A.tss" 2>/dev/null
 pin_parent_tpm2b "$APUB" "$W/A.rebuilt" && cmp -s "$W/A.tss" "$W/A.rebuilt" \
   && P "the parent public area rebuilt from the PEM and the pinned template is the TPM's, byte for byte" || F "rebuilt parent differs from the TPM's"
@@ -174,22 +195,24 @@ done
 
 hdr "5  #242: with the TPM's owner authorization set, the import key only with the envelope's value (--ownerauth-stdin)"
 tpm C; TC="swtpm:path=$W/C.sock"
+ikc_ready "$TC" "$W/idC" || F "cannot make TPM C's EK and AK"     # before the owner authorization, as enrol init is
+CC=(--ak-credential "$W/idC/cred.bin" --certification "$W/C.cert.json")
 hex(){ python3 -I -c 'import secrets; print(secrets.token_hex(32))'; }
 OA="$(hex)"                                                     # a throwaway owner authorization, set as enrol ownerauth would
 printf 'hex:%s' "$OA" > "$W/oa.auth"
 TPM2TOOLS_TCTI="$TC" tpm2_changeauth -c o "file:$W/oa.auth" || F "could not set TPM C's owner authorization"
 rm -f "$W/oa.auth"
-out="$(seal "$TC" --init-import-key --import-pub "$W/C.pem" </dev/null)"; rc=$?
+out="$(seal "$TC" --init-import-key "${CC[@]}" --import-pub "$W/C.pem" </dev/null)"; rc=$?
 [ "$rc" != 0 ] && grep -q 'tpm2_createprimary failed' <<< "$out" && P "without the value, the TPM refuses the owner hierarchy (exit $rc)" || F "no value: $out"
-out="$(printf '%s\n' "$OA" | seal "$TC" --init-import-key --import-pub "$W/C.pem" --ownerauth-stdin)"
+out="$(printf '%s\n' "$OA" | seal "$TC" --init-import-key "${CC[@]}" --import-pub "$W/C.pem" --ownerauth-stdin)"
 grep -q 'IMPORT KEY CREATED' <<< "$out" && P "with the envelope's value on standard input, the key is made" || F "with the value: $out"
 grep -qF "$OA" <<< "$out" && F "the owner authorization appeared in the output" || P "the owner authorization never appears in the output"
 fpc="$(fp "$W/C.pem")"
-out="$(printf '%s\n' "$(hex)" | seal "$TC" --init-import-key --replace-import-key --import-pub "$W/C2.pem" --ownerauth-stdin)"; rc=$?
+out="$(printf '%s\n' "$(hex)" | seal "$TC" --init-import-key "${CC[@]}" --replace-import-key --import-pub "$W/C2.pem" --ownerauth-stdin)"; rc=$?
 [ "$rc" != 0 ] && grep -q 'cannot remove the old key' <<< "$out" && P "a wrong value is refused by the TPM (exit $rc)" || F "wrong value: $out"
 TPM2TOOLS_TCTI="$TC" tpm2_readpublic -Q -c 0x81000101 -f pem -o "$W/C-after.pem" 2>/dev/null
 [ "$(fp "$W/C-after.pem")" = "$fpc" ] && P "the key made with the right value is still there" || F "the key changed after a wrong value"
-out="$(printf 'not-hex\n' | seal "$TC" --init-import-key --replace-import-key --import-pub "$W/C3.pem" --ownerauth-stdin)"; rc=$?
+out="$(printf 'not-hex\n' | seal "$TC" --init-import-key "${CC[@]}" --replace-import-key --import-pub "$W/C3.pem" --ownerauth-stdin)"; rc=$?
 [ "$rc" != 0 ] && grep -q 'does not hold 64 lowercase hex' <<< "$out" && P "a value not in the envelope's form is refused before the TPM (exit $rc)" || F "bad form: $out"
 enc "$W/C.pem" "$W/c.blob"
 out="$(seal "$TC" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/c.blob" </dev/null)"; rc=$?

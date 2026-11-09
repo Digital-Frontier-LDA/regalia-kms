@@ -396,7 +396,14 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
    authorization set, not in lockout; the tries counted are reported). Proven on software TPMs only
    (`e2e/tpm-lockout-swtpm.sh`); the DL360's own behaviour under real power cuts is a PoC still to
    run (#57).
-1. **PIN import key:** `sudo deploy/seal-hsm-pin.sh --init-import-key`. Copy the printed fingerprint
+1. **PIN import key:** after `enrol init` (the EK and AK: #702), the verifier makes a credential to them
+   with no TPM (`python3 -Es -m deploy.baremetal.importkey challenge --ek-public EK.pub --ak-public AK.pub
+   --credential CRED.bin --keep KEEP.json`; `importkey host-publics` exports the two public areas), then
+   `sudo deploy/seal-hsm-pin.sh --init-import-key --ak-credential CRED.bin`. It opens the credential first
+   (a credential for another TPM makes nothing), makes the key, and has the AK certify it (TPM2_Certify);
+   the verifier checks that with `importkey verify --certification … --keep KEEP.json --ek-name <intake>
+   --fingerprint <console copy>`, and the evidence records it as `host.pin_import_key_certification`.
+   Copy the printed fingerprint
    **by hand** at the console (the ceremony checks it) and record it in the evidence as
    `host.pin_import_key_sha256`. Measured: `pin_import_key_present`, which compares the key at the
    handle with that recorded value and checks its template: an ECC P-256 storage key (SHA-256,
