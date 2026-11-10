@@ -108,4 +108,45 @@ func TestASecretKEKIsNotSharedWithAnObjectThatDeclaresUnwrap(t *testing.T) {
 	if err := load(secret, "unwrap", slot{device: "nk-1", serial: "S1", objectID: "01"}); err == nil || !strings.Contains(err.Error(), "also assigned to") {
 		t.Fatalf("the same declared slot loaded (err = %v)", err)
 	}
+
+	// REVIEW F1: the driver hex-decodes object_id, so "0a" and "0A" are one CKA_ID. Case A: the
+	// secret pins its key and the unwrap binding re-cases the object id. Case B: the secret pins
+	// DevAut only and the unwrap binding pins the real key. Both loaded at 99e15fde.
+	devautOnly := slot{device: "nk-1", serial: "S1", objectID: "0a"}
+	for name, pair := range map[string][2]slot{
+		"A: the secret pins its key, the unwrap object re-cases object_id": {
+			{device: "nk-1", serial: "S1", objectID: "0a", publicKey: keyA}, {device: "nk-2", serial: "S1", objectID: "0A"}},
+		"B: the secret pins DevAut only, the unwrap object re-cases object_id and pins the key": {
+			devautOnly, {device: "nk-2", serial: "S1", objectID: "0A", publicKey: keyA}},
+	} {
+		if err := load(pair[0], "unwrap", pair[1]); err == nil || !strings.Contains(err.Error(), "lowercase hex") {
+			t.Fatalf("%s: loaded (err = %v)", name, err)
+		}
+	}
+	// B': the same pair spelled the same way was already refused, and still is.
+	if err := load(devautOnly, "unwrap", slot{device: "nk-2", serial: "S1", objectID: "0a", publicKey: keyA}); err == nil || !strings.Contains(err.Error(), "declares unwrap") {
+		t.Fatalf("B': a shared KEK spelled one way loaded (err = %v)", err)
+	}
+	// With no pin on either side, only the physical coordinate says it is one key.
+	if err := load(devautOnly, "unwrap", slot{device: "nk-2", serial: "S1", objectID: "0a"}); err == nil || !strings.Contains(err.Error(), "declares unwrap") {
+		t.Fatalf("the same card, neither binding pinning a key: loaded (err = %v)", err)
+	}
+
+	// REVIEW F2: a secret that pins DevAut only has no key of its own to compare. If another object
+	// pins the key in the secret's slot, an unwrap binding pinning that key on another card reaches
+	// it. The sign object is the alias the first block allows; it is what tells the manifest which
+	// key the secret's slot holds.
+	three := func(signerKey string) error {
+		objects := r4object("secret", "release-purpose", "release-secret", binding(devautOnly, true)) + "," +
+			staging(object("signer", "sign-purpose", "rsa2048", "sign", binding(slot{device: "nk-3", serial: "S1", objectID: "0a", publicKey: signerKey}, false))) + "," +
+			staging(object("other", "other-purpose", "rsa2048", "unwrap", binding(slot{device: "nk-2", serial: "S2", objectID: "09", publicKey: keyA}, false)))
+		_, err := Load(strings.NewReader(manifest(objects)), "sitea", &healthMap{states: map[string]bool{"nk-1": true, "nk-2": true, "nk-3": true}})
+		return err
+	}
+	if err := three(keyB); err != nil {
+		t.Fatalf("F2 control: the secret's slot pinned to another key was refused: %v", err)
+	}
+	if err := three(keyA); err == nil || !strings.Contains(err.Error(), "declares unwrap") {
+		t.Fatalf("F2: an unwrap binding pinning the key another object pins in the secret's slot loaded (err = %v)", err)
+	}
 }

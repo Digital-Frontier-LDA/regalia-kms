@@ -182,14 +182,14 @@ func (c *slotCard) Execute(ctx context.Context, route registry.Route, operation,
 
 const rotatedManifest = `{"schema_version":1,"manifest_id":"rotation","generated_at":"2026-09-05T00:00:00Z","objects":[{"id":"production-sops","name":"rotating","kind":"opaque-secret","classification":"restricted","environment":"production","owner":"security","purpose":"sops-data-key","custody":"hardware-envelope","algorithm":"opaque","operations":["seal-envelope","release-secret"],"policy_id":"sops","bindings":[%s],"recovery":{"mode":"shamir-4-of-6","authority_id":"root","minimum_replicas":2,"status":"tested"},"rotation":{"maximum_age_days":365,"last_rotated":null},"migration":{"status":"migrated","source":"test"},"verification":{"status":"verified"}}]}`
 
-const retiredSlot1 = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"slot-1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"retired","kek_algorithm":"rsa4096","kek_version":"1"}`
-const activeSlot2 = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-2","object_id":"slot-2","public_fingerprint":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"active","device_serial":"test-serial","devaut_fingerprint":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","kek_algorithm":"rsa4096","kek_version":"2"}`
+const retiredSlot1 = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"a1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"retired","kek_algorithm":"rsa4096","kek_version":"1"}`
+const activeSlot2 = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-2","object_id":"a2","public_fingerprint":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"active","device_serial":"test-serial","devaut_fingerprint":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","kek_algorithm":"rsa4096","kek_version":"2"}`
 
 // A production object may not be single-homed, so both cases below carry a second site. It is at
 // siteb and RouteForUnwrap filters by the registry's own site, so it never competes for the
 // routing decision — it is here to satisfy the two-binding rule and to keep the two cases
 // differing in exactly one thing: whether the retired v1 binding exists.
-const standbySiteB = `{"site":"siteb","backend":"nitrokey-pkcs11","device_id":"dev-9","object_id":"slot-9","public_fingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","state":"standby","device_serial":"siteb-serial","devaut_fingerprint":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","kek_algorithm":"rsa4096","kek_version":"2"}`
+const standbySiteB = `{"site":"siteb","backend":"nitrokey-pkcs11","device_id":"dev-9","object_id":"a9","public_fingerprint":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","state":"standby","device_serial":"siteb-serial","devaut_fingerprint":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","kek_algorithm":"rsa4096","kek_version":"2"}`
 
 type allHealthy struct{}
 
@@ -236,8 +236,8 @@ func TestARotatedObjectStillOpensItsOldEnvelopes(t *testing.T) {
 		if string(data) != "the secret" {
 			t.Fatalf("released %q, want the sealed plaintext", data)
 		}
-		if len(slots) != 1 || slots[0] != "slot-1" {
-			t.Fatalf("the card was asked for slots %v, want exactly [slot-1]: the v1 envelope must reach v1's slot, not whichever one is active", slots)
+		if len(slots) != 1 || slots[0] != "a1" {
+			t.Fatalf("the card was asked for slots %v, want exactly [a1]: the v1 envelope must reach v1's slot, not whichever one is active", slots)
 		}
 	})
 

@@ -34,8 +34,8 @@ import (
 // and it is also what an operator needs: "unsupported classification" sends
 // somebody to the wrong field.
 func TestValidateObjectRefusesMissingRequiredFields(t *testing.T) {
-	baseBindings := binding("sitea", "nitrokey-pkcs11", "hs-1", "slot-1", "active") + "," +
-		binding("siteb", "nitrokey-pkcs11", "hs-2", "slot-2", "standby")
+	baseBindings := binding("sitea", "nitrokey-pkcs11", "hs-1", "a1", "active") + "," +
+		binding("siteb", "nitrokey-pkcs11", "hs-2", "a2", "standby")
 	cases := map[string]func(string) string{
 		"blank algorithm":   func(p string) string { return strings.Replace(p, `"algorithm":"secp256k1"`, `"algorithm":""`, 1) },
 		"blank policy_id":   func(p string) string { return strings.Replace(p, `"policy_id":"test-policy"`, `"policy_id":""`, 1) },
@@ -66,8 +66,8 @@ func TestValidateObjectRefusesMissingRequiredFields(t *testing.T) {
 // returns the `backend X does not support Y/Z` error instead of "operation
 // must not be empty" — different message, different remedy.
 func TestValidateObjectRefusesAnEmptyOperationString(t *testing.T) {
-	bindings := binding("sitea", "nitrokey-pkcs11", "hs-1", "slot-1", "active") + "," +
-		binding("siteb", "nitrokey-pkcs11", "hs-2", "slot-2", "standby")
+	bindings := binding("sitea", "nitrokey-pkcs11", "hs-1", "a1", "active") + "," +
+		binding("siteb", "nitrokey-pkcs11", "hs-2", "a2", "standby")
 	body := manifest(object("wallet-key", "cosmos-transaction", "secp256k1", "sign", bindings))
 	body = strings.Replace(body, `"sign"`, `""`, 1)
 	if _, err := Load(strings.NewReader(body), "sitea", &healthMap{states: map[string]bool{}}); err == nil {
@@ -83,8 +83,8 @@ func TestValidateObjectRefusesAnEmptyOperationString(t *testing.T) {
 // and the loop in validateBinding runs once per "sign" — the duplicate
 // never gets a distinct refusal because there isn't one to give.
 func TestValidateObjectRefusesDuplicateOperations(t *testing.T) {
-	bindings := binding("sitea", "nitrokey-pkcs11", "hs-1", "slot-1", "active") + "," +
-		binding("siteb", "nitrokey-pkcs11", "hs-2", "slot-2", "standby")
+	bindings := binding("sitea", "nitrokey-pkcs11", "hs-1", "a1", "active") + "," +
+		binding("siteb", "nitrokey-pkcs11", "hs-2", "a2", "standby")
 	body := manifest(object("wallet-key", "cosmos-transaction", "secp256k1", "sign", bindings))
 	body = strings.Replace(body, `"operations":["sign"]`, `"operations":["sign","sign"]`, 1)
 	if _, err := Load(strings.NewReader(body), "sitea", &healthMap{states: map[string]bool{}}); err == nil {
@@ -103,8 +103,8 @@ func TestValidateObjectRefusesDuplicateOperations(t *testing.T) {
 // Route() answers with a zero-value route.
 func TestValidateBindingRefusesMissingSiteDeviceOrObject(t *testing.T) {
 	cases := map[string]string{
-		"no site":   `{"backend":"nitrokey-pkcs11","device_id":"hs-1","object_id":"slot-1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"active"}`,
-		"no device": `{"site":"sitea","backend":"nitrokey-pkcs11","object_id":"slot-1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"active"}`,
+		"no site":   `{"backend":"nitrokey-pkcs11","device_id":"hs-1","object_id":"a1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"active"}`,
+		"no device": `{"site":"sitea","backend":"nitrokey-pkcs11","object_id":"a1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"active"}`,
 		"no object": `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"hs-1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"active"}`,
 	}
 	for name, bindingJSON := range cases {
@@ -134,7 +134,7 @@ func TestValidateBindingRefusesMissingSiteDeviceOrObject(t *testing.T) {
 func TestValidateBindingRefusesBindingWithoutFingerprintOrKeyCheck(t *testing.T) {
 	bindings := `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"hs-1","device_serial":"test-serial",
 		"devaut_fingerprint":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-		"object_id":"slot-1","state":"active"}`
+		"object_id":"a1","state":"active"}`
 	obj := `{"id":"wallet-key","name":"Test key","kind":"asymmetric-key","classification":"critical","environment":"development",
 		"owner":"security","purpose":"cosmos-transaction","custody":"direct-hardware","algorithm":"secp256k1",
 		"operations":["sign"],"policy_id":"test-policy","bindings":[` + bindings + `],
@@ -160,7 +160,7 @@ func TestValidateBindingRefusesBindingWithoutFingerprintOrKeyCheck(t *testing.T)
 func TestValidateBindingRefusesPinTouchPolicyOnNonYubikey(t *testing.T) {
 	bindings := `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"hs-1","device_serial":"test-serial",
 		"devaut_fingerprint":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-		"object_id":"slot-1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"object_id":"a1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"pin_policy":"once","touch_policy":"never","state":"active"}`
 	obj := `{"id":"wallet-key","name":"Test key","kind":"asymmetric-key","classification":"critical","environment":"development",
 		"owner":"security","purpose":"cosmos-transaction","custody":"direct-hardware","algorithm":"secp256k1",
@@ -183,7 +183,7 @@ func TestValidateBindingRefusesPinTouchPolicyOnNonYubikey(t *testing.T) {
 // Falsify: a malformed kek_version passes the empty check at L819 but trips
 // L822; without L822, an envelope's KEK reference can carry any value.
 func TestValidateBindingRefusesSealEnvelopeWithMalformedKEKVersion(t *testing.T) {
-	bindings := sealBinding("sitea", "nitrokey-pkcs11", "hs-1", "slot-1", "active", "rsa2048", "has space")
+	bindings := sealBinding("sitea", "nitrokey-pkcs11", "hs-1", "a1", "active", "rsa2048", "has space")
 	_, err := Load(strings.NewReader(manifest(sealObject("seal-target", "seal-purpose", bindings))), "sitea",
 		&healthMap{states: map[string]bool{"hs-1": true}})
 	if err == nil {
@@ -203,8 +203,8 @@ func TestValidateBindingRefusesSealEnvelopeWithMalformedKEKVersion(t *testing.T)
 // are non-fido2), the L1136-style check does not fire (no rotation is past
 // deadline), and the L1090-style health check passes.
 func TestSelectBindingForStateRefusesMultipleUsableBindings(t *testing.T) {
-	bindings := sealBinding("sitea", "nitrokey-pkcs11", "hs-1", "slot-1", "qualified", "rsa2048", "1") + "," +
-		sealBinding("sitea", "nitrokey-pkcs11", "hs-2", "slot-2", "qualified", "rsa2048", "1")
+	bindings := sealBinding("sitea", "nitrokey-pkcs11", "hs-1", "a1", "qualified", "rsa2048", "1") + "," +
+		sealBinding("sitea", "nitrokey-pkcs11", "hs-2", "a2", "qualified", "rsa2048", "1")
 	registry, err := Load(strings.NewReader(manifest(sealObject("seal-target", "seal-purpose", bindings))), "sitea",
 		&healthMap{states: map[string]bool{"hs-1": true, "hs-2": true}})
 	if err != nil {
@@ -321,7 +321,7 @@ func TestRouteForUnwrapRefusesUnhealthyBinding(t *testing.T) {
 // RouteForSeal L1136 — past rotation deadline.
 
 func TestRouteForSealRefusesObjectPastRotationDeadline(t *testing.T) {
-	bindings := sealBinding("sitea", "nitrokey-pkcs11", "hs-1", "slot-1", "active", "rsa2048", "1")
+	bindings := sealBinding("sitea", "nitrokey-pkcs11", "hs-1", "a1", "active", "rsa2048", "1")
 	obj := `{"id":"seal-target","name":"seal target","kind":"opaque-secret","classification":"restricted","environment":"staging","owner":"security","purpose":"seal-purpose","custody":"hardware-envelope","algorithm":"opaque","operations":["seal-envelope"],"policy_id":"test-policy","bindings":[` + bindings + `],"recovery":{"mode":"shamir-4-of-6","authority_id":"root","minimum_replicas":2,"status":"tested"},"rotation":{"maximum_age_days":30,"last_rotated":"2026-01-01T00:00:00Z"},"migration":{"status":"migrated","source":"test"},"verification":{"status":"verified"}
 	}`
 	registry, err := Load(strings.NewReader(manifest(obj)), "sitea", &healthMap{states: map[string]bool{"hs-1": true}})
@@ -346,7 +346,7 @@ func TestSafeHealthyReturnsFalseWhenTheProbePanics(t *testing.T) {
 		Site:     "sitea",
 		Backend:  "nitrokey-pkcs11",
 		DeviceID: "hs-1",
-		ObjectID: "slot-1",
+		ObjectID: "a1",
 		State:    "active",
 	}
 	if safeHealthy(context.Background(), probe, binding) {

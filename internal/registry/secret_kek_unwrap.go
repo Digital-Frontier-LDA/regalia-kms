@@ -39,15 +39,49 @@ func validateSecretKEKsUnreachableByUnwrap(objects []custodyObject) error {
 		}
 		return false
 	}
-	sameKey := func(secret, other Binding) bool {
-		if secret.PublicKeySHA256 != "" && secret.PublicKeySHA256 == other.PublicKeySHA256 {
-			return true
-		}
-		if secret.DeviceSerial == "" || secret.Backend != other.Backend || secret.DeviceSerial != other.DeviceSerial || secret.ObjectID != other.ObjectID {
+	// sameSlot is the physical coordinate: one card (backend and serial), one key on it (object_id,
+	// canonical by validateBindingCoordinates), and one token where the card is two. An unlabelled
+	// binding may resolve to either token of the card, as in the declared-slot rule.
+	//
+	// The backend clause treats yubikey-openpgp and nitrokey-pkcs11 as different cards even though
+	// one PKCS#11 driver serves both (review F4). An OpenPGP-applet binding is today refused any
+	// operation but sign by requireOpenPGPAppletBindingsAreServable at daemon start, so it cannot be
+	// the unwrap object here; this rule does not itself refuse that alias.
+	sameSlot := func(a, b Binding) bool {
+		if a.DeviceSerial == "" || a.Backend != b.Backend || a.DeviceSerial != b.DeviceSerial || a.ObjectID != b.ObjectID {
 			return false
 		}
-		// An unlabelled binding may resolve to either token of the card, as in the slot rule.
-		return secret.TokenLabel == other.TokenLabel || secret.TokenLabel == "" || other.TokenLabel == ""
+		return a.TokenLabel == b.TokenLabel || a.TokenLabel == "" || b.TokenLabel == ""
+	}
+	// pinsAt is every public_key_sha256 the manifest declares for the key in binding's slot: its own
+	// and that of any binding, of any object, on the same slot. A secret that pins only its DevAut
+	// fingerprint has no pin of its own, but if anything else in the manifest pins the key in that
+	// slot, an unwrap binding pinning the same key elsewhere reaches it (review F2).
+	pinsAt := func(binding Binding) map[string]bool {
+		pins := map[string]bool{}
+		if binding.PublicKeySHA256 != "" {
+			pins[binding.PublicKeySHA256] = true
+		}
+		for _, object := range objects {
+			for _, candidate := range object.Bindings {
+				if candidate.PublicKeySHA256 != "" && sameSlot(binding, candidate) {
+					pins[candidate.PublicKeySHA256] = true
+				}
+			}
+		}
+		return pins
+	}
+	sameKey := func(secret, other Binding) bool {
+		if sameSlot(secret, other) {
+			return true
+		}
+		otherPins := pinsAt(other)
+		for pin := range pinsAt(secret) {
+			if otherPins[pin] {
+				return true
+			}
+		}
+		return false
 	}
 	for index := range objects {
 		secret := &objects[index]
