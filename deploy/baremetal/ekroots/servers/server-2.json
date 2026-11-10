@@ -1,0 +1,6 @@
+{
+  "host": "the second DL360",
+  "reason": "its TPM has not been read (LIMITATIONS.md, #190). Intake: read both EK certificates and their AIA CAs on that server, run ekchain verify --server server-2, and replace this file with the result; ek_name is recorded only on a pass.",
+  "server": "server-2",
+  "status": "open"
+}

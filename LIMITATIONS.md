@@ -17,8 +17,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   The first host's TPM 2.0 (Infineon, manufacturer `IFX`, firmware 5.62) carries both an RSA EK
   certificate (NV 0x1c00002) and an ECC one (NV 0x1c0000a). Each verifies against the issuing CA named
   in its AIA, Infineon OPTIGA(TM) RSA / ECC Manufacturing CA 029; the EK certificates are valid to 2032.
-  The verification is `openssl verify -partial_chain` against that issuing CA; the chain to Infineon's
-  root was not pinned. On the same TPM, the RSA EK's public key equals the RSA certificate's, and an AK
+  The drill verified them with `openssl verify -partial_chain` against that issuing CA. Since
+  regalia-kms-x6x, intake (`deploy/baremetal/ekchain.py`) verifies each server's EK certificates with
+  `openssl verify -x509_strict`, no partial chain, up to Infineon's OPTIGA RSA and ECC roots, which
+  `deploy/baremetal/ekroots/PINS` pins (three public sources agree: `ekroots/SOURCES.md`), with the CA 029
+  keys pinned too. The first host's certificates, re-checked from the drill's captures, pass:
+  `ekroots/servers/server-1.json`, with its ek_name. **The other two are open** (`server-2.json`,
+  `server-3.json`). On the same TPM, the RSA EK's public key equals the RSA certificate's, and an AK
   under the EK quoted sha256 PCRs 0-7 over a fresh nonce: `tpm2_checkquote` passed, and the same quote
   against a different nonce was refused. Evidence (both EK certificates, both issuing CAs as fetched,
   the verbatim command transcript with exit codes, SHA256SUMS): the private regalia repository,

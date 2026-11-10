@@ -27,6 +27,13 @@ Commissioning has two halves:
 4. Record them in the evidence: the server serial (`host_serial`), `system_rom_version`,
    `ilo_firmware_version`, `tpm_ek_certificate_present` (`tpm2_getekcertificate`), and
    `used_hardware_intake: true` once steps 1-3 are done.
+5. Verify the EK certificates against the pinned Infineon roots, for this server on its own:
+   `python3 -Es -m deploy.baremetal.ekchain verify --server server-<n> --rsa EK-RSA.der CA-RSA.der
+   --ecc EK-ECC.der CA-ECC.der --ek-public ek.pub --out deploy/baremetal/ekroots/servers/server-<n>.json`
+   (the CAs are the ones each certificate's AIA names; `ek.pub` is `tpm2_createek -G rsa -u`'s output).
+   Exit 0 records `"status": "verified"` and the ek_name enrolment will meet; anything else is a refusal
+   and records no ek_name. A CA whose key `ekroots/PINS` does not name is refused until it is pinned
+   from public sources (`ekroots/SOURCES.md`).
 
 ## 2. Firmware settings (RBSU / iLO)
 
