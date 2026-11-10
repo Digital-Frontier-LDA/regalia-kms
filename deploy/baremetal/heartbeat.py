@@ -100,9 +100,15 @@ def parse_time(text, label):
     require(isinstance(text, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", text) is not None,
             "%s must be UTC, YYYY-MM-DDTHH:MM:SSZ" % label)
     try:
-        return calendar.timegm(time.strptime(text, "%Y-%m-%dT%H:%M:%SZ"))
+        seconds = calendar.timegm(time.strptime(text, "%Y-%m-%dT%H:%M:%SZ"))
     except ValueError:
         raise Refused("%s is not a real date" % label)
+    # strptime's %S takes 60 and 61, so "23:59:60Z" was the next day's 00:00:00 under a second name; the Go readers
+    # (time.Parse, internal/admission) and membership's issued_at refuse both. Only a form that formats back to itself
+    # is one (regalia-78j). Formatted field by field: glibc's strftime does not pad a year below 1000 ("%Y" of year 1 is
+    # "1"), so a strftime round trip would refuse on Linux what it takes on a Mac
+    require("%04d-%02d-%02dT%02d:%02d:%02dZ" % time.gmtime(seconds)[:6] == text, "%s is not a real date" % label)
+    return seconds
 
 
 def max_lifetime(manifest):

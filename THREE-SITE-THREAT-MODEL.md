@@ -6,7 +6,7 @@ until a phase's evidence and a recorded decision exist, [PIN-CUSTODY.md](PIN-CUS
 TPM-sealed user PINs, no runtime PKA), [FENCING.md](FENCING.md) (one independent activation
 signer) and `deploy/baremetal/` (single-site commissioning, TPM-only disk unlock as the interim
 baseline) remain authoritative. The secrets and their lifecycles are in
-[THREE-SITE-SECRETS.md](THREE-SITE-SECRETS.md).
+the operators' secrets inventory, kept in their private repository.
 
 ## The goal, stated as invariants
 
@@ -16,7 +16,9 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 - **A3.** A total outage (all three down) is restored by one manual recovery at one node, after which
   A1/A2 restore the rest.
 - **A4.** No single provider, datacenter, network path or device failure stops the cluster from
-  serving (one serving site at a time under fencing; the others are standby). Every site needs a
+  serving. **Since ADR-0002 D32 (2026-10-05), every server serves** under its own majority-co-signed lease,
+  and stateful operations commit on a majority (FENCING.md). What follows is the single-active design D32
+  supersedes: one serving site at a time under fencing, the others standby. Every site needs a
   short-lived activation lease, and recovery does not grant one (FENCING.md). **Decided (ADR-0002 D28 and #351, 2026-10-04), not
   built:** the lease's issuer is **majority agreement**, not a separate authority host: an activation lease
   needs two signatures from {node a, node b, node c, the owner}, two of the three servers being the normal
@@ -40,7 +42,8 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 - **S3.** A captured bootstrap exchange cannot be replayed: every contribution is bound to one boot
   session's fresh ephemeral key and the peer's nonce.
 - **S4.** Unlocking a disk grants nothing else: serving needs a fencing lease from the independent
-  authority (FENCING.md); key use needs the HSM's own authorization; neither is a bootstrap result.
+  authority (FENCING.md; the current single-active contract. Under ADR-0002 D32, decided and not built, serving
+  needs the server's own runtime lease, co-signed by two of the three servers); key use needs the HSM's own authorization; neither is a bootstrap result.
 - **S5.** Long-term service private keys never leave hardware; no online bundle carries an SO PIN,
   a YubiKey PUK or management key, a membership-root key or a recovery credential.
 - **S6.** Every security decision (quote verdicts, contributions issued or denied, manifests,
@@ -51,7 +54,7 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 | Domain | What compromising it gives | What still holds |
 |---|---|---|
 | One server, powered off, stolen | Its disks, TPM, HSM (if attached), WG-BOOT key sealed in the TPM | S1: no peer contribution once revoked or once away from the datacenter networks (peers accept WG-BOOT only from the declared datacenter addresses); HSM keys need the HSM PIN, sealed to that TPM's measured boot |
-| One server, running, root compromised | Its unlocked disk, its HSM session, its WG-SERVICE identity | S4: no activation lease unless it is the fenced active site; S5: no exportable key; revocation (#69) and lease expiry (#74) bound the window; detection is the audit trail and attestation drift |
+| One server, running, root compromised | Its unlocked disk, its HSM session, its WG-SERVICE identity | S4: no activation lease unless it is the fenced active site (current; under D32, decided and not built, no runtime lease without two co-signers, and every server is active); S5: no exportable key; revocation (#69) and lease expiry (#74) bound the window; detection is the audit trail and attestation drift |
 | One datacenter (physical) | Every server in it; staff cannot open the locked drawers (custody plan) | Other sites; chassis-intrusion and access logs as detection |
 | One provider (two sites may share provider X) | Both of its sites' power, network and remote hands: **one administrative failure domain** | The site at provider Y; A3 manual recovery |
 | Network partition | Peers cannot reach each other | Fail closed: a peer whose membership is older than the freshness bound authorizes nothing (design question 1); serving continues only under a valid lease |
@@ -114,8 +117,8 @@ global", and only as strong as the peers' authenticated time.
 **3. Bootstrap eligibility versus service signing authority.** Different capabilities with different
 issuers. ACTIVE (or MAINTENANCE) membership makes a node *eligible to be unlocked*; ACTIVE makes a
 peer *eligible to authorize*; neither makes a node a signer. Serving needs the fencing authority's
-lease (FENCING.md: no overlapping sites; today one independent signer, decided to become two of {a, b, c,
-the owner}, #351, not built); key use needs the HSM's own
+lease (FENCING.md; since D32, each server's own lease, co-signed by 2 of the 3 servers and non-exclusive,
+not built; today one independent signer); key use needs the HSM's own
 authorization. Peer runtime leases (#74) must not become a second activation authority.
 
 ## Device profiles and their assurance
@@ -138,15 +141,15 @@ assumed.
 
 | Item | State |
 |---|---|
-| Nitrokey HSM 2 DENK0404144 (staging) | attached; firmware 4.1, hardware 24.13; PKCS#11 contract 14/0 (#62) |
-| Nitrokey HSM 2 DENK0404380, DENK0404547 (staging) | on the bench, not attached |
-| PicoHSM staging units (ESP2202E14A, ESP41D722E2) | not attached; firmware under disclosure GHSA-wq3w-g2fj-q2jq |
-| YubiKeys 36345471, 36344616, 35718625 (staging) | not attached |
+| One Nitrokey HSM 2 (staging) | attached; firmware 4.1, hardware 24.13; PKCS#11 contract 14/0 (#62) |
+| Two more Nitrokey HSM 2 (staging) | on the bench, not attached |
+| Two PicoHSM staging units | not attached; firmware under disclosure GHSA-wq3w-g2fj-q2jq |
+| Three YubiKeys (staging) | not attached |
 | ACS ACR40U (SLE-4442) | attached; validated (regalia#43) |
-| HPE DL360 Gen9 ×3 with TPM 2.0 | **not delivered** (expected mid-October): every TPM, PCR, initramfs and LUKS phase on real hardware waits for them |
+| HPE DL360 Gen9 ×3 with TPM 2.0 | **not delivered** at this baseline (expected mid-October). Since then: on 2026-11-03 one host's TPM EK certificates were measured with standard tooling (tpm2-tools and openssl), not this software (`LIMITATIONS.md`, #190); the other two are not measured. Every TPM, PCR, initramfs and LUKS phase of this software on real hardware is still open |
 | Software | Debian 13, OpenSC 0.26.1, pcscd 2.3.3, libccid 1.6.2, OpenSSL 3.5.1, cryptsetup 2.7.5, nftables 1.1.3, swtpm (kernel vTPM via tpm_vtpm_proxy for harness work) |
 
-Invariants under test are A1–A4 and S1–S6 above. Evidence format: each phase records device serials,
+Invariants under test are A1–A4 and S1–S6 above. Evidence format: each phase records device serials (in the operators' private records),
 firmware and software versions, the exact commands, positive and negative outcomes, sanitized logs
 and stated limits on its issue; harness evidence (swtpm, SoftHSM, network namespaces) is labelled as
 such.

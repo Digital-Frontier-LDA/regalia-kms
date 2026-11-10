@@ -192,6 +192,41 @@ def signed(man):
 
 
 class ConcurrentService(Case):
+    def test_an_advance_after_lock_release_does_not_invalidate_the_recount(self):
+        """#244 (carried from draft #373): the rebuilt counter is verified BEFORE its lock goes to a waiting service; read
+        after, a legitimate advance made a recovery that worked read as INCOMPLETE (repository CI saw it)."""
+        from contextlib import contextmanager
+        from unittest.mock import patch
+        self.break_counter()
+        service = hb.Counter("0x1500018", lock_path=self.d + "/lock", run=self.tpm)
+        exclusive = m._exclusive
+        define = self.counter._define_at
+        rebuilt = []
+        advanced = []
+
+        def define_at(floor):
+            define(floor)
+            rebuilt.append(True)
+
+        @contextmanager
+        def handoff(path):
+            with exclusive(path):
+                yield
+            if path == self.counter.lock_path and rebuilt and not advanced:
+                advanced.append(True)
+                # Deterministically model a waiting service acquiring the lock
+                # immediately after recount releases it, before its next line.
+                self.assertEqual(service.advance(41), 41)
+
+        with patch.object(m, "_exclusive", handoff), patch.object(self.counter, "_define_at", define_at):
+            value = recount.recount(self.counter, self.m1, [self.state()],
+                                    lambda p: recount.phrase(self.counter.index, p),
+                                    self.events.append, self.floor)
+        self.assertEqual(value, 40)
+        self.assertEqual(service.value(), 41)
+        self.assertEqual(len(advanced), 1)
+        self.assertEqual(self.events[-1]["outcome"], "ALLOW")
+
     def test_an_advance_by_the_service_waits_for_the_recount(self):
         """#261 (regalia-kms-3e, decided by regalia-kms-24): recount holds the counter's own lock, the one the
         service's Counter takes, so a concurrent advance blocks until the new counter is in place."""
@@ -235,7 +270,7 @@ class CommandLine(TheHostsTpmAndChain):
         tpm.nv.pop("0x01500018")                              # the counter's index gone: unusable
         with open(os.path.join(os.path.dirname(recount.__file__), "node.example.json")) as f:
             cfg = json.load(f)
-        cfg.update(root_key=hbt.pub(hbt.ROOT), tcti=None, state_dir=self.d, nv_epoch="0x01500016", nv_heartbeat="0x01500018",
+        cfg.update(root_key=hbt.pub(hbt.ROOT), tcti="device:/dev/tpmrm0", state_dir=self.d, nv_epoch="0x01500016", nv_heartbeat="0x01500018",
                    node_id=self.m1["nodes"][0]["node_id"])         # a node the manifest lists
         with open(self.d + "/node.json", "w") as f:
             json.dump(cfg, f)

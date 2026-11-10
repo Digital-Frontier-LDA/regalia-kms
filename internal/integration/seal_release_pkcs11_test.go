@@ -73,6 +73,11 @@ func TestSealOnConcretePKCS11ThenReleaseFromIt(t *testing.T) {
 			State: "active",
 		},
 	}
+	// THE KEK IS PINNED, AS COMMISSIONING PINS IT (ADR-0002 D1). Unpinned, the seal's wrap asks the
+	// token for CKA_LOCAL, which an SC-HSM behind OpenSC cannot answer as provenance (#447): on a real
+	// card this test could only fail, measured on DENK0404144 and a Pico on 2026-11-03 as "hardware
+	// wrapping backend unavailable". The runtime CKA_LOCAL path keeps its own tests.
+	route.Binding.PublicKeySHA256 = commissionedPin(t, driver, route.Binding)
 	secret := []byte("a service account token that must survive the round trip")
 	bindingContext := envelope.ReleaseContext(route.ObjectID, route.Purpose, route.Environment)
 
@@ -147,4 +152,22 @@ func TestSealOnConcretePKCS11ThenReleaseFromIt(t *testing.T) {
 	if contentType != "application/vnd.regalia.secret" {
 		t.Fatalf("content type = %q", contentType)
 	}
+}
+
+// commissionedPin simulates commissioning: read the KEK's public key once, before any wrap, and
+// return the pin a ceremony would record for it. (For real, the pin is taken only after
+// hsm-key-attestation-verify.py proves the key was generated on the card.)
+func commissionedPin(t *testing.T, driver *nitrokey.PKCS11Driver, binding registry.Binding) string {
+	t.Helper()
+	session, err := driver.Open(context.Background(), binding)
+	if err != nil {
+		t.Fatalf("open the token to commission object %s: %v", binding.ObjectID, err)
+	}
+	public, err := session.PublicKey(context.Background(), binding.ObjectID)
+	_ = session.Close()
+	if err != nil || len(public) == 0 {
+		t.Fatalf("read the public key of object %s to commission it: %v", binding.ObjectID, err)
+	}
+	sum := sha256.Sum256(public)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }

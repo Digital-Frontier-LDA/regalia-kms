@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Writes tests/vectors/heartbeat-v4.json: every call of heartbeat.verify() that the v4 heartbeat tests
-(tests/test_baremetal_heartbeat_v4.py) make, with what it was given and what it decided. The Go port is held
-to the same rules: a quorum of heartbeat_signers, a party twice, a key not the party's, a node that does not
-count, low-S, the single-key form refused under v4, the manifest's lifetime bound, and the owner's shorter one
-(the lifetime is the heartbeat's own expires_at - issued_at, both in the case). A drift on either side fails
-CI: the Python test replays this file too.
+(tests/test_baremetal_heartbeat_v4.py) make, with what it was given and what it decided: a quorum of
+heartbeat_signers, a party twice, a key not the party's, a node that does not count, low-S, the single-key form
+refused under v4, the manifest's lifetime bound, the owner's shorter one (the lifetime is the heartbeat's own
+expires_at - issued_at, both in the case), and a leap second in either time. The Python test replays this file,
+so it cannot drift from the code. It is written for a Go port to be held to the same rules, but Go has no
+heartbeat verifier yet and no Go code reads it (regalia-6j4).
 
     python3 -Es tests/vectors/make-heartbeat-v4.py > tests/vectors/heartbeat-v4.json
 
 As in membership-v4.json, every "key" field is written "public" (a public key written as `"key": "<hex>"`
 reads as a credential to the secret scanner, and the repository fixes such findings by composition, never by
-an allowlist); a reader renames every "public" back to "key". The reasons are Python's words; the Go test
-compares the outcome (the heartbeat accepted, as a body, or a refusal).
+an allowlist); a reader renames every "public" back to "key". The reasons are Python's words; a Go reader would
+compare the outcome (the heartbeat accepted, as a body, or a refusal).
 """
 import json
 import os

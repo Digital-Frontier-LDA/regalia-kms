@@ -11,7 +11,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
-from deploy.baremetal import attest, measurements, rollout
+from deploy.baremetal import attest, lease, measurements, rollout
 from deploy.baremetal import membership as m
 import tests.test_baremetal_heartbeat as hbt
 import tests.test_baremetal_lease as lt
@@ -398,7 +398,7 @@ class Decisions(Case):
         rc, result = self.as_json(*self.reboot("a", self.state()))
         self.assertEqual(rc, 0)
         self.assertEqual(result, {"ok": True, "command": "may-reboot", "node_id": "a", "target": "image-2", "authorizers": ["b", "c"],
-                                  "seconds": 300, "epoch": 2, "checked_against_tpm": False, "time_authenticated": True})
+                                  "seconds": lease.MAX_LIFETIME, "epoch": 2, "checked_against_tpm": False, "time_authenticated": True})
         rc, out, _ = self.run_cli(*self.reboot("a", self.state()))
         self.assertIn("YES: a may reboot into image-2", out)
         self.assertIn("Wait until this host is back and serving before starting the next one", out)

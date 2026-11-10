@@ -268,7 +268,12 @@ nnp="$(awk '/^NoNewPrivs:/{print $2}' "/proc/$pid/status")"; seccomp="$(awk '/^S
 
 hdr "5  AppArmor: the profile's label, in complain mode"
 label="$(sudo cat "/proc/$pid/attr/apparmor/current" 2>/dev/null || sudo cat "/proc/$pid/attr/current" 2>/dev/null)"
-[ "$label" = "regalia-kms (complain)" ] && P "the process is labelled '$label'" || F "the process is labelled '${label:-nothing}'"
+# systemd 259 (ubuntu-26.04) applies a User= service's profile as a stack on its current label, so the
+# same unit is 'regalia-kms//&unconfined' there; os_probe takes that as the profile (regalia-kms#548)
+case "$label" in
+  "regalia-kms (complain)"|"regalia-kms//&unconfined (complain)") P "the process is labelled '$label'" ;;
+  *) F "the process is labelled '${label:-nothing}'" ;;
+esac
 IFS=$'\t' read -r value why < <(probe kms_apparmor_enforced)
 [ "${value:-}" = false ] && grep -q "in complain mode, not enforce" <<< "$why" \
   && P "kms_apparmor_enforced is false, for the right reason: $why" || F "kms_apparmor_enforced is ${value:-not measured}: ${why:-}"

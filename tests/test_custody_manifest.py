@@ -41,17 +41,17 @@ def direct_key():
         "policy_id": "cosmos-hot-wallet",
         "bindings": [
             {
-                "site": "lisbon",
+                "site": "alder",
                 "backend": "nitrokey-pkcs11",
-                "device_id": "nitrokey-lisbon",
+                "device_id": "nitrokey-alder",
                 "object_id": "01",
                 "public_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "state": "planned",
             },
             {
-                "site": "porto",
+                "site": "birch",
                 "backend": "nitrokey-pkcs11",
-                "device_id": "nitrokey-porto",
+                "device_id": "nitrokey-birch",
                 "object_id": "01",
                 "public_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "state": "planned",

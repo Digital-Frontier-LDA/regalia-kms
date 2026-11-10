@@ -5,7 +5,8 @@
   * enrol commit hands it to its regalia-sync steps through an inherited sealed memfd (--ownerauth-fd), closed after;
   * under v4 enrolment refuses a TPM whose owner or lockout authorization is empty, and a commit without the value;
   * an owner call refused for its authorization says what to give; set refuses before systemd's SRK is persistent;
-  * reanchor and recount pass it to the anchor and the counter."""
+  * reanchor and recount pass it to the anchor and the counter;
+  * each refuses a record that is not the one the node holds, before the TPM (#460)."""
 import io
 import json
 import os
@@ -24,6 +25,11 @@ class Args:
         self.ownerauth = record
 
 
+def hold(directory, envelope):
+    """The node holds `envelope` as its record (what `enrol ownerauth` writes: root's, 0600; here the test's user's)."""
+    enrol._ownerauth_hold(directory, ownerauth.record_digest(envelope))
+
+
 class TheValueOnStandardInput(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
@@ -31,12 +37,35 @@ class TheValueOnStandardInput(unittest.TestCase):
         self.record = os.path.join(self.d, "ownerauth.record.json")
         with open(self.record, "w") as f:
             f.write(VECTOR["record_file"])
+        hold(self.d, json.loads(VECTOR["record_file"]))
 
     def test_read_then_judged(self):
         auth, envelope = ownerauth.read_arguments(Args(self.record), value("a"))
         self.assertEqual(ownerauth.confirm(auth, envelope, PIN, "a").check("a"), RECORD["record"]["nodes"]["a"]["check"])
         with self.assertRaisesRegex(m.Refused, "is not b's"):
-            ownerauth.from_arguments(Args(self.record), PIN, "b", value("a"))
+            ownerauth.from_arguments(Args(self.record), PIN, "b", value("a"), directory=self.d)
+        self.assertEqual(ownerauth.from_arguments(Args(self.record), PIN, "a", value("a"), directory=self.d).check("a"),
+                         RECORD["record"]["nodes"]["a"]["check"])
+
+    def test_only_the_record_the_node_holds(self):
+        """#460: a record other than the node's (one from before a rotation) is refused by name; with none held, the
+        way on is the one-time adopt; a held file anyone else may read is not trusted."""
+        enrol._ownerauth_hold(self.d, "ab" * 32)
+        with self.assertRaises(m.Refused) as caught:
+            ownerauth.from_arguments(Args(self.record), PIN, "a", value("a"), directory=self.d)
+        self.assertIn("the --ownerauth record is not the one this node is on (%s..., the node holds abababababababab...)"
+                      % ownerauth.record_digest(json.loads(VECTOR["record_file"]))[:16], str(caught.exception))
+        os.unlink(os.path.join(self.d, ownerauth.HELD_FILE))
+        with self.assertRaisesRegex(m.Refused, "this node holds no record of which owner-authorization record its TPM answers "
+                                    "to .*: prove it once with `enrol ownerauth --check --adopt --record RECORD`"):
+            ownerauth.from_arguments(Args(self.record), PIN, "a", value("a"), directory=self.d)
+        hold(self.d, json.loads(VECTOR["record_file"]))
+        os.chmod(os.path.join(self.d, ownerauth.HELD_FILE), 0o644)
+        with self.assertRaisesRegex(m.Refused, "is not a regular file of root's that only root reads"):
+            ownerauth.from_arguments(Args(self.record), PIN, "a", value("a"), directory=self.d)
+        with unittest.mock.patch.object(ownerauth, "HELD_DIR", self.d):     # the tools' default: enrol's directory
+            os.chmod(os.path.join(self.d, ownerauth.HELD_FILE), 0o600)
+            self.assertIsNotNone(ownerauth.from_arguments(Args(self.record), PIN, "a", value("a")))
         self.assertIsNone(ownerauth.read_arguments(Args(None), value("a")))
 
     def test_never_from_a_terminal(self):
@@ -110,6 +139,21 @@ class EnrolmentUnderV4(unittest.TestCase):
         self.tpm = FakeTpm()
         self.given = ownerauth.read_value(value("a")), RECORD
         self.v4, self.v3 = {"schema": m.SCHEMA_V4}, {"schema": m.SCHEMA_V3}
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        hold(self.d, RECORD)
+        patcher = unittest.mock.patch.object(ownerauth, "HELD_DIR", self.d)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_record_the_node_does_not_hold_is_refused_before_the_tpm(self):
+        """#460: commit's record is checked against the node's before anything asks the TPM (not even its posture)."""
+        enrol._ownerauth_hold(self.d, "cd" * 32)
+        calls = []
+        with self.assertRaisesRegex(m.Refused, "the --ownerauth record is not the one this node is on"):
+            enrol.commit_owner_auth(self.v4, self.given, PIN, "a", run=lambda *a, **kw: calls.append(a) or self.tpm(*a, **kw),
+                                    directory=self.d)
+        self.assertEqual(calls, [])
 
     def test_the_owner_and_lockout_authorizations_set_and_the_value_given(self):
         with self.assertRaisesRegex(m.Refused, "the TPM's owner authorization is empty: a v4 node's is set from its envelope first"):
@@ -273,6 +317,10 @@ class ReanchorTakesIt(unittest.TestCase):
         record = os.path.join(d, "ownerauth.record.json")
         with open(record, "w") as f:
             json.dump(envelope, f)
+        hold(d, envelope)
+        held = unittest.mock.patch.object(ownerauth, "HELD_DIR", d)
+        held.start()
+        self.addCleanup(held.stop)
         for name in ("b", "c"):                                     # two other nodes (#199: no authority)
             with open("%s/%s.json" % (d, name), "wb") as f:
                 f.write(m.canonical(chain(3)))
@@ -306,6 +354,16 @@ class ReanchorTakesIt(unittest.TestCase):
             self.assertEqual(reanchor.main(argv, ask=lambda prompt: None, highwater=highwater, active=lambda: []), 1)
         self.assertIn("is not a's", err.getvalue())
         self.assertEqual(built, {})
+        # a record the node does not hold (#460): refused by name, nothing built
+        enrol._ownerauth_hold(d, "ef" * 32)
+        stdin = unittest.mock.Mock(buffer=value("a"))
+        stdin.buffer.isatty = lambda: False
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
+                unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
+            self.assertEqual(reanchor.main(argv, ask=lambda prompt: None, highwater=highwater, active=lambda: []), 1)
+        self.assertIn("the --ownerauth record is not the one this node is on", err.getvalue())
+        self.assertEqual(built, {})
 
 
 class RecountTakesIt(unittest.TestCase):
@@ -324,6 +382,10 @@ class RecountTakesIt(unittest.TestCase):
         record = os.path.join(d, "ownerauth.record.json")
         with open(record, "w") as f:
             f.write(VECTOR["record_file"])
+        hold(d, json.loads(VECTOR["record_file"]))
+        held = unittest.mock.patch.object(ownerauth, "HELD_DIR", d)
+        held.start()
+        self.addCleanup(held.stop)
         built = {}
 
         def counter(cfg, run=None, owner_auth=None):
@@ -341,6 +403,20 @@ class RecountTakesIt(unittest.TestCase):
         self.assertEqual(rc, 1, err.getvalue())
         self.assertIn("stop after the counter is built", err.getvalue())
         self.assertEqual(built["owner_auth"].check("a"), RECORD["record"]["nodes"]["a"]["check"])
+        # a record the node does not hold (#460): refused by name, no counter built
+        built.clear()
+        enrol._ownerauth_hold(d, "ef" * 32)
+        stdin = unittest.mock.Mock(buffer=value("a"))
+        stdin.buffer.isatty = lambda: False
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stdin", stdin), unittest.mock.patch("sys.stderr", err), \
+                unittest.mock.patch.object(node, "heartbeat_counter", counter), \
+                unittest.mock.patch.object(ownerauth, "measured_once", lambda: None):
+            os.environ.pop("TPM2TOOLS_TCTI", None)
+            self.assertEqual(recount.main(["--config", config, "--audit-log", d + "/audit.jsonl", "--ownerauth", record],
+                                          ask=lambda p: None, run=run), 1)
+        self.assertIn("the --ownerauth record is not the one this node is on", err.getvalue())
+        self.assertEqual(built, {})
 
 
 def setUpModule():

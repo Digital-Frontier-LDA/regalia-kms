@@ -28,14 +28,15 @@ User=root
 # those modes: the image's PCR key and the boot's tpm2-pcr-signature.json (world-readable under /run/systemd),
 # the published chain (chain.json, 0644; sync's store is 0600 and is not read) and the measurement documents
 # (the state directory's measurements/, 0755/0644). Tightening any of those modes stops the advance (regalia-kms-95).
-SupplementaryGroups=tss
+SupplementaryGroups=tss regalia-audit-esp-advances
 # no capability: the ESP is root's, the TPM the group's
 CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
 ProtectSystem=strict
-# the one place it writes on disk, and its node_exporter textfile directory (deploy/baremetal/metrics.py)
-ReadWritePaths=/efi -/run/regalia-metrics/esp-advance
+# the one place it writes on disk, its node_exporter textfile directory (deploy/baremetal/metrics.py), and its trail
+# (deploy/baremetal/trails.py: each run before the anchor moves, its group so its shipper reads it)
+ReadWritePaths=/efi -/run/regalia-metrics/esp-advance /var/log/regalia-esp-advance
 # the anchor's writer lock (node.ESP_LOCK): regalia-sync's lock in its state directory is 0600, its own
 RuntimeDirectory=regalia-esp-advance
 RuntimeDirectoryMode=0700

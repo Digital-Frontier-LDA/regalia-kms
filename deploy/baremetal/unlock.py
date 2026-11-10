@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Peer-assisted disk unlock: a KMS host's root disk opens with its TPM AND one peer, never the TPM alone
-(#67, Phase 7 of #59; closes the gap of #135; THREE-SITE-THREAT-MODEL.md S1-S3, THREE-SITE-SECRETS.md).
+(#67, Phase 7 of #59; closes the gap of #135; THREE-SITE-THREAT-MODEL.md S1-S3; the secrets inventory is private).
 
 WHY. A disk that unlocks from the local TPM alone unlocks for every boot image the TPM's policy ever
 accepted: a signed PCR policy has no counter, so an old signed kernel on a stolen server opens the disk,
@@ -80,7 +80,7 @@ carry it: T's boot-session key is gone after unlock, and the verifier refuses a 
 
 LIMITS, stated:
   * Root on a running T can read local_T and whatever contribution it received this boot, and so keep a
-    whole credential (THREE-SITE-SECRETS.md). After a suspected compromise: rotate both paths, reencrypt.
+    whole credential (the private secrets inventory). After a suspected compromise: rotate both paths, reencrypt.
   * A LUKS header backup restores killed keyslots. None is kept; a host with a damaged header is rebuilt.
   * A peer that has not heard of a revocation helps until its heartbeat expires (24 hours, #69).
 
@@ -940,9 +940,15 @@ def unseal_local(sealed, signature=None, tpm2_device=None, run=subprocess.run):
     if tpm2_device:
         args.append("--tpm2-device=" + tpm2_device)
     done = run([*args, "-", "-"], input=sealed.encode(), capture_output=True)
-    require(done.returncode == 0 and len(done.stdout) == SECRET_BYTES,
-            "the TPM does not release the local contribution: another TPM, or a boot its policy does not accept")
-    return done.stdout
+    if done.returncode == 0 and len(done.stdout) == SECRET_BYTES:
+        return done.stdout
+    # what systemd-creds said travels with the refusal (#592: a TPM out of session slots read as "a boot its policy does
+    # not accept"): its exit status and stderr, bounded and printable only; never stdout, the secret's own channel
+    said = (done.stderr or b"").decode("utf-8", "replace") if isinstance(done.stderr, bytes) else str(done.stderr or "")
+    said = " | ".join(line.strip() for line in "".join(c if c.isprintable() or c == "\n" else " " for c in said).splitlines()
+                      if line.strip())
+    raise Refused("the TPM does not release the local contribution: another TPM, a boot its policy does not accept, or a "
+                  "TPM error (systemd-creds exit %d%s)" % (done.returncode, (": " + said[-400:]) if said else ""))
 
 
 def unlock(device, session, pins, transports, quote, unseal, name=None, run=subprocess.run):

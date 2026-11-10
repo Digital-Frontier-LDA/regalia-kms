@@ -61,30 +61,43 @@ P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; log "PASS $1"; pass=$((pass+1)); 
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; log "FAIL $1"; fail=$((fail+1)); }
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
 
+# Every token call is bounded by lib/bounded.py (#684), not timeout(1): its -k reaches the whole process group only
+# with GNU coreutils (uutils' timeout signals the tool alone, and a forked child outlives the bound). bounded.py sends
+# SIGTERM to the tool's process group, and KILL_GRACE s later SIGKILL if anything is left (status 124, or 137).
+KILL_GRACE=5
+bounded(){ python3 -I "$HERE/lib/bounded.py" "$1" "$KILL_GRACE" "${@:2}"; }
+# A call its bound ended is an ERROR, never an answer (#684). Listings return HUNG for it, and each caller says so.
+HUNG=3
+hung(){ [ "$1" = 124 ] || [ "$1" = 137 ]; }
+# listed takes the PIPESTATUS of "bounded … | python3 …": HUNG if the bound ended the listing, else the parser's status
+listed(){ hung "$1" && return "$HUNG"; return "$2"; }
 # The slot holding the token with this serial; exactly one, or refuse.
-slot_of(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
+slot_of(){ bounded 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 serial = sys.argv[1]; slot = None; hits = []
 for line in sys.stdin:
     m = re.match(r"Slot (\d+) \((0x[0-9a-f]+)\)", line)
     if m: slot = m.group(2)
     if "serial num" in line and line.split(":", 1)[1].strip() == serial: hits.append(slot)
-print(hits[0] if len(hits) == 1 else "")' "$SERIAL"; }
-SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "no single token with serial $SERIAL (pkcs11-tool -L)"
+print(hits[0] if len(hits) == 1 else "")' "$SERIAL"; listed "${PIPESTATUS[@]}"; }
+# Sets SLOT, or dies with WHY; a listing the bound ended dies saying so, not as "no token".
+find_slot(){ local rc; SLOT="$(slot_of)"; rc=$?
+  [ "$rc" = "$HUNG" ] && die "the slot listing hung (its bound ended it): $1"; [ -n "$SLOT" ] || die "$1"; }
+find_slot "no single token with serial $SERIAL (pkcs11-tool -L)"
 # ONE READER ONLY from here on (e2e/lib/opensc_isolate.py): another token can no longer take this
 # token's slot ID when its reader disappears, and OpenSC stops probing the other cards.
 if [ "${OWN_OPENSC_CONF:-0}" = 1 ]; then
   HSM_IGNORE_READERS="${HSM_IGNORE_READERS:-Yubico}" python3 -Es "$(dirname "$0")/lib/opensc_isolate.py" "$SLOT" "$W/opensc.conf" "$MODULE" >/dev/null \
     || die "cannot isolate this token's reader in OpenSC"
-  SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "the token is not visible after isolating its reader"
-  [ "$(timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | grep -c '^Slot')" = 1 ] || die "more than one slot is visible after isolation"
+  find_slot "the token is not visible after isolating its reader"
+  [ "$(bounded 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | grep -c '^Slot')" = 1 ] || die "more than one slot is visible after isolation"
 fi
 # EVERY LOGIN IS GATED ON WHAT IS IN THE SLOT NOW (review of #152): slot $SLOT must hold the token with
 # serial $SERIAL, no other slot may hold that serial, and under the suite's own isolated config it must
 # be the ONLY slot. During a removal the check fails and no PIN is sent; a reader that arrived later and
 # took this slot ID fails it too. Residual: the token removed AND another arriving in the milliseconds
-# between this check and pkcs11-tool's own login. Every call is bounded (timeout 60 s).
-target_ok(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
+# between this check and pkcs11-tool's own login. Every call is bounded (bounded.py: 30 s, then SIGKILL).
+target_ok(){ bounded 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 slot, serial, isolated = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 cur, slots, hits = None, 0, []
@@ -95,10 +108,23 @@ for line in sys.stdin:
     elif "serial num" in line and line.split(":", 1)[1].strip() == serial:
         hits.append(cur)
 ok = hits == [slot] and (slots == 1 or not isolated)
-sys.exit(0 if ok else 1)' "$SLOT" "$SERIAL" "${OWN_OPENSC_CONF:-0}"; }
-p11(){ timeout 60 pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
-p11l(){ target_ok || { echo "p11l: slot $SLOT does not hold $SERIAL alone right now: no login, no PIN" >&2; return 97; }
+sys.exit(0 if ok else 1)' "$SLOT" "$SERIAL" "${OWN_OPENSC_CONF:-0}"; listed "${PIPESTATUS[@]}"; }
+p11(){ bounded 60 pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
+p11l(){ target_ok || { [ $? = "$HUNG" ] && { echo "p11l: the slot listing hung: no login, no PIN" >&2; return 124; }
+    echo "p11l: slot $SLOT does not hold $SERIAL alone right now: no login, no PIN" >&2; return 97
+  }
   REGALIA_Q_PIN="$Q_PIN" p11 --login --pin env:REGALIA_Q_PIN "$@"; }
+# The extraction probe logs in on its own, so it is gated like p11l: the PIN reaches it only once the slot holds
+# this serial alone, and only through its environment, never argv. Kept a helper, not an inline call, so the
+# card-isolation scanner sees its PIN line (a line inside a quoted "$( )" is invisible to it).
+# Bounded like every other token call (#676): a probe that hangs in C_Login or C_GetAttributeValue fails its row
+# with a reason instead of hanging the run, and its status is returned, never swallowed.
+PROBE_BOUND=60
+p11probe(){ target_ok || { [ $? = "$HUNG" ] && { echo "the slot listing hung: no login, no PIN, no verdict"; return 124; }
+    echo "slot $SLOT does not hold $SERIAL alone right now: no login, no PIN"; return 97
+  }
+  local rc; REGALIA_Q_PIN="$Q_PIN" bounded "$PROBE_BOUND" python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$@"; rc=$?
+  hung "$rc" && echo "the probe did not answer within $PROBE_BOUND s: no verdict"; return "$rc"; }
 # Fresh ids: refuse any id already on the token (PKCS#11 does not make CKA_ID unique), and remember
 # only the objects THIS run created, so cleanup can never delete a key that was there before.
 # An id counts as free only against a listing that SUCCEEDED (an absent token lists nothing).
@@ -135,7 +161,10 @@ for b in text.split("Private Key Object")[1:]:
     P "$id: pkcs11-tool reports Access = $acc"
   else F "$id: Access = ${acc:-not reported}"; fi
   # pkcs11-tool will not read a private key at all, so ask the TOKEN directly (C_GetAttributeValue).
-  out="$(python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"; rc=$?; log "extract probe $id: $out"
+  # The probe gets the PIN through p11probe, gated like p11l. Since Q_PIN stopped being exported (#225)
+  # it had no PIN at all, and this check failed on every card with "REGALIA_Q_PIN is not set".
+  out="$(p11probe "$id" 2>&1)"; rc=$?
+  log "extract probe $id: $out"
   [ "$rc" = 0 ] && P "$id: the token refuses its secret attributes ($(python3 -I -c 'import json,sys; d=json.loads(sys.stdin.read()); print("CKA_VALUE "+d["CKA_VALUE"]["rv"]+", PRIVATE_EXPONENT "+d["CKA_PRIVATE_EXPONENT"]["rv"])' <<< "$out" 2>/dev/null))" \
     || F "$id: extraction probe: $out"
 done

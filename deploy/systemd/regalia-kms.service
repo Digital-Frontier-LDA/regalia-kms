@@ -32,6 +32,11 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 StateDirectory=regalia-kms
 StateDirectoryMode=0700
+# the operational state (ADR-0002 D32, #432): this instance's session key (its public half) in
+# /run/regalia-kms, the revision it has applied in /run/regalia-state, both read by regalia-admission and
+# regalia-sync. Not preserved: a stopped daemon leaves neither, which they read as "no lease request".
+RuntimeDirectory=regalia-kms regalia-state
+RuntimeDirectoryMode=0755
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 UMask=0077

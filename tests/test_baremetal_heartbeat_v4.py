@@ -101,6 +101,16 @@ class Quorum(unittest.TestCase):
     def test_the_owner_lifetime_never_loosens_the_manifest_bound(self):
         self.refused("lives at most 21600 s", quorum(body(self.man, lifetime=21601), A, B), self.man)
 
+    def test_a_leap_second_is_not_a_time(self):
+        """Seconds 60 and 61 are refused in either time, signed by a quorum (regalia-78j): time.strptime took them, so
+        :60 read as the next minute's :00, which Go's time.Parse and datetime refuse. Recorded in the shared vectors."""
+        for field in ("issued_at", "expires_at"):
+            for second in ("60", "61"):
+                with self.subTest(field=field, second=second):
+                    heartbeat = body(self.man)
+                    heartbeat[field] = heartbeat[field][:-3] + second + "Z"
+                    self.refused("%s is not a real date" % field, quorum(heartbeat, A, B), self.man)
+
 
 def restored(document):
     """A document from the vectors file: every "public" read back as "key" (tests/vectors/make-heartbeat-v4.py)."""
@@ -113,8 +123,8 @@ def restored(document):
 
 class Vectors(unittest.TestCase):
     def test_the_shared_vectors_are_what_this_python_decides(self):
-        """tests/vectors/heartbeat-v4.json, which the Go port reads, replayed here: a vector the Python no longer
-        decides the same way fails, so the file cannot drift from the code."""
+        """tests/vectors/heartbeat-v4.json replayed here: a vector the Python no longer decides the same way fails, so
+        the file cannot drift from the code. No Go code reads it yet: Go has no heartbeat verifier (regalia-6j4)."""
         cases = json.loads(VECTORS.read_text())["cases"]
         seen = {"accepted": 0, "refused": 0}
         for case in cases:
@@ -127,8 +137,11 @@ class Vectors(unittest.TestCase):
                 self.assertEqual(outcome, want)
                 seen[next(iter(want))] += 1
         self.assertTrue(seen["accepted"] >= 5 and seen["refused"] >= 12, seen)
-        # the owner's lifetime, both ways, is in the file for the Go side's arithmetic
+        # the owner's lifetime, both ways, is in the file for a Go reader's arithmetic
         self.assertTrue(any("owner signed lives at most" in c.get("refused", "") for c in cases))
+        # a leap second, in either time, is in the file as a refusal
+        for field in ("issued_at", "expires_at"):
+            self.assertTrue(any(c.get("refused") == "%s is not a real date" % field for c in cases), field)
 
 
 if __name__ == "__main__":

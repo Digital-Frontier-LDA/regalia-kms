@@ -146,7 +146,7 @@ func signOnce(provider *Provider, route registry.Route) (output []byte, err erro
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:43 op0 `driver == nil`, op1 `pins == nil`
+// provider.go:New{driver == nil} op0 `driver == nil`, op1 `pins == nil`
 // ----------------------------------------------------------------------------
 
 // NEITHER CONSTRUCTOR ARGUMENT HAD A TEST THAT SUPPLIED IT AS NIL.
@@ -156,7 +156,7 @@ func signOnce(provider *Provider, route registry.Route) (output []byte, err erro
 // construction — it fails at the first Open, inside a deferred cleanup, on a
 // nil interface, which is a crash rather than a refusal.
 //
-// Falsifier: provider.go:43 op0 -> `(false && driver == nil)`. New(nil, pins)
+// Falsifier: provider.go:New{driver == nil} op0 -> `(false && driver == nil)`. New(nil, pins)
 // then returns a Provider and a nil error. Sole failure. Likewise op1.
 func TestNewRefusesAMissingDriverOrPINSource(t *testing.T) {
 	if _, err := New(nil, sixDigitPIN()); err == nil {
@@ -173,7 +173,7 @@ func TestNewRefusesAMissingDriverOrPINSource(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:51 op6 `binding.PINPolicy != "always"`
+// provider.go:(*Provider).Execute{binding.PINPolicy != "always"} op6 `binding.PINPolicy != "always"`
 // ----------------------------------------------------------------------------
 
 // A REFUSAL-DIRECTION GAP: THE POLICY THE SUITE NEVER ACCEPTS.
@@ -185,7 +185,7 @@ func TestNewRefusesAMissingDriverOrPINSource(t *testing.T) {
 // is PINPolicyAlways would stop being servable, and no negative test notices,
 // because losing access to a key looks like every other refusal.
 //
-// Falsifier: provider.go:51 op6 -> `(true || binding.PINPolicy != "always")`,
+// Falsifier: provider.go:(*Provider).Execute{binding.PINPolicy != "always"} op6 -> `(true || binding.PINPolicy != "always")`,
 // which collapses the pair to `!= "once"`. Sole failure.
 func TestABindingWithPINPolicyAlwaysIsServed(t *testing.T) {
 	session := boundaryCard()
@@ -210,7 +210,7 @@ func TestABindingWithPINPolicyAlwaysIsServed(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:59 op1 `session == nil`
+// provider.go:(*Provider).Execute{session == nil} op1 `session == nil`
 // ----------------------------------------------------------------------------
 
 // Healthy has a case for a driver that returns neither a session nor an error;
@@ -218,7 +218,7 @@ func TestABindingWithPINPolicyAlwaysIsServed(t *testing.T) {
 // Identity, and the deferred cleanup then calls Close on the same nil — a panic
 // raised inside a deferred function that has already spent its recover.
 //
-// Falsifier: provider.go:59 op1 -> `(false && session == nil)`. This test is
+// Falsifier: provider.go:(*Provider).Execute{session == nil} op1 -> `(false && session == nil)`. This test is
 // the failure; the panic escapes Execute, so it is caught here rather than
 // aborting the binary and reporting as a package-wide failure.
 func TestExecuteRefusesADriverThatReturnsNoSessionAndNoError(t *testing.T) {
@@ -238,7 +238,7 @@ func TestExecuteRefusesADriverThatReturnsNoSessionAndNoError(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:63 op0 `recover() != nil`
+// provider.go:(*Provider).Execute{recover() != nil} op0 `recover() != nil`
 // ----------------------------------------------------------------------------
 
 // A FAULTING CARD DRIVER MUST BE A REFUSAL, NOT A DEAD DAEMON.
@@ -247,7 +247,7 @@ func TestExecuteRefusesADriverThatReturnsNoSessionAndNoError(t *testing.T) {
 // unmeasured. It is the boundary between "one operation failed" and "the
 // process serving every other key went down".
 //
-// Falsifier: provider.go:63 op0 -> `(false && recover() != nil)`, which does
+// Falsifier: provider.go:(*Provider).Execute{recover() != nil} op0 -> `(false && recover() != nil)`, which does
 // not merely skip the body — short-circuiting means recover() is never CALLED,
 // so the panic propagates out of Execute. Sole failure.
 func TestAPanickingCardSessionBecomesARefusal(t *testing.T) {
@@ -272,7 +272,7 @@ func TestAPanickingCardSessionBecomesARefusal(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:73 op0, :77 op0, :77 op1
+// provider.go:(*Provider).Execute{serial != binding.DeviceSerial} op0, provider.go:(*Provider).Execute{pinPolicy != binding.PINPolicy} op0, provider.go:(*Provider).Execute{pinPolicy != binding.PINPolicy} op1
 // ----------------------------------------------------------------------------
 
 // THE CARD-DISAGREEMENT CHECKS EXIST TWICE AND WERE TESTED ONCE.
@@ -289,19 +289,19 @@ func TestExecuteRefusesACardThatDisagreesWithItsBinding(t *testing.T) {
 		apply  func(*boundarySession)
 		reason string
 	}{
-		// :73 op0 — Identity errors while returning the RIGHT serial, so the
+		// provider.go:(*Provider).Execute{serial != binding.DeviceSerial} op0 — Identity errors while returning the RIGHT serial, so the
 		// sibling `serial != binding.DeviceSerial` agrees and this operand is
 		// the only thing that can refuse.
 		"the serial cannot be read": {
 			apply:  func(s *boundarySession) { s.identityErr = errors.New("card stopped answering") },
 			reason: "a card that will not state its serial has not been identified, and an unidentified card is not the commissioned one",
 		},
-		// :77 op0 — Policies errors while returning matching policies.
+		// provider.go:(*Provider).Execute{pinPolicy != binding.PINPolicy} op0 — Policies errors while returning matching policies.
 		"the slot policy cannot be read": {
 			apply:  func(s *boundarySession) { s.policiesErr = errors.New("slot unreadable") },
 			reason: "an unreadable slot policy is not a policy of \"never\"; this backend's whole contract is that no operation requests presence",
 		},
-		// :77 op1 — the card reports a PIN policy the manifest did not declare.
+		// provider.go:(*Provider).Execute{pinPolicy != binding.PINPolicy} op1 — the card reports a PIN policy the manifest did not declare.
 		"a PIN policy the manifest did not declare": {
 			apply:  func(s *boundarySession) { s.pinPolicy = "always" },
 			reason: "the manifest declares \"once\" and the card says \"always\"; the manifest is the record the fleet is audited against",
@@ -328,7 +328,7 @@ func TestExecuteRefusesACardThatDisagreesWithItsBinding(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:82 op0 and :93 op0 — `err != nil` from PublicKey
+// provider.go:(*Provider).Execute{len(output) == 0#1} op0 and provider.go:(*Provider).Execute{publicErr != nil} op0 — `err != nil` from PublicKey
 // ----------------------------------------------------------------------------
 
 // AN ANSWER RETURNED ALONGSIDE AN ERROR, WHICH NO EXISTING FIXTURE COULD BUILD.
@@ -344,8 +344,8 @@ func TestExecuteRefusesACardThatDisagreesWithItsBinding(t *testing.T) {
 // error operand neutralised, the public-key arm hands back a key the card
 // disowned, and the wrap arm wraps a data key TO it.
 //
-// Falsifiers: :82 op0 -> `(false && err != nil)` (sole failure, subtest
-// "public-key"); :93 op0 -> `(false && publicErr != nil)` (sole failure,
+// Falsifiers: provider.go:(*Provider).Execute{len(output) == 0#1} op0 -> `(false && err != nil)` (sole failure, subtest
+// "public-key"); provider.go:(*Provider).Execute{publicErr != nil} op0 -> `(false && publicErr != nil)` (sole failure,
 // subtest "wrap").
 func TestACardKeyReturnedWithAnErrorIsNotUsed(t *testing.T) {
 	publicKey := boundaryRSAPublicKey(t)
@@ -431,12 +431,12 @@ func boundaryRSAPublicKey(t *testing.T) []byte {
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:104 op0 `retryErr != nil` and :105 op0 `retryErr == nil`
+// provider.go:(*Provider).Execute{retryErr != nil} op0 `retryErr != nil` and provider.go:(*Provider).Execute{retryErr == nil} op0 `retryErr == nil`
 // ----------------------------------------------------------------------------
 
 // THE LATCH MUST FIRE ON A SPENT BUDGET AND MUST NOT FIRE ON A FAILED READ.
 //
-// provider.go:105 was the only operand in this package that survived in BOTH
+// provider.go:(*Provider).Execute{retryErr == nil} was the only operand in this package that survived in BOTH
 // directions, and it is the one whose two failure modes point opposite ways:
 //
 //	never latch   a card down to its last retry is tried again and again until
@@ -454,9 +454,9 @@ func boundaryRSAPublicKey(t *testing.T) []byte {
 //
 // Falsifiers, each the sole failure:
 //
-//	:104 op0 -> `(false && retryErr != nil)`  subtest "unreadable" reaches Sign
-//	:105 op0 -> `(false && retryErr == nil)`  subtest "one retry left" is not latched
-//	:105 op0 -> `(true  || retryErr == nil)`  subtest "unreadable" is latched
+//	provider.go:(*Provider).Execute{retryErr != nil} op0 -> `(false && retryErr != nil)`  subtest "unreadable" reaches Sign
+//	provider.go:(*Provider).Execute{retryErr == nil} op0 -> `(false && retryErr == nil)`  subtest "one retry left" is not latched
+//	provider.go:(*Provider).Execute{retryErr == nil} op0 -> `(true  || retryErr == nil)`  subtest "unreadable" is latched
 func TestThePINLatchDistinguishesASpentBudgetFromAnUnreadableOne(t *testing.T) {
 	// THE LATCH IS READ FOR THE DEVICE THE OPERATION ACTUALLY USED, taken from
 	// the same route the call was made with rather than spelled out again. A
@@ -506,7 +506,7 @@ func TestThePINLatchDistinguishesASpentBudgetFromAnUnreadableOne(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:111 op0 `err != nil` from the PIN source
+// provider.go:(*Provider).Execute{len(pin) < 6} op0 `err != nil` from the PIN source
 // ----------------------------------------------------------------------------
 
 // fakePIN never fails, so this operand had no fixture. And a PIN source that
@@ -515,7 +515,7 @@ func TestThePINLatchDistinguishesASpentBudgetFromAnUnreadableOne(t *testing.T) {
 // correctly-shaped PIN alongside an error leaves this operand as the sole
 // refuser.
 //
-// Falsifier: :111 op0 -> `(false && err != nil)`. The PIN is presented to the
+// Falsifier: provider.go:(*Provider).Execute{len(pin) < 6} op0 -> `(false && err != nil)`. The PIN is presented to the
 // card and a retry is spent on custody material the source disowned. Sole
 // failure.
 type failingPIN struct{ value []byte }
@@ -546,7 +546,7 @@ func TestAPINReturnedWithAnErrorIsNeverPresentedToTheCard(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:117 op0 `releaseErr != nil`, forced direction
+// provider.go:(*Provider).Execute{releaseErr != nil} op0 `releaseErr != nil`, forced direction
 // ----------------------------------------------------------------------------
 
 // THE SUITE HAD A PIN SOURCE THAT CANNOT RELEASE AND NONE THAT CAN.
@@ -557,7 +557,7 @@ func TestAPINReturnedWithAnErrorIsNeverPresentedToTheCard(t *testing.T) {
 // asserted that a SUCCESSFUL release lets the result through. Another
 // refusal-direction gap: the daemon would discard every signature it produced.
 //
-// Falsifier: :117 op0 -> `(true || releaseErr != nil)`. Sole failure.
+// Falsifier: provider.go:(*Provider).Execute{releaseErr != nil} op0 -> `(true || releaseErr != nil)`. Sole failure.
 type releasingPIN struct {
 	value    []byte
 	released int
@@ -592,7 +592,7 @@ func TestASuccessfulPINReleaseDoesNotDiscardTheResult(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:132 op1 `format != "sops-pgp"`
+// provider.go:(*Provider).Execute{format != "sops-pgp"} op1 `format != "sops-pgp"`
 // ----------------------------------------------------------------------------
 
 // THE SECOND ALLOWED UNWRAP FORMAT HAD NO TEST THAT USED IT.
@@ -603,7 +603,7 @@ func TestASuccessfulPINReleaseDoesNotDiscardTheResult(t *testing.T) {
 // format left everything green — and the SOPS path, which is the reason this
 // operand exists, would refuse every artifact.
 //
-// Falsifier: :132 op1 -> `(true || format != "sops-pgp")`. Sole failure.
+// Falsifier: provider.go:(*Provider).Execute{format != "sops-pgp"} op1 -> `(true || format != "sops-pgp")`. Sole failure.
 func TestUnwrapAcceptsTheSOPSPGPFormat(t *testing.T) {
 	aad := []byte("aad-for-the-sops-pgp-format-test")
 	plaintext := []byte("decrypted-data-key-32-bytes-long")
@@ -642,7 +642,7 @@ func boundaryV2Frame(aad, plaintext []byte) []byte {
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:145 op0 `err != nil`, op1 `len(output) == 0`
+// provider.go:(*Provider).Execute{len(output) == 0#2} op0 `err != nil`, op1 `len(output) == 0`
 // ----------------------------------------------------------------------------
 
 // THE FINAL BACKSTOP, WHOSE TWO OPERANDS MASKED EACH OTHER.
@@ -652,8 +652,8 @@ func boundaryV2Frame(aad, plaintext []byte) []byte {
 // sole refuser. Splitting them needs a card that returns bytes WITH an error,
 // and one that returns nothing WITHOUT one.
 //
-// Falsifiers, each the sole failure: :145 op0 -> `(false && err != nil)` for
-// "bytes with an error"; :145 op1 -> `(false && len(output) == 0)` for
+// Falsifiers, each the sole failure: provider.go:(*Provider).Execute{len(output) == 0#2} op0 -> `(false && err != nil)` for
+// "bytes with an error"; provider.go:(*Provider).Execute{len(output) == 0#2} op1 -> `(false && len(output) == 0)` for
 // "nothing without an error".
 func TestAFailedOrEmptySignatureIsNotReturned(t *testing.T) {
 	t.Run("bytes returned with an error", func(t *testing.T) {
@@ -689,7 +689,7 @@ func TestAFailedOrEmptySignatureIsNotReturned(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:165 op0 `err != nil` in Healthy
+// provider.go:(*Provider).Healthy{session == nil} op0 `err != nil` in Healthy
 // ----------------------------------------------------------------------------
 
 // Healthy's "the card cannot be opened" case passes a nil session with the
@@ -697,7 +697,7 @@ func TestAFailedOrEmptySignatureIsNotReturned(t *testing.T) {
 // operand was never measured. A driver that returns a usable session ALONGSIDE
 // an error separates them.
 //
-// Falsifier: :165 op0 -> `(false && err != nil)`. Sole failure.
+// Falsifier: provider.go:(*Provider).Healthy{session == nil} op0 -> `(false && err != nil)`. Sole failure.
 func TestHealthyRefusesAnOpenThatReturnsSessionAndError(t *testing.T) {
 	session := boundaryCard()
 	session.retries, session.retriesSet = 3, true
@@ -717,7 +717,7 @@ func TestHealthyRefusesAnOpenThatReturnsSessionAndError(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// provider.go:181 op1 `provider.driver != nil` in Ready
+// provider.go:(*Provider).Ready{provider.driver != nil} op1 `provider.driver != nil` in Ready
 // ----------------------------------------------------------------------------
 
 // A BOUND NAMED ON ONE SIDE ONLY, INSIDE A SINGLE TEST.
@@ -727,7 +727,7 @@ func TestHealthyRefusesAnOpenThatReturnsSessionAndError(t *testing.T) {
 // is `&Provider{}`, where pins is nil too, so the pins operand refuses the same
 // input and the driver operand is never the sole refuser.
 //
-// Falsifier: :181 op1 -> `(true || provider.driver != nil)`. Ready then calls
+// Falsifier: provider.go:(*Provider).Ready{provider.driver != nil} op1 -> `(true || provider.driver != nil)`. Ready then calls
 // Ready on a nil driver interface, which panics; the panic is caught here so
 // the failure is one named test rather than an aborted binary.
 func TestReadyRefusesAProviderWithAPINSourceAndNoDriver(t *testing.T) {

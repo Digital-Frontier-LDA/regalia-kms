@@ -30,6 +30,11 @@ start and b serves again. A server whose two peers are both destroyed has no suc
      refused, since the anchor is usable
   7  the three start: b's regalia-esp-advance runs and finds its ESP and anchor at epoch 3; b holds a heartbeat the
      nodes signed and a lease, and issues one: it serves again
+  8  #340: every line of every node's sync, admission and ESP-advance trail, and b's re-anchor trail, is in the audit
+     collector (the nodes' real shippers, Cluster(audit=True); the re-anchor's as regalia-audit-ship@reanchor ships it),
+     and b's re-anchor decisions are there by name in b's reanchor stream: every refusal of step 5 (one peer only, its
+     own chain as a peer, the phrase mistyped, regalia-esp-advance's lock held: refused before any plan, and recorded
+     since #340 found it was not), the request at epoch 3 and its ALLOW, and the refusal of a run on a usable anchor
 
 NOT SHOWN HERE (MEMBERSHIP-RECOVERY.md, "What the rehearsal does not show"):
   * a physical TPM: these are software TPMs, and power is never cut during the redefinition here;
@@ -163,7 +168,8 @@ def scenario(cluster, work):
     header("3  b's anchor unusable: its epoch counter gone from its TPM")
     cfg = cluster.node(b).cfg
     index = "0x%x" % int(str(cfg["nv_epoch"]), 0)
-    gone = sh("tpm2_nvundefine", "-T", cluster.nodes[b].tcti, "-C", "o", index, check=False)
+    with cluster.tpm_of(b) as n:                       # its route, socket or tpm2-abrmd (regalia-afi): never the raw socket by hand
+        gone = sh("tpm2_nvundefine", "-T", n.tcti, "-C", "o", index, check=False)
     said = refusal(lambda: cluster.node(b).store().load())
     ok(gone.returncode == 0 and said is not None,
        "b's epoch counter %s undefined in its TPM: b's own membership no longer loads (%s)" % (index, (said or "it loads")[:120]),
@@ -204,7 +210,7 @@ def scenario(cluster, work):
        "b's services, started by its boot, refuse its membership (%r); stopped, and inactive (%s), before the re-anchor" % (reason, states),
        {"sync": cluster.journal(b, "sync")[-400:], "start": (refused_at_start or "")[-600:]})
     shutil.copyfile(cluster.nodes[b].state / node.PUBLISHED, d / "b-chain.json")
-    trail = d / "b-reanchor.jsonl"
+    trail = cluster.ship_tool_trail(b, "reanchor")                 # b's /var/log/regalia/reanchor.jsonl, shipped as on a host (#340)
     esp_lock = cluster.nodes[b].run / "esp-advance.lock"          # the lock the fixture's regalia-esp-advance takes (_esp_args)
 
     def reanchor(peers, answer=None):
@@ -218,8 +224,13 @@ def scenario(cluster, work):
 
     def snapshot():
         """What a refusal must leave as it was: b's membership file (its bytes) and locks (their metadata), the NV indices
-        its TPM holds and their public areas, and what each index of its anchor holds (read with the owner's authorization)."""
-        tcti = cluster.nodes[b].tcti
+        its TPM holds and their public areas, and what each index of its anchor holds (read with the owner's authorization).
+        Its TPM reads go through b's route (tpm_of): in abrmd mode the raw socket is the daemon's, and its bus is set only
+        inside (regalia-afi, #605's follow-up)."""
+        with cluster.tpm_of(b) as n:
+            return _snapshot(n.tcti)
+
+    def _snapshot(tcti):
         files = {}
         for name in ("membership.json", "membership.json.lock", "highwater.lock"):
             path = cluster.node(b).path(name)
@@ -299,6 +310,28 @@ def scenario(cluster, work):
                             and e.get("at", 0) >= since], 300, 5)
     ok(bool(issued), "and b issues leases to its peers again (%s): it serves" % sorted(set(issued or [])), cluster.journal(b, "sync")[-600:])
 
+    header("8  #340: every node's trails, and b's re-anchor trail, in the audit collector, for the node that recorded them")
+    wrong = cluster.audit_complete()
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t in cluster._node_trails(n)}
+    ok(wrong == {}, "every node's sync, admission and ESP-advance trail, and b's re-anchor trail, is written and in the collector line "
+       "for line: sequence from 1, chained from genesis, each DENY a deny, its head as the receipt and the head file state it %s" % counts,
+       {"%s.%s" % k: v for k, v in wrong.items()})
+    has = lambda r: (lambda reason: isinstance(reason, str) and r in reason)
+    decided = [e for e in cluster.audit_has(b, "reanchor") if e.get("event") in ("reanchor", "reanchor-requested")]
+    shape = [(e["event"], e.get("outcome")) for e in decided]
+    ok(shape == [("reanchor", "DENY"), ("reanchor", "DENY"), ("reanchor-requested", None), ("reanchor", "DENY"), ("reanchor", "DENY"),
+                 ("reanchor-requested", None), ("reanchor", "ALLOW"), ("reanchor", "DENY")],
+       "b's reanchor stream holds its decisions in order: two refused plans, a request refused for the phrase, the refusal "
+       "with the ESP lock held, a request and its ALLOW, then the refused run on a usable anchor", shape)
+    named = {"one peer only": bool(cluster.audit_has(b, "reanchor", event="reanchor", outcome="DENY", reason=has("at least two other nodes"))),
+             "its own chain": bool(cluster.audit_has(b, "reanchor", event="reanchor", outcome="DENY", reason=has("cannot be a source for its own re-anchor"))),
+             "phrase mistyped": bool(cluster.audit_has(b, "reanchor", event="reanchor", outcome="DENY", reason=has("not confirmed"))),
+             "ESP lock held": bool(cluster.audit_has(b, "reanchor", event="reanchor", outcome="DENY", epoch=0,
+                                                     reason=has("regalia-esp-advance holds the anchor's lock"))),
+             "the re-anchor": bool(cluster.audit_has(b, "reanchor", event="reanchor", outcome="ALLOW", epoch=3, manifest_digest=digest)),
+             "usable anchor": bool(cluster.audit_has(b, "reanchor", event="reanchor", outcome="DENY", reason=has("the TPM anchor is usable")))}
+    ok(all(named.values()), "each of b's re-anchor decisions is in b's reanchor stream, by its reason", named)
+
 
 def main():
     try:
@@ -318,7 +351,7 @@ def main():
         print("three-node-reanchor: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work)
+    cluster = threenode.Cluster(work, audit=True)
     try:
         scenario(cluster, work)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once

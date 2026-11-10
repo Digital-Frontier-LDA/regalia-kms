@@ -16,6 +16,8 @@ import (
 const (
 	testBoot    = "0f3a9c1e-1111-4222-8333-444455556666"
 	testSession = "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+	testCluster = "c1c1c1c1c1c1c1c1"
+	testKey     = "e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7"
 	testDigest  = "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
 )
 
@@ -52,7 +54,8 @@ func good(now int64) map[string]any {
 	return map[string]any{
 		"schema": Schema, "node_id": "a", "session_id": testSession, "boot_id": testBoot, "epoch": 7,
 		"manifest_digest": testDigest, "hsm_serials": "DENK0404144 36345471", "lease_issued_at": "2026-10-02T09:00:00Z",
-		"requested_boottime_ms": now - 5_000, "serve_until_boottime_ms": now + 290_000, "reason": "",
+		"requested_boottime_ms": now - 5_000, "cluster_id": testCluster, "state_epoch": 2, "state_revision": 41,
+		"session_key": testKey, "serve_until_boottime_ms": now + 25_000, "mode": "lease", "reason": "",
 	}
 }
 
@@ -132,8 +135,12 @@ func TestANodeWithACurrentAdmissionIsAdmitted(t *testing.T) {
 	if !w.gate.Ready(context.Background()) {
 		t.Fatal("Ready is false for a current admission")
 	}
+	// the held lease's operational state reaches the daemon's state gate as written (D32, #510)
+	if want := (LeaseState{ClusterID: testCluster, StateEpoch: 2, StateRevision: 41, SessionKey: testKey}); status.State != want {
+		t.Fatalf("state = %+v, want %+v", status.State, want)
+	}
 	// up to the last millisecond, and not at it
-	w.now += 289_999
+	w.now += 24_999
 	if !w.gate.Ready(context.Background()) {
 		t.Fatal("refused one millisecond before serve_until")
 	}
@@ -234,16 +241,31 @@ func TestEveryDefectOfTheFileIsNotAdmitted(t *testing.T) {
 		{"a serial of 33 characters", "hsm_serials is not distinct serials", change("hsm_serials", strings.Repeat("S", 33))},
 		{"seventeen serials", "lists more than 16 hardware tokens", change("hsm_serials", serials(17))},
 		{"the old schema", "another schema", change("schema", "regalia.admission/v1")},
+		{"the v2 schema (no mode)", "another schema", change("schema", "regalia.admission/v2")},
+		// v4 is v3's mode (#494) and the lease's state (#510) together: a v3 file, of either shape, is another schema
+		{"the v3 schema (#494's mode, no lease state)", "another schema", change("schema", "regalia.admission/v3")},
+		{"a cluster ID of 15 hex", "cluster_id is not 16 lowercase hex", change("cluster_id", testCluster[1:])},
+		{"an uppercase cluster ID", "cluster_id is not 16 lowercase hex", change("cluster_id", "C1C1C1C1C1C1C1C1")},
+		{"a cluster ID as a number", "cluster_id is not a string", change("cluster_id", 7)},
+		{"a negative state epoch", "state_epoch is not a whole number", change("state_epoch", -1)},
+		{"a state revision as text", "state_revision is not a whole number", change("state_revision", "41")},
+		{"a session key of 63 hex", "session_key is not 64 lowercase hex", change("session_key", testKey[1:])},
+		// a lease that serves carries its state, or the state gate has nothing to check (2f's read of #510)
+		{"serving under a lease with no cluster", "serves under a lease but carries no lease state", change("cluster_id", strings.Repeat("0", 16))},
+		{"serving under a lease with no session key", "serves under a lease but carries no lease state", change("session_key", strings.Repeat("0", 64))},
+		{"an unknown mode", "neither lease nor recovery", change("mode", "standby")},
+		{"recovery, with no stateless-only gate yet", "no stateless-only gate yet", change("mode", "recovery")},
 		{"a local time", "lease_issued_at is not UTC", change("lease_issued_at", "2026-10-02T09:00:00+02:00")},
 		{"a fractional bound", "serve_until_boottime_ms is not a whole number", change("serve_until_boottime_ms", 1.0e6+0.5)},
-		{"an exponent bound", "serve_until_boottime_ms is not a whole number", raw(`{"schema":"regalia.admission/v2","node_id":"a","session_id":"` + testSession +
+		{"an exponent bound", "serve_until_boottime_ms is not a whole number", raw(`{"schema":"` + Schema + `","node_id":"a","session_id":"` + testSession +
 			`","boot_id":"` + testBoot + `","epoch":7,"manifest_digest":"` + testDigest + `","hsm_serials":"DENK0404144` +
-			`","lease_issued_at":"2026-10-02T09:00:00Z","requested_boottime_ms":1,"serve_until_boottime_ms":1e9,"reason":""}`)},
-		{"a bound as text", "serve_until_boottime_ms is not a whole number", change("serve_until_boottime_ms", "1290000")},
+			`","lease_issued_at":"2026-10-02T09:00:00Z","requested_boottime_ms":1,"cluster_id":"` + testCluster + `","state_epoch":2,"state_revision":41,"session_key":"` + testKey +
+			`","serve_until_boottime_ms":1e9,"mode":"lease","reason":""}`)},
+		{"a bound as text", "serve_until_boottime_ms is not a whole number", change("serve_until_boottime_ms", "1025000")},
 		{"a negative request time", "requested_boottime_ms is not a whole number", change("requested_boottime_ms", -1)},
 		{"a reason that is not a string", "reason is not a string", change("reason", 0)},
 		{"a reason with a control character", "reason is not printable ASCII", change("reason", "bad\x1b[31m")},
-		{"a reason too long", "reason is too long", change("reason", strings.Repeat("x", 241))},
+		{"a reason too long", "reason is too long", change("reason", strings.Repeat("x", MaxReasonBytes+1))},
 		{"zero, with the service's reason", "not admitted by the lease service: a may not serve under epoch 8 (REVOKED_STOLEN)", func(w *world) {
 			document := good(w.now)
 			document["serve_until_boottime_ms"], document["reason"] = 0, "a may not serve under epoch 8 (REVOKED_STOLEN)"
@@ -317,6 +339,9 @@ func TestAFileInADirectoryThatIsNotThereIsNotAdmitted(t *testing.T) {
 }
 
 func TestAFileOwnedBySomeoneElseIsNotAdmitted(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("as root the test's directory is root's, which the gate trusts by design: the owner check cannot be reached")
+	}
 	w := newWorld(t)
 	other, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"), SessionOwnerUID: uint32(os.Getuid()),
 		OwnerUID: uint32(os.Getuid()) + 1, Boottime: func() (int64, error) { return w.now, nil }, BootID: func() (string, error) { return testBoot, nil }})
@@ -333,6 +358,9 @@ func TestAFileOwnedBySomeoneElseIsNotAdmitted(t *testing.T) {
 // boot session: the session is what the admission is checked against, so it stays root's (or, here,
 // whoever SessionOwnerUID names), whatever OwnerUID says.
 func TestTheBootSessionIsHeldToItsOwnOwnerNotTheLeaseServices(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("as root the session's directory is root's, which the gate trusts by design: the owner check cannot be reached")
+	}
 	w := newWorld(t)
 	gate, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"),
 		OwnerUID: uint32(os.Getuid()), SessionOwnerUID: uint32(os.Getuid()) + 1,
@@ -343,6 +371,88 @@ func TestTheBootSessionIsHeldToItsOwnOwnerNotTheLeaseServices(t *testing.T) {
 	status := gate.Check(context.Background())
 	if status.Admitted || !strings.Contains(status.Reason, "the boot session: its directory is not one only its owner or root can write") {
 		t.Fatalf("status = %+v", status)
+	}
+}
+
+// AS ROOT (regalia-sp1). The two tests above skip as root, because t.TempDir() is then root's and the gate trusts
+// root by design. Here the directory and both files are chowned to nobody (65534), so the owner check is reached,
+// and OwnerUID / SessionOwnerUID are derived from that uid, not from os.Getuid(). Each check proves both halves:
+// the uid that owns the directory is admitted, and another is refused for its directory. CI's privileged-and-fuzz
+// job runs these under sudo with REGALIA_EXPECT_ROOT_TESTS=1, which makes a skip a failure.
+const nobody = 65534
+
+// rootWorldOwnedBy needs root; its callers hold the gate (the census in tests/ reads gates per test function).
+func rootWorldOwnedBy(t *testing.T, owner uint32) *world {
+	t.Helper()
+	w := newWorld(t)
+	for _, path := range []string{w.directory, w.path("admission.json"), w.path("boot-session")} {
+		if err := os.Chown(path, int(owner), int(owner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return w
+}
+
+func (w *world) gateFor(owner, sessionOwner uint32) Status {
+	w.t.Helper()
+	gate, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"),
+		OwnerUID: owner, SessionOwnerUID: sessionOwner,
+		Boottime: func() (int64, error) { return w.now, nil }, BootID: func() (string, error) { return testBoot, nil }})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return gate.Check(context.Background())
+}
+
+func TestAsRootAFileOwnedBySomeoneElseIsNotAdmitted(t *testing.T) {
+	if os.Getenv("REGALIA_EXPECT_ROOT_TESTS") == "1" && os.Geteuid() != 0 {
+		t.Fatalf("REGALIA_EXPECT_ROOT_TESTS=1 and euid %d: the as-root half this run was meant to reach was not reached", os.Geteuid())
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("chown to another user needs root")
+	}
+	w := rootWorldOwnedBy(t, nobody)
+	if status := w.gateFor(nobody, nobody); !status.Admitted {
+		t.Fatalf("the directory owner's own admission was refused: %+v", status)
+	}
+	status := w.gateFor(nobody+1, nobody)
+	if status.Admitted || !strings.Contains(status.Reason, "its directory is not one only its owner or root can write") {
+		t.Fatalf("status = %+v", status)
+	}
+	// The owner's directory, someone else's file (only root can make it): the file's own owner check refuses it.
+	w = rootWorldOwnedBy(t, nobody)
+	if err := os.Chown(w.path("admission.json"), nobody+1, nobody+1); err != nil {
+		t.Fatal(err)
+	}
+	status = w.gateFor(nobody, nobody)
+	if status.Admitted || !strings.Contains(status.Reason, "the admission file: it is not a file only its owner or root can write") {
+		t.Fatalf("another uid's admission file in the owner's directory: status = %+v", status)
+	}
+}
+
+func TestAsRootTheBootSessionIsHeldToItsOwnOwnerNotTheLeaseServices(t *testing.T) {
+	if os.Getenv("REGALIA_EXPECT_ROOT_TESTS") == "1" && os.Geteuid() != 0 {
+		t.Fatalf("REGALIA_EXPECT_ROOT_TESTS=1 and euid %d: the as-root half this run was meant to reach was not reached", os.Geteuid())
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("chown to another user needs root")
+	}
+	w := rootWorldOwnedBy(t, nobody)
+	if status := w.gateFor(nobody, nobody); !status.Admitted {
+		t.Fatalf("the session owner's own session was refused: %+v", status)
+	}
+	status := w.gateFor(nobody, nobody+1)
+	if status.Admitted || !strings.Contains(status.Reason, "the boot session: its directory is not one only its owner or root can write") {
+		t.Fatalf("status = %+v", status)
+	}
+	// The session owner's directory, someone else's session file: the file's own owner check refuses it.
+	w = rootWorldOwnedBy(t, nobody)
+	if err := os.Chown(w.path("boot-session"), nobody+1, nobody+1); err != nil {
+		t.Fatal(err)
+	}
+	status = w.gateFor(nobody, nobody)
+	if status.Admitted || !strings.Contains(status.Reason, "the boot session: it is not a file only its owner or root can write") {
+		t.Fatalf("another uid's boot session in the owner's directory: status = %+v", status)
 	}
 }
 
@@ -519,7 +629,7 @@ func TestEveryChangeOfAnswerIsReportedOnceWithItsReasonAndEpoch(t *testing.T) {
 	// admitted again, then the file is simply not rewritten: time alone ends it
 	w.put(good(w.now))
 	w.gate.Check(ctx)
-	w.now += 290_000
+	w.now += 25_000
 	w.gate.Check(ctx)
 	if len(w.events) != 4 || !w.events[2].Admitted || w.events[3].Admitted || w.events[3].Reason != "the admission ran out" {
 		t.Fatalf("after expiry: %+v", w.events)
@@ -543,7 +653,7 @@ func TestRequestedAfterNeedsAnAdmissionAskedForLater(t *testing.T) {
 	if w.gate.RequestedAfter(ctx, requested) || w.gate.RequestedAfter(ctx, requested+1) {
 		t.Fatal("a lease asked for at or before the moment is accepted")
 	}
-	w.now += 290_000
+	w.now += 25_000
 	if w.gate.RequestedAfter(ctx, 0) {
 		t.Fatal("an admission that ran out vouches for a request time")
 	}

@@ -60,17 +60,22 @@ MODE = 0o640                               # every trail: its writer writes, its
 OWN = ("seq", "prev")
 
 # name: (where, writer, stream at the collector, the group its shipper reads it through).
-# "state_dir", "admission_dir": the configuration's. Each service trail has a reader group of its own
+# "state_dir", "admission_log_dir": the configuration's (admission's trail in a directory of its own, #349). Each service trail has a reader group of its own
 # (#286): its writer belongs to it and gives the trail that group (append's `group`), and its shipper
 # belongs to it and to nothing of the writer's, so the shipper reads the trail and no other file the writer
 # makes. The operator tools' trails take TOOL_GROUP from their directory, which holds nothing else.
 TRAILS = {
     "sync": ("state_dir/sync-audit.jsonl", "regalia-sync.service (user regalia-sync), node", "sync", "regalia-audit-sync"),
-    "admission": ("admission_dir/audit.jsonl", "regalia-admission.service, node", "admission", "regalia-audit-admission"),
+    "admission": ("admission_log_dir/audit.jsonl", "regalia-admission.service, node", "admission", "regalia-audit-admission"),
     "enrol": (TOOL_DIR + "/enrol.jsonl", "regalia-node enrol, root, by hand, node", "enrol", TOOL_GROUP),
     # #303: regalia-authtime's transitions (authenticated or not, and why) and each clear of the chrony latch;
     # both writers are root, the directory is root:regalia-audit-time 0750 (regalia.tmpfiles.conf)
     "time": ("/var/log/regalia-time/time.jsonl", "regalia-authtime.service and regalia-node time-clear, root, node", "time", "regalia-audit-time"),
+    # #66 B3: regalia-esp-advance's runs, each one before the TPM anchor moves (the chain written to the ESP, its epoch and
+    # digest) and each refusal; root, the directory root:regalia-audit-esp-advances 0750 (regalia.tmpfiles.conf)
+    # named esp-advances, not esp-advance: the shipper's metrics file is <trail>.prom, and esp-advance.prom is the unit's own
+    "esp-advances": ("/var/log/regalia-esp-advance/esp-advances.jsonl", "regalia-esp-advance.service, root, node", "esp-advances",
+                    "regalia-audit-esp-advances"),
     "reanchor": (TOOL_DIR + "/reanchor.jsonl", "reanchor.py, root, by hand", "reanchor", TOOL_GROUP),
     "recount": (TOOL_DIR + "/recount.jsonl", "recount.py, root, by hand", "recount", TOOL_GROUP),
     # #75: update.py's BootNext, promotion and removal of a boot entry, each REQUEST before the change, with the
@@ -78,6 +83,9 @@ TRAILS = {
     "update": (TOOL_DIR + "/update.jsonl", "update.py, root, by hand, node", "update", TOOL_GROUP),
     "recovery-key": (TOOL_DIR + "/recovery-key.jsonl", "recovery-key.sh, root, by hand", "recovery-key", TOOL_GROUP),
     "recovery-reconcile": (TOOL_DIR + "/recovery-reconcile.jsonl", "recovery-reconcile.py, root, by hand", "recovery-reconcile", TOOL_GROUP),
+    # #432 (G6): the lone survivor's etcd take-over and the fenced servers' rejoin, each step a REQUEST before it acts,
+    # then its ALLOW (what it did: the cluster, the revisions, the state epoch, the divergent tail's digest) or DENY
+    "survivor": (TOOL_DIR + "/survivor.jsonl", "takeover.py and rejoin.py, root, by hand, node", "survivor", TOOL_GROUP),
 }
 
 
@@ -90,7 +98,7 @@ def canonical(obj):
 
 
 def where(name, cfg=None):
-    """The path of trail `name`; a configuration supplies state_dir and admission_dir."""
+    """The path of trail `name`; a configuration supplies state_dir and admission_log_dir."""
     if name not in TRAILS:
         raise Refused("no trail is called %r" % (name,))
     path = TRAILS[name][0]
@@ -100,6 +108,47 @@ def where(name, cfg=None):
     if not cfg or base not in cfg:
         raise Refused("the trail %s is under the configuration's %s: give the configuration" % (name, base))
     return os.path.join(cfg[base], rest)
+
+
+NODE_CONFIG = "/etc/regalia/node.json"         # 0644 root's (enrol.py _install): the shipper's user reads it
+SHIPPER = "/usr/bin/regalia-audit-ship"
+
+
+def resolve(name, config=NODE_CONFIG):
+    """The absolute path of trail `name`, from the registry alone (#580): where every shipper and pruner finds its trail,
+    so no file of its own (the old /etc/regalia/audit-ship/<trail>.env, which nothing ever wrote) can name another.
+    A trail under the configuration's state_dir or admission_log_dir reads ONLY those keys of `config`, each an absolute
+    path. FAILS CLOSED: an unknown trail, an unreadable or malformed configuration, a key missing or relative, or a
+    result that is not absolute is Refused, and there is no default path to fall back to."""
+    if name not in TRAILS:
+        raise Refused("no trail is called %r: nothing is resolved" % (name,))
+    location = TRAILS[name][0]
+    cfg = None
+    if not location.startswith("/"):
+        base = location.partition("/")[0]
+        try:
+            with open(config, "rb") as f:
+                doc = json.loads(f.read(1024 * 1024 + 1))
+        except (OSError, ValueError) as failure:
+            raise Refused("the trail %s is under the configuration's %s, and %s cannot be read: %s" % (name, base, config, failure)) from None
+        value = doc.get(base) if isinstance(doc, dict) else None
+        if not isinstance(value, str) or not os.path.isabs(value):
+            raise Refused("the trail %s is under the configuration's %s, and %s does not give it as an absolute path" % (name, base, config))
+        cfg = {base: value}
+    path = where(name, cfg)
+    if not os.path.isabs(path):
+        raise Refused("the trail %s resolves to %r, not an absolute path" % (name, path))
+    return os.path.normpath(path)
+
+
+def exec_ship(name, args, config=NODE_CONFIG, shipper=SHIPPER, execv=None):
+    """regalia-audit-ship@<name>'s ExecStart (#580): the shipper exec'd in this same process with the trail's path from
+    the registry (resolve), so nothing between the unit and the shipper can supply another. Never returns: Refused if
+    the path cannot be resolved, and the exec replaces this process."""
+    path = resolve(name, config)
+    argv = [shipper, "-trail", name, "-path", path] + list(args)
+    (execv or os.execv)(shipper, argv)
+    raise Refused("the shipper did not start")                # reached only with a stand-in execv that returns
 
 
 def _last_line(fd):
@@ -647,6 +696,28 @@ def main(argv):
         except (Refused, OSError, ValueError) as failure:
             print("REFUSED: %s" % failure, file=sys.stderr)
             return 1
+    if len(argv) >= 2 and argv[0] == "exec-ship":
+        # exec-ship <trail> [--config <node.json>] -- <the shipper's other flags>: regalia-audit-ship@'s ExecStart (#580)
+        rest = argv[2:]
+        config = NODE_CONFIG
+        if rest[:1] == ["--config"] and len(rest) >= 2:
+            config, rest = rest[1], rest[2:]
+        if rest[:1] != ["--"]:
+            print("REFUSED: exec-ship <trail> [--config <path>] -- <shipper flags>", file=sys.stderr)
+            return 2
+        try:
+            exec_ship(argv[1], rest[1:], config)
+        except (Refused, OSError) as failure:
+            print("REFUSED: %s" % failure, file=sys.stderr)
+            return 2
+    if len(argv) == 10 and argv[0] == "prune" and argv[2::2] == ["--trail", "--site", "--client-cert", "--receipt-keys"]:
+        # prune <shipper head file> --trail <name> ...: the trail's path from the registry (#580), as exec-ship finds it
+        try:
+            print(prune(resolve(argv[3]), argv[1], argv[3], argv[5], client_identity(argv[7]), receipt_keys(argv[9])))
+            return 0
+        except (Refused, OSError, ValueError) as failure:
+            print("REFUSED: %s" % failure, file=sys.stderr)
+            return 2
     if len(argv) == 11 and argv[0] == "prune" and argv[3::2] == ["--trail", "--site", "--client-cert", "--receipt-keys"]:
         try:
             print(prune(argv[1], argv[2], argv[4], argv[6], client_identity(argv[8]), receipt_keys(argv[10])))
@@ -655,7 +726,8 @@ def main(argv):
             print("REFUSED: %s" % failure, file=sys.stderr)
             return 1
     print("usage: trails.py append <trail> < event.json | verify <path> [<expected head>] | unanswered <trail> [key=value ...]"
-          " | prune <path> <shipper head file> --trail <name> --site <site> --client-cert <pem> --receipt-keys <file>", file=sys.stderr)
+          " | prune [<path>] <shipper head file> --trail <name> --site <site> --client-cert <pem> --receipt-keys <file>"
+          " | exec-ship <trail> [--config <node.json>] -- <shipper flags>", file=sys.stderr)
     return 2
 
 

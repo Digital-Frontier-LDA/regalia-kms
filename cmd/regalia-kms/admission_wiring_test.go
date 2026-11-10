@@ -41,7 +41,7 @@ import (
 // The lease service's user (runtime_admission_owner) is the one running the test, so the admission
 // file the test writes is trusted; the boot session it writes is not, because that file stays root's
 // whoever the lease service runs as (regalia-kms#191). So as anyone but root the gate refuses on the
-// session, and as root (CI's privileged job) it admits.
+// session, and as root (run by hand: CI's Go tests run as the runner's user) it admits.
 func TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted(t *testing.T) {
 	directory := t.TempDir()
 	me, err := user.Current()
@@ -87,7 +87,8 @@ func TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted(t *testing.T) {
 	document, _ := json.Marshal(map[string]any{
 		"schema": admission.Schema, "node_id": "site-a", "session_id": session, "boot_id": boot, "epoch": 3,
 		"manifest_digest": strings.Repeat("d1", 32), "hsm_serials": "DENK0404144", "lease_issued_at": "2026-10-02T09:00:00Z",
-		"requested_boottime_ms": now - 1000, "serve_until_boottime_ms": now + 60_000, "reason": "",
+		"requested_boottime_ms": now - 1000, "cluster_id": strings.Repeat("c1", 8), "state_epoch": 0, "state_revision": 1,
+		"session_key": strings.Repeat("e7", 32), "serve_until_boottime_ms": now + 25_000, "mode": "lease", "reason": "",
 	})
 	if err := os.Chmod(directory, 0o755); err != nil {
 		t.Fatal(err)
@@ -100,18 +101,46 @@ func TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// owner item 212, as any user: the daemon's gate reads the survivor's directives where survivor.py keeps them
+	if gate.DirectivesStore() != admission.DirectivesPath {
+		t.Fatalf("the daemon's gate reads the directives at %q, not %s", gate.DirectivesStore(), admission.DirectivesPath)
+	}
+	if os.Getenv("REGALIA_EXPECT_ROOT_TESTS") == "1" && os.Geteuid() != 0 {
+		t.Fatalf("REGALIA_EXPECT_ROOT_TESTS=1 and euid %d: the as-root half this run was meant to reach was not reached", os.Geteuid())
+	}
 	if os.Getuid() != 0 {
 		if status := gate.Check(context.Background()); status.Admitted || !strings.Contains(status.Reason, "the boot session") {
 			t.Fatalf("a boot session root did not write was accepted, or the admission file of the lease service's user was refused: %+v", status)
 		}
 		return
 	}
-	// As root (CI's privileged job): the same wiring admits, and the runner reaches the executor.
+	// As root (CI's privileged-and-fuzz job, REGALIA_EXPECT_ROOT_TESTS=1; regalia-8zj): the same wiring admits, and the runner reaches the executor.
 	if !gate.Ready(context.Background()) {
 		t.Fatalf("a current admission file written by root did not admit the node: %+v", gate.Check(context.Background()))
 	}
 	if err := runner.Run(context.Background(), func(context.Context) error { return nil }); err != nil || !base.ran {
 		t.Fatalf("an admitted node was refused: err=%v ran=%v", err, base.ran)
+	}
+	// The same node in recovery reads the survivor's directives where survivor.py keeps them (owner item 212): the
+	// gate the daemon builds names that store, never "no store configured", and refuses by key what it reads there.
+	var recovery map[string]any
+	if err := json.Unmarshal(document, &recovery); err != nil {
+		t.Fatal(err)
+	}
+	recovery["mode"] = "recovery"
+	recovered, _ := json.Marshal(recovery)
+	if err := os.WriteFile(filepath.Join(directory, "admission.json"), recovered, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	status := gate.Check(context.Background())
+	if !status.Recovery || status.Admitted {
+		t.Fatalf("a recovery admission file: %+v", status)
+	}
+	if status.DirectivesError != "" && !strings.Contains(status.DirectivesError, filepath.Dir(admission.DirectivesPath)) {
+		t.Fatalf("the daemon's gate does not read %s: %q", admission.DirectivesPath, status.DirectivesError)
+	}
+	if status.DirectivesError == "" && status.Disabled == nil {
+		t.Fatal("a recovering node read its directives and kept no set")
 	}
 }
 

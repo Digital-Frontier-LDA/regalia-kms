@@ -199,9 +199,11 @@ def scenario(fixture, stop, threads):
     # ---- the servers, each listening on its tunnel address inside its namespace ----------------------------
     servers = {
         "b": sync.Server("b", stores["b"], freshness["b"], fixture.peers["b"]["attester"], fixture.peers["b"]["signer"],
-                         wgsvc.key_at, events["b"].append, clock=lambda: fixture.now),
+                         wgsvc.key_at, events["b"].append, clock=lambda: fixture.now,
+                         floor=fixture.peers["b"]["floor"], applied=lambda: (st.lt.CLUSTER, st.lt.STATE_EPOCH, fixture.revision)),       # D32
         "c": sync.Server("c", stores["c"], freshness["c"], fixture.peers["c"]["attester"], fixture.peers["c"]["signer"],
-                         wgsvc.key_at, events["c"].append, clock=lambda: fixture.now),
+                         wgsvc.key_at, events["c"].append, clock=lambda: fixture.now,
+                         floor=fixture.peers["c"]["floor"], applied=lambda: (st.lt.CLUSTER, st.lt.STATE_EPOCH, fixture.revision)),
     }
     for host, server in servers.items():
         listener = inside(host, lambda host=host: socket.create_server((address[host], sync.PORT), family=socket.AF_INET6))

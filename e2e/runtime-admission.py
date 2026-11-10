@@ -288,13 +288,15 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     fixture.hsm_serials = {"a": [serial]}   # the daemon serves only from a token the manifest lists for this node (#72 G1)
     fixture.setUp()
     world = {"manifest": fixture.m1, "peer_up": True}
-    holder = lease.Holder("a", lt.SESSION, fixture.clock, hbt.simulated_ticks(fixture, fixture.tcti["a"]), str(w / "holder.json"))
+    holder = lease.Holder("a", lt.SESSION, fixture.clock, hbt.simulated_ticks(fixture, fixture.tcti["a"]), str(w / "holder.json"),
+                          **lt.SOURCES)                     # D32: the request's etcd state and session key, as the test lease fixture's
 
     def renew(request):
         if not world["peer_up"]:
             raise ConnectionError("peer b is unreachable")
         manifest = world["manifest"]
-        return lease.issue(manifest, "b", request, fixture.attester, fixture.evidence(lt.SESSION, manifest), fixture.freshness, fixture.signer)
+        return lease.issue(manifest, "b", request, fixture.attester, fixture.evidence(lt.SESSION, manifest), fixture.freshness, fixture.signer,
+                           lt.primed_floor())
     # As on a host: the service knows when the daemon's process started, from the kernel, by its PID.
     def daemon_started():
         return admission.process_started_ms(daemon.pid)
@@ -308,7 +310,9 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     header("2  the lease service's first round: admitted, ready, serving")
     document = round_()
     left = (document["serve_until_boottime_ms"] - admission.boottime_ms()) / 1000
-    ok(document["serve_until_boottime_ms"] > 0 and 280 <= left <= 290, "a lease from b's TPM became an admission of %.0f s (300 s less the margin)" % left, document)
+    full = lease.MAX_LIFETIME - admission.MARGIN
+    ok(document["serve_until_boottime_ms"] > 0 and full - 10 <= left <= full,
+       "a lease from b's TPM became an admission of %.0f s (%d s less the margin)" % (left, lease.MAX_LIFETIME), document)
     status = wait_for(200, 20)
     ok(status == 200, "the daemon is ready (200)", "%s\n%s" % (status, log()[-600:]))
     message = b"regalia-kms runtime admission e2e " + stamp.encode()
@@ -322,7 +326,7 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     # ---- 3 ------------------------------------------------------------------------------------------------
     header("3  renewal stops near the lease's end: the daemon stops by itself at serve_until")
     world["peer_up"] = False
-    fixture.now += lease.MAX_LIFETIME - 22               # authenticated time: the lease has 22 s left, 12 s after the margin
+    fixture.now += lease.MAX_LIFETIME - (admission.MARGIN + 12)   # authenticated time: the lease has 12 s left after the margin
     document = round_()
     left = (document["serve_until_boottime_ms"] - admission.boottime_ms()) / 1000
     ok(0 < left <= 12, "the peer is unreachable; the admission now ends in %.0f s and nobody will rewrite it" % left, document)

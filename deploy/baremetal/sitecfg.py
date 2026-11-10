@@ -25,7 +25,7 @@ network_probe.py checks the result from each zone, so the two can never describe
     }
 
     "boot_mesh": {
-      "node_id": "lisbon",                           # this host's node ID in the membership manifest
+      "node_id": "alder",                           # this host's node ID in the membership manifest
       "interface": "wg-unlock",                      # the running host's WireGuard interface for unlock requests
       "listen_port": 51820,                          # its UDP port, reachable from the peers' declared addresses only
       "address": "10.89.0.1",                        # this node's address inside the tunnel
@@ -38,8 +38,8 @@ network_probe.py checks the result from each zone, so the two can never describe
                                                      #   then routes by default on the card), which this file
                                                      #   cannot show: network_probe.py checks reachability
       "peers": [                                     # the other nodes: where each is, outside and inside the tunnel
-        {"node_id": "porto", "underlay": "198.51.100.7", "address": "10.89.0.2"},
-        {"node_id": "faro", "underlay": "198.51.100.9", "address": "10.89.0.3"}
+        {"node_id": "birch", "underlay": "198.51.100.7", "address": "10.89.0.2"},
+        {"node_id": "acacia", "underlay": "198.51.100.9", "address": "10.89.0.3"}
       ]
     }
 

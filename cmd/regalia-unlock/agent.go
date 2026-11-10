@@ -63,6 +63,18 @@ func (env agentEnv) pause(d time.Duration) bool {
 	return false
 }
 
+// stoppedLine is what the client writes when the system stops it (SIGTERM; systemd at switch-root, or a shutdown),
+// to the unit's console as well as its journal (#572): the volume can open by another way (the console's recovery
+// key) between two of pause's looks, and systemd then stops the unit before the loop sees it, so without this line
+// the console shows the attempts stop with no reason given. When the volume is open it is the loop's own line;
+// otherwise it says the client was stopped before. It names nothing a peer said and holds nothing secret.
+func stoppedLine(volume string, sig os.Signal, opened func() bool) string {
+	if opened() {
+		return fmt.Sprintf("regalia-unlock: %s is open: standing down", volume)
+	}
+	return fmt.Sprintf("regalia-unlock: stopped by the system (%s) before %s opened: standing down", sig, volume)
+}
+
 // agent runs until the volume is open, the key was refused maxAnswers times, -attempts is spent (tests), or
 // nothing can be done (no path from any peer: the console's recovery key is the way). It never decides
 // that the disk stays locked for good: a peer that comes back after an hour is answered then.

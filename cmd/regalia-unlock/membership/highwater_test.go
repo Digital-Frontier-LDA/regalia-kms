@@ -254,3 +254,70 @@ func TestThePolicyIsAskedForLazilyAndOnce(t *testing.T) {
 		t.Errorf("a short policy: %v", err)
 	}
 }
+
+// TestTheRefusalNamesTheTPMsReason is #450 on the Go side: tpmReason gives the same suffix membership._why does, so
+// a refused anchor read says why, and highwater-v1.json holds both readers to the same text.
+func TestTheRefusalNamesTheTPMsReason(t *testing.T) {
+	long := ""
+	for i := 0; i < 300; i++ {
+		long += "x"
+	}
+	for _, c := range []struct {
+		err  error
+		data []byte
+		size int
+		want string
+	}{
+		{errors.New("first\nERROR: TPM_RC_RETRY\n\n"), nil, 8, " (TPM: ERROR: TPM_RC_RETRY)"},
+		{errors.New("\xff" + long), nil, 8, " (TPM: " + long[:200] + ")"},
+		{errors.New("bad \xff byte"), nil, 8, " (TPM: bad � byte)"},
+		{nil, []byte{0, 0, 0}, 8, " (TPM: 3 bytes, not 8)"},
+		{nil, nil, 48, " (TPM: 0 bytes, not 48)"},
+	} {
+		if got := tpmReason(c.err, c.data, c.size); got != c.want {
+			t.Errorf("tpmReason(%q, %d bytes, %d) = %q, want %q", c.err, len(c.data), c.size, got, c.want)
+		}
+	}
+	h := highWater{nv: fakeNV{nv: map[uint32]map[string]any{}, broken: true}}
+	if _, err := h.read8(0x1500016); err == nil || err.Error() != "cannot read 8 bytes from NV index 0x1500016 (TPM: the TPM said no)" {
+		t.Errorf("read8 of an index the TPM does not read: %v", err)
+	}
+}
+
+// TestTheTPMReasonIsTheSameRuleInBoth replays tests/vectors/tpm-reason-v1.json, the Python's _why over raw tool
+// output: the same bytes as an error's text give the same suffix here, so neither reader prints a control character
+// the other would not, and the two cannot drift apart on input neither has seen (#450).
+func TestTheTPMReasonIsTheSameRuleInBoth(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "vectors", "tpm-reason-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		Cases []struct {
+			Name      string `json:"name"`
+			Stderr    string `json:"stderr"`
+			StdoutLen int    `json:"stdout_len"`
+			Size      int    `json:"size"`
+			Suffix    string `json:"suffix"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Cases) < 10 {
+		t.Fatalf("only %d cases in tpm-reason-v1.json", len(v.Cases))
+	}
+	for _, c := range v.Cases {
+		text, err := hex.DecodeString(c.Stderr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var failure error
+		if len(text) > 0 {
+			failure = errors.New(string(text))
+		}
+		if got := tpmReason(failure, make([]byte, c.StdoutLen), c.Size); got != c.Suffix {
+			t.Errorf("%s: tpmReason = %q, the Python's _why = %q", c.Name, got, c.Suffix)
+		}
+	}
+}

@@ -28,6 +28,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from deploy.baremetal import attest, bootcreds, bootnet, espcreds, firewall, membership, sitecfg, uki, unlock
 import tests.test_baremetal_unlock as tub
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "e2e", "lib"))
+import tpmdiag  # noqa: E402  regalia-zga, regalia-a0y: what a TPM failure is diagnosed from
+
 BOOT = os.environ.get("REGALIA_BOOT_DIR", "")
 UNDERLAY = {"a": "192.0.2.10", "b": "198.51.100.7", "c": "198.51.100.9"}
 TUNNEL = {"a": "10.89.0.1", "b": "10.89.0.2", "c": "10.89.0.3"}
@@ -39,6 +42,49 @@ GUEST_MAC = "52:54:00:ab:cd:02"
 # ("recovery key" when that is the only kind of keyslot it knows of, "passphrase or recovery key" otherwise)
 PROMPT = re.compile(rb"Please enter (?:passphrase or )?(?:recovery key|passphrase) for disk (?:root|regalia-root \(root\))")
 OVMF = os.environ.get("REGALIA_OVMF", "/usr/share/OVMF")
+# regalia-a0y: on ubuntu-26.04's QEMU 10.2.1 + swtpm 0.10.1 the FIRMWARE fails to extend a PCR about one boot in
+# fifteen: swtpm answers the PCR_Extend at once, QEMU cancels it (CMD_CANCEL_TPM_CMD) and systemd-stub logs
+# EFI_DEVICE_ERROR. The host's emulation, never the product: a boot that says so fails as exactly that, by name.
+HOST_TPM_FAULT = re.compile(r"Failed to measure data for event \d+: 0x8000000000000007")
+
+
+def host_tpm_fault(console):
+    """The firmware's own line when the host's TPM emulation dropped a measurement (regalia-a0y), or None."""
+    found = HOST_TPM_FAULT.search(console)
+    return found.group(0) if found else None
+
+
+# regalia-kms-a0g: main's run 41741497644 attempt 1 (5ff5fa23) failed with "the ESP did not mount" while passing on the
+# same tree before (job 126164147549) and after (job 126285443219). The mount is the HOST's, before QEMU starts, and the
+# old helper waited a fixed 5 s for <loop>p1, then returned in silence and dropped mount's stderr, so nothing said why.
+# The wait is NOT lengthened and nothing retries: the setup fails as soon as it fails, by name, with what it measured.
+PARTITION_WAIT = 5.0
+
+
+def wait_for_partition(loop, number, timeout=PARTITION_WAIT, exists=None, clock=None, sleep=None):
+    """Polls for <loop>p<number> after `losetup --partscan`. Returns (path, seconds it took to appear, or None if
+    it never did within `timeout`)."""
+    exists, clock, sleep = exists or os.path.exists, clock or time.monotonic, sleep or time.sleep
+    path, start = "%sp%d" % (loop, number), clock()
+    while True:
+        if exists(path):
+            return path, clock() - start
+        if clock() - start >= timeout:
+            return path, None
+        sleep(0.1)
+
+
+def esp_mount_failure(part, appeared_after, mount_rc, mount_stderr, losetup_list, lsblk):
+    """Why the host could not mount the guest's ESP, by name and with what was measured, or None if it mounted.
+    A partition seen late (after the bound) that still mounted is no failure: it passed before, and must still."""
+    if mount_rc == 0:
+        return None
+    if appeared_after is None:
+        head = "HOST LOOP PARTITION NOT READY: %s did not appear within %.1f s of losetup --partscan" % (part, PARTITION_WAIT)
+    else:
+        head = "HOST ESP MOUNT FAILED: %s appeared after %.2f s, then mount -t vfat exited %d" % (part, appeared_after, mount_rc)
+    return "%s\n mount rc=%s stderr: %s\n losetup -l:\n%s\n lsblk:\n%s" % (
+        head, mount_rc, (mount_stderr or "").strip() or "(empty)", losetup_list.rstrip(), lsblk.rstrip())
 run = tub.run
 
 
@@ -83,6 +129,142 @@ def unattended(test, said):
     test.assertRegex(said, PROMPT.pattern.decode())
     test.assertIn("regalia-unlock: gave the key of ", said)
     test.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+
+
+class HostTpmFault(unittest.TestCase):
+    """regalia-a0y's signature, judged without a guest: the firmware's line from runs 39919392188 and 39922567279."""
+
+    def test_the_firmware_s_measurement_failure_is_named(self):
+        console = "EFI stub: WARNING: Failed to measure data for event 1: 0x8000000000000007\r\nLoading Linux ...\n"
+        self.assertEqual(host_tpm_fault(console), "Failed to measure data for event 1: 0x8000000000000007")
+
+    def test_a_good_boot_and_another_error_are_not_it(self):
+        self.assertIsNone(host_tpm_fault("EFI stub: Measured initrd data into PCR 9.\nWelcome to Debian\n"))
+        self.assertIsNone(host_tpm_fault("Failed to measure data for event 1: 0x8000000000000002\n"))   # another status
+
+
+class EspMountFailure(unittest.TestCase):
+    """regalia-kms-a0g, judged without a guest: the host-side ESP setup fails by name, with its measurements."""
+
+    class Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def __call__(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    def test_a_partition_that_never_appears_is_measured_as_none_after_the_bound(self):
+        clock = self.Clock()
+        part, after = wait_for_partition("/dev/loop7", 1, exists=lambda path: False, clock=clock, sleep=clock.sleep)
+        self.assertEqual(part, "/dev/loop7p1")
+        self.assertIsNone(after)
+        self.assertGreaterEqual(clock.now, PARTITION_WAIT)
+        self.assertLess(clock.now, PARTITION_WAIT + 0.2)   # the bound is not lengthened
+
+    def test_a_partition_that_appears_late_reports_how_long_it_took(self):
+        clock = self.Clock()
+        part, after = wait_for_partition("/dev/loop7", 1, exists=lambda path: clock.now >= 0.3, clock=clock, sleep=clock.sleep)
+        self.assertAlmostEqual(after, 0.3, places=6)
+
+    def test_a_missing_partition_is_named_with_mount_s_answer_and_the_loop_state(self):
+        why = esp_mount_failure("/dev/loop7p1", None, 32, "mount: /x: special device /dev/loop7p1 does not exist.\n",
+                                "NAME       SIZELIMIT OFFSET BACK-FILE\n/dev/loop7 0 0 /w/disk.img\n", "loop7 7:7 2G loop\n")
+        self.assertTrue(why.startswith("HOST LOOP PARTITION NOT READY: /dev/loop7p1 did not appear within 5.0 s"), why)
+        for measured in ("mount rc=32", "special device /dev/loop7p1 does not exist", "/dev/loop7 0 0 /w/disk.img", "loop7 7:7 2G loop"):
+            self.assertIn(measured, why)
+
+    def test_a_partition_that_appeared_but_did_not_mount_is_named_apart(self):
+        why = esp_mount_failure("/dev/loop7p1", 0.42, 32, "mount: wrong fs type\n", "", "")
+        self.assertTrue(why.startswith("HOST ESP MOUNT FAILED: /dev/loop7p1 appeared after 0.42 s, then mount -t vfat exited 32"), why)
+        self.assertIn("wrong fs type", why)
+        self.assertIn("stderr: mount: wrong fs type", why)
+
+    def test_esp_itself_fails_by_name_when_the_partition_never_appears_and_still_detaches(self):
+        """The wiring, not only the helpers: OnQemu's own partition() and esp(), with the host's commands faked."""
+        from unittest import mock
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            out = {"--find": "/dev/loop7\n", "-l": "/dev/loop7 0 0 /w/disk.img\n", "-O": "/w/disk.img\n"}
+            if argv[0] == "mount":
+                return subprocess.CompletedProcess(argv, 32, "", "mount: special device /dev/loop7p1 does not exist.\n")
+            if argv[0] == "lsblk":
+                return subprocess.CompletedProcess(argv, 0, "loop7 7:7 2G loop\n", "")
+            key = next((a for a in argv if a in out), None)
+            return subprocess.CompletedProcess(argv, 0, out.get(key, ""), "")
+
+        class Host(unittest.TestCase):
+            partition, esp = OnQemu.partition, OnQemu.esp
+
+            def runTest(self):
+                pass
+
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        host = Host()
+        host.image, host.d = "/w/disk.img", d
+        module = sys.modules[__name__]
+        with mock.patch.object(module, "run", fake_run), \
+                mock.patch.object(module, "wait_for_partition", lambda loop, number: (loop + "p%d" % number, None)), \
+                mock.patch.object(module.os.path, "realpath", lambda path: path):
+            with self.assertRaises(host.failureException) as raised:
+                host.esp({})
+            host.doCleanups()
+        self.assertTrue(str(raised.exception).startswith("HOST LOOP PARTITION NOT READY: /dev/loop7p1"), raised.exception)
+        for measured in ("mount rc=32", "special device /dev/loop7p1", "/dev/loop7 0 0 /w/disk.img", "loop7 7:7 2G loop"):
+            self.assertIn(measured, str(raised.exception))
+        self.assertIn(["losetup", "-d", "/dev/loop7"], calls)
+        self.assertNotIn(["umount", d + "/esp"], calls)   # it never mounted
+
+    def test_esp_itself_passes_a_late_partition_that_mounts_and_says_it_was_late(self):
+        """regalia-01 F1, on the wiring: p1 not seen within the bound, then mounted; that passed on main, and does."""
+        import contextlib
+        import io
+        import tempfile
+        from unittest import mock
+        calls, d, boot = [], tempfile.mkdtemp(), tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        self.addCleanup(shutil.rmtree, boot, True)
+        for sub in ("esp/loader/credentials", "esp/EFI/BOOT"):
+            os.makedirs(os.path.join(d, sub))
+        with open(os.path.join(boot, "e2e.efi"), "wb") as f:
+            f.write(b"stub")
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            out = {"--find": "/dev/loop7\n", "-O": "/w/disk.img\n"}
+            key = next((a for a in argv if a in out), None)
+            return subprocess.CompletedProcess(argv, 0, out.get(key, ""), "")
+
+        class Host(unittest.TestCase):
+            partition, esp = OnQemu.partition, OnQemu.esp
+
+            def runTest(self):
+                pass
+
+        host = Host()
+        host.image, host.d, host.chain = "/w/disk.img", d, {}
+        module, said = sys.modules[__name__], io.StringIO()
+        with mock.patch.object(module, "run", fake_run), mock.patch.object(module, "BOOT", boot), \
+                mock.patch.object(module, "wait_for_partition", lambda loop, number: (loop + "p%d" % number, None)), \
+                mock.patch.object(module.os.path, "realpath", lambda path: path), contextlib.redirect_stderr(said):
+            files = host.esp({"x": b"1"})
+            host.doCleanups()
+        self.assertEqual(files, {"x.cred": b"1"})
+        self.assertIn("was not seen within 5.0 s; mount succeeded anyway", said.getvalue())
+        self.assertIn(["umount", d + "/esp"], calls)
+
+    def test_a_mounted_esp_is_no_failure_even_when_its_partition_was_seen_late(self):
+        self.assertIsNone(esp_mount_failure("/dev/loop7p1", 0.1, 0, "", "", ""))
+        self.assertIsNone(esp_mount_failure("/dev/loop7p1", None, 0, "", "", ""))   # regalia-01 F1: passed on main, still passes
+
+    def test_an_empty_stderr_still_says_so(self):
+        self.assertIn("stderr: (empty)", esp_mount_failure("/dev/loop7p1", None, 32, "", "", ""))
 
 
 @unittest.skipUnless(os.environ.get("REGALIA_EXPECT_QEMU") == "1", "needs a guest built by e2e/unlock-boot-qemu.sh")
@@ -227,11 +409,8 @@ class OnQemu(tub.OnSwtpm):
             if os.path.realpath(run(["losetup", "-n", "-O", "BACK-FILE", loop], capture_output=True, text=True).stdout.strip() or "/") == os.path.realpath(self.image):
                 run(["losetup", "-d", loop], capture_output=True)
         self.addCleanup(detach)
-        for _ in range(50):
-            if os.path.exists("%sp%d" % (loop, number)):
-                break
-            time.sleep(0.1)
-        return loop, "%sp%d" % (loop, number)
+        part, self.partition_appeared_after = wait_for_partition(loop, number)
+        return loop, part
 
     def esp(self, named, image="e2e"):
         """Puts exactly these credentials ({name: bytes}) in the ESP's loader/credentials, as <name>.cred, and
@@ -241,9 +420,17 @@ class OnQemu(tub.OnSwtpm):
         loop, part = self.partition(1)
         mnt = self.d + "/esp"
         os.makedirs(mnt, exist_ok=True)
-        mounted = run(["mount", "-t", "vfat", part, mnt], capture_output=True).returncode == 0
+        mount = run(["mount", "-t", "vfat", part, mnt], capture_output=True, text=True)
+        mounted = mount.returncode == 0
         try:
-            self.assertTrue(mounted, "the ESP did not mount")
+            if not mounted:
+                self.fail(esp_mount_failure(part, self.partition_appeared_after, mount.returncode, mount.stderr,
+                                            run(["losetup", "-l"], capture_output=True, text=True).stdout,
+                                            run(["lsblk", "-o", "NAME,MAJ:MIN,SIZE,TYPE,FSTYPE", loop], capture_output=True, text=True).stdout))
+            if self.partition_appeared_after is None:
+                print("the ESP's partition %s was not seen within %.1f s; mount succeeded anyway" % (part, PARTITION_WAIT), file=sys.stderr)
+            elif self.partition_appeared_after >= 1.0:
+                print("the ESP's partition %s appeared after %.2f s" % (part, self.partition_appeared_after), file=sys.stderr)
             where = mnt + "/loader/credentials"
             for name in os.listdir(where):
                 os.unlink(os.path.join(where, name))
@@ -277,7 +464,11 @@ class OnQemu(tub.OnSwtpm):
         ctrl = self.d + "/a.ctrl"
         if os.path.exists(ctrl):
             os.unlink(ctrl)
-        tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--ctrl", "type=unixio,path=" + ctrl],
+        # regalia-a0y's cause was in this swtpm's log at level 20 (an answered PCR_Extend, then CMD_CANCEL_TPM_CMD): written in
+        # self.d (under /tmp, where swtpm's AppArmor profile lets it write), then kept beside the boot's console
+        tpm_log = "%s/swtpm-%s.log" % (self.d, label)
+        tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--ctrl", "type=unixio,path=" + ctrl,
+                                "--log", tpmdiag.log_arg(tpm_log)],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.processes.append(tpm)
         for _ in range(100):
@@ -288,7 +479,9 @@ class OnQemu(tub.OnSwtpm):
                 "-cpu", "host" if kvm else "max", "-m", "1536", "-smp", "2", "-display", "none", "-no-reboot", "-serial", "stdio",
                 "-drive", "if=pflash,format=raw,unit=0,readonly=on,file=%s/OVMF_CODE_4M.fd" % OVMF,
                 "-drive", "if=pflash,format=raw,unit=1,file=" + variables,
-                "-drive", "file=%s,format=raw,if=virtio" % self.image,
+                # The guest's disk is the first boot option, whatever OVMF would order: ubuntu-26.04's (fresh variables, a
+                # virtio NIC) tried PXE and HTTP boot first, about 60 s each, and boot 1 asked after 158 s (regalia-oiq)
+                "-drive", "file=%s,format=raw,if=none,id=boot" % self.image, "-device", "virtio-blk-pci,drive=boot,bootindex=0",
                 "-netdev", "tap,id=n0,ifname=tap0,script=no,downscript=no", "-device", "virtio-net-pci,netdev=n0,mac=%s" % GUEST_MAC,
                 "-chardev", "socket,id=chrtpm,path=" + ctrl, "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-tis,tpmdev=tpm0"]
         if enrol_disk:
@@ -339,7 +532,17 @@ class OnQemu(tub.OnSwtpm):
         qemu.wait(30)
         tpm.terminate()
         tpm.wait(30)
+        if os.path.exists(tpm_log):
+            shutil.copyfile(tpm_log, "%s/swtpm-%s.log" % (BOOT, label))      # e2e/unlock-boot-qemu.sh keeps it on a failure
         text = said.decode(errors="replace")
+        fault = host_tpm_fault(text)
+        if fault:
+            # a distinct outcome, never retried in silence: the boots share one TPM and one disk, so a boot run again
+            # is not the same boot; the shell runner counts these and says so (e2e/unlock-boot-qemu.sh)
+            print("\nHOST TPM EMULATION FAULT (regalia-a0y) in boot %s: %s" % (label, fault), file=sys.stderr)
+            self.fail("boot %s: HOST TPM EMULATION FAULT (regalia-a0y): the firmware could not measure (%s); the host's "
+                      "QEMU/swtpm, not the product. The job runs on ubuntu-24.04 for this reason (.github/workflows/ci.yml)"
+                      % (label, fault))
         print("\n----- boot %s (%s): %d lines of console; the lines that matter:" % (label, "KVM" if kvm else "TCG", text.count("\n")), file=sys.stderr)
         for line in text.splitlines():
             if re.search(r"REGALIA-E2E|regalia-unlock|wg-boot|Please enter|time limit|cryptsetup\[", line):
@@ -478,7 +681,8 @@ class OnQemu(tub.OnSwtpm):
         print("boot 2: %s" % meminit.strip(), file=sys.stderr)
         self.assertRegex(meminit, r"heap alloc:on")
         self.assertRegex(meminit, r"heap free:on")
-        self.assertRegex(said, r"regalia-unlock: /dev/mapper/root is open: standing down|Stopped regalia-unlock\.service")
+        # the client's own line (#412), not PID 1's "Stopped" status, which a `quiet` command line hides (#413)
+        self.assertIn("regalia-unlock: /dev/mapper/root is open: standing down", said)
         # PCR 12 is what espcreds computes from the ESP's files, and nothing moved it after the initrd
         booted = booted_pcrs(said)
         self.assertIsNotNone(booted)
@@ -709,7 +913,12 @@ class OnQemu(tub.OnSwtpm):
             if n + 1 in attempts:                                # and it did pause that long: no hot loop
                 self.assertGreaterEqual(attempts[n + 1][0] - arrived, pause - 2, "attempt %d came early" % (n + 1))
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
-        self.assertRegex(said, r"regalia-unlock: /dev/mapper/root is open: standing down|Stopped regalia-unlock\.service")
+        # Here the recovery key opened root while the client sat in its backoff, and systemd stopped it at switch-root
+        # between two of its looks: the stop handler says the client's own line on the way out (#572), as the loop does
+        # when it sees root open itself. The test report's count, written to /dev/console whatever the command line,
+        # proves independently that no client survived into the system.
+        self.assertIn("regalia-unlock: /dev/mapper/root is open: standing down", said)
+        self.assertIn("REGALIA-E2E-CLIENT processes=0", said)
         no_shell(self, said)
         self.assertEqual(self.events[since:], [])
 
@@ -767,8 +976,10 @@ class OnQemu(tub.OnSwtpm):
         """The guest's TPM anchor moved to the tip of `envelopes` while the guest is off (what regalia-esp-advance
         does on a running host, after the ESP holds the chain: node.esp_advance)."""
         sock = self.d + "/a-off.sock"
+        tpm_log = self.d + "/swtpm-anchor.log"
         tpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-a" % self.d, "--server", "type=unixio,path=" + sock,
-                                "--ctrl", "type=unixio,path=%s.ctrl" % sock, "--flags", "not-need-init,startup-clear"],
+                                "--ctrl", "type=unixio,path=%s.ctrl" % sock, "--flags", "not-need-init,startup-clear",
+                                "--log", tpmdiag.log_arg(tpm_log)],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             for _ in range(100):
@@ -785,6 +996,8 @@ class OnQemu(tub.OnSwtpm):
         finally:
             tpm.terminate()
             tpm.wait(30)
+            if os.path.exists(tpm_log):
+                shutil.copyfile(tpm_log, BOOT + "/swtpm-anchor.log")   # self.d is removed after the test; the script keeps BOOT's
 
 
 if __name__ == "__main__":

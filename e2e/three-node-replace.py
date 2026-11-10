@@ -3,7 +3,8 @@
 (e2e/lib/threenode.py, v4 since #199: each node its real services in its own namespace against its own TPM, the nodes
 signing their own heartbeats; no authority host).
 
-    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-replace.py
+    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> REGALIA_AUDIT_BIN=<dir with regalia-audit-ship, regalia-audit-collector> \
+        sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN python3 -Es e2e/three-node-replace.py
 
 IT CHANGES THE MACHINE (namespaces, interfaces, loop devices, dm-crypt mappings, transient units), so it runs
 only on a GitHub-hosted runner, or on a throwaway host whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
@@ -24,6 +25,10 @@ with new identities and keeps c as RETIRED, a tombstone whose identities are nev
      lease; and through a service tunnel forced open by hand, a's sync refuses it by name (RETIRED). Its TPM posing
      as c2 (refused on the EK and AK the manifest pins for c2) is NOT covered here: replacement.py's unit tests
      cover it (test_poc_16_5_the_old_hardware_is_refused_by_every_decision).
+  6  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector (c2's, added mid-run,
+     and old c's once powered back, included), and this scenario's decisions are there by name, each in the stream of the
+     node that made it: b's move to epoch 2 from a, c2's unlocks and leases through a and through b, b's unlock through
+     c2, a's refusal of old c by name, and no lease issued to old c
 
 Not here: restoring the service keys onto c2's HSM (the DKEK domain, #64); `enrol --replace` as the operator's
 command (#279, merged: the fixture enrolls c2 as it enrolls every node, and starts its heartbeat counter at 0, so it
@@ -101,6 +106,7 @@ def scenario(cluster):
     ok(said is not None and "ek_name of c2 is already used (ek_name of c)" in said,
        "root-signed, one giving c2 the retired c's EK is refused: the tombstone keeps it (%s)" % (said or "accepted")[:90])
     since = time.time()
+    replaced_at = since                              # for step 6
     cluster.replace("c", "c2")                       # #199: the root's envelope given to a, as advance() gives an epoch
     took = until(lambda: all(cluster.node(name).store().load()["epoch"] == 2 for name in ("a", "b"))
                  and any(e.get("event") == "sync-apply" and e.get("peer") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
@@ -117,14 +123,17 @@ def scenario(cluster):
     cluster.enrol("c2", peers=["a", "b"])
     for name in ("a", "b"):
         cluster.start(name, SERVICES)
+    windows = {}                                     # the peer c2 had alone -> (start, end), for step 6
     for alone, other in (("a", "b"), ("b", "a")):
         cluster.stop(other)
+        began = time.time()
         got = cluster.unlock("c2")
         ok(got["rc"] == 0 and got["peer"] == alone and got["marker"],
            "U: c2, with only %s up, opened its volume through %s's keyslot" % (alone, alone), got)
         cluster.start("c2", SERVICES)
         ok(bool(until(lambda: cluster.lease("c2") and cluster.lease_issuer("c2") == alone, 150, 3)),
            "L: c2 holds a lease %s issued" % alone, cluster.journal("c2", "admission")[-400:])
+        windows[alone] = (began, time.time())
         cluster.stop("c2")
         cluster.start(other, SERVICES)
 
@@ -134,10 +143,12 @@ def scenario(cluster):
     cluster.stop("a")
     cluster.stop("b")
     cluster.start("c2", SERVICES)
+    through_c2 = time.time()
     got = cluster.unlock("b")
     ok(got["rc"] == 0 and got["peer"] == "c2" and got["marker"], "U: b, with only c2 up, opened its volume through c2's keyslot",
        {"client": got, "c2 decided": [{k: e.get(k) for k in ("event", "subject", "outcome", "reason")} for e in cluster.trail("c2")
                                       if e.get("event", "").startswith(("unlock", "sync-heartbeat"))][-6:]})
+    through_c2_end = time.time()
     for name in ("a", "b"):
         cluster.start(name, SERVICES)
 
@@ -151,6 +162,7 @@ def scenario(cluster):
     got = cluster.unlock("c", timeout=120, rounds=2)
     ok(got["rc"] != 0 and got["peer"] is None, "N: c, from its own chain (epoch 1) and its paths, gets no key", got)
     since = time.time()
+    back_at = since                                  # old c powered back: from here no lease for it anywhere (step 6)
     cluster.start("c", SERVICES)
     off = until(lambda: all(as_wg(service_key) not in cluster.wg_peers(p, "wg-svc") for p in peers), 60, 2)
     time.sleep(30)
@@ -162,6 +174,7 @@ def scenario(cluster):
     # before any operation (sync.peer_of). (On the unlock side a's
     # listener answers no address of a node that may not request: closed unanswered, by design, with nothing to record.)
     since = time.time()
+    forced_at = since
     c_address = threenode.wgsvc.address(service_key)
     cluster.nodes["a"].in_ns("wg", "set", "wg-svc", "peer", as_wg(service_key), "allowed-ips", c_address + "/128",
                              "endpoint", "%s:51821" % cluster.nodes["c"].underlay)
@@ -169,6 +182,32 @@ def scenario(cluster):
                            and "c is RETIRED under epoch 2" in e.get("reason", "") and e.get("at", 0) >= since], 120, 3)
     ok(bool(named) and not cluster.lease("c"), "and through a tunnel forced open by hand, a's sync refuses c's requests by name: c is RETIRED under epoch 2",
        {"a denied": named, "c": cluster.journal("c", "admission")[-300:]})
+
+    header("6  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector, for the node that recorded it")
+    # The windows compare this harness's clock with the nodes' own trail "at": sound because the namespaces share one
+    # kernel clock. Each bound is taken BEFORE the action it bounds, so a late one only fails. The converse needs no
+    # sequence bound here: old c was powered off from step 2 until back_at, so nothing could be issued to it in between.
+    wrong = cluster.audit_complete()
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in cluster.nodes for t, _, _ in threenode.AUDIT_TRAILS}
+    ok(wrong == {}, "every node's sync, admission and ESP-advance trail (c2's and old c's included) is written and in the collector line for "
+       "line: sequence from 1, chained from genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s"
+       % counts, {"%s.%s" % k: v for k, v in wrong.items()})
+    ok(cluster.moved_by_sync("b", replaced_at, 2) == "a", "b's move to epoch 2 (c RETIRED, c2 ACTIVE) is in b's stream, by a sync round from a",
+       cluster.moved_by_sync("b", replaced_at, 2))
+    within = lambda end: (lambda at: isinstance(at, int) and at <= int(end))
+    unlocks = {alone: bool(cluster.audit_has(alone, "sync", since=start, event="unlock", subject="c2", outcome="ALLOW", at=within(end)))
+               for alone, (start, end) in windows.items()}
+    ok(len(unlocks) == 2 and all(unlocks.values()), "c2's unlock with only a up, and with only b up, are each in that peer's stream", unlocks)
+    leases = {alone: bool(cluster.audit_has(alone, "sync", since=start, event="sync-lease", subject="c2", outcome="ALLOW", at=within(end)))
+              for alone, (start, end) in windows.items()}
+    ok(len(leases) == 2 and all(leases.values()), "c2's lease from a, and from b, are each in its issuer's stream", leases)
+    ok(bool(cluster.audit_has("c2", "sync", since=through_c2, event="unlock", subject="b", outcome="ALLOW", at=within(through_c2_end))),
+       "b's unlock through c2 (step 4) is in c2's stream: the new node gave bootstrap")
+    by_name = cluster.audit_has("a", "sync", since=forced_at, outcome="DENY", event=lambda e: isinstance(e, str) and e.startswith("sync"),
+                                reason=lambda r: bool(r) and "c is RETIRED under epoch 2" in r)
+    ok(bool(by_name), "a's refusal of old c's requests by name (c is RETIRED under epoch 2), through the tunnel forced open, is in a's stream")
+    late = [e for p in ("a", "b", "c2") for e in cluster.audit_has(p, "sync", since=back_at, event="sync-lease", subject="c", outcome="ALLOW")]
+    ok(not late, "and the collector holds no lease issued to old c by a, b or c2 since it was powered back", late)
 
 
 def main():
@@ -191,7 +230,7 @@ def main():
         print("three-node-replace: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work)
+    cluster = threenode.Cluster(work, audit=True)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once

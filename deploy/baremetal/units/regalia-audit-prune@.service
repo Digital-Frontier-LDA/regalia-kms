@@ -19,14 +19,14 @@ Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/depl
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/regalia/audit-ship.env
-EnvironmentFile=/etc/regalia/audit-ship/%i.env
-ExecStart=/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune ${TRAIL_PATH} /var/lib/regalia-audit-ship/%i.head.json \
+# the trail's path from the registry (trails.py resolve, #580), as the shipper's: no per-trail file names it
+ExecStart=/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune /var/lib/regalia-audit-ship/%i.head.json \
     --trail %i --site ${SITE} --client-cert /etc/regalia/audit-ship/client.crt --receipt-keys /etc/regalia/audit-ship/collector-receipt.pub
 CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=-/var/lib/regalia-sync -/run/regalia/admission -/var/log/regalia -/var/log/regalia-time
+ReadWritePaths=-/var/lib/regalia-sync -/var/log/regalia-admission -/var/log/regalia -/var/log/regalia-time -/var/log/regalia-esp-advance
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

@@ -3,7 +3,8 @@
 each node its real services in its own namespace against its own TPM, the nodes signing their own heartbeats; no
 authority host; the owner's keys on a SoftHSM token, signed through the real owner.py halves).
 
-    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-outage.py
+    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> REGALIA_AUDIT_BIN=<dir with regalia-audit-ship, regalia-audit-collector> \
+        sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN python3 -Es e2e/three-node-outage.py
 
 IT CHANGES THE MACHINE (namespaces, interfaces, loop devices, dm-crypt mappings, transient units), so it runs
 only on a GitHub-hosted runner, or on a throwaway host whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
@@ -23,6 +24,10 @@ then the other two by themselves, through that node; then the nodes sign their o
      (fail closed). Judged by position in a's trail, not by time: after a's first refusal for want of time, no
      signature as proposer or co-signer. One signature already in flight across the switch is allowed (the Proposer
      reads authenticated time once per step): a stated limitation, not a failure
+  6  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector (the nodes'
+     real shippers, Cluster(audit=True)), and this scenario's own decisions are there by name, each in the stream
+     of the node that made it: every hand recovery's owner-beat, every unattended unlock through the first node,
+     the revocation of c by a and b, and a's two refusals for want of authenticated time
 """
 import base64
 import json
@@ -91,7 +96,9 @@ def scenario(cluster):
         ok(got["rc"] != 0 and got["peer"] is None, "N: %s, everything down, gets no key" % name, got)
 
     header("3  PoC 11.2-11.4: one node by hand, the owner's hand recovery, the other two through it")
+    windows = {}                                     # first node -> (start, end) of its iteration, for step 6
     for first in names:
+        began = time.time()
         others = [n for n in names if n != first]
         got = cluster.recover(first)
         ok(got["rc"] == 0 and got["peer"] is None and got["marker"],
@@ -119,6 +126,7 @@ def scenario(cluster):
             # plus beat_interval_s): the emergency credential is not needed any more. Once, not for every first node
             back = cluster.fresh(names, timeout=900)
             ok(all(back.values()), "the nodes sign their own heartbeats again, with no owner (%s)" % back, {n: recent(cluster, n) for n in names})
+        windows[first] = (began, time.time())
         outage(cluster, names)
 
     header("4  two nodes revoke the third; their service tunnels drop it")
@@ -127,6 +135,7 @@ def scenario(cluster):
     cluster.fresh(names, timeout=300)
     keys = {name: base64.b64encode(bytes.fromhex(cluster.keys[name]["service"][1])).decode() for name in names}
     before = {n: cluster.wg_peers(n, "wg-svc") for n in ("a", "b")}
+    revoked_at = time.time()
     cluster.revoke_by_nodes("a", "b", "c", "REVOKED_STOLEN", "e2e: two nodes revoke the third")
     ok(until(lambda: all(keys["c"] not in cluster.wg_peers(n, "wg-svc") for n in ("a", "b")), 60, 2) is True
        and all(keys["c"] in before[n] for n in ("a", "b")),
@@ -141,6 +150,7 @@ def scenario(cluster):
     # prune of the file cannot move them. Between the switch and the refusal, one signature in flight is allowed (the
     # Proposer reads the time once per step): the stated limitation (LIMITATIONS.md, Tests)
     switched_at = max([e.get("seq", 0) for e in cluster.trail("a")] or [0])
+    switched_time = time.time()
     cluster.time["a"] = False                        # chrony stops vouching (the stand-in's switch)
     ok(until(lambda: not json.loads((cluster.nodes["a"].run / "authtime.json").read_text())["authenticated"], 30, 1) is True,
        "a's authtime.json says not authenticated")
@@ -172,6 +182,36 @@ def scenario(cluster):
        "co-signer, and says why (fail closed)%s" % (" (one signature in flight across the switch, allowed)" if in_flight else ""),
        {"co-sign answer": answer, "refused at": refused_at, "signed after": signed, "in flight": in_flight, "events": recent(cluster, "a")})
 
+    header("6  #340: every line of every node's sync, admission and ESP-advance trail is in the audit collector, for the node that recorded it")
+    wrong = cluster.audit_complete()
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t, _, _ in threenode.AUDIT_TRAILS}
+    ok(wrong == {}, "every node's sync, admission and ESP-advance trail is written and in the collector line for line: sequence from 1, chained from "
+       "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
+       {"%s.%s" % k: v for k, v in wrong.items()})
+    # The windows compare this harness's clock (time.time(): windows, revoked_at, switched_time) with the nodes' own
+    # trail "at": sound because the three nodes share this runner's clock. A fixture on separate hosts would make them
+    # skew-sensitive (b9 on #576). Each bound is taken BEFORE the action it bounds, so a late one only fails the check.
+    hand = {first: bool(cluster.audit_has(first, "sync", since=start, event="owner-beat", outcome="ALLOW",
+                                          at=lambda at, end=end: isinstance(at, int) and at <= int(end)))
+            for first, (start, end) in windows.items()}
+    ok(len(hand) == len(names) and all(hand.values()), "every hand recovery of step 3 (owner-beat) is in that first node's own stream", hand)
+    through = {"%s<-%s" % (name, first): bool(cluster.audit_has(first, "sync", since=start, event="unlock", subject=name, outcome="ALLOW",
+                                                                at=lambda at, end=end: isinstance(at, int) and at <= int(end)))
+               for first, (start, end) in windows.items() for name in names if name != first}
+    ok(len(through) == 2 * len(names) and all(through.values()),
+       "every unattended unlock of step 3 is in the stream of the first node that gave it", through)
+    # revoke_by_nodes("a", "b", ...): a proposes, b co-signs and COMMITS, so only b writes revoke-commit (revoke.py); a
+    # takes epoch 2 by an ordinary sync round, which moved_by_sync finds in a's own stream (CI on #576 measured it)
+    revoked = {"b commits": bool(cluster.audit_has("b", "sync", since=revoked_at, event="revoke-commit", epoch=2, outcome="ALLOW",
+                                                   signers=lambda s: isinstance(s, list) and "a" in s and "b" in s)),
+               "a moved by sync": cluster.moved_by_sync("a", revoked_at, 2) is not None}
+    ok(all(revoked.values()), "the revocation of c (epoch 2, signed by a and b): b's commit in b's stream, and the sync round that "
+       "moved a to it in a's", revoked)
+    unauthenticated = lambda r: bool(r) and "time is not authenticated" in r
+    refusals = {"propose": bool(cluster.audit_has("a", "sync", since=switched_time, event="beat-propose", outcome="DENY", reason=unauthenticated)),
+                "co-sign": bool(cluster.audit_has("a", "sync", since=switched_time, event="sync-beat-sign", outcome="DENY", reason=unauthenticated))}
+    ok(all(refusals.values()), "a's refusals for want of authenticated time, as proposer and as co-signer (step 5), are in a's stream", refusals)
+
 
 def main():
     try:
@@ -191,7 +231,7 @@ def main():
         print("three-node-outage: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work)
+    cluster = threenode.Cluster(work, audit=True)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once

@@ -18,6 +18,7 @@ import (
 	api "github.com/Digital-Frontier-LDA/regalia-kms/internal/api"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/approval"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/auth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/envelope"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/executor"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/policy"
@@ -73,6 +74,9 @@ type Coordinator struct {
 	now              func() time.Time
 	// admission is nil unless the configuration requires a runtime lease (RequireAdmission).
 	admission Admission
+	// nodeID is this node as the membership manifest spells it (SetNodeID): the only signer an
+	// approval is verified for here (#432 G3).
+	nodeID string
 
 	// droppedMu guards droppedRecords, which Execute writes from concurrent request
 	// goroutines and the metrics handler reads.
@@ -112,12 +116,26 @@ type Admission interface {
 	Ready(context.Context) bool
 }
 
+// ObjectAdmission is an Admission that can also refuse one key by name: a lone survivor's gate refuses the keys the
+// owner's directives disabled, and every key when those cannot be read (internal/admission, regalia-j18). It
+// returns the audit outcome of the refusal, or "" to serve.
+type ObjectAdmission interface {
+	RefusesObject(ctx context.Context, objectID string) string
+}
+
 // RequireAdmission makes every operation need a runtime lease. Call it before the coordinator
 // serves. The runner the coordinator was built with must be an admission runner over the same gate:
 // this check refuses before any policy state is spent, that one stops an operation whose lease
 // lapsed while it ran.
 func (coordinator *Coordinator) RequireAdmission(gate Admission) {
 	coordinator.admission = gate
+}
+
+// SetNodeID names this node, the one signer this coordinator verifies approvals for (#432 G3):
+// an approval naming another node does not count here, and a request whose context names
+// another signer is refused by name.
+func (coordinator *Coordinator) SetNodeID(nodeID string) {
+	coordinator.nodeID = nodeID
 }
 
 // RecordAdmission writes the audit event for a change in this node's admission: it began to hold a
@@ -146,6 +164,13 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 	}
 	started := coordinator.now()
+	// An agent principal is never served release-secret, whatever the RBAC policy says (regalia-kms-sv3.2): checked
+	// before the grant, so the trail records this rule and not a generic rbac-denied, and so a policy loaded by some
+	// other path than auth.LoadPolicy still cannot hand an agent a secret.
+	if auth.AgentRefuses(request.Principal, request.Operation) {
+		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", auth.AgentReleaseRefused, started, false, nil)
+		return api.Result{}, failure("DENIED", http.StatusForbidden, false)
+	}
 	if !coordinator.authorizer.Allowed(request.Principal, request.ObjectID, request.Operation, request.Context.Environment) {
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "rbac-denied", started, false, nil)
 		return api.Result{}, failure("DENIED", http.StatusForbidden, false)
@@ -159,6 +184,21 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 	if coordinator.admission != nil && !coordinator.admission.Ready(ctx) {
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "not-admitted", started, false, nil)
 		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
+	}
+	// A KEY THE OWNER DISABLED ON A LONE SURVIVOR IS NOT SERVED (owner item 212), and no key is while the survivor's
+	// directives cannot be read. Before routing and policy, as above: a refused key spends no policy state. A
+	// disabled key is permanent here (re-enabling it is the majority's act), so a 403; an unreadable store may be
+	// repaired, so a retryable 503.
+	if objects, ok := coordinator.admission.(ObjectAdmission); ok {
+		switch outcome := objects.RefusesObject(ctx, request.ObjectID); outcome {
+		case "":
+		case "survivor-directive-disabled":
+			coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", outcome, started, false, nil)
+			return api.Result{}, failure("DENIED", http.StatusForbidden, false)
+		default:
+			coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", outcome, started, false, nil)
+			return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
+		}
 	}
 	// Seal routes differently: RouteForSeal admits standby and qualified bindings, because an
 	// envelope sealed today must open after tomorrow's rotation. Release routes differently
@@ -250,6 +290,8 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		Algorithm: route.Algorithm, ContentType: contentType, PayloadBytes: payloadBytes(request),
 		ExpiresAt: request.Context.ExpiresAt, Nonce: request.Context.Nonce,
 	}
+	payloadDigest := sha256.Sum256(approvalPayload(request))
+	policyRequest.PayloadSHA256 = hex.EncodeToString(payloadDigest[:])
 	// THE APPROVERS ARE VERIFIED HERE, NOT ASSERTED BY THE CALLER.
 	//
 	// request.Approvals is the raw header: attacker-controlled bytes. Verify returns only
@@ -258,10 +300,18 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 	// RequiredApprovals: 1 and never 2. Evidence that fails any check is not an error; it
 	// is simply not an approver, because rejecting the request on bad evidence would let
 	// anyone who can reach the endpoint deny a valid request by appending garbage.
+	//
+	// AN APPROVAL IS FOR ONE NODE (#432 G3). The binding's signer is this node, never what the
+	// caller says, so another node's approvals simply do not verify here. A request whose context
+	// names another signer is refused by name first: sent to the wrong node, not under-approved.
+	if request.Context.Signer != "" && request.Context.Signer != coordinator.nodeID {
+		coordinator.recordOrCount(ctx, request, route, "deny", "approval-signer-other-node", started, false, nil)
+		return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
+	}
 	policyRequest.VerifiedApprovers = coordinator.approvers.Verify(request.Approvals, approval.Binding{
 		ObjectID: request.ObjectID, Purpose: request.Context.Purpose,
 		Environment: request.Context.Environment, Nonce: request.Context.Nonce,
-		ExpiresAt: request.Context.ExpiresAt, Payload: approvalPayload(request),
+		ExpiresAt: request.Context.ExpiresAt, Payload: approvalPayload(request), Signer: coordinator.nodeID,
 	})
 	if contentType == "application/vnd.cosmos.tx+protobuf" {
 		parsed, err := policy.ParseCosmosSignDoc(request.Data)

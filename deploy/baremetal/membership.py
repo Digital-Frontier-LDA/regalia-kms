@@ -152,6 +152,7 @@ BENCH_YUBIKEYS = ("36345471", "36344616", "35718625")
 BENCH_TOKENS = frozenset(BENCH_NITROKEYS + BENCH_PICOS + BENCH_YUBIKEYS + tuple("0006%08d" % int(s) for s in BENCH_YUBIKEYS))
 DOMAIN = b"regalia-membership/v1\0"
 MAX_BYTES = 256 * 1024
+MAX_DEPTH = 64            # arrays and objects in one another; the deepest document here is 10 (tests/vectors/opstate-v1.json)
 MAX_CHAIN_BYTES = 64 * 1024 * 1024
 CAPABILITIES = {
     "ACTIVE": frozenset({"serve", "request", "authorize"}),
@@ -189,14 +190,85 @@ class Unusable(Refused):
     Distinct from a TPM that did not answer (a plain Refused): only this is what re-anchoring repairs."""
 
 
+# a test-only switch (b9 on #596, regalia-afi): node.validate accepts a simulator TCTI (a SOCKET, which no unit's
+# DevicePolicy constrains: a software TPM with no hardware root) only under it. Only the e2e fixtures and the tests set
+# it; nothing shipped may (tests/test_baremetal_node.py holds that this is the one file under deploy/ that names it).
+# TODO(regalia-afi step 2): once the three-node fixture reaches its TPMs through the kernel (swtpm --vtpm-proxy, so
+# device:/dev/tpmrmN), refuse swtpm:/mssim: unconditionally and delete this switch and handover_env's carrying of it
+# (and of the session-bus address it carries for the tpm2-abrmd route).
+SIMULATOR_SWITCH = "REGALIA_TCTI_ALLOW_SIMULATOR"
+
+
+def handover_env():
+    """The whole environment of a step handed to regalia-sync (`runuser … env -i …`): PATH and the C locale, nothing of
+    root's, except, only under the test-only SIMULATOR_SWITCH when the caller has it: the switch, so a fixture's step
+    reloads its own node.json, and the caller's session-bus address when it is a unix socket path, so a fixture node's
+    `tabrmd:…,bus_type=session` tcti reaches that node's tpm2-abrmd from the step too (regalia-afi: its TCTI names no
+    address, and without one every TPM call of a handed-over step failed closed, #605's run 40456967936). On a host
+    nothing sets the switch, and the step's TPM is /dev/tpmrm0, which needs no environment."""
+    env = ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"]
+    if os.environ.get(SIMULATOR_SWITCH) != "1":
+        return env
+    env.append("%s=1" % SIMULATOR_SWITCH)
+    bus = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
+    if re.fullmatch(r"unix:path=/[^,;=\s]+", bus):
+        env.append("DBUS_SESSION_BUS_ADDRESS=" + bus)
+    return env
+
+
+def session_bus_hint(tcti):
+    """What to add to a TPM call's failure when its tcti is a tabrmd one on the SESSION bus (the e2e fixture's,
+    regalia-afi) and this process has no DBUS_SESSION_BUS_ADDRESS: that this is why. handover_env carries only a
+    unix:path= address, under the simulator switch; any other was dropped, and run 40456967936 chased a bare "the TPM
+    does not answer" (TEAMLEAD-grafana on #605). Empty otherwise, so every other refusal stays the one the Go reader
+    gives too (tests/vectors/highwater-v1.json holds both to it): that reader never takes a tabrmd tcti."""
+    if (tcti or "").startswith("tabrmd:") and "bus_type=session" in tcti and not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        return (" | this process has no DBUS_SESSION_BUS_ADDRESS, which its tcti %s needs: a step handed to regalia-sync "
+                "carries one only under %s and only as unix:path=/… (handover_env), any other is dropped" % (tcti, SIMULATOR_SWITCH))
+    return ""
+
+
+# What a TPM tool's text may not carry into a refusal or the journal, each mapped to a space: every C0 control, DEL and
+# C1 control (an ESC, a "\r"), and the format characters that reorder or hide text on an operator's terminal
+# (zero-width and LRM/RLM, the bidi embeddings and overrides, U+202E among them, the isolates, the BOM) and the
+# Unicode line and paragraph separators. A fixed list, not a Unicode category, so it is the same in the Go reader
+# (highwater.go, unprintable) whatever Unicode version either was built with.
+_UNPRINTABLE = re.compile("[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]")
+
+
+def _lines(text):
+    """`text` (bytes or str) as the lines _why and _said print: each run of bytes that are not UTF-8 one U+FFFD, split
+    on "\\n" only, every _UNPRINTABLE character a space, spaces trimmed, empty lines dropped."""
+    text = text if isinstance(text, str) else text.decode("utf-8", "replace")
+    text = re.sub("\ufffd+", "\ufffd", text)
+    return [line for line in (_UNPRINTABLE.sub(" ", raw).strip(" ") for raw in text.split("\n")) if line]
+
+
+def _why(done, size):
+    """The TPM's reason for a read of `size` bytes that `done` did not give, as a refusal's suffix: " (TPM: <the last line
+    tpm2_nvread wrote on stderr>)", or the byte count when it wrote nothing (#450). The line is made safe to print and
+    the same in both readers whatever the input (_lines), and the last 200 characters of the last line are kept. A tool
+    that failed with no text at all is named by its exit status when the bytes did come back, else by the count. The
+    Go reader (highwater.go, tpmReason) does exactly this to its own TPM error; tests/vectors/tpm-reason-v1.json holds
+    both to it (Go has no exit status: an error with no text and the bytes back is a read that did not fail). The two never see the same text in production (this reads the
+    tool's stderr, Go its library's error), so the vector is what makes "the same rule" checkable."""
+    lines = _lines(done.stderr or b"")
+    if lines:
+        return " (TPM: %s)" % lines[-1][-200:]
+    got = len(done.stdout or b"")
+    if got == size:
+        return " (TPM: exit %s, no output)" % done.returncode
+    return " (TPM: %d bytes, not %d)" % (got, size)
+
+
 def _said(tool, index, done):
-    """What tpm2_<tool> said when it failed on `index`, on this process's stderr (the unit's journal): the TPM's own reason
-    for an anchor read that is then refused. The refusal's text does not change (the shared vectors pin it, #450); this
-    is so the next one is named rather than guessed at (an intermittent refusal in CI, #448). Never raises."""
+    """What tpm2_<tool> said when it failed on `index`, on this process's stderr (the unit's journal): every line, made
+    safe to print as _why's are (_lines) and joined by " | ", of which the last 400 characters are kept. The refusal
+    carries only the last line (_why, #450); this keeps the lines before it for whoever reads the journal (an
+    intermittent refusal in CI, #448). Never raises."""
     try:
         import sys
-        err = done.stderr or b""
-        text = (err if isinstance(err, str) else err.decode("utf-8", "replace")).strip().replace("\n", " | ")
+        text = " | ".join(_lines(done.stderr or b""))
         print("regalia: tpm2_%s %s failed (exit %s, %d bytes out): %s" % (tool, index, done.returncode, len(done.stdout or b""), text[-400:] or "no output"),
               file=sys.stderr)
     except Exception:                                   # noqa: BLE001 - a diagnostic never changes the outcome
@@ -253,8 +325,25 @@ def _no_float(text):
     raise Refused("floats are not allowed (%s)" % text)
 
 
+_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+_NOT_A_BRACKET = re.compile(r"[^\[\]{}]")
+
+
+def _depth(text):
+    """How deeply arrays and objects nest in `text`, brackets inside strings not counted."""
+    depth = deepest = 0
+    for c in _NOT_A_BRACKET.sub("", _STRING.sub("", text)):
+        depth += 1 if c in "[{" else -1
+        deepest = max(deepest, depth)
+    return deepest
+
+
 def load(raw, limit=MAX_BYTES):
     require(isinstance(raw, (bytes, str)) and len(raw) <= limit, "a document is at most %d bytes here" % limit)
+    # Refused before parsing, on every Python: 3.12 json.loads raised RecursionError on 30000 levels,
+    # 3.14 parses 100000, and the depth would then reach code that walks the document.
+    text = raw.decode(json.detect_encoding(raw), "replace") if isinstance(raw, bytes) else raw     # as json.loads decodes it
+    require(_depth(text) <= MAX_DEPTH, "not valid JSON: nested too deeply (more than %d levels)" % MAX_DEPTH)
     try:
         return json.loads(raw, object_pairs_hook=_pairs, parse_float=_no_float, parse_constant=_no_float)
     except ValueError as error:
@@ -907,7 +996,7 @@ class HighWater:
         about the anchor, and that is neither "usable" nor "unusable"."""
         r = self._tpm("getcap", "handles-nv-index")
         require(r.returncode == 0, "the TPM does not answer (tpm2_getcap handles-nv-index failed): the high-water anchor is "
-                "unavailable (fail closed)")
+                "unavailable (fail closed)%s" % session_bus_hint((self.env or {}).get("TPM2TOOLS_TCTI")))
         return {int(found, 16) for found in re.findall(rb"0x[0-9A-Fa-f]+", r.stdout)}
 
     def _public(self, index):
@@ -996,7 +1085,7 @@ class HighWater:
         r = self._tpm("nvread", index, "-C", index, "-s", "8")
         if r.returncode != 0 or len(r.stdout) != 8:
             _said("nvread", index, r)
-        require(r.returncode == 0 and len(r.stdout) == 8, "cannot read 8 bytes from NV index %s" % index)
+        require(r.returncode == 0 and len(r.stdout) == 8, "cannot read 8 bytes from NV index %s%s" % (index, _why(r, 8)))
         return int.from_bytes(r.stdout, "big")
 
     def define(self):
@@ -1201,7 +1290,7 @@ class HighWater:
         if r.returncode != 0 or len(r.stdout) != self.RECORD_BYTES:
             _said("nvread", index, r)
         require(r.returncode == 0 and len(r.stdout) == self.RECORD_BYTES, "cannot read %d bytes from the record index %s: the anchor "
-                "is unavailable (fail closed)" % (self.RECORD_BYTES, index))
+                "is unavailable (fail closed)%s" % (self.RECORD_BYTES, index, _why(r, self.RECORD_BYTES)))
         epoch, held = int.from_bytes(r.stdout[:8], "big"), r.stdout[8:40].hex()
         return (epoch, held) if r.stdout == self.slot_bytes(epoch, held) else None
 
@@ -1266,7 +1355,7 @@ class HighWater:
         if r.returncode != 0 or len(r.stdout) != size:
             _said("nvread", index, r)
         require(r.returncode == 0 and len(r.stdout) == size, "cannot read %d bytes from NV index %s: what the anchor holds cannot "
-                "be known (fail closed)" % (size, index))
+                "be known (fail closed)%s" % (size, index, _why(r, size)))
         return r.stdout
 
     def remains(self):

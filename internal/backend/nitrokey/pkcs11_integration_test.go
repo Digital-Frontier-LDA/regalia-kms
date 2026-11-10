@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/asn1"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"os"
 	"testing"
@@ -50,6 +51,11 @@ func TestConcretePKCS11DriverAgainstSoftHSM(t *testing.T) {
 
 	route.Algorithm = "rsa2048"
 	route.Binding.ObjectID = "02"
+	// THE KEK IS PINNED, AS COMMISSIONING PINS IT (ADR-0002 D1). Unpinned, wrap asks the token for
+	// CKA_LOCAL, which an SC-HSM behind OpenSC cannot answer as provenance (#447), so on a real card
+	// this test could only ever fail -- measured on DENK0404144 and a Pico, 2026-11-03, as "backend
+	// unavailable". The runtime CKA_LOCAL path keeps its own tests (kek_hardware_rooted_test.go).
+	route.Binding.PublicKeySHA256 = commissionedPin(t, driver, route.Binding)
 	aad := []byte(`{"environment":"development","path":"fixture.enc.yaml","purpose":"sops-data-key","repository":"Org/repo"}`)
 	dataKey := []byte("0123456789abcdef0123456789abcdef")
 	wrapped, contentType, err := provider.Execute(context.Background(), route, "wrap", "regalia-envelope-v2", "", dataKey, aad)
@@ -212,4 +218,22 @@ func buildFrame(label, plaintext []byte) ([]byte, error) {
 	out = append(out, lengthBuf[:]...)
 	out = append(out, plaintext...)
 	return out, nil
+}
+
+// commissionedPin simulates commissioning: read the KEK's public key once, before any wrap, and
+// return the pin a ceremony would record for it. (For real, the pin is taken only after
+// hsm-key-attestation-verify.py proves the key was generated on the card.)
+func commissionedPin(t *testing.T, driver *PKCS11Driver, binding registry.Binding) string {
+	t.Helper()
+	session, err := driver.Open(context.Background(), binding)
+	if err != nil {
+		t.Fatalf("open the token to commission object %s: %v", binding.ObjectID, err)
+	}
+	public, err := session.PublicKey(context.Background(), binding.ObjectID)
+	_ = session.Close()
+	if err != nil || len(public) == 0 {
+		t.Fatalf("read the public key of object %s to commission it: %v", binding.ObjectID, err)
+	}
+	sum := sha256.Sum256(public)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }

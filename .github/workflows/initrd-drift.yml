@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -60,7 +60,8 @@ jobs:
           if [ "$rc" -ge 2 ]; then
             # the check itself failed: what the issue says instead of silence (the log in a ~~~ fence, no ~ inside)
             { echo "The daily drift check FAILED (exit $rc): the initrd could not be built or compared, so nothing says whether"
-              echo "today's archive moves it. The end of its log:"; echo; echo '~~~~~~~~'
+              echo "today's archive moves it. An archive or mirror outage (snapshot.debian.org, deb.debian.org) is a known cause"
+              echo "that is not a regression: check the log's apt/mmdebstrap lines before the code. The end of its log:"; echo; echo '~~~~~~~~'
               tail -40 "$RUNNER_TEMP/drift/log.txt" | tr -d '~'; echo '~~~~~~~~'; } > "$RUNNER_TEMP/drift/report.md"
           fi
           [ ! -s "$RUNNER_TEMP/drift/report.md" ] || cat "$RUNNER_TEMP/drift/report.md" >> "$GITHUB_STEP_SUMMARY"
@@ -73,18 +74,27 @@ jobs:
             ${{ runner.temp }}/drift/report.md
           if-no-files-found: ignore
           retention-days: 7
+      # #330: a check that could not run filed its issue and left the run green, for three weeks. Red now, after the
+      # upload, so the filing job still says what failed; a drift found (exit 1) is the issue's to say, not a failure
+      - name: Fail the run when the check itself could not run
+        run: |
+          rc="$(cat "$RUNNER_TEMP/drift/rc")"
+          if [ "$rc" -ge 2 ]; then
+            echo "::error title=initrd drift check FAILED::exit $rc: the initrd could not be built or compared, so nothing says whether today's archive moves it. A known cause that is not a regression: an archive or mirror outage (snapshot.debian.org, deb.debian.org): check the log's apt/mmdebstrap lines before the code (see the step above and the job summary)"
+            exit 1
+          fi
 
   file:
     needs: build
     # also when build failed before it could report (an install, the client's build, the upload): silence is not
     # an answer; with no artifact, rc defaults to 2 and the issue says the check FAILED
     if: always() && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       issues: write
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         continue-on-error: true
         with:
           name: initrd-drift

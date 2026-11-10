@@ -159,6 +159,12 @@ class Enrolment(ea.Anchor):
         self.addCleanup(os.kill, pid, 15)
         self.tcti = "swtpm:path=" + sock
         self.cfg["tcti"] = self.tcti
+        # this node.json names a swtpm socket, a test fixture's TPM to node.validate: the switch, for these tests only
+        # (regalia-afi; set here rather than process-wide, so a test that forgets it fails, b9 on #596)
+        from unittest import mock
+        switch = mock.patch.dict(os.environ, {m.SIMULATOR_SWITCH: "1"})
+        switch.start()
+        self.addCleanup(switch.stop)
         with open(self.path, "w") as f:
             json.dump(self.cfg, f)
         self.tpm = subprocess.run

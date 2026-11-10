@@ -232,18 +232,18 @@ func TestUnwrapRefusesAFormatOutsideTheAllowlist(t *testing.T) {
 // Re-measured operand by operand for #237, most of that was wrong, and wrong in
 // the direction that stops the next sweep looking:
 //
-//   provider.go:73  said "the divergence path is never observed". It is:
+//   provider.go:(*Provider).Execute{serial != binding.DeviceSerial} said "the divergence path is never observed". It is:
 //                   TestPresenceOrSubstitutedDeviceFailsBeforePrivateOperation
 //                   sets the card's serial to 87654321 against a binding
 //                   pinning 12345678, and that operand is killed.
-//   provider.go:77  said "no existing test sets them to divergent values". The
+//   provider.go:(*Provider).Execute{pinPolicy != binding.PINPolicy} said "no existing test sets them to divergent values". The
 //                   same test sets touchPolicy to "always".
-//   provider.go:104 cited coverage "through `fakeDriver.SetPINBlocked`". There
+//   provider.go:(*Provider).Execute{retryErr != nil} cited coverage "through `fakeDriver.SetPINBlocked`". There
 //                   is no such method in this package, and there never was.
-//   provider.go:111 said "no falsifiable length error". Two files along,
+//   provider.go:(*Provider).Execute{len(pin) < 6} said "no falsifiable length error". Two files along,
 //                   TestAPINOutsideTheAcceptedLengthNeverReachesTheCard drives
 //                   a five-byte and a sixty-five-byte PIN through exactly it.
-//   provider.go:124 said the Login error path "is unreachable from the unit
+//   provider.go:(*Provider).Execute{session.Login(ctx, pin)} said the Login error path "is unreachable from the unit
 //                   tests". fakeSession.loginErr exists and
 //                   TestPINFailureAndLowRetryCountPreventRepeatedLogin uses it.
 //   piv_driver.go   the parseSlot residual quoted a mutation, `if false && slot
@@ -258,5 +258,7 @@ func TestUnwrapRefusesAFormatOutsideTheAllowlist(t *testing.T) {
 // argument.
 //
 // Two of the old residuals survived re-measurement and are recorded there:
-// provider.go:137 op0 (masked by the final err/len backstop) and
+// provider.go:(*Provider).Execute{session.Unwrap then err == nil} op0 (masked by the final err/len backstop)
+// (mapped by the backstop it names: only the unwrap branch falls through to Execute's final err/len check,
+// the public-key branch has its own; the release's line number was already stale at f60d679, #294) and
 // piv_driver.go:NewPIVDriver{deviceID == "" || serial == ""}[1] (masked by strconv.ParseUint). Four did not.

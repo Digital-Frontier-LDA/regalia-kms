@@ -385,6 +385,73 @@ func TestNoYubiKeyTestCitesPivDriverByLineNumber(t *testing.T) {
 	}
 }
 
+// TestNoYubiKeyTestCitesThisPackageByLineNumber is #294: #290 converted the ledger's piv_driver.go
+// references, and about a hundred short ":N" references remained in the boundary tests' prose,
+// several already drifted (one into an interface method, another into a struct). Every comment in this
+// package's tests now cites its own sources as file.go:Func{anchor}, which resolves or fails; a bare
+// ":N", or file.go:N for a file of this package, is refused. A file outside the package (a stack frame
+// in piv-go's pcsc_unix.go, another package's gate.go) is not this package's to resolve, and text in
+// double quotes is quoted history, not a citation.
+func TestNoYubiKeyTestCitesThisPackageByLineNumber(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	dir := filepath.Dir(thisFile)
+	tests, _ := filepath.Glob(filepath.Join(dir, "*_test.go"))
+	sources := packageSources()
+	own := map[string]bool{}
+	all, _ := filepath.Glob(filepath.Join(dir, "*.go"))
+	for _, path := range all {
+		if !strings.HasSuffix(path, "_test.go") {
+			own[filepath.Base(path)] = true
+		}
+	}
+	if len(tests) < 10 || !own["provider.go"] || !own["piv_driver.go"] {
+		t.Fatalf("%d test files and sources %v under %s: the scan would check nothing", len(tests), own, dir)
+	}
+	citations := 0
+	for _, test := range tests {
+		data, err := os.ReadFile(test)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for number, line := range strings.Split(string(data), "\n") {
+			at := strings.Index(line, "//")
+			if at < 0 || strings.Contains(line, "regexp.MustCompile") {
+				continue
+			}
+			comment := line[at:]
+			where := filepath.Base(test) + ":" + itoa(number+1)
+			for _, bare := range commentLineReference.FindAllStringSubmatch(quotedText.ReplaceAllString(comment, `""`), -1) {
+				t.Errorf("%s has a bare line reference %q: cite file.go:Func{anchor} (#294)", where, strings.TrimSpace(bare[0]))
+			}
+			for _, match := range sweeptext.LineCitationPattern.FindAllStringSubmatch(comment, -1) {
+				if match[1] == "" && own[match[2]] {
+					t.Errorf("%s cites %s by line number: cite %s:Func{anchor} (#294)", where, match[0], match[2])
+				}
+			}
+			for _, cited := range sweeptext.CitationPattern.FindAllString(comment, -1) {
+				file := cited[:strings.Index(cited, ":")]
+				if !own[file] || strings.HasPrefix(cited, file+":Func{") {
+					continue
+				}
+				citations++
+				if _, _, err := sweeptext.ResolveCitation(sources, cited); err != nil {
+					t.Errorf("%s cites %s: %v", where, cited, err)
+				}
+			}
+		}
+	}
+	if citations < 100 {
+		t.Errorf("only %d citations of this package resolved: the boundary tests carry well over a hundred", citations)
+	}
+}
+
+// commentLineReference is a bare ":N" in a comment: not a slice bound (`[:8]`), a clock, or a
+// file.go:N (which LineCitationPattern judges).
+var commentLineReference = regexp.MustCompile(`(?:^|[^\w.)\[\]]):\d+\b`)
+
+// quotedText is a double-quoted span in a comment: quoted history (`":56" had drifted`), never a citation.
+var quotedText = regexp.MustCompile(`"[^"]*"`)
+
 // bareLineReference is a ":N" line number in an entry's prose, the short form of a line citation.
 var bareLineReference = regexp.MustCompile(`(?:^|[^\w.)]):\d+\b`)
 
