@@ -1,0 +1,15 @@
+# regalia-kms/ek-roots/v1 (regalia-kms-x6x). What intake trusts for a TPM's EK certificates; read by
+# deploy/baremetal/ekchain.py. Changing a line changes what every future intake accepts: it needs the
+# owner's sign-off. The sources each pin was taken from, and where they agree, are in SOURCES.md.
+#
+#   root    <family> <SHA-256 of the root certificate's DER>      <its file in this directory>
+#   ca-spki <family> <SHA-256 of the issuing CA's SPKI, DER>      <the CA it is>
+#
+# The roots: Infineon OPTIGA(TM) RSA Root CA and ECC Root CA (2013-07-26 .. 2043-07-25).
+root rsa 899e35474c9807eb4c7f2f7a12da0028fb250cd02154d0009fca7d9c66574f3b infineon-optiga-rsa-root-ca.der
+root ecc cfeb02fecd55ad7a73c6e1d11985d4c47dee248ab63dcb66091a2489660443c3 infineon-optiga-ecc-root-ca.der
+# The issuing CAs, by key: Infineon OPTIGA(TM) RSA/ECC Manufacturing CA 029. Each key has two certificates,
+# issued 2017-08-21 and re-issued 2023-02-08; both have this SPKI. A server whose EKs another CA issued is
+# refused at intake until that CA's key is added here, from the same sources.
+ca-spki rsa 31c0aa4f072f1d9e4d7ff33e5bd27810e5d2d1019c06549bbc707a3180fa518e Infineon OPTIGA(TM) RSA Manufacturing CA 029
+ca-spki ecc 942da2973e3523889c0766925767f3b207300838a67523b293bced843e59c53a Infineon OPTIGA(TM) ECC Manufacturing CA 029

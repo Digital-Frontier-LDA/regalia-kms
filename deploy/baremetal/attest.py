@@ -55,7 +55,7 @@ cryptographic primitive.
       the hash of every boot session and ephemeral key it ever accepted.
 
 NOT covered here: the EK certificate chain to the TPM manufacturer (the swtpm EK has none; the DL360's
-is checked at intake, #65 PoC 5.2), and which PCRs to expect (PoC 5.2/5.3 on the real hardware).
+is checked at intake, #65 PoC 5.2, by ekchain.py against the pinned Infineon roots), and which PCRs to expect (PoC 5.2/5.3 on the real hardware).
 """
 import argparse
 import contextlib
