@@ -457,7 +457,7 @@ func Load(reader io.Reader, site string, health BackendHealth) (*Registry, error
 			rotateBy:   rotateBy,
 		}
 	}
-	return result, nil
+	return unlessASecretKEKIsAnUnwrapKey(result, document.Objects)
 }
 
 // THE DAEMON ENFORCES THE CUSTODY RULES, NOT ONLY CI.
@@ -748,8 +748,8 @@ func (label *TokenLabel) UnmarshalJSON(data []byte) error {
 var tokenLabelPattern = regexp.MustCompile(`^[!-~]([ -~]{0,30}[!-~])?$`)
 
 func validateBinding(binding Binding, algorithm string, operations []string) error {
-	if binding.Site == "" || binding.DeviceID == "" || binding.ObjectID == "" {
-		return errors.New("binding site, device_id and object_id are required")
+	if err := validateBindingCoordinates(binding); err != nil {
+		return err
 	}
 	if binding.PublicFingerprint == "" && binding.KeyCheck == "" {
 		return errors.New("binding needs a public fingerprint or key check")

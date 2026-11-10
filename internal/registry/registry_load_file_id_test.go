@@ -23,8 +23,8 @@ import (
 // the comparison "binding.Site != site" later silently matches no binding.
 func TestLoadRefusesANonIdentifierSiteName(t *testing.T) {
 	body := manifest(object("wallet-key", "cosmos-transaction", "secp256k1", "sign",
-		binding("sitea", "nitrokey-pkcs11", "hsm-1", "slot-1", "active")+","+
-			binding("siteb", "nitrokey-pkcs11", "hsm-2", "slot-2", "standby")))
+		binding("sitea", "nitrokey-pkcs11", "hsm-1", "a1", "active")+","+
+			binding("siteb", "nitrokey-pkcs11", "hsm-2", "a2", "standby")))
 
 	for _, site := range []string{"SiteA", "lis bon", "sitea!", "ab", "", "-sitea", "sitea_"} {
 		t.Run(site, func(t *testing.T) {
@@ -49,8 +49,8 @@ func TestLoadRefusesANonIdentifierSiteName(t *testing.T) {
 // multi-JSON guard would mask the size cap. Trailing whitespace keeps the
 // document valid and isolates the size cap from the multi-document check.
 func TestLoadRefusesAManifestLargerThanTwoMiB(t *testing.T) {
-	pair := binding("sitea", "nitrokey-pkcs11", "hsm-1", "slot-1", "active") + "," +
-		binding("siteb", "nitrokey-pkcs11", "hsm-2", "slot-2", "standby")
+	pair := binding("sitea", "nitrokey-pkcs11", "hsm-1", "a1", "active") + "," +
+		binding("siteb", "nitrokey-pkcs11", "hsm-2", "a2", "standby")
 	base := manifest(object("wallet-key", "cosmos-transaction", "secp256k1", "sign", pair))
 	trailing := strings.Repeat(" ", maxManifestBytes+1-len(base)+1)
 	body := []byte(base + trailing)
@@ -92,9 +92,9 @@ func TestLoadReportsMalformedJSONAsMalformed(t *testing.T) {
 // contract, not json's.
 func TestLoadRefusesMoreThanOneJSONDocument(t *testing.T) {
 	body := manifest(object("wallet-key", "cosmos-transaction", "secp256k1", "sign",
-		binding("sitea", "nitrokey-pkcs11", "hsm-1", "slot-1", "active"))) +
+		binding("sitea", "nitrokey-pkcs11", "hsm-1", "a1", "active"))) +
 		manifest(object("second", "other-purpose", "secp256k1", "sign",
-			binding("sitea", "nitrokey-pkcs11", "hsm-2", "slot-2", "active")))
+			binding("sitea", "nitrokey-pkcs11", "hsm-2", "a2", "active")))
 	if _, err := Load(strings.NewReader(body), "sitea", &healthMap{}); err == nil {
 		t.Fatal("Load accepted two JSON documents")
 	} else if !strings.Contains(err.Error(), "exactly one JSON document") {
@@ -114,8 +114,8 @@ func TestLoadRefusesAnIncompleteHeader(t *testing.T) {
 		"no generated_at":   `{"schema_version":1,"manifest_id":"x","objects":[%s]}`,
 		"empty objects":     `{"schema_version":1,"manifest_id":"x","generated_at":"2026-09-04T00:00:00Z","objects":[]}`,
 	}
-	body := binding("sitea", "nitrokey-pkcs11", "hsm-1", "slot-1", "active") + "," +
-		binding("siteb", "nitrokey-pkcs11", "hsm-2", "slot-2", "standby")
+	body := binding("sitea", "nitrokey-pkcs11", "hsm-1", "a1", "active") + "," +
+		binding("siteb", "nitrokey-pkcs11", "hsm-2", "a2", "standby")
 	obj := object("wallet-key", "cosmos-transaction", "secp256k1", "sign", body)
 	for name, tmpl := range cases {
 		t.Run(name, func(t *testing.T) {
