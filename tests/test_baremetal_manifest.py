@@ -933,13 +933,13 @@ class ProposeGenesis(unittest.TestCase):
         from tests.test_baremetal_membership_v4 import typed
         return typed(key or self.k_a)
 
-    def generation_record(self, signer=None, change=None, k_a=None):
-        """regalia-ceremony's offline-keys generation record (rc#129, offline-keys.record.json; the real one is
-        tests/vectors/offline-keys-record/), signed by `signer` (default: the pinned root) over the ceremony record domain."""
+    def generation_record(self, signer=None, change=None, k_a=None, domain=None):
+        """regalia-ceremony's offline-keys generation record (rc#129, offline-keys.record.json; the tool's own output is
+        tests/vectors/offline-keys-record/), signed by `signer` (default: the pinned root) over `domain` (default: the
+        offline-keys record's own, regalia-avz)."""
         import base64
         import copy
         import hashlib
-        from deploy.baremetal import cardrecord
         signer = signer or self.root_key
         k_a = k_a or self.k_a
         root = signer.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
@@ -952,7 +952,7 @@ class ProposeGenesis(unittest.TestCase):
         record = copy.deepcopy(record)
         if change:
             change(record)
-        return {"record": record, "signature": signer.sign(cardrecord.RECORD_DOMAIN + m.canonical(record)).hex()}
+        return {"record": record, "signature": signer.sign((domain or tool.OFFLINE_KEYS_DOMAIN) + m.canonical(record)).hex()}
 
     def card_record(self, signer=None, change=None):
         """The card ceremony's record of the owner's two cards and the release card, as regalia-ceremony writes it
@@ -1060,16 +1060,29 @@ class ProposeGenesis(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         from tests.test_baremetal_membership_v4 import typed
         self.assertEqual(tool.offline_keys_record(self.generation_record(), self.root)[0], typed(self.k_a))
-        # regalia-ceremony's own output (offline-keys generate at rc fd8df0a, run once; the shares and sealed file not kept)
+        # regalia-ceremony's own output: offline-keys generate at ceremony main 2e24e691 (regalia-avz merged), a simulation
+        # with throwaway keys, run once (vectors/offline-keys-record/PROVENANCE.md). It publishes ownerauth-recovery's age
+        # recipient beside the keys (rc#133, regalia-kms-51), and signs under the offline-keys record's own domain.
         here = pathlib.Path(__file__).parent / "vectors" / "offline-keys-record"
         real = json.loads((here / "offline-keys.record.json").read_text())
+        self.assertIn("ownerauth-recovery", real["record"]["publics"])
         entry, record = tool.offline_keys_record(real, (here / "root.hex").read_text().strip())
         self.assertEqual((entry, record["event"]), (real["record"]["anchor_policy_entry"], "generate"))
-        # and rc#133's (head 178e358, by regalia-kms-51): ownerauth-recovery's age recipient published beside the keys
-        real = json.loads((here / "offline-keys.record.rc133.json").read_text())
-        self.assertIn("ownerauth-recovery", real["record"]["publics"])
-        entry, _ = tool.offline_keys_record(real, (here / "root-rc133.hex").read_text().strip())
-        self.assertEqual(entry, real["record"]["anchor_policy_entry"])
+        # the same tool before regalia-avz (rc fd8df0a; rc#133 head 178e358) signed under the shared domain, now retired:
+        # its records are refused, never read through a fallback
+        for name in ("fd8df0a", "rc133"):
+            with self.subTest(retired=name):
+                old = json.loads((here / ("offline-keys.record.%s.json" % name)).read_text())
+                self.refused("the offline-keys record's signature is not the pinned root's", tool.offline_keys_record, old,
+                             (here / ("root-%s.hex" % name)).read_text().strip())
+        # and a record otherwise right, signed by the pinned root under any other kind's domain (regalia-avz)
+        from deploy.baremetal import cardrecord, ownerauth
+        for domain in (tool.RETIRED_RECORD_DOMAIN, cardrecord.RETIRED_RECORD_DOMAIN, cardrecord.RECORD_DOMAIN, ownerauth.RECORD_DOMAIN,
+                       cardrecord.REBUILD_DOMAIN, tool.OFFLINE_KEYS_SCHEMA.encode()):
+            with self.subTest(domain=domain):
+                self.refused("the offline-keys record's signature is not the pinned root's", tool.offline_keys_record,
+                             self.generation_record(domain=domain), self.root)
+        self.assertEqual(tool.OFFLINE_KEYS_DOMAIN, b"regalia.offline-keys-record/v1\x00")
         # rc#133 (regalia-kms-51): the record also publishes the ownerauth-recovery age recipient (no spki) and its proof;
         # only K_A's entries are read, so other keys of publics and operation_proof never refuse it
         def recovery(r):

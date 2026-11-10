@@ -6468,6 +6468,14 @@
     ],
     "threshold": 2
    },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
    "epoch": 1,
    "heartbeat_max_lifetime_s": 21600,
    "heartbeat_signers": {
@@ -6574,6 +6582,14 @@
     ],
     "threshold": 2
    },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
    "epoch": 2,
    "heartbeat_max_lifetime_s": 21600,
    "heartbeat_signers": {
@@ -6652,7 +6668,7 @@
     }
    ],
    "policy_version": "p1",
-   "prev_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+   "prev_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
    "revocation_signers": [
     {
      "parties": [
@@ -6804,7 +6820,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "ee74f4c8f01469bb7467211b3547678d29796f613b62446e61b194897e40bb9137a100afee38977072f9fc5edafa9c45228feff031708224f19b7aae11cce493"
+    "signature": "ed4b5440409cac04b220bb9c0d2f5a8bcfbd3facdca15719093c83e96b27074c7b5b456f563d23a2b6a8c3c75f1bd58f155d15060ad3381b147f9f60ce1c7357"
    }
   },
   {
@@ -6820,7 +6836,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618"
     },
-    "signature": "766a789a7ad9bd7c6f3629c3e4d5c121e439c92f0db935183e3d715ac7bc82401cb47e78bb0fb87b2795fba8892e1113876ffb83519624b3ba70fb2090bfe977"
+    "signature": "8eead919429c4a6072ac8e86820254ae7017f24eeb6491e2712379ba639e5a7c14de1285cd39aa9876241f87501705d00bf3f7a9ab246fd6a38f41d5e78e867f"
    }
   },
   {
@@ -6836,7 +6852,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
     },
-    "signature": "768e47b0576f38051f18e6e49a5aad07e3d57522720b0483d9d916199e7a0fb269553bb6deb7f4fae882f8465c31e2ec5e265820a42137a1c98e288505e73345"
+    "signature": "4262d1a8d7e6719596ef0724d644b449a8e879cc760ade84bfe2eb4631fd096e43ea1b8accd14a750edf308aaf14e441ea8d1f8f4cd65f9d27fbc42fc74da5e4"
    }
   },
   {
@@ -6852,7 +6868,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "02e9d74c5d235fe2e13c96c7e2295fa333d0762623a03414cffcb571233ff97e6622453721c8c9607839c08fb01065bd76c8f947881b137f33d5619a9a624d4e"
+    "signature": "e8d7de592521fcf780c96f114f7b8be5c54e12aee23b07a2a00d282274f21fa12f84292fe0d41928fad899cb91283b25cb2c9bd03ddcbe745cf3af959ac718d2"
    }
   },
   {
@@ -6868,7 +6884,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "677bb8a0a4b41324d114a47093a77412312957a6d7836772e692e0c81f6375746e93cd064090003edcb7b4f2f73c104b4b4b9e242d8c6ffc7e10ddf62022f4fa"
+    "signature": "fc25fc5c43dd2bfa6d3f3c694ca155d67c525cd3bdb372bb9643b719b2118db918a802afcb7d82d65df5465cd47e81b1d91010664852e932d69563d735cc3c93"
    }
   },
   {
@@ -6884,7 +6900,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "e97c1b8cf7a0f66b27042d97915d186a3b2a464b7817b6c15540b5199de2dad44d4e0476218cf27195a6ff941f21080507047f3bd7ab2d24aa821e1cd471584a"
+    "signature": "ec03bb4281b69c6d15be4b2a5615f6d34ed1c93bc629294667296b6aefad90db1ea5ecf354b26d38b5a69e46e1013caae1aa213b099bf16ae15647751925f173"
    }
   },
   {
@@ -6900,7 +6916,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "45321dd44a482863657f3a257188fa9dc141ce42ebdb4af0351ec8497979f70d0af9e6d066d6e92dc966a0d548cf69ded7ccab6c5a00dd1ec1a2fc074873d771"
+    "signature": "51ee97bfbe7307e21bf4108ddcf81b88ddb6c6358319cea529411feea93b0975444f6f1d974ee4c11b72dc8cbccbdb61505567b446aad15dbab03cc2d6f5df01"
    }
   },
   {
@@ -6916,7 +6932,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "8af83c3fc3f1bb1fd21e8b108a3a5801a5d8ff8d86c6dbfa9dec8799450a23c63f3ff19b7c8e032046474a11e969697379d77e18ce59fd851cda2e5c4174efc3"
+    "signature": "10a87cc314fdc148c74d57d7023fdd84a89bcdc280d0cdaf032dfca2d79f89af05f6b7026d4b62dadeb17a35e92f1829c0a1b230df22014cbc3d6ca2c7064fba"
    }
   },
   {
@@ -6932,7 +6948,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "00000000000000000000000000000000000000000000000000000000000000"
     },
-    "signature": "d4a4e52eb80d6c24bc389b717ba4ffb0712380ba3b26fb9d9a843a35facc19ba32d5a50aa11fd3e5831d3843d9a969a3cc4cc714a2a3a81e9dbd6d1a95b6c4a5"
+    "signature": "79004f7a8cc54662bf67d50a25c39e5113638ed23dba80ac9715494e1779fc042a1bf22e9b8871f673de00e42283c831553d9ebde32d6fb9238e9178fb492ebd"
    }
   },
   {
@@ -6948,7 +6964,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "0100000000000000000000000000000000000000000000000000000000000000"
     },
-    "signature": "a39d5f17b782a05bacc3267c3d0bfac49253f29f6a2cb300630407e6c206f7d27a4ea882f0f9a2f6ce6730b92d91449855eb0134dcf2715c110158adc0c64cb9"
+    "signature": "1c7f70991bec653563aefef3127f1b3b34ff0d81f51b183abffdcb1e77ed9898333d7ed4d16378c3b342ca0036ac9bd5920b9829639d9c670b8b2651497ef90e"
    }
   },
   {
@@ -6964,7 +6980,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "0100000000000000000000000000000000000000000000000000000000000080"
     },
-    "signature": "7fc30f2e383117636e08896cf85f023b2d15c1787eed169792c710d25dc8507c442dec6549efb5b536932277cdee513e6175578462ff41556aa4622716a1786f"
+    "signature": "b7e6273262bf53f4f36e719ff02c0cf8e616594dbbe1ae0adb96478f363069a964a6974939fd5558d98f4b7e362c180faab875e3dba85002be7de65ea3d7dd47"
    }
   },
   {
@@ -6980,7 +6996,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"
     },
-    "signature": "e6913b9e544f34472ab0586735cd732ad0193d5ae68133f08f2f018ff3f573e34be4bd9e5c63cc89604396fdbe7a88ec9c09253ecc33f5a10d25b377f0968caa"
+    "signature": "f5f193d842a0dfaf168deb2999b028ae56aa437d569fbe8f8bef089fc3dc2df64ad936e34e73c0c76b41a97d1c62430c14655b945e40abeff1533810f69338aa"
    }
   },
   {
@@ -6996,7 +7012,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"
     },
-    "signature": "c0cbf0f6b256142c256676c7fdc27b312db61cc0528c99356a1881d770d1872961dd899276a9e3831c0902c38f29830f6dd2cb687aa8fa18d5c2bab38861478f"
+    "signature": "bb8f7b29de4f9055ae10a551f3392d2ecd00df548500d295b8f7bc277fe3de2b4701f90c0246cb19d5554fc2baa03da1b04da9b0c21eb77fe5ed9d7671204b3e"
    }
   },
   {
@@ -7012,7 +7028,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
     },
-    "signature": "21a0f66c4c302e1a958a08c453537c085dad72518de6194bec2abf11b217090819f052ed3270eb8ebf52f52125ad174da3b04d8249e5f1ed903c7ac57bcee400"
+    "signature": "6c6053841ccd50406fa2880f27923bdbec559be7919102af399ae62f197ac57862529fa8b736508933b975f7a75c301958067d9c59d510b2ffe1bbf7beeac8aa"
    }
   },
   {
@@ -7028,7 +7044,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "0000000000000000000000000000000000000000000000000000000000000000"
     },
-    "signature": "414ab813d4e2cb62b7d255bf11261ecefc1c5ef3b416bf610bf2b194b08f6244510438e65371e6b1f6f766b0c2f1bcf1b37b449dd210e6662903a6e052cf6b0b"
+    "signature": "9fd02c4206279b37b0bb018ddb2fee34bbab61d0bb13181f008e1c76643937fc04348923222cf14e94216ee7ac701a8960dcb76e092a47da9c0f735e77121d00"
    }
   },
   {
@@ -7044,7 +7060,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
     },
-    "signature": "223453280ba0e683787325132341ce650006de8058b1172ff51c4d4928fedea5549b4948432b8704577abcdc1df3feba6484a8a442a326652e877fe899f22023"
+    "signature": "bae181c5498d0294fb4e01a0c2381ca05cb4949ebad2b17ccba2968a9e3f0d01481bd07913a59edac49766c7caf9c5e757ccab5516a8ed90369cad2f5bc56502"
    }
   },
   {
@@ -7060,7 +7076,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "7688f43708c8805880790034d9a25274873ee28839c2b55e48b6a352c2f1b7024baa0144b7db3067c5ee1f88c4dfe02cdb28695511711daf92885cd1888620b5"
+    "signature": "ef0f61608fad3c0fc8ed35cd876b5fa45186d54959de683012cc3f9d8cdfbb22676e07fe90fd2a4e5ead735e423abc2696570f2bcd5ec392f22897465ca94ad3"
    }
   },
   {
@@ -7076,7 +7092,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "de0f55b858689e0a590ebbfcf70edae2ed949c538143138462887e1950e611936a6083f61fa4dd06015881c8dea5fd497bd6428ca74f53593e9b1cb08acb8b8b"
+    "signature": "b38c4df34a199dc8d68e942b46130047ef7ae5fa6e56c3899cb6b4a424584dd63b8686f333083d575c45a6576312278bbf30b5ae1a4a81830a2436bb192abe96"
    }
   },
   {
@@ -7092,7 +7108,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "149ef9bb4cbe4d09ebe564123bc83e33c0ca2564a1c8edcd04e6467025d5c77f113808c800ce4a72858c135b2982662c3d5dca85ab3042684ae9713a62b5330a"
+    "signature": "8578c736dc289e37c7d2fc4d2be17d6882993b33780eb10b5e59dc1e17211cab407efdf439a184b8c9d54801ac50f6a091f261be5e848c5c58052777439c20a2"
    }
   },
   {
@@ -7109,7 +7125,7 @@
      "schema": "regalia.opstate-session/v1",
      "session_public": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
     },
-    "signature": "9e41c6841c61718929f17bd8eeb6e245486fd97a0c3fcedcfc512f6c916d78673f34588f49b0e88fdc76f8bdaa2122762a1a91de0cefcd9a398f59d49ac93e0d"
+    "signature": "ff735008cafe23d65c636fb98d2f20d362a9d58550b79e49ec1bf174d4a5e98c64c1066f58e37575c59519bb945d6c6a9ff339b078caad1cfcd148d3902ed45a"
    }
   }
  ],
@@ -7278,6 +7294,14 @@
     ],
     "threshold": 2
    },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
    "epoch": 1,
    "heartbeat_max_lifetime_s": 21600,
    "heartbeat_signers": {
@@ -7384,6 +7408,14 @@
     ],
     "threshold": 2
    },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
    "epoch": 2,
    "heartbeat_max_lifetime_s": 21600,
    "heartbeat_signers": {
@@ -7462,7 +7494,7 @@
     }
    ],
    "policy_version": "p1",
-   "prev_digest": "cec9b93a7bfc47caee948161fb03d813546cc9638e29350ff443f00a7afe4457",
+   "prev_digest": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
    "revocation_signers": [
     {
      "parties": [
@@ -7489,6 +7521,14 @@
      "c"
     ],
     "threshold": 2
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
    },
    "epoch": 3,
    "heartbeat_max_lifetime_s": 21600,
@@ -7568,7 +7608,7 @@
     }
    ],
    "policy_version": "p1",
-   "prev_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+   "prev_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
    "revocation_signers": [
     {
      "parties": [
@@ -7595,6 +7635,14 @@
      "c"
     ],
     "threshold": 2
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
    },
    "epoch": 4,
    "heartbeat_max_lifetime_s": 21600,
@@ -7674,7 +7722,7 @@
     }
    ],
    "policy_version": "p1",
-   "prev_digest": "bcc82b4bdd58b05c937ff5cb910c059da0f9703290ad6792a5dcaf513bb1fe50",
+   "prev_digest": "8d4ad7e1412b84102bc1ab159fe238a65c386f1d0d9e50dd00fbda9face3bc90",
    "revocation_signers": [
     {
      "parties": [
@@ -7701,6 +7749,14 @@
      "c"
     ],
     "threshold": 2
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
    },
    "epoch": 5,
    "heartbeat_max_lifetime_s": 21600,
@@ -7780,7 +7836,7 @@
     }
    ],
    "policy_version": "p1",
-   "prev_digest": "3a14f9eda8b463e5d217ad70706c9552e2b11faba005050f254e17b0563c8fe7",
+   "prev_digest": "d7f04348ed14ae9ba56c566e9c134704cb7ed7134035057c77200496a9460398",
    "revocation_signers": [
     {
      "parties": [
@@ -7843,7 +7899,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -7851,7 +7907,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -7861,7 +7917,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "9cb7a797447c8dfa28e2debd2edf257376095058b616d0914ced97f46611619c167a819be3e556dcda2b697cb88ac0b9190f2d85570e499373772d386828666f"
+    "signature": "41b511a0129ffd06b702f43518f85242efc523ea23ea5d3b14a372f84f3f2a1757628b3b3821ce168f50c400c0b55ba39216c984fee8d9544bf5b1330e0e57a7"
    }
   },
   {
@@ -7898,7 +7954,7 @@
       "fenced": "b, c: off at the iLO",
       "node_id": "a",
       "not_before": "2026-10-05T12:00:00Z",
-      "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+      "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
       "quarantine_epoch": 2,
       "schema": "regalia.survivor-authorization/v1",
       "scope": "full"
@@ -7906,7 +7962,7 @@
      "signature": {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+      "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
      }
     },
     "cluster_id": "62ff5b5c1a2e3d4f",
@@ -7953,7 +8009,7 @@
        "fenced": "a, c: off at the iLO",
        "node_id": "b",
        "not_before": "2026-10-07T12:00:00Z",
-       "quarantine_digest": "3a14f9eda8b463e5d217ad70706c9552e2b11faba005050f254e17b0563c8fe7",
+       "quarantine_digest": "d7f04348ed14ae9ba56c566e9c134704cb7ed7134035057c77200496a9460398",
        "quarantine_epoch": 4,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -7961,7 +8017,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "af1d004e227d2cdcbc964ccbedbc8e59c901619cf9a948971587d49647eb16a79ba2ee2d2f6506dbcdb0c0820b5c5e7c77c1a8aa7cc8e0d3410645b00009150c"
+       "sig": "9e7202de2e82f0217e8c0c3ba978c3e87c604d03e4c22d93f5e0b488949324dfbe289ab62353bb68beb396e1b3d5d74537afceb53884969b238214fd1221ad0a"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -7971,7 +8027,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 4
     },
-    "signature": "24b7229ba0f1282c49dfe3b00555d00734c4a8630f49f22846ff8b1dead70bad29bc442beeca82ec66a9c283a3faead746bd1ad8ddb83676be3db02d210ccc8d"
+    "signature": "b7d9f9b7a36f19cf9e509cb4edaee4bc839f03fae3c0f4a45837c3fd276f7004787441a5ec8c9a73503a9814777ee5d49165986caf072b4fbe0c3e7f3dfaf61e"
    }
   },
   {
@@ -8008,7 +8064,7 @@
       "fenced": "a, c: off at the iLO",
       "node_id": "b",
       "not_before": "2026-10-07T12:00:00Z",
-      "quarantine_digest": "3a14f9eda8b463e5d217ad70706c9552e2b11faba005050f254e17b0563c8fe7",
+      "quarantine_digest": "d7f04348ed14ae9ba56c566e9c134704cb7ed7134035057c77200496a9460398",
       "quarantine_epoch": 4,
       "schema": "regalia.survivor-authorization/v1",
       "scope": "full"
@@ -8016,7 +8072,7 @@
      "signature": {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "af1d004e227d2cdcbc964ccbedbc8e59c901619cf9a948971587d49647eb16a79ba2ee2d2f6506dbcdb0c0820b5c5e7c77c1a8aa7cc8e0d3410645b00009150c"
+      "sig": "9e7202de2e82f0217e8c0c3ba978c3e87c604d03e4c22d93f5e0b488949324dfbe289ab62353bb68beb396e1b3d5d74537afceb53884969b238214fd1221ad0a"
      }
     },
     "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8063,7 +8119,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8071,7 +8127,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8081,7 +8137,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "ec5038632670e23ea38d7b1d07d2c7f88e5082692b748519e4966cc18c8942063043af7194ec038802674bd5e78c4dea3789ae3c4f4e48a7853dd60c8be66c08"
+    "signature": "3ac2c00aabe3f17901407fe87662c28ee959067ba2601fcab95a66c8d0db99ac73bd679cc1762d1356cdc1b5cf07d32f4a359f09b669208d7c71d13297b83809"
    }
   },
   {
@@ -8118,7 +8174,7 @@
       "fenced": "b, c: off at the iLO",
       "node_id": "a",
       "not_before": "2026-10-05T12:00:00Z",
-      "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+      "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
       "quarantine_epoch": 2,
       "schema": "regalia.survivor-authorization/v1",
       "scope": "full"
@@ -8126,7 +8182,7 @@
      "signature": {
       "party": "owner",
       "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-      "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+      "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
      }
     },
     "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8173,7 +8229,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8181,7 +8237,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8191,7 +8247,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "35a15f4b9af076e5607deae14d02cc41428d28d5b76dc191dd3aaceafdc459e272531d0eb3e859c72c41da7da4db2a4ea15c2d9282513de43e480afa35657457"
+    "signature": "7fdb189a1fff0ed2d406f117e091aa2c2467c17d05b7173ef08604c4f886c99241503cf75cda46dbcd7ca568b83ed9198ced148d1b7f66abe21a25a051bb6d25"
    }
   },
   {
@@ -8236,7 +8292,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "stateless"
@@ -8244,7 +8300,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "48e1b4d4270f120fd48fdd571655364f0d89853f40c3bc9f061f3e5c1f49bbef370956be52606eb93b62c49a350c3d0168176153f1f46000096a4bb327618d0c"
+       "sig": "425d98f888d4be629f4130e618cead6b0569069cd71344429e3fd2a8cee2b8078971ad4fd56b8f737f0b291520d621c5bd9f3ab5900991a8896adcd34f400a01"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8254,7 +8310,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "5e17d0285b95f7cb64b6b6ac694dbf8d3ea105adcece2d8b90a6b415775c6dac35b1f956e4cb034d6833c7903625b0986f3f4d8f31d7276ca161060c3190be38"
+    "signature": "72d427102ecf9c055d77dce92388d6f1ea5e78e8e076b6e946043d7c80509bc1076d125a3131e88b18dffe4b4dec507faf53f4ae8d76c32e786400db105bb4e1"
    }
   },
   {
@@ -8299,7 +8355,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8307,7 +8363,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8317,7 +8373,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "38472500d09719692d14fed62c9069b768587f44c91ae14ae69c662b83c498ea153dfed0914974d475c3a7acedcb72faf4702653ff9e968a8da614cfd999823e"
+    "signature": "445e53591c36952fb5b93375a5bc6f4d1c4fb0f9ed8538ab7135c8d420ee9caa472398b376628be7058a89c80668418f10e959723a672f2dee428dc4debaa004"
    }
   },
   {
@@ -8362,7 +8418,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8370,7 +8426,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8380,7 +8436,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "40108c77d2599c7d88be9d972cd5b45ac9cc35714aaa2148f8ded1e9180aa6382bd14bd58a2f36628ceb0a7951116395df6639c394b720ba795777b7a977b85e"
+    "signature": "248bb2127b35da04eb0f037124c11693c329297a8ada87934bc267a0512a0f083172da719ad14166355cc55a373d6423dd8cbc22e04279fa9dbc82644172a48e"
    }
   },
   {
@@ -8425,7 +8481,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8433,7 +8489,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8443,7 +8499,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "d51567dab138db14a2d58095ce5f5a582c56c4a7d1403b8649f047b48613b46e69b2a3d2045be996a09e3eb04f964a0e83ddd08b73324bd493803ff1b3905d57"
+    "signature": "2883efd47f2e0d5e0ede5d160d134d9dbcb008dcbeda42c4a6f64cc9423791ba371a04db3d3d3da0c1aeedd731c58435ee9ce9e1a262b838f6bac2c1dfce89c0"
    }
   },
   {
@@ -8488,7 +8544,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8496,7 +8552,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8506,7 +8562,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 9
     },
-    "signature": "1466be30d43e5e7ef6208c761c5ed774014df3f0ddb17bdd807c7be92ef46754562ca72e684a935c66a47449ac7389241bac30fbcb70ee474db9933dda1226f6"
+    "signature": "043a1a85f1b4529c51ba519c5bfc47ce9ebdd8f41c9a970733ded466dd1e2d6e62ba732398d906e694efa3eecdf74ff0874d18bf4c973546ea8afd7956603975"
    }
   },
   {
@@ -8551,7 +8607,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8559,7 +8615,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8569,7 +8625,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "6f09a735c8315ad0aa025674d7cac06270d4ced8a13d54e7230c2c13859de0a612cbab25c723498926825bb68f739d95ffcda385022708fad50f305089030cec"
+    "signature": "0701bb71c9534a8fcdc9fc7d542d13f9b5b6096aa0923741a5b6c964426ce9ee3fb34e44fad8b71b7b9facb8b9683c21e3ec25908342077407a2722e240d80c6"
    }
   },
   {
@@ -8614,7 +8670,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8622,7 +8678,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8632,7 +8688,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "8fdbee90fc5d9c6d01307a4b55275c2d123fab0d97d59205d8e30bbdb4a575b32dbd80969540b8a7726d41907ba9880130ae948ee4d460cda14d0794dcf75c11"
+    "signature": "2d1920ad200dded01d99b13ece6a9e6e68da1660c91fc521f369c98e8e6f3f0058f48e3fda23d2bbdd1af11761be30b8aad9cccdaa1ce8ded2dccb6335acb825"
    }
   },
   {
@@ -8677,7 +8733,7 @@
        "fenced": "a, c: off at the iLO",
        "node_id": "b",
        "not_before": "2026-10-07T12:00:00Z",
-       "quarantine_digest": "3a14f9eda8b463e5d217ad70706c9552e2b11faba005050f254e17b0563c8fe7",
+       "quarantine_digest": "d7f04348ed14ae9ba56c566e9c134704cb7ed7134035057c77200496a9460398",
        "quarantine_epoch": 4,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8685,7 +8741,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "af1d004e227d2cdcbc964ccbedbc8e59c901619cf9a948971587d49647eb16a79ba2ee2d2f6506dbcdb0c0820b5c5e7c77c1a8aa7cc8e0d3410645b00009150c"
+       "sig": "9e7202de2e82f0217e8c0c3ba978c3e87c604d03e4c22d93f5e0b488949324dfbe289ab62353bb68beb396e1b3d5d74537afceb53884969b238214fd1221ad0a"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8695,7 +8751,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 4
     },
-    "signature": "8bb834115b87340228d149913aacd4d608993a6db1cf6fda858c7f9207fc5b8604cb21a1d661b1d1d92b6b63092dc106bb1d0842d90cf719d67d0d25bceca22d"
+    "signature": "e4cfbc54f6b9492b1763c6da4695595ce556a0b285f7cab7286fd7d5a346733e13b511fc5a8fcbfada8331c32d2979c8e8d7e05bf372216b67d570662be295fa"
    }
   },
   {
@@ -8740,7 +8796,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8748,7 +8804,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8758,7 +8814,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "5dd3217691ec2c08a6cce79fa61706888a91b2c650540603a5ebab711376e786653bf0f523d2b3289d1de296005a81b8f14d074537d0dc13fead02270ebf1f07"
+    "signature": "cb46a9dbb90b4611ac12c36d27fec0b073ecb1fde9ea8ff9d4275fc4bc6162d95e3b0e801f86994cd0aa415e6f8e8f13787a2da07d10a798489168996b089c95"
    }
   },
   {
@@ -8803,7 +8859,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8811,7 +8867,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "f7df4679d3c2e93f8e415759dfe654792cd04bb9fc7ac59847437d25dabd4e69e4047f6152c08d03f8f844243fba2ccf9450d196975c4d96f6b58dfab051530b"
+       "sig": "b61ede23862cf75eb3d3f58bdc5b36413f146cd13062a679abf1a42fca1d793cda81b6ead96a79b15566dc0f72fdb81b1bc57b867e2ad5daf12209ddaf8fe202"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8821,7 +8877,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "fb93f07fc023e26e0228484e02482de97c1bb86eeddb81edfd4fa90a2a7fe8cc1ef786aa4c8adaea6debf1c1063745d070ede98cb50f2a3bc43cd9a2d4142159"
+    "signature": "308debb0c5f8d95c2212faa02cf41d73b96db48f896e9dfe23f19bcaaaa38afa3f255f8c6af18dc9545a72a7c2344ff1f96e959547b40b39ad76f8d3a68acc14"
    }
   },
   {
@@ -8866,7 +8922,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8874,7 +8930,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "26a5beaf19c7020c481320609f31946633be47d73eacfa073964858993978e53bf5f66159a150e07206bb2a1a8eab46d5991446dfd8aa6fb99a7faf065538e0c"
+       "sig": "db99855f3b21634f84a7325f65c2196852fcf853faf5e6967e9f4b0e4e12f4f893dbf86fcd909216d3ba2775631533bd4ad5be764ebab9dbd7e936bb3dfcbb01"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8884,7 +8940,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "b41145fd18d11dd637e237d06d3cdce3aa251d69f1cb2db8f187d2c4e5c9734967727710e32987aa505f4f2610592a71a884360613295dd9b72a49cb5e1237bd"
+    "signature": "48c62fcf10b6e93fd2377573e446defe58778a2151583caea2d3c11e8559eea36ade667846fbe89ffa1a4e79e09c9f9aa4ab50a78932832284fc371139bfdc2b"
    }
   },
   {
@@ -8929,7 +8985,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -8937,7 +8993,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "77440a1e85e9d1487d9a52f55b1e3568b817430de74c824fbe03ad3d568d35ed22c4ea0d2076658544d08e4706af0d0f1383069e1e96edef6236aed4d9d65004"
+       "sig": "f5c83b7653700138dbfcd37fe6bdc8a3b8b763922520e792831d5ba7f21c066c6de8848b98d988de022a937e8f55c31ecfca41e3923474daf1e096b3dfc4da03"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -8947,7 +9003,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "f636c11622c4fb2ba9bd8ec70e52a231f5d8a45f345c957f5273ec46567f8c7a6405fddef5658f2ee6074aaa80726de49151f40310f3548642321255247fe637"
+    "signature": "0197a111aa49804274d3e18e316cf6879de876c1b97f362148f6e2cbdb4626d631c1fd2a50043b5dfe8a82aff8b3fa956d246a5a1c4c542429ceb2e0b864e64f"
    }
   },
   {
@@ -8992,7 +9048,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9000,7 +9056,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "74ab15981bb1d50029c7caea4abf70b4624a839917d860907692e2a6264e6db4ee9faed3e36eacf71d5b706a8f10f4395a99f88e326986d7e68ff87c29135101"
+       "sig": "c88c72310142128c9f1a4798855ce5f67126cd61a05ff8d175d655eaede32be54b0d572d6ccc93701a3e89e0b1b91675a4ec8cfc5af0237c2abcee342083a003"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9010,7 +9066,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "2ed9f5e7028397a94b336479e1bf44b1f56f841ed8db632d14acf4cf8950fb0e28908f88b1911b8382deb38cefd750bc5d26869d5ff9ea7a36d25b8c663f7daa"
+    "signature": "3418a0a102769dd81bc4b19fd34af1855270b22cf7a641d8ba0c9ac9ccfe706d1a5def52c7c57de52ac368e41394bdae5505d924114d6289e8cd2813cb212c73"
    }
   },
   {
@@ -9055,7 +9111,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9063,7 +9119,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "d27d04f59ff4bd2b2a2bf8c727eb8ccc1f31e50e93d9212420c0fa94f33fa322e66bc56e6ccb08061e163e8973f0e14e19166f6ee064af9ae2879df06fedab08"
+       "sig": "5565a6dadf4c83544c55512ab19ff6c5a15ccc0c901de055807ae5811bafa55dc93e100bbd0f5fe38655083f0f8119309bca2eae40abc88131bc5d5281ce7202"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9073,7 +9129,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "7ceb6fd7e87b5c944993c1a70e91cb1438fd69a6b293ec08555a0b39410a905e28119e1015997db213e25da5023349b1fbdc4718ff43089d52ead9e44e28db66"
+    "signature": "381d320ece15f1b487033989bebdd3f8a1407d67d80e06e9aff22f7657e40bbd4847c141bd8980365ea77e77cc6db74d87428ecf94473c11b251624352bde958"
    }
   },
   {
@@ -9109,7 +9165,7 @@
        "fenced": "a, c: off at the iLO",
        "node_id": "b",
        "not_before": "2026-10-08T12:00:00Z",
-       "quarantine_digest": "38ad7fe69443f4ccd9ee6d3b8aff3fb89b4b7008d509af4082324ab1ddcfd7ed",
+       "quarantine_digest": "d62a1e0369c18f8d9e931aba4a31204471a8549a2eae32e6ee14be1dd99c6b3d",
        "quarantine_epoch": 5,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9117,7 +9173,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "fe7aa7da916412259380ac982cce1097cfb6b56f95231f2a5809af43408955dc2f05af7f4d11a76ee2ff06293e54756ede27a049f8c725f4d860e9a10e94f50b"
+       "sig": "e4d946f1ee1ab1c95bac3a1ba441de412684d9a037f09dd549752c2c33e48d6b06186903652d38941ec2254e747801b8ad2fe9e6d66e61e97316592ae84d0905"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9127,7 +9183,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 5
     },
-    "signature": "8744deaa2b1379f7c3460687fca801dd633099e74a1ebc09f648286e96528fab7c69d1ac4f2a76bef6574c652376ab8eab276d27d59f42915cda1261a311f60f"
+    "signature": "9fab0ed641eed2a92506f69d804da051eeb7e87c879960b9797884709c449496125244bf2406f7b870fe1ee37f0d860b03d28e98f4264bdf52650a5204647678"
    }
   },
   {
@@ -9172,7 +9228,7 @@
        "fenced": "a, c: off at the iLO",
        "node_id": "b",
        "not_before": "2026-10-08T12:00:00Z",
-       "quarantine_digest": "38ad7fe69443f4ccd9ee6d3b8aff3fb89b4b7008d509af4082324ab1ddcfd7ed",
+       "quarantine_digest": "d62a1e0369c18f8d9e931aba4a31204471a8549a2eae32e6ee14be1dd99c6b3d",
        "quarantine_epoch": 5,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9180,7 +9236,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "c7d91e7829d7a068ba8364b4aa6b0c776536e31b99f0bc57f6205abc8d55b79164d481a73c1d753e942396cd3d3a209091fc065e9781db256cd6574168f5a70b"
+       "sig": "9cc9608ae03ffe61d2ced5b61039b7582948caeea3a4277d0b64363ff59c77a2875d5778a62d15b1b006465e7a50799fd3064a4d77897cf88b1847ba18cb950f"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9190,7 +9246,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 5
     },
-    "signature": "2c684728c5e3433f7ce32e41d8a39a5365adfc145fa8fa5a804c6909cd037a2229e3a23c669914aea5042d7b5b98b9e642197f6d956b83df801bee529dcbf03c"
+    "signature": "5d2658c7257074da8475f84cf0b20e4c157988cae7ae4dfad872dfd113b062da4a6c16cce50d61e0ecbae7085d4bd5edcc7aa7d15cda574f244c7a56c9ce970e"
    }
   },
   {
@@ -9230,7 +9286,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9238,7 +9294,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "2532009a3f661487458b6923ecac007672a2ff643053e3fc15037c2eedbb349fd470942cec88de632ffd57edd34ab5f5083c0ab097c8f3ddb4dbbaaebc1b9f01"
+       "sig": "4e106ef8e3c09bb5e2169c3e8621d99b9a4d6dd09ebb0d96f1199ba61886d8619690d58c4870c7f90a96bf4f08b30c44145e6746cc5893d1e190877f73a0ea0b"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9248,7 +9304,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "4d89742cb82fe9d4d2dc42df592bf03db1ee350312cc488cee163e9f047e721643d7b608b8c8dbb16208492bddb75db36fa6ff40dc8f7cb8d1b53701cd15fa38"
+    "signature": "5c1cf6800e4406dd5786676beb1413197032c0dc96d25337082e57b178c4c66d59683777b79ae0d591c4065f52fe9deeb9599f0ba7e0cde00e483fa8bf1f934b"
    }
   },
   {
@@ -9293,7 +9349,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9301,7 +9357,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9311,7 +9367,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "be9d73b255d1326d47ef0b63a15732a97dad57b9abf3b5c54cb3c01ec9ec67e858c2f7fb577d525c59129c55d08b1ba8ae396cbf990d6cb744f69e0a876e6d0c"
+    "signature": "c37a7e11fd5d83245157a8fedea6aae8ffaf7162402a32bad007c47c99831e50720916e845c848e8c174a9d95aa78928bac4fe36e34868f985dea80e5cbe3b1e"
    }
   },
   {
@@ -9356,7 +9412,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9364,7 +9420,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9375,7 +9431,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "b3451217d1de59fd4105816dddb0d6f345905ece3fe9b237be2da6dd786234931fbe12a3e22777497ec5d198a2e6dc92ce829744da14c8b1da11e26e6260dda4"
+    "signature": "cbffde2a4b63c660f228d554adf99252c7db447c9880991a7b9ded9dd4eb8dfb598076f4c0d479ea142355f9ab785797ca4ceefa366c3aaefcdf794bf426d1f2"
    }
   },
   {
@@ -9417,7 +9473,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9425,7 +9481,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9435,7 +9491,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "7ff5de4dc6699185c1dcbeb398b224403688610311a3efe0fe2bfa4ab5b3c1e444b430e2b6e6ae473fa535b8c6814b938e5697e73cabab90c588b46fed55d12d"
+    "signature": "afd76112b562292ef66fa4613173f1ef977261a52820e8b6436c1a484919f08c7d5faa470c08277c9e4a2be7293bb51804f54c9017a1274f381dfaae2713e907"
    }
   },
   {
@@ -9480,7 +9536,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9488,7 +9544,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9498,7 +9554,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "4d615928f6dc33cd21ad914646a693a25ca0d376742720512b574df184c875c903424bbef40f5686bd526777151e6c81abcfb1d14dca12d8d9ceb1e74e025628"
+    "signature": "58497e082ae705fa48e9694406bef290445dc78913b4fc21b98805a2a130d9293d1993778b28c87ff06dc3c1ffe308f04c05f15281fdd68240df62fcebbd2ec2"
    }
   },
   {
@@ -9543,7 +9599,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9551,7 +9607,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9561,7 +9617,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "c8d7111d741f345e13dd35c196d13f603c803f9479fa22483614efa982ccfb7202e7df24627cc219ef2a8942ea84599b2e25a22d42d777894075ce6c7dc6ef82"
+    "signature": "b17cc83ae3dee43a7f1c48df85283ce909724d4038abc8b9d4ff824455f2612d5ad81b698ac2eef0e8264496eb3007b5b0b07d631bd7ecfbec8c32e97cf6026d"
    }
   },
   {
@@ -9606,7 +9662,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9614,7 +9670,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9624,7 +9680,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "d2ad2c367ddcfa7902e042619b430ceb5ba80a3dfd80958bb63d1daf639895c74323932727acb7c1eddf2c016bccc51f407dfb3ebb42921fdf119210d6b09774"
+    "signature": "287557243564036c861801ff22a6613b0658a63ef7324839a9574ecf626c543c05bf067869afea6879bdf5852b4554d669c9b32c1a939bc00d4839029c5ad347"
    }
   },
   {
@@ -9669,7 +9725,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "bcc82b4bdd58b05c937ff5cb910c059da0f9703290ad6792a5dcaf513bb1fe50",
+       "quarantine_digest": "8d4ad7e1412b84102bc1ab159fe238a65c386f1d0d9e50dd00fbda9face3bc90",
        "quarantine_epoch": 3,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9677,7 +9733,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "89c9fb65d2284912786e0154888881457487b007c923dfc5ae900e26a5383220cba3e6bc75049bb5442fc81a81fff8804448307078c6e43eda03d5080552a205"
+       "sig": "57601e5bdf4c94db3e5e670cc6e616d36dceb397e346b5d05f40d3baed84dec7224cdeeb8b7b5923f447dbae0b67b0de3ec7a78de16d6ae3f9165a85014f2c07"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9687,7 +9743,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "7f5b52861f6d4f5abda84d9521a3ecd39b2e9d0e647219903502a58cecef60437e620e665895645f5ce502f418b1207e621b3448b43736448f8ae329f3df1483"
+    "signature": "1180660a85369e063b844658b3e3801208e1d539103c9c8b2e6f52f1414de00f1755c79a578f560ed7339c6b25983a44c447beb3b5b77dcdd554ce0fa3f42f4c"
    }
   },
   {
@@ -9732,7 +9788,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9740,7 +9796,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9750,7 +9806,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 0
     },
-    "signature": "1ca5c351e9ab907ffc801077ad52cded753cdc522f1d2fbadf1f51da07e84ae321c0cd05803454c6485af53ce85f70bb195e7f23f013cb678ed85d059c396017"
+    "signature": "f4ad60296fb53517ad2b73c24fd93b936025e61e94af335a62f925dd240b8f9d563d54e45e12a74188eb5fc96b8d896fcd9829ef5821111b9267ff57c23727ac"
    }
   },
   {
@@ -9795,7 +9851,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9803,7 +9859,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9813,7 +9869,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "94fb1009a719b1ab71b699144dc3f289bb1fdb1a5c01dbd9c490de30dc8b56376ebc65a4a29881fcd86aafc81aa3b8d33e45c19a6aef905382b6332e1a6b30b0"
+    "signature": "8fda66f22354c0a011ad2f84e39fdb5422e499c2c6b887d8dd2b158e878822aa286837efd62d491a56f716671088107ea19124499270af875dd3a4951fc1ce82"
    }
   },
   {
@@ -9837,7 +9893,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "7beccb6481cbe9abd311bbabd2c17788c099851de88e3289c55c8398b4db2023520c52bdd5995c43af1f952c465fcef752ded084767fd2788dacc71d45b73a85"
+    "signature": "076e940f8c74cbc311eaa7646d64cdc2512b224f7b623d1f667ac929be5b8a5b6bb0486ef897158f96ea944cc65df98a4ec42a669f6216fddced8ecaafcff45f"
    }
   },
   {
@@ -9883,7 +9939,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9891,7 +9947,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "85b9e29ed330f416adffe0d9c65c42c07ae5fb24180d9eab58b602a996fa1d326d5491e84d1812907c60b7afc54b3b3995c89c6c9f8e553cec7e6f69c59c3c09"
+       "sig": "d001c39d70d9f7112ec98a572c3010c0d7947f45a71359608f419d1b26d39e944a5da00633204dad780aaf9c7fd11276b2feaab4257587788d7338551f070205"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9901,7 +9957,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "f9b21b3dc82a246c914f6c49c85bc365b74e2f59388421660d0f1b35c32064f92f513d7c8a3ed6894380a63e1c989c7438fdf8ab4d9f7f560644f194057dfc5d"
+    "signature": "b7d07bcb518719171a956193b0eaa1639d84f1fd1b5ee27ec739f933926ddb4a64ba7de51c61cd8537865be6d93039863c1d095ec05380b3fc4872967f66bde1"
    }
   },
   {
@@ -9936,7 +9992,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-03T00:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -9944,7 +10000,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "a8747240986a2baa191fcf2f31986df2f42146216e2527e85d8c00beab9ba9cbf3c163b1f7fac15577975e83c7517a7bf56adbaeefe28e00fe594b23e6eee403"
+       "sig": "18d1cde3b18e63248db6e5ed695308dfb3ad3735e31ebe9409bd86450e0919b38a4939939d187166d88624b0c197970085c0109767c5ce9ec1d6ef93ba5ab504"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -9954,7 +10010,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "cba9324b437b6e389c7856a4df7cac83879bd8d46e3bfa2faf725d20ba3f488b01ac7aa92d55ef523076c9a2490dd6e97de12e0577ce70d3dadc32edc519d02b"
+    "signature": "99bbceb9d133c576a46fec5af9a46034a700bb7e4555d169cd4aba044c01d1f1670aef81f1c289dde6e5a01d26aa876a9440ff4ad705ffa6643ab171b4b562b7"
    }
   },
   {
@@ -9999,7 +10055,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 0,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -10007,7 +10063,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "8f5e2a84ff7d41b01e4a19567766dc6e030ff69b3826001a718df4c8f1f6f4e9164e29bc2366885bdeb30f50f47349a910acadfd8fb800713c57b61136c5c70c"
+       "sig": "ffa8216c6253e32d82029ce469af339df98f44bebfe59e2c687b0903c917493c498fd1dcf34c52baceb191d96e4f5f73e57ff55ebd8ec7da4c0206d1cea3ca0e"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -10017,7 +10073,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "cf917a2b6fc22efa3e1f977fe6d8a823f9da80d1262b26718fd20032adfa9b6f1e553f63b3b83374d22e37a3db2ebd8ae7de97bbef9fa53dd5d560568f1e2ba3"
+    "signature": "d3d81af613a4bc79bbaa4b46ecafdcc2ca0a894e0f84345c703348d1acaf95cb115eb24198ffb432aa7bb0c3263d2477358263caea65fd944788d2ffb975c799"
    }
   },
   {
@@ -10062,7 +10118,7 @@
        "fenced": "   ",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -10070,7 +10126,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "1d001d6a2b1723b5a1f9769a52bf83798cb59f6828038f41ffc68850598b1d885a9192cd198663b7a181673c9942b8fffc6898186ff66dca7b0704c5f9f2a302"
+       "sig": "be42d5c63d69b153d123649667934c876dd4d87a0300768857f061f25d4fcbfb4b08b1af93eedac3b8e2b05781c3b8ca9fbec1f3949c3da092624d26b2c03105"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -10080,7 +10136,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "7640c37787b2841e4a8e5f522209108956c3a3d004e58bf28d24b2475c4baa4545692201d479955313c710e4cc5bdfdbe62411d23093c29c37a01b255af9b15f"
+    "signature": "056a75852db5e45eec7a017f2121be5094b4d538160b700afc801ae0b096fd23030312bda0d1a2f47de84352ee3c26a3977a26648720d8421662d73d07a82883"
    }
   },
   {
@@ -10125,7 +10181,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "partial"
@@ -10133,7 +10189,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "f1f0c3897fbcef63f98a6bdc93bfcc68cabf304a5962475dec010f2e6efe9fa6f7b5e8551adfcd46bccfd51f615f3b2c19dca878a56e145b71152ef29c5cd808"
+       "sig": "f41fdd7a077a43631630175677a6ea5c851e4e84d216a40ba5f55765f2358eade057bef5b7a4a06eb1fef1f53f6c783548e1341c06f9bfe2e578ca402eca9a03"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -10143,7 +10199,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "9ba04dbca19fbb80bdae247b56acb9d3304af187ed043e4b290ad02519dcea365d9ea2189be5306fe71acad806a5e28bddf8abf80df7520d17ca7b5009e13dbe"
+    "signature": "ea76262df6befd4bb1a7205f6738b37e896aa4a5f1d8388d25667c7bafd815ff427dbaa7feb4147aba16e76d1f557f45f34e0c8001d3c6a0a93f6c30667389d5"
    }
   },
   {
@@ -10188,7 +10244,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -10196,7 +10252,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "c67e24dbb1269848be60e49965e651abf2e58fafe53db9344065c18ebc9cf1c917c42748f44f589836fa604632c846a371b8b427e0bcc43a29f37f3baca01408"
+       "sig": "6ab463453cb866d983f7b1cca53f0fad77f33f3b858ee05b5781420733cab4f8928ecbd74809a3796c2d3498d9b47d76d64b5f6d78f74817e5fe051306104f0b"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -10206,7 +10262,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "7953703aa21fa6a96051ed8d105162851704bd2ef3e9cb518666900f3feaa8fb0d38233a8bbe5f24966ec2853b80a15c167b3af33e4c9986e7138494fddb8892"
+    "signature": "497151f77074c2cd0d8674dd23d01679bc966f214b48c61e89e2d528768aed5955b3719bf485c7238dc592c40ef0f337cd5961fda2e835234e918c9ec826b931"
    }
   },
   {
@@ -10232,7 +10288,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -10240,7 +10296,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "b1056f878f6a238028e3373fe37aa14aae7b5e62f2c5ca2534db961160b19fe1bed15d835c8cc08f490fcb8cf5f747e0ad6eca7a4dbabf4671046e0584364b08"
+       "sig": "af15b56a459de5071b110eb4f4daf9aec091c69587dd469e68221b6de33d50ef33fde68651b0b2232d09ce879da64b5d6a45311838cb19f535c6ce1e84c7060f"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -10250,7 +10306,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "1409f58013bf2df3fec7a188605d95be93636a3fa6b128f73cc7b11f46aa78926a113800af70761c431aaa83c6e53e76c8e7cf60e47b76d8e950dc2972379b2a"
+    "signature": "ed4d3409db7f460a6f443a3ff34dff8d64ea08633ee169ec41e624db99e4045a7cb9e00eb63ef134e08091ef7e40680f06ab1b05627f8ca208eb0c65f7dba24c"
    }
   },
   {
@@ -10295,7 +10351,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -10303,7 +10359,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "32482dbd7872ceb24445850f73c04e9a288a273c2e67f145d546a7b65c1b4bf7204d30fd3de33b583642dcecb6525198c3e48bfcc123f0c9acfa87d4b8b68501"
+       "sig": "7c45d157a13ef3428315fd30a2f91d1f2cb53bf7f42a8ae550f8999f1707aa30c515f9ad0713163792966f01418f31de846158a1fd6641eaaad7eb51a4444d0e"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -10313,7 +10369,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "08298643514fdbcf6c3d0dd4fae077c895e6207da4166e786cdb08bb0a8b6dc5645720062b8edf81c7fa88045531bd8abf65efd3574acf96c80e62c668d29a95"
+    "signature": "27846c11188bc31388822c7d5e6d3378106ad4830c102e6898d39137b4eb4b313fdf52c0d5fd86c384d2e2afee8b0cb1029b7a93c395133c58656b5d5f3982c0"
    }
   },
   {
@@ -10358,7 +10414,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -10366,7 +10422,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "c251ead7cd55eaea7e7ebce7bf4f2c34ebabebc8bd90ca976742e1a61562510dd0619f6fbe4e612a1e4ba0a855d1115fdebe9607924686d83b829819ea5df105"
+       "sig": "afff1a4c4b4b270f2564bbabbdd1cef982cc5543c11dfb1562cf4cab1227fef6298251c747c888ae6c6a168a12b55ba062db969c8a44d5ed4fa97b6b53071209"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -10376,7 +10432,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "56d92ae664f3b199b317a62c0eb4a97a818f1108afb252cf1e84aa7a5a6370ce2b6d1e631a858b2507ff87b4046a4205695a0068dc5f88f7d21e6b86f37ea91c"
+    "signature": "c6dbbbc5890905bb64906f4de17815e383903831e89e9cc6befe7e4ed2c51d6a1765ec7d1893d8127bfce8f205c7798633f1ae0eb88251f1b71f09d70af0638c"
    }
   },
   {
@@ -10421,7 +10477,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -10429,7 +10485,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "75ecce950024332eb2f68287988b5026334e523345c79afacf84c84b20ba6b29731b5f981787046b1600e59c43fb8aafd9dfeffcfc145394faedb89948e4990c"
+       "sig": "41efe2c9825af8e9f2b0e281ed8cbfd6ff5bdd16640df628c0913390bffb9a7744bf2b3af19f282afe31ad14e274777332f0943703f95b3c161b2e8532967105"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -10439,7 +10495,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "6b708a018254a9de012154a36c76836ca9e58fdfa42207149a5b0941189ab2591e353e5eebb694fd1110f8279e95e044bffadea3b0bac4ad466e7b74eb4bf478"
+    "signature": "045cd4dd64b49d082fd4ff4b403f5cd403f7f97a84305497ac9f435da91da4171d804caf200d83f4d0f5e08c31365a9022088e02cf9da0ef2ced97fa100438c3"
    }
   },
   {
@@ -10484,7 +10540,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -10492,7 +10548,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "b2d427b9767a7283440eafc2cf878068de0a031598820e02db6b944b2975acb1cedebc6b37755e6b4dd840284c931f1963197dcd3f503b8519ccf09d68d50300"
+       "sig": "b5bf94285e1b997cda4819cbcf0730212bdd11923c55438bd6ff62d749aba7f13fa71ca62d462dfcf69cfe0f3a2246c6d272285cc1ecb7ec91dda68ba88f6e0e"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -10502,7 +10558,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "46d148091085302d9f6d066109dc1ade847e7b866da4e2a2b318ffd6de04a40a228e847b82a75b042e340862ec1609c1ead2fe985cdb9f79625508fc3cc401c3"
+    "signature": "60efba417e9538ff04ca6c3ea28579f37bb3a821f85f675d2863e53b04bd0f1770b69de01ce174c440d4b8c4d65fe22cd34ab6d2e98b773134824adf6925a0d6"
    }
   },
   {
@@ -10547,7 +10603,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -10555,7 +10611,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "50e378758bdaf3347e47bfa0ad1b707be5453be06ebe5e52d9ab3207cb163442f54a6a81df15275c02a9f216a08bf3cfc3bed5ddbbec80dde5524a930dd60002"
+       "sig": "c3c40fd3ae85ee0945aed1376fb36c642021e864935fe4d100338d9c1b16a2793949f546cc8c7cb8e17a57b4b7a00ec9305216f6f50fa71c1481874cef1b7a0b"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -10565,7 +10621,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "ed2908146947909962b56efbd0311df1d6b9c9f0c2744ff814e57d7b988556d22180b81c54df46c49e16d305a7ef2cae1e954c1eb0b0011a87cf8268d552a4c1"
+    "signature": "c1e651e73aa0997d4f78b24d3b6e29d05d006bc8eaef52d64c41b690b696b78253527c6906b7e6046b57a18407efa6a7ed97fb886d79acf85bf75df93f481296"
    }
   },
   {
@@ -10610,7 +10666,7 @@
        "fenced": "a, c: off at the iLO",
        "node_id": "b",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -10618,7 +10674,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "f4bd84ebb2e94bf1dd161b441ea60e61f8780db0a87b0dffa8a9fab5255177d9bf99d973b78e3409ab729481896d3b8f0a0506e3285059b41f654db0e4829f08"
+       "sig": "1cbf076c535e6a1d366755098a8d9bd8815a981130141c6b5019bb715349a454326950694ccac4eeebe25b8886236eb4e4f1fc4b0426e719d79b8bcfd6e35604"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -10628,7 +10684,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "e6f2bcf177aec1751d95e60e18271fe96cb42b9bfbad3bd89aac14a40956eef052ee304df377d7655c528dc631c536672a32e784404114768e3d9f7400d5f5bd"
+    "signature": "980c248f46236bd4537d5a2f71895806a29a5f11d351d56b122e99d3a4818f6d3d571babd7365c91df09f2f8b3f01c37f25652989533ad05c944054facf9626f"
    }
   },
   {
@@ -10673,7 +10729,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -10681,7 +10737,7 @@
       "signature": {
        "party": "a",
        "public": "044225b303dcd056cc74990f6e70bc522da8140650803607f709d6e7826aca2b803cf17536986eb98b9918f41fe9a44a7bd34eccd2cc3cd5c709c1b20f28a3dce2",
-       "sig": "2392f22d7e1b978d6d8db79abfb4b7fe25e8998b687e5ec44f23e5cbdb24aa0f66518c2fcf729500500319e64fdface458549646a93e553d09ca3519983025bb"
+       "sig": "0b50b94d86a025cd3c800b510237aa6f66cba07f333c2f469438ac1439ce967f7c4a447db4dbde9048acf7897cbb18e0829789e6558608c2d3f3c330d27133f3"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -10691,7 +10747,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "7d4e8cd12569d800a2fb4b08053763da74fe6446bb6526f23846e703e66eed311f36671676efd7b79dc9c5c7566e87624185fcccd3861c8f899049139ea30992"
+    "signature": "069c58e6a11562ef095309de97882be8ceed52423aa20860fa9a76532c90035b672aae5f0af8a53e0c4fe4ab93f00706ee1892164734d118be39aee96a2281e4"
    }
   },
   {
@@ -10736,7 +10792,7 @@
        "fenced": "b, c: off at the iLO",
        "node_id": "a",
        "not_before": "2026-10-05T12:00:00Z",
-       "quarantine_digest": "4f2cb9cdcf8fe96ca1e5a14306ff3d46c82b53382f3120425176500fbfca2d2b",
+       "quarantine_digest": "fd92e79aa9f8aaf27e8999d42a088b3e87abbbe4dc92d1e3df2ca5ce0cc1daea",
        "quarantine_epoch": 2,
        "schema": "regalia.survivor-authorization/v1",
        "scope": "full"
@@ -10754,7 +10810,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 2
     },
-    "signature": "7d1832e22267b348c862021931108d861d4efd8e4d353b460c929b0f8d9640e560e1bd308715c49d949ec7e6052a6d9717b99803dbca253838851ae0185e70f8"
+    "signature": "8f5e7d09dcb809f31d16b7cfb0f0810331738d7a0ffa5fda7ed45edd92b9b626136e5d7efafb5e1948cbe4168fbc970bda7471a83f92c2f4883c91e1aef0a617"
    }
   }
  ]

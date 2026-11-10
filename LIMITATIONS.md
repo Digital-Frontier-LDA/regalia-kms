@@ -538,7 +538,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   record to judge it by), so it holds only that the root moved to a later one whenever owner_keys
   changed, not what that record says.
 - **K_A is taken from the sealed set's generation record** (`--offline-keys-record`, regalia-kms-95 on
-  #438). It is verified under the pinned root, and its published key must equal the entry. Its private
+  #438). It is verified under the pinned root, over the offline-keys record's own domain
+  (`regalia.offline-keys-record/v1`, regalia-avz: the retired shared domain is refused), and its published key must
+  equal the entry. Its private
   half is shown only by the record's `operation_proof` ("verified": the generating tool's own check of a
   challenge signature, vouched for by the root's signature on the record). It is not re-proven at
   genesis: a sealed file damaged after generation is found only at the first approval K_A signs.

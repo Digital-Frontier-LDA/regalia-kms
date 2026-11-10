@@ -599,7 +599,8 @@ def _genesis(test, root, record, state):
     import tempfile
     from unittest import mock
     from deploy.baremetal import manifest as tool, measurements
-    from tests.test_baremetal_membership_v4 import nodes4
+    from tests.test_baremetal_membership_v4 import K_A, nodes4, typed
+    generated = {"at": "2026-10-04T10:00:00Z", "master_id": "ab" * 16, "threshold": 2, "shares": 3}
     d = tempfile.mkdtemp()
     test.addCleanup(shutil.rmtree, d, True)
     entries = [{k: v for k, v in n.items() if k != "state"} for n in nodes4()]
@@ -610,7 +611,13 @@ def _genesis(test, root, record, state):
         json.dump(doc, f)
     with open(os.path.join(d, "system.pem"), "w") as f:
         f.write("stub\n")
-    args = ["propose", "--genesis", "--root-key", root, "--card-record", record, "--state-dir", state, "--measurements",
+    # #438 (#361 B): a genesis takes K_A from the sealed set's generation record. That record's verification is
+    # test_baremetal_manifest's; this helper is the card record's, so the record is stood in for, as in
+    # ProducersWriterRun.test_propose_genesis_takes_the_writer_s_record_and_state
+    with open(os.path.join(d, "offline-keys.record.json"), "w") as f:
+        json.dump({"stand-in": True}, f)
+    args = ["propose", "--genesis", "--offline-keys-record", os.path.join(d, "offline-keys.record.json"), "--root-key", root,
+            "--card-record", record, "--state-dir", state, "--measurements",
             os.path.join(d, "doc.json"), "--out", os.path.join(d, "e1.json"), "--issued-at", "2026-10-04T12:00:00Z",
             "--system-pub", os.path.join(d, "system.pem")]
     for e in entries:
@@ -620,7 +627,8 @@ def _genesis(test, root, record, state):
         args += ["--node", path, path, path]
     out, err = io.StringIO(), io.StringIO()
     with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), mock.patch.object(tool.keyfd, "tty_line", lambda p: "40000001 40000002"), \
-            mock.patch.object(tool.enrol, "proven_entry", lambda bundle, pub, keep, act, run=None: (bundle, {"7": "00" * 32, "11": "bb" * 32})):
+            mock.patch.object(tool.enrol, "proven_entry", lambda bundle, pub, keep, act, run=None: (bundle, {"7": "00" * 32, "11": "bb" * 32})), \
+            mock.patch.object(tool, "offline_keys_record", lambda envelope, root: (typed(K_A), generated)):
         test.assertEqual(tool.main(args), 0, err.getvalue())
     return out.getvalue()
 

@@ -220,6 +220,11 @@ def judge_enrolled(document, enrolled):
 # that generated and sealed K_A beside it, after every key signed a fresh challenge that verified under its published public
 # key ("operation_proof"). K_A is taken from it and nowhere else (regalia-kms-95 on #438): never typed, never a loose file.
 OFFLINE_KEYS_SCHEMA = "regalia.offline-keys-record/v1"
+# regalia-avz (regalia-ceremony#178, merged 04255c29): each root-signed record kind signs under its own schema, NUL-terminated,
+# so no card or ownerauth record's signature verifies as a generation record. The domain all kinds shared until then
+# ("regalia-ceremony-record/v1", RETIRED_RECORD_DOMAIN: tests only) is accepted nowhere, never as a fallback.
+RETIRED_RECORD_DOMAIN = b"regalia-ceremony-record/v1\x00"
+OFFLINE_KEYS_DOMAIN = OFFLINE_KEYS_SCHEMA.encode() + b"\x00"
 OFFLINE_KEYS_FIELDS = ("schema", "event", "threshold", "shares", "slip39_identifier", "master_id", "publics", "root_entry",
                        "anchor_policy_entry", "root_fingerprint", "files", "operation_proof", "tool", "at")
 
@@ -228,7 +233,7 @@ def offline_keys_record(envelope, root):
     """K_A (#361) as the manifest's typed entry, from the offline-keys generation record verified under the PINNED root
     (as card_record_keys takes the owner's keys from the card record): exactly {record, signature}; schema
     OFFLINE_KEYS_SCHEMA, event "generate", every top-level field by name; root_entry the pinned Ed25519 root and
-    root_fingerprint its SHA-256; the root's signature over cardrecord.RECORD_DOMAIN + canonical(record); then
+    root_fingerprint its SHA-256; the root's signature over OFFLINE_KEYS_DOMAIN + canonical(record); then
     anchor_policy_entry a P-256 key equal to the published "anchor-policy" public key, whose generation proof is
     "verified". That binds K_A to this ceremony's sealed set and shows its private half signed when it was sealed; a
     wrong entry (a rehearsal's, another set's) or one never sealed is refused here, not found at the first rotation.
@@ -253,11 +258,11 @@ def offline_keys_record(envelope, root):
     require(record["root_fingerprint"] == hashlib.sha256(bytes.fromhex(root_key)).hexdigest(), "the offline-keys record's root_fingerprint is not the root's")
     try:
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(root_key)).verify(bytes.fromhex(signature),
-                                                                           cardrecord.RECORD_DOMAIN + membership.canonical(record))
+                                                                           OFFLINE_KEYS_DOMAIN + membership.canonical(record))
     except (InvalidSignature, ValueError):
         raise Refused("the offline-keys record's signature is not the pinned root's") from None
-    # the ceremony's records (card, ownerauth, generation) share RECORD_DOMAIN: THIS check is what tells their kinds apart
-    # under it (regalia-kms-95), never redundant with the signature
+    # the offline-keys tool signs four events under OFFLINE_KEYS_DOMAIN (generate, forms-verified, session, ownerauth-verified):
+    # THIS check is what tells a generation record from the others under it (regalia-kms-95), never redundant with the signature
     require(record["schema"] == OFFLINE_KEYS_SCHEMA and record["event"] == "generate",
             "the offline-keys record is not a %s generation record" % OFFLINE_KEYS_SCHEMA)
     require(all(type(record[k]) is int for k in ("threshold", "shares")) and 1 <= record["threshold"] <= record["shares"],
