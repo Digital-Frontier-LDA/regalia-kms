@@ -27,3 +27,10 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    groups:
+      # CodeQL refuses to run when init and analyze are on different
+      # versions, so every github/codeql-action/* step must move together.
+      codeql-action:
+        patterns:
+          - "github/codeql-action"
+          - "github/codeql-action/*"
