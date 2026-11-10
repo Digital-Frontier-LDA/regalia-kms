@@ -2,6 +2,7 @@
 
 The synthetic chains are tests/fixtures/ekchain/*.pem (make-synthetic.sh); the Infineon certificates are the
 public ones ekroots/SOURCES.md names. Every negative test asserts the reason, not only the refusal."""
+import contextlib
 import hashlib
 import io
 import json
@@ -46,7 +47,9 @@ class Base(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.d)
 
     def intake(self, ek="ek.pem", ca="ica-2023.pem", **kw):
-        return ekchain.intake("server-9", {"rsa": (cert(ek), cert(ca))}, pins_dir=kw.pop("pins", self.d), **kw)
+        # synthetic_pins pins one root and CA key for both families, so the one chain serves both
+        chain = (cert(ek), cert(ca))
+        return ekchain.intake("server-9", {"rsa": chain, "ecc": chain}, pins_dir=kw.pop("pins", self.d), **kw)
 
 
 class ThePins(unittest.TestCase):
@@ -118,12 +121,74 @@ class TheChain(Base):
                                     "root.pem", "-untrusted", "ca.pem"])
         self.assertEqual(sorted(env), ["LC_ALL", "PATH"])
 
+    # The pass conditions behind openssl's exit status (review of #709, M1): each one alone refuses, with its own
+    # reason, and no ek_name. openssl verify itself is replaced; every other call runs for real.
+    GOOD_CHAIN = ("ek.pem: OK\nChain:\ndepth=0:  (untrusted)\n"
+                  "depth=1: C=XX, O=Synthetic, OU=TPM2.0, CN=Synthetic Manufacturing CA 029 (untrusted)\n"
+                  "depth=2: C=XX, O=Synthetic, OU=Devices, CN=Synthetic Root CA\n")
+
+    @staticmethod
+    def faked_verify(rc, stdout, stderr=""):
+        def run(argv, **kw):
+            if argv[:2] == ["openssl", "verify"]:
+                return subprocess.CompletedProcess(argv, rc, stdout, stderr)
+            return subprocess.run(argv, **kw)
+        return run
+
+    def test_the_faked_good_chain_passes_so_each_fake_below_changes_one_thing(self):
+        synthetic_pins(self.d)
+        record, findings = self.intake(run=self.faked_verify(0, self.GOOD_CHAIN))
+        self.assertEqual((findings, record["status"], record["ek_name"]), ([], "verified", SWTPM_EK_NAME))
+
+    def test_ok_and_rc_0_but_depth_2_is_not_the_pinned_root_is_refused(self):
+        synthetic_pins(self.d)
+        other = self.GOOD_CHAIN.replace("depth=2: C=XX, O=Synthetic, OU=Devices, CN=Synthetic Root CA",
+                                        "depth=2: C=XX, O=Elsewhere, CN=Another Root CA")
+        record, findings = self.intake(run=self.faked_verify(0, other))
+        self.assertEqual(record["status"], "refused")
+        self.assertNotIn("ek_name", record)
+        self.assertEqual(len(findings), 2)
+        for fam, f in zip(ekchain.FAMILIES, findings):
+            self.assertTrue(f.startswith("%s: openssl's chain is not EK -> CA -> the pinned root:\n" % fam), f)
+            self.assertIn("CN=Another Root CA", f)
+        self.assertFalse(record["families"]["rsa"]["openssl"]["chain_ends_at_root"])
+
+    def test_rc_0_without_ok_is_refused(self):
+        synthetic_pins(self.d)
+        record, findings = self.intake(run=self.faked_verify(0, self.GOOD_CHAIN.replace("ek.pem: OK\n", "")))
+        self.assertEqual(record["status"], "refused")
+        self.assertNotIn("ek_name", record)
+        self.assertEqual(len(findings), 2)
+        for fam, f in zip(ekchain.FAMILIES, findings):
+            self.assertTrue(f.startswith("%s: openssl verify -x509_strict refused the chain (rc 0): Chain:" % fam), f)
+
+    def test_ok_on_stdout_with_rc_2_is_refused(self):
+        synthetic_pins(self.d)
+        record, findings = self.intake(run=self.faked_verify(2, self.GOOD_CHAIN, "error 2 at 1 depth lookup: x\n"))
+        self.assertEqual(record["status"], "refused")
+        self.assertNotIn("ek_name", record)
+        self.assertEqual(findings, ["%s: openssl verify -x509_strict refused the chain (rc 2): error 2 at 1 depth "
+                                    "lookup: x" % fam for fam in ekchain.FAMILIES])
+
+    def test_both_families_are_required(self):
+        # review of #709, L2: a run with one family left out must not record "verified"
+        synthetic_pins(self.d)
+        chain = (cert("ek.pem"), cert("ica-2023.pem"))
+        for given, missing in (({"rsa": chain}, "ECC"), ({"ecc": chain}, "RSA")):
+            with self.assertRaisesRegex(ekchain.Refused, r"^the %s EK certificate and its CA are required" % missing):
+                ekchain.intake("server-9", given, pins_dir=self.d)
+        with self.assertRaises(SystemExit) as e, contextlib.redirect_stderr(io.StringIO()) as usage:
+            ekchain.main(["verify", "--server", "server-9", "--pins", self.d, "--rsa", os.path.join(FIX, "ek.pem"),
+                          os.path.join(FIX, "ica-2023.pem")])
+        self.assertEqual(e.exception.code, 2)
+        self.assertIn("the following arguments are required: --ecc", usage.getvalue())
+
     def test_wrong_root_same_name_other_key_is_refused_by_openssl_and_no_ek_name(self):
         synthetic_pins(self.d, root="root-other.pem")
         record, findings = self.intake()
         self.assertEqual(record["status"], "refused")
         self.assertNotIn("ek_name", record)
-        self.assertEqual(len(findings), 1)
+        self.assertEqual(len(findings), 2)  # one per family
         # openssl looks the issuer up by name AND key id: a root with the name and another key is no issuer
         self.assertRegex(findings[0], r"rsa: openssl verify -x509_strict refused the chain \(rc 2\): .*"
                                       r"error 20 at 1 depth lookup: unable to get local issuer certificate")
@@ -281,8 +346,9 @@ class TheCommand(Base):
     def test_exit_0_writes_a_verified_record_and_exit_1_a_refused_one(self):
         synthetic_pins(self.d)
         out_path = os.path.join(self.d, "record.json")
-        args = ["verify", "--server", "server-9", "--pins", self.d, "--out", out_path, "--rsa",
-                os.path.join(FIX, "ek.pem")]
+        ek = os.path.join(FIX, "ek.pem")
+        args = ["verify", "--server", "server-9", "--pins", self.d, "--out", out_path, "--ecc", ek,
+                os.path.join(FIX, "ica-2023.pem"), "--rsa", ek]
         err = io.StringIO()
         self.assertEqual(ekchain.main(args + [os.path.join(FIX, "ica-2023.pem")], err=err), 0, err.getvalue())
         with open(out_path) as f:

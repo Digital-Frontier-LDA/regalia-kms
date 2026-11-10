@@ -23,7 +23,9 @@ For each family (rsa, ecc), in this order, and every failure a refusal:
             "EK: OK" on stdout AND the chain openssl printed ending in the root's subject; openssl's
             output is kept verbatim in the record either way.
 
-ek_name is written only when every family passed (and the RSA one was given). It is the Name of the RSA EK
+Both families are required: a TPM read at intake gives both certificates (the DL360's Infineon TPMs carry
+both), and a run that leaves one out is refused, never "verified" on the other alone.
+ek_name is written only when both families passed. It is the Name of the RSA EK
 that enrolment makes (enrol._this_tpms_ek: tpm2_createek -G rsa, the TCG default template L-1):
 000b || SHA-256(TPMT_PUBLIC), the public area built from that template and the certificate's modulus. With
 --ek-public (tpm2_createek -G rsa -u's output, read on the same server), that public area must be byte for
@@ -262,7 +264,10 @@ def intake(server, chains, ek_public=None, pins_dir=PINS_DIR, run=subprocess.run
     """The intake record for one server: chains is {family: (ek_der, ca_der)}. Returns (record, findings)."""
     require(re.fullmatch(r"server-[0-9]+", server) is not None, "--server must be server-<n>: the hostnames and "
             "chassis serials stay in the private repository")
-    require("rsa" in chains, "the RSA EK certificate is required: ek_name is the RSA EK's")
+    missing = [f for f in FAMILIES if f not in chains]
+    require(not missing, "the %s EK certificate and its CA are required: intake verifies both families, and "
+            "ek_name is the RSA EK's" % " and ".join(f.upper() for f in missing))
+    require(set(chains) == set(FAMILIES), "unknown family: %s" % sorted(set(chains) - set(FAMILIES)))
     pins = load_pins(pins_dir)
     record = {"schema": RECORD_SCHEMA, "server": server, "pins_sha256": pins["sha256"],
               "openssl_version": openssl_version(run),
@@ -270,8 +275,6 @@ def intake(server, chains, ek_public=None, pins_dir=PINS_DIR, run=subprocess.run
               "families": {}}
     findings = []
     for family in FAMILIES:
-        if family not in chains:
-            continue
         ev, f = verify_family(pins, family, *chains[family], run=run)
         record["families"][family] = ev
         findings += f
@@ -299,7 +302,7 @@ def main(argv=None, out=sys.stdout, err=sys.stderr):
     v = sub.add_parser("verify")
     v.add_argument("--server", required=True)
     v.add_argument("--rsa", nargs=2, metavar=("EK", "CA"), required=True)
-    v.add_argument("--ecc", nargs=2, metavar=("EK", "CA"))
+    v.add_argument("--ecc", nargs=2, metavar=("EK", "CA"), required=True)
     v.add_argument("--ek-public")
     v.add_argument("--pins", default=PINS_DIR)
     v.add_argument("--out")
@@ -313,9 +316,8 @@ def main(argv=None, out=sys.stdout, err=sys.stderr):
                 pinned_root(pins, family)
                 print("%s root %s: pinned" % (family, pins["root"][family][0]), file=out)
             return 0
-        chains = {"rsa": (_read(a.rsa[0], "the RSA EK certificate"), _read(a.rsa[1], "the RSA CA"))}
-        if a.ecc:
-            chains["ecc"] = (_read(a.ecc[0], "the ECC EK certificate"), _read(a.ecc[1], "the ECC CA"))
+        chains = {"rsa": (_read(a.rsa[0], "the RSA EK certificate"), _read(a.rsa[1], "the RSA CA")),
+                  "ecc": (_read(a.ecc[0], "the ECC EK certificate"), _read(a.ecc[1], "the ECC CA"))}
         ek_public = None
         if a.ek_public:
             with open(a.ek_public, "rb") as f:
