@@ -257,4 +257,15 @@ EOF
 echo
 echo "uki-build: image $(field "$SIGNED" signed.image_sha256) (unsigned $(field "$REC" unsigned_sha256)), kernel $UNAME"
 echo "uki-build: $pass passed, $fail failed"
+# REGALIA_KEEP_TEST_IMAGE=DIR keeps this run's TEST image for a staging rehearsal (install-inputs.yml): the image,
+# both its records, its initrd's build record, the TEST membership root and the TEST public certificates. Every key
+# here is a test key from this script, so the image is a TEST UKI (make-install-disk.sh --test-uki), never one to
+# commission. Only a run with no failure is kept; a copy that fails fails the run. No PASS/FAIL line, so the count
+# CI greps for is the same with or without it.
+if [ "$fail" = 0 ] && [ -n "${REGALIA_KEEP_TEST_IMAGE:-}" ]; then
+  mkdir -p "$REGALIA_KEEP_TEST_IMAGE" && cp "$W/a/test-image.efi" "$W/a/test-image.signed.json" "$W/a/test-image.record.json" \
+    "$W/initrd-build.json" "$W/root-key.json" "$W/TEST-initrd.crt" "$W/TEST-system.pub" "$W/TEST-secure-boot.crt" \
+    "$REGALIA_KEEP_TEST_IMAGE/" || { echo "uki-build: the TEST image could not be kept in $REGALIA_KEEP_TEST_IMAGE"; exit 1; }
+  echo "uki-build: TEST image kept in $REGALIA_KEEP_TEST_IMAGE"
+fi
 [ "$fail" = 0 ]
