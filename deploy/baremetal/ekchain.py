@@ -31,8 +31,21 @@ that enrolment makes (enrol._this_tpms_ek: tpm2_createek -G rsa, the TCG default
 --ek-public (tpm2_createek -G rsa -u's output, read on the same server), that public area must be byte for
 byte the one built from the certificate, and the record says the Name was read from the TPM.
 
-Exit 0 writes the record (RECORD.json, or stdout) with "status": "verified"; exit 1 prints every finding
-and writes a record with "status": "refused" and NO ek_name. Standard library and openssl.
+The record is "status": "verified" with ek_name, or "status": "refused" with every finding and NO ek_name.
+
+--out is the server's file, deploy/baremetal/ekroots/servers/server-<n>.json, and the record goes in it
+under "intake", in server-1.json's shape (regalia-kms-a7g):
+
+  exit 0    the file becomes {"server", "status": "verified", "intake": RECORD} plus every other field the
+            file already had (host, and evidence such as ac3 and captures); an "open" placeholder's
+            "reason" is dropped. Written whole to a temporary file beside it, then renamed over it.
+  exit 1    --out is NOT touched: the refused record goes to stdout and the findings to stderr. A refused
+            re-run can never overwrite a record.
+  refused   before anything is checked, if --out is already "verified" (at the top or under "intake"): a
+            verified record is never overwritten. Re-intake removes it in a reviewed commit first. Also
+            refused: a --out for another server, or a file that is not a JSON object.
+
+Without --out the record goes to stdout, verified or refused. Standard library and openssl.
 """
 import argparse
 import base64
@@ -291,6 +304,46 @@ def intake(server, chains, ek_public=None, pins_dir=PINS_DIR, run=subprocess.run
     return record, findings
 
 
+def _existing(path, server):
+    """The server file at path as a dict ({} if there is none), refused if it may not take a new intake record."""
+    try:
+        with open(path) as f:
+            current = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except ValueError as e:
+        raise Refused("--out %s is not JSON (%s): nothing was checked or written" % (path, e)) from None
+    require(isinstance(current, dict), "--out %s is not a JSON object: nothing was checked or written" % path)
+    require(current.get("server", server) == server, "--out %s is %s's record, not %s's: nothing was checked or written"
+            % (path, current.get("server"), server))
+    intake_status = current.get("intake", {}).get("status") if isinstance(current.get("intake"), dict) else None
+    require("verified" not in (current.get("status"), intake_status),
+            "--out %s is already a verified record: it is never overwritten (a re-intake removes it in a reviewed "
+            "commit first). Nothing was checked or written" % path)
+    return current
+
+
+def server_file(current, record):
+    """server-<n>.json in server-1's shape: the verified record under "intake", the file's other fields kept."""
+    merged = {k: v for k, v in current.items() if k != "reason"}
+    merged.update({"server": record["server"], "status": record["status"], "intake": record})
+    return merged
+
+
+def _write(path, data):
+    d = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".ekchain-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(data)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
 def _read(path, label):
     with open(path, "rb") as f:
         return der_of(f.read(), label)
@@ -309,6 +362,7 @@ def main(argv=None, out=sys.stdout, err=sys.stderr):
     p = sub.add_parser("pins")
     p.add_argument("--pins", default=PINS_DIR)
     a = ap.parse_args(argv)
+    current = None
     try:
         if a.cmd == "pins":
             pins = load_pins(a.pins)
@@ -316,6 +370,9 @@ def main(argv=None, out=sys.stdout, err=sys.stderr):
                 pinned_root(pins, family)
                 print("%s root %s: pinned" % (family, pins["root"][family][0]), file=out)
             return 0
+        if a.out:
+            require(re.fullmatch(r"server-[0-9]+", a.server) is not None, "--server must be server-<n>")
+            current = _existing(a.out, a.server)
         chains = {"rsa": (_read(a.rsa[0], "the RSA EK certificate"), _read(a.rsa[1], "the RSA CA")),
                   "ecc": (_read(a.ecc[0], "the ECC EK certificate"), _read(a.ecc[1], "the ECC CA"))}
         ek_public = None
@@ -326,14 +383,15 @@ def main(argv=None, out=sys.stdout, err=sys.stderr):
     except (Refused, OSError, ValueError) as e:
         print("ekchain: refused: %s" % e, file=err)
         return 1
-    text = json.dumps(record, indent=2, sort_keys=True) + "\n"
-    if a.out:
-        with open(a.out, "w") as f:
-            f.write(text)
-    else:
-        out.write(text)
+    if a.out and not findings:
+        _write(a.out, json.dumps(server_file(current, record), indent=2, sort_keys=True) + "\n")
+        print("ekchain: %s verified; recorded under \"intake\" in %s" % (a.server, a.out), file=err)
+        return 0
+    out.write(json.dumps(record, indent=2, sort_keys=True) + "\n")
     for f in findings:
         print("ekchain: refused: %s" % f, file=err)
+    if a.out:
+        print("ekchain: %s was not written: a refused run never writes the server's record" % a.out, file=err)
     return 1 if findings else 0
 
 
