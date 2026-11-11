@@ -1055,6 +1055,9 @@ class ProposeGenesis(unittest.TestCase):
     def test_k_a_comes_from_the_root_signed_generation_record(self):
         """regalia-kms-95 on #438: K_A is pinned for the genesis's life, so it is taken from the sealed set's generation
         record, verified under the pinned root, and nowhere else. Each guard by an input only it refuses."""
+        # the domain is pinned first, so a change to it FAILS here by name (regalia-kms-j74), before the positive-path
+        # calls below would ERROR on a record signed under another domain
+        self.assertEqual(tool.OFFLINE_KEYS_DOMAIN, b"regalia.offline-keys-record/v1\x00")
         import pathlib
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -1082,7 +1085,6 @@ class ProposeGenesis(unittest.TestCase):
             with self.subTest(domain=domain):
                 self.refused("the offline-keys record's signature is not the pinned root's", tool.offline_keys_record,
                              self.generation_record(domain=domain), self.root)
-        self.assertEqual(tool.OFFLINE_KEYS_DOMAIN, b"regalia.offline-keys-record/v1\x00")
         # rc#133 (regalia-kms-51): the record also publishes the ownerauth-recovery age recipient (no spki) and its proof;
         # only K_A's entries are read, so other keys of publics and operation_proof never refuse it
         def recovery(r):
