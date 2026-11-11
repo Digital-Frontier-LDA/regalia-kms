@@ -145,6 +145,12 @@ PRIVATE_PATTERNS = (
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,62}$")
 FINGERPRINT_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 TOKEN_LABEL_PATTERN = re.compile(r"[!-~]([ -~]{0,30}[!-~])?")
+# ONE SPELLING PER DRIVER-PARSED OBJECT_ID. Mirrors validateBindingCoordinates in
+# internal/registry/binding_coordinates.go: the PKCS#11 driver hex-decodes object_id into CKA_ID
+# and the PIV driver parses it as a hex slot, so "0a"/"0A" (and "9c"/"9C"/"0x9c"/"09c") are one
+# key that a string comparison sees as two. fido2 object_ids are names and are not constrained.
+PKCS11_OBJECT_ID_PATTERN = re.compile(r"(?:[0-9a-f]{2}){1,64}")
+PIV_SLOT_PATTERN = re.compile(r"[0-9a-f]{2}")
 
 
 def fail(path: str, message: str) -> NoReturn:
@@ -227,7 +233,11 @@ def validate_binding(binding: Any, path: str) -> dict[str, Any]:
     if backend not in BACKENDS:
         fail(f"{path}.backend", "unsupported backend")
     require_string(item["device_id"], f"{path}.device_id")
-    require_string(item["object_id"], f"{path}.object_id")
+    object_id = require_string(item["object_id"], f"{path}.object_id")
+    if backend in {"nitrokey-pkcs11", "yubikey-openpgp"} and not PKCS11_OBJECT_ID_PATTERN.fullmatch(object_id):
+        fail(f"{path}.object_id", "a PKCS#11 object_id must be lowercase hex, 1 to 64 whole bytes: the driver decodes it, so any other spelling names the same key twice")
+    if backend == "yubikey-piv" and not PIV_SLOT_PATTERN.fullmatch(object_id):
+        fail(f"{path}.object_id", "a PIV object_id must be the slot as two lowercase hex digits: the driver parses it, so any other spelling names the same slot twice")
     fingerprints = [name for name in ("public_fingerprint", "key_check") if name in item]
     if not fingerprints:
         fail(path, "requires public_fingerprint or key_check")
@@ -473,12 +483,85 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
     if not isinstance(objects, list) or not objects:
         fail("manifest.objects", "must be a non-empty list")
     seen: set[str] = set()
+    occupied: list[tuple[tuple[str, str, str], str, str]] = []
     for index, item in enumerate(objects):
         object_id = validate_object(item, f"manifest.objects[{index}]")
         if object_id in seen:
             fail(f"manifest.objects[{index}].id", f"duplicate object id: {object_id}")
         seen.add(object_id)
+        _claim_declared_slots(item, object_id, occupied, f"manifest.objects[{index}]")
+    _refuse_a_secret_kek_reachable_by_unwrap(objects)
     return manifest
+
+
+# THE DAEMON'S CROSS-OBJECT RULES, STATED AGAIN FOR CI (regalia-kms-wd6). registry.Load refuses
+# both, and a manifest CI passes and the daemon then refuses at start is the defect this file
+# exists to prevent. tests/vectors/custody-slot-rules-v1.json holds the cases both suites run.
+
+
+def _claim_declared_slots(item: dict[str, Any], object_id: str,
+                          occupied: list[tuple[tuple[str, str, str], str, str]], path: str) -> None:
+    """Mirrors the declared-slot rule in validateObject (internal/registry/registry.go).
+
+    A slot is a site, a device, an object id and, on a card that is two tokens, the token's label:
+    the same object id under two labels is two keys. A binding with no label may resolve to either
+    token, so it shares a slot with every label of that device and object. Two bindings of one
+    object may share a slot; two objects may not.
+    """
+    for index, binding in enumerate(item["bindings"]):
+        slot = (binding["site"], binding["device_id"], binding["object_id"])
+        label = binding.get("token_label", "")
+        for taken, taken_label, owner in occupied:
+            if owner == object_id or taken != slot:
+                continue
+            if taken_label == label or taken_label == "" or label == "":
+                fail(f"{path}.bindings[{index}]", f"hardware slot is also assigned to {owner!r}")
+        occupied.append((slot, label, object_id))
+
+
+def _same_slot(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    # The physical coordinate, as sameSlot in internal/registry/secret_kek_unwrap.go: one card
+    # (backend and serial), one key on it (a canonical object_id), one token where the card is two.
+    serial = a.get("device_serial", "")
+    if (not serial or a["backend"] != b["backend"] or serial != b.get("device_serial", "")
+            or a["object_id"] != b["object_id"]):
+        return False
+    label, other = a.get("token_label", ""), b.get("token_label", "")
+    return label == other or label == "" or other == ""
+
+
+def _refuse_a_secret_kek_reachable_by_unwrap(objects: list[dict[str, Any]]) -> None:
+    """Mirrors validateSecretKEKsUnreachableByUnwrap (internal/registry/secret_kek_unwrap.go).
+
+    unwrap returns a data key to its caller, and release-secret is granted per object and refused
+    to agents. So an object declaring unwrap that is bound to the key a secret's envelopes are
+    wrapped under opens the secret without a release-secret grant. Two bindings are one key when
+    they are on one physical slot, or when the public keys the manifest pins for their slots meet.
+    """
+    every_binding = [binding for item in objects for binding in item["bindings"]]
+
+    def pins_at(binding: dict[str, Any]) -> set[str]:
+        pins = {binding["public_key_sha256"]} if binding.get("public_key_sha256") else set()
+        pins.update(other["public_key_sha256"] for other in every_binding
+                    if other.get("public_key_sha256") and _same_slot(binding, other))
+        return pins
+
+    def same_key(secret: dict[str, Any], other: dict[str, Any]) -> bool:
+        return _same_slot(secret, other) or bool(pins_at(secret) & pins_at(other))
+
+    for index, secret in enumerate(objects):
+        # seal-envelope writes envelopes under the KEK that release-secret opens them with.
+        if not {"release-secret", "seal-envelope"} & set(secret["operations"]):
+            continue
+        for other_index, other in enumerate(objects):
+            if other_index == index or "unwrap" not in other["operations"]:
+                continue
+            for secret_binding in secret["bindings"]:
+                for other_binding in other["bindings"]:
+                    if same_key(secret_binding, other_binding):
+                        fail(f"manifest.objects[{index}]",
+                             f"its KEK is also bound to {other['id']!r}, which declares unwrap: an unwrap there "
+                             "would return this secret's data key without a release-secret grant")
 
 
 def load_and_validate(path: Path | str) -> dict[str, Any]:
