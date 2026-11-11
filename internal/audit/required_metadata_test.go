@@ -33,6 +33,7 @@ import (
 
 func TestARecordMissingRequiredMetadataIsRefusedFieldByField(t *testing.T) {
 	for field, clear := range map[string]func(*Draft){
+		"Principal":      func(item *Draft) { item.Principal = "" },
 		"Operation":      func(item *Draft) { item.Operation = "" },
 		"Outcome":        func(item *Draft) { item.Outcome = "" },
 		"RegistryDigest": func(item *Draft) { item.RegistryDigest = "" },
