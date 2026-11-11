@@ -306,6 +306,26 @@ class AC3(unittest.TestCase):
                           runs["%s ca029-2023 at=2017-10-08" % fam]["stderr"])
 
 
+def check_a_verified_server_record(test, r, server, pins):
+    """What every verified ekroots/servers/server-<n>.json holds, whoever wrote it: server-1's shape (a7g)."""
+    intake = r["intake"]
+    test.assertEqual((r["server"], r["status"], intake["status"], intake["server"]), (server, "verified", "verified", server))
+    test.assertEqual(intake["schema"], ekchain.RECORD_SCHEMA)
+    test.assertEqual(intake["pins_sha256"], pins["sha256"], "PINS changed since %s was verified: re-run it" % server)
+    test.assertRegex(intake["ek_name"], r"^000b[0-9a-f]{64}$")
+    test.assertNotIn("findings", intake)
+    test.assertNotIn("ek_name", r, "ek_name lives under intake only")
+    test.assertEqual(sorted(intake["families"]), ["ecc", "rsa"])
+    for fam, ev in intake["families"].items():
+        test.assertEqual(ev["root_sha256"], pins["root"][fam][0])
+        test.assertIn(ev["ca_spki_sha256"], pins["ca_spki"][fam])
+        test.assertEqual(ev["openssl"]["rc"], 0)
+        test.assertTrue(ev["openssl"]["stdout"].startswith("ek.pem: OK\n"))
+        test.assertTrue(ev["openssl"]["chain_ends_at_root"])
+        test.assertIn("-x509_strict", ev["openssl"]["argv"])
+        test.assertNotIn("-partial_chain", ev["openssl"]["argv"])
+
+
 class TheServerRecords(unittest.TestCase):
     def load(self, n):
         with open(os.path.join(SERVERS, "server-%d.json" % n)) as f:
@@ -322,19 +342,7 @@ class TheServerRecords(unittest.TestCase):
     def test_server_1_was_verified_against_the_current_pins_strictly(self):
         r = self.load(1)
         intake = r["intake"]
-        pins = ekchain.load_pins()
-        self.assertEqual((r["status"], intake["status"], intake["server"]), ("verified", "verified", "server-1"))
-        self.assertEqual(intake["pins_sha256"], pins["sha256"], "PINS changed since server-1 was verified: re-run it")
-        self.assertRegex(intake["ek_name"], r"^000b[0-9a-f]{64}$")
-        self.assertEqual(sorted(intake["families"]), ["ecc", "rsa"])
-        for fam, ev in intake["families"].items():
-            self.assertEqual(ev["root_sha256"], pins["root"][fam][0])
-            self.assertIn(ev["ca_spki_sha256"], pins["ca_spki"][fam])
-            self.assertEqual(ev["openssl"]["rc"], 0)
-            self.assertTrue(ev["openssl"]["stdout"].startswith("ek.pem: OK\n"))
-            self.assertTrue(ev["openssl"]["chain_ends_at_root"])
-            self.assertIn("-x509_strict", ev["openssl"]["argv"])
-            self.assertNotIn("-partial_chain", ev["openssl"]["argv"])
+        check_a_verified_server_record(self, r, "server-1", ekchain.load_pins())
         caps = r["captures"]["sha256"]
         self.assertEqual(intake["families"]["rsa"]["ek_cert_sha256"], caps["ek-0x1c00002.der"])
         self.assertEqual(intake["families"]["ecc"]["ek_cert_sha256"], caps["ek-0x1c0000a.der"])
@@ -343,23 +351,142 @@ class TheServerRecords(unittest.TestCase):
 
 
 class TheCommand(Base):
-    def test_exit_0_writes_a_verified_record_and_exit_1_a_refused_one(self):
-        synthetic_pins(self.d)
-        out_path = os.path.join(self.d, "record.json")
+    GOOD, BAD = os.path.join(FIX, "ica-2023.pem"), os.path.join(FIX, "ica-other.pem")
+
+    def run_verify(self, out_path, rsa_ca, server="server-9"):
         ek = os.path.join(FIX, "ek.pem")
-        args = ["verify", "--server", "server-9", "--pins", self.d, "--out", out_path, "--ecc", ek,
-                os.path.join(FIX, "ica-2023.pem"), "--rsa", ek]
-        err = io.StringIO()
-        self.assertEqual(ekchain.main(args + [os.path.join(FIX, "ica-2023.pem")], err=err), 0, err.getvalue())
-        with open(out_path) as f:
-            self.assertEqual(json.load(f)["ek_name"], SWTPM_EK_NAME)
-        err = io.StringIO()
-        self.assertEqual(ekchain.main(args + [os.path.join(FIX, "ica-other.pem")], err=err), 1)
-        self.assertIn("is not a pinned rsa CA key", err.getvalue())
-        with open(out_path) as f:
+        out, err = io.StringIO(), io.StringIO()
+        args = ["verify", "--server", server, "--pins", self.d, "--ecc", ek, self.GOOD, "--rsa", ek, rsa_ca]
+        rc = ekchain.main(args + (["--out", out_path] if out_path else []), out=out, err=err)
+        return rc, out.getvalue(), err.getvalue()
+
+    def placeholder(self, n=9):
+        # what servers 2 and 3 are before intake (server-2.json), for this server
+        with open(os.path.join(SERVERS, "server-2.json")) as f:
             r = json.load(f)
+        r["server"] = "server-%d" % n
+        path = os.path.join(self.d, "server-%d.json" % n)
+        with open(path, "w") as f:
+            json.dump(r, f)
+        return path
+
+    def raw(self, path):
+        with open(path, "rb") as f:
+            return f.read()
+
+    def test_with_no_out_the_record_goes_to_stdout_verified_or_refused(self):
+        synthetic_pins(self.d)
+        rc, out, err = self.run_verify(None, self.GOOD)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out)["ek_name"], SWTPM_EK_NAME)
+        rc, out, err = self.run_verify(None, self.BAD)
+        self.assertEqual(rc, 1)
+        self.assertIn("is not a pinned rsa CA key", err)
+        r = json.loads(out)
         self.assertEqual(r["status"], "refused")
         self.assertNotIn("ek_name", r)
+
+    def test_a_new_server_record_comes_out_in_server_1s_shape(self):
+        synthetic_pins(self.d)
+        path = self.placeholder()
+        rc, out, err = self.run_verify(path, self.GOOD)
+        self.assertEqual((rc, out), (0, ""), err)
+        with open(path) as f:
+            r = json.load(f)
+        # what TheServerRecords checks of server-1, here against the PINS this record was made with
+        check_a_verified_server_record(self, r, "server-9", ekchain.load_pins(self.d))
+        self.assertEqual(r["intake"]["ek_name"], SWTPM_EK_NAME)
+        with open(os.path.join(SERVERS, "server-1.json")) as f:
+            one = json.load(f)
+        self.assertEqual(sorted(r), sorted(set(one) - {"ac3", "captures"}), "server-1's fields, less its own evidence")
+        self.assertEqual(r["host"], "the second DL360", "the placeholder's host is kept")
+        self.assertNotIn("reason", r)
+        self.assertEqual(sorted(r["intake"]), sorted(one["intake"]))
+        for fam in ekchain.FAMILIES:
+            self.assertEqual(sorted(r["intake"]["families"][fam]), sorted(one["intake"]["families"][fam]))
+        self.assertEqual(sorted(os.listdir(self.d)), ["PINS", "root.der", "server-9.json"], "no temporary file is left")
+
+    def test_the_files_other_evidence_is_kept(self):
+        synthetic_pins(self.d)
+        path = self.placeholder()
+        with open(path) as f:
+            r = json.load(f)
+        r["captures"] = {"sha256": {"ek-0x1c00002.der": "ab" * 32}}
+        with open(path, "w") as f:
+            json.dump(r, f)
+        self.assertEqual(self.run_verify(path, self.GOOD)[0], 0)
+        with open(path) as f:
+            self.assertEqual(json.load(f)["captures"], r["captures"])
+
+    def test_a_refused_run_cannot_clobber_a_verified_record(self):
+        synthetic_pins(self.d)
+        path = os.path.join(self.d, "server-1.json")
+        shutil.copyfile(os.path.join(SERVERS, "server-1.json"), path)
+        before = self.raw(path)
+        rc, out, err = self.run_verify(path, self.BAD, server="server-1")
+        self.assertEqual(rc, 1)
+        self.assertIn("is already a verified record: it is never overwritten", err)
+        self.assertEqual(self.raw(path), before, "server-1's verified record (and its ac3 and captures) is unchanged")
+        # nor does a run that would pass replace it
+        rc, out, err = self.run_verify(path, self.GOOD, server="server-1")
+        self.assertEqual(rc, 1)
+        self.assertIn("is already a verified record", err)
+        self.assertEqual(self.raw(path), before)
+
+    def test_a_record_verified_under_intake_only_is_not_clobbered_either(self):
+        synthetic_pins(self.d)
+        path = self.placeholder()
+        self.assertEqual(self.run_verify(path, self.GOOD)[0], 0)
+        with open(path) as f:
+            r = json.load(f)
+        r["status"] = "open"                       # a hand edit of the top level: intake still says verified
+        with open(path, "w") as f:
+            json.dump(r, f)
+        before = self.raw(path)
+        rc, out, err = self.run_verify(path, self.BAD)
+        self.assertEqual(rc, 1)
+        self.assertIn("is already a verified record", err)
+        self.assertEqual(self.raw(path), before)
+
+    def test_a_refused_run_never_writes_out_and_its_record_goes_to_stdout(self):
+        synthetic_pins(self.d)
+        path = self.placeholder()
+        before = self.raw(path)
+        rc, out, err = self.run_verify(path, self.BAD)
+        self.assertEqual(rc, 1)
+        self.assertIn("is not a pinned rsa CA key", err)
+        self.assertIn("was not written: a refused run never writes the server's record", err)
+        self.assertEqual(self.raw(path), before, "the open placeholder is unchanged")
+        r = json.loads(out)
+        self.assertEqual(r["status"], "refused")
+        self.assertNotIn("ek_name", r)
+
+    def test_another_servers_file_and_a_file_that_is_not_a_record_are_refused(self):
+        synthetic_pins(self.d)
+        path = self.placeholder(n=8)
+        before = self.raw(path)
+        rc, out, err = self.run_verify(path, self.GOOD, server="server-9")
+        self.assertEqual(rc, 1)
+        self.assertIn("is server-8's record, not server-9's", err)
+        self.assertEqual(self.raw(path), before)
+        for text, why in (("not json", "is not JSON"), ("[1]", "is not a JSON object")):
+            with self.subTest(why):
+                with open(path, "w") as f:
+                    f.write(text)
+                rc, out, err = self.run_verify(path, self.GOOD, server="server-8")
+                self.assertEqual(rc, 1)
+                self.assertIn(why, err)
+                with open(path) as f:
+                    self.assertEqual(f.read(), text)
+
+    def test_a_new_file_is_made_when_there_is_none(self):
+        synthetic_pins(self.d)
+        path = os.path.join(self.d, "server-9.json")
+        self.assertEqual(self.run_verify(path, self.GOOD)[0], 0)
+        with open(path) as f:
+            r = json.load(f)
+        self.assertEqual(sorted(r), ["intake", "server", "status"])
+        check_a_verified_server_record(self, r, "server-9", ekchain.load_pins(self.d))
 
     def test_pins_checks_the_committed_roots(self):
         out = io.StringIO()

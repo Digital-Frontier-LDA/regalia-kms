@@ -31,9 +31,13 @@ Commissioning has two halves:
    `python3 -Es -m deploy.baremetal.ekchain verify --server server-<n> --rsa EK-RSA.der CA-RSA.der
    --ecc EK-ECC.der CA-ECC.der --ek-public ek.pub --out deploy/baremetal/ekroots/servers/server-<n>.json`
    (the CAs are the ones each certificate's AIA names; `ek.pub` is `tpm2_createek -G rsa -u`'s output).
-   Exit 0 records `"status": "verified"` and the ek_name enrolment will meet; anything else is a refusal
-   and records no ek_name. A CA whose key `ekroots/PINS` does not name is refused until it is pinned
-   from public sources (`ekroots/SOURCES.md`).
+   Exit 0 writes the record into `server-<n>.json` under `"intake"`, in server-1.json's shape, sets the
+   file's `"status": "verified"`, and keeps its other fields (`host`); the record carries the ek_name
+   enrolment will meet. Exit 1 is a refusal: `server-<n>.json` is not touched, and the refused record (no
+   ek_name) goes to stdout with its findings on stderr. A `server-<n>.json` that is already verified is
+   never overwritten, by a refusal or a pass: a re-intake removes it in a reviewed commit first. A CA
+   whose key `ekroots/PINS` does not name is refused until it is pinned from public sources
+   (`ekroots/SOURCES.md`).
 
 ## 2. Firmware settings (RBSU / iLO)
 
