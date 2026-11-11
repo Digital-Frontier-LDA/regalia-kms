@@ -47,7 +47,7 @@ jobs:
             --reconciler deploy/baremetal/recovery-reconcile.py \
             --mode "${{ matrix.mode }}" --shard "${{ matrix.shard }}/8" \
             --output "$RUNNER_TEMP/recovery-evidence/matrix-${{ matrix.mode }}-${{ matrix.shard }}.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: recovery-interruption-evidence-${{ matrix.mode }}-${{ matrix.shard }}
