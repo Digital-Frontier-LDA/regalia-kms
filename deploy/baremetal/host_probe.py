@@ -90,8 +90,15 @@ PLATFORM AND TPM, measured:
                             recorded at --init-import-key: the sha256 of its DER public key starts with
                             the evidence's host.pin_import_key_sha256 (without evidence,
                             --import-key-sha256; with evidence an argument must agree), and it
-                            is RSA-3072 with EXACTLY the attributes --init-import-key sets:
-                            fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda
+                            is the template --init-import-key creates, EXACTLY (#671): an ECC NIST
+                            P-256 storage key, name algorithm SHA-256, AES-128-CFB, scheme and KDF
+                            null, attributes fixedtpm|fixedparent|sensitivedataorigin|userwithauth|
+                            restricted|decrypt|noda
+  (tpm_algorithms)          NOT a control, a report: which key types the TPM accepts (tpm2_testparms
+                            rsa2048, rsa3072, ecc256, ecc384), in every run's output, so that what a
+                            module can hold is known before commissioning and the ceremony (#671: an
+                            SLB9665 has no RSA-3072). --tpm-algorithms prints only this and exits 0
+                            when ecc256, the import key's type, is accepted
   pin_credentials_sealed_as_recorded
                             every /etc/credstore.encrypted/regalia-kms-*.pin is sealed to the TPM AND the
                             host key together (not the TPM alone, not the host key alone, not a null key:
@@ -177,7 +184,14 @@ IMA_LOG = "/sys/kernel/security/ima/ascii_runtime_measurements"
 KMS_BINARY = os_probe.ALLOWED_TOKEN_CLIENT_EXES[0]
 NITROKEY_HSM = ("20a0", "4230")
 SYSTEM_BIN_DIRS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin", "/opt/bin")
-IMPORT_KEY_ATTRS = {"fixedtpm", "fixedparent", "sensitivedataorigin", "userwithauth", "decrypt", "noda"}
+IMPORT_KEY_ATTRS = {"fixedtpm", "fixedparent", "sensitivedataorigin", "userwithauth", "restricted", "decrypt", "noda"}
+# The rest of the import key's template (seal-hsm-pin.sh --init-import-key, #671), as tpm2_readpublic names it:
+# an ECC P-256 storage key whose outer wrap is AES-128-CFB. Every field must match.
+IMPORT_KEY_TEMPLATE = {"name-alg": "sha256", "type": "ecc", "curve-id": "NIST p256", "kdfa-alg": "null", "scheme": "null",
+                       "sym-alg": "aes", "sym-mode": "cfb", "sym-keybits": "128"}
+# What tpm2_testparms is asked (tpm_algorithms): the key types the PIN paths have used or might use.
+TESTPARMS = ("rsa2048", "rsa3072", "ecc256", "ecc384")
+IMPORT_KEY_ALGORITHM = "ecc256"
 # The TPM's dictionary-attack settings, as deploy/baremetal/tpm-lockout.sh sets them (#57): 32 failed
 # tries before lockout, one try forgiven every 600 s, and 86400 s before the lockout hierarchy can be
 # used again after ITS authorization was got wrong.
@@ -1133,10 +1147,21 @@ def import_key(host, expected=None):
     if rc != 0:
         return False, "no key at %s: run seal-hsm-pin.sh --init-import-key" % IMPORT_HANDLE
     attrs = set((re.search(r"^attributes:\s*\n\s+value:\s*(\S+)", yaml, re.M) or [None, ""])[1].split("|")) - {""}
-    kind = (re.search(r"^type:\s*\n\s+value:\s*(\S+)", yaml, re.M) or [None, "?"])[1]
-    bits = (re.search(r"^bits:\s*(\d+)", yaml, re.M) or [None, "?"])[1]
-    if kind != "rsa" or bits != "3072" or attrs != IMPORT_KEY_ATTRS:
-        return False, "the key at %s is not the import key's template (%s-%s, %s)" % (IMPORT_HANDLE, kind, bits, "|".join(sorted(attrs)))
+
+    def field(name):    # "name: v" on one line, or "name:" then "  value: v" (tpm2_readpublic's two shapes)
+        m = re.search(r"^%s:[ \t]*(\S[^\n]*)?\n(?:[ \t]+value:[ \t]*([^\n]*)\n)?" % re.escape(name), yaml + "\n", re.M)
+        return ((m.group(2) if m and m.group(2) is not None else m.group(1) if m else None) or "?").strip()
+    got = {name: field(name) for name in IMPORT_KEY_TEMPLATE}
+    wrong = ["%s %s (not %s)" % (n, got[n], want) for n, want in IMPORT_KEY_TEMPLATE.items() if got[n] != want]
+    # --init-import-key sets no authPolicy; tpm2_readpublic prints this line only for a non-empty one
+    policy = re.search(r"^authorization policy:[ \t]*(\S+)", yaml, re.M)
+    if policy:
+        wrong.append("authorization policy %s (not empty)" % policy.group(1)[:16])
+    if wrong or attrs != IMPORT_KEY_ATTRS:
+        if attrs != IMPORT_KEY_ATTRS:
+            wrong.append("attributes %s (not %s)" % ("|".join(sorted(attrs)), "|".join(sorted(IMPORT_KEY_ATTRS))))
+        return False, "the key at %s is not the import key's template (an ECC P-256 storage key, #671): %s" % (
+            IMPORT_HANDLE, "; ".join(wrong))
     rc, pem = host.run(["tpm2_readpublic", "-Q", "-c", IMPORT_HANDLE, "-f", "pem", "-o", "/dev/stdout"])
     body = "".join(l for l in pem.splitlines() if l and not l.startswith("-----"))
     try:
@@ -1152,6 +1177,20 @@ def import_key(host, expected=None):
     if not fp.startswith(want):
         return False, "the key at %s (sha256 %s) is NOT the recorded import key (%s)" % (IMPORT_HANDLE, fp, want)
     return True, "the recorded import key is at %s (sha256 %s)" % (IMPORT_HANDLE, fp)
+
+
+def tpm_algorithms(host):
+    """{params: True (accepted), False (refused by the TPM), None (not asked: no tool, or the tool failed)} for
+    each of TESTPARMS. Not a control: a report of what this module can hold (#671)."""
+    if not host.which("tpm2_testparms"):
+        return {p: None for p in TESTPARMS}
+    out = {}
+    for p in TESTPARMS:
+        rc, _ = host.run(["tpm2_testparms", p])
+        # 0: accepted. Any other exit: the TPM (or tpm2-tools for this module) does not take it. An exit of
+        # 127 is the runner's own (the tool could not be started): not an answer.
+        out[p] = None if rc == 127 else rc == 0
+    return out
 
 
 def der_item(data, at):
@@ -1461,8 +1500,15 @@ def main(argv=None, host=None, run=None):
                     "from host.node_id, and an argument must agree with it")
     ap.add_argument("--unlock-peer", action="append", default=[], metavar="NODE_ID",
                     help="a peer that holds an unlock path for this host; repeat for each. With --node-id")
+    ap.add_argument("--tpm-algorithms", action="store_true", help="print only the key types the TPM accepts "
+                    "(tpm2_testparms %s) and exit 0 when %s, the PIN import key's, is one of them: run it before "
+                    "commissioning and before the ceremony (#671)" % (", ".join(TESTPARMS), IMPORT_KEY_ALGORITHM))
     args = ap.parse_args(argv)
     host = host or Host()
+    if args.tpm_algorithms:
+        algorithms = tpm_algorithms(host)
+        print(json.dumps({"tpm_algorithms": algorithms, "import_key_algorithm": IMPORT_KEY_ALGORITHM}, indent=2))
+        return 0 if algorithms[IMPORT_KEY_ALGORITHM] is True else 1
     report = {"attested_not_measured": list(UNMEASURED)}
     problems, want, binding, sb_cert = [], args.import_key_sha256, None, args.secure_boot_cert_sha256
     if args.unlock_peer and not args.node_id:
@@ -1518,6 +1564,7 @@ def main(argv=None, host=None, run=None):
             ev_host = None
     measured = measure(host, want, binding, unlock_record, sb_cert)
     report["measured"] = measured
+    report["tpm_algorithms"] = tpm_algorithms(host)
     if args.evidence or args.image:
         report["image_signed_by_recorded_cert"] = image_cert(host, args.esp, args.image, sb_cert)
     if args.evidence:

@@ -39,8 +39,46 @@ DB = DB_ATTRS + DB_FACTORY + siglist(host_probe.EFI_CERT_X509, [SB_CERT])
 DER = b"stand-in DER public key of the import key"
 FP = hashlib.sha256(DER).hexdigest()
 PEM = "-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----\n" % base64.b64encode(DER).decode()
-# tpm2_readpublic's YAML for the template seal-hsm-pin.sh --init-import-key creates (captured from swtpm)
-IMPORT_YAML = """name: 000b87fe
+# tpm2_readpublic's YAML for the template seal-hsm-pin.sh --init-import-key creates (#671: an ECC P-256
+# storage key; captured from swtpm 0.10.1, tpm2-tools 5.7, 2026-11-07)
+IMPORT_YAML = """name: 000b2e6193b869e4962b3b1686583f0899d0f64ebdb75b7ecfc5f56686d625685e37
+qualified name: 000beae5d8f7b6073a21533c3045c38b78564af7516011dc750dc70fd2b2a2fdd39f
+name-alg:
+  value: sha256
+  raw: 0xb
+attributes:
+  value: fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|restricted|decrypt
+  raw: 0x30472
+type:
+  value: ecc
+  raw: 0x23
+curve-id:
+  value: NIST p256
+  raw: 0x3
+kdfa-alg:
+  value: null
+  raw: 0x10
+kdfa-halg:
+  value: (null)
+  raw: 0x0
+scheme:
+  value: null
+  raw: 0x10
+scheme-halg:
+  value: (null)
+  raw: 0x0
+sym-alg:
+  value: aes
+  raw: 0x6
+sym-mode:
+  value: cfb
+  raw: 0x43
+sym-keybits: 128
+x: de45c068ed74ddf9476649cddf3c38501743da11a1df0423161acfe2d980b3a0
+y: b0815ae94c1fbbcec5e2e487dda04392c26f697e53d344bbbf9d5e133449fb67
+"""
+# The RSA-3072 import key every host commissioned before #671 holds (captured from swtpm): the wrong template now.
+IMPORT_YAML_RSA3072 = """name: 000b87fe
 attributes:
   value: fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|decrypt
   raw: 0x20072
@@ -1041,15 +1079,94 @@ class HostProbe(unittest.TestCase):
             policy["TPM2_PT_MAX_AUTH_FAIL"], policy["TPM2_PT_LOCKOUT_INTERVAL"], policy["TPM2_PT_LOCKOUT_RECOVERY"]), script)
 
     def test_the_import_key_needs_exactly_the_init_template_attributes(self):
-        for attrs in ("fixedtpm|fixedparent|sensitivedataorigin|noda|decrypt",
+        for attrs in ("fixedtpm|fixedparent|sensitivedataorigin|noda|restricted|decrypt",
                       # the template before #57's decision: subject to the dictionary-attack counter
-                      "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt",
-                      "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt"):
+                      "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt",
+                      # not a storage key: TPM2_Import refuses it as a parent
+                      "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|decrypt",
+                      # fixedTPM, fixedParent, sensitiveDataOrigin: each one missing is a key that was not made here
+                      "fixedparent|sensitivedataorigin|userwithauth|noda|restricted|decrypt",
+                      "fixedtpm|sensitivedataorigin|userwithauth|noda|restricted|decrypt",
+                      "fixedtpm|fixedparent|userwithauth|noda|restricted|decrypt",
+                      "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|restricted|decrypt|sign"):
             with self.subTest(attrs=attrs):
                 h = FakeHost()
                 h.runs[("tpm2_readpublic", "-c", host_probe.IMPORT_HANDLE)] = (
-                    0, IMPORT_YAML.replace("fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|decrypt", attrs))
-                self.assertFalse(host_probe.import_key(h, FP[:16])[0])
+                    0, IMPORT_YAML.replace("fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|restricted|decrypt", attrs))
+                value, why = host_probe.import_key(h, FP[:16])
+                self.assertFalse(value)
+                self.assertIn("not the import key's template", why)
+
+    def test_the_import_key_needs_exactly_the_p256_storage_template(self):
+        self.assertTrue(host_probe.import_key(FakeHost(), FP[:16])[0])
+        for label, yaml, said in (
+                # a host commissioned before #671: the RSA-3072 key is at the handle, with the right fingerprint
+                ("the old RSA-3072 import key", IMPORT_YAML_RSA3072, "type rsa (not ecc)"),
+                ("P-384", IMPORT_YAML.replace("NIST p256", "NIST p384"), "curve-id NIST p384 (not NIST p256)"),
+                ("AES-256", IMPORT_YAML.replace("sym-keybits: 128", "sym-keybits: 256"), "sym-keybits 256 (not 128)"),
+                ("no symmetric algorithm", IMPORT_YAML.replace("  value: aes\n", "  value: null\n"), "sym-alg null (not aes)"),
+                ("CTR mode", IMPORT_YAML.replace("  value: cfb\n", "  value: ctr\n"), "sym-mode ctr (not cfb)"),
+                ("an ECDH scheme", IMPORT_YAML.replace("scheme:\n  value: null", "scheme:\n  value: ecdh"), "scheme ecdh (not null)"),
+                ("SHA-1 names", IMPORT_YAML.replace("name-alg:\n  value: sha256", "name-alg:\n  value: sha1"), "name-alg sha1 (not sha256)"),
+                ("a KDF", IMPORT_YAML.replace("kdfa-alg:\n  value: null", "kdfa-alg:\n  value: kdf1_sp800_56a"), "kdfa-alg kdf1_sp800_56a"),
+                ("no curve line", IMPORT_YAML.replace("curve-id:\n  value: NIST p256\n  raw: 0x3\n", ""), "curve-id ? (not NIST p256)"),
+                # tpm2_readpublic prints this line only when the key has a policy; --init-import-key sets none
+                ("an authPolicy", IMPORT_YAML + "authorization policy: ae7f391387f5e2e0fc16e46e2dc0f5f431205b7b978bcfac0d8ab0c0a0016434\n",
+                 "authorization policy ae7f391387f5e2e0 (not empty)")):
+            with self.subTest(label):
+                h = FakeHost()
+                h.runs[("tpm2_readpublic", "-c", host_probe.IMPORT_HANDLE)] = (0, yaml)
+                value, why = host_probe.import_key(h, FP[:16])
+                self.assertFalse(value)
+                self.assertIn("not the import key's template", why)
+                self.assertIn(said, why)
+
+    def test_the_old_rsa_key_fails_even_with_its_recorded_fingerprint(self):
+        # the fingerprint still matches (the evidence recorded that very key): the template alone refuses it
+        h = FakeHost()
+        h.runs[("tpm2_readpublic", "-c", host_probe.IMPORT_HANDLE)] = (0, IMPORT_YAML_RSA3072)
+        value, why = host_probe.import_key(h, FP)
+        self.assertFalse(value)
+        self.assertNotIn("NOT the recorded import key", why)
+
+    def test_tpm_algorithms_reports_what_tpm2_testparms_accepts(self):
+        h = FakeHost()
+        self.assertEqual(host_probe.tpm_algorithms(h), dict.fromkeys(host_probe.TESTPARMS))   # no tool: not asked
+        h.tools.add("tpm2_testparms")
+        # the SLB9665 of #671: rsa2048 and ecc256 only (tpm2_testparms exits 1 for the others)
+        for p, rc in (("rsa2048", 0), ("rsa3072", 1), ("ecc256", 0), ("ecc384", 1)):
+            h.runs[("tpm2_testparms", p)] = (rc, "")
+        self.assertEqual(host_probe.tpm_algorithms(h), {"rsa2048": True, "rsa3072": False, "ecc256": True, "ecc384": False})
+        h.runs[("tpm2_testparms", "ecc384")] = (127, "")
+        self.assertIsNone(host_probe.tpm_algorithms(h)["ecc384"])
+
+    def test_tpm_algorithms_flag_exits_on_the_import_key_type(self):
+        for ecc256, rc_want in ((0, 0), (1, 1)):
+            with self.subTest(ecc256=ecc256):
+                h = FakeHost()
+                h.tools.add("tpm2_testparms")
+                for p in host_probe.TESTPARMS:
+                    h.runs[("tpm2_testparms", p)] = (0, "")
+                h.runs[("tpm2_testparms", "ecc256")] = (ecc256, "")
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    rc = host_probe.main(["--tpm-algorithms"], host=h)
+                self.assertEqual(rc, rc_want)
+                report = json.loads(out.getvalue())
+                self.assertEqual(report["import_key_algorithm"], "ecc256")
+                self.assertIs(report["tpm_algorithms"]["ecc256"], ecc256 == 0)
+                self.assertNotIn("measured", report)
+
+    def test_every_run_reports_tpm_algorithms(self):
+        h = FakeHost()
+        h.tools.add("tpm2_testparms")
+        for p in host_probe.TESTPARMS:
+            h.runs[("tpm2_testparms", p)] = (0 if p in ("rsa2048", "ecc256") else 1, "")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            host_probe.main(["--import-key-sha256", FP[:16]], host=h)
+        self.assertEqual(json.loads(out.getvalue())["tpm_algorithms"],
+                         {"rsa2048": True, "rsa3072": False, "ecc256": True, "ecc384": False})
 
     def test_a_real_credential_header_says_what_the_blob_is_sealed_to(self):
         self.assertEqual(host_probe.credential_header(cred("host-tpm2-7.cred")), PCR7)

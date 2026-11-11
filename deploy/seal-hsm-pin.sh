@@ -30,14 +30,17 @@
 # TPM IMPORT (ADR-0002 D21): the PIN can arrive ENCRYPTED to this host's TPM, so it is never typed here
 # or carried in clear. Two extra modes:
 #   sudo deploy/seal-hsm-pin.sh --init-import-key [--import-handle 0x81000101] [--import-pub FILE]
-#       once, at commissioning: creates an RSA-3072 decryption key INSIDE the TPM (fixedTPM,
-#       fixedParent, sensitiveDataOrigin: generated there, never leaves), persists it at the handle,
-#       and writes its public key (PEM) and SHA-256 fingerprint. Copy the fingerprint BY HAND at the
-#       console: the ceremony checks the public key against it before encrypting a PIN to it.
+#       once, at commissioning: creates an ECC P-256 STORAGE key INSIDE the TPM (fixedTPM, fixedParent,
+#       sensitiveDataOrigin: generated there, never leaves; restricted|decrypt, AES-128-CFB: the parent
+#       TPM2_Import needs), persists it at the handle, and writes its public key (PEM) and SHA-256
+#       fingerprint. Copy the fingerprint BY HAND at the console: the ceremony checks the public key
+#       against it before wrapping a PIN to it. About 128-bit security (P-256, AES-128, SHA-256).
 #   sudo deploy/seal-hsm-pin.sh --id … --serial … --pcrs … --from-blob pin-<site>.blob
-#       the ceremony's RSA-OAEP (SHA-256) blob; the TPM decrypts it, then every check below runs as for
-#       a typed PIN (card, counter, tested on the card, sealed, read back). A blob made for another
-#       TPM, or altered, fails to decrypt and no card try is spent.
+#       the ceremony's blob (format v2, PIN-IMPORT-DESIGN.md): a TPM2 duplication of a sealed object
+#       holding the PIN, wrapped to this TPM's import key. The TPM imports, loads and unseals it, then
+#       every check below runs as for a typed PIN (card, counter, tested on the card, sealed, read
+#       back). A blob made for another TPM's key, or altered, is refused and no card try is spent. An
+#       RSA-OAEP blob from before #671 (format 1) is refused with a message saying so.
 #   gpg --decrypt ownerauth-<node>.yk.gpg | sudo deploy/seal-hsm-pin.sh --init-import-key --ownerauth-stdin ...
 #       on a TPM whose owner authorization is set (#242): the import key is created and persisted under the
 #       owner hierarchy, which then takes this node's value from its envelope, on STANDARD INPUT (64 lowercase
@@ -117,23 +120,26 @@ while [ $# -gt 0 ]; do case "$1" in
 # #199 signing key): with --replace-import-key a typo there would evict one and strand the node. Never there.
 case "${IMPORT_HANDLE,,}" in 0x810100??) fail "--import-handle $IMPORT_HANDLE is in 0x810100xx, the node's identity keys (EK 0x81010001, AK 0x81010002, signing key 0x81010003): the PIN tool never makes, replaces or removes a key there";; esac
 
+# Production goes through the kernel resource manager (/dev/tpmrm0, the tpm2-tools default), which
+# gives each connection its own transient objects and cleans them up: nothing to flush globally,
+# and flushing all transient objects or sessions (-t / -s) on a shared TPM would break other users.
+# A raw /dev/tpm0 has no resource manager and is refused. Only a PRIVATE simulator named in
+# TPM2TOOLS_TCTI (swtpm, mssim: the test's own TPM) has no manager and needs the transient objects
+# that each tool call leaves behind flushed between steps.
+refuse_raw_tpm(){ case "${TPM2TOOLS_TCTI:-}" in
+    *tpm0|*"/dev/tpm0"*) fail "TPM2TOOLS_TCTI points at /dev/tpm0 (no resource manager); use /dev/tpmrm0" ;;
+  esac; }
+flush_in(){ local c; for c in "$1"/*.ctx; do [ -f "$c" ] && tpm2_flushcontext "$c" >/dev/null 2>&1; done
+  case "${TPM2TOOLS_TCTI:-}" in swtpm*|mssim*) tpm2_flushcontext -t >/dev/null 2>&1 ;; esac; }
+
 # ---- commissioning: the TPM-resident import key ---------------------------------------------------
 if [ "$INIT_IMPORT" = 1 ]; then
   [ "$(id -u)" = 0 ] || fail "run as root (sudo)"
   for t in tpm2_createprimary tpm2_create tpm2_load tpm2_evictcontrol tpm2_readpublic tpm2_flushcontext openssl; do
     command -v "$t" >/dev/null || fail "$t is required (tpm2-tools, openssl)"; done
-  # Production goes through the kernel resource manager (/dev/tpmrm0, the tpm2-tools default), which
-  # gives each connection its own transient objects and cleans them up: nothing to flush globally,
-  # and flushing all transient objects or sessions (-t / -s) on a shared TPM would break other users.
-  # A raw /dev/tpm0 has no resource manager and is refused. Only a PRIVATE simulator named in
-  # TPM2TOOLS_TCTI (swtpm, mssim: the test's own TPM) has no manager and needs the transient objects
-  # that each tool call leaves behind flushed between steps.
-  case "${TPM2TOOLS_TCTI:-}" in
-    *tpm0|*"/dev/tpm0"*) fail "TPM2TOOLS_TCTI points at /dev/tpm0 (no resource manager); use /dev/tpmrm0" ;;
-  esac
+  refuse_raw_tpm
   work="$(mktemp -d)"
-  flush_own(){ local c; for c in "$work"/*.ctx; do [ -f "$c" ] && tpm2_flushcontext "$c" >/dev/null 2>&1; done
-    case "${TPM2TOOLS_TCTI:-}" in swtpm*|mssim*) tpm2_flushcontext -t >/dev/null 2>&1 ;; esac; }
+  flush_own(){ flush_in "$work"; }
   oa_dir=""
   trap 'flush_own; rm -rf "$work"; [ -n "$oa_dir" ] && rm -rf "$oa_dir"' EXIT
   # the owner authorization (#242), from its envelope on standard input: into a root-only tmpfs file for tpm2-tools'
@@ -164,13 +170,20 @@ if [ "$INIT_IMPORT" = 1 ]; then
   fi
   flush_own
   # noda, on the key and on its parent: neither is subject to the TPM's dictionary-attack counter.
-  # The key has no authorization value to guess (anyone on this host may ask it to decrypt; what it
+  # The key has no authorization value to guess (anyone on this host may ask it to import; what it
   # protects is that only THIS TPM can), so that protection guards nothing here, and it has a cost:
   # the TPM adds a failed try at the next start whenever such a key was used and the power then went
   # without a TPM2_Shutdown, and at the limit it refuses every key (measured on swtpm, #57).
   tpm2_createprimary -Q -C o "${OWNER_P[@]}" -g sha256 -G ecc256:aes128cfb \
     -a 'restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda' -c "$work/primary.ctx" || fail "tpm2_createprimary failed"
-  tpm2_create -Q -C "$work/primary.ctx" -G rsa3072 -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda' \
+  # The import key (#671): an ECC P-256 storage key. restricted|decrypt is what TPM2_Import requires of a
+  # parent (a storage key; anything else is TPM_RC_TYPE), and it keeps the key from being used for
+  # anything else (no TPM2_ECDH_ZGen, no signing): it only unwraps objects into this TPM. AES-128-CFB is
+  # the symmetric part of the outer wrap a duplication blob is made with. A CHILD of the transient
+  # primary, not the primary itself: the primary is a function of the owner seed and its template, the
+  # child is random, so --replace-import-key makes a different key. Every TPM 2.0 module has P-256
+  # (the SLB9665 has no RSA-3072: #671); host_probe.py reports what this one has (tpm_algorithms).
+  tpm2_create -Q -C "$work/primary.ctx" -G ecc256:aes128cfb -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt|noda' \
     -u "$work/k.pub" -r "$work/k.priv" || fail "tpm2_create failed"
   flush_own
   tpm2_load -Q -C "$work/primary.ctx" -u "$work/k.pub" -r "$work/k.priv" -c "$work/k.ctx" || fail "tpm2_load failed"
@@ -250,8 +263,10 @@ if [ "$KIND" = yubikey ]; then
   [ -r "$MODULE" ] || fail "ykcs11 is required for --yubikey ($MODULE; package ykcs11, or set YKCS11_MODULE)"
 fi
 if [ -n "$FROM_BLOB" ]; then
-  [ -r "$FROM_BLOB" ] || fail "--from-blob: cannot read $FROM_BLOB"
-  command -v tpm2_rsadecrypt >/dev/null || fail "tpm2_rsadecrypt is required for --from-blob (tpm2-tools)"
+  [ -r "$FROM_BLOB" ] && [ -f "$FROM_BLOB" ] || fail "--from-blob: cannot read $FROM_BLOB"
+  for t in tpm2_import tpm2_load tpm2_unseal tpm2_readpublic tpm2_flushcontext openssl od; do
+    command -v "$t" >/dev/null || fail "$t is required for --from-blob (tpm2-tools, openssl, coreutils)"; done
+  refuse_raw_tpm
 fi
 if [ "$BENCH" = 0 ]; then
   if [ -n "${REGALIA_TPM2_DEVICE:-}" ]; then
@@ -300,15 +315,76 @@ fi
 NAME="$ID.pin"; DEST="$CREDSTORE/regalia-kms-$ID.pin"
 if [ -e "$DEST" ] && [ "$REPLACE" = 0 ]; then fail "$DEST exists; pass --replace to rotate it (the old one is kept)"; fi
 
-# ---- a blob is decrypted FIRST, before any card is touched ------------------------------------------
-# A blob made for another host's TPM, or altered, is refused here without reading a card at all.
-PIN=""; PIN2=""; trap 'PIN=""; PIN2=""' EXIT
+# ---- a blob is opened FIRST, before any card is touched --------------------------------------------
+# A blob made for another host's TPM, altered, or of another format, is refused here without reading a
+# card at all. Format v2 (PIN-IMPORT-DESIGN.md): one header line, then the three TPM2B structures
+# TPM2_Import takes, as tpm2_duplicate writes them:
+#   "regalia-pin-blob v2 tpm2-import nist-p256 sha256=<the import key's fingerprint, 64 hex>\n"
+#   TPM2B_PUBLIC (the sealed object) | TPM2B_PRIVATE (its duplicate) | TPM2B_ENCRYPTED_SECRET (the seed)
+# The fingerprint in the header is only a label (a clear message for a blob made for another host);
+# what decides is the TPM: the outer HMAC, keyed from a seed only this TPM's key can recover, covers
+# the sealed object's name and its encrypted contents.
+BLOB_V2_RE='^regalia-pin-blob v2 tpm2-import nist-p256 sha256=([0-9a-f]{64})$'
+open_blob(){
+  local f="$1" c size head ver want fp total off part sz
+  # ONE copy, read once (at most 4097 bytes): everything below reads the copy, so the header that is
+  # checked and the body that is imported are the same bytes even if the file changes meanwhile
+  bw="$(mktemp -d)" || fail "cannot create a temporary directory"
+  c="$bw/blob"
+  head -c 4097 -- "$f" > "$c" 2>/dev/null || fail "--from-blob: cannot read $f"
+  size="$(stat -c %s "$c" 2>/dev/null)" || fail "--from-blob: cannot read $f"
+  # an unprintable byte becomes '?': the header is ASCII, and a binary blob must not reach the terminal
+  head="$(head -c 113 "$c" | tr -c '[:print:]' '?')"
+  case "$head" in
+    "regalia-pin-blob v2 "*) ;;
+    "regalia-pin-blob v"*) ver="${head#regalia-pin-blob v}"; ver="${ver%% *}"
+      fail "$f is a PIN blob of format v${ver:0:8}, which this seal-hsm-pin.sh does not read (it reads v2: TPM2 import to an ECC P-256 key). No card was touched; nothing was sealed" ;;
+    *) if [ "$size" = 384 ] || [ "$size" = 256 ]; then
+         fail "$f looks like an RSA-OAEP PIN blob ($size bytes, no header: format 1, before regalia-kms#671). This host's import key is ECC P-256 and takes only v2 blobs (TPM2 import): make a new blob at ceremony step 0 for this host's current public key, or type the PIN from the PIN card. No card was touched; nothing was sealed"
+       fi
+       fail "$f is not a PIN blob (no 'regalia-pin-blob v2' header). No card was touched; nothing was sealed" ;;
+  esac
+  [ "$size" -le 4096 ] || fail "$f is over 4096 bytes, too large for a v2 PIN blob. No card was touched; nothing was sealed"
+  [[ "$head" =~ $BLOB_V2_RE ]] || fail "$f has a malformed v2 header. No card was touched; nothing was sealed"
+  want="${BASH_REMATCH[1]}"
+  [ "$(tail -c +114 "$c" | head -c 1 | od -An -tx1 | tr -d ' \n')" = 0a ] || fail "$f has a malformed v2 header. No card was touched; nothing was sealed"
+  fp="$(tpm2_readpublic -Q -c "$IMPORT_HANDLE" -f pem -o /dev/stdout 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | sha256sum | cut -d' ' -f1)" || fp=""
+  [ -n "$fp" ] && [ "$fp" != "$(: | sha256sum | cut -d' ' -f1)" ] \
+    || fail "this TPM has no import key at $IMPORT_HANDLE (seal-hsm-pin.sh --init-import-key). No card was touched; nothing was sealed"
+  [ "$fp" = "$want" ] || fail "$f was made for the import key sha256 $want; this TPM's key at $IMPORT_HANDLE is $fp: a blob for another host, or for a key since replaced. No card was touched; nothing was sealed"
+  tail -c +115 "$c" > "$bw/body" || fail "cannot read $f"
+  total=$((size - 114)); off=0
+  for part in pub dpriv seed; do
+    [ $((off + 2)) -le "$total" ] || fail "$f is truncated (no $part). No card was touched; nothing was sealed"
+    sz="$(od -An -tu1 -j "$off" -N2 "$bw/body" | awk '{print $1 * 256 + $2}')"
+    [ $((off + 2 + sz)) -le "$total" ] || fail "$f is truncated ($part). No card was touched; nothing was sealed"
+    tail -c +$((off + 1)) "$bw/body" | head -c $((sz + 2)) > "$bw/$part"
+    off=$((off + 2 + sz))
+  done
+  [ "$off" = "$total" ] || fail "$f has $((total - off)) bytes after its three parts. No card was touched; nothing was sealed"
+  # TPM2_Import authorizes the PARENT (this key: no authorization value, userwithauth), not a hierarchy:
+  # the owner authorization (#242) is not needed here, only at --init-import-key.
+  tpm2_import -Q -C "$IMPORT_HANDLE" -u "$bw/pub" -i "$bw/dpriv" -s "$bw/seed" -r "$bw/priv" >/dev/null 2>&1 \
+    || fail "the TPM could not import $f: altered, or made for another TPM and labelled as this one's. No card was touched; nothing was sealed"
+  flush_in "$bw"
+  tpm2_load -Q -C "$IMPORT_HANDLE" -u "$bw/pub" -r "$bw/priv" -c "$bw/pin.ctx" >/dev/null 2>&1 \
+    || fail "the TPM imported $f but cannot load it. No card was touched; nothing was sealed"
+  # Unsealed inside the TPM; the PIN goes straight into this variable, never to a file or argv.
+  PIN="$(tpm2_unseal -c "$bw/pin.ctx" 2>/dev/null)" || PIN=""
+  flush_in "$bw"; rm -rf "$bw"; bw=""
+  [ -n "$PIN" ] || fail "the TPM could not unseal $f (not a sealed PIN object). No card was touched; nothing was sealed"
+  # The PIN's form, checked here too (the same rule as below), so that a well-made blob of a malformed
+  # PIN stops before any card is looked for; the PIN itself is never printed
+  if [ "$KIND" = yubikey ]; then
+    [[ "$PIN" =~ ^[0-9]{6,8}$ ]] || { PIN=""; fail "the value sealed in $f is not a YubiKey PIV PIN (6-8 digits). No card was touched; nothing was sealed"; }
+  else
+    [[ "$PIN" =~ ^[0-9]{6,16}$ ]] || { PIN=""; fail "the value sealed in $f is not a SmartCard-HSM user PIN (6-16 digits). No card was touched; nothing was sealed"; }
+  fi
+}
+PIN=""; PIN2=""; bw=""; trap 'PIN=""; PIN2=""; [ -n "$bw" ] && rm -rf "$bw"' EXIT
 if [ -n "$FROM_BLOB" ]; then
-  # Decrypted inside the TPM; the PIN goes straight into this variable, never to a file or argv.
-  PIN="$(tpm2_rsadecrypt -c "$IMPORT_HANDLE" -s oaep -o /dev/stdout "$FROM_BLOB" 2>/dev/null | tr -d '\0')" \
-    || PIN=""
-  [ -n "$PIN" ] || fail "the TPM could not decrypt $FROM_BLOB: made for another host's TPM, altered, or the import key at $IMPORT_HANDLE is gone. No card was touched; nothing was sealed"
-  say "PIN decrypted by the TPM from $FROM_BLOB"
+  open_blob "$FROM_BLOB"
+  say "PIN unsealed by the TPM from $FROM_BLOB"
 fi
 
 # ---- the card: attached, the right serial, a full counter --------------------------------------------
@@ -334,7 +410,7 @@ say "card $SERIAL: reader $reader, PKCS#11 slot $slot, $t tries left (full)"
 
 # ---- the PIN ---------------------------------------------------------------------------------------
 if [ -n "$FROM_BLOB" ]; then
-  : # decrypted above, before any card was touched
+  : # unsealed above, before any card was touched
 elif [ -t 0 ]; then
   read -r -s -p "User PIN for $SERIAL, from the PIN card (hidden): " PIN; echo >&2
   read -r -s -p "Again: " PIN2; echo >&2

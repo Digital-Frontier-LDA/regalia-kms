@@ -193,19 +193,27 @@ The ceremony runs on an air-gapped laptop; the PIN must reach each KMS host's TP
 it at the site, it travels **encrypted to a key that lives only in that host's TPM**:
 
 1. **Commissioning, on the host:** `sudo deploy/seal-hsm-pin.sh --init-import-key` creates an
-   RSA-3072 decryption key inside the TPM (`fixedTPM`, `fixedParent`, `sensitiveDataOrigin`: made
-   there, never leaves), persists it (default handle `0x81000101`) and writes its public key and
-   SHA-256 fingerprint. Copy the fingerprint by hand from the console.
-2. **Ceremony, on the laptop:** step 0 checks the public key against that fingerprint and encrypts
-   the site's PIN to it (RSA-OAEP, SHA-256). The blob is safe on any medium.
+   ECC P-256 storage key inside the TPM (`fixedTPM`, `fixedParent`, `sensitiveDataOrigin`: made
+   there, never leaves; `restricted|decrypt`, AES-128-CFB: a parent for TPM2_Import), persists it
+   (default handle `0x81000101`) and writes its public key and SHA-256 fingerprint. Copy the
+   fingerprint by hand from the console. (#671: until then the key was RSA-3072, which the DL360
+   Gen9's SLB9665 does not have. Run `host_probe.py --tpm-algorithms` first to see what a module has.)
+2. **Ceremony, on the laptop:** step 0 checks the public key against that fingerprint and wraps the
+   site's PIN to it, offline and with no TPM: a TPM2 duplication blob of a sealed object that holds
+   the PIN (`tpm2_duplicate --tcti none`), format v2. About 128-bit security (P-256, AES-128,
+   SHA-256). The blob is safe on any medium. The construction and format: PIN-IMPORT-DESIGN.md.
 3. **On the host:** `sudo deploy/seal-hsm-pin.sh --id … --serial … --pcrs … --from-blob pin-<site>.blob`.
-   The TPM decrypts it; then every check of the typed path runs (card serial, full counter, PIN tested
-   on the card, sealed, read back). A blob for another TPM, or altered, fails to decrypt **before any
-   card is touched**: nothing is read from or tried on the card.
+   The TPM imports, loads and unseals it (TPM2_Import, TPM2_Load, TPM2_Unseal; no owner authorization
+   needed); then every check of the typed path runs (card serial, full counter, PIN tested on the
+   card, sealed, read back). A blob for another TPM, altered, or an RSA-OAEP blob from before #671,
+   is refused **before any card is touched**: nothing is read from or tried on the card.
 
 Typing the PIN from the PIN card stays as the fallback (re-sealing later, a host commissioned after
-the ceremony). Proven on DENK0404144 with two software TPMs as the two hosts:
-`e2e/nitrokey-pin-import-drill.sh` (14/0, 2026-10-01).
+the ceremony). **It is also the interim path on the SLB9665 (Option C)** until Option B has passed
+on that module itself (`e2e/slb9665-pin-import-poc.sh`, written, not yet run on hardware). Proven on
+software TPMs: `e2e/pin-import-swtpm.sh` (CI). The card half was proven with the RSA-3072 key on
+DENK0404144 (`e2e/nitrokey-pin-import-drill.sh`, 14/0, 2026-10-01). The drill is updated for v2
+and **not yet re-run**.
 
 ## Power cuts and the TPM's own lockout
 
@@ -227,9 +235,10 @@ Decisions (#57, 2026-10-02):
   or clears the counter. Empty, anyone on the host can. It is generated and escrowed with the other
   ceremony secrets and typed at the console; it is never stored on the host. A wrong one blocks the
   lockout hierarchy for a day, which is the TPM protecting it.
-- **The PIN import key and its parent are created `noda`.** The key has no authorization value to
-  guess (anyone on the host may ask it to decrypt; its protection is that only this TPM can), so the
-  counter guards nothing there and would only add a way to lock the host out.
+- **The PIN import key and its parent are created `noda`,** and so is the sealed object a blob
+  carries. The key has no authorization value to guess (anyone on the host may ask it to import a
+  blob; its protection is that only this TPM can), so the counter guards nothing there and would only
+  add a way to lock the host out.
 
 *Verified by:* `e2e/tpm-lockout-swtpm.sh` in CI (software TPMs: the settings, drift, a wrong
 authorization, the `noda` key across four power cuts with a control, one try counted per cut after

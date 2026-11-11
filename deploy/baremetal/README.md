@@ -410,8 +410,12 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
 1. **PIN import key:** `sudo deploy/seal-hsm-pin.sh --init-import-key`. Copy the printed fingerprint
    **by hand** at the console (the ceremony checks it) and record it in the evidence as
    `host.pin_import_key_sha256`. Measured: `pin_import_key_present`, which compares the key at the
-   handle with that recorded value and checks its template: RSA-3072 with exactly
-   fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda. Any other key at the handle fails.
+   handle with that recorded value and checks its template: an ECC P-256 storage key (SHA-256,
+   AES-128-CFB, #671) with exactly fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt|noda.
+   Any other key at the handle fails, including the RSA-3072 key of a host commissioned before #671
+   (`--init-import-key --replace-import-key`, a new fingerprint, new evidence). Before commissioning,
+   `host_probe.py --tpm-algorithms` reports which key types the TPM takes (`tpm2_testparms`); every
+   run's report carries the same as `tpm_algorithms`. PIN-IMPORT-DESIGN.md.
    `noda`: the key has no authorization value to guess, so the TPM's dictionary-attack counter
    protects nothing there, and without it every power cut after the key was used would count a try.
 2. **PINs:** `sudo deploy/seal-hsm-pin.sh --id … --serial <Nitrokey> --pcrs 7 --from-blob
