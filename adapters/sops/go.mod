@@ -1,6 +1,6 @@
 module github.com/Digital-Frontier-LDA/regalia-kms/adapters/sops
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/golang/protobuf v1.5.4
