@@ -518,7 +518,10 @@ func validateDraft(draft Draft) error {
 	if draft.Decision != "allow" && draft.Decision != "deny" {
 		return errors.New("invalid audit decision")
 	}
-	if draft.Operation == "" || draft.Outcome == "" ||
+	// Principal is required (epic #40 AC3, T16): an event that names no actor cannot answer "who
+	// did this". Every emitter sets one: requests carry the middleware's authenticated principal,
+	// and the daemon's own records name a system:* principal.
+	if draft.Principal == "" || draft.Operation == "" || draft.Outcome == "" ||
 		draft.RegistryDigest == "" || draft.PolicyDigest == "" || draft.RBACDigest == "" {
 		return errors.New("incomplete audit metadata")
 	}
