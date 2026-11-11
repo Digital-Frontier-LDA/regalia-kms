@@ -3,6 +3,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
 
@@ -178,32 +179,414 @@ jobs:
           gpg --version | head -1 && git --version
           ( cd adapters/gpgsign && REGALIA_EXPECT_GPG=1 go test -race ./... )
 
-  # The benchmark harness is Python, and its regression tests need no card and no PyKCS11 — a fake
-  # module stands in for the library. Without this job they would ship untested in a Go-only CI,
-  # which is how the handle-reuse defect they pin reached review in the first place.
-  bench-tests:
+  # Folded jobs (CI minutes): software-TPM end-to-end checks (swtpm, tpm2-tools; SoftHSM for runtime-admission). Each former job is ONE step named after it, with its own
+  # timeout; every step runs even when an earlier one failed (if: !cancelled()), and the last step names each
+  # failed one in the job summary and fails the job. The job's timeout is the sum of its steps'.
+  e2e-swtpm:
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+
+      # regalia-kms#65 PoC 5.1/5.4/5.5: a peer verifies a node's TPM quote. Two software TPMs (swtpm):
+      # the AK is bound to the recorded EK by MakeCredential/ActivateCredential, a fresh quote over the
+      # boot-session transcript is accepted, and a replay, each substituted transcript field, changed
+      # PCRs, another TPM's AK, a session carried across a reboot and rolled-back TPM state are refused.
+      # The script exits nonzero on any FAIL; the count guards against it passing by running nothing.
+      - name: "tpm-attest: TPM attestation against swtpm (enrollment, fresh quote, replay, reboots); then regalia-node enrol init against swtpm (keys made on the host, nothing foreign touched, a crash at every call) — may not skip"
+        id: tpm-attest
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- Install the software TPM and tpm2-tools
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+          # --- TPM attestation against swtpm (enrollment, fresh quote, replay, reboots)
+          status=0
+          bash e2e/tpm-attest-swtpm.sh > "$RUNNER_TEMP/attest.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/attest.log"
+          [ "$status" -eq 0 ] || exit "$status"
+          grep -q '^tpm-attest-swtpm: 33 passed, 0 failed$' "$RUNNER_TEMP/attest.log" || {
+            echo "::error::the attestation battery did not run all 33 checks" >&2; exit 1; }
+          # --- regalia-node enrol init against swtpm (keys made on the host, nothing foreign touched, a crash at every call) — may not skip
+          (
+            export REGALIA_EXPECT_SWTPM='1'
+            sudo apt-get install -y -qq --no-install-recommends wireguard-tools python3-cryptography
+            python3 -BEs -m unittest -v tests.test_baremetal_enrol
+          )
+
+      # regalia-kms#69: freshness heartbeats. The TPM half on a software TPM: the heartbeat sequence in
+      # its own NV counter (replay and disk rollback refused), and the TPM clock behind the time floor.
+      # The script fails if any of its three tests is skipped.
+      - name: "heartbeat-swtpm: Heartbeat sequence counter and TPM clock against swtpm"
+        id: heartbeat-swtpm
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- Install the software TPM and tpm2-tools
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+          # --- Heartbeat sequence counter and TPM clock against swtpm
+          bash e2e/heartbeat-swtpm.sh
+
+      # regalia-kms#74: runtime trust leases, on two software TPMs. Node a re-attests to peer b, b's TPM
+      # signs a 5-minute lease, a holds and renews it; a revoked a is refused renewal; a rebooted a needs
+      # a new attested session. The script fails if either of its two tests is skipped.
+      - name: "runtime-lease-swtpm: Runtime leases against swtpm (issue, hold, revoke, reboot)"
+        id: runtime-lease-swtpm
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- Install the software TPM and tpm2-tools
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+          # --- Runtime leases against swtpm (issue, hold, revoke, reboot)
+          bash e2e/runtime-lease-swtpm.sh
+
+      # regalia-kms#76: replacing a node, on three software TPMs (the old node, the new one, a peer). One
+      # root-signed manifest retires the old node and enrolls the new; the new one attests, is unlocked and
+      # holds a lease; the old hardware is refused by every decision; its identities cannot be enrolled
+      # again. The script fails if its test is skipped.
+      - name: "node-replacement-swtpm: Node replacement against swtpm (enroll the new node, refuse the old hardware)"
+        id: node-replacement-swtpm
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- Install the software TPM and tpm2-tools
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+          # --- Node replacement against swtpm (enroll the new node, refuse the old hardware)
+          bash e2e/node-replacement-swtpm.sh
+
+      # regalia-kms#69: convergence, on two software TPMs. A revoked node's manifests reach one peer in a
+      # bundle; the partitioned peer helps only until its heartbeat expires, catches up through the chain
+      # in one exchange (its TPM epoch counter follows), and its disk rolled back is refused. The script
+      # fails if its test is skipped.
+      - name: "convergence-swtpm: Manifest convergence against swtpm (bundle, partition, catch-up, rollback)"
+        id: convergence-swtpm
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- Install the software TPM and tpm2-tools
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+          # --- Manifest convergence against swtpm (bundle, partition, catch-up, rollback)
+          bash e2e/convergence-swtpm.sh
+
+      # regalia-kms#75: a kernel update rolled through three nodes, on three software TPMs. The root approves
+      # CURRENT and NEXT in one manifest; the nodes reboot one at a time, in order, each unlocked by its
+      # peers on the new image; a failed image falls back to CURRENT; CURRENT is retired once every node was
+      # seen on NEXT; the old image, booted again, is then refused, and so is a peer's membership restored
+      # from before the retirement. The script fails if its test is skipped.
+      - name: "rolling-policy-swtpm: Rolling measured-boot update against swtpm (approve, one node at a time, retire, refuse the old image)"
+        id: rolling-policy-swtpm
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- Install the software TPM and tpm2-tools
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+          # --- Rolling measured-boot update against swtpm (approve, one node at a time, retire, refuse the old image)
+          bash e2e/rolling-policy-swtpm.sh
+
+      # regalia-kms#74: the real daemon serves key operations only while the node holds a runtime lease.
+      # SoftHSM for the token; the lease is real (node and peer on software TPMs) and reaches the daemon
+      # through the admission file. Not ready and 503 without a lease; a verified signature with one;
+      # stops by itself when renewal stops; refuses at once when the node is revoked.
+      - name: "runtime-admission: Go from go.mod"
+        id: runtime-admission-go
+        if: ${{ !cancelled() }}
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: "runtime-admission: The daemon serves only while admitted (SoftHSM, leases on swtpm)"
+        id: runtime-admission
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        run: |
+          # --- Install the PKCS#11 emulator, the software TPM and their tools
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends softhsm2 opensc swtpm swtpm-tools tpm2-tools libpcsclite-dev
+          # --- The daemon serves only while admitted (SoftHSM, leases on swtpm)
+          status=0
+          python3 -Es e2e/runtime-admission.py > "$RUNNER_TEMP/admission.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/admission.log"
+          [ "$status" -eq 0 ] || exit "$status"
+          grep -q '^runtime-admission: 32 passed, 0 failed$' "$RUNNER_TEMP/admission.log" || {
+            echo "::error::the admission test did not run all 32 checks" >&2; exit 1; }
+
+      - name: Name every failed step in the summary, and fail the job if any failed
+        if: ${{ always() }}
+        env:
+          OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          # id|step name, in run order: a step left out of this list is reported by its id (fail closed)
+          names='tpm-attest|tpm-attest: TPM attestation against swtpm (enrollment, fresh quote, replay, reboots); then regalia-node enrol init against swtpm (keys made on the host, nothing foreign touched, a crash at every call) — may not skip
+            heartbeat-swtpm|heartbeat-swtpm: Heartbeat sequence counter and TPM clock against swtpm
+            runtime-lease-swtpm|runtime-lease-swtpm: Runtime leases against swtpm (issue, hold, revoke, reboot)
+            node-replacement-swtpm|node-replacement-swtpm: Node replacement against swtpm (enroll the new node, refuse the old hardware)
+            convergence-swtpm|convergence-swtpm: Manifest convergence against swtpm (bundle, partition, catch-up, rollback)
+            rolling-policy-swtpm|rolling-policy-swtpm: Rolling measured-boot update against swtpm (approve, one node at a time, retire, refuse the old image)
+            runtime-admission-go|runtime-admission: Go from go.mod
+            runtime-admission|runtime-admission: The daemon serves only while admitted (SoftHSM, leases on swtpm)'
+          failed="$(jq -r 'to_entries[] | select(.value.outcome != "success" and .value.outcome != "skipped") | "\(.key) \(.value.outcome)"' <<<"$OUTCOMES")"
+          missing=""
+          while IFS='|' read -r id _; do id="${id#"${id%%[![:space:]]*}"}"; [ -n "$id" ] || continue
+            jq -e --arg id "$id" 'has($id)' <<<"$OUTCOMES" >/dev/null || missing="$missing $id"; done <<<"$names"
+          for id in $missing; do echo "::error::no outcome for $id"; failed="$failed"$'\n'"$id never-ran"; done
+          [ -n "$(printf '%s' "$failed" | tr -d '[:space:]')" ] || { echo "every step passed" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          { echo "### e2e-swtpm: failed steps"; while read -r id outcome; do [ -n "$id" ] || continue
+              name="$(printf '%s\n' "$names" | sed 's/^[[:space:]]*//' | awk -F'|' -v id="$id" '$1 == id {print $2; exit}')"
+              echo "- **${name:-$id}** ($outcome)"; echo "::error::failed: ${name:-$id} ($outcome)" >&2
+            done <<<"$failed"; } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+  # Folded jobs (CI minutes): network-namespace, loop-device and daemon checks (WireGuard, dm-crypt, sshd, chrony). Each former job is ONE step named after it, with its own
+  # timeout; every step runs even when an earlier one failed (if: !cancelled()), and the last step names each
+  # failed one in the job summary and fails the job. The job's timeout is the sum of its steps'.
+  e2e-netns-disk:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # regalia-kms#66: the boot mesh, by behaviour, in network namespaces with real WireGuard interfaces.
+      # A booting node reaches its peers' unlock port through the tunnel and nothing else; an outsider, a
+      # key from an undeclared address (the stolen server elsewhere) and a revoked node get no answer;
+      # loss, latency, an unreachable peer and a wrong key each end within a bound. Every ruleset is
+      # loaded only inside a throwaway namespace.
+      - name: "wg-boot-netns: The boot mesh, by behaviour (WireGuard, the initrd ruleset, the host firewall)"
+        id: wg-boot-netns
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- Install WireGuard tools, nftables, conntrack, and the kernel's extra modules (netem)
+          bash e2e/lib/apt-install-netem.sh wireguard-tools nftables iproute2 conntrack
+          # --- The boot mesh, by behaviour (WireGuard, the initrd ruleset, the host firewall)
+          sudo bash e2e/wg-boot-netns.sh
+
+      # regalia-kms#80: regalia-sync over real WireGuard, in network namespaces. Three nodes, each with a
+      # wg-svc interface configured from the manifest and read back from the kernel. A node pulls the chain and the heartbeat through the tunnel; a lease is issued across
+      # it; a revoked node is refused by name while its tunnel is up and gets no answer once the peer is
+      # reconciled; an address that is not its key's does not get through; a peer list widened by hand is
+      # detected and repaired; a partitioned node catches up in rounds and authorizes nothing until a
+      # heartbeat for the tip arrives. Every interface lives in a throwaway namespace.
+      - name: "regalia-sync-netns: regalia-sync between three namespaces (real WireGuard)"
+        id: regalia-sync-netns
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- Install WireGuard tools and the Python the libraries need
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends wireguard-tools iproute2 python3-cryptography
+          # --- regalia-sync between three namespaces (real WireGuard)
+          set -o pipefail
+          sudo python3 -Es e2e/regalia-sync-netns.py | tee "$RUNNER_TEMP/sync.log"
+          grep -q '^regalia-sync-netns: 28 passed, 0 failed$' "$RUNNER_TEMP/sync.log" || {
+            echo "::error::the sync test did not run all 28 checks" >&2; exit 1; }
+
+      # regalia-kms#77: the disk recovery key, on a real dm-crypt volume (a loop device). With every other
+      # keyslot destroyed, the recovery key alone opens and mounts it; a wrong key, one wrong letter, no
+      # dashes, other grouping and capitals do not; a used key is replaced and then opens nothing. The
+      # script fails if the file-backed tests of recovery-key.sh do not all run. Every header sync under a
+      # fault is lab/recovery/matrix.py (recovery-matrix.yml, #175).
+      - name: "luks-recovery-key: The recovery key alone opens the volume (loop device, LUKS2)"
+        id: luks-recovery-key
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- Install cryptsetup
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends cryptsetup-bin
+          command -v systemd-cryptenroll || sudo apt-get install -y -qq --no-install-recommends systemd-cryptsetup
+          command -v systemd-cryptenroll
+          # --- The recovery key alone opens the volume (loop device, LUKS2)
+          sudo bash e2e/luks-recovery-key.sh
+
+      # regalia-kms#61, second slice: install-host.sh on a loop device (GPT, LUKS2 made on the host, the rootfs, the ESP),
+      # read back from the disk, and its refusals before anything is written
+      - name: "install-host-loop: Install onto a loop device and read it back"
+        id: install-host-loop
+        if: ${{ !cancelled() }}
+        timeout-minutes: 20
+        run: |
+          # --- Install the disk tools
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends cryptsetup-bin dosfstools mdadm
+          # --- Install onto a loop device and read it back
+          sudo bash e2e/install-host-loop.sh | tee "$RUNNER_TEMP/install.log"; grep -q ' 0 failed$' "$RUNNER_TEMP/install.log"
+
+      # regalia-kms#143: a real sshd on the example configuration and a real ssh on the known_hosts that
+      # ssh_trust.py writes from a membership manifest. A certificate from the user CA logs in to the node
+      # it names; another node's name, a retired node's key, a bare key and a bad certificate are refused.
+      # No port (ProxyCommand runs `sshd -i`), no FIDO token. The script fails if a test is skipped.
+      - name: "ssh-trust-sshd: SSH host identity from the manifest, and certificate-only logins, against sshd"
+        id: ssh-trust-sshd
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- Install the OpenSSH server
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends openssh-server openssh-client
+          # --- SSH host identity from the manifest, and certificate-only logins, against sshd
+          bash e2e/ssh-trust-sshd.sh
+
+      # regalia-kms#69 / #80: authenticated time, against live chrony daemons with NTS. Two private NTS
+      # servers and a client on the loopback, none allowed to touch the runner's clock. The clock counts
+      # as authenticated only while chrony is synchronised to two agreeing NTS sources; one server
+      # stopping, a plain NTP source in the configuration, and a check that has stopped each end it.
+      - name: "authtime-chrony-nts: The clock is authenticated only under two agreeing NTS sources (live chronyd)"
+        id: authtime-chrony-nts
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- Install chrony
+          sudo apt-get update -qq
+          # tzdata-legacy: /usr/share/zoneinfo/right/UTC, chronyd's leap-second table (leapsectz), a node
+          # requirement on Debian 13; ubuntu-26.04's tzdata no longer carries it
+          sudo apt-get install -y -qq --no-install-recommends chrony python3-cryptography tzdata-legacy
+          # --- The clock is authenticated only under two agreeing NTS sources (live chronyd)
+          set -o pipefail
+          python3 -Es e2e/authtime-chrony-nts.py | tee "$RUNNER_TEMP/authtime.log"
+          grep -q '^authtime-chrony-nts: 26 passed, 0 failed$' "$RUNNER_TEMP/authtime.log" || {
+            echo "::error::the authenticated-time test did not run all 26 checks" >&2; exit 1; }
+
+      - name: Name every failed step in the summary, and fail the job if any failed
+        if: ${{ always() }}
+        env:
+          OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          # id|step name, in run order: a step left out of this list is reported by its id (fail closed)
+          names='wg-boot-netns|wg-boot-netns: The boot mesh, by behaviour (WireGuard, the initrd ruleset, the host firewall)
+            regalia-sync-netns|regalia-sync-netns: regalia-sync between three namespaces (real WireGuard)
+            luks-recovery-key|luks-recovery-key: The recovery key alone opens the volume (loop device, LUKS2)
+            install-host-loop|install-host-loop: Install onto a loop device and read it back
+            ssh-trust-sshd|ssh-trust-sshd: SSH host identity from the manifest, and certificate-only logins, against sshd
+            authtime-chrony-nts|authtime-chrony-nts: The clock is authenticated only under two agreeing NTS sources (live chronyd)'
+          failed="$(jq -r 'to_entries[] | select(.value.outcome != "success" and .value.outcome != "skipped") | "\(.key) \(.value.outcome)"' <<<"$OUTCOMES")"
+          missing=""
+          while IFS='|' read -r id _; do id="${id#"${id%%[![:space:]]*}"}"; [ -n "$id" ] || continue
+            jq -e --arg id "$id" 'has($id)' <<<"$OUTCOMES" >/dev/null || missing="$missing $id"; done <<<"$names"
+          for id in $missing; do echo "::error::no outcome for $id"; failed="$failed"$'\n'"$id never-ran"; done
+          [ -n "$(printf '%s' "$failed" | tr -d '[:space:]')" ] || { echo "every step passed" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          { echo "### e2e-netns-disk: failed steps"; while read -r id outcome; do [ -n "$id" ] || continue
+              name="$(printf '%s\n' "$names" | sed 's/^[[:space:]]*//' | awk -F'|' -v id="$id" '$1 == id {print $2; exit}')"
+              echo "- **${name:-$id}** ($outcome)"; echo "::error::failed: ${name:-$id} ($outcome)" >&2
+            done <<<"$failed"; } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+  # Folded jobs (CI minutes): the unit sandbox, the AppArmor profile, the hardened daemon, and the bench harness. Each former job is ONE step named after it, with its own
+  # timeout; every step runs even when an earlier one failed (if: !cancelled()), and the last step names each
+  # failed one in the job summary and fails the job. The job's timeout is the sum of its steps'.
+  e2e-sandbox-policy:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # #61, PoC 1.2: the KMS unit's sandbox by behaviour. A dummy service under the shipped unit and
+      # hardening drop-in is refused writes outside its state directory, home directories, the kernel,
+      # privilege and unused socket families; the same service with none of the settings is allowed each
+      # one (the control), and what the KMS needs still works. It starts root units on the runner's own
+      # system manager, which is why it has a job, and a runner, to itself.
+      - name: "kms-sandbox: The shipped sandbox refuses what it should, with a control for every refusal"
+        id: kms-sandbox
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- The shipped sandbox refuses what it should, with a control for every refusal
+          bash e2e/kms-sandbox-negative.sh
+
+      # regalia-kms#61: the AppArmor profile the bare-metal unit asks for by name. The parser compiles it
+      # without loading it, so this proves the profile is well-formed and says what the tests read in it;
+      # it does not prove a daemon runs under it. That is measured on the host (kms_apparmor_enforced).
+      - name: "apparmor-profile: The profile compiles, and the parser check cannot pass by skipping"
+        id: apparmor-profile
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          # --- Install the AppArmor parser and its abstractions
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends apparmor
+          # --- The profile compiles, and the parser check cannot pass by skipping
+          (
+            export REGALIA_EXPECT_APPARMOR_PARSER='1'
+            python3 -Es -m unittest -v tests.test_baremetal_apparmor
+          )
+
+      # #61: the other half of kms-sandbox. The REAL daemon, started by systemd from the shipped unit and
+      # hardening drop-in, serves a signature from a SoftHSM token that openssl verifies, and the hardening
+      # is measured on that process (os_probe.py). It installs a binary, a user, a unit and an AppArmor
+      # profile (complain mode) on the runner, so it has a runner to itself too.
+      - name: "kms-hardened-serve: Go from go.mod"
+        id: kms-hardened-serve-go
+        if: ${{ !cancelled() }}
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: "kms-hardened-serve: The real daemon serves a verifiable signature inside the shipped sandbox"
+        id: kms-hardened-serve
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        run: |
+          # --- Install the PKCS#11 emulator and the AppArmor parser
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends softhsm2 opensc apparmor acl
+          # --- The real daemon serves a verifiable signature inside the shipped sandbox
+          bash e2e/kms-hardened-serve.sh
+
+      # The benchmark harness is Python, and its regression tests need no card and no PyKCS11 — a fake
+      # module stands in for the library. Without this job they would ship untested in a Go-only CI,
+      # which is how the handle-reuse defect they pin reached review in the first place.
+      - name: "bench-tests: Python 3.12"
+        id: bench-tests-python
+        if: ${{ !cancelled() }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: unit tests for the PKCS#11 benchmark harness
+      - name: "bench-tests: unit tests for the PKCS#11 benchmark harness"
+        id: bench-tests
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
         env:
-          # The per-curve peer-point checks need `cryptography`. It is installed here, hash-pinned,
-          # with the harness's own requirements; with this set, the test fails rather than passes
-          # if it is somehow absent. PyKCS11 is installed too and never used: the tests put a fake
-          # module in its place.
           REGALIA_EXPECT_CRYPTOGRAPHY: "1"
         run: |
+          # --- unit tests for the PKCS#11 benchmark harness
           # In its own virtual environment: the harness then runs -Es (no PYTHON* variables, no user
           # site) and still finds what was installed for it.
           python3 -I -m venv "$RUNNER_TEMP/bench"
           "$RUNNER_TEMP/bench/bin/python" -I -m pip install --quiet --require-hashes -r tools/bench/requirements.txt
           "$RUNNER_TEMP/bench/bin/python" -Es tools/bench/test_hsm_bench.py
+
+      - name: Name every failed step in the summary, and fail the job if any failed
+        if: ${{ always() }}
+        env:
+          OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          # id|step name, in run order: a step left out of this list is reported by its id (fail closed)
+          names='kms-sandbox|kms-sandbox: The shipped sandbox refuses what it should, with a control for every refusal
+            apparmor-profile|apparmor-profile: The profile compiles, and the parser check cannot pass by skipping
+            kms-hardened-serve-go|kms-hardened-serve: Go from go.mod
+            kms-hardened-serve|kms-hardened-serve: The real daemon serves a verifiable signature inside the shipped sandbox
+            bench-tests-python|bench-tests: Python 3.12
+            bench-tests|bench-tests: unit tests for the PKCS#11 benchmark harness'
+          failed="$(jq -r 'to_entries[] | select(.value.outcome != "success" and .value.outcome != "skipped") | "\(.key) \(.value.outcome)"' <<<"$OUTCOMES")"
+          missing=""
+          while IFS='|' read -r id _; do id="${id#"${id%%[![:space:]]*}"}"; [ -n "$id" ] || continue
+            jq -e --arg id "$id" 'has($id)' <<<"$OUTCOMES" >/dev/null || missing="$missing $id"; done <<<"$names"
+          for id in $missing; do echo "::error::no outcome for $id"; failed="$failed"$'\n'"$id never-ran"; done
+          [ -n "$(printf '%s' "$failed" | tr -d '[:space:]')" ] || { echo "every step passed" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          { echo "### e2e-sandbox-policy: failed steps"; while read -r id outcome; do [ -n "$id" ] || continue
+              name="$(printf '%s\n' "$names" | sed 's/^[[:space:]]*//' | awk -F'|' -v id="$id" '$1 == id {print $2; exit}')"
+              echo "- **${name:-$id}** ($outcome)"; echo "::error::failed: ${name:-$id} ($outcome)" >&2
+            done <<<"$failed"; } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
 
   known-polkit-rules-debian13:
     # os_probe.KNOWN_RULES_FILES are the only polkit rules files a KMS host may carry beside the KMS rule, known by
@@ -436,42 +819,6 @@ jobs:
           path: internal/*/testdata/fuzz/
           if-no-files-found: ignore
 
-  # #61, PoC 1.2: the KMS unit's sandbox by behaviour. A dummy service under the shipped unit and
-  # hardening drop-in is refused writes outside its state directory, home directories, the kernel,
-  # privilege and unused socket families; the same service with none of the settings is allowed each
-  # one (the control), and what the KMS needs still works. It starts root units on the runner's own
-  # system manager, which is why it has a job, and a runner, to itself.
-  kms-sandbox:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: The shipped sandbox refuses what it should, with a control for every refusal
-        run: bash e2e/kms-sandbox-negative.sh
-
-  # #61: the other half of kms-sandbox. The REAL daemon, started by systemd from the shipped unit and
-  # hardening drop-in, serves a signature from a SoftHSM token that openssl verifies, and the hardening
-  # is measured on that process (os_probe.py). It installs a binary, a user, a unit and an AppArmor
-  # profile (complain mode) on the runner, so it has a runner to itself too.
-  kms-hardened-serve:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - name: Install the PKCS#11 emulator and the AppArmor parser
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends softhsm2 opensc apparmor acl
-      - name: The real daemon serves a verifiable signature inside the shipped sandbox
-        run: bash e2e/kms-hardened-serve.sh
-
   # regalia#439, RE-PROVEN ON EVERY CHANGE: a live Cosmos node accepts the transactions the KMS
   # signed, and every negative case fails for its own reason — replay, chain id, destination,
   # sequence, account number, fee and gas, several messages, malformed sign bytes, the daily quota
@@ -523,136 +870,14 @@ jobs:
           "$REGALIA_COSMOS_SIMD_BIN" version
           e2e/cosmos-simapp-kms-tx.sh
 
-  # regalia-kms#65 PoC 5.1/5.4/5.5: a peer verifies a node's TPM quote. Two software TPMs (swtpm):
-  # the AK is bound to the recorded EK by MakeCredential/ActivateCredential, a fresh quote over the
-  # boot-session transcript is accepted, and a replay, each substituted transcript field, changed
-  # PCRs, another TPM's AK, a session carried across a reboot and rolled-back TPM state are refused.
-  # The script exits nonzero on any FAIL; the count guards against it passing by running nothing.
-  tpm-attest:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install the software TPM and tpm2-tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
-      - name: TPM attestation against swtpm (enrollment, fresh quote, replay, reboots)
-        run: |
-          status=0
-          bash e2e/tpm-attest-swtpm.sh > "$RUNNER_TEMP/attest.log" 2>&1 || status=$?
-          cat "$RUNNER_TEMP/attest.log"
-          [ "$status" -eq 0 ] || exit "$status"
-          grep -q '^tpm-attest-swtpm: 33 passed, 0 failed$' "$RUNNER_TEMP/attest.log" || {
-            echo "::error::the attestation battery did not run all 33 checks" >&2; exit 1; }
-      - name: regalia-node enrol init against swtpm (keys made on the host, nothing foreign touched, a crash at every call) — may not skip
-        env:
-          REGALIA_EXPECT_SWTPM: "1"
-        run: |
-          sudo apt-get install -y -qq --no-install-recommends wireguard-tools python3-cryptography
-          python3 -BEs -m unittest -v tests.test_baremetal_enrol
-
-  # regalia-kms#61: the AppArmor profile the bare-metal unit asks for by name. The parser compiles it
-  # without loading it, so this proves the profile is well-formed and says what the tests read in it;
-  # it does not prove a daemon runs under it. That is measured on the host (kms_apparmor_enforced).
-  apparmor-profile:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install the AppArmor parser and its abstractions
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends apparmor
-      - name: The profile compiles, and the parser check cannot pass by skipping
-        env:
-          REGALIA_EXPECT_APPARMOR_PARSER: "1"
-        run: python3 -Es -m unittest -v tests.test_baremetal_apparmor
-
-  # regalia-kms#69: freshness heartbeats. The TPM half on a software TPM: the heartbeat sequence in
-  # its own NV counter (replay and disk rollback refused), and the TPM clock behind the time floor.
-  # The script fails if any of its three tests is skipped.
-  heartbeat-swtpm:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install the software TPM and tpm2-tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
-      - name: Heartbeat sequence counter and TPM clock against swtpm
-        run: bash e2e/heartbeat-swtpm.sh
-
-  # regalia-kms#74: runtime trust leases, on two software TPMs. Node a re-attests to peer b, b's TPM
-  # signs a 5-minute lease, a holds and renews it; a revoked a is refused renewal; a rebooted a needs
-  # a new attested session. The script fails if either of its two tests is skipped.
-  runtime-lease-swtpm:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install the software TPM and tpm2-tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
-      - name: Runtime leases against swtpm (issue, hold, revoke, reboot)
-        run: bash e2e/runtime-lease-swtpm.sh
-
-  # regalia-kms#77: the disk recovery key, on a real dm-crypt volume (a loop device). With every other
-  # keyslot destroyed, the recovery key alone opens and mounts it; a wrong key, one wrong letter, no
-  # dashes, other grouping and capitals do not; a used key is replaced and then opens nothing. The
-  # script fails if the file-backed tests of recovery-key.sh do not all run. Every header sync under a
-  # fault is lab/recovery/matrix.py (recovery-matrix.yml, #175).
-  luks-recovery-key:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install cryptsetup
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends cryptsetup-bin
-          command -v systemd-cryptenroll || sudo apt-get install -y -qq --no-install-recommends systemd-cryptsetup
-          command -v systemd-cryptenroll
-      - name: The recovery key alone opens the volume (loop device, LUKS2)
-        run: sudo bash e2e/luks-recovery-key.sh
-
-  # regalia-kms#66: the boot mesh, by behaviour, in network namespaces with real WireGuard interfaces.
-  # A booting node reaches its peers' unlock port through the tunnel and nothing else; an outsider, a
-  # key from an undeclared address (the stolen server elsewhere) and a revoked node get no answer;
-  # loss, latency, an unreachable peer and a wrong key each end within a bound. Every ruleset is
-  # loaded only inside a throwaway namespace.
-  wg-boot-netns:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install WireGuard tools, nftables, conntrack, and the kernel's extra modules (netem)
-        # The runner's kernel can be ahead of the archive's linux-modules-extra (7.0.0-1017-azure since
-        # 2026-10-21): the shared step installs it only when the running kernel lacks sch_netem (regalia-1ur).
-        run: bash e2e/lib/apt-install-netem.sh wireguard-tools nftables iproute2 conntrack
-      - name: The boot mesh, by behaviour (WireGuard, the initrd ruleset, the host firewall)
-        run: sudo bash e2e/wg-boot-netns.sh
-
   # regalia-kms#66: a host BOOTS through a peer. A Debian 13 guest in QEMU (KVM when the runner has it)
   # with a software TPM and its whole disk a LUKS2 volume; its initrd is built by the guest's own dracut
   # with the module of deploy/baremetal/initrd. Three boots: enrolment (the console asks, the recovery
   # key opens), unattended (systemd unseals the credentials, WireGuard comes up before root, a peer
   # gives its half, nobody types anything), and no peer (the console asks for the recovery key).
   unlock-boot-qemu:
+    # Draft-first: heavy, so skipped on a draft pull request; ready_for_review runs it. A push to main always does.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     # Kept on 24.04 (regalia-a0y): on 26.04 the guest's credentials intermittently fail to unseal ("Failed to set up
     # credentials: Protocol error", a different boot each run: 2c in 39886774777, 2 in 39890995069), and never on
     # 24.04. Explained (regalia-d8, runs 39919392188, 39922567279, 39928371319): QEMU 10.2.1 with swtpm 0.10.1 cancels a
@@ -692,6 +917,8 @@ jobs:
   # locale, time zone, umask and environment), and a Debian 13 container (another host userland, the one a
   # real builder runs). initrd-reproducible-compare FAILS unless every initrd and build record is identical.
   initrd-reproducible:
+    # Draft-first: heavy, so skipped on a draft pull request; ready_for_review runs it. A push to main always does.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
@@ -731,6 +958,8 @@ jobs:
   # environment) at the pinned snapshot; the two archives must be identical. The cgo daemon (-tags piv) is linked in a
   # build tree from the same snapshot, so its reproducibility is measured here.
   rootfs-reproducible:
+    # Draft-first: heavy, so skipped on a draft pull request; ready_for_review runs it. A push to main always does.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-26.04
     timeout-minutes: 75
     steps:
@@ -760,23 +989,9 @@ jobs:
             ${{ runner.temp }}/rootfs/build-*/rootfs-build.json
           retention-days: 14
 
-  # regalia-kms#61, second slice: install-host.sh on a loop device (GPT, LUKS2 made on the host, the rootfs, the ESP),
-  # read back from the disk, and its refusals before anything is written
-  install-host-loop:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install the disk tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends cryptsetup-bin dosfstools mdadm
-      - name: Install onto a loop device and read it back
-        run: sudo bash e2e/install-host-loop.sh | tee "$RUNNER_TEMP/install.log"; grep -q ' 0 failed$' "$RUNNER_TEMP/install.log"
-
   initrd-reproducible-debian:
+    # Draft-first: heavy, so skipped on a draft pull request; ready_for_review runs it. A push to main always does.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     container:
@@ -808,6 +1023,8 @@ jobs:
           retention-days: 14
 
   initrd-reproducible-compare:
+    # Draft-first: heavy, so skipped on a draft pull request; ready_for_review runs it. A push to main always does.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     needs: [initrd-reproducible, initrd-reproducible-debian]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
@@ -835,54 +1052,6 @@ jobs:
           [ "$bad" = 0 ] || exit 1
           echo "initrd-reproducible: IDENTICAL on three builders: $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["initrd_sha256"])' initrd-first/initrd-build.json)"
 
-  # regalia-kms#69 / #80: authenticated time, against live chrony daemons with NTS. Two private NTS
-  # servers and a client on the loopback, none allowed to touch the runner's clock. The clock counts
-  # as authenticated only while chrony is synchronised to two agreeing NTS sources; one server
-  # stopping, a plain NTP source in the configuration, and a check that has stopped each end it.
-  authtime-chrony-nts:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install chrony
-        run: |
-          sudo apt-get update -qq
-          # tzdata-legacy: /usr/share/zoneinfo/right/UTC, chronyd's leap-second table (leapsectz), a node
-          # requirement on Debian 13; ubuntu-26.04's tzdata no longer carries it
-          sudo apt-get install -y -qq --no-install-recommends chrony python3-cryptography tzdata-legacy
-      - name: The clock is authenticated only under two agreeing NTS sources (live chronyd)
-        run: |
-          set -o pipefail
-          python3 -Es e2e/authtime-chrony-nts.py | tee "$RUNNER_TEMP/authtime.log"
-          grep -q '^authtime-chrony-nts: 26 passed, 0 failed$' "$RUNNER_TEMP/authtime.log" || {
-            echo "::error::the authenticated-time test did not run all 26 checks" >&2; exit 1; }
-
-  # regalia-kms#80: regalia-sync over real WireGuard, in network namespaces. Three nodes, each with a
-  # wg-svc interface configured from the manifest and read back from the kernel. A node pulls the chain and the heartbeat through the tunnel; a lease is issued across
-  # it; a revoked node is refused by name while its tunnel is up and gets no answer once the peer is
-  # reconciled; an address that is not its key's does not get through; a peer list widened by hand is
-  # detected and repaired; a partitioned node catches up in rounds and authorizes nothing until a
-  # heartbeat for the tip arrives. Every interface lives in a throwaway namespace.
-  regalia-sync-netns:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install WireGuard tools and the Python the libraries need
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends wireguard-tools iproute2 python3-cryptography
-      - name: regalia-sync between three namespaces (real WireGuard)
-        run: |
-          set -o pipefail
-          sudo python3 -Es e2e/regalia-sync-netns.py | tee "$RUNNER_TEMP/sync.log"
-          grep -q '^regalia-sync-netns: 28 passed, 0 failed$' "$RUNNER_TEMP/sync.log" || {
-            echo "::error::the sync test did not run all 28 checks" >&2; exit 1; }
-
   # regalia-kms#67 (and the software half of #135): a KMS host's disk opens with its TPM and one peer,
   # never the TPM alone. Three software TPMs and a real dm-crypt volume on a loop device: either peer
   # restores the node, no peer leaves it locked, and a retired boot image, another machine and a
@@ -891,6 +1060,8 @@ jobs:
   # started by the runner's systemd and the real systemd-cryptsetup takes the key from their socket.
   # The script fails if any of its tests is skipped.
   peer-unlock-swtpm:
+    # Draft-first: heavy, so skipped on a draft pull request; ready_for_review runs it. A push to main always does.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
@@ -912,24 +1083,6 @@ jobs:
         # REGALIA_EXPECT_SYSTEMD: the runner has a running systemd, so the shipped units are started for real
         # and systemd-cryptsetup itself asks for the key; without them the script fails instead of skipping.
         run: sudo REGALIA_EXPECT_SYSTEMD=1 REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/peer-unlock-swtpm.sh
-
-  # regalia-kms#76: replacing a node, on three software TPMs (the old node, the new one, a peer). One
-  # root-signed manifest retires the old node and enrolls the new; the new one attests, is unlocked and
-  # holds a lease; the old hardware is refused by every decision; its identities cannot be enrolled
-  # again. The script fails if its test is skipped.
-  node-replacement-swtpm:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install the software TPM and tpm2-tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
-      - name: Node replacement against swtpm (enroll the new node, refuse the old hardware)
-        run: bash e2e/node-replacement-swtpm.sh
 
   # regalia-kms#135 (found under #75): a MEASUREMENT, not a control. Can an NV-backed TPM policy
   # (systemd-pcrlock) retire a boot image for a LUKS2 volume, with no peer? A software TPM, a LUKS2 volume
@@ -1025,84 +1178,30 @@ jobs:
           { echo "dracut: the two builds DIFFER; first differing members:"; diff /tmp/members-1.txt /tmp/members-2.txt | head -20; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit 1
 
-  # regalia-kms#69: convergence, on two software TPMs. A revoked node's manifests reach one peer in a
-  # bundle; the partitioned peer helps only until its heartbeat expires, catches up through the chain
-  # in one exchange (its TPM epoch counter follows), and its disk rolled back is refused. The script
-  # fails if its test is skipped.
-  convergence-swtpm:
+  # The one check that stands for the whole run: it passes only when every job above succeeded, on a push or on a
+  # pull request that is NOT a draft. On a draft it always fails (the heavy jobs did not run), so a draft can never
+  # satisfy it; marking the pull request ready runs everything, and then it can pass.
+  ci-gate:
+    if: ${{ always() }}
+    needs: [build-test, e2e-swtpm, e2e-netns-disk, e2e-sandbox-policy, known-polkit-rules-debian13, govulncheck, pkcs11-e2e, privileged-and-fuzz, cosmos-node, unlock-boot-qemu, initrd-reproducible, rootfs-reproducible, initrd-reproducible-debian, initrd-reproducible-compare, peer-unlock-swtpm, pcrlock-luks-swtpm, uki-build]
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install the software TPM and tpm2-tools
+      - name: Every job succeeded, and this is not a draft pull request
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          IS_DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
-      - name: Manifest convergence against swtpm (bundle, partition, catch-up, rollback)
-        run: bash e2e/convergence-swtpm.sh
-
-  # regalia-kms#75: a kernel update rolled through three nodes, on three software TPMs. The root approves
-  # CURRENT and NEXT in one manifest; the nodes reboot one at a time, in order, each unlocked by its
-  # peers on the new image; a failed image falls back to CURRENT; CURRENT is retired once every node was
-  # seen on NEXT; the old image, booted again, is then refused, and so is a peer's membership restored
-  # from before the retirement. The script fails if its test is skipped.
-  rolling-policy-swtpm:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install the software TPM and tpm2-tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
-      - name: Rolling measured-boot update against swtpm (approve, one node at a time, retire, refuse the old image)
-        run: bash e2e/rolling-policy-swtpm.sh
-
-  # regalia-kms#143: a real sshd on the example configuration and a real ssh on the known_hosts that
-  # ssh_trust.py writes from a membership manifest. A certificate from the user CA logs in to the node
-  # it names; another node's name, a retired node's key, a bare key and a bad certificate are refused.
-  # No port (ProxyCommand runs `sshd -i`), no FIDO token. The script fails if a test is skipped.
-  ssh-trust-sshd:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install the OpenSSH server
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends openssh-server openssh-client
-      - name: SSH host identity from the manifest, and certificate-only logins, against sshd
-        run: bash e2e/ssh-trust-sshd.sh
-
-  # regalia-kms#74: the real daemon serves key operations only while the node holds a runtime lease.
-  # SoftHSM for the token; the lease is real (node and peer on software TPMs) and reaches the daemon
-  # through the admission file. Not ready and 503 without a lease; a verified signature with one;
-  # stops by itself when renewal stops; refuses at once when the node is revoked.
-  runtime-admission:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - name: Install the PKCS#11 emulator, the software TPM and their tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends softhsm2 opensc swtpm swtpm-tools tpm2-tools libpcsclite-dev
-      - name: The daemon serves only while admitted (SoftHSM, leases on swtpm)
-        run: |
-          status=0
-          python3 -Es e2e/runtime-admission.py > "$RUNNER_TEMP/admission.log" 2>&1 || status=$?
-          cat "$RUNNER_TEMP/admission.log"
-          [ "$status" -eq 0 ] || exit "$status"
-          grep -q '^runtime-admission: 32 passed, 0 failed$' "$RUNNER_TEMP/admission.log" || {
-            echo "::error::the admission test did not run all 32 checks" >&2; exit 1; }
+          bad="$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<<"$NEEDS")"
+          n="$(jq 'length' <<<"$NEEDS")"
+          [ "$n" -eq 17 ] || { echo "::error::ci-gate sees $n jobs, not 17"; exit 1; }
+          if [ -n "$bad" ]; then
+            { echo "### ci-gate: not every job succeeded"; while read -r line; do echo "- $line"; done <<<"$bad"; } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::not every job succeeded:"; echo "$bad"
+          fi
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "### ci-gate: a draft pull request never passes; mark it ready for review to run every job" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::a draft pull request never passes ci-gate"; exit 1
+          fi
+          [ -z "$bad" ] || exit 1
+          echo "ci-gate: all $n jobs succeeded" >> "$GITHUB_STEP_SUMMARY"
