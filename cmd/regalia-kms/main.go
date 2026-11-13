@@ -415,6 +415,14 @@ func run() error {
 		if auditErr := audit.ReconcileContinuity(ctx, settings.AuditJournalPath, auditSink, settings.Site); auditErr != nil {
 			return auditErr
 		}
+		// THE POLICY SPEND JOURNAL AGAINST THE SAME OFF-HOST MEMORY (epic #40 gap .1.2, T09): a journal
+		// restored together with its high-water mark passes every local check, and is refused here when
+		// the collector acknowledged an operation authorized past the restored head.
+		if policyState != nil {
+			if err := operations.ReconcilePolicyState(ctx, policyState, settings.AuditJournalPath, auditSink, settings.Site); err != nil {
+				return err
+			}
+		}
 		recorder, auditErr = openAudit(settings, auditSink)
 		if auditErr != nil {
 			return auditErr
@@ -432,6 +440,9 @@ func run() error {
 		}
 		if admissionGate != nil {
 			coordinator.RequireAdmission(admissionGate)
+		}
+		if policyState != nil {
+			coordinator.SetPolicyHead(policyState.Head)
 		}
 		coordinator.SetNodeID(settings.NodeID) // the one signer approvals are verified for (#432 G3)
 		slog.Info("KMS hardware backend ready", "module", settings.PKCS11ModulePath)
