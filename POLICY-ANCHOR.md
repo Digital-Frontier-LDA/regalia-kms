@@ -1,8 +1,18 @@
-# Policy spend journal: anchored to the audit collector (DRAFT, for owner review before any push)
+# Policy spend journal: anchored to the audit collector
 
-Status: draft design note for epic #40 gap `.1.2` (threat model T09). Implemented on a local branch only.
+Status: design note for epic #40 gap `.1.2` (threat model T09). Its two owner items are accepted (below).
 The council approved option (C) of the proposal recorded on that bead. Option (A), a TPM NV counter, is
 follow-up `.1.6`.
+
+## Owner decisions (accepted 2026-11-13)
+
+Both items were accepted at 21:05Z on 2026-11-13, under the owner's standing grant to
+assess and implement its recommendations, and recorded on the `.1.2` bead:
+
+1. **Fail closed when the collector is unreachable at startup, with no bypass flag.** The trade-off is below.
+2. **Upgrade order: the collector before the KMS.** This is stated in the deploy notes an operator upgrading a
+   site reads: `deploy/baremetal/AUDIT-COLLECTOR.md`, section 3, and the audit-shipping section of
+   `deploy/baremetal/README.md`. There is no changelog.
 
 ## The gap
 
@@ -49,7 +59,7 @@ first, so an operator sees one name for it whichever check reaches it.
 
 ## Availability trade-off: a collector outage becomes a KMS outage at startup
 
-**This is the cost the owner is asked to accept.** A daemon that cannot reach its collector at startup does not
+**Accepted (owner decision 1 above).** A daemon that cannot reach its collector at startup does not
 start. That is already true of `ReconcileContinuity` on a host configured with a sink, so this change adds a
 second reason, not a new class of outage. The policy check runs only at startup; a running daemon is not
 stopped by it.
@@ -86,8 +96,9 @@ collector down.
 
 - **Hashed bytes.** `policy_sequence` and `policy_hash` are `omitempty`, so an event without them marshals to
   the bytes it always did, and existing journals keep verifying (`TestAnEventWithoutAPolicyPositionKeepsItsBytes`).
-- **Upgrade order: collector first.** The collector decodes events with `DisallowUnknownFields`, so a collector
-  older than this change refuses an authorized record that carries the new fields.
+- **Upgrade order: collector first (owner decision 2 above).** The reference collector decodes events with
+  `DisallowUnknownFields`, so one older than this change refuses an authorized record that carries the new
+  fields. An external service must accept them too (`deploy/baremetal/AUDIT-COLLECTOR.md`, section 1).
 - **No new device writes.** This adds no TPM writes and no new state file.
 
 ## Tests
