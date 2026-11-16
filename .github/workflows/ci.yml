@@ -182,6 +182,11 @@ jobs:
   # Folded jobs (CI minutes): software-TPM end-to-end checks (swtpm, tpm2-tools; SoftHSM for runtime-admission). Each former job is ONE step named after it, with its own
   # timeout; every step runs even when an earlier one failed (if: !cancelled()), and the last step names each
   # failed one in the job summary and fails the job. The job's timeout is the sum of its steps'.
+  # FOLDED JOB (#715): each step was a job of its own and now shares this runner with the steps before it. A step
+  # can therefore pass on a package, file or service an earlier step left behind, so removing an install line from
+  # one step may go unnoticed while an earlier step still installs the same thing. Accepted to save hosted minutes
+  # (regalia-kms-5st L2): each step keeps the install lines it had as a job, so it stays correct when run alone, and
+  # anything that must hold for a step in isolation belongs in its own job.
   e2e-swtpm:
     runs-on: ubuntu-26.04
     timeout-minutes: 75
@@ -346,6 +351,11 @@ jobs:
   # Folded jobs (CI minutes): network-namespace, loop-device and daemon checks (WireGuard, dm-crypt, sshd, chrony). Each former job is ONE step named after it, with its own
   # timeout; every step runs even when an earlier one failed (if: !cancelled()), and the last step names each
   # failed one in the job summary and fails the job. The job's timeout is the sum of its steps'.
+  # FOLDED JOB (#715): each step was a job of its own and now shares this runner with the steps before it. A step
+  # can therefore pass on a package, file or service an earlier step left behind, so removing an install line from
+  # one step may go unnoticed while an earlier step still installs the same thing. Accepted to save hosted minutes
+  # (regalia-kms-5st L2): each step keeps the install lines it had as a job, so it stays correct when run alone, and
+  # anything that must hold for a step in isolation belongs in its own job.
   e2e-netns-disk:
     runs-on: ubuntu-26.04
     timeout-minutes: 70
@@ -482,6 +492,11 @@ jobs:
   # Folded jobs (CI minutes): the unit sandbox, the AppArmor profile, the hardened daemon, and the bench harness. Each former job is ONE step named after it, with its own
   # timeout; every step runs even when an earlier one failed (if: !cancelled()), and the last step names each
   # failed one in the job summary and fails the job. The job's timeout is the sum of its steps'.
+  # FOLDED JOB (#715): each step was a job of its own and now shares this runner with the steps before it. A step
+  # can therefore pass on a package, file or service an earlier step left behind, so removing an install line from
+  # one step may go unnoticed while an earlier step still installs the same thing. Accepted to save hosted minutes
+  # (regalia-kms-5st L2): each step keeps the install lines it had as a job, so it stays correct when run alone, and
+  # anything that must hold for a step in isolation belongs in its own job.
   e2e-sandbox-policy:
     runs-on: ubuntu-26.04
     timeout-minutes: 45
