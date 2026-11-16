@@ -30,8 +30,8 @@
 # root hash (userspace, no device-mapper).
 #
 # CURRENT LIMITATIONS (stated, not hidden):
-#   * NOT BOOTED YET: nothing installs these partitions, no initrd opens them, no UKI carries usrhash= (the installer,
-#     initrd/UKI and QEMU slices of #61's dm-verity design).
+#   * NOT BOOTED YET: install-host.sh writes them to usr-a and usr-a-verity, but no initrd opens them and no UKI
+#     carries usrhash= (the initrd/UKI and QEMU slices of #61's dm-verity design).
 #   * NO XATTRS (-x-1): as rootfs.tar, which carries none either; so a file capability or a builder's security label
 #     cannot enter the image. A program that would need a file capability does not get one.
 #   * UNCOMPRESSED: the simplest layout to reproduce; compression is a later measurement if size matters.

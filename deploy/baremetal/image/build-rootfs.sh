@@ -44,9 +44,9 @@
 # CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
 #   * NOT A BOOTABLE DISK YET. No partitions, LUKS2, crypttab, ESP, kernel/UKI pairing, network configuration,
 #     node.json or first-boot step: later slices of #61. Nothing is enabled.
-#   * THE /usr IMAGE IS BUILT, NOT YET USED: install-host.sh still extracts rootfs.tar onto LUKS2; the A/B usr
-#     partitions, the initrd's systemd-veritysetup, usrhash= on the UKI and the boot from them are the next slices of
-#     the dm-verity design. /usr/share/factory/etc is copied, but no tmpfiles rule populates a tmpfs /etc from it yet,
+#   * THE /usr IMAGE IS INSTALLED, NOT YET BOOTED: install-host.sh writes usr.erofs and usr.verity to the A/B usr
+#     partitions (rootfs.tar is no longer extracted); the initrd's systemd-veritysetup, usrhash= on the UKI and the
+#     boot from them are the next slices of the dm-verity design. /usr/share/factory/etc is copied, but no tmpfiles rule populates a tmpfs /etc from it yet,
 #     and what else lives outside /usr (dpkg's database under /var/lib/dpkg) is the /etc and /var inventory's.
 #   * NO HARDENING beyond the units' own sandboxes: AppArmor profiles other than the daemon's, sysctl, sshd policy,
 #     removing unwanted binaries (#61's baseline) are later slices.
