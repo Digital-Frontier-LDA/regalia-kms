@@ -37,9 +37,13 @@ the collector's committed head at startup.
    reserved and before the card is touched. That record now also carries the policy journal's head:
    `policy_sequence` and `policy_hash`, read from `FileState.Head()`, which advances only after the append is
    synced.
-2. At startup, after `ReconcileContinuity`, `operations.ReconcilePolicyState` reads the policy position from
-   the last event the collector committed that carries one (`audit.AcknowledgedPolicyPosition`). It then
+2. At startup, after `ReconcileContinuity`, `operations.ReconcilePolicyState` reads the greatest policy
+   position carried by any event the collector committed (`audit.AcknowledgedPolicyPosition`). It then
    requires the journal to reach that reservation with the same hash (`FileState.RequireAcknowledged`).
+   It takes the greatest, not the last. The head is read when the authorized record is built, and that
+   read is not serialized with the audit append, so concurrent operations can acknowledge their heads
+   out of order (one records 2, then another records 1). The last one would understate how far the
+   journal had reached.
 
 A journal restored to before an operation the collector acknowledged is therefore refused, and so is one
 replaced by a different journal of the same length.
@@ -113,4 +117,5 @@ collector down.
 - a collector unreachable at open (`audit.ErrCollectorUnreachable`, from both checks).
 
 It also pins that only the authorized record carries the head. `internal/audit/policy_position_test.go` pins
-the field rules.
+the field rules. It also pins that heads acknowledged out of order (2, then 1) yield 2, and that an event the
+collector has not committed is never read.

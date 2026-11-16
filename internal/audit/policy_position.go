@@ -21,9 +21,14 @@ type PolicyPosition struct {
 	Hash     string
 }
 
-// AcknowledgedPolicyPosition returns the policy journal head recorded by the last event the
-// collector committed for this stream that carries one. Only acknowledged events count: an event
-// the collector has not committed is one the host could have restored away with the journal.
+// AcknowledgedPolicyPosition returns the GREATEST policy journal head that any event the collector
+// committed for this stream carries. Only acknowledged events count: an event the collector has not
+// committed is one the host could have restored away with the journal.
+//
+// Greatest, not last: the coordinator reads the head when it builds the authorized record, and
+// that read is not serialized with audit.Record, so concurrent operations can record their heads
+// out of order (A reads 1, B reserves and records 2, A records 1). Taking the last one would
+// return 1 while 2 is acknowledged, and a journal restored to 1 would pass.
 //
 // A journal-only host (sink nil) has no off-host memory and returns no position, as
 // ReconcileContinuity accepts it; that host's residual is recorded in POLICY-ANCHOR.md.
@@ -54,10 +59,11 @@ func AcknowledgedPolicyPosition(ctx context.Context, journalPath string, sink Si
 	if head > sequenceOf(events) || events[head-1].Hash != headHash {
 		return PolicyPosition{}, fmt.Errorf("the audit journal disagrees with the collector at sequence %d", head)
 	}
-	for index := head; index > 0; index-- {
-		if event := events[index-1]; event.PolicySequence > 0 {
-			return PolicyPosition{Sequence: event.PolicySequence, Hash: event.PolicyHash}, nil
+	var greatest PolicyPosition
+	for _, event := range events[:head] {
+		if event.PolicySequence > greatest.Sequence {
+			greatest = PolicyPosition{Sequence: event.PolicySequence, Hash: event.PolicyHash}
 		}
 	}
-	return PolicyPosition{}, nil
+	return greatest, nil
 }
