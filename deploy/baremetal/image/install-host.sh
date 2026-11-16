@@ -28,7 +28,9 @@
 #   1. the inputs: the UKI's sha256 is its record's signed.image_sha256; rootfs-build.json's "usr" is read whole (the
 #      root hash, the two PARTUUIDs, which must BE its halves, the sizes, the sha256s, the verity parameters);
 #      usr.erofs and usr.verity have those sizes and sha256s; then `veritysetup verify` reads every block of
-#      usr.erofs against usr.verity and the root hash. Each image must fit its partition
+#      usr.erofs against usr.verity and the root hash. The UKI's signed record must name THIS root hash: its
+#      usr_roothash, and the one usrhash= of its measured command line (uki.py, #61 K61V-3), so the UKI written to the
+#      ESP opens the /usr written beside it and no other. Each image must fit its partition
 #   2. the disk: the operator types its serial (lsblk), which must be --disk's; it must hold the layout and a /var of
 #      VAR_MIN at least; a disk holding data (partitions, or any signature wipefs finds on the whole device) needs
 #      --wipe and the serial typed again; an install record for this serial already in DIR is refused (move it away).
@@ -56,10 +58,10 @@
 # disk the variable is refused.
 #
 # CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
-#   * NOT BOOTABLE YET: the layout is the dm-verity design's, but the initrd does not yet open it (systemd-veritysetup,
-#     /var from the LUKS2 volume, / on tmpfs) and the UKI carries no usrhash= (the dm-verity design's next slice); so
-#     this installer cannot yet check that the UKI names THIS root hash, and the QEMU boot (the slice after) is what
-#     shows the two agree. Until then a host installed by it does not boot to the KMS.
+#   * NOT SHOWN BOOTING YET: the UKI carries usrhash=, root=tmpfs and panic-on-corruption, and the initrd has
+#     systemd-veritysetup (#61 K61V-3), and this installer checks that the UKI names the /usr it writes. No boot has
+#     shown them working together, nor /var mounted from the LUKS2 volume under root=tmpfs: that is the QEMU boot
+#     slice (K61V-4). Until then a host installed by it is not known to boot to the KMS.
 #   * NO RELEASE CHECK YET: the inputs are checked against their own build records, which nothing signs. Which
 #     root-committed document names both the /usr image and the UKI is #61's open question 1; until it lands, the
 #     operator compares the printed root hash and UKI digest with the ceremony's.
@@ -131,6 +133,23 @@ for f in "$USR" "$USR_VERITY" "$ROOTFS_RECORD" "$UKI" "$UKI_RECORD"; do [ -f "$f
 UKI_SHA="$(sha256sum < "$UKI" | cut -d' ' -f1)"
 UKI_WANT="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["signed"]["image_sha256"])' "$UKI_RECORD" 2>/dev/null)" || UKI_WANT=""
 [ "$UKI_SHA" = "$UKI_WANT" ] || die "the UKI is not the file its signed record names (sha256 $UKI_SHA)"
+# the /usr the UKI names (#61 K61V-3): its signed record's usr_roothash, and the one usrhash= of the command line the
+# record says it measured. Printed as one checked line; compared with rootfs-build.json's root hash below
+UKI_USRHASH="$(python3 -I - "$UKI_RECORD" <<'PY'
+import json, re, sys
+try:
+    record = json.load(open(sys.argv[1]))
+    named, cmdline = record["usr_roothash"], record["cmdline"]
+except Exception as e:
+    sys.exit("the UKI's record names no /usr (%s): built before usrhash= (#61 K61V-3)?" % type(e).__name__)
+words = [w for w in cmdline.split() if w.split("=", 1)[0].casefold().replace("-", "_").removeprefix("rd.") == "usrhash"] if isinstance(cmdline, str) else []
+if not (isinstance(named, str) and re.fullmatch(r"[0-9a-f]{64}", named)):
+    sys.exit("the UKI's record's usr_roothash is not 64 lowercase hex")
+if words != ["usrhash=" + named]:
+    sys.exit("the UKI's command line does not carry exactly usrhash=%s, its record's usr_roothash (it carries %s)" % (named, " ".join(words) or "none"))
+print(named)
+PY
+)" || die "the UKI's record is refused (above): nothing was written"
 # the record's "usr", read whole and judged in one place; its values come out as KEY=value lines of checked text only
 USR_FIELDS="$(python3 -I - "$ROOTFS_RECORD" <<'PY'
 import json, re, sys
@@ -173,9 +192,12 @@ COMMIT="$(field COMMIT)"
 # every block of the image against the hash tree and the root hash (userspace: no device-mapper, nothing opened)
 veritysetup verify "$USR" "$USR_VERITY" "$ROOTHASH" >/dev/null 2>&1 \
   || die "veritysetup verify refuses usr.erofs and usr.verity under the root hash $ROOTHASH: nothing was written"
+[ "$UKI_USRHASH" = "$ROOTHASH" ] \
+  || die "the UKI opens the /usr with root hash $UKI_USRHASH (its usrhash=), not this one ($ROOTHASH): it would boot no /usr from this disk. Nothing was written"
 [ "$EROFS_SIZE" -le "$USR_SIZE" ] || die "usr.erofs ($EROFS_SIZE bytes) is larger than a usr partition ($USR_SIZE)"
 [ "$VERITY_SIZE" -le "$USR_VERITY_SIZE" ] || die "usr.verity ($VERITY_SIZE bytes) is larger than a usr verity partition ($USR_VERITY_SIZE)"
 say "inputs: /usr usrhash=$ROOTHASH (usr.erofs $EROFS_SHA), commit $COMMIT; UKI $NAME $UKI_SHA"
+say "the UKI's usrhash= is this /usr's root hash"
 say "COMPARE the root hash and the UKI digest with the ceremony's before going on (no release check yet: the header's limitations)"
 
 # 2. the disk, by its serial typed at the console

@@ -31,6 +31,21 @@ VECTOR = {True: {"initrd": "7b5976f87e32c892f7cae4109e05bd6208f55c2fa5b080ebbbb4
 # a "pol" that systemd-measure 257.13 wrote for this PCR 11 value
 POLICY = ("132ab7e17a991bf12b108008052ca9c0c876f8a8c542f2d22eac1590a72105f4", "755f8cc34513bda797481e72388e539a2e83746b27d8186844fcf544fe9d8c0d")
 TRAILER = b"\0SECURE-BOOT-SIGNATURE"
+# the /usr the image runs (#61 K61V-3): build-rootfs.sh's record, and the three words uki.py adds from it to --cmdline's
+USRHASH = hashlib.sha256(b"the TEST /usr image").hexdigest()
+VERITY = "root=tmpfs usrhash=%s systemd.verity_usr_options=panic-on-corruption" % USRHASH
+BASE = "ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
+
+
+def uuid(half):
+    return "-".join((half[:8], half[8:12], half[12:16], half[16:20], half[20:]))
+
+
+def usr_record(roothash=USRHASH, **usr):
+    """build-rootfs.sh's rootfs-build.json, the fields uki.py reads: "usr", its root hash and the PARTUUIDs its halves."""
+    fields = {"roothash": roothash, "usr_partuuid": uuid(roothash[:32]), "usr_verity_partuuid": uuid(roothash[32:])}
+    fields.update(usr)
+    return json.dumps({"schema": "regalia.rootfs-build/v1", "commit": "ab" * 20, "usr": fields}).encode()
 
 
 def pe(sections, virtual=None, addresses=None, size_of_image=None):
@@ -272,7 +287,7 @@ class Case(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.tools = FakeTools()
         self.inputs = {}
-        for name, content in (("linux", b"a kernel"), ("initrd", unlock_initrd()), ("cmdline", b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
+        for name, content in (("linux", b"a kernel"), ("initrd", unlock_initrd()), ("cmdline", (BASE + "\n").encode()), ("usr_record", usr_record()),
                               ("os_release", b"ID=debian\n"), ("stub", b"a stub")):
             self.inputs[name] = self.write(name, content)
         self.inputs["pcrpkey"] = self.key("system", "pub")
@@ -397,15 +412,15 @@ class Arithmetic(unittest.TestCase):
             self.assertIn("the image has no %s section" % missing, str(caught.exception))
 
     def test_the_command_line(self):
-        self.assertEqual(uki.cmdline_text(b"root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
-                         "root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")
+        self.assertEqual(uki.cmdline_text((VERITY + " ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n").encode()),
+                         VERITY + " ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")
         # the word every image must carry, and the record keeps the command line it was built with
         with self.assertRaises(m.Refused) as caught:
             uki.cmdline_text(b"root=/dev/mapper/root ro quiet\n")
         self.assertIn("does not carry systemd.import_credentials=no", str(caught.exception))
         # (each case changes ONE word of a valid line, and the reason is asserted: a line can be refused for
         # several missing words, and a case must not pass for another word's reason)
-        full = "root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
+        full = VERITY + " ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
         for near in ("systemd.import_credentials=0", "systemd.import_credentials=yes", "import_credentials=no"):
             with self.subTest(near=near), self.assertRaises(m.Refused) as caught:
                 uki.cmdline_text(full.replace("systemd.import_credentials=no", near).encode())
@@ -415,7 +430,7 @@ class Arithmetic(unittest.TestCase):
                       "systemd.import_credentials=no", "systemd.import-credentials=yes", "rd.systemd.import-credentials=yes",
                       "systemd.import-credentials=no", "SYSTEMD.import_credentials=yes"):
             with self.subTest(extra=extra), self.assertRaises(m.Refused) as caught:
-                uki.cmdline_text(("root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0 %s" % extra).encode())
+                uki.cmdline_text(("%s %s %s" % (VERITY, "ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0", extra)).encode())
             self.assertIn("gives systemd.import_credentials more than once or with another value or spelling", str(caught.exception))
 
         # the kernel zeroes pages it frees and hands out (#221): each word must be there, exactly, once
@@ -462,8 +477,78 @@ class Arithmetic(unittest.TestCase):
                      "systemd.debug_shell", "systemd.debug-shell=1", "rd.systemd.debug_shell", "rdshell", "rdshell=1", "rdbreak", "rdbreak=pre-mount", "init=/bin/sh", "rdinit=/bin/sh",
                      "systemd.unit=emergency.target", "rd.systemd.unit=rescue.target", "emergency", "rescue", "single", "S", "s", "1", "-b"):
             with self.subTest(word=word), self.assertRaises(m.Refused) as caught:
-                uki.cmdline_text(("root=/dev/mapper/root %s ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0" % word).encode())
+                uki.cmdline_text(("%s %s %s" % (VERITY, word, "ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")).encode())
             self.assertIn("holds %r, which a KMS host's image does not carry" % word, str(caught.exception))
+
+    def test_the_command_line_opens_usr_by_its_root_hash_and_halts_on_corruption(self):
+        """#61 K61V-3: / is a tmpfs, /usr is opened by ONE usrhash= (64 lowercase hex), a corrupt block halts the host,
+        and nothing else on the line says where / or /usr come from or turns the verity generator off."""
+        full = "%s %s" % (BASE, VERITY)
+        self.assertEqual(uki.cmdline_text(full.encode()), full)
+        self.assertEqual(uki.usrhash(full), USRHASH)
+        for word in ("root=tmpfs", "systemd.verity_usr_options=panic-on-corruption"):
+            with self.subTest(missing=word), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(full.replace(" " + word, "").encode())
+            self.assertIn("does not carry %s" % word, str(caught.exception))
+        # another root, or another reaction to corruption (restart and ignore would go on running), or another spelling
+        for near, word in (("root=/dev/mapper/root", "root=tmpfs"), ("root=/dev/sda2", "root=tmpfs"), ("rd.root=tmpfs", "root=tmpfs"),
+                           ("systemd.verity_usr_options=restart-on-corruption", "systemd.verity_usr_options=panic-on-corruption"),
+                           ("systemd.verity_usr_options=ignore-corruption", "systemd.verity_usr_options=panic-on-corruption"),
+                           ("systemd.verity_usr_options=panic-on-corruption,ignore-zero-blocks", "systemd.verity_usr_options=panic-on-corruption"),
+                           ("systemd.verity-usr-options=panic-on-corruption", "systemd.verity_usr_options=panic-on-corruption")):
+            with self.subTest(near=near), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(full.replace(word, near).encode())
+            self.assertIn("does not carry %s" % word, str(caught.exception))
+        # ... and beside the right word: the last value would win
+        for extra, key in (("root=/dev/mapper/root", "root"), ("root=tmpfs", "root"), ("rd.root=/dev/sda", "root"),
+                           ("systemd.verity_usr_options=ignore-corruption", "systemd.verity_usr_options"),
+                           ("rd.systemd.verity-usr-options=restart-on-corruption", "systemd.verity_usr_options")):
+            with self.subTest(extra=extra), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(("%s %s" % (full, extra)).encode())
+            self.assertIn("gives %s more than once or with another value or spelling" % key, str(caught.exception))
+        # exactly one usrhash=, 64 lowercase hex
+        other = USRHASH[:-1] + ("0" if USRHASH[-1] != "0" else "1")
+        for line, reason in ((full.replace(" usrhash=" + USRHASH, ""), "must carry exactly one usrhash= (the /usr root hash, #61); it carries 0"),
+                             (full + " usrhash=" + other, "it carries 2"), (full + " usrhash=" + USRHASH, "it carries 2"),
+                             (full + " rd.usrhash=" + other, "it carries 2"), (full + " USRHASH=" + other, "it carries 2"),
+                             (full.replace(USRHASH, USRHASH.upper()), "is not usrhash=<64 lowercase hex>"),
+                             (full.replace(USRHASH, USRHASH[:-1]), "is not usrhash=<64 lowercase hex>"),
+                             (full.replace(USRHASH, USRHASH + "0"), "is not usrhash=<64 lowercase hex>"),
+                             (full.replace("usrhash=" + USRHASH, "usrhash"), "is not usrhash=<64 lowercase hex>"),
+                             (full.replace("usrhash=" + USRHASH, "rd.usrhash=" + USRHASH), "is not usrhash=<64 lowercase hex>")):
+            with self.subTest(line=line[-80:]), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(line.encode())
+            self.assertIn(reason, str(caught.exception))
+        # nothing else says where / or /usr come from, nor turns the generator off, nor points it at other partitions
+        for word in ("roothash=" + USRHASH, "rd.roothash=" + USRHASH, "systemd.verity=no", "systemd.verity=0", "systemd.verity=yes", "rd.systemd.verity=no",
+                     "systemd.verity_root_data=/dev/sda2", "systemd.verity_root_hash=/dev/sda3", "systemd.verity_root_options=ignore-corruption",
+                     "systemd.verity_usr_data=/dev/sda2", "systemd.verity-usr-data=/dev/sda2", "systemd.verity_usr_hash=/dev/sda3",
+                     "rd.systemd.verity_usr_hash=/dev/sda3", "mount.usr=/dev/sda2", "rd.mount.usr=/dev/sda2", "mount.usrfstype=ext4", "mount.usrflags=rw"):
+            with self.subTest(word=word), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(("%s %s" % (full, word)).encode())
+            self.assertIn("holds %r, which a KMS host's image does not carry" % word, str(caught.exception))
+
+    def test_the_image_command_line_takes_the_usr_from_its_record_only(self):
+        """--cmdline's words, then the three from the /usr record. --cmdline giving one of them is refused (they come from
+        the record or not at all), and the record must be build-rootfs.sh's, its PARTUUIDs the root hash's halves."""
+        self.assertEqual(uki.image_cmdline((BASE + "\n").encode(), usr_record()), "%s %s" % (BASE, VERITY))
+        other = hashlib.sha256(b"another /usr").hexdigest()
+        self.assertEqual(uki.image_cmdline(BASE.encode(), usr_record(other)), "%s %s" % (BASE, VERITY.replace(USRHASH, other)))
+        for word in ("root=tmpfs", "root=/dev/mapper/root", "usrhash=" + USRHASH, "rd.usrhash=" + other, "USRHASH=" + other,
+                     "systemd.verity_usr_options=panic-on-corruption", "systemd.verity-usr-options=ignore-corruption"):
+            with self.subTest(word=word), self.assertRaises(m.Refused) as caught:
+                uki.image_cmdline(("%s %s" % (BASE, word)).encode(), usr_record())
+            self.assertIn("--cmdline gives %s: root=, usrhash= and systemd.verity_usr_options= come from the /usr record" % word, str(caught.exception))
+        for raw, reason in ((b"not json", "--usr-record is not a JSON object"), (b"[]", "is not a regalia.rootfs-build/v1 record"),
+                            (json.dumps({"schema": "regalia.rootfs-build/v2", "usr": {}}).encode(), "is not a regalia.rootfs-build/v1 record"),
+                            (json.dumps({"schema": "regalia.rootfs-build/v1"}).encode(), "has no \"usr\""),
+                            (usr_record(USRHASH.upper()), "usr.roothash is not 64 lowercase hex"),
+                            (usr_record(USRHASH[:62]), "usr.roothash is not 64 lowercase hex"),
+                            (usr_record(usr_partuuid=uuid("0" * 32)), "usr.usr_partuuid is not the root hash's first 128 bits"),
+                            (usr_record(usr_verity_partuuid=uuid(USRHASH[:32])), "usr.usr_verity_partuuid is not the root hash's last 128 bits")):
+            with self.subTest(raw=raw[:60]), self.assertRaises(m.Refused) as caught:
+                uki.image_cmdline(BASE.encode(), raw)
+            self.assertIn(reason, str(caught.exception))
 
 
 class Build(Case):
@@ -475,9 +560,13 @@ class Build(Case):
         self.assertEqual(record["pcr11"], {phase: predicted(parts, path) for phase, path in uki.PHASE_PATHS.items()})
         self.assertNotEqual(record["pcr11"]["initrd"], record["pcr11"]["system"])
         self.assertEqual(record["sections"], {"." + n: hashlib.sha256(c).hexdigest() for n, c in parts.items()})
-        self.assertEqual(parts["cmdline"], b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")            # the file's newline is not in the image
+        # the file's newline is not in the image; the /usr record's three words follow the file's (#61 K61V-3)
+        self.assertEqual(parts["cmdline"], ("%s %s" % (BASE, VERITY)).encode())
+        self.assertEqual(record["cmdline"], "%s %s" % (BASE, VERITY))
+        self.assertEqual(record["usr_roothash"], USRHASH)
         self.assertEqual(record["inputs"]["linux"], {"sha256": hashlib.sha256(b"a kernel").hexdigest(), "size": 8})
-        self.assertEqual(sorted(record["inputs"]), ["cmdline", "initrd", "initrd_build", "linux", "os_release", "pcrpkey", "root_key", "stub"])
+        self.assertEqual(record["inputs"]["usr_record"], {"sha256": hashlib.sha256(usr_record()).hexdigest(), "size": len(usr_record())})
+        self.assertEqual(sorted(record["inputs"]), ["cmdline", "initrd", "initrd_build", "linux", "os_release", "pcrpkey", "root_key", "stub", "usr_record"])
         self.assertEqual(record["pcrpkey_pkfp"], uki.public_key(self.public()["system"], "k")[0])
         self.assertEqual(record["tools"], {"ukify": "ukify 257 (stand-in)", "systemd_measure": "systemd-measure 257 (stand-in)"})
         with open(os.path.join(self.out, "image-7.record.json"), "rb") as f:
@@ -523,7 +612,9 @@ class Build(Case):
 
     def test_names_and_the_command_line_are_checked_before_anything_runs(self):
         for kw, reason in (({"name": "an image"}, "short plain name"), ({"name": "../x"}, "short plain name"), ({"uname": "6.12; rm"}, "--uname must be a kernel version"),
-                           ({"inputs": {"cmdline": self.write("c", b"root=x rd.luks.uuid=1 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n")}}, "holds 'rd.luks.uuid=1'")):
+                           ({"inputs": {"cmdline": self.write("c", b"rd.luks.uuid=1 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n")}}, "holds 'rd.luks.uuid=1'"),
+                           ({"inputs": {"cmdline": self.write("c2", ("%s usrhash=%s\n" % (BASE, USRHASH)).encode())}}, "come from the /usr record"),
+                           ({"inputs": {"usr_record": self.write("u", usr_record(USRHASH.upper()))}}, "usr.roothash is not 64 lowercase hex")):
             with self.subTest(**{k: str(v) for k, v in kw.items()}):
                 self.tools.calls.clear()
                 self.refused(reason, self.build, **kw)
@@ -841,8 +932,11 @@ class Records(Case):
                    "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]}
         self.assertEqual(entry, {"label": "image-7", "tpm_firmware_version": "2019102300163636", "pcrs": dict(pcrs, **{"12": espcreds.pcr12(creds)}),
                                  "phases": {"initrd": {"11": record["pcr11"]["initrd"]}, "system": {"11": record["pcr11"]["system"]}},
-                                 "signing": signing})
+                                 "signing": signing, "usr_roothash": USRHASH})
         self.refused("the record is of an unsigned image", uki.measurement_set, unsigned, "image-7", "2019102300163636", pcrs, creds)
+        # the /usr it names is the record's, held to the usrhash= of its measured command line (#61 K61V-3)
+        other = dict(record, usr_roothash=hashlib.sha256(b"another /usr").hexdigest())
+        self.refused("record.usr_roothash is not the usrhash= of its command line", uki.measurement_set, other, "image-7", "2019102300163636", pcrs, creds)
         document = {"schema": measurements.SCHEMA, "name": "v1", "nodes": {n: {"accepted": [entry]} for n in "abc"}}
         self.assertTrue(measurements.version(document).startswith("m1-"))               # it is a set the document accepts
         self.assertEqual(attest.selection(entry), [0, 7, 11, 12])
@@ -954,7 +1048,13 @@ class Records(Case):
                 ("an input this tool does not take", lambda r: r["inputs"].update(extra={"sha256": "00" * 32, "size": 1}), "record.inputs names an input"),
                 ("a malformed signing part", lambda r: r.update(signed={"image_sha256": "00" * 32}), "record.signed fields mismatch"),
                 ("a command line without the import switch", lambda r: r.update(cmdline="root=/dev/mapper/root ro"), "does not carry systemd.import_credentials=no"),
-                ("a command line that is not the image's", lambda r: r.update(cmdline=r["cmdline"] + " quiet"), "record.cmdline is not the image's .cmdline section")):
+                ("a command line that is not the image's", lambda r: r.update(cmdline=r["cmdline"] + " quiet"), "record.cmdline is not the image's .cmdline section"),
+                # the /usr it names (#61 K61V-3): the one usrhash= of its measured command line, from a /usr record input
+                ("no usr_roothash", lambda r: r.pop("usr_roothash"), "fields mismatch"),
+                ("a usr_roothash that is not the command line's", lambda r: r.update(usr_roothash=r["usr_roothash"][:-1] + "0" if r["usr_roothash"][-1] != "0"
+                                                                                    else r["usr_roothash"][:-1] + "1"),
+                 "record.usr_roothash is not the usrhash= of its command line"),
+                ("no /usr record among the inputs", lambda r: r["inputs"].pop("usr_record"), "record.inputs names no /usr record")):
             with self.subTest(label):
                 changed = json.loads(json.dumps(record))
                 change(changed)
@@ -963,9 +1063,10 @@ class Records(Case):
         self.refused("the record is of an unsigned image", uki.load_record, json.dumps(record).encode(), signed=True)
 
     def test_the_command_refuses_with_a_reason_and_no_traceback(self):
-        argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
+        argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"init=/bin/sh systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
                 "--os-release", self.inputs["os_release"], "--uname", "6.12", "--stub", self.inputs["stub"], "--pcrpkey", self.inputs["pcrpkey"],
-                "--initrd-build", self.initrd_build(), "--root-key", self.inputs["root_key"], "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
+                "--initrd-build", self.initrd_build(), "--root-key", self.inputs["root_key"], "--usr-record", self.inputs["usr_record"],
+                "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
         with contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(uki.main(argv), 1)
         self.assertEqual(out.getvalue(), "")
@@ -1213,6 +1314,16 @@ class InitrdReview(Case):
                 self.refused_by(unlock_initrd({"etc/cmdline.d/90-x.conf": (0o100644, ("%s\n" % word).encode())}),
                                 "etc/cmdline.d/90-x.conf holds %r: the initrd's command line must not change what the image's command line requires" % word)
         self.passes(unlock_initrd({"etc/cmdline.d/20.conf": (0o100644, b"rd.emergency=reboot\n")}))
+        # ... nor where / or /usr come from (#61 K61V-3): the root hash is the image's command line's alone
+        requires, opened = "the initrd's command line must not change what the image's command line requires", "the initrd's command line must not say how the disk is opened"
+        for word, reason in (("root=/dev/sda2", requires), ("systemd.verity_usr_options=ignore-corruption", requires),
+                             ("systemd.verity=no", opened), ("mount.usr=/dev/sda2", opened), ("systemd.verity_usr_data=/dev/sda2", opened),
+                             ("usrhash=" + USRHASH, "only the image's command line names the /usr root hash"),
+                             ("rd.usrhash=" + USRHASH, "only the image's command line names the /usr root hash")):
+            with self.subTest(word):
+                self.refused_by(unlock_initrd({"etc/cmdline.d/90-x.conf": (0o100644, ("%s\n" % word).encode())}),
+                                "etc/cmdline.d/90-x.conf holds %r: %s" % (word, reason))
+        self.passes(unlock_initrd({"etc/cmdline.d/20.conf": (0o100644, b"root=tmpfs systemd.verity_usr_options=panic-on-corruption\n")}))
 
     def test_the_crypttab_holds_the_one_generic_line_and_nothing_else(self):
         line = b"root PARTLABEL=regalia-root none luks,x-initrd.attach,tries=0,timeout=0,x-systemd.device-timeout=0\n"

@@ -207,7 +207,10 @@ echo "### dracut --reproducible, kernel $KVER, SOURCE_DATE_EPOCH=$EPOCH"
 # links two identical files only when their mtimes are equal (measured, util-linux 2.41). Two identical files
 # written during the build then become one hard-linked entry or two, as their writes fall in one second or two:
 # the same files, another archive (#248, run 37145757537: 58682888 vs 58683049 bytes).
-inroot dracut --force --reproducible --nohardlink --no-hostonly --no-hostonly-cmdline --add regalia-unlock --kver "$KVER" /tmp/initrd.img \
+# --add-drivers "dm-verity erofs" (#61): the /usr the initrd opens is erofs under dm-verity. Both come today with
+# 90dm's =drivers/md and 90kernel-modules' =fs (--no-hostonly), and stated here they still do if `filesystems=` is
+# ever set (which turns =fs off) or 90dm narrows: a missing module is a failed build, not a host without /usr.
+inroot dracut --force --reproducible --nohardlink --no-hostonly --no-hostonly-cmdline --add regalia-unlock --add-drivers "dm-verity erofs" --kver "$KVER" /tmp/initrd.img \
   >"$W/dracut.log" 2>&1 || { tail -40 "$W/dracut.log"; die "dracut failed"; }
 cp "$ROOT/tmp/initrd.img" "$W/stage/initrd.img"
 

@@ -431,8 +431,8 @@ jobs:
           # --- Install onto a loop device and read it back
           set -o pipefail
           sudo bash e2e/install-host-loop.sh | tee "$RUNNER_TEMP/install.log"
-          grep -q '^install-host-loop: 41 passed, 0 failed$' "$RUNNER_TEMP/install.log" || {
-            echo "::error::the install test did not run all 41 checks" >&2; exit 1; }
+          grep -q '^install-host-loop: 44 passed, 0 failed$' "$RUNNER_TEMP/install.log" || {
+            echo "::error::the install test did not run all 44 checks" >&2; exit 1; }
 
       # regalia-kms#61, the dm-verity design's first slice: usr-verity.sh makes /usr an erofs image under dm-verity.
       # Two trees made differently give one image; the image is the tree; one byte changed in the filesystem, a file's
@@ -1182,7 +1182,7 @@ jobs:
           set -o pipefail
           set -- /tmp/kernel/root/boot/vmlinuz-*
           LINUX="$1" bash e2e/uki-build.sh | tee "$RUNNER_TEMP/uki.log"
-          grep -q '^uki-build: 33 passed, 0 failed$' "$RUNNER_TEMP/uki.log"
+          grep -q '^uki-build: 42 passed, 0 failed$' "$RUNNER_TEMP/uki.log"
           grep '^uki-build: image ' "$RUNNER_TEMP/uki.log" >> "$GITHUB_STEP_SUMMARY"
       # A MEASUREMENT, NOT A GATE: two runs gave identical bytes and one did not (regalia-kms#57, run
       # 37080073972), so the answer so far is "not reliably". The step reports, and on a difference names

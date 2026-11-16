@@ -17,7 +17,17 @@ record of what it will measure, and signed in a separate step by keys that are o
 
     INPUTS: --linux VMLINUZ --initrd INITRD [--microcode FILE] --cmdline FILE --os-release FILE
             --uname VERSION --stub LINUX-STUB --pcrpkey SYSTEM-KEY.pub --initrd-build INITRD-BUILD.json
-            (the initrd and its build record from deploy/baremetal/initrd/build-initrd.sh, #248)
+            --usr-record ROOTFS-BUILD.json
+            (the initrd and its build record from deploy/baremetal/initrd/build-initrd.sh, #248; the /usr image's
+            record from deploy/baremetal/image/build-rootfs.sh, #61)
+
+THE /usr IT RUNS (#61, the dm-verity design). The image's command line is --cmdline's words followed by three this
+tool adds from --usr-record's "usr": `root=tmpfs usrhash=<root hash> systemd.verity_usr_options=panic-on-corruption`.
+The initrd's systemd-veritysetup-generator opens /usr from the partition pair the root hash names (its PARTUUIDs are
+the hash's halves), every block read is checked against it, and a block that fails stops the host. --cmdline may give
+none of the three, nor anything else that says where /usr or / come from: they come from the record or not at all.
+The command line is a measured section, so the root hash is in PCR 11: another /usr is another PCR 11. The record
+names it ("usr_roothash") and `set` puts it in the measurement set (attest.USR_KEY), for the installer to check.
 
 WHAT IS MEASURED. systemd-stub extends PCR 11 with every section of the image it boots, in a fixed order,
 and systemd then extends it with the name of each boot phase. So one image has one PCR 11 value in the
@@ -109,11 +119,18 @@ MAX_IMAGE = 512 * 1024 * 1024
 #   rd.break, rd.shell, systemd.debug_shell, init=, systemd.unit=, emergency, rescue, single
 #                     a shell or another target before the disk is judged (also dracut's older
 #                     spellings rdbreak and rdshell, which its getarg still reads)
-#   root=UUID=…, root=PARTUUID=…   names ONE host's disk, so the image would be per host (the root is the
-#                     mapping, root=/dev/mapper/root, and the partition is found by its label)
+#   root=UUID=…, root=PARTUUID=…   names ONE host's disk, so the image would be per host (/ is a tmpfs, root=tmpfs,
+#                     a required word below; /usr is found by usrhash= and /var by its GPT label)
+#   roothash=, systemd.verity=, systemd.verity_root_*=, systemd.verity_usr_data=, systemd.verity_usr_hash=,
+#   mount.usr=, mount.usrfstype=, mount.usrflags=
+#                     anything that turns the verity generator off or says where / or /usr come from other than the
+#                     one usrhash= (#61): systemd.verity=no would leave /usr unopened, mount.usr= would mount another
+#                     /usr unverified, and _data=/_hash= would point the generator at other partitions
 CMDLINE_REFUSED = (r"(rd\.)?luks(\.[a-z0-9_.-]+)?(=.*)?", r"rd\.?break(=.*)?", r"rd\.?shell(=.*)?", r"(rd\.)?systemd\.debug[-_]shell(=.*)?",
                    r"(rd)?init=.*", r"(rd\.)?systemd\.unit=.*", r"emergency", r"rescue", r"single", r"[sS1]", r"-b",
-                   r"root=(UUID|PARTUUID|LABEL|PARTLABEL)=.*")
+                   r"root=(UUID|PARTUUID|LABEL|PARTLABEL)=.*",
+                   r"(rd\.)?roothash=.*", r"(rd\.)?systemd\.verity=.*", r"(rd\.)?systemd\.verity[-_]root[-_](data|hash|options)=.*",
+                   r"(rd\.)?systemd\.verity[-_]usr[-_](data|hash)=.*", r"(rd\.)?mount\.usr(fstype|flags)?=.*")
 # ... except the forms that turn a shell OFF, which a KMS host's image should carry (rd.shell=0).
 CMDLINE_HARDENING = r"(rd\.shell|(rd\.)?systemd\.debug[-_]shell)=(0|no|false|off)"
 # Words the command line MUST carry. systemd.import_credentials=no: systemd in the initrd would otherwise
@@ -145,8 +162,18 @@ CMDLINE_HARDENING = r"(rd\.shell|(rd\.)?systemd\.debug[-_]shell)=(0|no|false|off
 # in emergency, and so in a reboot, under an operator still typing (#70). The partition's own wait is
 # crypttab's x-systemd.device-timeout=0. rootflags= is compared as ONE key: an image that needs other
 # root mount flags puts them in this same word, comma-separated.
+# UNDER root=tmpfs (#61) / is a tmpfs, which waits for no device, so the word no longer bounds anything: the volume
+# the recovery key or the client opens is /var now, and its mount's wait is the QEMU boot slice's to set and show
+# (K61V-4). The word is kept (fstab-generator passes x-systemd.* to no filesystem) until that slice replaces it.
+# root=tmpfs and systemd.verity_usr_options=panic-on-corruption (#61, the dm-verity design): / is a tmpfs, nothing on
+# it survives a reboot, and everything that runs comes from the verity /usr; a /usr block that fails its hash halts the
+# host rather than handing a program an I/O error and running on half-verified (systemd-veritysetup sets the option
+# only when asked). With usrhash= (exactly one, 64 hex: cmdline_text) these three come from the /usr record, never
+# from --cmdline (image_cmdline).
 CMDLINE_REQUIRED = ("systemd.import_credentials=no", "init_on_free=1", "init_on_alloc=1", "rd.shell=0", "rd.emergency=reboot",
-                    "rootflags=x-systemd.device-timeout=0")
+                    "rootflags=x-systemd.device-timeout=0", "root=tmpfs", "systemd.verity_usr_options=panic-on-corruption")
+# the words image_cmdline adds, and --cmdline may not give (compared by key)
+VERITY_WORDS = ("root=tmpfs", "usrhash=", "systemd.verity_usr_options=panic-on-corruption")
 
 
 def _cmdline_key(word):
@@ -294,7 +321,61 @@ def cmdline_text(raw):
         given = [w for w in words if _cmdline_key(w) == key]
         require(given == [needed], "the command line gives %s more than once or with another value or spelling (%s): it must say %s, once"
                 % (needed.split("=", 1)[0], " ".join(given), needed))
+    usrhash(text)
     return text
+
+
+def usrhash(text):
+    """The /usr root hash the command line names: exactly one usrhash=, 64 lowercase hex (#61). The generator would
+    take the LAST of two, and a short or upper-case one names no partition pair the installer wrote."""
+    given = [w for w in text.split() if _cmdline_key(w) == "usrhash"]
+    require(len(given) == 1, "the command line must carry exactly one usrhash= (the /usr root hash, #61); it carries %d" % len(given))
+    value = given[0].split("=", 1)[1] if "=" in given[0] else ""
+    require(given[0] == "usrhash=" + value and attest.is_hex(value, 64), "the command line's %r is not usrhash=<64 lowercase hex>" % given[0])
+    return value
+
+
+ROOTFS_SCHEMA = "regalia.rootfs-build/v1"
+
+
+def _uuid(half):
+    return "-".join((half[0:8], half[8:12], half[12:16], half[16:20], half[20:32]))
+
+
+def usr_roothash(raw):
+    """The /usr root hash of build-rootfs.sh's record (rootfs-build.json, "usr"), checked as install-host.sh checks it:
+    64 lowercase hex, and the two PARTUUIDs the installer writes are its halves (systemd-veritysetup-generator's
+    convention), so the usrhash= built from it names the partitions the installer made. The record is unsigned: what
+    binds it is the signed UKI's PCR 11 and the measurement set that names the hash."""
+    try:
+        record = membership.load(raw, limit=1024 * 1024)
+    except (Refused, RecursionError, ValueError):
+        raise Refused("--usr-record is not a JSON object (build-rootfs.sh's rootfs-build.json)")
+    require(isinstance(record, dict) and record.get("schema") == ROOTFS_SCHEMA,
+            "--usr-record is not a %s record (build-rootfs.sh's rootfs-build.json)" % ROOTFS_SCHEMA)
+    usr = record.get("usr")
+    require(isinstance(usr, dict), "--usr-record has no \"usr\": built before the /usr image (#61)?")
+    roothash = usr.get("roothash")
+    require(attest.is_hex(roothash, 64), "--usr-record's usr.roothash is not 64 lowercase hex")
+    require(usr.get("usr_partuuid") == _uuid(roothash[:32]), "--usr-record's usr.usr_partuuid is not the root hash's first 128 bits")
+    require(usr.get("usr_verity_partuuid") == _uuid(roothash[32:]), "--usr-record's usr.usr_verity_partuuid is not the root hash's last 128 bits")
+    return roothash
+
+
+def image_cmdline(cmdline_raw, usr_record_raw):
+    """The image's command line: --cmdline's words, then root=tmpfs, usrhash=<the /usr record's root hash> and
+    systemd.verity_usr_options=panic-on-corruption, all checked as one (cmdline_text). --cmdline giving any of the
+    three keys itself is refused: they come from the record, never from a file beside it."""
+    try:
+        base = cmdline_raw.decode("ascii").rstrip("\n")
+    except UnicodeDecodeError:
+        raise Refused("the command line is not ASCII")
+    keys = {_cmdline_key(w) for w in VERITY_WORDS}
+    own = [w for w in base.split() if _cmdline_key(w) in keys]
+    require(not own, "--cmdline gives %s: root=, usrhash= and systemd.verity_usr_options= come from the /usr record (--usr-record), "
+            "never from --cmdline" % " ".join(own))
+    roothash = usr_roothash(usr_record_raw)
+    return cmdline_text(("%s root=tmpfs usrhash=%s systemd.verity_usr_options=panic-on-corruption" % (base, roothash)).encode("ascii"))
 
 
 # ---- the initrd's review (#198): what the measured initrd does to open the root disk ----
@@ -901,6 +982,9 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, cl
                 continue
             if any(re.fullmatch(p, word) for p in CMDLINE_REFUSED):
                 findings.append("%s holds %r: the initrd's command line must not say how the disk is opened" % (fragment, word))
+                continue
+            if _cmdline_key(word) == "usrhash":
+                findings.append("%s holds %r: only the image's command line names the /usr root hash (#61)" % (fragment, word))
     pinned = ours()
     found, walk_findings = walk_search(files)
     findings += walk_findings
@@ -990,7 +1074,7 @@ def check_review(review):
     require(review["inventory_sha256"] is None or attest.is_hex(review["inventory_sha256"], 64), "record.initrd_review.inventory_sha256 is not a sha256")
     require(review["root_key"] is None or attest.is_hex(review["root_key"], 64), "record.initrd_review.root_key is not a sha256")
 
-INPUTS = ("linux", "initrd", "microcode", "cmdline", "os_release", "stub", "pcrpkey", "initrd_build", "root_key")
+INPUTS = ("linux", "initrd", "microcode", "cmdline", "os_release", "stub", "pcrpkey", "initrd_build", "root_key", "usr_record")
 OPTIONAL_INPUTS = ("microcode",)
 # The initrd's build record (deploy/baremetal/initrd/build-initrd.sh, #248). Every builder builds the initrd
 # itself, from pinned inputs, and gets the same bytes and the same record; the record names what the initrd
@@ -1231,9 +1315,14 @@ def stub_sections(data):
     return {n: sha256(c) for n, c in sections(data) if n[1:] not in OURS and n != ".pcrsig"}
 
 
+def _image_cmdline(inputs):
+    require(inputs.get("usr_record"), "--usr-record is required: the image's command line names the /usr it runs (#61)")
+    return image_cmdline(read(inputs["cmdline"], 4096), read(inputs["usr_record"], 1024 * 1024))
+
+
 def _ukify(inputs, uname, output, run, tools, pcrsig=None):
     argv = [tools["ukify"], "build", "--config", "/dev/null", "--linux", inputs["linux"], "--initrd", inputs["initrd"],
-            "--cmdline", cmdline_text(read(inputs["cmdline"], 4096)), "--os-release", "@" + inputs["os_release"], "--uname", uname,
+            "--cmdline", _image_cmdline(inputs), "--os-release", "@" + inputs["os_release"], "--uname", uname,
             "--stub", inputs["stub"], "--pcrpkey", inputs["pcrpkey"], "--output", output]
     if inputs.get("microcode"):
         argv += ["--microcode", inputs["microcode"]]
@@ -1247,7 +1336,7 @@ def _check_sections(parts, inputs, uname):
     """Every measured section is the input it was built from. ukify decides what goes where; this is the
     check that it did what the record will say."""
     want = {"linux": read(inputs["linux"]), "initrd": read(inputs["initrd"]), "osrel": read(inputs["os_release"], 65536),
-            "cmdline": cmdline_text(read(inputs["cmdline"], 4096)).encode("ascii"), "uname": uname.encode("ascii"),
+            "cmdline": _image_cmdline(inputs).encode("ascii"), "uname": uname.encode("ascii"),
             "pcrpkey": read(inputs["pcrpkey"], 65536)}
     if inputs.get("microcode"):
         want["ucode"] = read(inputs["microcode"])
@@ -1317,7 +1406,8 @@ def build(inputs, uname, name, out_dir, run=subprocess.run, tools=TOOLS, invento
             "schema": SCHEMA, "name": name, "uname": uname,
             "inputs": {k: {"sha256": sha256(read(inputs[k])), "size": os.path.getsize(inputs[k])} for k in INPUTS if inputs.get(k)},
             "sections": {"." + n: sha256(c) for n, c in parts.items()},
-            "unsigned_sha256": sha256(data), "stub_sections": stub_sections(data), "cmdline": parts["cmdline"].decode("ascii"), "phase_paths": dict(PHASE_PATHS), "pcr11": values, "pcrpkey_pkfp": fingerprint,
+            "unsigned_sha256": sha256(data), "stub_sections": stub_sections(data), "cmdline": parts["cmdline"].decode("ascii"),
+            "usr_roothash": usrhash(parts["cmdline"].decode("ascii")), "phase_paths": dict(PHASE_PATHS), "pcr11": values, "pcrpkey_pkfp": fingerprint,
             "initrd_review": review,
             "tools": {"ukify": _tool_version(run, [tools["ukify"], "--version"]),
                       "systemd_measure": _tool_version(run, [tools["measure"], "--version"])}}
@@ -1339,8 +1429,8 @@ def _place(source, destination):
     os.unlink(source)
 
 
-RECORD_KEYS = ("schema", "name", "uname", "inputs", "sections", "unsigned_sha256", "stub_sections", "cmdline", "phase_paths", "pcr11", "pcrpkey_pkfp",
-               "initrd_review", "tools")
+RECORD_KEYS = ("schema", "name", "uname", "inputs", "sections", "unsigned_sha256", "stub_sections", "cmdline", "usr_roothash", "phase_paths", "pcr11",
+               "pcrpkey_pkfp", "initrd_review", "tools")
 
 
 def load_record(raw, signed=None):
@@ -1359,6 +1449,9 @@ def load_record(raw, signed=None):
     require(isinstance(record["cmdline"], str), "record.cmdline is not text")
     cmdline_text(record["cmdline"].encode("ascii", "replace"))      # the same rules, read back
     require(sha256(record["cmdline"].encode("ascii")) == record["sections"].get(".cmdline"), "record.cmdline is not the image's .cmdline section")
+    # the /usr it names (#61): the one usrhash= of its measured command line, and so of its PCR 11
+    require(record["usr_roothash"] == usrhash(record["cmdline"]), "record.usr_roothash is not the usrhash= of its command line")
+    require("usr_record" in record["inputs"], "record.inputs names no /usr record (--usr-record): the image's /usr is unaccounted for (#61)")
     membership.exact(record["pcr11"], attest.PHASES, "record.pcr11")
     check_review(record["initrd_review"])
     for field in [record["unsigned_sha256"], record["pcrpkey_pkfp"]] + list(record["pcr11"].values()):
@@ -1686,7 +1779,9 @@ def measurement_set(record, label, firmware, pcrs, credentials):
     (espcreds.pcr12). PCR 12 has one value for both phases: nothing extends it after the initrd (measured
     in the unlock boot test, #215). It is never given by hand: a set that should hold it is made from the
     files. It is REQUIRED: a set without it would leave PCR 12 unattested, the gap #66 closed, and after
-    stage B2 a host with no credentials cannot be unlocked unattended anyway."""
+    stage B2 a host with no credentials cannot be unlocked unattended anyway. The set also names the /usr the
+    image runs, the record's usr_roothash (#61): load_record has checked it is the usrhash= of the measured
+    command line, so it is the /usr the set's PCR 11 attests."""
     load_record(membership.canonical(record), signed=True)
     require(isinstance(pcrs, dict) and "11" not in pcrs, "the host's PCR values must not give PCR 11: it comes from the image's record, per phase")
     require("12" not in pcrs, "the host's PCR values must not give PCR 12: it is computed from the node's credential files (--credentials)")
@@ -1699,7 +1794,8 @@ def measurement_set(record, label, firmware, pcrs, credentials):
              # the keys the image is signed with, from its SIGNED record: what enrol may seal to (#190, #265)
              "signing": {"initrd": record["signed"]["pcr_signatures"]["initrd"]["pkfp"],
                          "system": record["signed"]["pcr_signatures"]["system"]["pkfp"],
-                         "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]}}
+                         "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]},
+             attest.USR_KEY: record["usr_roothash"]}
     try:
         attest.validate_sets([entry], "set")
     except attest.Refused as refusal:

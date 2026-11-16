@@ -73,7 +73,12 @@ record "$W/rootfs-build.json"
 ROOTHASH="$(sed -n 's/^roothash=//p' "$W/img/usr-verity.txt")"
 USR_PARTUUID="$(sed -n 's/^usr_partuuid=//p' "$W/img/usr-verity.txt")" USR_VERITY_PARTUUID="$(sed -n 's/^usr_verity_partuuid=//p' "$W/img/usr-verity.txt")"
 head -c 300000 /dev/urandom > "$W/e2e-test.efi"
-printf '{"signed": {"image_sha256": "%s"}}\n' "$(sha256sum < "$W/e2e-test.efi" | cut -d' ' -f1)" > "$W/e2e-test.signed.json"
+# the UKI's signed record: its digest, and the /usr it names (#61 K61V-3: usr_roothash and its command line's usrhash=)
+uki_record(){   # uki_record OUT IMAGE_SHA USR_ROOTHASH CMDLINE_USRHASH
+  printf '{"signed": {"image_sha256": "%s"}, "usr_roothash": "%s", "cmdline": "rd.shell=0 root=tmpfs usrhash=%s systemd.verity_usr_options=panic-on-corruption"}\n' \
+    "$2" "$3" "$4" > "$1"; }
+UKI_SHA="$(sha256sum < "$W/e2e-test.efi" | cut -d' ' -f1)"
+uki_record "$W/e2e-test.signed.json" "$UKI_SHA" "$ROOTHASH" "$ROOTHASH"
 truncate -s 16G "$W/disk.img"
 LOOP="$(losetup --find --show --partscan "$W/disk.img")"
 # install DISK RECORD [USR] [VERITY] [more arguments]
@@ -112,8 +117,18 @@ record "$W/r-vuuid.json" 'r["usr"]["usr_verity_partuuid"] = r["usr"]["usr_partuu
 refused "usr_verity_partuuid" "$LOOP" "$W/r-vuuid.json"; ok $? "a record whose usr_verity_partuuid is not the root hash's last half is refused"
 record "$W/r-nousr.json" 'del r["usr"]'
 refused 'has no readable "usr"' "$LOOP" "$W/r-nousr.json"; ok $? "a record with no \"usr\" (built before the /usr image) is refused"
-cp "$W/e2e-test.signed.json" "$W/uki-good.json"; printf '{"signed": {"image_sha256": "%s"}}\n' "$(printf 0%.0s {1..64})" > "$W/e2e-test.signed.json"
+cp "$W/e2e-test.signed.json" "$W/uki-good.json"; uki_record "$W/e2e-test.signed.json" "$(printf 0%.0s {1..64})" "$ROOTHASH" "$ROOTHASH"
 refused "the UKI is not the file its signed record names" "$LOOP" "$W/rootfs-build.json"; ok $? "a UKI that is not its record's is refused"
+# #61 K61V-3: the UKI must open THIS /usr. One hex digit of the root hash changed, in the record and its command line
+OTHERHASH="$(python3 -I -c 'import sys; h = sys.argv[1]; print(h[:-1] + ("0" if h[-1] != "0" else "1"))' "$ROOTHASH")"
+uki_record "$W/e2e-test.signed.json" "$UKI_SHA" "$OTHERHASH" "$OTHERHASH"
+refused "the UKI opens the /usr with root hash $OTHERHASH (its usrhash=), not this one ($ROOTHASH)" "$LOOP" "$W/rootfs-build.json"
+ok $? "a UKI whose usrhash= is another /usr's (one digit) is refused, the disk untouched"
+uki_record "$W/e2e-test.signed.json" "$UKI_SHA" "$ROOTHASH" "$OTHERHASH"
+refused "the UKI's command line does not carry exactly usrhash=$ROOTHASH" "$LOOP" "$W/rootfs-build.json"
+ok $? "a UKI record whose usr_roothash is not its command line's usrhash= is refused"
+printf '{"signed": {"image_sha256": "%s"}}\n' "$UKI_SHA" > "$W/e2e-test.signed.json"
+refused "the UKI's record names no /usr" "$LOOP" "$W/rootfs-build.json"; ok $? "a UKI record built before usrhash= (no usr_roothash) is refused"
 cp "$W/uki-good.json" "$W/e2e-test.signed.json"
 refused "rootfs.tar is no longer installed" "$LOOP" "$W/rootfs-build.json" "" "" --rootfs "$W/rootfs.tar"; ok $? "--rootfs is refused: rootfs.tar is not extracted any more"
 truncate -s 16G "$W/other.img"; OTHER="$(losetup --find --show "$W/other.img")"
