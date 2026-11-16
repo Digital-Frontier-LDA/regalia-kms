@@ -19,7 +19,8 @@
 #                     host runs and checked in CI (tests/test_baremetal_rootfs_packages.py)
 #
 # TWO TREES from the same snapshot:
-#   BUILD  gcc, libc6-dev, libpcsclite-dev, pkg-config: packages.txt's [built] programs are compiled IN it, so the
+#   BUILD  gcc, libc6-dev, libpcsclite-dev, pkg-config (and erofs-utils, cryptsetup-bin for the /usr image, below):
+#          packages.txt's [built] programs are compiled IN it, so the
 #          cgo link (the -tags piv daemon's PC/SC) is against the snapshot's libraries, never the builder's. The
 #          toolchain and the modules are fetched outside it first (go.sum and the checksum database verify them);
 #          inside it nothing reaches the network (GOPROXY=off, GOTOOLCHAIN=local, the module cache read-only).
@@ -28,14 +29,25 @@
 #          AppArmor profile, and the [built] programs at their paths. systemd-sysusers runs in it, so the system
 #          users exist in the image; nothing is enabled or started (first boot is a later slice).
 #
+# THE HERMETIC /usr (#61's dm-verity design of 2026-10-05; the owner requires it before the first ceremony, #297): the
+#   host tree's /etc is also copied to /usr/share/factory/etc, so /usr alone holds everything a booted host runs and
+#   the /etc it starts from; then usr-verity.sh, run INSIDE the build tree (its erofs-utils and cryptsetup-bin are the
+#   snapshot's), makes /usr an erofs image and its dm-verity hash tree, salt and UUIDs derived from the commit.
+#
 # OUT, written last and all together: DIR/rootfs.tar (sorted, numeric owners, every mtime clamped to the epoch, pax
-# with no atime or ctime), DIR/rootfs-listing.txt (path, type, mode, uid, gid, size, sha256, link) and
-# DIR/rootfs-build.json (regalia.rootfs-build/v1: the inputs, the package set with versions, each built program's
-# sha256 and Go release, the repository files' sha256). A refusal leaves DIR empty.
+# with no atime or ctime), DIR/rootfs-listing.txt (path, type, mode, uid, gid, size, sha256, link),
+# DIR/usr.erofs and DIR/usr.verity (the /usr image and its hash tree), and DIR/rootfs-build.json
+# (regalia.rootfs-build/v1: the inputs, the package set with versions, each built program's sha256 and Go release,
+# the repository files' sha256, and "usr": the root hash, the two PARTUUIDs derived from it, the salt, the UUIDs, the
+# images' sizes and sha256s and the tools' versions). A refusal leaves DIR empty.
 #
 # CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
 #   * NOT A BOOTABLE DISK YET. No partitions, LUKS2, crypttab, ESP, kernel/UKI pairing, network configuration,
 #     node.json or first-boot step: later slices of #61. Nothing is enabled.
+#   * THE /usr IMAGE IS BUILT, NOT YET USED: install-host.sh still extracts rootfs.tar onto LUKS2; the A/B usr
+#     partitions, the initrd's systemd-veritysetup, usrhash= on the UKI and the boot from them are the next slices of
+#     the dm-verity design. /usr/share/factory/etc is copied, but no tmpfiles rule populates a tmpfs /etc from it yet,
+#     and what else lives outside /usr (dpkg's database under /var/lib/dpkg) is the /etc and /var inventory's.
 #   * NO HARDENING beyond the units' own sandboxes: AppArmor profiles other than the daemon's, sysctl, sshd policy,
 #     removing unwanted binaries (#61's baseline) are later slices.
 #   * PACKAGES ARE AUTHENTICATED BY APT ONLY: every .deb is checked by apt against the snapshot's signed index with
@@ -62,9 +74,9 @@ SCRIPT="deploy/baremetal/image/build-rootfs.sh"
 LIST="deploy/baremetal/image/packages.txt"
 SCHEMA="regalia.rootfs-build/v1"
 SUITE=trixie
-BUILD_PACKAGES="gcc,libc6-dev,libpcsclite-dev,pkg-config"
+BUILD_PACKAGES="gcc,libc6-dev,libpcsclite-dev,pkg-config,erofs-utils,cryptsetup-bin"   # the last two: the /usr image
 PIN="deploy/baremetal/image/etcd.pin"
-REPO_FILES=("$SCRIPT" "$LIST" "$PIN" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh go.mod go.sum)
+REPO_FILES=("$SCRIPT" "$LIST" "$PIN" deploy/baremetal/image/usr-verity.sh deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh go.mod go.sum)
 die(){ echo "build-rootfs: $*" >&2; exit 2; }
 SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO" KEYRING=""
 while [ $# -gt 0 ]; do
@@ -323,6 +335,11 @@ done
 [ "${#missing[@]}" = 0 ] || die "packages.txt says these are provided, and the host tree lacks them: ${missing[*]}"
 chroot "$ROOT" dpkg-query -W -f '${Package}=${Version}\n' | sort > "$W/packages.txt"
 
+# the hermetic /usr: the image's /etc, as built, is also /usr's factory copy (the dm-verity design: / is a tmpfs and
+# /etc is made from it at boot). The image's own files win over a package's factory default of the same name
+mkdir -p "$ROOT/usr/share/factory/etc"
+cp -a "$ROOT/etc/." "$ROOT/usr/share/factory/etc/" || die "/etc could not be copied to /usr/share/factory/etc"
+
 # the archive: sorted, numeric owners, mtimes clamped to the epoch, no atime/ctime; the API filesystems' contents
 # are not the image's
 echo "### rootfs.tar, SOURCE_DATE_EPOCH=$EPOCH"
@@ -339,6 +356,23 @@ with tarfile.open(sys.argv[1]) as t:
         print("\t".join([m.name, kind, "%o" % m.mode, str(m.uid), str(m.gid), str(m.size), digest, m.linkname or ""]))
 PY
 
+# ---- the /usr image: erofs and its dm-verity hash tree, made IN the build tree by the snapshot's tools, from the host
+# tree's /usr read-only (usr-verity.sh, the commit's own copy; the seed is the commit)
+echo "### usr.erofs and usr.verity, from the host tree's /usr"
+mkdir -p "$BUILD/build/usr-src" "$BUILD/build/usr-out"
+mount --bind "$ROOT/usr" "$BUILD/build/usr-src"; MOUNTED+=("$BUILD/build/usr-src")
+mount -o remount,bind,ro "$BUILD/build/usr-src"
+for fs in proc dev; do mount --bind "/$fs" "$BUILD/$fs"; MOUNTED+=("$BUILD/$fs"); done
+chroot "$BUILD" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C TZ=UTC \
+  bash /build/src/deploy/baremetal/image/usr-verity.sh --usr /build/usr-src --seed "$COMMIT" --epoch "$EPOCH" --out /build/usr-out \
+  >"$W/usr-verity.log" 2>&1 || { tail -20 "$W/usr-verity.log"; die "the /usr image could not be made"; }
+for m in "${MOUNTED[@]}"; do umount -R "$m" || die "$m could not be unmounted after the /usr image"; done; MOUNTED=()
+for f in usr.erofs usr.verity usr-verity.txt; do mv "$BUILD/build/usr-out/$f" "$W/stage/$f"; done
+grep -qx "seed=$COMMIT" "$W/stage/usr-verity.txt" && grep -qx "source_date_epoch=$EPOCH" "$W/stage/usr-verity.txt" \
+  && [ "$(sed -n 's/^erofs_sha256=//p' "$W/stage/usr-verity.txt")" = "$(sha256sum < "$W/stage/usr.erofs" | cut -d' ' -f1)" ] \
+  && [ "$(sed -n 's/^verity_sha256=//p' "$W/stage/usr-verity.txt")" = "$(sha256sum < "$W/stage/usr.verity" | cut -d' ' -f1)" ] \
+  || die "the /usr image's record does not name this commit, this epoch and these files"
+
 # the build record
 {
   echo "schema=$SCHEMA"; echo "commit=$COMMIT"; echo "go=$GO_VERSION"; echo "snapshot=$SNAPSHOT"; echo "source_date_epoch=$EPOCH"
@@ -354,7 +388,7 @@ PY
   echo "rootfs_size=$(stat -c %s "$W/stage/rootfs.tar")"
   echo "rootfs_entries=$(wc -l < "$W/stage/rootfs-listing.txt")"
 } > "$W/record.txt"
-python3 -I - "$W/record.txt" "$W/packages.txt" "$W/stage/rootfs-build.json" <<'PY'
+python3 -I - "$W/record.txt" "$W/packages.txt" "$W/stage/rootfs-build.json" "$W/stage/usr-verity.txt" <<'PY'
 import json, sys
 record, files, built, etcd = {}, {}, {}, {"programs": {}}
 for line in open(sys.argv[1]):
@@ -378,9 +412,14 @@ record["built"] = built
 record["etcd"] = etcd
 record["repository_files"] = files
 record["packages"] = [l.strip() for l in open(sys.argv[2]) if l.strip()]
+usr = dict(l.rstrip("\n").partition("=")[::2] for l in open(sys.argv[4]) if l.strip())
+for key in ("source_date_epoch", "erofs_size", "verity_size", "verity_format", "verity_data_block_size", "verity_hash_block_size"):
+    usr[key] = int(usr[key])
+record["usr"] = usr
 with open(sys.argv[3], "w") as f:
     json.dump(record, f, indent=1, sort_keys=True)
     f.write("\n")
 PY
-for f in rootfs.tar rootfs-listing.txt rootfs-build.json; do mv "$W/stage/$f" "$OUT/$f"; done
+for f in rootfs.tar rootfs-listing.txt usr.erofs usr.verity rootfs-build.json; do mv "$W/stage/$f" "$OUT/$f"; done
 echo "build-rootfs: $(python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["rootfs_sha256"], r["rootfs_size"], "bytes,", r["rootfs_entries"], "entries, commit", r["commit"][:12], r["go"])' "$OUT/rootfs-build.json")"
+echo "build-rootfs: /usr $(python3 -I -c 'import json,sys; u=json.load(open(sys.argv[1]))["usr"]; print("usrhash=" + u["roothash"], "usr.erofs", u["erofs_size"], "bytes, PARTUUIDs", u["usr_partuuid"], u["usr_verity_partuuid"])' "$OUT/rootfs-build.json")"

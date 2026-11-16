@@ -35,8 +35,10 @@
 #   * NO RELEASE CHECK YET: the inputs are checked against their own build records, which nothing signs. Which
 #     root-committed document names both the rootfs and the UKI is #61's open question 1; until it lands, the
 #     operator compares the printed digests with the ceremony's.
-#   * THE ROOT FILESYSTEM HAS NO RUNTIME INTEGRITY: LUKS2 keeps it confidential, not unaltered (dm-verity on /usr is
-#     #61's next design).
+#   * THE ROOT FILESYSTEM HAS NO RUNTIME INTEGRITY: LUKS2 keeps it confidential, not unaltered. dm-verity on a hermetic
+#     /usr is #61's design of 2026-10-05, required before the first ceremony (#297): build-rootfs.sh now makes the
+#     image (usr.erofs, usr.verity, the root hash and its PARTUUIDs in rootfs-build.json), but this installer does not
+#     lay out the A/B usr partitions from it yet, so an installed host still runs from the extracted rootfs.tar.
 #   * THE MIRROR IS NOT BOOTABLE YET (#544): the initrd has no mdadm and opens PARTLABEL=regalia-root, so --disk twice is
 #     refused outside the test mode. Its firmware entries (one per ESP), keeping the ESPs in step on an update, and what a
 #     degraded mirror means at boot and in the evidence are #544's next steps and its owner's questions 2-4.

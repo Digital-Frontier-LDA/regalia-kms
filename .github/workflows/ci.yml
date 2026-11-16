@@ -358,7 +358,7 @@ jobs:
   # anything that must hold for a step in isolation belongs in its own job.
   e2e-netns-disk:
     runs-on: ubuntu-26.04
-    timeout-minutes: 70
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -430,6 +430,23 @@ jobs:
           # --- Install onto a loop device and read it back
           sudo bash e2e/install-host-loop.sh | tee "$RUNNER_TEMP/install.log"; grep -q ' 0 failed$' "$RUNNER_TEMP/install.log"
 
+      # regalia-kms#61, the dm-verity design's first slice: usr-verity.sh makes /usr an erofs image under dm-verity.
+      # Two trees made differently give one image; the image is the tree; one byte changed in the filesystem, a file's
+      # data or the hash tree, or a wrong root hash, is refused by veritysetup verify (each after its control); the
+      # PARTUUIDs are the root hash's halves. Userspace only: the booted halt is the QEMU slice's
+      - name: "usr-verity: The /usr image is reproducible, is the tree, and refuses a changed byte (erofs, dm-verity)"
+        id: usr-verity
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          # --- Install erofs-utils and veritysetup
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends erofs-utils cryptsetup-bin
+          # --- The /usr image is reproducible, is the tree, and refuses a changed byte
+          sudo bash e2e/usr-verity.sh | tee "$RUNNER_TEMP/usr-verity.log"
+          grep -q '^usr-verity: 40 passed, 0 failed$' "$RUNNER_TEMP/usr-verity.log" || {
+            echo "::error::the /usr image test did not run all 40 checks" >&2; exit 1; }
+
       # regalia-kms#143: a real sshd on the example configuration and a real ssh on the known_hosts that
       # ssh_trust.py writes from a membership manifest. A certificate from the user CA logs in to the node
       # it names; another node's name, a retired node's key, a bare key and a bad certificate are refused.
@@ -475,6 +492,7 @@ jobs:
             regalia-sync-netns|regalia-sync-netns: regalia-sync between three namespaces (real WireGuard)
             luks-recovery-key|luks-recovery-key: The recovery key alone opens the volume (loop device, LUKS2)
             install-host-loop|install-host-loop: Install onto a loop device and read it back
+            usr-verity|usr-verity: The /usr image is reproducible, is the tree, and refuses a changed byte (erofs, dm-verity)
             ssh-trust-sshd|ssh-trust-sshd: SSH host identity from the manifest, and certificate-only logins, against sshd
             authtime-chrony-nts|authtime-chrony-nts: The clock is authenticated only under two agreeing NTS sources (live chronyd)'
           failed="$(jq -r 'to_entries[] | select(.value.outcome != "success" and .value.outcome != "skipped") | "\(.key) \(.value.outcome)"' <<<"$OUTCOMES")"
