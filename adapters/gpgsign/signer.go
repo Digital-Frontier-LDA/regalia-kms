@@ -34,6 +34,11 @@ type Signer struct {
 	public crypto.PublicKey
 	hash   crypto.Hash
 	call   signCall
+	// client and target are what call is built from. Prepare and Complete (approval.go) keep the
+	// key and replace the call: one that only observes the payload, one that sends it with a
+	// fixed nonce, expiry and approval evidence.
+	client *Client
+	target Target
 }
 
 // NewSigner binds a pinned public key to the KMS object that holds its private half. The key type
@@ -47,8 +52,24 @@ func NewSigner(public crypto.PublicKey, client *Client, target Target) (*Signer,
 	if err != nil {
 		return nil, err
 	}
-	return &Signer{public: public, hash: hash, call: func(ctx context.Context, payload []byte, subject string) ([]byte, error) {
+	return &Signer{public: public, hash: hash, client: client, target: target, call: func(ctx context.Context, payload []byte, subject string) ([]byte, error) {
 		return client.Sign(ctx, target, payload, subject)
+	}}, nil
+}
+
+// NewOfflineSigner binds a pinned public key to a target without any KMS behind it. A key built on
+// it can compute what WOULD be sent (Key.Payload) and can sign nothing: it is what an approver uses
+// to check a pending signature on a machine that holds no workload identity.
+func NewOfflineSigner(public crypto.PublicKey, target Target) (*Signer, error) {
+	if !target.valid() {
+		return nil, errors.New("a signer needs a valid target")
+	}
+	hash, err := digestFor(public)
+	if err != nil {
+		return nil, err
+	}
+	return &Signer{public: public, hash: hash, target: target, call: func(context.Context, []byte, string) ([]byte, error) {
+		return nil, errors.New("this key is offline: it has no KMS to sign with")
 	}}, nil
 }
 
