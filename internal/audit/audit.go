@@ -92,6 +92,13 @@ type Draft struct {
 	// keep verifying and only approval-bearing events carry the field. Stripping the field
 	// from an event that had one still changes the hash and is still detected.
 	VerifiedApprovers []string
+	// PolicySequence and PolicyHash are the policy spend journal's head when an operation was
+	// authorized (epic #40 gap .1.2): set on the "authorized" record only, which is acknowledged
+	// off-host before the card is touched, so the collector holds a position of that journal the host
+	// cannot restore together with it. Both or neither. omitempty on the Event, as VerifiedApprovers:
+	// an event without a position marshals to the bytes it always did, so existing journals verify.
+	PolicySequence uint64
+	PolicyHash     string
 }
 
 type Event struct {
@@ -110,6 +117,8 @@ type Event struct {
 	PolicyDigest        string          `json:"policy_digest"`
 	RBACDigest          string          `json:"rbac_digest"`
 	VerifiedApprovers   []string        `json:"verified_approvers,omitempty"`
+	PolicySequence      uint64          `json:"policy_sequence,omitempty"`
+	PolicyHash          string          `json:"policy_hash,omitempty"`
 	Detail              json.RawMessage `json:"detail,omitempty"` // trail.go: what it carries and how it is bounded
 	PreviousHash        string          `json:"previous_hash"`
 	Hash                string          `json:"hash"`
@@ -374,7 +383,8 @@ func (recorder *Recorder) Record(ctx context.Context, draft Draft, requireRemote
 		Outcome: draft.Outcome, LatencyMilliseconds: draft.LatencyMilliseconds,
 		RegistryDigest: draft.RegistryDigest, PolicyDigest: draft.PolicyDigest, RBACDigest: draft.RBACDigest,
 		VerifiedApprovers: draft.VerifiedApprovers,
-		PreviousHash:      recorder.lastHash,
+		PolicySequence:    draft.PolicySequence, PolicyHash: draft.PolicyHash,
+		PreviousHash: recorder.lastHash,
 	}
 	event.Hash = eventHash(event)
 	line, err := json.Marshal(event)
@@ -525,7 +535,10 @@ func validateDraft(draft Draft) error {
 		draft.RegistryDigest == "" || draft.PolicyDigest == "" || draft.RBACDigest == "" {
 		return errors.New("incomplete audit metadata")
 	}
-	values := []string{draft.RequestID, draft.Principal, draft.Decision, draft.ObjectID, draft.Purpose, draft.Operation, draft.DeviceID, draft.Outcome, draft.RegistryDigest, draft.PolicyDigest, draft.RBACDigest}
+	if (draft.PolicySequence == 0) != (draft.PolicyHash == "") || (draft.PolicyHash != "" && !auditHashPattern.MatchString(draft.PolicyHash)) {
+		return errors.New("invalid policy position")
+	}
+	values := []string{draft.RequestID, draft.Principal, draft.Decision, draft.ObjectID, draft.Purpose, draft.Operation, draft.DeviceID, draft.Outcome, draft.RegistryDigest, draft.PolicyDigest, draft.RBACDigest, draft.PolicyHash}
 	for _, value := range values {
 		if len(value) > 512 || strings.Contains(strings.ToUpper(value), "PRIVATE KEY") || strings.Contains(strings.ToUpper(value), "AGE-SECRET-KEY") {
 			return errors.New("unsafe audit metadata")

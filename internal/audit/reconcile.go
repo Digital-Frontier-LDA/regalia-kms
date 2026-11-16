@@ -41,7 +41,7 @@ func ReconcileContinuity(ctx context.Context, journalPath string, sink Sink, sit
 	}
 	head, headHash, err := positioned.CommittedHead(ctx, site)
 	if err != nil {
-		return fmt.Errorf("collector position: %w", err)
+		return fmt.Errorf("collector position: %w: %w", ErrCollectorUnreachable, err)
 	}
 	if head == 0 {
 		if len(events) > 0 {
