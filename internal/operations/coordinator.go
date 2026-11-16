@@ -62,13 +62,15 @@ type Hardware interface {
 }
 
 type Coordinator struct {
-	authorizer       Authorizer
-	router           Router
-	policy           Policy
-	audit            Auditor
-	runner           Runner
-	hardware         Hardware
-	policyDigest     string
+	authorizer   Authorizer
+	router       Router
+	policy       Policy
+	audit        Auditor
+	runner       Runner
+	hardware     Hardware
+	policyDigest string
+	// policyHead reports the policy spend journal's head for the authorized record; nil records none.
+	policyHead       func() (uint64, string)
 	approvers        *approval.KeySet
 	authorizerDigest string
 	now              func() time.Time
@@ -469,15 +471,30 @@ func (coordinator *Coordinator) DroppedAuditRecords() map[string]uint64 {
 	return dropped
 }
 
+// SetPolicyHead gives the coordinator the policy spend journal's head (policy.FileState.Head), which
+// the "authorized" record then carries off-host (epic #40 gap .1.2): that record is acknowledged
+// before the card is touched, so the collector's copy says how far the journal had reached.
+func (coordinator *Coordinator) SetPolicyHead(head func() (uint64, string)) {
+	coordinator.policyHead = head
+}
+
 func (coordinator *Coordinator) record(ctx context.Context, request api.Request, route registry.Route, decision, outcome string, started time.Time, requireRemote bool, approvers []string) error {
-	return coordinator.audit.Record(ctx, audit.Draft{
+	draft := audit.Draft{
 		Timestamp: coordinator.now(), RequestID: request.RequestID, Principal: request.Principal,
 		Decision: decision, ObjectID: request.ObjectID, Purpose: request.Context.Purpose,
 		Operation: request.Operation, DeviceID: route.Binding.DeviceID, Outcome: outcome,
 		LatencyMilliseconds: max(coordinator.now().Sub(started).Milliseconds(), 0),
 		RegistryDigest:      coordinator.router.Digest(), PolicyDigest: coordinator.policyDigest,
 		RBACDigest: coordinator.authorizerDigest, VerifiedApprovers: approvers,
-	}, requireRemote)
+	}
+	// The authorized record only: it is written after policy reserved, and acknowledged off-host
+	// before the card is touched. An empty journal (sequence 0) has no position to carry.
+	if outcome == "authorized" && coordinator.policyHead != nil {
+		if sequence, hash := coordinator.policyHead(); sequence > 0 {
+			draft.PolicySequence, draft.PolicyHash = sequence, hash
+		}
+	}
+	return coordinator.audit.Record(ctx, draft, requireRemote)
 }
 
 // payloadBytes measures what policy's payload cap should govern: the ciphertext for a
