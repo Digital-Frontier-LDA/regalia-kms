@@ -1076,6 +1076,9 @@ class OnQemuVerity(OnQemu):
     the A/B slots and the fallback, and a broken factory /etc, each beside a boot that passes."""
     test_a_host_boots_through_a_peer_and_with_no_peer_it_asks_for_the_recovery_key = None
     LABEL = "regalia e2e"            # the entry e2e-enrol makes through bootnext, as install-host.sh's step 7 would
+    # node_exporter's EnvironmentFile, a link to /var that enrolment writes (00-regalia-etc.conf): without it the unit
+    # fails to start (Result=resources, measured on an unenrolled guest). The test's stand-in listens on loopback only
+    NODE_EXPORTER = b"# the test's (MONITORING.md: metrics node-exporter-args renders a host's)\nARGS=\"--web.listen-address=127.0.0.1:9100\"\n"
     CHRONY = b"# the test's: two NTS servers no guest reaches (chronyd runs, and synchronises with nothing)\nserver 198.18.3.2 iburst nts\nserver 198.18.3.3 iburst nts\n"
 
     def setUp(self):
@@ -1099,8 +1102,10 @@ class OnQemuVerity(OnQemu):
         (`entry`); nothing enabled under /etc; one machine ID, kept on /var, boot after boot."""
         proof = verity_proof(said)
         self.assertIsNotNone(proof, "no REGALIA-E2E-VERITY line: the report did not run")
-        self.assertEqual(proof, {"usr": "/dev/mapper/usr:erofs", "root": "tmpfs:tmpfs", "var": "/dev/mapper/root:ext4",
-                                 "status": "verified", "roothash": self.usr[slot]["roothash"]})
+        # / is the tmpfs root=tmpfs makes (findmnt names its source "rootfs")
+        self.assertTrue(proof["root"].endswith(":tmpfs"), proof)
+        self.assertEqual(dict(proof, root=None), {"usr": "/dev/mapper/usr:erofs", "root": None, "var": "/dev/mapper/root:ext4",
+                                                  "status": "verified", "roothash": self.usr[slot]["roothash"]})
         self.assertIn("usrhash=" + self.usr[slot]["roothash"], re.search(r"REGALIA-E2E-CMDLINE (.*)", said).group(1).split())
         self.assertRegex(said, r"REGALIA-E2E-VARMOUNT initrd=Mounted sysroot-var\.mount")
         current, label = boot_entry(said)
@@ -1116,21 +1121,26 @@ class OnQemuVerity(OnQemu):
         self.machine_id = seen["id"]
         print("boot proof: usrhash=%s /usr %s, / %s, /var %s, BootCurrent %s (%s), first-boot=%s" % (
             proof["roothash"][:16], proof["usr"], proof["root"], proof["var"], current, label, seen["first-boot"]), file=sys.stderr)
+        # every boot is a first boot (/etc starts empty): systemd-firstboot runs, and asks nothing (the factory /etc
+        # has the locale, the time zone and the accounts), nor does the preset pass enable anything (etc-links above)
+        self.assertNotRegex(said, r"Please enter (?:system locale|timezone|a new root password|system keymap|hostname)|Please choose your")
+        firstboot = unit_states(said).get("systemd-firstboot.service")
+        print("boot proof: systemd-firstboot.service %s" % (firstboot,), file=sys.stderr)
         no_shell(self, said)
         return proof
 
     def started(self, said):
         """The image's own units, enabled under /usr, ran: the factory /etc, the system users, AppArmor with the KMS's
-        profile, chronyd, node_exporter, and the KMS's main process (which exits on the test's missing configuration
-        and is restarted: started is what is shown, not serving)."""
+        profile, chronyd, node_exporter, and the KMS's main process (started is what is shown, not serving: the test
+        gives it no configuration). Not `systemctl is-enabled`: it counts links under /etc and /run only, and says
+        "disabled" for a unit the image wants from /usr (measured on the first local run); started is the proof."""
         units = unit_states(said)
         self.assertIn("REGALIA-E2E-FACTORY assert=yes", said)
         for unit in ("regalia-etc-factory.service", "systemd-sysusers.service", "apparmor.service"):
             self.assertEqual((units[unit]["active"], units[unit]["result"]), ("active", "success"), (unit, units[unit]))
         for unit in ("chrony.service", "prometheus-node-exporter.service"):
             self.assertEqual(units[unit]["active"], "active", (unit, units[unit]))
-            self.assertEqual(units[unit]["enabled"], "enabled", (unit, units[unit]))
-        self.assertEqual(units["regalia-kms.service"]["enabled"], "enabled")
+            self.assertGreater(units[unit]["started"], 0, (unit, units[unit]))
         self.assertGreater(units["regalia-kms.service"]["started"], 0, "regalia-kms.service's main process never started")
         self.assertRegex(said, r"REGALIA-E2E-APPARMOR enabled=Y regalia-kms=regalia-kms \(enforce\) etc-passwd=present")
 
@@ -1167,7 +1177,8 @@ class OnQemuVerity(OnQemu):
         # through bootnext; its test mode makes none). First an entry carrying LOAD OPTIONS: refused, and deleted again
         local = os.urandom(32)
         image, mnt = self.enrolment_disk(local, self.keys["a", "boot"][0],
-                                         extra={"esp-partuuid": self.installed["partuuids"]["esp"].encode(), "chrony.conf": self.CHRONY})
+                                         extra={"esp-partuuid": self.installed["partuuids"]["esp"].encode(), "chrony.conf": self.CHRONY,
+                                                "node-exporter.default": self.NODE_EXPORTER})
         said = self.boot("v1-enrolment", enrol_disk=image, recovery=True, nvram="host")
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)

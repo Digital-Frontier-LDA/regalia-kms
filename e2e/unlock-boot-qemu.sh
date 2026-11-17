@@ -352,13 +352,13 @@ echo "the initrd passes uki.py's review (#198): inventory $(python3 -I -c 'impor
 # uki_image NAME CMDLINE LINUX USR-RECORD (paths in the chroot): built twice (the signer requires a second builder's
 # identical record), then signed; to $W/NAME.efi and its signed record $W/NAME.record.json
 uki_image(){
-  local name="$1" in
-  in="--linux $3 --initrd /boot/initrd.e2e --cmdline $2 --os-release /usr/lib/os-release --uname $KVER --usr-record $4"
-  in="$in --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub --initrd-build /tmp/uki/initrd-build.json --root-key /tmp/uki/root-key.json"
+  local name="$1" ukargs
+  ukargs="--linux $3 --initrd /boot/initrd.e2e --cmdline $2 --os-release /usr/lib/os-release --uname $KVER --usr-record $4"
+  ukargs="$ukargs --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub --initrd-build /tmp/uki/initrd-build.json --root-key /tmp/uki/root-key.json"
   # shellcheck disable=SC2086  # the lists are words on purpose
-  chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $in --name $name --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
-    && python3 -Es -m deploy.baremetal.uki build $in --name $name --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
-    && python3 -Es -m deploy.baremetal.uki sign $in --record /tmp/uki/out/$name.record.json --second-record /tmp/uki/second/$name.record.json --out /tmp/uki/out $KEYS" \
+  chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $ukargs --name $name --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+    && python3 -Es -m deploy.baremetal.uki build $ukargs --name $name --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
+    && python3 -Es -m deploy.baremetal.uki sign $ukargs --record /tmp/uki/out/$name.record.json --second-record /tmp/uki/second/$name.record.json --out /tmp/uki/out $KEYS" \
     > "$W/uki-$name.log" 2>&1 || { cat "$W/uki-$name.log"; echo "unlock-boot-qemu: the image $name did not build or sign"; exit 2; }
   cp "$ROOT/tmp/uki/out/$name.efi" "$W/$name.efi"; cp "$ROOT/tmp/uki/out/$name.signed.json" "$W/$name.record.json"
 }

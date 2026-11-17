@@ -50,6 +50,10 @@ fi
 if [ -s /mnt/enrol/chrony.conf ]; then
   install -D -m 0644 /mnt/enrol/chrony.conf /var/lib/regalia-etc/chrony/regalia.conf
 fi
+# ... and node_exporter's arguments (MONITORING.md: metrics node-exporter-args), its EnvironmentFile's /var name
+if [ -s /mnt/enrol/node-exporter.default ]; then
+  install -D -m 0644 /mnt/enrol/node-exporter.default /var/lib/regalia-etc/default/prometheus-node-exporter
+fi
 sync
 umount /mnt/enrol
 echo "REGALIA-E2E-ENROLLED" > /dev/console

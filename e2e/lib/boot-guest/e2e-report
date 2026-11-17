@@ -28,7 +28,7 @@ links="$(find /etc/systemd/system -type l 2>/dev/null | wc -l)"
 echo "REGALIA-E2E-MACHINE id=$(cat /etc/machine-id 2>/dev/null || echo none) kept=$(cat /var/lib/dbus/machine-id 2>/dev/null || echo none) first-boot=$firstboot etc-links=$links" > /dev/console
 # the units the image's /etc and its KMS depend on: whether each ran, and how it ended. ExecMainStartTimestampMonotonic
 # is 0 for a service whose main process never started (a failed dependency, a failed assert)
-for u in regalia-etc-factory.service systemd-sysusers.service apparmor.service chrony.service prometheus-node-exporter.service pcscd.socket regalia-kms.service; do
+for u in systemd-firstboot.service regalia-etc-factory.service systemd-sysusers.service apparmor.service chrony.service prometheus-node-exporter.service pcscd.socket regalia-kms.service; do
   st="$(systemctl show -P LoadState "$u" 2>/dev/null)/$(systemctl show -P ActiveState "$u" 2>/dev/null)/$(systemctl show -P Result "$u" 2>/dev/null)"
   started="$(systemctl show -P ExecMainStartTimestampMonotonic "$u" 2>/dev/null)"
   enabled="$(systemctl is-enabled "$u" 2>/dev/null | head -1)"
