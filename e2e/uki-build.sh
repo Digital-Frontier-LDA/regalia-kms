@@ -107,7 +107,9 @@ json.dump({"schema": "regalia.rootfs-build/v1", "usr": {"roothash": h, "usr_part
 USRHASH="$(printf 'TEST /usr image' | sha256sum | cut -d' ' -f1)"
 OTHER_USRHASH="${USRHASH:0:63}$( [ "${USRHASH:63}" = 0 ] && echo 1 || echo 0)"
 usr_record "$W/rootfs-build.json" "$USRHASH"; usr_record "$W/rootfs-build-other.json" "$OTHER_USRHASH"
-FULL="$BASE root=tmpfs usrhash=$USRHASH systemd.verity_usr_options=panic-on-corruption"
+# ... and /var, mounted by the initrd from the LUKS2 volume (#61 K61V-4: uki.py's VAR_MOUNT, added by it, never by --cmdline)
+VAR_MOUNT="systemd.mount-extra=/dev/mapper/root:/var:ext4:x-initrd.mount,x-systemd.device-timeout=0,nodev,nosuid"
+FULL="$BASE root=tmpfs usrhash=$USRHASH systemd.verity_usr_options=panic-on-corruption $VAR_MOUNT"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"
 for k in initrd system secure-boot other; do
   openssl genrsa -out "$W/TEST-$k.key" 2048 2>/dev/null
@@ -138,7 +140,7 @@ printf '%s rd.luks.uuid=0\n' "$BASE" > "$W/cmdline-bad"
 out="$(uki build "${IN[@]:0:4}" --cmdline "$W/cmdline-bad" "${IN[@]:6}" --name x --out "$W/x" 2>&1)"; rc=$?
 [ "$rc" = 1 ] && grep -q "holds 'rd.luks.uuid=0'" <<< "$out" && [ ! -e "$W/x/x.unsigned.efi" ] && P "a command line that unlocks a disk by itself is refused, nothing built" || F "bad command line: exit $rc: $out"
 [ "$(field "$REC" cmdline)" = "$FULL" ] && [ "$(field "$REC" usr_roothash)" = "$USRHASH" ] \
-  && P "the image's command line is --cmdline's, then root=tmpfs usrhash=<the /usr record's root hash> systemd.verity_usr_options=panic-on-corruption; the record names the root hash" \
+  && P "the image's command line is --cmdline's, then root=tmpfs usrhash=<the /usr record's root hash> systemd.verity_usr_options=panic-on-corruption and the initrd's /var mount; the record names the root hash" \
   || F "the record's command line is '$(field "$REC" cmdline)', its usr_roothash '$(field "$REC" usr_roothash)'"
 printf '%s usrhash=%s\n' "$BASE" "$OTHER_USRHASH" > "$W/cmdline-own"
 out="$(uki build "${IN[@]:0:4}" --cmdline "$W/cmdline-own" "${IN[@]:6}" --name x --out "$W/x2" 2>&1)"; rc=$?
