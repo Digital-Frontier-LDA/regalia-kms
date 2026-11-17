@@ -15,9 +15,6 @@
 # --add regalia-unlock --add-drivers "dm-verity erofs", DRACUT_NO_MKNOD=1, so no dev/* nodes and no hard links), the client compiled by it from this
 # repository's cmd/regalia-unlock (CGO_ENABLED=0, -trimpath, -buildvcs=false, the go.mod Go release). The initrd's
 # sha256 moves with the client's source; every builder CI runs gets the same one (initrd-reproducible).
-# NOT YET A BUILD'S (#61 K61V-3): the seven systemd-cryptsetup veritysetup lines were added by hand, hashed from the
-# snapshot's systemd-cryptsetup_257.13-1~deb13u1_amd64.deb; usr/lib/dracut/modules.txt and build-parameter.txt are still the
-# old build's. A real build-initrd.sh run replaces this file (KERNEL-UPDATE.md) before this lands on main.
 ours regalia-kms f 0644 0:0 etc/crypttab 71ce00157d1a94a11ba7ecd31064ec77926aa804e866597412723a334b8912ce
 ours regalia-kms l 0777 0:0 etc/systemd/system/cryptsetup.target.wants/regalia-unlock.service /usr/lib/systemd/system/regalia-unlock.service
 ours regalia-kms f 0755 0:0 usr/bin/regalia-unlock =compiled
@@ -81,10 +78,10 @@ generated dracut-over:systemd=257.13-1~deb13u1 l 0777 0:0 usr/bin/loginctl true
 generated dracut f 0755 0:0 usr/lib/dracut-crypt-lib.sh d21702eb9dee0e3d748b72aaf0a02bff9a3da1675abaa3321d377c267a010eb9
 generated dracut f 0755 0:0 usr/lib/dracut-dev-lib.sh 948fa5cd4250f03df0fbaa6e3cab3f2bb82270df8d47f38a5b57399c299d7a60
 generated dracut f 0755 0:0 usr/lib/dracut-lib.sh b4736104e821e2e6c13ad21717d08467629c7accfa3b67cedd56385d5cc04f1f
-generated dracut f 0644 0:0 usr/lib/dracut/build-parameter.txt c91dbf2d8da62df69edc6c46784557eea670fd1b74ad6419a52b3ffc6a0a084f
+generated dracut f 0644 0:0 usr/lib/dracut/build-parameter.txt 40d451702fc6e82647bd8cabd1f6d277559b9bc0ac6d6f544c4ad893f6d97d65
 generated dracut f 0644 0:0 usr/lib/dracut/dracut-106-6 2e446eac7298ea391cb3e0e10ce78c50fb99c1e370c23cabb4cdb9f60b5a7e98
 generated dracut l 0777 0:0 usr/lib/dracut/hooks ../../../var/lib/dracut/hooks
-generated dracut f 0644 0:0 usr/lib/dracut/modules.txt 9ab4d68fd9d9b6a7f5ed71f5be86eb63b9f39e57af264c531da2b5ab48e703e7
+generated dracut f 0644 0:0 usr/lib/dracut/modules.txt 0dfdcd7c9b1dfac05ba41f6ec90103f92795a4f3cc927ffcc71c187d2c9f926e
 generated dracut f 0644 0:0 usr/lib/dracut/need-initqueue e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 generated dracut f 0755 0:0 usr/lib/fs-lib.sh 6f3f0ac2595735883c19ec808c4f84c15514d8b910e7ff2105601a28f84cfe0b
 generated dracut f 0644 0:0 usr/lib/initrd-release e81949eb129c97adb7a47dd5b54db478289bcd15e82599bfff47d4e192ea9eb2
