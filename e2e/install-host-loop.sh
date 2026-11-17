@@ -217,15 +217,16 @@ printf '%s' "$PASS" | cryptsetup open --key-file - "$VAR_DEV" install-host-loop;
 [ "$(blkid -o value -s TYPE /dev/mapper/install-host-loop)" = ext4 ] && [ "$(blkid -o value -s LABEL /dev/mapper/install-host-loop)" = regalia-var ]
 ok $? "inside it, ext4 labelled regalia-var"
 mkdir -p "$W/check"
-mount -o ro /dev/mapper/install-host-loop "$W/check"
-[ "$(cd "$W/check" && find . -mindepth 1 \! -path './lost+found*' | wc -l)" = 0 ]; ok $? "/var holds nothing: rootfs.tar was not extracted"
-umount "$W/check"; cryptsetup close install-host-loop
-mount -o ro "$ESP_DEV" "$W/check"
+# each mount is part of the check that reads it: a mount that fails must not leave an empty mountpoint to read as an
+# empty /var (CodeRabbit on #721), and each unmount and close is checked, so a cleanup that fails turns the run red
+mount -o ro /dev/mapper/install-host-loop "$W/check" \
+  && [ "$(cd "$W/check" && find . -mindepth 1 \! -path './lost+found*' | wc -l)" = 0 ]; ok $? "/var holds nothing: rootfs.tar was not extracted"
+umount "$W/check" && cryptsetup close install-host-loop; ok $? "/var unmounted and its volume closed"
 uki="$(sha256sum < "$W/e2e-test.efi" | cut -d' ' -f1)"
-[ "$(sha256sum < "$W/check/EFI/Linux/e2e-test.efi" | cut -d' ' -f1)" = "$uki" ] && [ "$(sha256sum < "$W/check/EFI/BOOT/BOOTX64.EFI" | cut -d' ' -f1)" = "$uki" ]
+mount -o ro "$ESP_DEV" "$W/check" && [ "$(sha256sum < "$W/check/EFI/Linux/e2e-test.efi" | cut -d' ' -f1)" = "$uki" ] && [ "$(sha256sum < "$W/check/EFI/BOOT/BOOTX64.EFI" | cut -d' ' -f1)" = "$uki" ]
 ok $? "the ESP holds the UKI at \\EFI\\Linux and at the removable-media path, byte for byte"
 [ "$(cd "$W/check" && find . -type f | sort | tr '\n' ' ')" = "./EFI/BOOT/BOOTX64.EFI ./EFI/Linux/e2e-test.efi " ]; ok $? "and nothing else"
-umount "$W/check"
+umount "$W/check"; ok $? "the ESP unmounted"
 uuid(){ blkid -p -s PART_ENTRY_UUID -o value "$1" | tr '[:upper:]' '[:lower:]'; }
 python3 -I - "$W/out/install-test-$(basename "$LOOP").json" "$ROOTHASH" "$uki" "$(cryptsetup luksUUID "$VAR_DEV")" \
   "$(uuid "$ESP_DEV")" "$(uuid "$USR_A")" "$(uuid "$USR_A_VERITY")" "$(uuid "$USR_B")" "$(uuid "$USR_B_VERITY")" "$(uuid "$VAR_DEV")" \

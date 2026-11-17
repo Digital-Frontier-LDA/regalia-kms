@@ -17,9 +17,11 @@
 #   TAMPER         after ONE byte changed in the erofs superblock, in the 1 MiB file's data, or in the hash tree, and
 #                  with one hex digit of the root hash changed, veritysetup verify refuses; the untouched copy, verified
 #                  the same way just before, passes (the control)
-#   INPUTS COUNT   another seed, another epoch, or one byte changed in one file gives another root hash
-#   REFUSALS       a non-empty --out, a seed that is not a commit, a --usr that is a symlink, no --epoch: exit 2, --out
-#                  left as it was
+#   INPUTS COUNT   another seed, another epoch, or one byte changed in one file builds and gives another root hash (a
+#                  variant that fails to build fails the check: it is never compared as an empty value); an inherited
+#                  SOURCE_DATE_EPOCH does not reach mkfs.erofs, so --epoch alone governs the image
+#   REFUSALS       a non-empty --out, a seed that is not a commit, a --usr that is a symlink, no --epoch, an --out inside
+#                  --usr (directly or through a symlink): exit 2, --out left as it was
 # Nothing here uses device-mapper or the kernel's erofs: the booted halt on a tampered block is the QEMU slice's.
 # It writes only under one mktemp -d directory, removed at exit.
 # shellcheck disable=SC2319  # file-wide: `ok $?` reads the check made just before it, on purpose
@@ -124,11 +126,18 @@ veritysetup verify "$W/out-a/usr.erofs" "$W/out-a/usr.verity" "$RH" >/dev/null 2
 uuid(){ printf '%s-%s-%s-%s-%s' "${1:0:8}" "${1:8:4}" "${1:12:4}" "${1:16:4}" "${1:20:12}"; }
 [ "$(rec "$W/out-a" usr_partuuid)" = "$(uuid "${RH:0:32}")" ]; ok $? "usr_partuuid is the root hash's first 128 bits ($(rec "$W/out-a" usr_partuuid))"
 [ "$(rec "$W/out-a" usr_verity_partuuid)" = "$(uuid "${RH:32:32}")" ]; ok $? "usr_verity_partuuid is its last 128 bits ($(rec "$W/out-a" usr_verity_partuuid))"
-veritysetup dump "$W/out-a/usr.verity" > "$W/dump.txt" 2>&1
-grep -qiE "^Salt:[[:space:]]*$(rec "$W/out-a" verity_salt)\$" "$W/dump.txt"; ok $? "usr.verity's superblock carries the recorded salt"
-grep -qiE "^UUID:[[:space:]]*$(rec "$W/out-a" verity_uuid)\$" "$W/dump.txt"; ok $? "usr.verity's superblock carries the recorded UUID"
-grep -qiE "^Hash algorithm:[[:space:]]*sha256\$" "$W/dump.txt" && grep -qiE "^Data block size:[[:space:]]*4096\$" "$W/dump.txt" \
-  && grep -qiE "^Hash block size:[[:space:]]*4096\$" "$W/dump.txt"; ok $? "usr.verity is sha256 over 4096-byte data and hash blocks"
+# the superblock is read from its bytes (cryptsetup's struct verity_sb: 512 bytes, little-endian), not from
+# `veritysetup dump`, whose text differs between releases (2.8 on the CI runner, 2.7 in trixie)
+sb(){ python3 -I -c '
+import struct, sys, uuid
+b = open(sys.argv[1], "rb").read(512)
+sig, version, hash_type, raw, alg, dbs, hbs, blocks, salt_size = struct.unpack_from("<8sII16s32sIIQH", b)
+print({"salt": b[88:88 + salt_size].hex(), "uuid": str(uuid.UUID(bytes=raw)),
+       "shape": "%s v%d type%d %s %d/%d" % (sig.rstrip(b"\0").decode(), version, hash_type, alg.rstrip(b"\0").decode(), dbs, hbs)}[sys.argv[2]])
+' "$W/out-a/usr.verity" "$1"; }
+[ -n "$(rec "$W/out-a" verity_salt)" ] && [ "$(sb salt)" = "$(rec "$W/out-a" verity_salt)" ]; ok $? "usr.verity's superblock carries the recorded salt"
+[ -n "$(rec "$W/out-a" verity_uuid)" ] && [ "$(sb uuid)" = "$(rec "$W/out-a" verity_uuid)" ]; ok $? "usr.verity's superblock carries the recorded UUID"
+[ "$(sb shape)" = "verity v1 type1 sha256 4096/4096" ]; ok $? "usr.verity is format 1, sha256 over 4096-byte data and hash blocks ($(sb shape))"
 want_salt="$(printf 'regalia-kms usr-verity salt v1\0%s' "$SEED" | sha256sum | cut -d' ' -f1)"
 [ "$(rec "$W/out-a" verity_salt)" = "$want_salt" ]; ok $? "the salt is the seed's documented derivation"
 [ "$(sha256sum < "$W/out-a/usr.erofs" | cut -d' ' -f1)" = "$(rec "$W/out-a" erofs_sha256)" ] \
@@ -158,14 +167,21 @@ wrong="${RH:0:63}$(printf '%x' $(( (0x${RH:63:1} + 1) % 16 )))"
 ! veritysetup verify "$W/out-a/usr.erofs" "$W/out-a/usr.verity" "$wrong" >/dev/null 2>&1; ok $? "one hex digit of the root hash changed: veritysetup verify refuses"
 
 echo "### every input counts"
-build "$W/tree-a" "$W/out-seed" fedcba9876543210fedcba9876543210fedcba98
-[ "$(rec "$W/out-seed" roothash)" != "$RH" ] && [ "$(rec "$W/out-seed" verity_salt)" != "$(rec "$W/out-a" verity_salt)" ]
-ok $? "another seed: another salt and root hash"
-build "$W/tree-a" "$W/out-epoch" "$SEED" $((EPOCH + 1))
-[ "$(rec "$W/out-epoch" erofs_sha256)" != "$(rec "$W/out-a" erofs_sha256)" ] && [ "$(rec "$W/out-epoch" roothash)" != "$RH" ]
-ok $? "another epoch: another image and root hash"
+# each variant must BUILD and RECORD before it is compared: a failed build records nothing, and an empty value is
+# "different" from every root hash. differs OUT KEY OTHER: OUT's KEY is 64 hex and is not OTHER
+differs(){ local v; v="$(rec "$1" "$2")"; [[ "$v" =~ ^[0-9a-f]{64}$ ]] && [ "$v" != "$3" ]; }
+build "$W/tree-a" "$W/out-seed" fedcba9876543210fedcba9876543210fedcba98 \
+  && differs "$W/out-seed" roothash "$RH" && differs "$W/out-seed" verity_salt "$(rec "$W/out-a" verity_salt)"
+ok $? "another seed: it builds, with another salt and root hash"
+build "$W/tree-a" "$W/out-epoch" "$SEED" $((EPOCH + 1)) \
+  && differs "$W/out-epoch" erofs_sha256 "$(rec "$W/out-a" erofs_sha256)" && differs "$W/out-epoch" roothash "$RH"
+ok $? "another epoch: it builds, with another image and root hash"
 cp -a "$W/tree-a" "$W/tree-c"; printf 'conF\n' > "$W/tree-c/lib/regalia-kms/conf"
-build "$W/tree-c" "$W/out-c"; [ "$(rec "$W/out-c" roothash)" != "$RH" ]; ok $? "one byte changed in one file of the tree: another root hash"
+build "$W/tree-c" "$W/out-c" && differs "$W/out-c" roothash "$RH"; ok $? "one byte changed in one file of the tree: it builds, with another root hash"
+# an inherited SOURCE_DATE_EPOCH does not reach mkfs.erofs: --epoch alone governs, so the image is tree A's
+SOURCE_DATE_EPOCH=0 build "$W/tree-a" "$W/out-sde" && cmp -s "$W/out-sde/usr.erofs" "$W/out-a/usr.erofs" \
+  && [ "$(rec "$W/out-sde" source_date_epoch)" = "$EPOCH" ]
+ok $? "SOURCE_DATE_EPOCH=0 in the environment: the image is still --epoch's (identical to tree A's)"
 
 echo "### refusals: exit 2, --out as it was"
 refused(){   # refused NAME OUTDIR ARGS...: exit 2, and OUTDIR's listing unchanged
@@ -180,6 +196,9 @@ refused "a seed that is not a commit" "$W/empty1" --usr "$W/tree-a" --seed main 
 ln -s "$W/tree-a" "$W/tree-link"
 refused "a --usr that is a symlink" "$W/empty2" --usr "$W/tree-link" --seed "$SEED" --epoch "$EPOCH" --out "$W/empty2"
 refused "no --epoch" "$W/empty3" --usr "$W/tree-a" --seed "$SEED" --out "$W/empty3"
+cp -a "$W/tree-a" "$W/tree-d"; mkdir -p "$W/tree-d/out"; ln -s "$W/tree-d/out" "$W/out-link"
+refused "an --out inside --usr" "$W/tree-d/out" --usr "$W/tree-d" --seed "$SEED" --epoch "$EPOCH" --out "$W/tree-d/out"
+refused "an --out inside --usr, through a symlink" "$W/tree-d/out" --usr "$W/tree-d" --seed "$SEED" --epoch "$EPOCH" --out "$W/out-link"
 
 echo "usr-verity: $(rec "$W/out-a" mkfs_erofs); $(rec "$W/out-a" veritysetup)"
 echo "usr-verity: $passed passed, $failed failed"
