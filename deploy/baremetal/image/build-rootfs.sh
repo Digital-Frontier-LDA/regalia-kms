@@ -419,7 +419,7 @@ rm -rf -- "$ROOT/var/lib/apt" "$ROOT/var/cache/apt" "$ROOT/var/cache/debconf" "$
 # resolv.conf; the fstab is its placeholder): fixed files, the same on every builder, and no backup or lock left
 printf 'localhost\n' > "$ROOT/etc/hostname"
 printf '127.0.0.1\tlocalhost\n::1\t\tlocalhost ip6-localhost ip6-loopback\n' > "$ROOT/etc/hosts"
-printf '# The KMS host image names no resolver (regalia-kms#61): audit_sink_url and the NTS servers are addresses or /etc/hosts.\n' > "$ROOT/etc/resolv.conf"
+printf '# The KMS host image names no resolver (regalia-kms#61): audit_sink_url and the NTS servers are addresses, or names in the hosts file.\n' > "$ROOT/etc/resolv.conf"
 printf '# The KMS host mounts nothing from /etc/fstab (regalia-kms#61): / is a tmpfs, /usr the verity image and /var the\n# LUKS2 volume, all from the signed kernel command line.\n' > "$ROOT/etc/fstab"
 rm -f -- "$ROOT/etc/.pwd.lock" "$ROOT/etc/passwd-" "$ROOT/etc/group-" "$ROOT/etc/shadow-" "$ROOT/etc/gshadow-"
 
