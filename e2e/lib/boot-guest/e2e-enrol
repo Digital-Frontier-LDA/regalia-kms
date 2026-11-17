@@ -21,9 +21,10 @@ for pcr in 7 11 12; do cat "/sys/class/tpm/tpm0/pcr-sha256/$pcr" > "/mnt/enrol/p
 # which must be made, first in BootOrder; the next boot's BootCurrent is the test's to check
 if [ -s /mnt/enrol/esp-partuuid ]; then
   esp="$(cat /mnt/enrol/esp-partuuid)"
+  HERE=/usr/lib/regalia-kms       # the image's tree: deploy.baremetal is imported from it, and from nothing else
   rc=0
   (
-    cd /usr/lib/regalia-kms && python3 -Es - "$esp" <<'PY'
+    cd / && PYTHONPATH="$HERE" python3 -Ps - "$esp" <<'PY'
 import subprocess, sys
 from deploy.baremetal import bootnext
 def run(argv, **kw):
@@ -40,7 +41,7 @@ PY
   ) > /mnt/enrol/entry-options.log 2>&1 || rc=$?
   echo "$rc" > /mnt/enrol/entry-options.rc
   rc=0
-  ( cd /usr/lib/regalia-kms && python3 -Es -m deploy.baremetal.bootnext install-entry --disk /dev/vda --part 1 --partuuid "$esp" \
+  ( cd "$HERE" && python3 -Es -m deploy.baremetal.bootnext install-entry --disk /dev/vda --part 1 --partuuid "$esp" \
       --label "regalia e2e" --loader '\EFI\Linux\e2e.efi' ) > /mnt/enrol/entry.log 2>&1 || rc=$?
   echo "$rc" > /mnt/enrol/entry.rc
   efibootmgr -v > /mnt/enrol/entries.txt 2>&1 || true
