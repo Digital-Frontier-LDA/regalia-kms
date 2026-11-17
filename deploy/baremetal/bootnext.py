@@ -29,7 +29,8 @@ remove(entry, run)    delete an entry that is not the one booted, nor first in B
 install_entry(disk, part, partuuid, label, loader, run)
                       a NEW host's first entry (install-host.sh, #61): its image on `disk`'s partition `part`, created
                       only if no entry has that label, then read back: exactly one new entry, active, on the GPT
-                      partition `partuuid`, loading `loader`, first in BootOrder; one that reads back otherwise is deleted
+                      partition `partuuid`, loading `loader`, with NO load options (no optional data: #61, 95's
+                      caveat), first in BootOrder; one that reads back otherwise is deleted
                       again (`python3 -Es -m deploy.baremetal.bootnext install-entry …`)
 image(esp, entry)     the file an entry boots, on the ESP this host booted from: the entry's GPT partition
                       must be BootCurrent's, and `esp` must BE that partition (a vfat mount whose device is
@@ -67,13 +68,21 @@ def _efibootmgr(run, *argv):
 
 def parse(text):
     """efibootmgr -v's report as {"current", "next" (None if unset), "order": [...], "entries": {id: {"label",
-    "active", "partition" (GPT partition GUID, lower case, or None), "path" (or None)}}}."""
+    "active", "partition" (GPT partition GUID, lower case, or None), "path" (or None), "options"}}}.
+
+    "options" is whether the entry carries optional data (the load options a boot loader would hand systemd-stub as
+    its command line): efibootmgr 17 prints it straight after the device path, efibootmgr 18 on a `data:` line under
+    the entry. Anything after the file node counts, so text this parser does not know reads as options, never as
+    none; None when the device path is not a disk's (it is not judged)."""
     require(isinstance(text, str), "efibootmgr printed nothing")
-    found, seen = {"current": None, "next": None, "order": None, "entries": {}}, set()
+    found, seen, last = {"current": None, "next": None, "order": None, "entries": {}}, set(), None
     for line in text.splitlines():
         line = line.rstrip("\r")
         if line[:1].isspace():           # efibootmgr 18's -v continuation lines (dp: …, data: …): the hex of what is above
+            if last is not None and line.strip().startswith("data:") and found["entries"][last]["options"] is not None:
+                found["entries"][last]["options"] = True
             continue
+        last = None
         header = next((k for k, name in (("current", "BootCurrent: "), ("next", "BootNext: "), ("order", "BootOrder: "))
                        if line.startswith(name)), None)
         if header is not None:
@@ -89,7 +98,9 @@ def parse(text):
             device = DEVICE.search(rest)
             found["entries"][number] = {"label": label.strip(), "active": star == "*",
                                         "partition": device.group(1).lower() if device else None,
-                                        "path": (device.group(2) or device.group(3)) if device else None}
+                                        "path": (device.group(2) or device.group(3)) if device else None,
+                                        "options": bool(rest[device.end():].strip()) if device else None}
+            last = number
     require(found["current"] is not None and ENTRY.fullmatch(found["current"]), "efibootmgr reports no BootCurrent: was this host "
             "booted by UEFI firmware?")
     require(found["current"] in found["entries"], "BootCurrent %s is not among the entries" % found["current"])
@@ -198,6 +209,9 @@ def install_entry(disk, part, partuuid, label, loader, run=subprocess.run):
         require(made["label"] == label and made["active"], "Boot%s reads %r (active %s), not the active %r created" % (entry, made["label"], made["active"], label))
         require(made["partition"] == partuuid.lower(), "Boot%s is on partition %s, not the ESP %s: a wrong --disk or --part" % (entry, made["partition"], partuuid.lower()))
         require((made["path"] or "").lower() == loader.lower(), "Boot%s loads %r, not %r" % (entry, made["path"], loader))
+        # 95 on #61: with Secure Boot off systemd-stub prefers a loader's command line to the UKI's own, so options here
+        # could name another usrhash=; the entry must carry none (and nothing above asks efibootmgr for any)
+        require(made["options"] is False, "Boot%s carries load options (optional data): an installed entry passes none" % entry)
         require(after["order"][:1] == [entry], "Boot%s is not first in BootOrder (%s) after its creation" % (entry, ",".join(after["order"])))
     except Refused as refusal:
         # the entry just made is undone, by its number: never left first in BootOrder under a label a rerun refuses
