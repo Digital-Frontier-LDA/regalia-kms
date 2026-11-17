@@ -94,7 +94,9 @@ PUBKEY=""; PUBKEY_PCRS=""; SIGNATURE=""; PKFP=""; TPMDEV=(); DECARGS=(); LOOKUP_
 HOSTKEY="${SYSTEMD_CREDENTIAL_SECRET:-/var/lib/systemd/credential.secret}"
 ID=""; SERIAL=""; YUBIKEY=""; PCRS=""; REPLACE=0; BENCH=0; RETRIES=""
 MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
-CREDSTORE="${REGALIA_CREDSTORE:-/etc/credstore.encrypted}"
+# /etc/credstore.encrypted is a link to this, on /var: / is a tmpfs on a verity-/usr host, and a credential sealed into
+# /etc would be gone at the next boot (#61, deploy/baremetal/hostpaths.py). Written by its /var name, never the link.
+CREDSTORE="${REGALIA_CREDSTORE:-/var/lib/regalia-etc/credstore.encrypted}"
 fail(){ printf 'seal-hsm-pin: FAIL: %s\n' "$*" >&2; exit 1; }
 say(){ printf 'seal-hsm-pin: %s\n' "$*" >&2; }
 INIT_IMPORT=0; FROM_BLOB=""; IMPORT_HANDLE="0x81000101"; IMPORT_PUB="/root/regalia-pin-import.pub.pem"; REPLACE_IMPORT=0

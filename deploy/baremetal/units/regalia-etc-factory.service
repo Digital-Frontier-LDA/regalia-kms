@@ -1,0 +1,27 @@
+# /etc from the image's factory copy, first thing at boot (#61, the dm-verity design: / is a tmpfs and /usr the verity
+# image, so /etc starts empty). It runs /usr/lib/tmpfiles.d/00-regalia-etc.conf's /etc lines only: the copy of
+# /usr/share/factory/etc and the links to this host's files on /var. The /var lines are systemd-tmpfiles-setup's.
+#
+# ORDER, the reason it is a unit of its own: systemd-sysusers.service runs before systemd-tmpfiles-setup.service (its
+# own Before=), so on an empty /etc it would make /etc/passwd itself and allocate the image's system users again, in
+# its own order: other UIDs and GIDs than the files on /var carry, and none of the accounts a package's maintainer
+# script made. This unit is ordered before it, so sysusers finds the image's accounts and allocates nothing
+# (e2e/etc-factory.sh shows both orders). Nothing enables it: /etc/systemd/system is empty when PID 1 loads the units,
+# so it is pulled in by drop-ins on the units that need /etc first (systemd-sysusers, systemd-tmpfiles-setup,
+# apparmor: units/<unit>.d/regalia-etc.conf).
+#
+# Not before everything: PID 1 itself, its generators, systemd-journald and the units started before this one read an
+# empty /etc and run on their defaults (deploy/baremetal/image/etc-inventory.txt, [early]).
+[Unit]
+Description=Regalia KMS: /etc from the image's factory copy, before the system users are checked
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/issues/61
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+Before=systemd-tmpfiles-setup-dev-early.service systemd-sysusers.service systemd-tmpfiles-setup.service apparmor.service sysinit.target
+ConditionPathIsDirectory=/usr/share/factory/etc
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/systemd-tmpfiles --create --boot --prefix=/etc /usr/lib/tmpfiles.d/00-regalia-etc.conf

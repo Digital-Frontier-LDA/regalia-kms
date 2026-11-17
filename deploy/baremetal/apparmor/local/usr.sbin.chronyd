@@ -1,0 +1,4 @@
+# /etc/apparmor.d/local/usr.sbin.chronyd on a verity-/usr host (#61): linked here from /usr by
+# units/00-regalia-etc.tmpfiles.conf. chronyd -f /etc/chrony/regalia.conf (units/chrony.service.d/regalia.conf) is a link
+# to this host's file on /var, and AppArmor mediates the file the link resolves to: read it, nothing else.
+/var/lib/regalia-etc/chrony/regalia.conf r,

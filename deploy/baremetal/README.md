@@ -360,12 +360,16 @@ KMS and SSH ports, the zones allowed to reach each, and the only destinations th
 (the audit and NTP sinks at least). From it:
 
 ```sh
-install -d -m 0755 /etc/nftables.d
+# On the verity-/usr image /etc is a tmpfs: /etc/nftables.d/regalia-kms.nft is a link to this host's file on /var
+# (units/00-regalia-etc.tmpfiles.conf). Write the /var name: a mv onto the link would replace it with a file the next
+# boot does not have (#61, image/etc-inventory.txt).
+D=/var/lib/regalia-etc/nftables.d
+install -d -m 0755 "$D"
 # Render to a name the *.nft include never matches, validate, load, and only then replace the fragment:
 # a bad config or a failed render leaves the previous, working ruleset in place at the next boot.
-tmp="$(mktemp /etc/nftables.d/.regalia-kms.XXXXXX)"
+tmp="$(mktemp "$D/.regalia-kms.XXXXXX")"
 if python3 -Es deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp"; then
-  chmod 0644 "$tmp" && mv -f "$tmp" /etc/nftables.d/regalia-kms.nft
+  chmod 0644 "$tmp" && mv -f "$tmp" "$D/regalia-kms.nft"
 else
   rm -f "$tmp"; echo "firewall NOT installed: the previous ruleset stays" >&2
 fi

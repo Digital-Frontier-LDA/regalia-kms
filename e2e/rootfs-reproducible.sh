@@ -50,3 +50,5 @@ done
 [ "$same" = 1 ] || exit 1
 echo "rootfs-reproducible: IDENTICAL over $BUILDS builds: rootfs.tar $first ($(wc -l < "$OUT/build-1/rootfs-listing.txt") entries)"
 echo "rootfs-reproducible: IDENTICAL /usr: $(python3 -I -c 'import json,sys; u=json.load(open(sys.argv[1]))["usr"]; print("usrhash=" + u["roothash"], "usr.erofs", u["erofs_sha256"], "usr.verity", u["verity_sha256"])' "$OUT/build-1/rootfs-build.json")"
+# the image's /etc as a booted host makes it (#61: / on tmpfs, /etc from /usr/share/factory/etc before systemd-sysusers)
+e2e/etc-factory.sh "$OUT/build-1/rootfs.tar"

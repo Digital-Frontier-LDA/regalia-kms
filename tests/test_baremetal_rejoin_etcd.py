@@ -32,7 +32,7 @@ class NodeView:
 
     def __init__(self, hosts, me, manifest):
         self.hosts, self.me = hosts, me
-        self.files = {etcdconf.CONFIG_PATH: config_for(me, manifest)}
+        self.files = {etcdconf.STORED_CONFIG: config_for(me, manifest)}
         self.daemon = True
 
     def path(self, p):
@@ -77,7 +77,7 @@ class NodeView:
             if argv[1] == "stop":
                 h.stop(me)
             elif argv[1] in ("start", "restart"):
-                config = json.loads(self.files[etcdconf.CONFIG_PATH])
+                config = json.loads(self.files[etcdconf.STORED_CONFIG])
                 h.stop(me)
                 h.start(me, initial=config["initial-cluster"], state=config["initial-cluster-state"])
                 h.wait(h.client[me], 90, write=False)
