@@ -13,6 +13,43 @@ seal() {  # seal <credential name> <input> <output>
 seal regalia.unlock-local /mnt/enrol/local.bin /mnt/enrol/unlock-local.cred
 seal regalia.wg-boot-key /mnt/enrol/wg-boot.key /mnt/enrol/wg-boot.cred
 for pcr in 7 11 12; do cat "/sys/class/tpm/tpm0/pcr-sha256/$pcr" > "/mnt/enrol/pcr$pcr"; done
+# THE INSTALLER'S FIRMWARE ENTRY (#61 K61V-4), when the enrolment disk names the ESP (esp-partuuid): made here, on the
+# running guest, by the image's own deploy/baremetal/bootnext.py, as install-host.sh's step 7 makes it (its test mode
+# makes none: a loop device has no firmware). First an entry whose read-back carries LOAD OPTIONS (efibootmgr --create
+# given a command line, as a hand-made or planted entry would carry one: with Secure Boot off systemd-stub would take it
+# over the UKI's, another usrhash= among it): install_entry must refuse it and delete it again. Then the plain entry,
+# which must be made, first in BootOrder; the next boot's BootCurrent is the test's to check
+if [ -s /mnt/enrol/esp-partuuid ]; then
+  esp="$(cat /mnt/enrol/esp-partuuid)"
+  rc=0
+  (
+    cd /usr/lib/regalia-kms && python3 -Es - "$esp" <<'PY'
+import subprocess, sys
+from deploy.baremetal import bootnext
+def run(argv, **kw):
+    if "--create" in argv:
+        argv = list(argv) + ["--unicode", "usrhash=" + "0" * 64]
+    return subprocess.run(argv, **kw)
+try:
+    done = bootnext.install_entry("/dev/vda", 1, sys.argv[1], "regalia e2e-options", "\\EFI\\Linux\\e2e.efi", run=run)
+except Exception as refusal:
+    print("REFUSED %s: %s" % (type(refusal).__name__, refusal))
+    sys.exit(3)
+print("ACCEPTED Boot%s" % done["entry"])
+PY
+  ) > /mnt/enrol/entry-options.log 2>&1 || rc=$?
+  echo "$rc" > /mnt/enrol/entry-options.rc
+  rc=0
+  ( cd /usr/lib/regalia-kms && python3 -Es -m deploy.baremetal.bootnext install-entry --disk /dev/vda --part 1 --partuuid "$esp" \
+      --label "regalia e2e" --loader '\EFI\Linux\e2e.efi' ) > /mnt/enrol/entry.log 2>&1 || rc=$?
+  echo "$rc" > /mnt/enrol/entry.rc
+  efibootmgr -v > /mnt/enrol/entries.txt 2>&1 || true
+fi
+# chrony's configuration, as enrolment renders it (#303: /etc/chrony/regalia.conf, a link to /var, 00-regalia-etc.conf),
+# when the enrolment disk carries one: chrony.service is skipped (ConditionPathExists) until it is there
+if [ -s /mnt/enrol/chrony.conf ]; then
+  install -D -m 0644 /mnt/enrol/chrony.conf /var/lib/regalia-etc/chrony/regalia.conf
+fi
 sync
 umount /mnt/enrol
 echo "REGALIA-E2E-ENROLLED" > /dev/console

@@ -131,6 +131,64 @@ def unattended(test, said):
     test.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
 
 
+# ---- the verity /usr's boots (#61 K61V-4): what each boot's report says, parsed (e2e/lib/boot-guest/e2e-report) ----
+
+def verity_proof(said):
+    """The boot's REGALIA-E2E-VERITY line as {"usr", "root", "var": "SOURCE:FSTYPE", "status", "roothash"}, or None."""
+    found = re.search(r"REGALIA-E2E-VERITY usr=(\S*) root=(\S*) var=(\S*) status=(\S+) roothash=(\S+)", said)
+    return dict(zip(("usr", "root", "var", "status", "roothash"), found.groups())) if found else None
+
+
+def unit_states(said):
+    """{unit: {"load", "active", "result", "started" (monotonic µs, 0 = its main process never started), "enabled"}}."""
+    units = {}
+    for m in re.finditer(r"REGALIA-E2E-UNIT (\S+) state=([^/\s]*)/([^/\s]*)/(\S*) started=(\S+) enabled=(\S+)", said):
+        started = int(m.group(5)) if m.group(5).isdigit() else 0
+        units[m.group(1)] = {"load": m.group(2), "active": m.group(3), "result": m.group(4), "started": started, "enabled": m.group(6)}
+    return units
+
+
+def machine(said):
+    """The REGALIA-E2E-MACHINE line as {"id", "kept", "first-boot", "etc-links"}, or None."""
+    found = re.search(r"REGALIA-E2E-MACHINE id=(\S+) kept=(\S+) first-boot=(\S+) etc-links=(\d+)", said)
+    return dict(zip(("id", "kept", "first-boot", "etc-links"), found.groups())) if found else None
+
+
+def boot_entry(said):
+    """BootCurrent and the label of the entry it names (REGALIA-E2E-BOOTENTRY), or (None, None)."""
+    found = re.search(r"REGALIA-E2E-BOOTENTRY current=(\S+) entry=(.*)", said)
+    if not found:
+        return None, None
+    label = re.match(r"Boot[0-9A-Fa-f]{4}\*? (.*?)(?:\t| HD\(| PciRoot\(| VenHw\(|$)", found.group(2).strip())
+    return found.group(1), (label.group(1).strip() if label else None)
+
+
+class VerityReport(unittest.TestCase):
+    """The parsers of the verity boots' report lines, on lines as e2e-report writes them (no guest needed)."""
+    SAID = ("REGALIA-E2E-VERITY usr=/dev/mapper/usr:erofs root=tmpfs:tmpfs var=/dev/mapper/root:ext4 status=verified roothash=" + "ab" * 32 + "\n"
+            "REGALIA-E2E-BOOTENTRY current=0003 entry=Boot0003* regalia e2e HD(1,GPT,0f0e,0x800,0x200000)/\\EFI\\Linux\\e2e.efi\n"
+            "REGALIA-E2E-MACHINE id=" + "1" * 32 + " kept=" + "1" * 32 + " first-boot=yes etc-links=0\n"
+            "REGALIA-E2E-UNIT regalia-kms.service state=loaded/activating/exit-code started=81234567 enabled=enabled\n"
+            "REGALIA-E2E-UNIT apparmor.service state=loaded/inactive/success started=0 enabled=enabled\n")
+
+    def test_the_proof_line(self):
+        self.assertEqual(verity_proof(self.SAID), {"usr": "/dev/mapper/usr:erofs", "root": "tmpfs:tmpfs", "var": "/dev/mapper/root:ext4",
+                                                   "status": "verified", "roothash": "ab" * 32})
+        self.assertIsNone(verity_proof("nothing"))
+
+    def test_the_units(self):
+        units = unit_states(self.SAID)
+        self.assertEqual(units["regalia-kms.service"]["started"], 81234567)
+        self.assertEqual(units["apparmor.service"], {"load": "loaded", "active": "inactive", "result": "success", "started": 0, "enabled": "enabled"})
+
+    def test_the_machine_and_the_entry(self):
+        self.assertEqual(machine(self.SAID)["etc-links"], "0")
+        self.assertEqual(boot_entry(self.SAID), ("0003", "regalia e2e"))
+        self.assertEqual(boot_entry("REGALIA-E2E-BOOTENTRY current=0001 entry=Boot0001* UEFI Misc Device PciRoot(0x0)/Pci(0x3,0x0)"),
+                         ("0001", "UEFI Misc Device"))
+        self.assertEqual(boot_entry(""), (None, None))
+
+
 class HostTpmFault(unittest.TestCase):
     """regalia-a0y's signature, judged without a guest: the firmware's line from runs 39919392188 and 39922567279."""
 
@@ -439,6 +497,10 @@ class OnQemu(tub.OnSwtpm):
                 with open(os.path.join(where, name), "wb") as f:
                     f.write(content)
             shutil.copyfile("%s/%s.efi" % (BOOT, image), mnt + "/EFI/BOOT/BOOTX64.EFI")
+            # and at the installer's own path (install-host.sh: \EFI\Linux\e2e.efi, its firmware entry's loader), when the
+            # disk has one: what an update leaves, the image to boot at the path the entry names (#61 K61V-4)
+            if os.path.isdir(mnt + "/EFI/Linux"):
+                shutil.copyfile("%s/%s.efi" % (BOOT, image), mnt + "/EFI/Linux/e2e.efi")
             os.makedirs(mnt + "/EFI/regalia", exist_ok=True)
             with open(mnt + "/" + bootcreds.CHAIN_ON_ESP, "wb") as f:
                 f.write(membership.canonical(self.chain))
@@ -449,7 +511,7 @@ class OnQemu(tub.OnSwtpm):
         return files
 
     def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None, smbios=None, smbios_strings=(), image="e2e",
-             watch=None):
+             watch=None, nvram=None):
         """One boot of the guest under OVMF, to power-off, with `credentials` and `image` on its ESP. Returns what its
         console said. With `recovery`, the recovery key is typed whenever the console asks for a passphrase; when it is
         a function of (console so far, seconds since start), only once that says so (and what it returns, when that is
@@ -457,8 +519,11 @@ class OnQemu(tub.OnSwtpm):
         called as the console grows (to change the network under the guest), and the times it returned true are kept in
         self.watched."""
         self.on_esp = self.esp(credentials or {}, image)
-        variables = "%s/vars-%s.fd" % (self.d, label)
-        shutil.copyfile(OVMF + "/OVMF_VARS_4M.fd", variables)
+        # the firmware's variables: fresh for every boot, or with `nvram` one store kept from boot to boot (a host's
+        # NVRAM, where the installer's firmware entry stays: #61 K61V-4)
+        variables = "%s/vars-%s.fd" % (self.d, nvram or label)
+        if not (nvram and os.path.exists(variables)):
+            shutil.copyfile(OVMF + "/OVMF_VARS_4M.fd", variables)
         kvm = os.access("/dev/kvm", os.R_OK | os.W_OK)
         timeout = timeout or (600 if kvm else 2400)
         ctrl = self.d + "/a.ctrl"
@@ -549,8 +614,9 @@ class OnQemu(tub.OnSwtpm):
                 print("    " + line.strip()[:300], file=sys.stderr)
         return text
 
-    def enrolment_disk(self, local, wg_private):
-        """The second disk of the enrolment boot: what the running guest seals to its own TPM."""
+    def enrolment_disk(self, local, wg_private, extra=None):
+        """The second disk of the enrolment boot: what the running guest seals to its own TPM (and `extra`, {name:
+        bytes}, what e2e/lib/boot-guest/e2e-enrol acts on when it is there: esp-partuuid, chrony.conf)."""
         image, mnt = self.d + "/enrol.img", self.d + "/enrol"
         with open(image, "wb") as f:
             f.truncate(16 * 1024 * 1024)
@@ -560,7 +626,8 @@ class OnQemu(tub.OnSwtpm):
             self.assertEqual(run(argv, capture_output=True).returncode, 0, argv)
         with open(BOOT + "/initrd.pub", "rb") as f:
             initrd_public = f.read()
-        for name, content in (("local.bin", local), ("wg-boot.key", wg_private.encode() + b"\n"), ("initrd.pub", initrd_public)):
+        for name, content in (("local.bin", local), ("wg-boot.key", wg_private.encode() + b"\n"), ("initrd.pub", initrd_public),
+                              *sorted((extra or {}).items())):
             with open(os.open("%s/%s" % (mnt, name), os.O_WRONLY | os.O_CREAT, 0o600), "wb") as f:
                 f.write(content)
         self.assertEqual(run(["umount", mnt], capture_output=True).returncode, 0)
@@ -614,7 +681,7 @@ class OnQemu(tub.OnSwtpm):
             return {"accepted": [{"label": label, "tpm_firmware_version": firmware,
                                   "pcrs": {"7": pcrs["7"], "12": pcr12}, "phases": {phase: {"11": built["pcr11"][phase]} for phase in attest.PHASES}}
                                  for label, built in images]}
-        loop, self.disk = self.partition(2)
+        loop, self.disk = self.partition(6)          # regalia-root: install-host.sh's sixth partition (#61 K61V-4)
         for peer in ("b", "c"):
             enrolment = unlock.Enrolment("a")
             wrapped = unlock.contribute(self.contributions[peer], self.m1, peer, "a", enrolment.public, enrolment.fingerprint)
@@ -875,7 +942,7 @@ class OnQemu(tub.OnSwtpm):
 
         # boot 8, NO PEER, FOR LONGER THAN ANY DEFAULT TIMEOUT (#70): the client keeps asking, at the backoff's schedule
         # and past its cap (attempt 6), and the console, which asked from the start, still takes the recovery key after
-        # 150 s: neither systemd-cryptsetup (timeout=0) nor the root's device wait (rootflags=x-systemd.device-timeout=0;
+        # 150 s: neither systemd-cryptsetup (timeout=0) nor /var's device wait (systemd.mount-extra=...x-systemd.device-timeout=0, #61;
         # 90 s by default) gave up meanwhile. A WRONG key typed first only brings the prompt back (tries=0): no
         # emergency, no reboot. Nothing ends in a shell. Under TCG the long boots 8 and 9 would outlast the job, so they
         # need KVM; with REGALIA_EXPECT_KVM=1 (CI) its absence FAILS. The skip RETURNS: boots 8 and 9 stay the last ones,
@@ -998,6 +1065,241 @@ class OnQemu(tub.OnSwtpm):
             tpm.wait(30)
             if os.path.exists(tpm_log):
                 shutil.copyfile(tpm_log, BOOT + "/swtpm-anchor.log")   # self.d is removed after the test; the script keeps BOOT's
+
+
+@unittest.skipUnless(os.environ.get("REGALIA_EXPECT_QEMU") == "1", "needs a guest built by e2e/unlock-boot-qemu.sh (REGALIA_BOOT_CASES=verity)")
+class OnQemuVerity(OnQemu):
+    """THE VERITY /usr BOOTS (#61 K61V-4): the REAL image's /usr (build-rootfs.sh's rootfs.tar, with the test's two units
+    and the UKI kernel's modules), as an erofs image under dm-verity, on a disk install-host.sh laid out (its test mode).
+    Every boot proves what it booted: /usr is /dev/mapper/usr (verified, the root hash its UKI names), / a tmpfs, /var
+    the LUKS2 volume mounted by the initrd, the firmware entry the installer's. Then: a wrong usrhash, a tampered block,
+    the A/B slots and the fallback, and a broken factory /etc, each beside a boot that passes."""
+    test_a_host_boots_through_a_peer_and_with_no_peer_it_asks_for_the_recovery_key = None
+    LABEL = "regalia e2e"            # the entry e2e-enrol makes through bootnext, as install-host.sh's step 7 would
+    CHRONY = b"# the test's: two NTS servers no guest reaches (chronyd runs, and synchronises with nothing)\nserver 198.18.3.2 iburst nts\nserver 198.18.3.3 iburst nts\n"
+
+    def setUp(self):
+        for name in ("e2e-b.efi", "e2e-c.efi", "e2e-badhash.efi", "usr-a.json", "usr-b.json", "usr-c.json"):
+            self.assertTrue(os.path.exists("%s/%s" % (BOOT, name)), "REGALIA_BOOT_DIR has no %s: built without REGALIA_BOOT_CASES=verity" % name)
+        super().setUp()
+        self.usr = {}
+        for slot in "abc":
+            with open("%s/usr-%s.json" % (BOOT, slot)) as f:
+                self.usr[slot] = json.load(f)["usr"]
+        installs = [n for n in os.listdir(BOOT + "/install") if n.startswith("install-") and n.endswith(".json")]
+        self.assertEqual(len(installs), 1, installs)
+        with open(BOOT + "/install/" + installs[0]) as f:
+            self.installed = json.load(f)
+        self.assertEqual((self.installed["layout"], self.installed["usr"]["roothash"]), ("verity-ab", self.usr["a"]["roothash"]))
+        self.machine_id = None
+
+    def proven(self, said, slot, entry=True):
+        """What every boot that reached the system shows (the proof): /usr from dm-verity, verified, under the root hash
+        of `slot`'s image; / a tmpfs; /var the LUKS2 mapping, mounted in the initrd; the firmware entry the installer's
+        (`entry`); nothing enabled under /etc; one machine ID, kept on /var, boot after boot."""
+        proof = verity_proof(said)
+        self.assertIsNotNone(proof, "no REGALIA-E2E-VERITY line: the report did not run")
+        self.assertEqual(proof, {"usr": "/dev/mapper/usr:erofs", "root": "tmpfs:tmpfs", "var": "/dev/mapper/root:ext4",
+                                 "status": "verified", "roothash": self.usr[slot]["roothash"]})
+        self.assertIn("usrhash=" + self.usr[slot]["roothash"], re.search(r"REGALIA-E2E-CMDLINE (.*)", said).group(1).split())
+        self.assertRegex(said, r"REGALIA-E2E-VARMOUNT initrd=Mounted sysroot-var\.mount")
+        current, label = boot_entry(said)
+        if entry:
+            self.assertEqual(label, self.LABEL, "BootCurrent %s is not the installer's entry" % current)
+        seen = machine(said)
+        self.assertIsNotNone(seen)
+        self.assertEqual(seen["etc-links"], "0", "something was enabled under /etc (a first boot's preset pass?)")
+        self.assertRegex(seen["id"], r"^[0-9a-f]{32}$")
+        self.assertEqual(seen["id"], seen["kept"], "the machine ID is not the one kept on /var")
+        if self.machine_id:
+            self.assertEqual(seen["id"], self.machine_id, "the machine ID changed between boots")
+        self.machine_id = seen["id"]
+        print("boot proof: usrhash=%s /usr %s, / %s, /var %s, BootCurrent %s (%s), first-boot=%s" % (
+            proof["roothash"][:16], proof["usr"], proof["root"], proof["var"], current, label, seen["first-boot"]), file=sys.stderr)
+        no_shell(self, said)
+        return proof
+
+    def started(self, said):
+        """The image's own units, enabled under /usr, ran: the factory /etc, the system users, AppArmor with the KMS's
+        profile, chronyd, node_exporter, and the KMS's main process (which exits on the test's missing configuration
+        and is restarted: started is what is shown, not serving)."""
+        units = unit_states(said)
+        self.assertIn("REGALIA-E2E-FACTORY assert=yes", said)
+        for unit in ("regalia-etc-factory.service", "systemd-sysusers.service", "apparmor.service"):
+            self.assertEqual((units[unit]["active"], units[unit]["result"]), ("active", "success"), (unit, units[unit]))
+        for unit in ("chrony.service", "prometheus-node-exporter.service"):
+            self.assertEqual(units[unit]["active"], "active", (unit, units[unit]))
+            self.assertEqual(units[unit]["enabled"], "enabled", (unit, units[unit]))
+        self.assertEqual(units["regalia-kms.service"]["enabled"], "enabled")
+        self.assertGreater(units["regalia-kms.service"]["started"], 0, "regalia-kms.service's main process never started")
+        self.assertRegex(said, r"REGALIA-E2E-APPARMOR enabled=Y regalia-kms=regalia-kms \(enforce\) etc-passwd=present")
+
+    def write_slot_b(self, slot):
+        """The updater's step, by hand: `slot`'s image into usr-b and usr-b-verity (partitions 4 and 5), their PARTUUIDs
+        set to its root hash's halves, as the updater must (systemd-veritysetup-generator finds them by those)."""
+        for number, name in ((4, "usr.erofs"), (5, "usr.verity")):
+            loop, part = self.partition(number)
+            done = run(["dd", "if=%s/usr-%s/%s" % (BOOT, slot, name), "of=" + part, "bs=4M", "conv=fsync", "status=none"], capture_output=True)
+            run(["losetup", "-d", loop], capture_output=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+        for number, key in ((4, "usr_partuuid"), (5, "usr_verity_partuuid")):
+            done = run(["sfdisk", "--part-uuid", self.image, str(number), self.usr[slot][key]], capture_output=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+
+    def flip(self, number, offset):
+        """One byte of partition `number` at `offset` inverted (run twice: put back)."""
+        loop, part = self.partition(number)
+        try:
+            fd = os.open(part, os.O_RDWR)
+            try:
+                byte = os.pread(fd, 1, offset)
+                os.pwrite(fd, bytes([byte[0] ^ 0xFF]), offset)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        finally:
+            run(["losetup", "-d", loop], capture_output=True)
+        return byte[0]
+
+    def test_the_verity_usr_boots(self):
+        # boot v1, ENROLMENT, as OnQemu's boot 1, on a host's NVRAM kept from here on: the recovery key typed, the
+        # credentials sealed, and the installer's firmware entry made on the running guest (install-host.sh's step 7,
+        # through bootnext; its test mode makes none). First an entry carrying LOAD OPTIONS: refused, and deleted again
+        local = os.urandom(32)
+        image, mnt = self.enrolment_disk(local, self.keys["a", "boot"][0],
+                                         extra={"esp-partuuid": self.installed["partuuids"]["esp"].encode(), "chrony.conf": self.CHRONY})
+        said = self.boot("v1-enrolment", enrol_disk=image, recovery=True, nvram="host")
+        self.assertIn("REGALIA-E2E-ENROLLED", said)
+        self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+        self.proven(said, "a", entry=False)          # (the firmware's own removable-media entry: none was installed yet)
+        self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
+        def text(name):
+            with open("%s/%s" % (mnt, name)) as f:
+                return f.read()
+        try:
+            sealed = {name: "".join(text(name).split()) for name in ("unlock-local.cred", "wg-boot.cred")}
+            pcrs = {str(i): "".join(text("pcr%d" % i).split()).lower() for i in (7, 11, 12)}
+            options = (text("entry-options.rc").strip(), text("entry-options.log"))
+            made = (text("entry.rc").strip(), text("entry.log"), text("entries.txt"))
+        finally:
+            self.assertEqual(run(["umount", mnt], capture_output=True).returncode, 0)
+        print("boot v1: the entry with options: rc %s: %s" % (options[0], options[1].strip()[:400]), file=sys.stderr)
+        print("boot v1: the installer's entry: rc %s: %s\n%s" % (made[0], made[1].strip()[:300], made[2].strip()[:600]), file=sys.stderr)
+        self.assertEqual(options[0], "3", options[1])
+        self.assertRegex(options[1], r"REFUSED Refused: Boot[0-9A-F]{4} carries load options \(optional data\): an installed entry passes none; "
+                                     r"Boot[0-9A-F]{4}, just created, was deleted again")
+        self.assertNotIn("e2e-options", made[2])
+        self.assertEqual(made[0], "0", made[1])
+        self.assertIn(self.LABEL, made[2])
+        with open(BOOT + "/e2e.record.json") as f:
+            record = json.load(f)
+        self.assertEqual(record["usr_roothash"], self.usr["a"]["roothash"])
+        self.assertEqual(pcrs["11"], record["pcr11"]["system"])
+        records = {}
+        for name in ("e2e-b", "e2e-c", "e2e-badhash"):
+            with open("%s/%s.record.json" % (BOOT, name)) as f:
+                records[name] = json.load(f)
+        firmware = self.reference["tpm_firmware_version"]
+
+        def reference(pcr12, images=(("e2e", record),)):
+            return {"accepted": [{"label": label, "tpm_firmware_version": firmware,
+                                  "pcrs": {"7": pcrs["7"], "12": pcr12}, "phases": {phase: {"11": built["pcr11"][phase]} for phase in attest.PHASES}}
+                                 for label, built in images]}
+        loop, self.disk = self.partition(6)
+        for peer in ("b", "c"):
+            enrolment = unlock.Enrolment("a")
+            wrapped = unlock.contribute(self.contributions[peer], self.m1, peer, "a", enrolment.public, enrolment.fingerprint)
+            epoch, secret = enrolment.open(wrapped, peer)
+            unlock.enrol_path(self.disk, "a", peer, epoch, local, sealed["unlock-local.cred"], secret, tub.RECOVERY, run)
+        del local, secret
+        run(["losetup", "-d", loop], capture_output=True)
+        device = "/dev/disk/by-partlabel/regalia-root"
+        credentials = {"regalia.unlock-local": sealed["unlock-local.cred"].encode() + b"\n",
+                       "regalia.wg-boot-key": sealed["wg-boot.cred"].encode() + b"\n",
+                       "regalia.site": bootcreds.site_document(self.site("a"), device)}
+        expected = espcreds.record({name + ".cred": content for name, content in credentials.items()})
+
+        # boot v2, THE CONTROL: unattended through a peer, from the installer's firmware entry; the proof, and the
+        # image's units started from their enablement under /usr
+        self.reference = reference(expected["pcr12"])
+        since = len(self.events)
+        said = self.boot("v2-control", credentials, nvram="host")
+        unattended(self, said)
+        self.proven(said, "a")
+        self.started(said)
+        self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
+
+        # boot v3, A WRONG USRHASH: a UKI signed by the same keys whose command line names a root hash one digit off A's
+        # (its PARTUUIDs derived from it). No partition carries them: the initrd waits for its /usr, gives up, and reboots
+        # (rd.emergency=reboot; -no-reboot ends the guest). No /usr, no system. Its PCR 11 is its own, never approved: no
+        # peer gives a key (the client still asks in the initrd, and is refused by PCR 11: no ALLOW)
+        self.assertNotEqual(records["e2e-badhash"]["usr_roothash"], self.usr["a"]["roothash"])
+        self.assertEqual(sum(x != y for x, y in zip(records["e2e-badhash"]["usr_roothash"], self.usr["a"]["roothash"])), 1)
+        since = len(self.events)
+        said = self.boot("v3-wrong-usrhash", credentials, image="e2e-badhash", nvram="host")
+        print("boot v3: the peers' decisions: %s" % [(e.get("event"), e.get("peer"), e.get("outcome"), (e.get("reason") or "")[:120])
+                                                     for e in self.events[since:]], file=sys.stderr)
+        self.assertNotIn("REGALIA-E2E-ROOT-UP", said)
+        self.assertNotIn("REGALIA-E2E-VERITY", said)
+        self.assertNotIn("regalia-unlock: gave the key", said)
+        self.assertNotIn("time limit", said, "the guest did not end by itself: it waited rather than failing closed")
+        self.assertNotIn(("unlock", "ALLOW"), {(e["event"], e["outcome"]) for e in self.events[since:]})
+        no_shell(self, said)
+
+        # boot v4, A TAMPERED BLOCK: one byte of usr-a inverted at offset 1024 (the erofs superblock, read at mount). The
+        # kernel's dm-verity finds the block corrupted and panics (panic-on-corruption): no /usr, no system
+        before = self.flip(2, 1024)
+        said = self.boot("v4-tampered", credentials, nvram="host")
+        self.assertIn("device-mapper: verity", said)
+        self.assertIn("is corrupted", said)
+        self.assertIn("Kernel panic", said)
+        self.assertNotIn("REGALIA-E2E-ROOT-UP", said)
+        self.assertNotIn("time limit", said)
+        self.assertEqual(self.flip(2, 1024), before ^ 0xFF)          # put back
+
+        # boot v5, THE CONTROL after both: the same disk, put back, boots unattended
+        said = self.boot("v5-control", credentials, nvram="host")
+        unattended(self, said)
+        self.proven(said, "a")
+        self.started(said)
+
+        # boot v6, A/B: image B (another root hash) written to usr-b, and its UKI (approved beside A's) to the ESP, as the
+        # updater leaves a host. B's /usr boots; then A's UKI back on the ESP (the fallback): A's /usr, untouched in its
+        # slot, boots again. Each time the root hash dm-verity holds is the one its UKI names
+        self.write_slot_b("b")
+        self.reference = reference(expected["pcr12"], (("e2e", record), ("e2e-b", records["e2e-b"])))
+        said = self.boot("v6-slot-b", credentials, image="e2e-b", nvram="host")
+        unattended(self, said)
+        self.proven(said, "b")
+        self.started(said)
+        said = self.boot("v7-fallback-a", credentials, nvram="host")
+        unattended(self, said)
+        self.proven(said, "a")
+
+        # boot v8, A BROKEN FACTORY /etc (#723's runtime case): image C, the image with /usr/share/factory/etc taken out,
+        # in slot B. regalia-etc-factory.service's assert fails; systemd-sysusers and apparmor.service require it and do
+        # not run; regalia-kms.service requires apparmor.service and never starts: the KMS fails closed
+        self.write_slot_b("c")
+        self.reference = reference(expected["pcr12"], (("e2e", record), ("e2e-c", records["e2e-c"])))
+        said = self.boot("v8-broken-factory", credentials, image="e2e-c", nvram="host")
+        unattended(self, said)
+        proof = verity_proof(said)
+        self.assertEqual((proof["usr"], proof["status"], proof["roothash"]), ("/dev/mapper/usr:erofs", "verified", self.usr["c"]["roothash"]))
+        units = unit_states(said)
+        print("boot v8: %s" % {u: (s["active"], s["result"], s["started"]) for u, s in units.items()}, file=sys.stderr)
+        self.assertIn("REGALIA-E2E-FACTORY assert=no", said)
+        self.assertEqual(units["regalia-etc-factory.service"]["started"], 0, units["regalia-etc-factory.service"])
+        self.assertNotEqual(units["regalia-etc-factory.service"]["active"], "active", units["regalia-etc-factory.service"])
+        for unit in ("systemd-sysusers.service", "apparmor.service", "regalia-kms.service"):
+            self.assertEqual(units[unit]["started"], 0, "%s ran with no factory /etc" % unit)
+            self.assertNotEqual(units[unit]["active"], "active", (unit, units[unit]))
+        self.assertRegex(said, r"REGALIA-E2E-APPARMOR enabled=\S+ regalia-kms=none etc-passwd=absent")
+
+        # boot v9, THE CONTROL: A's UKI again, A's /usr, everything started
+        said = self.boot("v9-control", credentials, nvram="host")
+        unattended(self, said)
+        self.proven(said, "a")
+        self.started(said)
 
 
 if __name__ == "__main__":
