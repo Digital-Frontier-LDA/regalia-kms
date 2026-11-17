@@ -123,6 +123,36 @@ def no_shell(test, said):
     test.assertNotRegex(said, r"Emergency Shell|Rescue Shell|Give root password|emergency mode")
 
 
+# a line systemd forwarded from the journal to the console (systemd.journald.forward_to_console=1, the wrong-usrhash
+# image's only): its unit descriptions, "Emergency Shell" among them, are the journal's, not something the console offers
+JOURNAL_LINE = re.compile(r"(?m)^.*\bsystemd\[1\]: .*$")
+
+
+def usr_device_missing(said, roothash, booted):
+    """What the console of a boot whose usrhash= is `roothash` lacks of the proof that it failed BECAUSE its /usr is not
+    on the disk, [] when nothing (#722 review). `booted` is the root hash of the /usr that IS there: the half of
+    `roothash` that differs from it is a PARTUUID no partition carries (the data or the hash partition,
+    systemd-veritysetup-generator's convention). Its device times out, so systemd-veritysetup@usr cannot start, so
+    /dev/mapper/usr never appears and the initrd cannot mount /usr: in this order, as systemd says it in the initrd's
+    journal (on the console through systemd.journald.forward_to_console=1). A boot that fails for any other reason
+    (killed, another device, another unit) lacks at least one of them."""
+    def unit(half):
+        uuid = "-".join((half[0:8], half[8:12], half[12:16], half[16:20], half[20:32]))
+        return "dev-disk-by\\x2dpartuuid-%s.device" % uuid.replace("-", "\\x2d")
+    absent = [mine for mine, there in ((roothash[:32], booted[:32]), (roothash[32:], booted[32:])) if mine != there]
+    expected = ["Timed out waiting for device " + unit(half) for half in absent] + [
+        "Dependency failed for systemd-veritysetup@usr.service", "Timed out waiting for device dev-mapper-usr.device",
+        "Dependency failed for sysroot-usr.mount"]
+    missing, at = [], 0
+    for line in expected:
+        found = said.find(line, at)
+        if found < 0:
+            missing.append(line)
+        else:
+            at = found
+    return missing if absent else ["a root hash that names no other /usr than the one on the disk"]
+
+
 def unattended(test, said):
     """Nobody typed (boot() was given no recovery), yet the root came up: the client's answer opened it. The prompt is
     up all the same, from the start (#70: the client answers beside the console, never in front of it)."""
@@ -1262,7 +1292,15 @@ class OnQemuVerity(OnQemu):
         refused = [e for e in self.events[since:] if e.get("event") == "unlock" and e.get("outcome") == "DENY"]
         self.assertTrue(any("PCR" in (e.get("reason") or "") for e in refused),
                         "no peer refused the wrong-usrhash image's unlock on its PCRs: did its initrd run? %r" % self.events[since:])
-        no_shell(self, said)
+        # ... and it failed BECAUSE of its /usr (#722 review): the partition its usrhash= names is not there, so the verity
+        # device, then /usr, never came. An unrelated failure after the denial lacks these. MEASURED on the review's local
+        # run: "Timed out waiting for device dev-disk-by\x2dpartuuid-<the changed half>.device", "Dependency failed for
+        # systemd-veritysetup@usr.service", "Timed out waiting for device dev-mapper-usr.device", "Dependency failed for
+        # sysroot-usr.mount"; then emergency.target, which rd.shell=0 and rd.emergency=reboot turn into a reboot
+        self.assertEqual(usr_device_missing(said, records["e2e-badhash"]["usr_roothash"], self.usr["a"]["roothash"]), [],
+                         "the wrong-usrhash boot did not fail on its missing /usr")
+        no_shell(self, JOURNAL_LINE.sub("", said))
+        self.assertRegex(said, r"Boot has failed\.[^\n]*\n+Rebooting\.", "the initrd did not reboot (rd.emergency=reboot)")
 
         # boot v4, A TAMPERED BLOCK: one byte of usr-a inverted at offset 1024 (the erofs superblock, read at mount). The
         # kernel's dm-verity finds the block corrupted and panics (panic-on-corruption): no /usr, no system

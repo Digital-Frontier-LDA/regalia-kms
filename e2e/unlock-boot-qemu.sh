@@ -386,7 +386,11 @@ else
   # image), C (the broken factory /etc), and A's record with one digit of its root hash changed (WRONG USRHASH)
   uki_image e2e-b /tmp/uki/cmdline "/boot/vmlinuz-$KVER" /tmp/uki/usr-b.json
   uki_image e2e-c /tmp/uki/cmdline "/boot/vmlinuz-$KVER" /tmp/uki/usr-c.json
-  uki_image e2e-badhash /tmp/uki/cmdline "/boot/vmlinuz-$KVER" /tmp/uki/usr-wrong.json
+  # WRONG USRHASH's console also carries the journal (systemd.journald.forward_to_console=1, this test image only): its
+  # initrd fails behind the passphrase prompt, which holds systemd's status lines back, so its console said only "Boot has
+  # failed", not why (measured on the #722 review's local run). The test asserts the cause, the /usr device's own failure
+  printf '%s systemd.journald.forward_to_console=1\n' "$(cat "$ROOT/tmp/uki/cmdline")" > "$ROOT/tmp/uki/cmdline-badhash"
+  uki_image e2e-badhash /tmp/uki/cmdline-badhash "/boot/vmlinuz-$KVER" /tmp/uki/usr-wrong.json
   for x in a b c; do cp "$W/usr-$x/rootfs-build.json" "$W/usr-$x.json"; done
 fi
 cp "$W/keys/TEST-initrd.pub" "$W/initrd.pub"
