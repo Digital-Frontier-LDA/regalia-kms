@@ -211,6 +211,20 @@ class Order(unittest.TestCase):
         # the AppArmor cache is emptied by the full pass: apparmor loads after it
         self.assertIn("systemd-tmpfiles-setup.service", unit(UNITS / "apparmor.service.d" / "regalia-etc.conf")["After"][0].split())
 
+    def test_apparmor_empties_its_own_cache_first_and_fails_closed(self):
+        """#723 review: ordering after systemd-tmpfiles-setup does not make its clear SUCCEED, and a stale cache newer
+        than a changed profile is loaded instead of it. apparmor.service runs the D /var/cache/apparmor line itself, as
+        an ExecStartPre= with no "-": a failed clear fails apparmor, and the KMS that requires it. Not Requires= on the
+        full pass, whose unrelated lines would then stop the KMS as well."""
+        u = unit(UNITS / "apparmor.service.d" / "regalia-etc.conf")
+        self.assertEqual(u.get("ExecStartPre"), ["/usr/bin/systemd-tmpfiles --create --remove --prefix=/var/cache/apparmor "
+                                                 "/usr/lib/tmpfiles.d/00-regalia-etc.conf"])
+        self.assertNotIn("systemd-tmpfiles-setup.service", " ".join(u.get("Requires", [])))
+        # the prefix selects exactly the cache line (a prefix matching nothing clears nothing and exits 0)
+        under = [f for f in tmpfiles_lines() if f[1] == "/var/cache/apparmor" or f[1].startswith("/var/cache/apparmor/")]
+        self.assertEqual(under, [["D", "/var/cache/apparmor", "0755", "root", "root", "-"]])
+        self.assertEqual(LINKS.name, "00-regalia-etc.tmpfiles.conf")     # installed as /usr/lib/tmpfiles.d/00-regalia-etc.conf
+
     def test_the_image_builder_installs_them_where_systemd_reads_them(self):
         """build-rootfs.sh copies units/ (directories, *.service, *.conf) to /usr/lib/systemd/system and
         *.tmpfiles.conf to /usr/lib/tmpfiles.d/<name>.conf: the drop-in directories and this file are included."""

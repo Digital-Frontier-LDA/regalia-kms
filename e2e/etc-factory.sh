@@ -165,6 +165,13 @@ echo "### the machine ID and the AppArmor cache, on /var"
   || bad "/var/lib/dbus/machine-id is $(readlink "$S/var/lib/dbus/machine-id" || cat "$S/var/lib/dbus/machine-id" 2>&1), not PID 1's ID"
 [ -d "$S/var/cache/apparmor" ] && [ -z "$(ls -A "$S/var/cache/apparmor")" ] && ok "the AppArmor cache is emptied" \
   || bad "the AppArmor cache still holds: $(ls -A "$S/var/cache/apparmor" 2>&1)"
+# apparmor.service empties the cache itself first (ExecStartPre=, its drop-in) and a failed clear must FAIL it (#723
+# review). systemd-tmpfiles exits 73 (CANTCREAT) when it cannot remove the cache, the status systemd-tmpfiles-setup
+# counts as success: the distribution's apparmor.service must not count it so either, or the clear would fail open.
+AA="$IMG/usr/lib/systemd/system/apparmor.service"
+if [ ! -f "$AA" ]; then bad "the image has no apparmor.service (packages.txt: apparmor)"
+elif grep -qsE '^[[:space:]]*SuccessExitStatus=' "$AA" "$AA.d"/*.conf; then bad "apparmor.service counts an exit status as success: $(grep -hsE '^[[:space:]]*SuccessExitStatus=' "$AA" "$AA.d"/*.conf)"
+else ok "apparmor.service counts no failed exit as success: a failed cache clear fails it"; fi
 
 echo "### this host's files: links to /var"
 # the directory-backed ones, as the IMAGE's deploy package says (hostpaths.DIRECTORIES), never read from the tmpfiles

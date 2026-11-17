@@ -59,6 +59,12 @@ MUTANTS = [
      "/etc/regalia-kms/config.json", "deploy/baremetal/node.py"),
     ("python open(file=..., mode='w') (review)", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _planted():\n    with open(file="/etc/regalia/site.json", mode="w") as f:\n        f.write("x")\n'),
      "/etc/regalia/site.json", "deploy/baremetal/node.py"),
+    ("python gzip.open(path, 'wb'), a module's open (review)", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _planted():\n    import gzip\n    with gzip.open("/etc/regalia/node.json", "wb") as f:\n        f.write(b"x")\n'),
+     "/etc/regalia/node.json", "deploy/baremetal/node.py"),
+    ("python an aliased module's open(filename=..., mode='at') (review)", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _planted():\n    import lzma as xz\n    with xz.open(filename="/etc/regalia/site.json", mode="at") as f:\n        f.write("x")\n'),
+     "/etc/regalia/site.json", "deploy/baremetal/node.py"),
+    ("shell a command-local assignment does not persist (review)", lambda: mutate("deploy/baremetal/tpm-lockout.sh", None, '\nDEST=/etc/regalia/node.json\nDEST=/tmp/out /usr/bin/true\nprintf x > "$DEST"\n'),
+     "/etc/regalia/node.json", "deploy/baremetal/tpm-lockout.sh"),
     ("shell assignments in command order (review)", lambda: mutate("deploy/baremetal/tpm-lockout.sh", None, '\nDEST=/etc/regalia/node.json; echo x > "$DEST"; DEST=/tmp/out\n'),
      "/etc/regalia/node.json", "deploy/baremetal/tpm-lockout.sh"),
     ("python open w", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _planted():\n    with open("/etc/regalia/site.json", "w") as f:\n        f.write("x")\n'),
@@ -116,6 +122,8 @@ NO_OPS = [
     ("unit ReadOnlyPaths", lambda: add_to_section("deploy/baremetal/units/regalia-sync.service", "Service", "ReadOnlyPaths=/etc/regalia")),
     ("blank line", lambda: mutate("deploy/baremetal/enrol.py", None, "\n")),
     ("python Path(...).open() to read, a module's open to read (review)", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _noop():\n    with Path("/etc/regalia/node.json").open() as f:\n        return f.read(), Path("/etc/regalia/site.json").open("r")\n')),
+    ("python gzip.open to read (review)", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _noop():\n    import gzip\n    with gzip.open("/etc/regalia/node.json", "rb") as f:\n        return f.read()\n')),
+    ("shell a command-local /etc assignment, a /tmp write (review)", lambda: mutate("deploy/baremetal/tpm-lockout.sh", None, '\nDEST=/tmp/out\nDEST=/etc/regalia/node.json /usr/bin/true\nprintf x > "$DEST"\n')),
     ("shell an assignment after the write, to a /etc name (review)", lambda: mutate("deploy/baremetal/tpm-lockout.sh", None, '\nDEST=/tmp/out; echo x > "$DEST"; DEST=/etc/regalia/node.json\n')),
 ]
 

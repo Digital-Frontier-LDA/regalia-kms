@@ -195,8 +195,9 @@ SHELL_WRITERS = {"cp", "mv", "install", "ln", "mkdir", "mktemp", "tee", "touch",
                  "systemd-creds", "ssh-keygen", "rsync", "dd", "sed"}
 
 
-def _writes(node):
-    """How this call writes, or None: (how, [the argument nodes that name the written path])."""
+def _writes(node, modules=frozenset()):
+    """How this call writes, or None: (how, [the argument nodes that name the written path]). modules: the names the
+    file binds by `import` (a module's open is not a path's)."""
     name = _call_name(node)
     last = name.rsplit(".", 1)[-1]
     args = list(node.args) + [k.value for k in node.keywords if k.arg not in ("data", "text", "content", "encoding", "mode")]
@@ -211,14 +212,22 @@ def _writes(node):
         names = {n.attr for n in ast.walk(flags) if isinstance(n, ast.Attribute)} if flags is not None else set()
         return ("os.open(%s)" % "|".join(sorted(names & WRITING_FLAGS)), node.args[:1]) if names & WRITING_FLAGS else None
     if last == "open" and isinstance(node.func, ast.Attribute):
+        root = node.func.value
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        if isinstance(root, ast.Name) and root.id in modules:
+            # a MODULE's open, a name this file imports (gzip.open, lzma.open, tarfile.open, codecs.open, as aliased):
+            # the file first, the mode second (#723 review: gzip.open's filename was read as a mode)
+            mode = node.args[1] if len(node.args) > 1 else next((k.value for k in node.keywords if k.arg == "mode"), None)
+            if isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value.split(":")[0]) & set("wax+"):
+                return "%s(..., %r)" % (name, mode.value), \
+                    node.args[:1] or [k.value for k in node.keywords if k.arg in ("filename", "file", "name")]
+            return None
         # a method open on a path: Path("/etc/...").open("w"), p.open(mode="w") (#723 review). The receiver is the
-        # path, the mode its first argument; a module's open(path, mode) (gzip.open) names the path first
+        # path, the mode its first argument
         mode = node.args[0] if node.args else next((k.value for k in node.keywords if k.arg == "mode"), None)
         if isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) & set("wax+"):
             return "%s(%r)" % (name, mode.value), [node.func.value]
-        mode = node.args[1] if len(node.args) > 1 else None
-        if isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) & set("wax+"):
-            return "%s(..., %r)" % (name, mode.value), node.args[:1]
         return None
     if name.startswith("os.") and last in OS_WRITES:
         return name, args
@@ -302,6 +311,13 @@ class _Scanner(ast.NodeVisitor):
     def __init__(self, name, resolver, module_scope, findings):
         self.name, self.resolver, self.findings = name, resolver, findings
         self.scopes = [module_scope]
+        self.modules = frozenset()
+
+    def visit_Module(self, node):
+        # the names `import x` / `import x as y` bind, anywhere in the file (import a.b binds a)
+        self.modules = frozenset(a.asname or a.name.split(".")[0] for n in ast.walk(node) if isinstance(n, ast.Import)
+                                 for a in n.names)
+        self.generic_visit(node)
 
     def _scope(self):
         return self.scopes[-1]
@@ -337,7 +353,7 @@ class _Scanner(ast.NodeVisitor):
                     self.findings.append(Finding(self.name, line, text + ("" if complete else "..."), entry, how))
 
     def visit_Call(self, node):
-        found = _writes(node)
+        found = _writes(node, self.modules)
         if found:
             self._judge(found[0], found[1], node.lineno)
         for arg in node.args:
@@ -386,6 +402,8 @@ def scan_python_tree(texts, focus=None):
 
 ASSIGN = re.compile(r"(?:^|[\s;])(?:export\s+|local\s+|readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)=(\"[^\"]*\"|'[^']*'|[^\s;&|]*)")
 REDIRECT = re.compile(r"(?:\d|&)?>>?\|?\s*(\"[^\"]*\"|'[^']*'|[^\s;&|<>()]+)")
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.S)
+DECLARATIONS = {"export", "local", "readonly", "declare", "typeset", "else", "{"}
 WRAPPERS = {"sudo", "env", "command", "exec", "nice", "nohup", "time", "!", "then", "do", "else", "if", "while", "{", "("}
 
 
@@ -470,14 +488,19 @@ def _scan_shell(text, name):
         # DEST=/etc/x; echo > "$DEST"; DEST=/tmp/out writes /etc/x (#723 review: all of a line's assignments were applied
         # before any of its commands)
         for command in re.split(r"&&|\|\||;|(?<!>)\||\$\(|`|\bthen\b|\bdo\b", line):     # >| is a redirection, not a pipe
-            for m in ASSIGN.finditer(command):
-                variables[m.group(1)] = _expand(m.group(2), variables, assigned)
-            for m in REDIRECT.finditer(command):
-                judge(m.group(1), "redirection")
             try:
                 words = shlex.split(command, posix=False)
             except ValueError:
                 words = command.split()
+            # an assignment persists only in a command that is nothing but assignments (export/local/... included):
+            # DEST=/tmp/out cmd sets DEST for cmd alone, and its words and redirections expand the value before it
+            # (#723 review)
+            if all(_ASSIGNMENT.fullmatch(w) or w in DECLARATIONS or (w.startswith("-") and words[0] in DECLARATIONS)
+                   for w in words):
+                for m in ASSIGN.finditer(command):
+                    variables[m.group(1)] = _expand(m.group(2), variables, assigned)
+            for m in REDIRECT.finditer(command):
+                judge(m.group(1), "redirection")
             while words and (words[0] in WRAPPERS or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[0])):
                 words = words[1:]
             command_name = os.path.basename(words[0].strip("\"'")) if words else None
