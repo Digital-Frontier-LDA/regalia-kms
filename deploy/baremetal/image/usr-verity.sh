@@ -10,8 +10,9 @@
 # IN:  --usr DIR    the tree that becomes /usr (build-rootfs.sh: the host tree's /usr, bind-mounted read-only)
 #      --seed HEX   what the salt and the UUIDs are derived from (build-rootfs.sh: the commit, 40 hex), so two builds
 #                   of one commit make the same bytes and no per-build randomness enters the image
-#      --epoch N    every inode's time (mkfs.erofs -T, --all-time) and the filesystem's build time
-# OUT, written last and all together, in DIR (which must be empty):
+#      --epoch N    every inode's time (mkfs.erofs -T, --all-time) and the filesystem's build time; an inherited
+#                   SOURCE_DATE_EPOCH is ignored
+# OUT, written last and all together, in DIR (which must be empty, and lie outside --usr once both are resolved):
 #      usr.erofs        erofs, 4096-byte blocks, uncompressed, no xattrs, UUID derived from the seed
 #      usr.verity       its dm-verity hash tree (format 1, sha256, 4096/4096), salt and UUID derived from the seed
 #      usr-verity.txt   key=value: the roothash, the two PARTUUIDs, the salt, the UUIDs, sizes, sha256s, tool versions
@@ -55,6 +56,10 @@ done
 [[ "$EPOCH" =~ ^[0-9]{1,11}$ ]] || die "--epoch must be seconds since 1970, not '$EPOCH'"
 [ -n "$OUT" ] && [ -d "$OUT" ] || die "--out must be an existing directory: '$OUT'"
 [ -z "$(ls -A "$OUT")" ] || die "--out $OUT must be empty"
+# --out must lie outside --usr, after resolving both (a symlink, .., or a relative path cannot hide it): the staging
+# directory is made inside --out, and inside --usr mkfs.erofs would put it, a random name and all, into the image
+USR_REAL="$(realpath -e -- "$USR")" && OUT_REAL="$(realpath -e -- "$OUT")" || die "--usr and --out must resolve"
+case "$OUT_REAL/" in "$USR_REAL"/*) die "--out $OUT ($OUT_REAL) lies inside --usr $USR ($USR_REAL)" ;; esac
 for t in mkfs.erofs fsck.erofs veritysetup sha256sum; do command -v "$t" >/dev/null || die "$t is required"; done
 
 derive(){ printf 'regalia-kms %s v1\0%s' "$1" "$SEED" | sha256sum | cut -d' ' -f1; }
@@ -72,7 +77,9 @@ W="$(mktemp -d "$OUT/.usr-verity.XXXXXX")"
 trap 'rm -rf --one-file-system -- "$W"' EXIT
 
 # the filesystem: 4096-byte blocks named (the default is the BUILDER's page size), every time the epoch, no xattrs
-mkfs.erofs -d0 -b4096 -x-1 -T"$EPOCH" --all-time -U"$EROFS_UUID" "$W/usr.erofs" "$USR" >"$W/mkfs.log" 2>&1 \
+# SOURCE_DATE_EPOCH is removed from its environment: mkfs.erofs reads it after its options, so an inherited one would
+# override -T/--all-time and the image would disagree with the record's source_date_epoch
+env -u SOURCE_DATE_EPOCH mkfs.erofs -d0 -b4096 -x-1 -T"$EPOCH" --all-time -U"$EROFS_UUID" "$W/usr.erofs" "$USR" >"$W/mkfs.log" 2>&1 \
   || { cat "$W/mkfs.log" >&2; die "mkfs.erofs failed"; }
 DATA_SIZE="$(stat -c %s "$W/usr.erofs")"
 [ "$DATA_SIZE" -gt 0 ] && [ $((DATA_SIZE % 4096)) = 0 ] || die "usr.erofs is $DATA_SIZE bytes, not a whole number of 4096-byte blocks"

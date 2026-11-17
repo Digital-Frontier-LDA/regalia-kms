@@ -448,8 +448,8 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends erofs-utils cryptsetup-bin
           # --- The /usr image is reproducible, is the tree, and refuses a changed byte
           sudo bash e2e/usr-verity.sh | tee "$RUNNER_TEMP/usr-verity.log"
-          grep -q '^usr-verity: 37 passed, 0 failed$' "$RUNNER_TEMP/usr-verity.log" || {
-            echo "::error::the /usr image test did not run all 37 checks" >&2; exit 1; }
+          grep -q '^usr-verity: 40 passed, 0 failed$' "$RUNNER_TEMP/usr-verity.log" || {
+            echo "::error::the /usr image test did not run all 40 checks" >&2; exit 1; }
 
       # regalia-kms#143: a real sshd on the example configuration and a real ssh on the known_hosts that
       # ssh_trust.py writes from a membership manifest. A certificate from the user CA logs in to the node
