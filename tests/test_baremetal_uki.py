@@ -34,7 +34,7 @@ TRAILER = b"\0SECURE-BOOT-SIGNATURE"
 # the /usr the image runs (#61 K61V-3): build-rootfs.sh's record, and the three words uki.py adds from it to --cmdline's
 USRHASH = hashlib.sha256(b"the TEST /usr image").hexdigest()
 VERITY = "root=tmpfs usrhash=%s systemd.verity_usr_options=panic-on-corruption" % USRHASH
-BASE = "ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
+BASE = "quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
 
 
 def uuid(half):
@@ -412,15 +412,28 @@ class Arithmetic(unittest.TestCase):
             self.assertIn("the image has no %s section" % missing, str(caught.exception))
 
     def test_the_command_line(self):
-        self.assertEqual(uki.cmdline_text((VERITY + " ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n").encode()),
-                         VERITY + " ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")
+        self.assertEqual(uki.cmdline_text((VERITY + " quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n").encode()),
+                         VERITY + " quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")
+        good = VERITY + " quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
+        # #722 review: no quote and no backslash (systemd unquotes the line, so a quoted word would pass the checks as another
+        # and act as itself: a /usr not verified, a second value of a required word)
+        for extra in ('"mount.usr=/dev/sda2"', "'mount.usr=/dev/sda2'", '"systemd.import_credentials=yes"', "mount.usr\\=/dev/sda2", 'quiet="x y"'):
+            with self.subTest(extra), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(("%s %s" % (good, extra)).encode())
+            self.assertIn("holds a quote or a backslash", str(caught.exception))
+        # ... and no bare ro: root=tmpfs must stay writable, the initrd makes the verity /usr's mount point in it
+        for line in (good + " ro", "ro " + good):
+            with self.subTest(line[:12]), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(line.encode())
+            self.assertIn("holds a bare 'ro'", str(caught.exception))
+        self.assertEqual(uki.cmdline_text((good + " rw").encode()), good + " rw")
         # the word every image must carry, and the record keeps the command line it was built with
         with self.assertRaises(m.Refused) as caught:
-            uki.cmdline_text(b"root=/dev/mapper/root ro quiet\n")
+            uki.cmdline_text(b"root=/dev/mapper/root quiet\n")
         self.assertIn("does not carry systemd.import_credentials=no", str(caught.exception))
         # (each case changes ONE word of a valid line, and the reason is asserted: a line can be refused for
         # several missing words, and a case must not pass for another word's reason)
-        full = VERITY + " ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
+        full = VERITY + " systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
         for near in ("systemd.import_credentials=0", "systemd.import_credentials=yes", "import_credentials=no"):
             with self.subTest(near=near), self.assertRaises(m.Refused) as caught:
                 uki.cmdline_text(full.replace("systemd.import_credentials=no", near).encode())
@@ -430,7 +443,7 @@ class Arithmetic(unittest.TestCase):
                       "systemd.import_credentials=no", "systemd.import-credentials=yes", "rd.systemd.import-credentials=yes",
                       "systemd.import-credentials=no", "SYSTEMD.import_credentials=yes"):
             with self.subTest(extra=extra), self.assertRaises(m.Refused) as caught:
-                uki.cmdline_text(("%s %s %s" % (VERITY, "ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0", extra)).encode())
+                uki.cmdline_text(("%s %s %s" % (VERITY, "systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0", extra)).encode())
             self.assertIn("gives systemd.import_credentials more than once or with another value or spelling", str(caught.exception))
 
         # the kernel zeroes pages it frees and hands out (#221): each word must be there, exactly, once
@@ -477,7 +490,7 @@ class Arithmetic(unittest.TestCase):
                      "systemd.debug_shell", "systemd.debug-shell=1", "rd.systemd.debug_shell", "rdshell", "rdshell=1", "rdbreak", "rdbreak=pre-mount", "init=/bin/sh", "rdinit=/bin/sh",
                      "systemd.unit=emergency.target", "rd.systemd.unit=rescue.target", "emergency", "rescue", "single", "S", "s", "1", "-b"):
             with self.subTest(word=word), self.assertRaises(m.Refused) as caught:
-                uki.cmdline_text(("%s %s %s" % (VERITY, word, "ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")).encode())
+                uki.cmdline_text(("%s %s %s" % (VERITY, word, "systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")).encode())
             self.assertIn("holds %r, which a KMS host's image does not carry" % word, str(caught.exception))
 
     def test_the_command_line_opens_usr_by_its_root_hash_and_halts_on_corruption(self):
@@ -1047,7 +1060,7 @@ class Records(Case):
                 ("a section this tool does not measure", lambda r: r["sections"].update({".splash": "00" * 32}), "record.sections"),
                 ("an input this tool does not take", lambda r: r["inputs"].update(extra={"sha256": "00" * 32, "size": 1}), "record.inputs names an input"),
                 ("a malformed signing part", lambda r: r.update(signed={"image_sha256": "00" * 32}), "record.signed fields mismatch"),
-                ("a command line without the import switch", lambda r: r.update(cmdline="root=/dev/mapper/root ro"), "does not carry systemd.import_credentials=no"),
+                ("a command line without the import switch", lambda r: r.update(cmdline="root=/dev/mapper/root quiet"), "does not carry systemd.import_credentials=no"),
                 ("a command line that is not the image's", lambda r: r.update(cmdline=r["cmdline"] + " quiet"), "record.cmdline is not the image's .cmdline section"),
                 # the /usr it names (#61 K61V-3): the one usrhash= of its measured command line, from a /usr record input
                 ("no usr_roothash", lambda r: r.pop("usr_roothash"), "fields mismatch"),
@@ -1324,6 +1337,10 @@ class InitrdReview(Case):
                 self.refused_by(unlock_initrd({"etc/cmdline.d/90-x.conf": (0o100644, ("%s\n" % word).encode())}),
                                 "etc/cmdline.d/90-x.conf holds %r: %s" % (word, reason))
         self.passes(unlock_initrd({"etc/cmdline.d/20.conf": (0o100644, b"root=tmpfs systemd.verity_usr_options=panic-on-corruption\n")}))
+        # a quoted word, which systemd unquotes, is refused as such (#722 review): it would pass the rules above as another word
+        for body in (b'"mount.usr=/dev/sda2"\n', b"'systemd.verity=no'\n", b"mount.usr\\=/dev/sda2\n", b'"rd.shell=1"\n'):
+            with self.subTest(body):
+                self.refused_by(unlock_initrd({"etc/cmdline.d/90-x.conf": (0o100644, body)}), "etc/cmdline.d/90-x.conf holds a quote or a backslash")
 
     def test_the_crypttab_holds_the_one_generic_line_and_nothing_else(self):
         line = b"root PARTLABEL=regalia-root none luks,x-initrd.attach,tries=0,timeout=0,x-systemd.device-timeout=0\n"

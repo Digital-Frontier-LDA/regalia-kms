@@ -98,7 +98,7 @@ json.dump({"schema": "regalia.initrd-build/v1", "commit": provenance["commit"], 
                                  "keyring_sha256": sys.argv[5], "inventory_sha256": digest(sys.argv[4]),
                                  "entries": 0, "dracut_over": 0}}, open(sys.argv[3], "w"))
 PY
-BASE="ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
+BASE="quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
 printf '%s\n' "$BASE" > "$W/cmdline"
 # the /usr image's record (build-rootfs.sh's rootfs-build.json, #61): a TEST root hash, its PARTUUIDs its two halves.
 # usr_record OUT HASH; OTHER_USRHASH is USRHASH with its last hex digit changed (one digit, section 6)

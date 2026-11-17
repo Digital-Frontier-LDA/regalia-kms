@@ -307,7 +307,15 @@ def cmdline_text(raw):
     except UnicodeDecodeError:
         raise Refused("the command line is not ASCII")
     require(text and re.fullmatch(r"[\x20-\x7e]+", text) is not None, "the command line must be one line of printable ASCII")
+    # no quote and no backslash, before any word is read: systemd removes them when it reads the line (#722 review), so
+    # "mount.usr=/dev/sda2" would pass every check below under one spelling and act under another (a /usr not
+    # verified; a second value of a required word, which systemd takes as the last). The image's words are never quoted
+    require(re.search(r"[\"'\\]", text) is None, "the command line holds a quote or a backslash: systemd unquotes the line it reads, "
+            "so a quoted word would pass these checks and act as another; a KMS host's image quotes nothing")
     words = text.split()
+    # root=tmpfs is a WRITABLE root: the initrd creates /usr in it, the mount point of the verity /usr's bind mount;
+    # a bare ro makes it read-only and the mount point cannot be made (#722 review)
+    require("ro" not in words, "the command line holds a bare 'ro': root=tmpfs must stay writable, the initrd makes /usr's mount point in it")
     for word in words:
         if re.fullmatch(CMDLINE_HARDENING, word):
             continue
@@ -974,6 +982,8 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, cl
         fragments = ["etc/cmdline.d/" + os.path.basename(p) for p in sorted(files) if os.path.dirname(p) == real and p.endswith(".conf")]
     for fragment in fragments + (["etc/cmdline"] if "etc/cmdline" in files else []):
         body = _regular(files, fragment) or b""
+        if re.search(rb"[\"'\\]", body):
+            findings.append("%s holds a quote or a backslash: systemd unquotes the command line, so a quoted word passes these checks and acts as another" % fragment)
         for word in " ".join(lines(body.decode("utf-8", "replace"))).split():
             if re.fullmatch(CMDLINE_HARDENING, word):
                 continue
