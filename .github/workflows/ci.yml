@@ -971,7 +971,7 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 mmdebstrap debian-archive-keyring \
             swtpm swtpm-tools tpm2-tools cryptsetup-bin wireguard-tools nftables iproute2 cpio e2fsprogs ovmf dosfstools openssl
       - name: Build the KMS host image (build-rootfs.sh) at the boot's snapshot
-        run: sudo REGALIA_GO="$(command -v go)" bash deploy/baremetal/image/build-rootfs.sh --snapshot 20261023T210712Z --out "$RUNNER_TEMP/image"
+        run: sudo bash deploy/baremetal/image/build-rootfs.sh --snapshot 20261023T210712Z --go "$(command -v go)" --out "$RUNNER_TEMP/image"
       - name: The verity /usr boots (install-host.sh's disk, usrhash=, dm-verity, /var in the initrd, A/B, the factory /etc)
         run: sudo REGALIA_DIAG_DIR="$RUNNER_TEMP/unlock-diag" REGALIA_EXPECT_KVM=1 REGALIA_GO="$(command -v go)" REGALIA_BOOT_CASES=verity REGALIA_BOOT_IMAGE="$RUNNER_TEMP/image" REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/20261023T210712Z/ REGALIA_BOOT_SECURITY_MIRROR=https://snapshot.debian.org/archive/debian-security/20261023T210712Z/ bash e2e/unlock-boot-qemu.sh
       - name: Keep the software TPM's logs and the consoles

@@ -132,7 +132,9 @@ CMDLINE_REFUSED = (r"(rd\.)?luks(\.[a-z0-9_.-]+)?(=.*)?", r"rd\.?break(=.*)?", r
                    r"(rd)?init=.*", r"(rd\.)?systemd\.unit=.*", r"emergency", r"rescue", r"single", r"[sS1]", r"-b",
                    r"root=(UUID|PARTUUID|LABEL|PARTLABEL)=.*",
                    r"(rd\.)?roothash=.*", r"(rd\.)?systemd\.verity=.*", r"(rd\.)?systemd\.verity[-_]root[-_](data|hash|options)=.*",
-                   r"(rd\.)?systemd\.verity[-_]usr[-_](data|hash)=.*", r"(rd\.)?mount\.usr(fstype|flags)?=.*")
+                   r"(rd\.)?systemd\.verity[-_]usr[-_](data|hash)=.*", r"(rd\.)?mount\.usr(fstype|flags)?=.*",
+                   # root=tmpfs is a writable tmpfs (#722 review): another filesystem type for it, or a read-only mount option
+                   r"rootfstype=.*", r"rootflags=(.*,)?ro(,.*)?")
 # ... except the forms that turn a shell OFF, which a KMS host's image should carry (rd.shell=0).
 CMDLINE_HARDENING = r"(rd\.shell|(rd\.)?systemd\.debug[-_]shell)=(0|no|false|off)"
 # Words the command line MUST carry. systemd.import_credentials=no: systemd in the initrd would otherwise

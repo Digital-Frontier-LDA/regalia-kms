@@ -1257,6 +1257,11 @@ class OnQemuVerity(OnQemu):
         self.assertNotIn("regalia-unlock: gave the key", said)
         self.assertNotIn("time limit", said, "the guest did not end by itself: it waited rather than failing closed")
         self.assertNotIn(("unlock", "ALLOW"), {(e["event"], e["outcome"]) for e in self.events[since:]})
+        # ... and positive evidence that THIS UKI booted to its initrd (#722 review): a guest that never started would pass
+        # every absence above. Its client asked, and a peer refused it on PCR 11, the badhash image's own and unapproved
+        refused = [e for e in self.events[since:] if e.get("event") == "unlock" and e.get("outcome") == "DENY"]
+        self.assertTrue(any("PCR" in (e.get("reason") or "") for e in refused),
+                        "no peer refused the wrong-usrhash image's unlock on its PCRs: did its initrd run? %r" % self.events[since:])
         no_shell(self, said)
 
         # boot v4, A TAMPERED BLOCK: one byte of usr-a inverted at offset 1024 (the erofs superblock, read at mount). The

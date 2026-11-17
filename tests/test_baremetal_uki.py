@@ -429,6 +429,13 @@ class Arithmetic(unittest.TestCase):
                 uki.cmdline_text(line.encode())
             self.assertIn("holds a bare 'ro'", str(caught.exception))
         self.assertEqual(uki.cmdline_text((good + " rw").encode()), good + " rw")
+        # ... nor another filesystem type or a read-only option for that root (#722 review)
+        for extra in ("rootfstype=ext4", "rootfstype=tmpfs", "rootflags=ro", "rootflags=x-systemd.device-timeout=0,ro", "rootflags=ro,nosuid"):
+            with self.subTest(extra), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(("%s %s" % (good, extra)).encode())
+            self.assertIn("holds %r, which a KMS host's image does not carry" % extra, str(caught.exception))
+        self.assertIn("rootflags=x-systemd.device-timeout=0", good)
+        self.assertEqual(uki.cmdline_text((good + " rootflags=nosuid,rootcontext=x").encode()), good + " rootflags=nosuid,rootcontext=x")
         # the word every image must carry, and the record keeps the command line it was built with
         with self.assertRaises(m.Refused) as caught:
             uki.cmdline_text(b"root=/dev/mapper/root quiet\n")
@@ -1364,6 +1371,10 @@ class InitrdReview(Case):
                                 "etc/cmdline.d/90-x.conf holds %r: %s" % (word, reason))
         self.passes(unlock_initrd({"etc/cmdline.d/20.conf": (0o100644, b"root=tmpfs systemd.verity_usr_options=panic-on-corruption\n")}))
         # a quoted word, which systemd unquotes, is refused as such (#722 review): it would pass the rules above as another word
+        for word in ("rootfstype=ext4", "rootflags=ro"):
+            with self.subTest(word):
+                self.refused_by(unlock_initrd({"etc/cmdline.d/90-x.conf": (0o100644, ("%s\n" % word).encode())}),
+                                "etc/cmdline.d/90-x.conf holds %r: the initrd's command line must not say how the disk is opened" % word)
         for body in (b'"mount.usr=/dev/sda2"\n', b"'systemd.verity=no'\n", b"mount.usr\\=/dev/sda2\n", b'"rd.shell=1"\n'):
             with self.subTest(body):
                 self.refused_by(unlock_initrd({"etc/cmdline.d/90-x.conf": (0o100644, body)}), "etc/cmdline.d/90-x.conf holds a quote or a backslash")
