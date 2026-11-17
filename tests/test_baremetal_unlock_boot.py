@@ -1143,6 +1143,8 @@ class OnQemuVerity(OnQemu):
             self.assertGreater(units[unit]["started"], 0, (unit, units[unit]))
         self.assertGreater(units["regalia-kms.service"]["started"], 0, "regalia-kms.service's main process never started")
         self.assertRegex(said, r"REGALIA-E2E-APPARMOR enabled=Y regalia-kms=regalia-kms \(enforce\) etc-passwd=present")
+        # chronyd confined by its profile in enforce mode while it reads /etc/chrony/regalia.conf through the link to /var
+        self.assertRegex(said, r"REGALIA-E2E-CHRONYD confined=\S*chronyd\S* \(enforce\)")
 
     def write_slot_b(self, slot):
         """The updater's step, by hand: `slot`'s image into usr-b and usr-b-verity (partitions 4 and 5), their PARTUUIDs
