@@ -58,10 +58,11 @@
 # disk the variable is refused.
 #
 # CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
-#   * NOT SHOWN BOOTING YET: the UKI carries usrhash=, root=tmpfs and panic-on-corruption, and the initrd has
-#     systemd-veritysetup (#61 K61V-3), and this installer checks that the UKI names the /usr it writes. No boot has
-#     shown them working together, nor /var mounted from the LUKS2 volume under root=tmpfs: that is the QEMU boot
-#     slice (K61V-4). Until then a host installed by it is not known to boot to the KMS.
+#   * SHOWN BOOTING IN QEMU ONLY (#61 K61V-4): e2e/unlock-boot-qemu.sh lays its guest's disk out with this script's
+#     test mode and boots it (OnQemuVerity): /usr from usr-a under dm-verity, /var from the LUKS2 volume mounted by the
+#     initrd, the firmware entry bootnext makes, a tampered block, a wrong usrhash and the A/B slots. Not on a DL360,
+#     and the image has no kernel modules yet (build-rootfs.sh's limitations): a host installed by it does not yet boot
+#     to the KMS by itself.
 #   * NO RELEASE CHECK YET: the inputs are checked against their own build records, which nothing signs. Which
 #     root-committed document names both the /usr image and the UKI is #61's open question 1; until it lands, the
 #     operator compares the printed root hash and UKI digest with the ceremony's.

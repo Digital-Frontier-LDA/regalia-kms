@@ -44,14 +44,14 @@
 # images' sizes and sha256s and the tools' versions). A refusal leaves DIR empty.
 #
 # CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
-#   * NOT A BOOTABLE DISK YET. No partitions, LUKS2, crypttab, ESP, kernel/UKI pairing, network configuration,
-#     node.json or first-boot step: later slices of #61. The node units (regalia-sync, admission, etcd, the audit
-#     shippers) are not enabled by the image, and an operator's `systemctl enable` writes the tmpfs /etc, gone at the next
-#     boot: their enablement after enrolment is open (README.md's steps predate the verity /usr).
-#   * THE /usr IMAGE IS INSTALLED, NOT YET BOOTED: install-host.sh writes usr.erofs and usr.verity to the A/B usr
-#     partitions (rootfs.tar is no longer extracted); the initrd's systemd-veritysetup, usrhash= on the UKI and the
-#     boot from them are the next slices of the dm-verity design. /usr/share/factory/etc is copied, but no tmpfiles rule populates a tmpfs /etc from it yet,
-#     and what else lives outside /usr is the /etc and /var inventory's (etc-inventory.txt).
+#   * NO KERNEL IN THE IMAGE: the UKI carries the kernel, and /usr has no /usr/lib/modules yet (no kernel/UKI pairing).
+#     The QEMU boots (e2e/unlock-boot-qemu.sh REGALIA_BOOT_CASES=verity, #61 K61V-4) add the test UKI kernel's modules
+#     to the guest's /usr; a host needs the pairing (a later slice), as it needs network configuration and node.json.
+#   * BOOTED IN QEMU, NOT ON A DL360: this image's /usr, installed by install-host.sh (test mode) and opened by the
+#     UKI's usrhash=, boots in QEMU with /var from the initrd, /etc from the factory copy and its units started
+#     (OnQemuVerity). The node units (regalia-sync, admission, etcd, the audit shippers) are not enabled by the image, and
+#     an operator's `systemctl enable` writes the tmpfs /etc, gone at the next boot: regalia-kms-r1s.8. What lives
+#     outside /usr is the /etc and /var inventory's (etc-inventory.txt).
 #   * NO HARDENING beyond the units' own sandboxes: AppArmor profiles other than the daemon's, sysctl, sshd policy,
 #     removing unwanted binaries (#61's baseline) are later slices.
 #   * PACKAGES ARE AUTHENTICATED BY APT ONLY: every .deb is checked by apt against the snapshot's signed index with
