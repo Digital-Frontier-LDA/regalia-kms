@@ -211,6 +211,15 @@ class Order(unittest.TestCase):
         # the AppArmor cache is emptied by the full pass: apparmor loads after it
         self.assertIn("systemd-tmpfiles-setup.service", unit(UNITS / "apparmor.service.d" / "regalia-etc.conf")["After"][0].split())
 
+    def test_systemd_firstboot_never_prompts_and_never_runs_on_an_empty_etc(self):
+        """#61 K61V-4, measured: on an image whose factory copy failed, systemd-firstboot (every boot is a first boot)
+        ran on the empty /etc and stopped the boot at the console. It requires the copy, and prompts for nothing."""
+        u = unit(UNITS / "systemd-firstboot.service.d" / "regalia-etc.conf")
+        self.assertEqual(u.get("Requires"), ["regalia-etc-factory.service"])
+        self.assertEqual(u.get("After")[0].split()[0], "regalia-etc-factory.service")
+        self.assertEqual(u.get("ExecStart"), ["", "systemd-firstboot"])
+        self.assertNotIn("--prompt", " ".join(u["ExecStart"]))
+
     def test_apparmor_empties_its_own_cache_first_and_fails_closed(self):
         """#723 review: ordering after systemd-tmpfiles-setup does not make its clear SUCCEED, and a stale cache newer
         than a changed profile is loaded instead of it. apparmor.service runs the D /var/cache/apparmor line itself, as

@@ -1123,7 +1123,7 @@ class OnQemuVerity(OnQemu):
             proof["roothash"][:16], proof["usr"], proof["root"], proof["var"], current, label, seen["first-boot"]), file=sys.stderr)
         # every boot is a first boot (/etc starts empty): systemd-firstboot runs, and asks nothing (the factory /etc
         # has the locale, the time zone and the accounts), nor does the preset pass enable anything (etc-links above)
-        self.assertNotRegex(said, r"Please enter (?:system locale|timezone|a new root password|system keymap|hostname)|Please choose your")
+        self.assertNotRegex(said, r"Please enter (?:system locale|timezone|a new root password|system keymap|hostname)|Please choose your|Please configure your system")
         firstboot = unit_states(said).get("systemd-firstboot.service")
         print("boot proof: systemd-firstboot.service %s" % (firstboot,), file=sys.stderr)
         no_shell(self, said)
@@ -1301,7 +1301,10 @@ class OnQemuVerity(OnQemu):
         self.assertIn("REGALIA-E2E-FACTORY assert=no", said)
         self.assertEqual(units["regalia-etc-factory.service"]["started"], 0, units["regalia-etc-factory.service"])
         self.assertNotEqual(units["regalia-etc-factory.service"]["active"], "active", units["regalia-etc-factory.service"])
-        for unit in ("systemd-sysusers.service", "apparmor.service", "regalia-kms.service"):
+        # systemd-firstboot too (systemd-firstboot.service.d/regalia-etc.conf): measured before it, it ran on the empty /etc
+        # and held the boot at "Please configure your system! -- Press any key to proceed --"
+        self.assertNotIn("Please configure your system", said)
+        for unit in ("systemd-firstboot.service", "systemd-sysusers.service", "apparmor.service", "regalia-kms.service"):
             self.assertEqual(units[unit]["started"], 0, "%s ran with no factory /etc" % unit)
             self.assertNotEqual(units[unit]["active"], "active", (unit, units[unit]))
         self.assertRegex(said, r"REGALIA-E2E-APPARMOR enabled=\S+ regalia-kms=none etc-passwd=absent")
