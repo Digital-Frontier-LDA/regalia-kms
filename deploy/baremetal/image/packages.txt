@@ -29,7 +29,7 @@ pcr_survey | the commissioning survey of a host's PCRs across boots, as root at 
 dash | /bin/sh | chrony.service.d/regalia.conf's ExecStartPre
 python3 | /usr/bin/python3 python3 | every Python unit and the deploy tools
 python3-cryptography | py:cryptography | Ed25519, P-256 and AES-GCM in membership, trails, signkey, ownerauth, enrol, unlock
-systemd | systemctl journalctl systemd-analyze systemd-creds | the units; authtime reads chronyd's journal; enrol and host_probe seal with systemd-creds
+systemd | systemctl journalctl systemd-analyze systemd-creds /usr/bin/systemd-tmpfiles | the units; authtime reads chronyd's journal; enrol and host_probe seal with systemd-creds; regalia-etc-factory.service makes /etc from the image's factory copy (#61)
 systemd-sysv | /sbin/init | systemd as PID 1
 util-linux | runuser findmnt lsblk | enrol, deliver and revoke run steps as regalia-sync (runuser); host_probe reads the root's block devices
 coreutils | stat test | host_probe and os_probe's file checks

@@ -19,7 +19,8 @@
 # In complain mode kms_apparmor_enforced fails, as it should: the host is not commissioned yet.
 #
 # WHAT IS CONFINED. The profile has a name and NO attachment path: it confines the service, which
-# asks for it by name (regalia-kms-hardening.conf.example), and nothing else. The same binary run by
+# asks for it by name (the image's units/regalia-kms.service.d/apparmor.conf, or regalia-kms-hardening.conf.example
+# on another host), and nothing else. The same binary run by
 # an operator (-export-control-plane, -restore-export, -scan-tree, -verify-audit) reads and writes
 # paths the operator names and stays unconfined; an attachment path would confine those runs too and
 # a restore under -restore-root could not write.
