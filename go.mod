@@ -10,7 +10,7 @@ require (
 	go.etcd.io/etcd/api/v3 v3.6.15
 	go.etcd.io/etcd/client/v3 v3.6.15
 	go.uber.org/zap v1.28.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 )
 
 require (
