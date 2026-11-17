@@ -164,7 +164,7 @@ chroot "$ROOT" apt-get install -y -qq --no-install-recommends 'libtss2-tcti-devi
   || { tail -20 "$W/apt.log"; echo "unlock-boot-qemu: the TPM library did not install"; exit 2; }
 # and mkfs.erofs, which makes the guest's /usr image (deploy/baremetal/image/usr-verity.sh, run in this tree, #61 K61V-4);
 # installed after the tree is made, so its package list stays e2e/initrd-drift.sh's
-chroot "$ROOT" apt-get install -y -qq --no-install-recommends erofs-utils >>"$W/apt.log" 2>&1 \
+{ chroot "$ROOT" apt-get update -qq && chroot "$ROOT" apt-get install -y -qq --no-install-recommends erofs-utils; } >>"$W/apt.log" 2>&1 \
   || { tail -20 "$W/apt.log"; echo "unlock-boot-qemu: erofs-utils did not install"; exit 2; }
 
 # What a KMS host has installed: the client, the units, the script, the dracut module.
