@@ -32,7 +32,7 @@ import re
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
-from deploy.baremetal import heartbeat, membership, wgsvc
+from deploy.baremetal import heartbeat, hostpaths, membership, wgsvc
 
 Refused, require = membership.Refused, membership.require
 
@@ -40,6 +40,8 @@ SCHEMA = "regalia.etcd-cert/v1"
 DOMAIN = b"regalia-etcd-cert/v1\0"
 MEMBER_STATES = ("ACTIVE", "MAINTENANCE", "DRAINING")
 CONFIG_PATH = "/etc/regalia/etcd.conf.yml"
+# where it is written (rejoin): its /var name, /etc/regalia being a link there on a verity-/usr host (hostpaths, #61)
+STORED_CONFIG = hostpaths.persistent(CONFIG_PATH)
 CERT_DIR = "/etc/regalia/etcd"                     # public: this member's certificates and the rendered bundles
 CREDENTIALS = "/run/credentials/regalia-etcd.service"      # the keys, LoadCredentialEncrypted= (regalia-etcd.service)
 DATA_DIR = "/var/lib/regalia-etcd"

@@ -40,18 +40,22 @@ class Config(unittest.TestCase):
 
     def test_the_three_files_are_written_and_node_json_loads(self):
         config = self.install()
-        loaded = node.load(self.prefix + enrol.NODE_JSON)
+        loaded = node.load(self.prefix + enrol.stored(enrol.NODE_JSON))
         self.assertEqual((loaded["node_id"], loaded["root_key"]), ("a", self.root_key))
         for path in (enrol.NODE_JSON, config["site"], enrol.CHRONY_CONF):
-            st = os.stat(self.prefix + path)
+            st = os.stat(self.prefix + enrol.stored(path))
             self.assertEqual(stat.S_IMODE(st.st_mode), 0o644, path)
         self.assertFalse(os.path.exists(self.prefix + config["measurements"]), "#332: no single measurements file")
+        # #61: on /var, at the /etc names' /var names (/etc is made from the image at every boot); nothing under /etc
+        self.assertEqual(enrol.stored(enrol.NODE_JSON), "/var/lib/regalia-etc/regalia/node.json")
+        self.assertEqual(enrol.stored(enrol.CHRONY_CONF), "/var/lib/regalia-etc/chrony/regalia.conf")
+        self.assertFalse(os.path.lexists(self.prefix + "/etc"), "enrolment wrote under /etc")
         recorded = self.journal.get("config")
-        self.assertEqual(set(recorded) - {"state", "at"}, {enrol.NODE_JSON, config["site"], enrol.CHRONY_CONF})
+        self.assertEqual(set(recorded) - {"state", "at"}, {enrol.stored(p) for p in (enrol.NODE_JSON, config["site"], enrol.CHRONY_CONF)})
         # again, as a resumed run: the same bytes are accepted, nothing is rewritten
-        before = os.stat(self.prefix + enrol.NODE_JSON).st_mtime_ns
+        before = os.stat(self.prefix + enrol.stored(enrol.NODE_JSON)).st_mtime_ns
         self.install()
-        self.assertEqual(os.stat(self.prefix + enrol.NODE_JSON).st_mtime_ns, before)
+        self.assertEqual(os.stat(self.prefix + enrol.stored(enrol.NODE_JSON)).st_mtime_ns, before)
 
     def test_time_comes_from_the_site_s_one_list(self):
         """#303: node.json's time_servers (what authtime judges), chrony.conf (what chrony uses) and the firewall's
@@ -61,8 +65,8 @@ class Config(unittest.TestCase):
         names = [server["name"] for server in self.site["time"]["nts"]]
         self.assertNotEqual(names, example("node.example.json")["time_servers"])
         self.install()
-        self.assertEqual(node.load(self.prefix + enrol.NODE_JSON)["time_servers"], names)
-        with open(self.prefix + enrol.CHRONY_CONF) as f:
+        self.assertEqual(node.load(self.prefix + enrol.stored(enrol.NODE_JSON))["time_servers"], names)
+        with open(self.prefix + enrol.stored(enrol.CHRONY_CONF)) as f:
             conf = f.read()
         self.assertEqual(conf, authtime.conf(names))
         self.assertEqual([line.split()[1] for line in conf.splitlines() if line.startswith("server ")], names)
@@ -70,18 +74,18 @@ class Config(unittest.TestCase):
         self.assertEqual(sorted({line.split('"time: ')[1].split(",")[0] for line in rules.splitlines() if '"time: ' in line}), sorted(names))
 
     def test_a_chrony_conf_already_there_is_never_replaced(self):
-        target = self.prefix + enrol.CHRONY_CONF
+        target = self.prefix + enrol.stored(enrol.CHRONY_CONF)
         os.makedirs(os.path.dirname(target))
         with open(target, "w") as f:
             f.write("pool pool.ntp.org iburst\n")
-        with self.assertRaisesRegex(enrol.Refused, "/etc/chrony/regalia.conf already exists with other content"):
+        with self.assertRaisesRegex(enrol.Refused, "/var/lib/regalia-etc/chrony/regalia.conf already exists with other content"):
             self.install()
         with open(target) as f:
             self.assertEqual(f.read(), "pool pool.ntp.org iburst\n")
 
     def test_other_content_is_never_overwritten(self):
         config = self.install()
-        target = self.prefix + config["site"]
+        target = self.prefix + enrol.stored(config["site"])
         with open(target, "w") as f:
             f.write("{}\n")
         with self.assertRaisesRegex(enrol.Refused, "already exists with other content.*rm "):
@@ -95,7 +99,7 @@ class Config(unittest.TestCase):
 
     def test_a_link_is_not_followed(self):
         config = self.install()
-        target = self.prefix + config["site"]
+        target = self.prefix + enrol.stored(config["site"])
         os.unlink(target)
         os.symlink(self.d + "/elsewhere", target)
         with self.assertRaisesRegex(enrol.Refused, "is not a regular file"):
@@ -123,9 +127,9 @@ class Config(unittest.TestCase):
         with unittest.mock.patch.object(enrol.os, "link", racing):
             with self.assertRaisesRegex(enrol.Refused, "already exists with other content"):
                 self.install()
-        with open(self.prefix + "/etc/regalia/site.json") as f:
+        with open(self.prefix + "/var/lib/regalia-etc/regalia/site.json") as f:
             self.assertEqual(f.read(), "planted\n")
-        self.assertEqual([n for n in os.listdir(self.prefix + "/etc/regalia") if n.endswith(".enrol-new")], [])
+        self.assertEqual([n for n in os.listdir(self.prefix + "/var/lib/regalia-etc/regalia") if n.endswith(".enrol-new")], [])
 
     def test_a_crash_leaves_only_its_own_journalled_temporary_file_which_the_rerun_removes(self):
         import unittest.mock
@@ -143,12 +147,12 @@ class Config(unittest.TestCase):
         with unittest.mock.patch.object(enrol.os, "fchmod", crash):
             with self.assertRaises(Crash):
                 self.install()
-        left = [n for n in os.listdir(self.prefix + "/etc/regalia") if n.endswith(".enrol-new")]
+        left = [n for n in os.listdir(self.prefix + "/var/lib/regalia-etc/regalia") if n.endswith(".enrol-new")]
         self.assertEqual(len(left), 1)
-        with open(self.prefix + "/etc/regalia/unrelated.enrol-new", "w") as f:
+        with open(self.prefix + "/var/lib/regalia-etc/regalia/unrelated.enrol-new", "w") as f:
             f.write("not ours\n")
         self.install()
-        rest = sorted(n for n in os.listdir(self.prefix + "/etc/regalia") if n.endswith(".enrol-new"))
+        rest = sorted(n for n in os.listdir(self.prefix + "/var/lib/regalia-etc/regalia") if n.endswith(".enrol-new"))
         self.assertEqual(rest, ["unrelated.enrol-new"], "a temporary file not journalled by this step was removed")
 
     def test_the_configuration_is_written_only_under_etc_regalia(self):
