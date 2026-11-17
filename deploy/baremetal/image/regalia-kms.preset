@@ -1,0 +1,6 @@
+# /usr/lib/systemd/system-preset/00-regalia-kms.preset (#61 K61V-4): the KMS host image's preset policy. Every boot is a
+# "first boot" (/etc/machine-id is missing when PID 1 starts, / being a tmpfs), and on a first boot PID 1 applies the
+# preset policy before it loads units. Debian ships no "disable *", so without this every unit with an [Install]
+# section would be enabled on every boot. The image's enablement is under /usr instead, from units-enabled.txt
+# (build-rootfs.sh); this file, read before any other preset, makes the preset pass enable nothing.
+disable *

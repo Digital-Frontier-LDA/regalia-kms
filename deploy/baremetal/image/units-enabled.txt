@@ -1,0 +1,40 @@
+# What the KMS host image STARTS, enabled under /usr (#61 K61V-4, bead regalia-kms-r1s.3), and what the packages enabled
+# that it does not. build-rootfs.sh reads this file.
+#
+# WHY UNDER /usr: / is a tmpfs, so /etc is EMPTY when PID 1 loads its units (the factory copy comes later, from
+# regalia-etc-factory.service), and an enablement under /etc/systemd/system is never seen (etc-inventory.txt, [early]).
+# So the build makes each [enabled] line a link in /usr/lib/systemd/system/<target>.wants/ (an [alias] a link beside its
+# unit), REFUSES a link a package made under /etc/systemd/system that no line here names, and then removes every one
+# of those from the image's /etc: what the image starts is this file, and the factory copy holds no enablement.
+#
+# FIRST BOOT, EVERY BOOT: /etc/machine-id is missing when PID 1 starts, so every boot is a "first boot" (machine-id(5)),
+# and PID 1 then applies the preset policy to /etc/systemd/system before it loads units (systemctl preset-all, enable
+# only). Debian ships no "disable *" preset, so that would enable every unit with an [Install] section on every boot.
+# The image's preset (regalia-kms.preset, installed as /usr/lib/systemd/system-preset/00-regalia-kms.preset, read
+# before any other) is "disable *": the preset pass enables nothing, and this file stays the whole of it. The units
+# with ConditionFirstBoot= in the image are the timers dropped below (measured: Debian 13, these packages); trixie's
+# systemd has no systemd-firstboot. The QEMU boot shows /etc/systemd/system empty after boot (e2e/unlock-boot-qemu.sh).
+#
+# Format: one entry per line, fields separated by " | ", in sections. Blank lines and lines starting with # are ignored.
+
+[enabled]
+# target | unit | why the host starts it
+sysinit.target | apparmor.service | loads the profiles from /etc/apparmor.d (the factory copy first: units/apparmor.service.d), the daemon's among them; regalia-kms.service requires it (units/regalia-kms.service.d/apparmor.conf)
+sysinit.target | systemd-pstore.service | keeps the kernel's last messages across a reboot (/var/lib/systemd/pstore): what a verity panic (panic-on-corruption) said
+multi-user.target | regalia-kms.service | the KMS daemon, under its AppArmor profile (deploy/systemd/regalia-kms.service, units/regalia-kms.service.d)
+multi-user.target | chrony.service | authenticated time (authtime, #155): chronyd -f /etc/chrony/regalia.conf (units/chrony.service.d)
+multi-user.target | prometheus-node-exporter.service | node metrics (units/prometheus-node-exporter.service.d, MONITORING.md)
+multi-user.target | remote-fs.target | systemd's own default (90-systemd.preset): nothing is mounted remotely, the target is empty
+sockets.target | pcscd.socket | PC/SC for the -tags piv daemon's YubiKey and OpenPGP backends (#72 G2)
+getty.target | getty@tty1.service | the operator's console (enrolment, recovery: README.md, as root at the node's console)
+
+[alias]
+# alias | the unit it names | why
+chronyd.service | chrony.service | chrony's own Alias=: the name chrony's tools and its package's units use
+
+[dropped]
+# target | unit a package enabled under /etc/systemd/system | why the image does not start it
+timers.target | apt-daily.timer | no apt sources in the image: a host is updated by a new image, never by apt (#61)
+timers.target | apt-daily-upgrade.timer | as apt-daily.timer
+timers.target | dpkg-db-backup.timer | the dpkg database is the image's, read-only in /usr (/usr/lib/sysimage/dpkg, owner decision q-18): nothing to back up on /var
+timers.target | fstrim.timer | /var is a LUKS2 volume opened without discards (90regalia-unlock's crypttab), so a trim would only fail; /usr is read-only

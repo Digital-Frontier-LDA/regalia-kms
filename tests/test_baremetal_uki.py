@@ -31,9 +31,11 @@ VECTOR = {True: {"initrd": "7b5976f87e32c892f7cae4109e05bd6208f55c2fa5b080ebbbb4
 # a "pol" that systemd-measure 257.13 wrote for this PCR 11 value
 POLICY = ("132ab7e17a991bf12b108008052ca9c0c876f8a8c542f2d22eac1590a72105f4", "755f8cc34513bda797481e72388e539a2e83746b27d8186844fcf544fe9d8c0d")
 TRAILER = b"\0SECURE-BOOT-SIGNATURE"
-# the /usr the image runs (#61 K61V-3): build-rootfs.sh's record, and the three words uki.py adds from it to --cmdline's
+# the /usr the image runs (#61 K61V-3): build-rootfs.sh's record, and the words uki.py adds from it to --cmdline's, with
+# the /var mount (K61V-4)
 USRHASH = hashlib.sha256(b"the TEST /usr image").hexdigest()
-VERITY = "root=tmpfs usrhash=%s systemd.verity_usr_options=panic-on-corruption" % USRHASH
+VAR_MOUNT = "systemd.mount-extra=/dev/mapper/root:/var:ext4:x-initrd.mount,x-systemd.device-timeout=0,nodev,nosuid"
+VERITY = "root=tmpfs usrhash=%s systemd.verity_usr_options=panic-on-corruption %s" % (USRHASH, VAR_MOUNT)
 BASE = "quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
 
 
@@ -541,17 +543,41 @@ class Arithmetic(unittest.TestCase):
                 uki.cmdline_text(("%s %s" % (full, word)).encode())
             self.assertIn("holds %r, which a KMS host's image does not carry" % word, str(caught.exception))
 
+    def test_the_command_line_mounts_var_from_the_volume_in_the_initrd_and_nothing_else(self):
+        """#61 K61V-4: /var is the LUKS2 volume (/dev/mapper/root), mounted by the initrd (x-initrd.mount), its wait
+        infinite; exactly that systemd.mount-extra=, once. Another one would mount something else, /usr included,
+        unverified: refused by key, as every required word's contradiction is."""
+        full = "%s %s" % (BASE, VERITY)
+        self.assertEqual(uki.cmdline_text(full.encode()), full)
+        with self.assertRaises(m.Refused) as caught:
+            uki.cmdline_text(full.replace(" " + VAR_MOUNT, "").encode())
+        self.assertIn("does not carry %s" % VAR_MOUNT, str(caught.exception))
+        for near in (VAR_MOUNT.replace("x-initrd.mount,", ""), VAR_MOUNT.replace(",x-systemd.device-timeout=0", ""),
+                     VAR_MOUNT.replace(",nodev,nosuid", ""), VAR_MOUNT.replace("/dev/mapper/root", "/dev/sda6"),
+                     "rd." + VAR_MOUNT, VAR_MOUNT.replace("mount-extra", "mount_extra")):
+            with self.subTest(near=near), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(full.replace(VAR_MOUNT, near).encode())
+            self.assertIn("does not carry %s" % VAR_MOUNT, str(caught.exception))
+        for extra in ("systemd.mount-extra=/dev/sda2:/usr:erofs", "rd.systemd.mount-extra=/dev/sda2:/sysroot/usr", VAR_MOUNT,
+                      "systemd.mount_extra=tmpfs:/var/lib/regalia-kms:tmpfs"):
+            with self.subTest(extra=extra), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(("%s %s" % (full, extra)).encode())
+            self.assertIn("gives systemd.mount-extra more than once or with another value or spelling", str(caught.exception))
+        # the image's line carries it, from this tool, after the /usr words
+        self.assertTrue(uki.image_cmdline(BASE.encode(), usr_record()).endswith(" " + VAR_MOUNT))
+
     def test_the_image_command_line_takes_the_usr_from_its_record_only(self):
-        """--cmdline's words, then the three from the /usr record. --cmdline giving one of them is refused (they come from
+        """--cmdline's words, then the three from the /usr record and the /var mount. --cmdline giving one of them is refused (they come from
         the record or not at all), and the record must be build-rootfs.sh's, its PARTUUIDs the root hash's halves."""
         self.assertEqual(uki.image_cmdline((BASE + "\n").encode(), usr_record()), "%s %s" % (BASE, VERITY))
         other = hashlib.sha256(b"another /usr").hexdigest()
         self.assertEqual(uki.image_cmdline(BASE.encode(), usr_record(other)), "%s %s" % (BASE, VERITY.replace(USRHASH, other)))
         for word in ("root=tmpfs", "root=/dev/mapper/root", "usrhash=" + USRHASH, "rd.usrhash=" + other, "USRHASH=" + other,
-                     "systemd.verity_usr_options=panic-on-corruption", "systemd.verity-usr-options=ignore-corruption"):
+                     "systemd.verity_usr_options=panic-on-corruption", "systemd.verity-usr-options=ignore-corruption", VAR_MOUNT,
+                     "systemd.mount-extra=/dev/sda2:/usr", "rd.systemd.mount_extra=/dev/sdb1:/var"):
             with self.subTest(word=word), self.assertRaises(m.Refused) as caught:
                 uki.image_cmdline(("%s %s" % (BASE, word)).encode(), usr_record())
-            self.assertIn("--cmdline gives %s: root=, usrhash= and systemd.verity_usr_options= come from the /usr record" % word, str(caught.exception))
+            self.assertIn("--cmdline gives %s: root=, usrhash=, systemd.verity_usr_options= and systemd.mount-extra= come from the /usr record" % word, str(caught.exception))
         for raw, reason in ((b"not json", "--usr-record is not a JSON object"), (b"[]", "is not a regalia.rootfs-build/v1 record"),
                             (json.dumps({"schema": "regalia.rootfs-build/v2", "usr": {}}).encode(), "is not a regalia.rootfs-build/v1 record"),
                             (json.dumps({"schema": "regalia.rootfs-build/v1"}).encode(), "has no \"usr\""),

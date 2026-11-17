@@ -22,10 +22,12 @@ record of what it will measure, and signed in a separate step by keys that are o
             record from deploy/baremetal/image/build-rootfs.sh, #61)
 
 THE /usr IT RUNS (#61, the dm-verity design). The image's command line is --cmdline's words followed by three this
-tool adds from --usr-record's "usr": `root=tmpfs usrhash=<root hash> systemd.verity_usr_options=panic-on-corruption`.
+tool adds from --usr-record's "usr": `root=tmpfs usrhash=<root hash> systemd.verity_usr_options=panic-on-corruption`, and
+the /var mount (VAR_MOUNT: the LUKS2 volume, mounted by the initrd, #61 K61V-4).
 The initrd's systemd-veritysetup-generator opens /usr from the partition pair the root hash names (its PARTUUIDs are
 the hash's halves), every block read is checked against it, and a block that fails stops the host. --cmdline may give
-none of the three, nor anything else that says where /usr or / come from: they come from the record or not at all.
+none of the four, nor anything else that says where /usr, / or /var come from: they come from the record and this tool or not
+at all.
 The command line is a measured section, so the root hash is in PCR 11: another /usr is another PCR 11. The record
 names it ("usr_roothash") and `set` puts it in the measurement set (attest.USR_KEY), for the installer to check.
 
@@ -162,18 +164,28 @@ CMDLINE_HARDENING = r"(rd\.shell|(rd\.)?systemd\.debug[-_]shell)=(0|no|false|off
 # in emergency, and so in a reboot, under an operator still typing (#70). The partition's own wait is
 # crypttab's x-systemd.device-timeout=0. rootflags= is compared as ONE key: an image that needs other
 # root mount flags puts them in this same word, comma-separated.
-# UNDER root=tmpfs (#61) / is a tmpfs, which waits for no device, so the word no longer bounds anything: the volume
-# the recovery key or the client opens is /var now, and its mount's wait is the QEMU boot slice's to set and show
-# (K61V-4). The word is kept (fstab-generator passes x-systemd.* to no filesystem) until that slice replaces it.
+# UNDER root=tmpfs (#61) / is a tmpfs, which waits for no device, so rootflags= no longer bounds anything and is no
+# longer required (a word that carries it is harmless: fstab-generator passes x-systemd.* to no filesystem). The volume
+# the recovery key or the client opens is /var now, and VAR_MOUNT below carries its wait.
 # root=tmpfs and systemd.verity_usr_options=panic-on-corruption (#61, the dm-verity design): / is a tmpfs, nothing on
 # it survives a reboot, and everything that runs comes from the verity /usr; a /usr block that fails its hash halts the
 # host rather than handing a program an I/O error and running on half-verified (systemd-veritysetup sets the option
 # only when asked). With usrhash= (exactly one, 64 hex: cmdline_text) these three come from the /usr record, never
 # from --cmdline (image_cmdline).
+# VAR_MOUNT (#61 K61V-4): /var is the LUKS2 volume the initrd's crypttab opens as /dev/mapper/root (PARTLABEL
+# regalia-root, 90regalia-unlock), mounted BY THE INITRD at /sysroot/var: systemd-fstab-generator reads
+# systemd.mount-extra= in the initrd and, with x-initrd.mount, prefixes /sysroot and orders the mount before
+# initrd-fs.target (systemd 257, src/fstab-generator: add_mounts_from_cmdline, mount_in_initrd). So PID 1 starts with
+# /var there: the machine ID kept on it (etc-inventory.txt [boot]) is read before any unit. After switch-root the
+# same word is the system's var.mount. x-systemd.device-timeout=0: the wait for the volume is infinite, as the root's
+# was (#70: the operator may still be typing the recovery key); nodev,nosuid: nothing on the per-host volume is a
+# device node or a set-uid program. The same word on every host: nothing in it names a disk. Any other
+# systemd.mount-extra= is refused (by key, below): one naming /usr would mount another /usr, unverified.
+VAR_MOUNT = "systemd.mount-extra=/dev/mapper/root:/var:ext4:x-initrd.mount,x-systemd.device-timeout=0,nodev,nosuid"
 CMDLINE_REQUIRED = ("systemd.import_credentials=no", "init_on_free=1", "init_on_alloc=1", "rd.shell=0", "rd.emergency=reboot",
-                    "rootflags=x-systemd.device-timeout=0", "root=tmpfs", "systemd.verity_usr_options=panic-on-corruption")
+                    "root=tmpfs", "systemd.verity_usr_options=panic-on-corruption", VAR_MOUNT)
 # the words image_cmdline adds, and --cmdline may not give (compared by key)
-VERITY_WORDS = ("root=tmpfs", "usrhash=", "systemd.verity_usr_options=panic-on-corruption")
+VERITY_WORDS = ("root=tmpfs", "usrhash=", "systemd.verity_usr_options=panic-on-corruption", VAR_MOUNT)
 
 
 def _cmdline_key(word):
@@ -380,10 +392,10 @@ def image_cmdline(cmdline_raw, usr_record_raw):
         raise Refused("the command line is not ASCII")
     keys = {_cmdline_key(w) for w in VERITY_WORDS}
     own = [w for w in base.split() if _cmdline_key(w) in keys]
-    require(not own, "--cmdline gives %s: root=, usrhash= and systemd.verity_usr_options= come from the /usr record (--usr-record), "
-            "never from --cmdline" % " ".join(own))
+    require(not own, "--cmdline gives %s: root=, usrhash=, systemd.verity_usr_options= and systemd.mount-extra= come from the /usr "
+            "record (--usr-record) and this tool, never from --cmdline" % " ".join(own))
     roothash = usr_roothash(usr_record_raw)
-    return cmdline_text(("%s root=tmpfs usrhash=%s systemd.verity_usr_options=panic-on-corruption" % (base, roothash)).encode("ascii"))
+    return cmdline_text(("%s root=tmpfs usrhash=%s systemd.verity_usr_options=panic-on-corruption %s" % (base, roothash, VAR_MOUNT)).encode("ascii"))
 
 
 # ---- the initrd's review (#198): what the measured initrd does to open the root disk ----
