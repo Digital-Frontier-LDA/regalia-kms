@@ -166,6 +166,17 @@ class Links(unittest.TestCase):
         self.assertEqual(plus, {"/etc/default/prometheus-node-exporter", "/etc/credstore.encrypted"} | set(IMAGE_LINKS))
 
 
+class Readers(unittest.TestCase):
+    def test_seal_hsm_pin_tells_the_unit_to_read_the_etc_name(self):
+        """seal-hsm-pin.sh WRITES the credential at its /var name, and the drop-in line it prints is a READER's: the
+        /etc name (the link), the only source PIN-CUSTODY.md's deployment check accepts. Printing the /var name sent
+        the operator to a drop-in that check refuses (#723 review). An overridden credstore is read where it is."""
+        script = (ROOT / "deploy" / "seal-hsm-pin.sh").read_text()
+        self.assertIn("  LoadCredentialEncrypted=$NAME:$READ_AS\n", script)
+        self.assertIn('READ_AS="$DEST"; [ -n "${REGALIA_CREDSTORE:-}" ] || READ_AS="/etc/credstore.encrypted/regalia-kms-$ID.pin"\n', script)
+        self.assertIn("under `/etc/credstore.encrypted/regalia-kms-`", (ROOT / "PIN-CUSTODY.md").read_text())
+
+
 class Order(unittest.TestCase):
     def test_the_factory_unit_runs_before_sysusers_tmpfiles_and_apparmor(self):
         u = unit(FACTORY_UNIT)

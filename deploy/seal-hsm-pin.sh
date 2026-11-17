@@ -300,6 +300,10 @@ if [ -n "$PUBKEY" ]; then
   say "signed policy: the TPM accepts this boot's PCR 11 signature by $PKFP, and refuses none"
 fi
 NAME="$ID.pin"; DEST="$CREDSTORE/regalia-kms-$ID.pin"
+# the name a unit READS it by: the /etc one, a link to the default credstore on /var (#61), and the only source the
+# deployment check accepts (PIN-CUSTODY.md: under /etc/credstore.encrypted/regalia-kms-); an overridden credstore
+# (REGALIA_CREDSTORE: a bench, a drill) is read where it is
+READ_AS="$DEST"; [ -n "${REGALIA_CREDSTORE:-}" ] || READ_AS="/etc/credstore.encrypted/regalia-kms-$ID.pin"
 if [ -e "$DEST" ] && [ "$REPLACE" = 0 ]; then fail "$DEST exists; pass --replace to rotate it (the old one is kept)"; fi
 
 # ---- a blob is decrypted FIRST, before any card is touched ------------------------------------------
@@ -411,5 +415,5 @@ SEALED
   key           : $([ "$BENCH" = 1 ] && echo "host (BENCH, not production)" || echo "host key + tpm2, PCRs $PCRS")$([ "${#TPMDEV[@]}" -gt 0 ] && echo " (TEST TPM $REGALIA_TPM2_DEVICE, not production)")$([ "$BENCH" = 0 ] && [ -n "${SYSTEMD_CREDENTIAL_SECRET:-}" ] && echo " (TEST host key $HOSTKEY, not production)")$SIGNED_REC
   sealed at    : $(date -u +%FT%TZ)
 Service drop-in line (/etc/systemd/system/regalia-kms.service.d/credentials.conf):
-  LoadCredentialEncrypted=$NAME:$DEST
+  LoadCredentialEncrypted=$NAME:$READ_AS
 REC
