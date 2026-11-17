@@ -194,7 +194,11 @@ an authenticated update from the OS, at the cost of a key ceremony; it is not pa
   distribution update that changes one of those files fails the control until its digest is renewed
   in `os_probe.KNOWN_RULES_FILES`.
 - **AppArmor.** The unit asks for the profile by name (`AppArmorProfile=regalia-kms` in
-  `regalia-kms-hardening.conf.example`) and does not start without it. Deny by default: no
+  `regalia-kms-hardening.conf.example`) and does not start without it. The image binds it itself
+  (`units/regalia-kms.service.d/apparmor.conf`, under `/usr`): the profile with no `-`, `AssertSecurity=apparmor`
+  (with AppArmor off, systemd would skip the profile and run the daemon unconfined), and `Requires=apparmor.service`,
+  which itself requires a successful `/etc` copy, so a failed copy stops the KMS instead of running it unconfined
+  (#723 review). In the image `apparmor.service` loads the profile in enforce mode at every boot. Deny by default: no
   capability, no execution, no datagram socket, so `audit_sink_url` must be an IP address or a name
   in `/etc/hosts`. The profile is parser-checked only, so load it in complain mode first, correct it
   from the kernel log, and only then enforce (the full sequence is in the file's header):

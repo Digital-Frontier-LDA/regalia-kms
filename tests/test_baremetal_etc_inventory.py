@@ -190,21 +190,21 @@ class Order(unittest.TestCase):
         self.assertEqual(u["Type"], ["oneshot"])
         self.assertNotIn("WantedBy", u, "nothing can enable it: /etc/systemd/system is empty when PID 1 loads the units")
 
-    def test_the_units_that_need_etc_pull_it_in_and_wait_for_it(self):
-        for name in ("systemd-tmpfiles-setup.service", "apparmor.service"):
+    def test_every_consumer_runs_only_after_a_successful_copy(self):
+        """#723 review: with Wants= a FAILED copy still let each consumer run on an empty /etc: systemd-sysusers allocating
+        the image's users again at other IDs (e2e/etc-factory.sh's CONTROL), apparmor.service loading no profile (or a
+        stale cache), the full tmpfiles pass applying none of /etc/tmpfiles.d. Requires= fails their jobs instead, and the
+        factory unit ASSERTS its tree (a Condition would skip it, which counts as success, and they would run)."""
+        consumers = ("systemd-sysusers.service", "systemd-tmpfiles-setup.service", "apparmor.service")
+        for name in consumers:
             with self.subTest(unit=name):
                 u = unit(UNITS / (name + ".d") / "regalia-etc.conf")
-                self.assertEqual(u.get("Wants"), ["regalia-etc-factory.service"])
+                self.assertEqual(u.get("Requires"), ["regalia-etc-factory.service"])
+                self.assertNotIn("Wants", u)
                 self.assertEqual(u.get("After")[0].split()[0], "regalia-etc-factory.service")
-
-    def test_sysusers_runs_only_after_a_successful_copy(self):
-        """#723 review: with Wants= a FAILED copy still let systemd-sysusers run on an empty /etc and allocate the image's
-        users again at other IDs (e2e/etc-factory.sh's CONTROL). Requires= fails sysusers' job instead, and the factory
-        unit ASSERTS its tree (a Condition would skip it, which counts as success, and sysusers would run)."""
-        u = unit(UNITS / "systemd-sysusers.service.d" / "regalia-etc.conf")
-        self.assertEqual(u.get("Requires"), ["regalia-etc-factory.service"])
-        self.assertNotIn("Wants", u)
-        self.assertEqual(u.get("After"), ["regalia-etc-factory.service"])
+        # ordered before, not required by: the /dev pass (--prefix=/dev) and the targets
+        before = set(" ".join(unit(FACTORY_UNIT)["Before"]).split())
+        self.assertEqual(before - set(consumers), {"systemd-tmpfiles-setup-dev-early.service", "sysinit.target", "shutdown.target"})
         f = unit(FACTORY_UNIT)
         self.assertEqual(f.get("AssertPathIsDirectory"), ["/usr/share/factory/etc"])
         self.assertNotIn("ConditionPathIsDirectory", f)

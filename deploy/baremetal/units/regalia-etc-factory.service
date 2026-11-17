@@ -8,7 +8,7 @@
 # script made. This unit is ordered before it, so sysusers finds the image's accounts and allocates nothing
 # (e2e/etc-factory.sh shows both orders). Nothing enables it: /etc/systemd/system is empty when PID 1 loads the units,
 # so it is pulled in by drop-ins on the units that need /etc first (systemd-sysusers, systemd-tmpfiles-setup,
-# apparmor: units/<unit>.d/regalia-etc.conf).
+# apparmor: units/<unit>.d/regalia-etc.conf). Each REQUIRES it: a failed copy fails them, not just orders them.
 #
 # Not before everything: PID 1 itself, its generators, systemd-journald and the units started before this one read an
 # empty /etc and run on their defaults (deploy/baremetal/image/etc-inventory.txt, [early]).
