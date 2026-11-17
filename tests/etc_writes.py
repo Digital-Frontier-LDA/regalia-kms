@@ -203,12 +203,23 @@ def _writes(node):
     if name in ("open", "io.open", "builtins.open", "os.fdopen") or (last == "open" and name.endswith("Path.open")):
         mode = node.args[1] if len(node.args) > 1 else next((k.value for k in node.keywords if k.arg == "mode"), None)
         if isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) & set("wax+"):
-            return "open(..., %r)" % mode.value, node.args[:1]
+            # the file positionally, or as file= (open(file="/etc/...", mode="w"): #723 review)
+            return "open(..., %r)" % mode.value, node.args[:1] or [k.value for k in node.keywords if k.arg == "file"]
         return None
     if name == "os.open":
         flags = node.args[1] if len(node.args) > 1 else None
         names = {n.attr for n in ast.walk(flags) if isinstance(n, ast.Attribute)} if flags is not None else set()
         return ("os.open(%s)" % "|".join(sorted(names & WRITING_FLAGS)), node.args[:1]) if names & WRITING_FLAGS else None
+    if last == "open" and isinstance(node.func, ast.Attribute):
+        # a method open on a path: Path("/etc/...").open("w"), p.open(mode="w") (#723 review). The receiver is the
+        # path, the mode its first argument; a module's open(path, mode) (gzip.open) names the path first
+        mode = node.args[0] if node.args else next((k.value for k in node.keywords if k.arg == "mode"), None)
+        if isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) & set("wax+"):
+            return "%s(%r)" % (name, mode.value), [node.func.value]
+        mode = node.args[1] if len(node.args) > 1 else None
+        if isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) & set("wax+"):
+            return "%s(..., %r)" % (name, mode.value), node.args[:1]
+        return None
     if name.startswith("os.") and last in OS_WRITES:
         return name, args
     if name.startswith("shutil.") and last in SHUTIL_WRITES:
@@ -449,18 +460,20 @@ def _scan_shell(text, name):
         for m in ASSIGN.finditer(line):
             assigned.add(m.group(1))
     for number, line in lines:
-        for m in ASSIGN.finditer(line):
-            variables[m.group(1)] = _expand(m.group(2), variables, assigned)
-
         def judge(word, how):
             text, complete = _expand(word, variables, assigned)
             entry = per_host(text, complete)
             if entry:
                 findings.append(Finding(name, number, text + ("" if complete else "..."), entry, how))
 
-        for m in REDIRECT.finditer(line):
-            judge(m.group(1), "redirection")
-        for command in re.split(r"&&|\|\||[;|]|\$\(|`|\bthen\b|\bdo\b", line):
+        # command by command, in the order the shell runs them: an assignment counts from its own command on, so
+        # DEST=/etc/x; echo > "$DEST"; DEST=/tmp/out writes /etc/x (#723 review: all of a line's assignments were applied
+        # before any of its commands)
+        for command in re.split(r"&&|\|\||;|(?<!>)\||\$\(|`|\bthen\b|\bdo\b", line):     # >| is a redirection, not a pipe
+            for m in ASSIGN.finditer(command):
+                variables[m.group(1)] = _expand(m.group(2), variables, assigned)
+            for m in REDIRECT.finditer(command):
+                judge(m.group(1), "redirection")
             try:
                 words = shlex.split(command, posix=False)
             except ValueError:

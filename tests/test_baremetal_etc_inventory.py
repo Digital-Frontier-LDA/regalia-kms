@@ -191,11 +191,23 @@ class Order(unittest.TestCase):
         self.assertNotIn("WantedBy", u, "nothing can enable it: /etc/systemd/system is empty when PID 1 loads the units")
 
     def test_the_units_that_need_etc_pull_it_in_and_wait_for_it(self):
-        for name in ("systemd-sysusers.service", "systemd-tmpfiles-setup.service", "apparmor.service"):
+        for name in ("systemd-tmpfiles-setup.service", "apparmor.service"):
             with self.subTest(unit=name):
                 u = unit(UNITS / (name + ".d") / "regalia-etc.conf")
                 self.assertEqual(u.get("Wants"), ["regalia-etc-factory.service"])
                 self.assertEqual(u.get("After")[0].split()[0], "regalia-etc-factory.service")
+
+    def test_sysusers_runs_only_after_a_successful_copy(self):
+        """#723 review: with Wants= a FAILED copy still let systemd-sysusers run on an empty /etc and allocate the image's
+        users again at other IDs (e2e/etc-factory.sh's CONTROL). Requires= fails sysusers' job instead, and the factory
+        unit ASSERTS its tree (a Condition would skip it, which counts as success, and sysusers would run)."""
+        u = unit(UNITS / "systemd-sysusers.service.d" / "regalia-etc.conf")
+        self.assertEqual(u.get("Requires"), ["regalia-etc-factory.service"])
+        self.assertNotIn("Wants", u)
+        self.assertEqual(u.get("After"), ["regalia-etc-factory.service"])
+        f = unit(FACTORY_UNIT)
+        self.assertEqual(f.get("AssertPathIsDirectory"), ["/usr/share/factory/etc"])
+        self.assertNotIn("ConditionPathIsDirectory", f)
         # the AppArmor cache is emptied by the full pass: apparmor loads after it
         self.assertIn("systemd-tmpfiles-setup.service", unit(UNITS / "apparmor.service.d" / "regalia-etc.conf")["After"][0].split())
 
@@ -213,6 +225,22 @@ class Order(unittest.TestCase):
     def test_the_e2e_runs_on_every_rootfs_build(self):
         self.assertIn('e2e/etc-factory.sh "$OUT/build-1/rootfs.tar"', (ROOT / "e2e" / "rootfs-reproducible.sh").read_text())
         self.assertTrue(os.access(ROOT / "e2e" / "etc-factory.sh", os.X_OK))
+
+
+class Directories(unittest.TestCase):
+    def test_each_per_host_directory_is_made_on_var_and_linked(self):
+        """hostpaths.DIRECTORIES (what e2e/etc-factory.sh checks is a directory in the booted layout, #723 review): each a
+        PER_HOST entry, linked from its /etc name, its /var directory made by a `d` line, root's."""
+        lines = tmpfiles_lines()
+        self.assertTrue(hostpaths.DIRECTORIES)
+        for path in hostpaths.DIRECTORIES:
+            with self.subTest(path=path):
+                self.assertIn(path, hostpaths.PER_HOST)
+                stored = hostpaths.persistent(path)
+                self.assertTrue(any(f[0] in ("L", "L+") and f[1] == path and f[6] == stored for f in lines), path)
+                made = [f for f in lines if f[0] == "d" and f[1] == stored]
+                self.assertEqual(len(made), 1, "no `d %s` line" % stored)
+                self.assertEqual(made[0][3:5], ["root", "root"])
 
 
 class Paths(unittest.TestCase):

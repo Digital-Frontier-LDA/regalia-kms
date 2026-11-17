@@ -53,6 +53,14 @@ MUTANTS = [
     ("seal-hsm-pin credstore", lambda: mutate("deploy/seal-hsm-pin.sh", 'CREDSTORE="${REGALIA_CREDSTORE:-/var/lib/regalia-etc/credstore.encrypted}"', 'CREDSTORE="${REGALIA_CREDSTORE:-/etc/credstore.encrypted}"'),
      "/etc/credstore.encrypted", "deploy/seal-hsm-pin.sh"),
     # planted writes of every kind the scanner reads
+    ("python Path(...).open('w') (review)", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _planted():\n    with Path("/etc/regalia/node.json").open("w") as f:\n        f.write("x")\n'),
+     "/etc/regalia/node.json", "deploy/baremetal/node.py"),
+    ("python an assigned Path's open(mode='w') (review)", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _planted():\n    p = Path("/etc/regalia-kms/config.json")\n    with p.open(mode="w") as f:\n        f.write("x")\n'),
+     "/etc/regalia-kms/config.json", "deploy/baremetal/node.py"),
+    ("python open(file=..., mode='w') (review)", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _planted():\n    with open(file="/etc/regalia/site.json", mode="w") as f:\n        f.write("x")\n'),
+     "/etc/regalia/site.json", "deploy/baremetal/node.py"),
+    ("shell assignments in command order (review)", lambda: mutate("deploy/baremetal/tpm-lockout.sh", None, '\nDEST=/etc/regalia/node.json; echo x > "$DEST"; DEST=/tmp/out\n'),
+     "/etc/regalia/node.json", "deploy/baremetal/tpm-lockout.sh"),
     ("python open w", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _planted():\n    with open("/etc/regalia/site.json", "w") as f:\n        f.write("x")\n'),
      "/etc/regalia/site.json", "deploy/baremetal/node.py"),
     ("python os.open O_CREAT through a constant", lambda: mutate("deploy/baremetal/node.py", None, '\n\nPLANTED = "/etc/ssh/ssh_host_ed25519_key"\n\n\ndef _planted():\n    os.open(PLANTED, os.O_WRONLY | os.O_CREAT, 0o600)\n'),
@@ -107,6 +115,8 @@ NO_OPS = [
     ("shell read and comment", lambda: mutate("deploy/baremetal/tpm-lockout.sh", None, '\ncat /etc/regalia/node.json >/dev/null  # > /etc/regalia/node.json\n')),
     ("unit ReadOnlyPaths", lambda: add_to_section("deploy/baremetal/units/regalia-sync.service", "Service", "ReadOnlyPaths=/etc/regalia")),
     ("blank line", lambda: mutate("deploy/baremetal/enrol.py", None, "\n")),
+    ("python Path(...).open() to read, a module's open to read (review)", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _noop():\n    with Path("/etc/regalia/node.json").open() as f:\n        return f.read(), Path("/etc/regalia/site.json").open("r")\n')),
+    ("shell an assignment after the write, to a /etc name (review)", lambda: mutate("deploy/baremetal/tpm-lockout.sh", None, '\nDEST=/tmp/out; echo x > "$DEST"; DEST=/etc/regalia/node.json\n')),
 ]
 
 

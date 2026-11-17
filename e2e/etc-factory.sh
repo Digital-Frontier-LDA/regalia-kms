@@ -167,12 +167,22 @@ echo "### the machine ID and the AppArmor cache, on /var"
   || bad "the AppArmor cache still holds: $(ls -A "$S/var/cache/apparmor" 2>&1)"
 
 echo "### this host's files: links to /var"
+# the directory-backed ones, as the IMAGE's deploy package says (hostpaths.DIRECTORIES), never read from the tmpfiles
+# file under test: a `d` line removed there must fail here
+DIRS="$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from deploy.baremetal import hostpaths
+print(" ".join(hostpaths.persistent(p) for p in hostpaths.DIRECTORIES))' "$IMG/usr/lib/regalia-kms")" \
+  || { echo "etc-factory: the image's deploy/baremetal/hostpaths.py has no DIRECTORIES"; exit 2; }
+[ -n "$DIRS" ] || { echo "etc-factory: hostpaths.DIRECTORIES is empty"; exit 2; }
 while read -r kind path _ _ _ _ target; do
   case "$kind" in L|L+) ;; *) continue ;; esac
   [ "$(readlink "$S$path")" = "$target" ] && ok "$path -> $target" || bad "$path is $(readlink "$S$path" || echo 'not a link'), not a link to $target"
   case "$target" in
     /usr/*) [ -f "$S$target" ] && ok "  $target is in the image" || bad "  $target is not in the image" ;;
-    *) [ -d "$S$(dirname "$target")" ] && ok "  $(dirname "$target") is made" || bad "  $(dirname "$target") is not made" ;;
+    *) if [[ " $DIRS " == *" $target "* ]]; then          # a directory-backed link: the target itself (#723 review)
+         [ -d "$S$target" ] && [ ! -L "$S$target" ] && ok "  $target is made, a directory" || bad "  $target is not made (a directory)"
+       else
+         [ -d "$S$(dirname "$target")" ] && ok "  $(dirname "$target") is made" || bad "  $(dirname "$target") is not made"
+       fi ;;
   esac
   if [ "$kind" = L ] && { [ -e "$F${path#/etc}" ] || [ -L "$F${path#/etc}" ]; }; then bad "  the factory copy holds ${path}: the image carries a per-host file"; fi
 done < <(grep -E '^L\+? ' "$CONF")

@@ -19,7 +19,9 @@ DefaultDependencies=no
 Conflicts=shutdown.target
 Before=shutdown.target
 Before=systemd-tmpfiles-setup-dev-early.service systemd-sysusers.service systemd-tmpfiles-setup.service apparmor.service sysinit.target
-ConditionPathIsDirectory=/usr/share/factory/etc
+# Assert, not Condition: a Condition would SKIP the unit, which counts as success, and sysusers (Requires=) would run on
+# an empty /etc. A verity image always has the factory tree; one without it is a broken image, refused loudly.
+AssertPathIsDirectory=/usr/share/factory/etc
 
 [Service]
 Type=oneshot

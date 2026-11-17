@@ -31,6 +31,12 @@ PER_HOST = {
 }
 
 
+# The PER_HOST entries that are DIRECTORIES (the rest are files). Their /var directory must exist for the link to be
+# usable at all, so tmpfiles makes it (a `d` line in 00-regalia-etc.tmpfiles.conf) and e2e/etc-factory.sh checks it is
+# there in the booted layout: said here, not inferred from that file, so a `d` line removed is a failure, not a skip.
+DIRECTORIES = ("/etc/regalia", "/etc/regalia-kms", "/etc/credstore.encrypted")
+
+
 class NotPerHost(ValueError):
     pass
 
