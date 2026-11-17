@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from deploy.baremetal import etcdconf, opstate, rejoin as rj, takeover as tk
+from deploy.baremetal import etcdconf, hostpaths, opstate, rejoin as rj, takeover as tk
 from tests.test_baremetal_rejoin import chain, config_for
 from tests.test_baremetal_takeover import NOW, authorization, sign
 from tests.test_baremetal_takeover_etcd import BINS, HAVE, RealEtcd
@@ -32,7 +32,7 @@ class NodeView:
 
     def __init__(self, hosts, me, manifest):
         self.hosts, self.me = hosts, me
-        self.files = {etcdconf.CONFIG_PATH: config_for(me, manifest)}
+        self.files = {etcdconf.STORED_CONFIG: config_for(me, manifest)}
         self.daemon = True
 
     def path(self, p):
@@ -41,8 +41,14 @@ class NodeView:
     def read(self, p):
         return self.files[p]
 
+    def on_disk(self, p):
+        """etcd's side, on disk: what lies beside its data directory (under /var/lib). This host's own /etc files, kept
+        on /var at their hostpaths.VAR_ETC names (#61), are the configuration: held in self.files, which read() and
+        systemctl's start read, as they were by their /etc names."""
+        return p.startswith(os.path.dirname(etcdconf.DATA_DIR) + "/") and not p.startswith(hostpaths.VAR_ETC + "/")
+
     def write(self, p, text, owner=None, mode=0o644):
-        if p.startswith(os.path.dirname(etcdconf.DATA_DIR)):
+        if self.on_disk(p):
             with open(self.path(p), "w") as f:
                 f.write(text)
         else:
@@ -77,7 +83,7 @@ class NodeView:
             if argv[1] == "stop":
                 h.stop(me)
             elif argv[1] in ("start", "restart"):
-                config = json.loads(self.files[etcdconf.CONFIG_PATH])
+                config = json.loads(self.files[etcdconf.STORED_CONFIG])
                 h.stop(me)
                 h.start(me, initial=config["initial-cluster"], state=config["initial-cluster-state"])
                 h.wait(h.client[me], 90, write=False)
@@ -91,6 +97,27 @@ class NodeView:
         argv = [real] + [h.client[me] if a == etcdconf.client_endpoint() else os.path.join(h.data_dir(me), "member", "snap", "db") if a == tk.BACKEND
                          else a for a in argv[1:]]
         return subprocess.run(argv, input=input, capture_output=True, text=True, timeout=60)
+
+
+class FixtureLayout(unittest.TestCase):
+    def test_the_stored_configuration_is_the_configuration_and_the_data_side_is_on_disk(self):
+        """#723's red: the configuration moved to its /var name (/var/lib/regalia-etc/...), which lies under /var/lib like
+        etcd's data, so this fixture sent rejoin's write of it to a directory it never made, and its start read the old
+        one. Rejoin itself writes the /var name through takeover.Host, which makes the directory (and tmpfiles has)."""
+        view = NodeView.__new__(NodeView)
+        self.assertFalse(view.on_disk(etcdconf.STORED_CONFIG))
+        self.assertTrue(view.on_disk(etcdconf.DATA_DIR) and view.on_disk(rj.JOINED))
+        self.assertTrue(etcdconf.STORED_CONFIG.startswith(hostpaths.VAR_ETC + "/"))
+
+    def test_the_real_host_writes_the_stored_name_making_its_directory(self):
+        """takeover.Host.write, what rejoin runs on a host: the /var name is written whole, 0644, its directory made if a
+        host lacks it (tmpfiles makes it at boot: d /var/lib/regalia-etc/regalia)."""
+        with tempfile.TemporaryDirectory() as d:
+            target = os.path.join(d, etcdconf.STORED_CONFIG.lstrip("/"))
+            tk.Host().write(target, "x\n")
+            with open(target) as f:
+                self.assertEqual(f.read(), "x\n")
+            self.assertEqual(os.stat(target).st_mode & 0o777, 0o644)
 
 
 @unittest.skipUnless(HAVE or os.environ.get("REGALIA_EXPECT_ETCD") == "1", "no etcd binaries (ETCD_BIN, ETCDCTL_BIN, ETCDUTL_BIN)")

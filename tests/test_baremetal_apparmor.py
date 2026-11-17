@@ -75,6 +75,27 @@ def allowed(path, perms):
     return set(perms) <= granted
 
 
+class ImageBinding(unittest.TestCase):
+    def test_the_images_kms_runs_confined_or_not_at_all(self):
+        """#723 review: the image's regalia-kms.service (units/regalia-kms.service.d/apparmor.conf, installed under
+        /usr/lib/systemd/system by build-rootfs.sh) fails closed: the profile by name with no "-" (not loaded: refused),
+        AssertSecurity=apparmor (AppArmor off: systemd would skip the profile and run it unconfined), and Requires= +
+        After=apparmor.service, which itself requires a successful /etc copy (test_baremetal_etc_inventory)."""
+        import configparser
+        c = configparser.ConfigParser(interpolation=None, strict=False)
+        c.optionxform = str
+        c.read(ROOT / "deploy/baremetal/units/regalia-kms.service.d/apparmor.conf", encoding="utf-8")
+        self.assertEqual(c.get("Service", "AppArmorProfile", fallback=None), "regalia-kms")
+        self.assertEqual(c.get("Unit", "Requires", fallback=None), "apparmor.service")
+        self.assertEqual(c.get("Unit", "After", fallback=None), "apparmor.service")
+        self.assertEqual(c.get("Unit", "AssertSecurity", fallback=None), "apparmor")
+        self.assertFalse(c.has_option("Unit", "Wants"))
+        self.assertEqual(re.findall(r"(?m)^profile .*$", PROFILE.read_text()), ["profile regalia-kms {"])
+        script = (ROOT / "deploy/baremetal/image/build-rootfs.sh").read_text()
+        self.assertIn("-type d -o -name '*.service'", script)       # the units/ directories and their *.conf drop-ins
+        self.assertIn('"$ROOT/etc/apparmor.d/usr.sbin.regalia-kms"', script)
+
+
 class Profile(unittest.TestCase):
     def test_it_has_the_name_the_unit_asks_for_and_no_attachment_path(self):
         drop_in = (ROOT / "deploy/baremetal/regalia-kms-hardening.conf.example").read_text()

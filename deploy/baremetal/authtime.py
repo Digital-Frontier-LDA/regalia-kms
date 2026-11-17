@@ -80,7 +80,7 @@ import subprocess
 import tempfile
 import time
 
-from deploy.baremetal import admission, membership, sitecfg
+from deploy.baremetal import admission, hostpaths, membership, sitecfg
 
 Refused, require = membership.Refused, membership.require
 
@@ -429,9 +429,11 @@ def service(run_dir, names, **how):
 
 CHRONY_CONF = "/etc/chrony/regalia.conf"   # as enrol.CHRONY_CONF: chronyd -f, by units/chrony.service.d/regalia.conf
 RUN_DIR = "/run/regalia"                   # where regalia-authtime publishes: its unit's only writable /run
+# where it is written: its /var name, CHRONY_CONF being a link there on a verity-/usr host (/etc is a tmpfs, #61)
+STORED_CHRONY_CONF = hostpaths.persistent(CHRONY_CONF)
 
 
-def install_chrony_conf(names, path=CHRONY_CONF):
+def install_chrony_conf(names, path=STORED_CHRONY_CONF):
     """chrony's configuration (conf(names)) where chronyd reads it, as a node's enrolment installs it: NEVER
     replacing a file. The bytes go to a temporary file in the same directory, published with link(2), which
     fails if the target exists; a file already there is accepted only if it is byte for byte this one (a
@@ -473,13 +475,13 @@ def main(argv=None):
         command = sub.add_parser(name, help=text)
         command.add_argument("--config", required=True, help="node.json: run_dir and time_servers")
         if name == "chrony-conf":
-            command.add_argument("--install", action="store_true", help="write it to %s (root), never replacing a different file" % CHRONY_CONF)
+            command.add_argument("--install", action="store_true", help="write it to %s, which %s links to (root), never replacing a different file" % (STORED_CHRONY_CONF, CHRONY_CONF))
     args = parser.parse_args(argv)
     try:
         run_dir, names = configured(args.config)
         if args.command == "chrony-conf":
             if args.install:
-                print("%s: %s" % (CHRONY_CONF, install_chrony_conf(names)))
+                print("%s: %s" % (STORED_CHRONY_CONF, install_chrony_conf(names)))
             else:
                 sys.stdout.write(conf(names))
             return 0
