@@ -25,7 +25,7 @@ import unittest
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from deploy.baremetal import attest, bootcreds, bootnet, espcreds, firewall, membership, sitecfg, uki, unlock
+from deploy.baremetal import attest, bootcreds, bootnet, espcreds, firewall, membership, sitecfg, trails, uki, unlock
 import tests.test_baremetal_unlock as tub
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "e2e", "lib"))
@@ -170,12 +170,27 @@ def verity_proof(said):
 
 
 def unit_states(said):
-    """{unit: {"load", "active", "result", "started" (monotonic µs, 0 = its main process never started), "enabled"}}."""
+    """{unit: {"load", "active", "result", "started" (monotonic µs, 0 = its main process never started; a timer's or a
+    path unit's: when it became active), "enabled", "condition", "assert" (yes/no, the per-host units' line only: None
+    otherwise)}}. A unit reported twice is its last line."""
     units = {}
-    for m in re.finditer(r"REGALIA-E2E-UNIT (\S+) state=([^/\s]*)/([^/\s]*)/(\S*) started=(\S+) enabled=(\S+)", said):
+    for m in re.finditer(r"REGALIA-E2E-UNIT (\S+) state=([^/\s]*)/([^/\s]*)/(\S*) started=(\S+) enabled=(\S+)(?: condition=(\S+) assert=(\S+))?", said):
         started = int(m.group(5)) if m.group(5).isdigit() else 0
-        units[m.group(1)] = {"load": m.group(2), "active": m.group(3), "result": m.group(4), "started": started, "enabled": m.group(6)}
+        units[m.group(1)] = {"load": m.group(2), "active": m.group(3), "result": m.group(4), "started": started, "enabled": m.group(6),
+                             "condition": m.group(7), "assert": m.group(8)}
     return units
+
+
+def firewall_state(said):
+    """The REGALIA-E2E-FIREWALL line as {"table", "input-policy", "ruleset-file"}, or None."""
+    found = re.search(r"REGALIA-E2E-FIREWALL table=(\S+) input-policy=(\S+) ruleset-file=(\S+)", said)
+    return dict(zip(("table", "input-policy", "ruleset-file"), found.groups())) if found else None
+
+
+def kms_unit(said):
+    """The REGALIA-E2E-KMSUNIT line as {"dropins": [path, ...], "credentials": str}, or None."""
+    found = re.search(r"REGALIA-E2E-KMSUNIT dropins=(\S*) credentials=(\S*)", said)
+    return {"dropins": [p for p in found.group(1).split(",") if p], "credentials": found.group(2)} if found else None
 
 
 def machine(said):
@@ -199,7 +214,10 @@ class VerityReport(unittest.TestCase):
             "REGALIA-E2E-BOOTENTRY current=0003 entry=Boot0003* regalia e2e HD(1,GPT,0f0e,0x800,0x200000)/\\EFI\\Linux\\e2e.efi\n"
             "REGALIA-E2E-MACHINE id=" + "1" * 32 + " kept=" + "1" * 32 + " first-boot=yes etc-links=0\n"
             "REGALIA-E2E-UNIT regalia-kms.service state=loaded/activating/exit-code started=81234567 enabled=enabled\n"
-            "REGALIA-E2E-UNIT apparmor.service state=loaded/inactive/success started=0 enabled=enabled\n")
+            "REGALIA-E2E-UNIT apparmor.service state=loaded/inactive/success started=0 enabled=enabled\n"
+            "REGALIA-E2E-UNIT nftables.service state=loaded/inactive/success started=0 enabled=gated condition=no assert=yes\n"
+            "REGALIA-E2E-FIREWALL table=absent input-policy=none ruleset-file=absent\n"
+            "REGALIA-E2E-KMSUNIT dropins=/usr/lib/systemd/system/regalia-kms.service.d/apparmor.conf,/run/systemd/generator/regalia-kms.service.d/50-regalia-credentials.conf credentials=\n")
 
     def test_the_proof_line(self):
         self.assertEqual(verity_proof(self.SAID), {"usr": "/dev/mapper/usr:erofs", "root": "tmpfs:tmpfs", "var": "/dev/mapper/root:ext4",
@@ -209,7 +227,16 @@ class VerityReport(unittest.TestCase):
     def test_the_units(self):
         units = unit_states(self.SAID)
         self.assertEqual(units["regalia-kms.service"]["started"], 81234567)
-        self.assertEqual(units["apparmor.service"], {"load": "loaded", "active": "inactive", "result": "success", "started": 0, "enabled": "enabled"})
+        self.assertEqual(units["apparmor.service"], {"load": "loaded", "active": "inactive", "result": "success", "started": 0, "enabled": "enabled",
+                                                     "condition": None, "assert": None})
+        self.assertEqual((units["nftables.service"]["condition"], units["nftables.service"]["assert"]), ("no", "yes"))
+
+    def test_the_firewall_and_the_kms_unit(self):
+        self.assertEqual(firewall_state(self.SAID), {"table": "absent", "input-policy": "none", "ruleset-file": "absent"})
+        self.assertEqual(kms_unit(self.SAID)["dropins"][1], "/run/systemd/generator/regalia-kms.service.d/50-regalia-credentials.conf")
+        self.assertEqual(kms_unit(self.SAID)["credentials"], "")
+        self.assertIsNone(firewall_state("nothing"))
+        self.assertIsNone(kms_unit("nothing"))
 
     def test_the_machine_and_the_entry(self):
         self.assertEqual(machine(self.SAID)["etc-links"], "0")
@@ -1110,6 +1137,96 @@ class OnQemuVerity(OnQemu):
     # fails to start (Result=resources, measured on an unenrolled guest). The test's stand-in listens on loopback only
     NODE_EXPORTER = b"# the test's (MONITORING.md: metrics node-exporter-args renders a host's)\nARGS=\"--web.listen-address=127.0.0.1:9100\"\n"
     CHRONY = b"# the test's: two NTS servers no guest reaches (chronyd runs, and synchronises with nothing)\nserver 198.18.3.2 iburst nts\nserver 198.18.3.3 iburst nts\n"
+    # THE PER-HOST FILES (regalia-kms-r1s.8), each at its /var name (e2e-enrol writes them as an operator does): what the
+    # image's gates read. The node units' gate, node.json, is NOT written: the guest is no member of a membership, so
+    # those units must stay skipped, which is their gate's other half shown
+    RULESET_VAR = "lib/regalia-etc/nftables.d/regalia-kms.nft"           # under /var
+    AUDIT_ENV_VAR = "lib/regalia-etc/regalia/audit-ship.env"
+    NODE_UNITS = ("regalia-authtime.service", "regalia-site-check.service", "regalia-wg-apply.service", "regalia-wg-apply.path",
+                  "regalia-boot-session.service", "regalia-admission.service", "regalia-sync.service", "regalia-etcd.service",
+                  "regalia-esp-advance.service", "regalia-esp-advance.path")
+    KMS_DROPINS = ("/usr/lib/systemd/system/regalia-kms.service.d/apparmor.conf", "/usr/lib/systemd/system/regalia-kms.service.d/firewall.conf",
+                   "/usr/lib/systemd/system/regalia-kms.service.d/hardening.conf", "/usr/lib/systemd/system/regalia-kms.service.d/memlock.conf",
+                   "/run/systemd/generator/regalia-kms.service.d/50-regalia-credentials.conf")
+
+    def per_host_files(self):
+        """The enrolment disk's per-host files (regalia-kms-r1s.8): this guest's firewall, rendered by firewall.py from its
+        site configuration; an audit collector configuration the shippers' own check accepts (a TEST CA and client
+        certificate made here, valid from a day ago, a receipt key), for a collector no guest reaches; a TEST PIN, which
+        the guest seals as seal-hsm-pin.sh does."""
+        import datetime
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.x509.oid import NameOID
+        now = datetime.datetime.now(datetime.timezone.utc)
+        def certificate(subject, key, issuer, signer, ca):
+            builder = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject)]))
+                       .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, issuer)])).public_key(key.public_key())
+                       .serial_number(x509.random_serial_number()).not_valid_before(now - datetime.timedelta(days=1))
+                       .not_valid_after(now + datetime.timedelta(days=30))
+                       .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True))
+            return builder.sign(signer, hashes.SHA256()).public_bytes(serialization.Encoding.PEM)
+        ca_key, client_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
+        receipt = Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        return {"regalia-kms.nft": firewall.render(self.site("a")).encode(),
+                "audit-ship.env": b"COLLECTOR=https://198.18.3.1:6514\nSITE=site-a\n",
+                "audit-ship-client.crt": certificate("node a (e2e)", client_key, "e2e collector CA", ca_key, False),
+                "audit-ship-client.key": client_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                                                  serialization.NoEncryption()),
+                "audit-ship-collector-ca.pem": certificate("e2e collector CA", ca_key, "e2e collector CA", ca_key, True),
+                "audit-ship-collector-receipt.pub": receipt.hex().encode() + b"\n",
+                "kms-e2e.pin": b"e2e-test-pin-not-a-secret"}
+
+    def var_rename(self, pairs):
+        """Renames files on the guest's /var (the LUKS2 volume, partition 6) while it is off: [(old, new)], each under
+        /var. Opened with the recovery key (keyslot 0, as the console takes it), closed again."""
+        loop, part = self.partition(6)
+        name, mnt = "regalia-e2e-var", self.d + "/var"
+        os.makedirs(mnt, exist_ok=True)
+        opened = run(["cryptsetup", "open", "--key-slot", "0", "--key-file", "-", part, name], input=tub.RECOVERY, capture_output=True)
+        try:
+            self.assertEqual(opened.returncode, 0, opened.stderr)
+            mounted = run(["mount", "/dev/mapper/" + name, mnt], capture_output=True)
+            self.assertEqual(mounted.returncode, 0, mounted.stderr)
+            try:
+                for old, new in pairs:
+                    os.rename(os.path.join(mnt, old), os.path.join(mnt, new))
+            finally:
+                self.assertEqual(run(["umount", mnt], capture_output=True).returncode, 0)
+        finally:
+            run(["cryptsetup", "close", name], capture_output=True)
+            run(["losetup", "-d", loop], capture_output=True)
+
+    def per_host_started(self, said):
+        """The per-host units (regalia-kms-r1s.8), with this host's files on /var: enabled by the image under /usr, gated on
+        them, started at this boot with nothing under /etc/systemd/system (proven(): etc-links=0). The firewall loaded
+        (firewall.py's table, input on drop) and the KMS behind it, its PIN credential named by the image's generator;
+        every trail's shipper started and its prune timer armed. The node units stay skipped: no node.json."""
+        units = unit_states(said)
+        nft = units.get("nftables.service")
+        self.assertIsNotNone(nft, "no line for nftables.service")
+        self.assertEqual((nft["condition"], nft["active"], nft["result"]), ("yes", "active", "success"), nft)
+        self.assertEqual(firewall_state(said), {"table": "loaded", "input-policy": "drop", "ruleset-file": "present"})
+        self.assertEqual(units["regalia-kms.service"]["assert"], "yes", units["regalia-kms.service"])
+        merged = kms_unit(said)
+        self.assertIsNotNone(merged, "no REGALIA-E2E-KMSUNIT line")
+        for path in self.KMS_DROPINS:
+            self.assertIn(path, merged["dropins"], "regalia-kms.service runs without %s" % path)
+        self.assertFalse([p for p in merged["dropins"] if p.startswith("/etc/")], merged["dropins"])
+        for trail in trails.TRAILS:
+            ship, prune = units.get("regalia-audit-ship@%s.service" % trail), units.get("regalia-audit-prune@%s.timer" % trail)
+            self.assertIsNotNone(ship, "no line for regalia-audit-ship@%s: the image does not enable it" % trail)
+            self.assertEqual(ship["condition"], "yes", (trail, ship))
+            self.assertGreater(ship["started"], 0, "regalia-audit-ship@%s never started (its check refused the configuration?) %r" % (trail, ship))
+            self.assertIsNotNone(prune, "no line for regalia-audit-prune@%s.timer: the image does not enable it" % trail)
+            self.assertEqual((prune["condition"], prune["active"]), ("yes", "active"), (trail, prune))
+        for unit in self.NODE_UNITS:
+            self.assertIn(unit, units, "no line for %s: the image does not enable it" % unit)
+            self.assertEqual((units[unit]["condition"], units[unit]["started"]), ("no", 0), (unit, units[unit]))
+        print("boot proof: per host: nftables %s, table %s, %d shippers started, KMS drop-ins %s" % (
+            nft["active"], firewall_state(said)["table"], sum(units["regalia-audit-ship@%s.service" % t]["started"] > 0 for t in trails.TRAILS),
+            ",".join(p.rsplit("/", 1)[1] for p in merged["dropins"])), file=sys.stderr)
 
     def setUp(self):
         for name in ("e2e-b.efi", "e2e-c.efi", "e2e-badhash.efi", "usr-a.json", "usr-b.json", "usr-c.json"):
@@ -1172,6 +1289,7 @@ class OnQemuVerity(OnQemu):
             self.assertEqual(units[unit]["active"], "active", (unit, units[unit]))
             self.assertGreater(units[unit]["started"], 0, (unit, units[unit]))
         self.assertGreater(units["regalia-kms.service"]["started"], 0, "regalia-kms.service's main process never started")
+        self.per_host_started(said)
         self.assertRegex(said, r"REGALIA-E2E-APPARMOR enabled=Y regalia-kms=regalia-kms \(enforce\) etc-passwd=present")
         # chronyd confined by its profile in enforce mode while it reads /etc/chrony/regalia.conf through the link to /var
         self.assertRegex(said, r"REGALIA-E2E-CHRONYD confined=\S*chronyd\S* \(enforce\)")
@@ -1210,7 +1328,7 @@ class OnQemuVerity(OnQemu):
         local = os.urandom(32)
         image, mnt = self.enrolment_disk(local, self.keys["a", "boot"][0],
                                          extra={"esp-partuuid": self.installed["partuuids"]["esp"].encode(), "chrony.conf": self.CHRONY,
-                                                "node-exporter.default": self.NODE_EXPORTER})
+                                                "node-exporter.default": self.NODE_EXPORTER, **self.per_host_files()})
         said = self.boot("v1-enrolment", enrol_disk=image, recovery=True, nvram="host")
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
@@ -1271,6 +1389,36 @@ class OnQemuVerity(OnQemu):
         self.proven(said, "a")
         self.started(said)
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
+
+        # boot v2m, THE PER-HOST FILES GONE (regalia-kms-r1s.8): this host's ruleset and its collector configuration moved
+        # aside on /var. Each gate holds by name: nftables.service and every shipper and prune timer are SKIPPED (their
+        # ConditionPathExists=), and the KMS, which a skipped nftables would not stop (Requires= counts a skip as
+        # success), REFUSES: its AssertPathExists= on the ruleset fails, its main process never starts, and no firewall
+        # table is in the kernel. Then the files go back, and v5's control starts all of it again
+        aside = [(self.RULESET_VAR, self.RULESET_VAR + ".aside"), (self.AUDIT_ENV_VAR, self.AUDIT_ENV_VAR + ".aside")]
+        self.var_rename(aside)
+        said = self.boot("v2m-per-host-missing", credentials, nvram="host")
+        unattended(self, said)
+        self.proven(said, "a")
+        units = unit_states(said)
+        print("boot v2m: %s" % {u: (s["active"], s["condition"], s["assert"], s["started"]) for u, s in units.items()
+                                if u.startswith(("nftables", "regalia-kms", "regalia-audit-ship@sync"))}, file=sys.stderr)
+        self.assertEqual((units["apparmor.service"]["active"], units["apparmor.service"]["result"]), ("active", "success"))
+        nft = units["nftables.service"]
+        self.assertEqual(nft["condition"], "no", nft)
+        self.assertEqual(nft["started"], 0, nft)
+        self.assertNotEqual(nft["active"], "active", nft)
+        self.assertEqual(firewall_state(said), {"table": "absent", "input-policy": "none", "ruleset-file": "absent"})
+        kms = units["regalia-kms.service"]
+        self.assertEqual(kms["assert"], "no", "regalia-kms.service did not refuse on the missing ruleset: %r" % kms)
+        self.assertEqual(kms["started"], 0, "regalia-kms.service started with no firewall: %r" % kms)
+        self.assertNotEqual(kms["active"], "active", kms)
+        for trail in trails.TRAILS:
+            ship, prune = units["regalia-audit-ship@%s.service" % trail], units["regalia-audit-prune@%s.timer" % trail]
+            self.assertEqual((ship["condition"], ship["started"]), ("no", 0), (trail, ship))
+            self.assertEqual(prune["condition"], "no", (trail, prune))
+            self.assertNotEqual(prune["active"], "active", (trail, prune))
+        self.var_rename([(new, old) for old, new in aside])
 
         # boot v3, A WRONG USRHASH: a UKI signed by the same keys whose command line names a root hash one digit off A's
         # (its PARTUUIDs derived from it). No partition carries them: the initrd waits for its /usr, gives up, and reboots
@@ -1353,6 +1501,8 @@ class OnQemuVerity(OnQemu):
             self.assertEqual(units[unit]["started"], 0, "%s ran with no factory /etc" % unit)
             self.assertNotEqual(units[unit]["active"], "active", (unit, units[unit]))
         self.assertRegex(said, r"REGALIA-E2E-APPARMOR enabled=\S+ regalia-kms=none etc-passwd=absent")
+        # ... and no firewall, which the KMS (not started, above) would have refused to run without anyway
+        self.assertNotEqual(units["nftables.service"]["active"], "active", units["nftables.service"])
 
         # boot v9, THE CONTROL: A's UKI again, A's /usr, everything started
         said = self.boot("v9-control", credentials, nvram="host")

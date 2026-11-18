@@ -55,6 +55,27 @@ fi
 if [ -s /mnt/enrol/node-exporter.default ]; then
   install -D -m 0644 /mnt/enrol/node-exporter.default /var/lib/regalia-etc/default/prometheus-node-exporter
 fi
+# THIS HOST'S FIREWALL, its audit collector configuration and a PIN credential (regalia-kms-r1s.8), when the enrolment disk
+# carries them, each written at its /var name as the operator writes it (README.md): the image enables nftables.service,
+# the audit shippers and their prune timers under /usr, each gated on its per-host file, and its generator names the
+# sealed PIN to regalia-kms.service; nothing is enabled or installed under /etc. The NEXT boot starts them
+if [ -s /mnt/enrol/regalia-kms.nft ]; then
+  install -D -m 0644 /mnt/enrol/regalia-kms.nft /var/lib/regalia-etc/nftables.d/regalia-kms.nft
+fi
+if [ -s /mnt/enrol/audit-ship.env ]; then
+  install -d -m 0755 /var/lib/regalia-etc/regalia/audit-ship
+  for f in client.crt collector-ca.pem collector-receipt.pub; do
+    install -m 0644 "/mnt/enrol/audit-ship-$f" "/var/lib/regalia-etc/regalia/audit-ship/$f"
+  done
+  install -m 0640 -o root -g regalia-audit-ship /mnt/enrol/audit-ship-client.key /var/lib/regalia-etc/regalia/audit-ship/client.key
+  install -m 0644 /mnt/enrol/audit-ship.env /var/lib/regalia-etc/regalia/audit-ship.env
+fi
+# (a TEST value, sealed as seal-hsm-pin.sh seals a PIN: to this TPM and host key, PCR 7, under its credential's name)
+if [ -s /mnt/enrol/kms-e2e.pin ]; then
+  systemd-creds encrypt --with-key=host+tpm2 --tpm2-pcrs=7 --name=e2e.pin /mnt/enrol/kms-e2e.pin \
+    /var/lib/regalia-etc/credstore.encrypted/regalia-kms-e2e.pin
+  chmod 0600 /var/lib/regalia-etc/credstore.encrypted/regalia-kms-e2e.pin
+fi
 sync
 umount /mnt/enrol
 echo "REGALIA-E2E-ENROLLED" > /dev/console

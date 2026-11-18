@@ -34,6 +34,22 @@ for u in systemd-firstboot.service regalia-etc-factory.service systemd-sysusers.
   enabled="$(systemctl is-enabled "$u" 2>/dev/null | head -1)"
   echo "REGALIA-E2E-UNIT $u state=$st started=${started:-none} enabled=${enabled:-none}" > /dev/console
 done
+# THE PER-HOST UNITS (regalia-kms-r1s.8): what the image enables under /usr gated on a per-host file (units-enabled.txt
+# [per-host]): the firewall, and every regalia-* unit its multi-user and timers targets want. ConditionResult says whether
+# the gate let it start ("no": the per-host file is not there), AssertResult whether an assert held (regalia-kms: the ruleset)
+for u in nftables.service regalia-kms.service $(ls /usr/lib/systemd/system/multi-user.target.wants /usr/lib/systemd/system/timers.target.wants 2>/dev/null \
+                                                  | grep -E '^regalia-' | grep -vE '^regalia-(e2e-|kms\.service)' | sort -u); do
+  st="$(systemctl show -P LoadState "$u" 2>/dev/null)/$(systemctl show -P ActiveState "$u" 2>/dev/null)/$(systemctl show -P Result "$u" 2>/dev/null)"
+  started="$(systemctl show -P ExecMainStartTimestampMonotonic "$u" 2>/dev/null)"
+  case "$u" in *.timer|*.path) started="$(systemctl show -P ActiveEnterTimestampMonotonic "$u" 2>/dev/null)" ;; esac
+  echo "REGALIA-E2E-UNIT $u state=$st started=${started:-none} enabled=gated condition=$(systemctl show -P ConditionResult "$u" 2>/dev/null || echo none) assert=$(systemctl show -P AssertResult "$u" 2>/dev/null || echo none)" > /dev/console
+done
+# the firewall the kernel holds: firewall.py's table, and its input chain's policy
+fw=absent; nft --terse list table inet regalia_kms >/dev/null 2>&1 && fw=loaded
+policy="$(nft --terse list chain inet regalia_kms input 2>/dev/null | grep -o 'policy [a-z]*' | head -1 | cut -d' ' -f2)"
+echo "REGALIA-E2E-FIREWALL table=$fw input-policy=${policy:-none} ruleset-file=$(test -e /etc/nftables.d/regalia-kms.nft && echo present || echo absent)" > /dev/console
+# the KMS unit's drop-ins as systemd merged them (the image's, and the generator's for this host's PIN credentials)
+echo "REGALIA-E2E-KMSUNIT dropins=$(systemctl show -P DropInPaths regalia-kms.service 2>/dev/null | tr ' ' ',') credentials=$(systemctl show -P LoadCredentialEncrypted regalia-kms.service 2>/dev/null | tr ' ' ',')" > /dev/console
 # /var was mounted IN THE INITRD (the UKI's systemd.mount-extra=...:x-initrd.mount): the initrd's own journal line for
 # /sysroot/var, kept across switch-root, and the boot's first line naming the real root's var.mount, if any
 initrdvar="$(journalctl -b -o cat --no-pager 2>/dev/null | grep -m1 -o 'Mounted sysroot-var.mount.*' | tr -s ' ' | cut -c1-120)"

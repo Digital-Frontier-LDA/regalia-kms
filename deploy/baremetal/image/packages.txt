@@ -45,7 +45,7 @@ libtss2-tcti-device0t64 | - | tpm2-tools' device TCTI (/dev/tpmrm0)
 cryptsetup-bin | cryptsetup /usr/sbin/cryptsetup | the root volume's keyslots (host_probe, unlock, recovery-reconcile)
 wireguard-tools | wg | the service and unlock tunnels (wgsvc, node, enrol)
 iproute2 | ip ss | the tunnels' interfaces and addresses (node, wgsvc); os_probe's listening sockets
-nftables | nft | the host firewall; host_probe reads its ruleset
+nftables | nft /usr/sbin/nft | the host firewall, loaded by nftables.service (enabled under /usr, gated on this host's ruleset); host_probe reads its ruleset, and regalia-kms.service checks its table is loaded (units/regalia-kms.service.d/firewall.conf)
 openssl | openssl | attest and evidence's certificate checks
 opensc | pkcs11-tool | enrol's HSM token checks (Nitrokey HSM 2)
 yubikey-manager | ykman | enrol's YubiKey checks

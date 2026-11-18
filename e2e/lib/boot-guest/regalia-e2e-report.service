@@ -6,6 +6,14 @@ Description=regalia e2e: report that the root filesystem is up, and power off
 After=regalia-e2e-enrol.service systemd-pcrphase.service
 # ... and after the units whose state it reports (#61 K61V-4): ordering only, it pulls none of them in
 After=regalia-etc-factory.service systemd-sysusers.service apparmor.service chrony.service prometheus-node-exporter.service regalia-kms.service
+# ... and the per-host units the image enables gated on per-host files (regalia-kms-r1s.8): the firewall, the audit
+# shippers and their timers, the node units (ordering only)
+After=nftables.service timers.target regalia-audit-ship@admission.service regalia-audit-ship@enrol.service regalia-audit-ship@esp-advances.service
+After=regalia-audit-ship@reanchor.service regalia-audit-ship@recount.service regalia-audit-ship@recovery-key.service
+After=regalia-audit-ship@recovery-reconcile.service regalia-audit-ship@survivor.service regalia-audit-ship@sync.service
+After=regalia-audit-ship@time.service regalia-audit-ship@update.service
+After=regalia-authtime.service regalia-site-check.service regalia-wg-apply.service regalia-boot-session.service regalia-admission.service
+After=regalia-sync.service regalia-etcd.service regalia-esp-advance.service
 
 [Service]
 Type=oneshot

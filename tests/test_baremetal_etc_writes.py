@@ -110,6 +110,28 @@ MUTANTS = [
                                                      "L+ /etc/credstore.encrypted - - - - /var/lib/regalia-etc/credstore.encrypted",
                                                      "C /etc/credstore.encrypted - - - - /var/lib/regalia-etc/credstore.encrypted"),
      "/etc/credstore.encrypted", "deploy/baremetal/units/00-regalia-etc.tmpfiles.conf"),
+    # /etc/systemd/system (regalia-kms-r1s.8): what README.md had the operator do, each planted in deploy code
+    ("shell systemctl enable --now (r1s.8)", lambda: mutate("deploy/baremetal/tpm-lockout.sh", None, '\nsystemctl enable --now regalia-audit-ship@sync nftables.service\n'),
+     "/etc/systemd/system", "deploy/baremetal/tpm-lockout.sh"),
+    ("shell sudo systemctl mask (r1s.8)", lambda: mutate("deploy/baremetal/recovery-key.sh", None, '\nsudo systemctl mask chronyd-restricted.service\n'),
+     "/etc/systemd/system", "deploy/baremetal/recovery-key.sh"),
+    ("shell a drop-in installed under /etc/systemd/system (r1s.8)", lambda: mutate("deploy/baremetal/recovery-key.sh", None,
+        '\nD=/etc/systemd/system/regalia-kms.service.d\ninstall -D -m 0644 firewall.conf "$D/firewall.conf"\n'),
+     "/etc/systemd/system/regalia-kms.service.d/firewall.conf", "deploy/baremetal/recovery-key.sh"),
+    ("python argv systemctl enable (r1s.8)", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _planted(run):\n    run(["systemctl", "--quiet", "enable", "regalia-sync.service"])\n'),
+     "/etc/systemd/system", "deploy/baremetal/node.py"),
+    ("python a drop-in written (r1s.8)", lambda: mutate("deploy/baremetal/node.py", None,
+        '\n\ndef _planted():\n    with open("/etc/systemd/system/regalia-kms.service.d/credentials.conf", "w") as f:\n        f.write("x")\n'),
+     "/etc/systemd/system/regalia-kms.service.d/credentials.conf", "deploy/baremetal/node.py"),
+    ("unit ExecStartPost systemctl enable (r1s.8)", lambda: add_to_section("deploy/baremetal/units/regalia-sync.service", "Service",
+                                                                         "ExecStartPost=/usr/bin/systemctl enable regalia-admission.service"),
+     "/etc/systemd/system", "deploy/baremetal/units/regalia-sync.service"),
+    ("tmpfiles a wants link under /etc (r1s.8)", lambda: mutate("deploy/baremetal/units/regalia.tmpfiles.conf", None,
+        "L /etc/systemd/system/multi-user.target.wants/regalia-sync.service - - - - /usr/lib/systemd/system/regalia-sync.service\n"),
+     "/etc/systemd/system/multi-user.target.wants/regalia-sync.service", "deploy/baremetal/units/regalia.tmpfiles.conf"),
+    ("generator writes /etc instead of its output directory (r1s.8)", lambda: mutate("deploy/baremetal/generators/regalia-kms-credentials",
+        'mkdir -p "$out/regalia-kms.service.d"', 'out=/etc/systemd/system; mkdir -p "$out/regalia-kms.service.d"'),
+     "/etc/systemd/system/regalia-kms.service.d", "deploy/baremetal/generators/regalia-kms-credentials"),
 ]
 
 # each must leave the scan clean: reads, mentions, the /var names, and writes to /etc paths that are not per-host
@@ -125,6 +147,13 @@ NO_OPS = [
     ("python gzip.open to read (review)", lambda: mutate("deploy/baremetal/node.py", None, '\n\ndef _noop():\n    import gzip\n    with gzip.open("/etc/regalia/node.json", "rb") as f:\n        return f.read()\n')),
     ("shell a command-local /etc assignment, a /tmp write (review)", lambda: mutate("deploy/baremetal/tpm-lockout.sh", None, '\nDEST=/tmp/out\nDEST=/etc/regalia/node.json /usr/bin/true\nprintf x > "$DEST"\n')),
     ("shell an assignment after the write, to a /etc name (review)", lambda: mutate("deploy/baremetal/tpm-lockout.sh", None, '\nDEST=/tmp/out; echo x > "$DEST"; DEST=/etc/regalia/node.json\n')),
+    # systemctl that writes nothing under /etc (r1s.8): starting, reloading, a runtime enablement, another tree, a read
+    ("shell systemctl start, daemon-reload, --runtime, --root=, a read (r1s.8)", lambda: mutate("deploy/baremetal/tpm-lockout.sh", None,
+        '\nsystemctl start regalia-audit-ship@sync\nsystemctl daemon-reload\nsystemctl enable --runtime x.service\n'
+        'chroot "$R" systemctl --root=/ preset-all\nsystemctl --root=/mnt enable x.service\ncat /etc/systemd/system/x.service >/dev/null\n')),
+    ("python argv systemctl restart, a drop-in under /run (r1s.8)", lambda: mutate("deploy/baremetal/node.py", None,
+        '\n\ndef _noop(run):\n    run(["systemctl", "restart", "regalia-sync.service"])\n'
+        '    with open("/run/systemd/system/regalia-kms.service.d/x.conf", "w") as f:\n        f.write("x")\n')),
 ]
 
 
@@ -139,7 +168,8 @@ class EtcWrites(unittest.TestCase):
         for rel, kind in etc_writes.deploy_files().items():
             kinds.setdefault(kind, []).append(rel)
         self.assertGreater(len(kinds.get("python", [])), 50)
-        for rel in ("deploy/seal-hsm-pin.sh", "deploy/baremetal/image/build-rootfs.sh", "deploy/baremetal/initrd/wg-boot"):
+        for rel in ("deploy/seal-hsm-pin.sh", "deploy/baremetal/image/build-rootfs.sh", "deploy/baremetal/initrd/wg-boot",
+                    "deploy/baremetal/generators/regalia-kms-credentials"):
             self.assertIn(rel, kinds.get("shell", []))
         for rel in ("deploy/systemd/regalia-kms.service", "deploy/baremetal/units/regalia-sync.service",
                     "deploy/baremetal/units/chrony.service.d/regalia.conf", "deploy/baremetal/units/regalia-etc-factory.service",

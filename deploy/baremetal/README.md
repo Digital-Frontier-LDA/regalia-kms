@@ -162,8 +162,9 @@ an authenticated update from the OS, at the cost of a key ceremony; it is not pa
   The binary itself is covered by IMA attestation (above) and by the package signature.
 - The regalia-kms host role (unprivileged service, no core dumps, no hibernation, swap off or
   encrypted): measured by `deploy/baremetal/os_probe.py`.
-- **The service's sandbox.** Install `deploy/baremetal/regalia-kms-hardening.conf.example` as
-  `/etc/systemd/system/regalia-kms.service.d/hardening.conf`. Measured, with the service running:
+- **The service's sandbox.** The image ships `deploy/baremetal/regalia-kms-hardening.conf.example` as
+  `/usr/lib/systemd/system/regalia-kms.service.d/hardening.conf` (build-rootfs.sh): nothing to install, and nothing
+  under `/etc/systemd/system`, which a verity host empties at every boot (regalia-kms-r1s.8). Measured, with the service running:
   `kms_service_sandboxed` (ProtectSystem=strict, ProtectHome, PrivateTmp, ProtectKernelTunables/
   Modules/Logs, ProtectControlGroups, RestrictSUIDSGID, LockPersonality), `kms_capabilities_minimal`
   (no capability in the unit's bounding or ambient set, nor in the running process's) and
@@ -288,8 +289,9 @@ an authenticated update from the OS, at the cost of a key ceremony; it is not pa
   recorded; then it starts. A backward jump is refused where expiries are judged anyway
   (`heartbeat.authenticated_now`: the last reading plus the TPM time since, a floor kept across reboots);
   what no node can refuse is two declared servers agreeing on a wrong time at the first boot, which is why
-  they must belong to independent operators. Mask the package's other ways of running chronyd at install:
-  `systemctl mask chronyd-restricted.service chrony-dnssrv@.timer`. Leap seconds come from the
+  they must belong to independent operators. The package's other ways of running chronyd,
+  `chronyd-restricted.service` and `chrony-dnssrv@.timer`, are masked by the image (links to `/dev/null` under
+  `/usr`: `image/units-enabled.txt`, `[masked]`); there is nothing to mask at install. Leap seconds come from the
   `right/UTC` zone (`leapsectz`): **on Debian 13 install `tzdata-legacy`**, where `right/` now lives (a host
   without it is refused by `regalia-authtime`, which publishes "…/right/UTC is missing: chronyd has no
   leap-second data (install tzdata-legacy)" and records it in the time trail, so the node goes unready
@@ -298,7 +300,7 @@ an authenticated update from the OS, at the cost of a key ceremony; it is not pa
   firewall
   opens NTS-KE (TCP 4460) and NTP (UDP 123) to those networks and nowhere else; an `outbound` entry for
   either port is refused, so there is no plain-NTP fallback. `units/chrony.service.d/regalia.conf`
-  (installed in `/etc/systemd/system/chrony.service.d/`) starts chronyd with `-f /etc/chrony/regalia.conf`
+  (the image's, in `/usr/lib/systemd/system/chrony.service.d/`) starts chronyd with `-f /etc/chrony/regalia.conf`
   (Debian's own `chrony.conf`, a package conffile, is never touched; `/etc/chrony` is where the
   distribution's AppArmor profile lets chronyd read) and conflicts with systemd-timesyncd: chronyd must be
   the only thing on the host that sets the clock. NTS cookies stay in chrony's own state directory
@@ -379,16 +381,22 @@ else
 fi
 ```
 
-It must also survive a reboot, and the KMS must never start without it:
-- **Load it at boot:** in `/etc/nftables.conf`, keep Debian's `flush ruleset` first, then add
-  `include "/etc/nftables.d/*.nft"`, and `systemctl enable nftables.service`.
-- **Order the KMS after it**, with a drop-in `/etc/systemd/system/regalia-kms.service.d/firewall.conf`:
-  ```ini
-  [Unit]
-  Requires=nftables.service
-  After=nftables.service
-  ```
-  If the ruleset fails to load, nftables.service fails and the KMS does not start.
+It must also survive a reboot, and the KMS must never start without it. **The image does both; the file above is the
+only thing the operator writes** (regalia-kms-r1s.8: on a verity host `/etc` is made from the image at every boot, so
+an edited `/etc/nftables.conf`, a `systemctl enable` or a drop-in under `/etc/systemd/system` would be gone at the
+next boot):
+- **Loaded at boot:** the image's `/etc/nftables.conf` is `flush ruleset` and `include "/etc/nftables.d/regalia-kms.nft"`
+  (build-rootfs.sh), and `nftables.service` is enabled under `/usr` (`image/units-enabled.txt`, `[per-host]`), gated
+  on this host's ruleset (`units/nftables.service.d/regalia.conf`: `ConditionPathExists=/etc/nftables.d/regalia-kms.nft`).
+  Before the ruleset is written (a host not enrolled yet) it is skipped.
+- **The KMS refuses to start without it** (`units/regalia-kms.service.d/firewall.conf`, the image's): `Requires=` and
+  `After=nftables.service`, so a ruleset that fails to load fails the KMS; `AssertPathExists=` on the ruleset, so a
+  host with none (nftables.service skipped, which `Requires=` alone counts as success) fails the start by name; and
+  `ExecStartPre=+nft list table inet regalia_kms`, so the table must be loaded in the kernel when it starts. The QEMU
+  boots show both ways (`tests/test_baremetal_unlock_boot.py`, OnQemuVerity: the ruleset there, nftables active and
+  the KMS started; the ruleset gone, nftables skipped and the KMS not started).
+- **Loaded now, without a reboot:** the render above loads it (`nft -f`); `systemctl start nftables.service
+  regalia-kms.service` then starts what the boot skipped.
 - **Check again after the reboot** (section 5): `firewall_default_deny` is measured on the running
   host, so a ruleset that loaded once but not at boot fails commissioning.
 
@@ -941,6 +949,12 @@ the single-site baseline (initramfs-tools, TPM-only crypttab); they change when 
 Six systemd units in `deploy/baremetal/units/`, all run from one configuration, `/etc/regalia/node.json`
 (`deploy/baremetal/node.py`; schema `regalia.node/v1`, every field required):
 
+**On the verity-`/usr` image there is nothing to enable** (regalia-kms-r1s.8). The image enables these units, with
+`regalia-site-check`, `regalia-esp-advance` and `regalia-etcd`, under `/usr` (`image/units-enabled.txt`,
+`[per-host]`), each gated on `/etc/regalia/node.json` (`units/<unit>.d/per-host.conf`), which enrolment's commit
+writes on /var: before enrolment they are skipped, and from the next boot on they start, every boot. An operator's
+`systemctl enable` would be gone at the next boot (`/etc` is made from the image), and no step here uses one.
+
 | Unit | Runs as | Privilege | Does |
 |---|---|---|---|
 | `regalia-authtime` | root | none, no network | asks chrony every 15 s whether time is authenticated; writes `/run/regalia/authtime.json` |
@@ -1127,10 +1141,15 @@ removing only what it can prove it made.
 
 Every trail in `deploy/baremetal/trails.py`'s registry is hash-chained line by line and shipped to the
 audit collector by one instance of `units/regalia-audit-ship@.service` per trail
-(`cmd/regalia-audit-ship`, `internal/audit/trail.go`). Enable all of them, one per trail in the registry:
+(`cmd/regalia-audit-ship`, `internal/audit/trail.go`). **The image enables all of them**, one per trail in the registry,
+with each trail's daily `regalia-audit-prune@<trail>.timer` (`image/units-enabled.txt`, `[per-host]`), gated on this
+host's collector configuration, `/etc/regalia/audit-ship.env` (on /var; `units/regalia-audit-ship@.service.d/per-host.conf`):
+nothing to enable, and nothing under `/etc/systemd/system`, which a verity host empties at every boot
+(regalia-kms-r1s.8). Write the configuration (AUDIT-COLLECTOR.md, section 3, at its /var names under
+`/var/lib/regalia-etc/regalia/`); from the next boot on every instance starts. To start them now:
 
 ```sh
-systemctl enable --now \
+systemctl start \
     regalia-audit-ship@admission \
     regalia-audit-ship@enrol \
     regalia-audit-ship@esp-advances \
@@ -1144,7 +1163,7 @@ systemctl enable --now \
     regalia-audit-ship@update
 ```
 
-A node that ships only some of them raises `RegaliaAuditShipMetricsMissing` until the rest are enabled
+A node that ships only some of them raises `RegaliaAuditShipMetricsMissing` until the rest are running
 (`tests/test_scrape_job_contract.py` holds this list to the registry).
 Each line becomes one audit event on the stream `<site>.<trail>`.
 

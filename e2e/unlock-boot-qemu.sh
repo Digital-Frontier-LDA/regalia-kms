@@ -23,7 +23,11 @@
 # boot proving /usr is /dev/mapper/usr (verified, the root hash its UKI names), / a tmpfs, /var the LUKS2 mapping
 # mounted in the initrd, BootCurrent the installer's entry, nothing enabled under /etc, one machine ID kept on /var,
 # and the image's units (the factory /etc, sysusers, AppArmor with the KMS's profile, chrony, node_exporter, the
-# KMS) started; a WRONG USRHASH (one digit: no /usr, no key given, the guest ends by itself); a TAMPERED block (one
+# KMS) started; THE PER-HOST UNITS (regalia-kms-r1s.8): enrolment writes this host's firewall ruleset, its audit
+# collector configuration and a sealed PIN at their /var names, and after the reboot nftables (the table loaded), every
+# audit shipper and prune timer, and the KMS behind the firewall with its PIN named by the image's generator are
+# started, nothing enabled under /etc; then those files moved aside: nftables and the shippers SKIPPED by their gates
+# and the KMS REFUSING (its assert on the ruleset), until a control boot with them back; a WRONG USRHASH (one digit: no /usr, no key given, the guest ends by itself); a TAMPERED block (one
 # byte of usr-a: dm-verity panics the kernel); A/B (image B in usr-b and its UKI, then A's again, the fallback); a
 # BROKEN FACTORY /etc (an image without /usr/share/factory/etc: sysusers, apparmor and the KMS never start). Each
 # failing case has a control boot that passes after it.
@@ -445,6 +449,6 @@ fi
 if ! grep -q "^$TEST" <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-[ "$CASES" = verity ] && { echo "unlock-boot-qemu: the verity /usr's boots passed (enrolment and the installer's firmware entry, an entry with options refused, the proof on every boot, a wrong usrhash, a tampered block, A/B and the fallback, a broken factory /etc)"; exit 0; }
+[ "$CASES" = verity ] && { echo "unlock-boot-qemu: the verity /usr's boots passed (enrolment and the installer's firmware entry, an entry with options refused, the proof on every boot, the per-host units started after the reboot and gated without their files (the KMS refusing with no firewall), a wrong usrhash, a tampered block, A/B and the fallback, a broken factory /etc)"; exit 0; }
 echo "unlock-boot-qemu: 17 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, a forked chain refused by the TPM anchor, an older signed image approved and then retired (refused: the recovery key), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock, a new epoch on the ESP ahead of the anchor and with it, the ESP behind the anchor refused)"
 

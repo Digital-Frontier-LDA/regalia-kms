@@ -90,7 +90,11 @@ passed no `--tpm2-pcrs` at all, so the binding it produced was whatever the tool
 recorded policy — while the text below it required binding to measured-boot PCRs. Do not pass the PIN
 as an argument or environment variable to `systemd-creds`; it reads the credential from standard
 input. Install the provided service drop-in only after its credential IDs match the non-secret device
-IDs in the custody manifest. *Verified by:* `hsm-host-role/files/verify-deployment.py`, which requires
+IDs in the custody manifest. On the verity-`/usr` KMS host image there is no drop-in to install (`/etc/systemd/system`
+is emptied at every boot, regalia-kms-r1s.8): the image's generator,
+`deploy/baremetal/generators/regalia-kms-credentials`, names every `regalia-kms-<id>.pin` in this host's credstore
+to the unit at each boot (and at `systemctl daemon-reload`), as the line `seal-hsm-pin.sh` prints; so seal only the
+IDs the manifest names. *Verified by:* `hsm-host-role/files/verify-deployment.py`, which requires
 every `LoadCredentialEncrypted=` source to sit under `/etc/credstore.encrypted/regalia-kms-`.
 
 ## Binding the kernel as well: a signed PCR 11 policy
