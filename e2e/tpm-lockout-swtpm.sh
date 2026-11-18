@@ -11,18 +11,20 @@
 #      on a fresh TPM, when a setting drifts, and when the TPM is in lockout
 #   3  drift is repaired by --set with the authorization; a wrong authorization is refused, and then
 #      the lockout hierarchy refuses the right one too (its recovery time: ask once, from the escrow)
-#   4  the PIN import key that seal-hsm-pin.sh --init-import-key creates is used and the power cut,
-#      four times: no try is counted. Control: a key with the template before #57 counts every cut
+#   4  the PIN import key that seal-hsm-pin.sh --init-import-key creates is used (a v2 blob imported,
+#      loaded and unsealed under it) and the power cut, four times: no try is counted. Control: a key with the template before #57 counts every cut
 #   5  what the settings are for: unsealing a PIN credential, then a power cut, counts one try each
 #      time; the PIN is still released after four cuts under the policy; --clear forgives them; and they heal
 #      on their own (shown with a short healing time, since 600 s is too long for a test)
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; LOCKOUT="$HERE/deploy/baremetal/tpm-lockout.sh"; SEAL="$HERE/deploy/seal-hsm-pin.sh"
+# shellcheck source=e2e/lib/pin-blob-v2.sh
+. "$HERE/e2e/lib/pin-blob-v2.sh"
 pass=0; fail=0
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; pass=$((pass+1)); }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; fail=$((fail+1)); }
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; }
-for t in swtpm tpm2_getcap tpm2_dictionarylockout tpm2_changeauth tpm2_rsadecrypt openssl systemd-creds python3; do
+for t in swtpm tpm2_getcap tpm2_dictionarylockout tpm2_changeauth tpm2_duplicate tpm2_import tpm2_unseal openssl systemd-creds python3; do
   command -v "$t" >/dev/null || { echo "tpm-lockout-swtpm: $t is required (swtpm, tpm2-tools, openssl, systemd)"; exit 2; }
 done
 sudo -n true 2>/dev/null || { echo "tpm-lockout-swtpm: needs sudo"; exit 2; }
@@ -149,22 +151,34 @@ up b
 out="$(sudo env TPM2TOOLS_TCTI="$D" "$SEAL" --init-import-key --import-pub "$W/import.pem" 2>&1)" && grep -q 'IMPORT KEY CREATED' <<< "$out" || F "--init-import-key failed: $out"
 attrs="$(tpm2_readpublic -c 0x81000101 2>/dev/null | awk '/^attributes:/{getline; print $2}')"
 grep -q noda <<< "$attrs" && P "the key seal-hsm-pin.sh creates carries noda ($attrs)" || F "import key attributes: $attrs"
-printf 7310048261 | openssl pkeyutl -encrypt -pubin -inkey "$W/import.pem" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 -out "$W/pin.blob"
+mkdir -p "$W/cer"; printf 7310048261 | pin_blob_v2 "$W/import.pem" "$W/pin.blob" "$W/cer" || F "cannot make the v2 blob"
+# open <blob>: what seal-hsm-pin.sh --from-blob does with it (import, load, unseal under the key at 0x81000101)
+open_blob(){ local d="$W/open"; rm -rf "$d"; mkdir -p "$d"; python3 -I -c '
+import sys; b=open(sys.argv[1],"rb").read(); b=b[b.index(b"\n")+1:]; o=0
+for n in ("pub","dpriv","seed"):
+    s=int.from_bytes(b[o:o+2],"big"); open(sys.argv[2]+"/"+n,"wb").write(b[o:o+2+s]); o+=2+s' "$1" "$d"
+  tpm2_import -Q -C 0x81000101 -u "$d/pub" -i "$d/dpriv" -s "$d/seed" -r "$d/priv" 2>/dev/null && tpm2_flushcontext -t \
+    && tpm2_load -Q -C 0x81000101 -u "$d/pub" -r "$d/priv" -c "$d/o.ctx" 2>/dev/null && tpm2_unseal -c "$d/o.ctx" 2>/dev/null; tpm2_flushcontext -t; }
 cut_power; base="$(get TPM2_PT_LOCKOUT_COUNTER)"
 [ "$base" = 0 ] && P "creating it, then a power cut: 0 tries counted" || F "creating the key and cutting the power counted $base"
 ok=1; for _ in 1 2 3 4; do
-  [ "$(tpm2_rsadecrypt -c 0x81000101 -s oaep -o /dev/stdout "$W/pin.blob" 2>/dev/null | tr -d '\0')" = 7310048261 ] || ok=0; cut_power; done
-[ "$ok" = 1 ] && [ "$(get TPM2_PT_LOCKOUT_COUNTER)" = 0 ] && P "used, then the power cut, four times: it still decrypts and 0 tries are counted" \
-  || F "import key after 4 cuts: decrypts=$ok, counter $(get TPM2_PT_LOCKOUT_COUNTER)"
+  [ "$(open_blob "$W/pin.blob")" = 7310048261 ] || ok=0; cut_power; done
+[ "$ok" = 1 ] && [ "$(get TPM2_PT_LOCKOUT_COUNTER)" = 0 ] && P "used (import, load, unseal), then the power cut, four times: it still unseals and 0 tries are counted" \
+  || F "import key after 4 cuts: unseals=$ok, counter $(get TPM2_PT_LOCKOUT_COUNTER)"
 down; up c
+# control: the same storage key WITHOUT noda (the template before #57), and a sealed object without it
 tpm2_createprimary -Q -C o -g sha256 -G ecc256:aes128cfb -c "$W/p.ctx"
-tpm2_create -Q -C "$W/p.ctx" -G rsa3072 -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt' -u "$W/k.pub" -r "$W/k.priv"; tpm2_flushcontext -t
+tpm2_create -Q -C "$W/p.ctx" -G ecc256:aes128cfb -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt' -u "$W/k.pub" -r "$W/k.priv"; tpm2_flushcontext -t
 tpm2_load -Q -C "$W/p.ctx" -u "$W/k.pub" -r "$W/k.priv" -c "$W/k.ctx"; tpm2_evictcontrol -Q -C o -c "$W/k.ctx" 0x81000101 >/dev/null; tpm2_flushcontext -t
-tpm2_readpublic -Q -c 0x81000101 -f pem -o "$W/old.pem"
-printf 7310048261 | openssl pkeyutl -encrypt -pubin -inkey "$W/old.pem" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 -out "$W/old.blob"
+tpm2_readpublic -Q -c 0x81000101 -f tss -o "$W/cer/parent"    # this control's own template, not the pinned one
+(umask 077; printf 7310048261 > "$W/cer/pin")
+tpm2_duplicate --tcti none -U "$W/cer/parent" -G keyedhash -k "$W/cer/pin" -a userwithauth \
+  -u "$W/cer/o.pub" -r "$W/cer/o.dpriv" -s "$W/cer/o.seed" >/dev/null 2>&1 || F "control: cannot make its blob"
+rm -f "$W/cer/pin"
+{ printf 'regalia-pin-blob v2 control\n'; cat "$W/cer/o.pub" "$W/cer/o.dpriv" "$W/cer/o.seed"; } > "$W/old.blob"
 down; up c
-tpm2_rsadecrypt -c 0x81000101 -s oaep -o /dev/null "$W/old.blob" 2>/dev/null; cut_power
-tpm2_rsadecrypt -c 0x81000101 -s oaep -o /dev/null "$W/old.blob" 2>/dev/null; cut_power
+open_blob "$W/old.blob" >/dev/null; cut_power
+open_blob "$W/old.blob" >/dev/null; cut_power
 [ "$(get TPM2_PT_LOCKOUT_COUNTER)" = 2 ] && P "control: the template before #57 (no noda), used and cut twice: 2 tries counted" \
   || F "control: the old template counted $(get TPM2_PT_LOCKOUT_COUNTER) after 2 cuts, so the check above proves nothing"
 down
