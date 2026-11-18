@@ -431,8 +431,8 @@ jobs:
           # --- Install onto a loop device and read it back
           set -o pipefail
           sudo bash e2e/install-host-loop.sh | tee "$RUNNER_TEMP/install.log"
-          grep -q '^install-host-loop: 43 passed, 0 failed$' "$RUNNER_TEMP/install.log" || {
-            echo "::error::the install test did not run all 43 checks" >&2; exit 1; }
+          grep -q '^install-host-loop: 46 passed, 0 failed$' "$RUNNER_TEMP/install.log" || {
+            echo "::error::the install test did not run all 46 checks" >&2; exit 1; }
 
       # regalia-kms#61, the dm-verity design's first slice: usr-verity.sh makes /usr an erofs image under dm-verity.
       # Two trees made differently give one image; the image is the tree; one byte changed in the filesystem, a file's
@@ -948,6 +948,38 @@ jobs:
         with:
           name: unlock-boot-qemu
 
+  # regalia-kms#61 K61V-4: the VERITY /usr BOOTS, in a job of their own beside the boots through a peer. The REAL image
+  # (build-rootfs.sh at the boot's snapshot), its /usr as an erofs image under dm-verity on a disk install-host.sh lays
+  # out (its test mode), booted by a UKI that names it (usrhash=): the proof on every boot, a wrong usrhash, a tampered
+  # block, the A/B slots and the fallback, an entry carrying options refused, and a broken factory /etc (#723).
+  verity-boot-qemu:
+    # Draft-first: heavy, so skipped on a draft pull request; ready_for_review runs it. A push to main always does.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    # 24.04, as unlock-boot-qemu, for the same reason (regalia-a0y: 26.04's QEMU/swtpm drop a firmware measurement)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install QEMU, the tree builder, the software TPM, WireGuard and nftables
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 mmdebstrap debian-archive-keyring \
+            swtpm swtpm-tools tpm2-tools cryptsetup-bin wireguard-tools nftables iproute2 cpio e2fsprogs ovmf dosfstools openssl
+      - name: Build the KMS host image (build-rootfs.sh) at the boot's snapshot
+        run: sudo bash deploy/baremetal/image/build-rootfs.sh --snapshot 20261023T210712Z --go "$(command -v go)" --out "$RUNNER_TEMP/image"
+      - name: The verity /usr boots (install-host.sh's disk, usrhash=, dm-verity, /var in the initrd, A/B, the factory /etc)
+        run: sudo REGALIA_DIAG_DIR="$RUNNER_TEMP/unlock-diag" REGALIA_EXPECT_KVM=1 REGALIA_GO="$(command -v go)" REGALIA_BOOT_CASES=verity REGALIA_BOOT_IMAGE="$RUNNER_TEMP/image" REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/20261023T210712Z/ REGALIA_BOOT_SECURITY_MIRROR=https://snapshot.debian.org/archive/debian-security/20261023T210712Z/ bash e2e/unlock-boot-qemu.sh
+      - name: Keep the software TPM's logs and the consoles
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: verity-boot-qemu
+
   # regalia-kms#248: the KMS host initrd is REPRODUCIBLE, and stays so. deploy/baremetal/initrd/build-initrd.sh
   # builds it from pinned inputs (one snapshot.debian.org time with the security suite, dracut --reproducible,
   # SOURCE_DATE_EPOCH). Three builders: two Ubuntu runners, each building twice (the second in a hostile
@@ -1182,7 +1214,7 @@ jobs:
           set -o pipefail
           set -- /tmp/kernel/root/boot/vmlinuz-*
           LINUX="$1" bash e2e/uki-build.sh | tee "$RUNNER_TEMP/uki.log"
-          grep -q '^uki-build: 33 passed, 0 failed$' "$RUNNER_TEMP/uki.log"
+          grep -q '^uki-build: 42 passed, 0 failed$' "$RUNNER_TEMP/uki.log"
           grep '^uki-build: image ' "$RUNNER_TEMP/uki.log" >> "$GITHUB_STEP_SUMMARY"
       # A MEASUREMENT, NOT A GATE: two runs gave identical bytes and one did not (regalia-kms#57, run
       # 37080073972), so the answer so far is "not reliably". The step reports, and on a difference names
@@ -1220,7 +1252,7 @@ jobs:
   # satisfy it; marking the pull request ready runs everything, and then it can pass.
   ci-gate:
     if: ${{ always() }}
-    needs: [build-test, e2e-swtpm, e2e-netns-disk, e2e-sandbox-policy, known-polkit-rules-debian13, govulncheck, pkcs11-e2e, privileged-and-fuzz, cosmos-node, unlock-boot-qemu, initrd-reproducible, rootfs-reproducible, initrd-reproducible-debian, initrd-reproducible-compare, peer-unlock-swtpm, pcrlock-luks-swtpm, uki-build]
+    needs: [build-test, e2e-swtpm, e2e-netns-disk, e2e-sandbox-policy, known-polkit-rules-debian13, govulncheck, pkcs11-e2e, privileged-and-fuzz, cosmos-node, unlock-boot-qemu, verity-boot-qemu, initrd-reproducible, rootfs-reproducible, initrd-reproducible-debian, initrd-reproducible-compare, peer-unlock-swtpm, pcrlock-luks-swtpm, uki-build]
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
@@ -1231,7 +1263,7 @@ jobs:
         run: |
           bad="$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<<"$NEEDS")"
           n="$(jq 'length' <<<"$NEEDS")"
-          [ "$n" -eq 17 ] || { echo "::error::ci-gate sees $n jobs, not 17"; exit 1; }
+          [ "$n" -eq 18 ] || { echo "::error::ci-gate sees $n jobs, not 18"; exit 1; }
           if [ -n "$bad" ]; then
             { echo "### ci-gate: not every job succeeded"; while read -r line; do echo "- $line"; done <<<"$bad"; } >> "$GITHUB_STEP_SUMMARY"
             echo "::error::not every job succeeded:"; echo "$bad"

@@ -637,8 +637,8 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   down waits at the prompt with its client still asking, and unlocks unattended when a peer comes
   back, however long that takes. Neither waits forever by accident: crypttab says `tries=0,timeout=0`
   (ask again after a wrong key, no time limit on the prompt) and `x-systemd.device-timeout=0`, and the
-  image's signed command line says `rootflags=x-systemd.device-timeout=0` (the root's mount waits for
-  the volume without limit; systemd's default is 90 s, after which the boot would fail into the
+  image's signed command line mounts `/var` from it with `x-systemd.device-timeout=0` (#61: `/` is a
+  tmpfs, and the volume is `/var`, `systemd.mount-extra=`; its mount waits for the volume without limit; systemd's default is 90 s, after which the boot would fail into the
   emergency path). `uki.py build` and `host_probe.py` refuse an image or a host without them.
 - **The client's unit** (`deploy/baremetal/initrd/regalia-unlock.service`, wanted by
   `cryptsetup.target`): sandboxed (no capability, no write anywhere but its own `/run/regalia` and the

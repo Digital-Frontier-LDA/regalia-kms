@@ -31,8 +31,8 @@
 # root hash (userspace, no device-mapper).
 #
 # CURRENT LIMITATIONS (stated, not hidden):
-#   * NOT BOOTED YET: install-host.sh writes them to usr-a and usr-a-verity, but no initrd opens them and no UKI
-#     carries usrhash= (the initrd/UKI and QEMU slices of #61's dm-verity design).
+#   * BOOTED IN QEMU ONLY: install-host.sh writes them to usr-a and usr-a-verity, the UKI names them (usrhash=, #61
+#     K61V-3), and e2e/unlock-boot-qemu.sh boots them (K61V-4: verified, a tampered block panics, A/B); not on a DL360.
 #   * NO XATTRS (-x-1): as rootfs.tar, which carries none either; so a file capability or a builder's security label
 #     cannot enter the image. A program that would need a file capability does not get one.
 #   * UNCOMPRESSED: the simplest layout to reproduce; compression is a later measurement if size matters.

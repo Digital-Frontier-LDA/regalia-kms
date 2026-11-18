@@ -27,7 +27,9 @@
 #   HOST   mmdebstrap --variant=minbase with exactly [packages], then from the commit: the deploy package at
 #          /usr/lib/regalia-kms (every unit's WorkingDirectory), the units, sysusers.d and tmpfiles.d, the daemon's
 #          AppArmor profile, and the [built] programs at their paths. systemd-sysusers runs in it, so the system
-#          users exist in the image; nothing is enabled or started (first boot is a later slice).
+#          users exist in the image. What it STARTS is units-enabled.txt, enabled under /usr (#61 K61V-4: /etc is a tmpfs,
+#          empty when PID 1 loads units), with a "disable *" preset so the first-boot preset pass every boot runs enables
+#          nothing more; dpkg's database is moved to /usr/lib/sysimage/dpkg (owner decision q-18 = A).
 #
 # THE HERMETIC /usr (#61's dm-verity design of 2026-10-05; the owner requires it before the first ceremony, #297): the
 #   host tree's /etc is also copied to /usr/share/factory/etc, so /usr alone holds everything a booted host runs and
@@ -42,12 +44,14 @@
 # images' sizes and sha256s and the tools' versions). A refusal leaves DIR empty.
 #
 # CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
-#   * NOT A BOOTABLE DISK YET. No partitions, LUKS2, crypttab, ESP, kernel/UKI pairing, network configuration,
-#     node.json or first-boot step: later slices of #61. Nothing is enabled.
-#   * THE /usr IMAGE IS INSTALLED, NOT YET BOOTED: install-host.sh writes usr.erofs and usr.verity to the A/B usr
-#     partitions (rootfs.tar is no longer extracted); the initrd's systemd-veritysetup, usrhash= on the UKI and the
-#     boot from them are the next slices of the dm-verity design. /usr/share/factory/etc is copied, but no tmpfiles rule populates a tmpfs /etc from it yet,
-#     and what else lives outside /usr (dpkg's database under /var/lib/dpkg) is the /etc and /var inventory's.
+#   * NO KERNEL IN THE IMAGE: the UKI carries the kernel, and /usr has no /usr/lib/modules yet (no kernel/UKI pairing).
+#     The QEMU boots (e2e/unlock-boot-qemu.sh REGALIA_BOOT_CASES=verity, #61 K61V-4) add the test UKI kernel's modules
+#     to the guest's /usr; a host needs the pairing (a later slice), as it needs network configuration and node.json.
+#   * BOOTED IN QEMU, NOT ON A DL360: this image's /usr, installed by install-host.sh (test mode) and opened by the
+#     UKI's usrhash=, boots in QEMU with /var from the initrd, /etc from the factory copy and its units started
+#     (OnQemuVerity). The node units (regalia-sync, admission, etcd, the audit shippers) are not enabled by the image, and
+#     an operator's `systemctl enable` writes the tmpfs /etc, gone at the next boot: regalia-kms-r1s.8. What lives
+#     outside /usr is the /etc and /var inventory's (etc-inventory.txt).
 #   * NO HARDENING beyond the units' own sandboxes: AppArmor profiles other than the daemon's, sysctl, sshd policy,
 #     removing unwanted binaries (#61's baseline) are later slices.
 #   * PACKAGES ARE AUTHENTICATED BY APT ONLY: every .deb is checked by apt against the snapshot's signed index with
@@ -76,7 +80,9 @@ SCHEMA="regalia.rootfs-build/v1"
 SUITE=trixie
 BUILD_PACKAGES="gcc,libc6-dev,libpcsclite-dev,pkg-config,erofs-utils,cryptsetup-bin"   # the last two: the /usr image
 PIN="deploy/baremetal/image/etcd.pin"
-REPO_FILES=("$SCRIPT" "$LIST" "$PIN" deploy/baremetal/image/usr-verity.sh deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh go.mod go.sum)
+ENABLED="deploy/baremetal/image/units-enabled.txt"
+PRESET="deploy/baremetal/image/regalia-kms.preset"
+REPO_FILES=("$SCRIPT" "$LIST" "$PIN" "$ENABLED" "$PRESET" deploy/baremetal/image/usr-verity.sh deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh go.mod go.sum)
 die(){ echo "build-rootfs: $*" >&2; exit 2; }
 SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO" KEYRING=""
 while [ $# -gt 0 ]; do
@@ -334,6 +340,88 @@ for w in "${PROVIDES[@]}"; do
 done
 [ "${#missing[@]}" = 0 ] || die "packages.txt says these are provided, and the host tree lacks them: ${missing[*]}"
 chroot "$ROOT" dpkg-query -W -f '${Package}=${Version}\n' | sort > "$W/packages.txt"
+
+# ---- what the image STARTS (#61 K61V-4): enablement under /usr, from units-enabled.txt. / is a tmpfs, so /etc is empty
+# when PID 1 loads units: a link under /etc/systemd/system is never seen. Every link a package made there must be named
+# in units-enabled.txt ([enabled], [alias] or [dropped]: a new one is a decision, not an accident); the [enabled] and
+# [alias] lines become links under /usr/lib/systemd/system; then the image's /etc holds no enablement at all
+echo "### the units the image starts, enabled under /usr ($ENABLED)"
+ENABLE_SPEC="$(python3 -I - "$ENABLED" <<'PY'
+import re, sys
+UNIT, TARGET = re.compile(r"[a-zA-Z0-9:_.\\-]+(@[a-zA-Z0-9:_.\\-]*)?\.(service|socket|timer|path|target)"), re.compile(r"[a-z0-9-]+\.target")
+sections, section = {"enabled": "ENABLE", "alias": "ALIAS", "dropped": "DROP"}, None
+for number, raw in enumerate(open(sys.argv[1]), 1):
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        continue
+    m = re.fullmatch(r"\[([a-z]+)\]", line)
+    if m:
+        section = m.group(1)
+        if section not in sections:
+            raise SystemExit("units-enabled.txt line %d: no section [%s]" % (number, section))
+        continue
+    fields = [f.strip() for f in line.split("|")]
+    first = UNIT if section == "alias" else TARGET
+    if section is None or len(fields) != 3 or not fields[2] or not first.fullmatch(fields[0]) or not UNIT.fullmatch(fields[1]):
+        raise SystemExit("units-enabled.txt line %d: not '%s | unit | why'" % (number, "alias" if section == "alias" else "target"))
+    print(sections[section], fields[0], fields[1])
+PY
+)" || die "$ENABLED cannot be read (above)"
+UNITDIR="$ROOT/usr/lib/systemd/system"
+unknown=()
+while IFS= read -r l; do
+  case "$l" in
+    *.wants/*) grep -qxF -e "ENABLE ${l%%.wants/*} ${l#*.wants/}" -e "DROP ${l%%.wants/*} ${l#*.wants/}" <<< "$ENABLE_SPEC" || unknown+=("$l") ;;
+    */*) unknown+=("$l") ;;
+    *) grep -qxF "ALIAS $l $(basename "$(readlink "$ROOT/etc/systemd/system/$l")")" <<< "$ENABLE_SPEC" || unknown+=("$l") ;;
+  esac
+done < <(cd "$ROOT/etc/systemd/system" && find . -type l -printf '%P\n' | sort)
+[ "${#unknown[@]}" = 0 ] || die "the packages enabled units under /etc/systemd/system that $ENABLED does not name (enable or drop each, with why): ${unknown[*]}"
+while read -r kind a b; do
+  case "$kind" in
+    ENABLE)
+      file="$b"; [[ "$b" =~ ^([^@]+@)[^.]+(\..+)$ ]] && file="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"      # an instance: its template
+      [ -f "$UNITDIR/$file" ] || die "$ENABLED enables $b, and the image has no /usr/lib/systemd/system/$file"
+      mkdir -p "$UNITDIR/$a.wants"
+      if [ -L "$UNITDIR/$a.wants/$b" ]; then [ "$(readlink "$UNITDIR/$a.wants/$b")" = "../$file" ] || die "the image's $a.wants/$b names another unit"
+      else ln -s "../$file" "$UNITDIR/$a.wants/$b"; fi ;;
+    ALIAS)
+      [ -f "$UNITDIR/$b" ] || die "$ENABLED aliases $a to $b, and the image has no /usr/lib/systemd/system/$b"
+      [ ! -e "$UNITDIR/$a" ] && [ ! -L "$UNITDIR/$a" ] || die "the image already has /usr/lib/systemd/system/$a"
+      ln -s "$b" "$UNITDIR/$a" ;;
+  esac
+done <<< "$ENABLE_SPEC"
+find "$ROOT/etc/systemd/system" -type l -delete
+find "$ROOT/etc/systemd/system" -mindepth 1 -type d -empty -delete
+rm -rf -- "$ROOT/var/lib/systemd/deb-systemd-helper-enabled" "$ROOT/var/lib/systemd/deb-systemd-helper-masked"
+# every boot is a first boot (/etc/machine-id is missing when PID 1 starts), and PID 1 then applies the preset policy:
+# the image's is "disable *" (regalia-kms.preset), shown here doing nothing to the tree, as PID 1 will do it to /etc
+install -D -m 0644 "$PRESET" "$ROOT/usr/lib/systemd/system-preset/00-regalia-kms.preset"
+chroot "$ROOT" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C systemctl --root=/ preset-all --preset-mode=enable-only >"$W/preset.log" 2>&1 \
+  || { cat "$W/preset.log"; die "systemctl preset-all failed in the host tree"; }
+made="$(cd "$ROOT/etc/systemd/system" && find . -mindepth 1 -printf '%P ' 2>/dev/null)"
+[ -z "$made" ] || die "the preset pass a first boot runs enabled units under /etc/systemd/system: $made"
+
+# ---- dpkg's database is the image's (owner decision q-18 = A): moved into /usr, where it is read-only and in the verity
+# hash with the files it lists, so a host's /var never disagrees with its /usr after an A/B update. dpkg reads admindir
+# from dpkg.cfg.d; dpkg-query does not (measured, dpkg 1.22): give it --admindir or DPKG_ADMINDIR. Nothing on the host
+# runs either. /var/lib/dpkg is not used on the host, and what only a package installation uses (apt's and debconf's
+# state, ucf's hashes) is dropped
+mkdir -p "$ROOT/usr/lib/sysimage"
+mv "$ROOT/var/lib/dpkg" "$ROOT/usr/lib/sysimage/dpkg" || die "/var/lib/dpkg could not be moved into /usr"
+printf '# The KMS host image keeps its package database in /usr, read-only (regalia-kms#61, q-18)\nadmindir /usr/lib/sysimage/dpkg\n' \
+  > "$ROOT/etc/dpkg/dpkg.cfg.d/regalia-kms-admindir"
+rm -rf -- "$ROOT/var/lib/apt" "$ROOT/var/cache/apt" "$ROOT/var/cache/debconf" "$ROOT/var/lib/ucf"
+[ "$(DPKG_ADMINDIR=/usr/lib/sysimage/dpkg chroot "$ROOT" dpkg-query -W -f '${Package}=${Version}\n' | sort)" = "$(cat "$W/packages.txt")" ] \
+  || die "the moved dpkg database does not list the packages the tree has"
+
+# ---- what the build host left in /etc (etc-inventory.txt [open]: mmdebstrap copies the BUILD's hostname, hosts,
+# resolv.conf; the fstab is its placeholder): fixed files, the same on every builder, and no backup or lock left
+printf 'localhost\n' > "$ROOT/etc/hostname"
+printf '127.0.0.1\tlocalhost\n::1\t\tlocalhost ip6-localhost ip6-loopback\n' > "$ROOT/etc/hosts"
+printf '# The KMS host image names no resolver (regalia-kms#61): audit_sink_url and the NTS servers are addresses, or names in the hosts file.\n' > "$ROOT/etc/resolv.conf"
+printf '# The KMS host mounts nothing from /etc/fstab (regalia-kms#61): / is a tmpfs, /usr the verity image and /var the\n# LUKS2 volume, all from the signed kernel command line.\n' > "$ROOT/etc/fstab"
+rm -f -- "$ROOT/etc/.pwd.lock" "$ROOT/etc/passwd-" "$ROOT/etc/group-" "$ROOT/etc/shadow-" "$ROOT/etc/gshadow-"
 
 # the hermetic /usr: the image's /etc, as built, is also /usr's factory copy (the dm-verity design: / is a tmpfs and
 # /etc is made from it at boot). The image's own files win over a package's factory default of the same name

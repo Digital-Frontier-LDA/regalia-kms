@@ -919,6 +919,36 @@ class Units(unittest.TestCase):
         depends = module[module.index("depends() {"):module.index("installkernel() {")]
         self.assertIn("systemd-pcrphase", re.search(r"^\s*echo (.*)$", depends, re.M).group(1).split())
 
+    def test_the_initrd_opens_usr_by_its_verity_root_hash(self):
+        """#61 K61V-3: the initrd carries systemd-veritysetup (named by the module, so a missing one fails the build,
+        never a silent boot without /usr), dm-verity and erofs (named to dracut), and the reviewed inventory lists them."""
+        here = os.path.join(REPO, "deploy/baremetal/initrd")
+        with open(os.path.join(here, "dracut/90regalia-unlock/module-setup.sh")) as f:
+            module = f.read()
+        depends = module[module.index("depends() {"):module.index("installkernel() {")]
+        named = re.search(r"^\s*echo (.*)$", depends, re.M).group(1).split()
+        self.assertIn("systemd-veritysetup", named)
+        self.assertIn("systemd-cryptsetup", named)          # the package that holds the generator, already a module here
+        with open(os.path.join(here, "build-initrd.sh")) as f:
+            builder = f.read()
+        dracut = re.search(r"^inroot dracut (.*?)/tmp/initrd\.img", builder, re.M | re.S).group(1)
+        self.assertIn('--add-drivers "dm-verity erofs"', dracut)
+        self.assertIn("--add regalia-unlock", dracut)
+        packages = re.search(r'^PACKAGES="([^"]*)"', builder, re.M).group(1).split(",")
+        self.assertIn("systemd-cryptsetup", packages)
+        with open(os.path.join(here, "initrd-inventory.txt")) as f:
+            inventory = [l.split() for l in f if l.strip() and not l.startswith("#")]
+        paths = {l[5]: l for l in inventory}
+        for path, package in (("usr/lib/systemd/system-generators/systemd-veritysetup-generator", "systemd-cryptsetup="),
+                              ("usr/lib/systemd/systemd-veritysetup", "systemd-cryptsetup="),
+                              ("usr/lib/systemd/system/veritysetup.target", "systemd-cryptsetup="),
+                              ("usr/lib/systemd/system/sysinit.target.wants/veritysetup.target", "systemd-cryptsetup=")):
+            with self.subTest(path):
+                self.assertIn(path, paths)
+                self.assertTrue(paths[path][1].startswith(package), paths[path])
+        modules = [p for p in paths if re.search(r"/kernel/(drivers/md/dm-verity|fs/erofs/erofs)\.ko(\.xz|\.zst)?$", p)]
+        self.assertEqual(sorted(os.path.basename(p).split(".")[0] for p in modules), ["dm-verity", "erofs"])
+
     def test_the_client_is_an_agent_beside_the_console_never_in_front_of_it(self):
         """#70 (24's condition): the console's prompt does not depend on the client. The client's unit is enabled
         under cryptsetup.target and nothing orders systemd-cryptsetup after it or makes it need the client: a

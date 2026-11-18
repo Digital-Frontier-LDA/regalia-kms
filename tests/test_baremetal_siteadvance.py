@@ -74,8 +74,8 @@ class TargetTests(unittest.TestCase):
                     siteadvance.target(sets, "current", NEW_SITE)
 
     def test_a_signing_key_change_is_an_image_update(self):
-        signed = dict(a_set("current", OLD_SITE), signing={"initrd": "01" * 32, "system": "02" * 32, "secure_boot_cert": "03" * 32})
-        resigned = dict(a_set("next", NEW_SITE), signing={"initrd": "01" * 32, "system": "04" * 32, "secure_boot_cert": "03" * 32})
+        signed = dict(a_set("current", OLD_SITE), signing={"initrd": "01" * 32, "system": "02" * 32, "secure_boot_cert": "03" * 32}, usr_roothash="6e" * 32)
+        resigned = dict(a_set("next", NEW_SITE), signing={"initrd": "01" * 32, "system": "04" * 32, "secure_boot_cert": "03" * 32}, usr_roothash="6e" * 32)
         sets = accepted(signed, resigned)
         with self.assertRaisesRegex(attest.Refused, "image update is rolling through"):
             siteadvance.target(sets, "current", NEW_SITE)

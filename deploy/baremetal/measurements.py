@@ -11,7 +11,8 @@ SIGNED MEMBERSHIP MANIFEST COMMITS TO, with one or two sets per node.
                 "nodes": {"<node_id>": {"accepted": [
                     {"label": "<image name>", "tpm_firmware_version": "<16 hex>", "pcrs": {"0": "<64 hex>", ...},
                      "phases": {"initrd": {"11": "<64 hex>"}, "system": {"11": "<64 hex>"}},     # optional
-                     "signing": {"initrd": "<pkfp>", "system": "<pkfp>", "secure_boot_cert": "<sha256>"}},  # optional
+                     "signing": {"initrd": "<pkfp>", "system": "<pkfp>", "secure_boot_cert": "<sha256>"},  # optional
+                     "usr_roothash": "<64 hex>"},                        # with "signing" only, and then required
                     ...]}}}                     # one set, or two while an update rolls through
 
 SIGNING KEYS. A signed image's set (`uki.py set`, from its SIGNED record) names the keys the image is signed with:
@@ -19,6 +20,12 @@ the two PCR-signing keys by fingerprint and the Secure Boot certificate by SHA-2
 never reads them. They are for whoever SEALS to a PCR-signing key (enrol, #190): PCR 11 does not cover an image's
 .pcrsig, so a re-signed copy of an approved image measures the same; taking only a key the root-approved set
 names is what keeps a node's secrets off a key nobody approved (#265).
+
+/usr. A signed image's set also names the /usr it runs (`usr_roothash`, #61, the dm-verity design): the dm-verity
+root hash that its UKI's command line carries as usrhash=, from the signed record. The command line is measured into
+PCR 11, so the set's per-phase PCR 11 already attests it: a /usr with another root hash is another PCR 11, which no
+set approves. The field names it for what has no quote to judge: the installer, which refuses to write a /usr whose
+root hash is not the UKI's.
 
 PER BOOT PHASE. A host that boots a unified kernel image has two PCR 11 values for one image: in the
 initrd, where it asks a peer for its disk, and once booted, where it asks for a lease (attest.py, "PCR
@@ -253,10 +260,11 @@ def _key(entry):
     the initrd key is not measured) is ANOTHER set, never "unchanged": under the old label it is a changed image,
     and under a new one it can neither sit beside the old set (attest refuses two sets of the same measurements)
     nor replace it in an emergency (the dropped measurements would still be accepted). A key rotation therefore
-    comes with a rebuilt image, a new PCR 11 (#267, 51's read)."""
+    comes with a rebuilt image, a new PCR 11 (#267, 51's read). So is the /usr it names (#61), though a usrhash=
+    that differs is a PCR 11 that differs already."""
     return (entry["tpm_firmware_version"], tuple(sorted(entry["pcrs"].items())),
             tuple((phase, tuple(sorted(pcrs.items()))) for phase, pcrs in sorted(entry.get("phases", {}).items())),
-            tuple(sorted(entry.get("signing", {}).items())))
+            tuple(sorted(entry.get("signing", {}).items())), entry.get("usr_roothash"))
 
 
 def _states(entry):
