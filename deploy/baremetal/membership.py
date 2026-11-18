@@ -9,7 +9,7 @@ node claims (THREE-SITE-THREAT-MODEL.md S2, ADR-0002 D23).
                                                  "sig": "<hex Ed25519 signature>"}}
              | {"manifest": {...}, "signatures": [{"party": "<node_id>" | "owner", "key": "<hex>", "sig": "<hex>"}, ...]}  (v4)
 
-    manifest = {"schema": "regalia.membership/v1" | ... | "regalia.membership/v4", "epoch": <int >= 1>,
+    manifest = {"schema": "regalia.membership/v1" | ... | "regalia.membership/v5", "epoch": <int >= 1>,
                 "prev_digest": "<64 hex, or "" at epoch 1>",
                 "policy_version": "<text>", "issued_at": "YYYY-MM-DDTHH:MM:SSZ",
                 "heartbeat_max_lifetime_s": <int> (v2 only),
@@ -72,6 +72,21 @@ v3's fields without `revocation_keys`, and:
   the way that key's entry says (P-256 low-S for a node, Ed25519 for the owner), all verifying, no party twice. A RETIRED, REVOKED_STOLEN or QUARANTINED node does not count. A quorum
   may make only the changes a revocation key could (restrictive), and changes none of the signer fields.
   The move to v4 is one root-signed step, after every verifier has learnt it; revocation_keys end there.
+
+Schema v5 (regalia-kms-dx7.1, docs/design/single-node.md 4.1): v4's fields and `topology`, the cluster's DESIGNED size,
+chosen at genesis and never inferred from how many nodes are live (a three-node manifest with two nodes retired is a
+three-node cluster in an outage, not a one-node cluster):
+  * `topology`: {"profile": "multi-node", "nodes": 3} or {"profile": "single-node", "nodes": 1,
+    "single_node_limits_sha256": <64 hex>, the digest of the single-node limits text the operator acknowledged}. An even
+    size is refused for ever (it tolerates no more lost nodes than the odd size below it); 5 and 7 until their epic. Not even the root changes it: another
+    size or profile is a new genesis. A v4 chain's root-signed move to v5 names {multi-node, 3}.
+  * THE FLOORS ARE THE DESIGNED SIZE'S: floor(nodes / 2) + 1, 2 for three nodes (v4's, which is a three-node cluster) and
+    1 for one; only a rule naming the owner alone may be 1 otherwise. A multi-node manifest lists at most `nodes` nodes
+    that are not RETIRED or REVOKED_STOLEN (fewer is an outage or a replacement pending).
+  * single-node: at most one node that is not RETIRED or REVOKED_STOLEN (none once the owner has revoked it: the KMS is
+    stopped until the root enrols a replacement), and exactly these rules: heartbeat_signers and activation_signers
+    {1, [that node]} (after a revocation, the revoked node), revocation_signers [{1, ["owner"]}]. A root-signed
+    replacement (the node RETIRED, its successor named in its place) keeps it so.
 Each manifest is
 validated under the schema it names, so a chain that starts at v1 and moves to v2 verifies from epoch 1.
 The schema only moves forward, and only in a ROOT-signed manifest: v1 may be followed by v1 or v2, v2
@@ -133,12 +148,17 @@ SCHEMA_V3 = "regalia.membership/v3"
 # QUORUM of parties the manifest names: each node by a key in its own TPM (signing_key), and the owner by any
 # one of the approval keys (owner_keys). See "Schema v4" in the docstring.
 SCHEMA_V4 = "regalia.membership/v4"
-SCHEMAS = (SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4)          # in order: a chain never goes back
+# v5 (regalia-kms-dx7.1, docs/design/single-node.md 4.1) is v4 plus `topology`: the DESIGNED size of the cluster, from
+# which the signer floors are derived. See "Schema v5" in the docstring.
+SCHEMA_V5 = "regalia.membership/v5"
+SCHEMAS = (SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5)          # in order: a chain never goes back
+QUORUM_SCHEMAS = (SCHEMA_V4, SCHEMA_V5)                          # the nodes and the owner sign: what v4 reads, v5 reads alike
 HEARTBEAT_MIN_S, HEARTBEAT_HARD_MAX_S = 3600, 7 * 24 * 3600      # what a v2 manifest may set as heartbeat_max_lifetime_s
 OWNER_HEARTBEAT_MIN_S = 300                                      # the least a v4 manifest may set as owner_heartbeat_lifetime_s
 OWNER = "owner"                                                  # the owner's party name in a v4 signer rule (never a node_id)
-HEARTBEAT_FLOOR = NODE_RULE_FLOOR = 2                            # no single party keeps a cluster alive or revokes alone,
-                                                                 # except the owner's own revocation rule (1 of owner)
+SINGLE_NODE, MULTI_NODE = "single-node", "multi-node"           # topology.profile
+SUPPORTED_MULTI_NODES = (3,)                                     # 5 and 7 are their own epic (regalia-kms-dx7.12)
+V4_DESIGNED_NODES = 3                                            # a v4 manifest predates topology: a three-node cluster
 MAX_OWNER_KEYS, MAX_RULES, MAX_SIGNATURES = 8, 4, 16
 # the bench's tokens, never a production node's token nor a ceremony card (ADR-0002 D28.5, D30): the Nitrokeys of regalia's
 # tools/hsm-staging-registry.json and DENK0400664 (dead), the staging Pico HSMs, and the staging YubiKeys
@@ -174,8 +194,10 @@ MAX_CARD_SEQUENCE = 2 ** 31 - 1                                  # exact in ever
 SINGLE_RULES = ("heartbeat_signers", "activation_signers")       # one rule each; revocation_signers is a list of them
 V4_MANIFEST_KEYS = tuple(k for k in V2_MANIFEST_KEYS if k != "revocation_keys") + SIGNER_FIELDS + V4_ONLY_FIELDS
 V4_NODE_KEYS = V2_NODE_KEYS + ("signing_key",)
-# What only the root may change: a quorum (or a v1-v3 revocation key) leaves every one as it was.
-ROOT_FIELDS = ("policy_version", "revocation_keys", "heartbeat_max_lifetime_s") + SIGNER_FIELDS + ("card_record",)
+V5_MANIFEST_KEYS = V4_MANIFEST_KEYS + ("topology",)
+# What only the root may change: a quorum (or a v1-v3 revocation key) leaves every one as it was. (topology: not even
+# the root, transition() below.)
+ROOT_FIELDS = ("policy_version", "revocation_keys", "heartbeat_max_lifetime_s") + SIGNER_FIELDS + ("card_record", "topology")
 # A node that is retired, revoked or quarantined is named in a signer rule but does not count.
 NOT_COUNTING = ("RETIRED", "REVOKED_STOLEN", "QUARANTINED")
 
@@ -491,9 +513,58 @@ def rename_party(rules, old_id, new_id):
     return [swap(r) for r in rules] if isinstance(rules, list) else swap(rules)
 
 
+def designed_nodes(manifest):
+    """The cluster's designed size: a v5 manifest's topology.nodes, and three for v4, which predates the field. Never
+    counted from the nodes a manifest lists, nor from how many are live."""
+    return manifest["topology"]["nodes"] if manifest["schema"] == SCHEMA_V5 else V4_DESIGNED_NODES
+
+
+def node_floor(manifest):
+    """The least threshold of a signer rule that names a node: a majority of the designed nodes."""
+    return designed_nodes(manifest) // 2 + 1
+
+
+def _topology(manifest, by_id):
+    """A v5 manifest's topology field, and the number of its nodes that are not RETIRED or REVOKED_STOLEN against it.
+    Checked before the signer rules, whose floors it gives."""
+    topology = manifest["topology"]
+    require(isinstance(topology, dict), "topology must be an object")
+    profile = topology.get("profile")
+    require(profile in (SINGLE_NODE, MULTI_NODE), "topology.profile must be %s or %s" % (SINGLE_NODE, MULTI_NODE))
+    exact(topology, ("profile", "nodes", "single_node_limits_sha256") if profile == SINGLE_NODE else ("profile", "nodes"), "topology")
+    n = topology["nodes"]
+    require(type(n) is int, "topology.nodes must be an integer")
+    live = [nid for nid, node in by_id.items() if node["state"] not in TERMINAL]
+    if profile == SINGLE_NODE:
+        require(n == 1, "a single-node topology has nodes 1, not %d" % n)
+        hex_field(topology["single_node_limits_sha256"], 64, "topology.single_node_limits_sha256")
+        # none once the owner has revoked it (REVOKED_STOLEN, 4.4): the KMS is stopped until the root enrols a replacement
+        require(len(live) <= 1, "a single-node topology lists at most one node that is not RETIRED or REVOKED_STOLEN (%d)" % len(live))
+    else:
+        require(n >= 3 and n % 2 == 1, "a multi-node topology has an odd number of nodes from 3, not %d (an even size tolerates "
+                "no more lost nodes than the odd size below it)" % n)
+        require(n in SUPPORTED_MULTI_NODES, "a multi-node topology of %d nodes is not supported yet (3 only; 5 and 7 are "
+                "regalia-kms-dx7.12)" % n)
+        require(len(live) <= n, "a %d-node topology lists at most %d nodes that are not RETIRED or REVOKED_STOLEN (%d)" % (n, n, len(live)))
+    return live
+
+
+def _single_node_rules(manifest, live, by_id):
+    """single-node's one shape of rules: the node alone signs its heartbeats and its activation, the owner alone revokes.
+    The node is the live one; with none (the owner revoked it), the one node of the manifest the heartbeat rule names."""
+    named = manifest["heartbeat_signers"]["parties"]
+    nid = live[0] if live else named[0] if len(named) == 1 and named[0] in by_id else None
+    for name in SINGLE_RULES:
+        require(nid is not None and manifest[name] == {"threshold": 1, "parties": [nid]},
+                "under %s %s is {threshold 1, parties [%s]}" % (SINGLE_NODE, name, nid or "the node"))
+    require(manifest["revocation_signers"] == [{"threshold": 1, "parties": [OWNER]}],
+            "under %s revocation_signers is [{threshold 1, parties [%s]}]" % (SINGLE_NODE, OWNER))
+
+
 def _signer_rules(manifest, by_id, seen):
-    """A v4 manifest's signer fields: the owner's keys, the owner's heartbeat bound, and the rules. The
-    floors are the format's, so no root-signed manifest can lower a threshold into danger."""
+    """A v4 or v5 manifest's signer fields: the owner's keys, the owner's heartbeat bound, and the rules. The floors are
+    the designed size's (node_floor), so no root-signed manifest can lower a threshold into danger."""
+    floor = node_floor(manifest)
     owners = manifest["owner_keys"]
     require(isinstance(owners, list) and 1 <= len(owners) <= MAX_OWNER_KEYS, "owner_keys must be a list of one to %d keys" % MAX_OWNER_KEYS)
     for i, entry in enumerate(owners):
@@ -514,7 +585,7 @@ def _signer_rules(manifest, by_id, seen):
             require(p == OWNER or p in by_id, "%s names %r, which is neither a node of this manifest nor %s" % (label, p, OWNER))
         t = value["threshold"]
         require(isinstance(t, int) and not isinstance(t, bool), "%s.threshold must be an integer" % label)
-        least = 1 if owner_alone and parties == [OWNER] else (NODE_RULE_FLOOR if owner_alone else HEARTBEAT_FLOOR)
+        least = 1 if owner_alone and parties == [OWNER] else floor
         require(least <= t <= len(parties), "%s.threshold must be from %d to the number of its parties (%d)" % (label, least, len(parties)))
 
     for name in SINGLE_RULES:
@@ -541,7 +612,7 @@ def counting_parties(current, message, signatures, what):
     an Ed25519 owner). A party named twice is refused, never counted once. A node that is
     RETIRED, REVOKED_STOLEN or QUARANTINED does not count, though its signature must still verify.
     The same rule for manifests (here) and heartbeats (heartbeat.py)."""
-    require(current is not None and current["schema"] == SCHEMA_V4,
+    require(current is not None and current["schema"] in QUORUM_SCHEMAS,
             "a %s signed by a quorum needs a current %s manifest naming its signers" % (what, SCHEMA_V4))
     require(isinstance(signatures, list) and 1 <= len(signatures) <= MAX_SIGNATURES,
             "signatures must be a list of one to %d signatures" % MAX_SIGNATURES)
@@ -576,9 +647,10 @@ def validate(manifest):
     """Schema and uniqueness. Returns the manifest's nodes by ID."""
     require(isinstance(manifest, dict), "manifest must be an object")
     require(manifest.get("schema") in SCHEMAS, "schema must be %s" % " or ".join(SCHEMAS))
-    fourth = manifest["schema"] == SCHEMA_V4
-    second = manifest["schema"] in (SCHEMA_V2, SCHEMA_V3, SCHEMA_V4)        # v3 and v4 have v2's fields
-    exact(manifest, V4_MANIFEST_KEYS if fourth else V2_MANIFEST_KEYS if second else MANIFEST_KEYS, "manifest")
+    fourth = manifest["schema"] in QUORUM_SCHEMAS                           # v5 is v4 and its topology
+    fifth = manifest["schema"] == SCHEMA_V5
+    second = manifest["schema"] in (SCHEMA_V2, SCHEMA_V3) + QUORUM_SCHEMAS  # v3, v4 and v5 have v2's fields
+    exact(manifest, V5_MANIFEST_KEYS if fifth else V4_MANIFEST_KEYS if fourth else V2_MANIFEST_KEYS if second else MANIFEST_KEYS, "manifest")
     node_keys = V4_NODE_KEYS if fourth else V2_NODE_KEYS if second else NODE_KEYS
     # A tombstone keeps exactly the fields it had: one retired under an earlier schema may lack what later
     # schemas added (ssh_host_pub from v2, signing_key from v4), and nothing is invented for it.
@@ -644,14 +716,17 @@ def validate(manifest):
             seen[("hsm", s)] = node["node_id"]
         by_id[node["node_id"]] = node
     if fourth:
+        live = _topology(manifest, by_id) if fifth else None
         _signer_rules(manifest, by_id, seen)
+        if fifth and manifest["topology"]["profile"] == SINGLE_NODE:
+            _single_node_rules(manifest, live, by_id)
     return by_id
 
 
 def _apart_from_root(manifest, root_key):
     """A v4 manifest's party keys (owner_keys, every signing_key) are none of the pinned root's: one device is
     never both the payload root and a quorum party (D28). Only accept() knows the root, so it is checked here."""
-    if manifest["schema"] != SCHEMA_V4:
+    if manifest["schema"] not in QUORUM_SCHEMAS:
         return
     roots = {key for _, key in root_entries(root_key)}
     keys = [("owner_keys[%d]" % i, e["key"]) for i, e in enumerate(manifest["owner_keys"])]
@@ -692,7 +767,7 @@ def verify_envelope(envelope, root_key, current=None):
     manifest = envelope["manifest"]
     validate(manifest)
     _apart_from_root(manifest, root_key)
-    require(alg == "ed25519" or manifest["schema"] in (SCHEMA_V3, SCHEMA_V4), "a manifest signed by a typed (%s) key needs schema %s"
+    require(alg == "ed25519" or manifest["schema"] in (SCHEMA_V3,) + QUORUM_SCHEMAS, "a manifest signed by a typed (%s) key needs schema %s"
             % (alg, " or ".join((SCHEMA_V3, SCHEMA_V4))))
     try:
         verify_revocation(alg, sig["key"], DOMAIN + canonical(manifest), sig["sig"], "manifest")
@@ -785,16 +860,31 @@ def transition(current, candidate, signer):
                 "only moves forward" % (candidate["schema"], current["schema"]))
         require(signer == "root", "only the root can change the schema (%s to %s)" % (current["schema"], candidate["schema"]))
     _tombstones(current, candidate)        # every signer: the one rule the root cannot override
-    if current["schema"] == candidate["schema"] == SCHEMA_V4:
+    both = current["schema"] in QUORUM_SCHEMAS and candidate["schema"] in QUORUM_SCHEMAS
+    if both:
         # K_A is named by every node's TPM objects (#361): no signer changes it; a new K_A is a new genesis. (v3 -> v4,
         # root-signed, is where it is first set.)
         require(candidate["anchor_policy_key"] == current["anchor_policy_key"], "anchor_policy_key is set at genesis "
                 "and never changes, for any signer: every node's TPM objects are defined under it (a new one is a new genesis)")
     if signer != "root":
-        _restrictive(current, candidate, signer)
-    elif current["schema"] == candidate["schema"] == SCHEMA_V4:
+        _restrictive(current, candidate, signer)              # a quorum: topology is a ROOT_FIELD
+    elif both:
         _card_record_rules(current, candidate)
+    if candidate["schema"] == SCHEMA_V5:
+        _topology_rules(current, candidate)
     return candidate
+
+
+def _topology_rules(current, candidate):
+    """topology (dx7.1, decision Q3): set at genesis and never changed in this epic, by any signer, the root included; a
+    v4 chain is a three-node cluster, and its root-signed move to v5 says so. Another size or profile is a new genesis."""
+    if current["schema"] == SCHEMA_V5:
+        require(candidate["topology"] == current["topology"], "topology is set at genesis and never changes, for any signer: "
+                "another size or profile is a new genesis")
+    else:
+        require(candidate["topology"] == {"profile": MULTI_NODE, "nodes": V4_DESIGNED_NODES},
+                "a %s chain is a three-node cluster: its move to %s names the topology {%s, %d nodes} (one node is a new genesis)"
+                % (current["schema"], SCHEMA_V5, MULTI_NODE, V4_DESIGNED_NODES))
 
 
 def _card_record_rules(current, candidate):
@@ -1220,7 +1310,7 @@ class HighWater:
             require_anchor(mask == want, "NV index %s does not have this anchor's attributes (0x%x, not 0x%x): it can be written or read "
                            "otherwise than this software defines" % (index, mask, want))
             if kind in self.POLICY_ATTRIBUTES:
-                require_anchor(self.tip_schema() != SCHEMA_V4, "NV index %s is owner-written: under %s the anchor is written by "
+                require_anchor(self.tip_schema() not in QUORUM_SCHEMAS, "NV index %s is owner-written: under %s the anchor is written by "
                                "policy only (re-anchor it)" % (index, SCHEMA_V4))
         if kind == "base":
             require_anchor(attributes & self.WRITELOCKED, "base index %s is not write-locked" % index)

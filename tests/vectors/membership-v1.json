@@ -7062,7 +7062,7 @@
       "revocation_keys": [
        "31cd480b9eb7f4876a1d0ec3c481a98664c15e1af24aa57762b0e0df4e50f5eb"
       ],
-      "schema": "regalia.membership/v5"
+      "schema": "regalia.membership/v6"
      },
      "signature": {
       "sig": "1b3412a8f99ec7fdcd0b0b09e842c2ec3fecd33a5a9522c63a9ecaedde2193101226ddcc712b1b0b41928fd751d97ce76e9ac8124bc2a31a8adbf387840b1d09",
@@ -7071,7 +7071,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -7182,7 +7182,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -7293,7 +7293,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -7404,7 +7404,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -7515,7 +7515,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -7628,7 +7628,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -7738,7 +7738,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -28090,7 +28090,7 @@
       "revocation_keys": [
        "31cd480b9eb7f4876a1d0ec3c481a98664c15e1af24aa57762b0e0df4e50f5eb"
       ],
-      "schema": "regalia.membership/v5"
+      "schema": "regalia.membership/v6"
      },
      "signature": {
       "sig": "1b3412a8f99ec7fdcd0b0b09e842c2ec3fecd33a5a9522c63a9ecaedde2193101226ddcc712b1b0b41928fd751d97ce76e9ac8124bc2a31a8adbf387840b1d09",
@@ -28099,7 +28099,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -28210,7 +28210,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -28321,7 +28321,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -28432,7 +28432,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -28543,7 +28543,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -28656,7 +28656,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {
@@ -28766,7 +28766,7 @@
     },
     "signature_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
    },
-   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4",
+   "refused": "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or regalia.membership/v5",
    "root_public": "0a17a28e6136b9f8739fd32a89d9699e666728ce8b5c4d6ec689c5a18708dbb0"
   },
   {

@@ -392,7 +392,7 @@ func ReadChain(envelopes []any, root any) ([]map[string]any, error) {
 func Anchored(nv NV, manifests []map[string]any, policy func() ([]byte, error)) (uint64, error) {
 	h := newHighWater(nv, HighWaterIndex, policy)
 	// judged by the tip of the chain read (#242 B3), as the Python Store judges by its own chain's (Store._judge_by)
-	h.v4 = len(manifests) > 0 && manifests[len(manifests)-1]["schema"] == SchemaV4
+	h.v4 = len(manifests) > 0 && quorumSchema(manifests[len(manifests)-1]["schema"]) // v4 or v5: production
 	hw, err := h.value()
 	if err != nil {
 		return 0, err

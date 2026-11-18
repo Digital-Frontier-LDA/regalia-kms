@@ -146,6 +146,13 @@ class EnrolmentUnderV4(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_v5_is_production_as_v4_is(self):
+        """dx7.1: under v5 too the owner authorization is required, and taken from the node's envelope."""
+        self.tpm.owner_auth = bytes.fromhex(VECTOR["values"]["a"][:64])
+        self.tpm.lockout_set = True
+        with self.assertRaisesRegex(enrol.Refused, "the TPM's owner authorization is set and enrolment takes it from this node's envelope"):
+            enrol.commit_owner_auth({"schema": m.SCHEMA_V5}, None, PIN, "a", run=self.tpm)
+
     def test_a_record_the_node_does_not_hold_is_refused_before_the_tpm(self):
         """#460: commit's record is checked against the node's before anything asks the TPM (not even its posture)."""
         enrol._ownerauth_hold(self.d, "cd" * 32)

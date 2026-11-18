@@ -22,8 +22,6 @@ const (
 	SchemaV4          = "regalia.membership/v4"
 	ownerHeartbeatMin = 300
 	ownerParty        = "owner" // the owner's party name in a signer rule (never a node_id)
-	heartbeatFloor    = 2       // no single party keeps a cluster alive, or (naming a node) revokes, alone
-	nodeRuleFloor     = 2
 	maxOwnerKeys      = 8
 	maxRules          = 4
 	maxSignatures     = 16
@@ -41,7 +39,7 @@ var (
 	v4ManifestKeys = append(append(without(v2ManifestKeys, "revocation_keys"), signerFields...), v4OnlyFields...)
 	v4NodeKeys     = append(append([]string(nil), v2NodeKeys...), "signing_key")
 	// what only the root may change: a quorum (or a v1-v3 revocation key) leaves every one as it was
-	rootFields = append(append([]string{"policy_version", "revocation_keys", "heartbeat_max_lifetime_s"}, signerFields...), "card_record")
+	rootFields = append(append([]string{"policy_version", "revocation_keys", "heartbeat_max_lifetime_s"}, signerFields...), "card_record", "topology")
 	// named in a signer rule, but not counting
 	notCounting = map[string]bool{"RETIRED": true, "REVOKED_STOLEN": true, "QUARANTINED": true}
 )
@@ -91,6 +89,7 @@ func typedKey(entry any, label string, algs []string) (string, string, error) {
 // signerRules is membership._signer_rules: a v4 manifest's owner keys, the owner's heartbeat bound and the
 // rules. `seen` is Validate's: an owner key is no node's identity, nor another owner key.
 func signerRules(manifest map[string]any, byID map[string]map[string]any, seen map[string]string) error {
+	floor := nodeFloor(manifest) // a majority of the designed nodes (v5.go)
 	owners, ok := manifest["owner_keys"].([]any)
 	if !ok || len(owners) < 1 || len(owners) > maxOwnerKeys {
 		return refuse("owner_keys must be a list of one to %d keys", maxOwnerKeys)
@@ -142,14 +141,11 @@ func signerRules(manifest map[string]any, byID map[string]map[string]any, seen m
 		if !isInt {
 			return refuse("%s.threshold must be an integer", label)
 		}
-		least := int64(heartbeatFloor)
-		if ownerAlone {
-			least = nodeRuleFloor
-			if len(parties) == 1 && parties[0] == ownerParty {
-				least = 1
-			}
+		least := floor
+		if ownerAlone && len(parties) == 1 && parties[0] == ownerParty {
+			least = big.NewInt(1)
 		}
-		if threshold.Cmp(big.NewInt(least)) < 0 || threshold.Cmp(big.NewInt(int64(len(parties)))) > 0 {
+		if threshold.Cmp(least) < 0 || threshold.Cmp(big.NewInt(int64(len(parties)))) > 0 {
 			return refuse("%s.threshold must be from %d to the number of its parties (%d)", label, least, len(parties))
 		}
 		return nil
@@ -210,7 +206,7 @@ func cardRecordRules(current, candidate map[string]any) error {
 // apartFromRoot is membership._apart_from_root: a v4 manifest's party keys (owner_keys, every signing_key)
 // are none of the pinned root's. One device is never both the payload root and a quorum party (D28).
 func apartFromRoot(manifest map[string]any, root any) error {
-	if manifest["schema"] != SchemaV4 {
+	if !quorumSchema(manifest["schema"]) {
 		return nil
 	}
 	entries, err := RootEntries(root, "the root key")
@@ -246,7 +242,7 @@ func apartFromRoot(manifest map[string]any, root any) error {
 // verifies the way that key's entry says; a party named twice is refused; a RETIRED, REVOKED_STOLEN or
 // QUARANTINED node's signature must verify all the same, and does not count.
 func countingParties(current map[string]any, message []byte, signatures any, what string) (map[string]bool, error) {
-	if current == nil || current["schema"] != SchemaV4 {
+	if current == nil || !quorumSchema(current["schema"]) {
 		return nil, refuse("a %s signed by a quorum needs a current %s manifest naming its signers", what, SchemaV4)
 	}
 	list, ok := signatures.([]any)

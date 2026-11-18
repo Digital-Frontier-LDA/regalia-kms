@@ -884,6 +884,12 @@ def check_manifest(directory, chain, root_key, typed, document, replace=None):
     node = nodes[node_id]
     require(membership.CAPABILITIES[node["state"]] & {"request", "serve"},
             "the manifest names %s %s: a node in that state is not enrolled" % (node_id, node["state"]))
+    # a single-node node enrols only at its genesis for now: a later one (the replacement after the owner's
+    # revocation) would be the only signer of its epoch's heartbeat, so no source could start its counter, and
+    # commit would stop after installing (regalia-kms-dx7.19, CodeRabbit on #734). Refused here, before anything is written.
+    require(manifest.get("topology", {}).get("profile") != membership.SINGLE_NODE or manifest["epoch"] == 1,
+            "a single-node manifest enrols its node only at epoch 1 for now, not epoch %d: its first heartbeat would have "
+            "no source (regalia-kms-dx7.19). Nothing was written" % manifest["epoch"])
     wg = {k: base64.b64decode(bundle[k]).hex() for k in ("wg_service_pub", "wg_boot_pub")}
     mine_all = [("ek_name", bundle["ek_name"]), ("ak_name", bundle["ak_name"]),
                 ("wg_service_pub", wg["wg_service_pub"]), ("wg_boot_pub", wg["wg_boot_pub"])]
@@ -2140,7 +2146,7 @@ def commit_owner_auth(manifest, given, root_key, node_id, run=subprocess.run, di
     if given is not None:
         ownerauth.require_held(given[1], directory)
     owner_auth = None if given is None else ownerauth.confirm(given[0], given[1], root_key, node_id)
-    if manifest["schema"] == membership.SCHEMA_V4:
+    if manifest["schema"] in membership.QUORUM_SCHEMAS:
         ownerauth.require_production(run=run)
         require(owner_auth is not None, "under %s the TPM's owner authorization is set and enrolment takes it from this "
                 "node's envelope: gpg --decrypt ownerauth-%s.yk.gpg | enrol commit ... --ownerauth ownerauth.record.json"
@@ -2181,7 +2187,7 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     # before the anchor: the store commits no epoch whose document it does not hold
     store_documents(prefix + config["state_dir"], document, as_sync is None)
     journal.started("anchor")
-    production = manifest["schema"] == membership.SCHEMA_V4
+    production = manifest["schema"] in membership.QUORUM_SCHEMAS
     if production:                                  # #419: the owner's definitions here, as root; the sync step gets none
         # no regalia-sync process meanwhile: its service's locks are not these, so only that keeps its writers out
         # while root defines (regalia-kms-d9); it was also the handoff's guard

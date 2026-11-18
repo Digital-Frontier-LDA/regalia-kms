@@ -26,7 +26,7 @@ const (
 )
 
 var (
-	schemas      = []string{SchemaV1, SchemaV2, SchemaV3, SchemaV4} // in order: a chain never goes back
+	schemas      = []string{SchemaV1, SchemaV2, SchemaV3, SchemaV4, SchemaV5} // in order: a chain never goes back
 	capabilities = map[string][]string{"ACTIVE": {"authorize", "request", "serve"}, "MAINTENANCE": {"request"}, "DRAINING": {"serve"},
 		"QUARANTINED": {}, "RETIRED": {}, "REVOKED_STOLEN": {}}
 	terminal       = map[string]bool{"RETIRED": true, "REVOKED_STOLEN": true}
@@ -167,10 +167,13 @@ func Validate(value any) (map[string]map[string]any, error) {
 	if schemaIndex(schema) < 0 {
 		return nil, refuse("schema must be %s", strings.Join(schemas, " or "))
 	}
-	fourth := schema == SchemaV4
-	second := schema == SchemaV2 || schema == SchemaV3 || fourth // v3 and v4 have v2's fields
+	fourth := quorumSchema(schema) // v5 is v4 and its topology
+	fifth := schema == SchemaV5
+	second := schema == SchemaV2 || schema == SchemaV3 || fourth // v3, v4 and v5 have v2's fields
 	keys, nodeKeySet := manifestKeys, nodeKeys
-	if fourth {
+	if fifth {
+		keys, nodeKeySet = v5ManifestKeys, v4NodeKeys
+	} else if fourth {
 		keys, nodeKeySet = v4ManifestKeys, v4NodeKeys
 	} else if second {
 		keys, nodeKeySet = v2ManifestKeys, v2NodeKeys
@@ -318,8 +321,20 @@ func Validate(value any) (map[string]map[string]any, error) {
 		byID[id] = node
 	}
 	if fourth {
+		var live []string
+		if fifth {
+			var err error
+			if live, err = topology(manifest, byID); err != nil {
+				return nil, err
+			}
+		}
 		if err := signerRules(manifest, byID, seen); err != nil {
 			return nil, err
+		}
+		if fifth && manifest["topology"].(map[string]any)["profile"] == singleNode {
+			if err := singleNodeRules(manifest, live, byID); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return byID, nil
@@ -392,7 +407,7 @@ func VerifyEnvelope(value any, root any, current map[string]any) (map[string]any
 	if err := apartFromRoot(manifest, root); err != nil {
 		return nil, "", err
 	}
-	if algorithm != "ed25519" && manifest["schema"] != SchemaV3 && manifest["schema"] != SchemaV4 {
+	if algorithm != "ed25519" && manifest["schema"] != SchemaV3 && !quorumSchema(manifest["schema"]) {
 		return nil, "", refuse("a manifest signed by a typed (%s) key needs schema %s or %s", algorithm, SchemaV3, SchemaV4)
 	}
 	sig, _ := hex.DecodeString(signature["sig"].(string))
@@ -637,7 +652,7 @@ func Accept(current map[string]any, envelope any, root any) (map[string]any, err
 	if err := tombstones(current, candidate); err != nil {
 		return nil, err
 	}
-	bothV4 := current["schema"] == SchemaV4 && candidate["schema"] == SchemaV4
+	bothV4 := quorumSchema(current["schema"]) && quorumSchema(candidate["schema"]) // v4 or v5, either side
 	// K_A is named by every node's TPM objects (#361): no signer changes it; a new K_A is a new genesis. (v3 -> v4,
 	// root-signed, is where it is first set.)
 	if bothV4 && !equal(candidate["anchor_policy_key"], current["anchor_policy_key"]) {
@@ -650,6 +665,11 @@ func Accept(current map[string]any, envelope any, root any) (map[string]any, err
 		}
 	} else if bothV4 {
 		if err := cardRecordRules(current, candidate); err != nil {
+			return nil, err
+		}
+	}
+	if candidate["schema"] == SchemaV5 {
+		if err := topologyRules(current, candidate); err != nil {
 			return nil, err
 		}
 	}

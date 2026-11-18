@@ -92,7 +92,7 @@ def verify(envelope, current):
     membership.exact(envelope, ("lease", "signatures"), "the activation envelope")
     lease = envelope["lease"]
     raw = message(lease)
-    require(current is not None and current["schema"] == membership.SCHEMA_V4, "activation by quorum needs a %s manifest" % membership.SCHEMA_V4)
+    require(current is not None and current["schema"] in membership.QUORUM_SCHEMAS, "activation by quorum needs a %s manifest" % membership.SCHEMA_V4)
     require(lease["manifest_epoch"] <= current["epoch"], "the lease names manifest epoch %d, newer than this node's %d"
             % (lease["manifest_epoch"], current["epoch"]))
     if lease["manifest_epoch"] == current["epoch"]:
