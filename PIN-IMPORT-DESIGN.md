@@ -195,6 +195,14 @@ Until Option B has passed on the SLB9665 itself (`e2e/slb9665-pin-import-poc.sh`
 run**), commissioning on that module types the PIN from the sealed PIN card (seal-hsm-pin.sh without
 `--from-blob`; PIN-CUSTODY.md). That path is unchanged.
 
+**What a real module has shown so far (2026-11-18).** On a DL360 Gen9's Infineon TPM (firmware
+5.62), with transient objects only and test keys, under an ECC P-256 owner primary: RSA-3072 and
+ECC P-384 are refused (`tpm2_create`: `TPM_RC_VALUE`, 0x2C4), RSA-2048 and ECC P-256 are accepted,
+and a P-256 key with the attributes `fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda`
+creates, loads and does ECDH. That key was **not** `restricted`: the import key's own template and
+TPM2_Import / Load / Unseal of a v2 blob are what `e2e/slb9665-pin-import-poc.sh` tests, and it has
+not run on that module yet. The owner kept ECC P-256 on that evidence (ADR-0002 D21 point 2).
+
 ## Not covered here
 
 - **TPM2_Certify of the import key by the EK-bound AK** (ADR-0002 D21 point 2): required, and **not

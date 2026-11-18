@@ -15,7 +15,9 @@
 #      a blob sealing a value that is not a PIN is refused before the card is looked for
 #   3  refused BEFORE any card is looked at: a blob for ANOTHER TPM (by its label, and relabelled as
 #      this host's), an altered, truncated or padded blob, an RSA-OAEP blob from before #671 (with a
-#      message saying so), and an unknown format version
+#      message saying so), an unknown format version, an oversized blob, a malformed header, a blob
+#      for a TPM with no import key, an object the TPM will not unseal, and a --from-blob that is not a
+#      regular file
 #   4  --pcrs with 10 (IMA) or 11 (kernel image) is refused
 #   5  #242: with the owner authorization set, --init-import-key needs it; --from-blob does NOT
 #      (TPM2_Import authorizes the parent key, not the owner hierarchy)
@@ -83,12 +85,13 @@ hdr "2  a v2 blob for this TPM is imported and unsealed (then the script looks f
 enc "$APUB" "$W/a.blob" || F "the ceremony-side blob could not be made"
 head -c 113 "$W/a.blob" | grep -q "^regalia-pin-blob v2 tpm2-import nist-p256 sha256=$(fp "$APUB")$" \
   && P "v2 header names the import key's fingerprint ($(wc -c < "$W/a.blob") bytes in all)" || F "header: $(head -c 113 "$W/a.blob")"
-grep -qF "$PIN" "$W/a.blob" && F "the PIN is visible in the blob" || P "the PIN is not visible in the blob"
+# the PIN is grep's PATTERN read from a file descriptor, never its argument: argv is readable by every process (#675)
+grep -qF -f <(printf '%s\n' "$PIN") "$W/a.blob" && F "the PIN is visible in the blob" || P "the PIN is not visible in the blob"
 [ "$(sudo sh -c "ls '$W/cer'")" = "" ] && P "nothing is left in the ceremony workdir (no PIN file)" || F "left in the workdir: $(ls "$W/cer")"
 out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/a.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'PIN unsealed by the TPM' <<< "$out" && grep -q 'no card DENK0000001 attached' <<< "$out" \
   && P "imported, loaded and unsealed by the TPM, then stopped at the card check (no card in CI)" || F "unexpected: $out"
-grep -qF "$PIN" <<< "$out" && F "the PIN appeared in the output" || P "the PIN never appears in the output"
+grep -qF -f <(printf '%s\n' "$PIN") <<< "$out" && F "the PIN appeared in the output" || P "the PIN never appears in the output"
 TPM2TOOLS_TCTI="$TA" tpm2_getcap handles-transient 2>/dev/null | grep -q 0x80 && F "transient objects left in TPM A" || P "no transient object left in TPM A"
 # the unsealed bytes are exactly the PIN: the same import by hand
 d="$W/byhand"; mkdir -p "$d"; python3 -I -c '
@@ -163,6 +166,42 @@ out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/v
 printf 'not a blob at all\n' > "$W/junk.blob"
 out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/junk.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'is not a PIN blob' <<< "$out" && nocard "$out" && P "a file that is no blob is refused (exit $rc)" || F "junk: $out"
+# a v2 header, then more than the 4096 bytes a v2 blob can be: refused on its size, before it is parsed
+{ head -c 114 "$W/a.blob"; head -c 4000 /dev/zero; } > "$W/big.blob"
+out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/big.blob")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'is over 4096 bytes' <<< "$out" && nocard "$out" && P "a blob over 4096 bytes is refused (exit $rc)" || F "oversized: $out"
+# a v2 header whose fingerprint is not 64 lowercase hex (here: this key's own, in capitals)
+{ printf '%s%s\n' "$PIN_BLOB_HEADER" "$(fp "$APUB" | tr a-f A-F)"; tail -c +115 "$W/a.blob"; } > "$W/upper.blob"
+out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/upper.blob")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'malformed v2 header' <<< "$out" && nocard "$out" && P "a v2 header with a fingerprint not in lowercase hex is refused (exit $rc)" || F "capitals: $out"
+# the right header, not ended by a newline: byte 114 is a space
+{ head -c 113 "$W/a.blob"; printf ' '; tail -c +115 "$W/a.blob"; } > "$W/nonl.blob"
+out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/nonl.blob")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'malformed v2 header' <<< "$out" && nocard "$out" && P "a v2 header not ended by a newline is refused (exit $rc)" || F "no newline: $out"
+# the header and one byte: not even the first part's size
+head -c 115 "$W/a.blob" > "$W/stub.blob"
+out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/stub.blob")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'truncated (no pub)' <<< "$out" && nocard "$out" && P "a blob cut inside the first part's size is refused (exit $rc)" || F "stub: $out"
+# a handle with no key: refused as such, not as "a blob for another host"
+out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --import-handle 0x81000199 --from-blob "$W/a.blob")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'has no import key at 0x81000199' <<< "$out" && nocard "$out" && P "--from-blob with no import key at the handle is refused, saying so (exit $rc)" || F "no key: $out"
+# an object this TPM imports and loads but will not unseal with no authorization: made without userwithauth,
+# its user role needs a policy, and it has none
+pin_parent_tpm2b "$APUB" "$W/cer/parent.tpm2b" && (umask 077; printf '%s' "$PIN" > "$W/cer/v") \
+  && tpm2_duplicate --tcti none -U "$W/cer/parent.tpm2b" -G keyedhash -k "$W/cer/v" -a 'noda' \
+       -u "$W/cer/o.pub" -r "$W/cer/o.dpriv" -s "$W/cer/o.seed" >/dev/null 2>&1 \
+  && { printf '%s%s\n' "$PIN_BLOB_HEADER" "$(fp "$APUB")"; cat "$W/cer/o.pub" "$W/cer/o.dpriv" "$W/cer/o.seed"; } > "$W/noauth.blob" \
+  || F "the no-userwithauth blob could not be made"
+rm -f "$W/cer/v" "$W/cer/parent.tpm2b" "$W/cer/o.pub" "$W/cer/o.dpriv" "$W/cer/o.seed"
+out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/noauth.blob")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'could not unseal' <<< "$out" && nocard "$out" && ! grep -qF -f <(printf '%s\n' "$PIN") <<< "$out" \
+  && P "an object the TPM will not unseal is refused, saying so (exit $rc)" || F "no userwithauth: $out"
+# --from-blob names a FIFO: refused as not a regular file, at once (reading it would wait for a writer forever)
+mkfifo "$W/fifo.blob"
+out="$(timeout 30 sudo env TPM2TOOLS_TCTI="$TA" REGALIA_CREDSTORE="$W/cred" OPENSC_CONF="$W/opensc-none.conf" \
+  "$SEAL" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/fifo.blob" 2>&1)"; rc=$?
+[ "$rc" != 0 ] && [ "$rc" != 124 ] && grep -q -- '--from-blob: cannot read' <<< "$out" && nocard "$out" \
+  && P "--from-blob refuses a FIFO, at once (exit $rc)" || F "fifo (exit $rc): $out"
 out="$(seal "/dev/tpm0" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/a.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'no resource manager' <<< "$out" && nocard "$out" && P "--from-blob refuses the raw /dev/tpm0 (exit $rc)" || F "raw tpm0: $out"
 
@@ -183,7 +222,7 @@ out="$(seal "$TC" --init-import-key --import-pub "$W/C.pem" </dev/null)"; rc=$?
 [ "$rc" != 0 ] && grep -q 'tpm2_createprimary failed' <<< "$out" && P "without the value, the TPM refuses the owner hierarchy (exit $rc)" || F "no value: $out"
 out="$(printf '%s\n' "$OA" | seal "$TC" --init-import-key --import-pub "$W/C.pem" --ownerauth-stdin)"
 grep -q 'IMPORT KEY CREATED' <<< "$out" && P "with the envelope's value on standard input, the key is made" || F "with the value: $out"
-grep -qF "$OA" <<< "$out" && F "the owner authorization appeared in the output" || P "the owner authorization never appears in the output"
+grep -qF -f <(printf '%s\n' "$OA") <<< "$out" && F "the owner authorization appeared in the output" || P "the owner authorization never appears in the output"
 fpc="$(fp "$W/C.pem")"
 out="$(printf '%s\n' "$(hex)" | seal "$TC" --init-import-key --replace-import-key --import-pub "$W/C2.pem" --ownerauth-stdin)"; rc=$?
 [ "$rc" != 0 ] && grep -q 'cannot remove the old key' <<< "$out" && P "a wrong value is refused by the TPM (exit $rc)" || F "wrong value: $out"
