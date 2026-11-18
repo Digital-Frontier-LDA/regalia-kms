@@ -1,6 +1,6 @@
 # Single-node KMS: analysis and design (regalia-kms-dx7)
 
-> **Status: design, not built.** Nothing in this document is implemented. It records the owner's requirement, the inventory of what assumes three nodes today, the proposed one-node design, what one node loses, and the slices that build it.
+> **Status: design, decided, not built.** The owner questions were decided on 2026-11-18 (section 7). Nothing in this document is implemented yet. It records the owner's requirement, the inventory of what assumes three nodes today, the proposed one-node design, what one node loses, and the slices that build it.
 > The full inventory, with file:line for each entry, is in [single-node-inventory.md](single-node-inventory.md).
 
 ## 1. The requirement
@@ -87,7 +87,7 @@ The ones that decide the design:
   - `single_node_limits_sha256` is present only when `profile` is `single-node`.
   - `nodes` is the **designed** size. In this epic it is 1 or 3. 5 and 7 are refused until their epic lands, and an even size is refused for ever.
 - **Who may change it.** `topology` joins `ROOT_FIELDS`, so a quorum can never touch it.
-  - In this epic, not even the root may change it after genesis (owner question Q3).
+  - In this epic, not even the root may change it after genesis (decision Q3).
   - A change of profile is a new genesis.
 - **Validation (Python `membership.validate` and the Go twin, held equal by a vector):**
   - **single-node:**
@@ -131,12 +131,12 @@ The ones that decide the design:
 - **Heartbeat:** `{1, [n]}`, self-signed by the node's TPM key on its NV sequence counter (`beat.py` collects threshold − 1 = 0 co-signatures).
   - It keeps one meaning: the node's own view of its manifest is fresh, which `heartbeat.authorize` and the watch read.
   - It loses its main one: bounding how long a **peer** keeps helping a revoked node. There is no peer.
-  - The owner co-signed path (`owner.py beat`) is not needed and is refused under `single-node` (owner question Q2).
+  - The owner co-signed path (`owner.py beat`) is not needed and is refused under `single-node` (decision Q2).
 - **Revocation:** the owner alone (`revocation_signers = [{1, [owner]}]`), through the existing `revoke.py export` / `import` and `deliver`.
   - Revoking or quarantining the only node is a **shutdown of the KMS**. The tool says so, and asks for a typed phrase.
   - A stolen node is defended by 4.5, not by a revocation reaching peers: there are none.
 
-### 4.5 Boot unlock: the owner takes the peer's place (owner question Q1)
+### 4.5 Boot unlock: the owner takes the peer's place (decision Q1)
 
 - **What the peer protects today.** It gives its half of the LUKS credential only to a node that is still a member, on an image the current manifest still lists (#67, #135). This is the defence against a stolen server booting an old signed image.
 - **Proposal:** the owner's laptop plays the peer in the **existing** protocol (`unlock.py`, `cmd/regalia-unlock`), unchanged on the wire.
@@ -170,7 +170,7 @@ The ones that decide the design:
 - **Site advance.** It changes PCR 12, and the owner's unlock tool judges it the same way.
 - **Docs.** `KERNEL-UPDATE.md` gets a single-node runbook: a maintenance window, the owner present, the expected downtime.
 
-### 4.7 Re-anchor and recovery (owner question Q5)
+### 4.7 Re-anchor and recovery (decision Q5)
 
 - **The trust question.** With no peer, the only off-node copies of the chain are:
   - the owner's: the chain is root-signed and public, and the owner's tool keeps every manifest it has delivered;
@@ -216,7 +216,7 @@ The ones that decide the design:
 
 ### 4.11 Audit and monitoring
 
-- **The external audit collector becomes mandatory** (owner question Q4).
+- **The external audit collector becomes mandatory** (decision Q4).
   - Under `single-node` it is the only witness besides the owner: the cross-node checks are gone.
   - Admission refuses stateful operations while the shipper has no collector configured. It does not refuse merely because the collector is down, which only alerts.
 - **Monitoring**, gated on a new metric, `regalia_topology_nodes`, from the manifest:
@@ -292,17 +292,21 @@ This table is the source for the user-facing table in README and LIMITATIONS (sl
    - LIMITATIONS gets a "Single-node deployments" section, with each "not supported" and "degraded" row as an **accepted** entry citing dx7.
    - THREE-SITE-THREAT-MODEL gets a "single-node profile" stating which of A1-A4 and S1-S4 hold.
 
-## 7. Owner questions
+## 7. Owner decisions (2026-11-18)
 
-| # | Question | Recommendation |
-|---|---|---|
-| **Q1** | With one node, who gives the second half of the disk key at boot? (a) the owner's card, every boot (attended reboots); (b) TPM-only, as an explicit genesis opt-in (unattended, but a stolen disk opens with any old signed image, reopening #135); (c) an external unlock witness | **(a)**. It keeps theft resistance and image retirement, the reasons #67 exists. Unattended reboot is the accepted loss. (b) is not offered. (c) is a second node in all but name |
-| **Q2** | Heartbeats with one node: self-signed (threshold 1 of the node), or node plus owner (an owner touch at least every `owner_heartbeat_lifetime_s`, 1 h by default)? | **Self-signed.** The heartbeat's real job is to bound peers, and there are none. Owner co-signing every hour is unworkable and adds nothing a self-signature lacks |
-| **Q3** | May a deployment change size in place (1→3, 3→1)? | **Not in this epic: a new genesis.** Later, 1→3 could be one root-signed step that enrols two nodes and raises the floors together (its own slice). 3→1 is never in place: it would silently drop guarantees the operator acknowledged as kept |
-| **Q4** | Make the external audit collector mandatory for one node (stateful operations refused without a configured collector)? | **Yes.** It is the only witness besides the owner, and re-anchor (4.7) and spend detection (4.8) lean on it |
-| **Q5** | After anchor damage on one node: re-anchor from the owner's chain plus the collector, or always a new genesis? | **The owner's chain plus the collector's cross-check.** A new genesis for every damaged NV index would re-enrol the node and rotate K_A for a fault, not an attack |
-| **Q6** | Keep the two owner cards (D30.7) with one node? | **Yes, unchanged.** They hold the owner's unlock contribution (4.5): one lost card must not strand the node |
-| **Q7** | Is the hot-theft row ("degraded": a running stolen node serves until it loses power) acceptable for one node? | **Accept and document.** A server is normally powered off to be moved, and then 4.5 holds. The alternative, an owner-issued lease every few minutes, is not workable |
+The owner delegated these on 2026-11-18 ("you assess and you do your recommendations; most KMS are single node, so you can inspire yourself from them"). Each was decided as recommended; the rationale cites the single-node KMS practice it follows where there is one.
+
+| # | Question | Decision (2026-11-18) | Rationale |
+|---|---|---|---|
+| **Q1** | With one node, who gives the second half of the disk key at boot? (a) the owner's card, every boot; (b) TPM-only, as a genesis opt-in; (c) an external unlock witness | **(a) The owner's card at every boot; reboots are attended.** (b) is not offered; (c) is not built | Keeps theft resistance and image retirement (#67, #135), as Vault/OpenBao require a Shamir unseal and a network HSM requires activation after every restart; (b) would let any old signed image open a stolen disk, and (c) is a second node in all but name |
+| **Q2** | Heartbeats with one node: self-signed, or node plus owner? | **Self-signed** (threshold 1 of the node) | The heartbeat bounds peers and there are none; an owner touch every hour is unworkable and adds nothing |
+| **Q3** | May a deployment change size in place (1→3, 3→1)? | **Not in this epic: a new genesis.** 1→3 in place comes later as its own root-signed slice; 3→1 in place never | 1→3 can raise the floors and enrol two nodes in one root-signed step later (as Vault's raft grows in place); 3→1 would silently drop guarantees the operator acknowledged |
+| **Q4** | Make the external audit collector mandatory for one node? | **Yes: stateful operations are refused without a configured collector** | It is the only witness besides the owner, and re-anchor (4.7) and spend detection (4.8) lean on it; Vault likewise refuses requests when no audit device can log |
+| **Q5** | After anchor damage on one node: re-anchor from the owner's chain plus the collector, or always a new genesis? | **The owner's chain plus the collector's cross-check** | A new genesis for every damaged NV index would re-enrol the node and rotate K_A for a fault, not an attack |
+| **Q6** | Keep the two owner cards (D30.7) with one node? | **Yes, unchanged** | They hold the owner's unlock contribution (4.5); one lost card must not strand the node |
+| **Q7** | Is the hot-theft row ("degraded": a running stolen node serves until it loses power) acceptable? | **Accepted and documented** | A server is normally powered off to be moved, and then 4.5 holds; an owner-issued lease every few minutes is not workable |
+
+**Added from single-node KMS practice:** with no peer to restore from, the recovery path *is* the backup. A timed **restore-to-replacement drill** (the DKEK backup plus the owner cards onto a fresh node) is part of the 1-node production gate, and its measured time is the 1-node recovery time objective (slice dx7.13).
 
 ## 8. Slices (beads under regalia-kms-dx7)
 
@@ -311,7 +315,7 @@ Each slice is a bead with its own acceptance criteria: slice dx7.N is bead `rega
 | Slice | What | Depends on |
 |---|---|---|
 | dx7.1 | Membership v5: the `topology` field, floors as majority-of-designed-nodes, the single-node validation; Python and Go in lock-step, with a v5 vector | — |
-| dx7.11 | User docs: `docs/single-node-limits.md` (the canonical text genesis hashes), README "1 node or 3 nodes?", LIMITATIONS "Single-node deployments", threat-model profile | owner answers |
+| dx7.11 | User docs: `docs/single-node-limits.md` (the canonical text genesis hashes), README "1 node or 3 nodes?", LIMITATIONS "Single-node deployments", threat-model profile | — (decisions in section 7) |
 | dx7.2 | Genesis: `--topology` (required), thresholds from topology, the typed acknowledgement and its digest, `sign --genesis` display | dx7.1, dx7.11 |
 | dx7.3 | Serving: self-issued runtime lease, 1-of-1 activation, admission mode `single` (Python and Go), survivor, fence, take-over and rejoin refusing by profile | dx7.1 |
 | dx7.4 | Heartbeats and revocation: `beat.py`, `activation.py` and `revoke.py` collect threshold − 1 co-signatures (0 here), owner-only revocation with the shutdown phrase | dx7.1 |
@@ -321,6 +325,9 @@ Each slice is a bead with its own acceptance criteria: slice dx7.N is bead `rega
 | dx7.8 | Rolling update and site advance: `--planned-outage`, retire evidence from the owner tool, KERNEL-UPDATE single-node runbook | dx7.5 |
 | dx7.9 | Monitoring and audit: `regalia_topology_nodes`, the collector-relative behind alerts, `RegaliaSingleNodeDown`, the owner-unlock alert, collector mandatory | dx7.3 |
 | dx7.10 | **One-node e2e in CI**: the fixture parameterized by topology, `e2e/one-node.py` (genesis with acknowledgement, owner unlock, self-lease serving, owner revocation stopping it, planned-outage update, owner-chain re-anchor), and a `one-node` job in `node-units.yml` with its paths | dx7.2, dx7.3, dx7.4, dx7.5, dx7.6 (dx7.7 and dx7.8 extend it) |
+| dx7.13 | **Hardware acceptance on one DL360**: boot, owner-card unlock, a timed restore-to-replacement from the DKEK backup plus the owner cards (its time is the 1-node RTO), and a 72 h burn-in. Owner-run | dx7.5, dx7.10 |
+
+**Gate:** bead `regalia-kms-2jd` ("Regalia KMS single-node (1 node) production ready") depends on dx7.1–dx7.11, dx7.13 and the appliance, PCR-policy, token, SSD and ceremony prerequisites; it closes only with the owner's sign-off on the ceremony and acceptance.
 
 **Left for the odd-N epic** (recorded on the deferred bead regalia-kms-dx7.12, P4, not built), so that 5 and 7 are not blocked silently:
 - `activation.propose` and `beat.Proposer` stop after one co-signer (fixed by dx7.4's threshold − 1).
@@ -332,6 +339,6 @@ Each slice is a bead with its own acceptance criteria: slice dx7.N is bead `rega
 
 ## 9. What this slice does not decide
 
-- Changing size in place (Q3).
+- Changing size in place (Q3: a new genesis in this epic; 1→3 in place is a later slice).
 - Even sizes (refused for ever: a 2-node cluster has neither one node's simplicity nor a majority that survives a loss).
 - 5 and 7 nodes.
