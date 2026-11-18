@@ -24,6 +24,30 @@ var (
 	supportedMultiNodes = []int64{3} // 5 and 7 are their own epic (regalia-kms-dx7.12)
 )
 
+// The topology profiles, as membership.SINGLE_NODE and MULTI_NODE spell them.
+const (
+	ProfileSingleNode = singleNode
+	ProfileMultiNode  = multiNode
+)
+
+// Profile is membership.profile (regalia-kms-dx7.3): ProfileSingleNode only for a v5 manifest whose topology says so,
+// ProfileMultiNode for every other manifest (v4 and before are three-node clusters). A v5 manifest whose topology is
+// neither is an error, never read as either: what depends on the profile fails closed.
+func Profile(manifest map[string]any) (string, error) {
+	if manifest == nil {
+		return "", refuse("a manifest is an object")
+	}
+	if manifest["schema"] != SchemaV5 {
+		return multiNode, nil
+	}
+	object, _ := manifest["topology"].(map[string]any)
+	profile, _ := object["profile"].(string)
+	if profile != singleNode && profile != multiNode {
+		return "", refuse("topology.profile must be %s or %s", singleNode, multiNode)
+	}
+	return profile, nil
+}
+
 // quorumSchema is membership.QUORUM_SCHEMAS: the nodes and the owner sign. What v4 reads, v5 reads alike.
 func quorumSchema(schema any) bool { return schema == SchemaV4 || schema == SchemaV5 }
 

@@ -292,6 +292,18 @@ func fenceEvidence(redfish bool, value any, id string) (map[string]any, error) {
 
 // verifySurvivorAuthorization is survivor.verify_authorization against the manifest it was given at (`current`).
 func verifySurvivorAuthorization(value any, current map[string]any, nodeID string) (map[string]any, error) {
+	// regalia-kms-dx7.3: first, whatever the authorization says. A single-node manifest has no other node, so the
+	// checks below (every other node quarantined, the fence naming every other node) would pass vacuously over none.
+	// survivor.verify_authorization refuses alike (membership.not_single_node).
+	profile, err := membership.Profile(current)
+	if err != nil {
+		return nil, asRefused(err)
+	}
+	if profile == membership.ProfileSingleNode {
+		return nil, refuse("a survivor authorization is refused under the %s profile (epoch %v): one node has no other node to "+
+			"survive, fence, take over from or rejoin; it is a profile of its own, never a lone survivor (docs/design/single-node.md 4.3)",
+			membership.ProfileSingleNode, current["epoch"])
+	}
 	signed, err := exactFields(value, []string{"authorization", "signature"}, "the signed survivor authorization")
 	if err != nil {
 		return nil, err

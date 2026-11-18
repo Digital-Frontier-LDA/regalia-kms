@@ -458,6 +458,13 @@ state_epoch_case("a fence that names no node", authorized(fence=fence_of()), Fal
 state_epoch_case("a fence that names a node by something not a node ID",
                  authorized(fence=fence_of(**{"B!": redfish_evidence(["b"])["nodes"]["b"], "c": redfish_evidence(["c"])["nodes"]["c"]})), False)
 state_epoch_case("a redfish fence that reads the box On", fenced_b(power_state="On"), False)
+# regalia-kms-dx7.3: under the single-node profile a survivor authorization is refused by name, before anything it says (over
+# no other node it would pass vacuously): the chain is one v5 single-node manifest, its node a
+from tests.test_baremetal_membership_v5 import single5  # noqa: E402
+_SINGLE = single5(1, "", issued_at="2026-10-04T09:00:00Z")
+state_epoch_case("a take-over under the single-node profile",
+                 took_over(state_epoch(1, authorization=survivor_authorization(unchecked=True, quarantine_epoch=1, quarantine_digest=m.digest(_SINGLE)))),
+                 False, chain=[_SINGLE])
 state_epoch_case("a redfish fence with no power-restore policy text", fenced_b(power_restore_policy=""), False)
 state_epoch_case("an authorization that ends when it begins", authorized(expires_at="2026-10-05T12:00:00Z"), False)
 state_epoch_case("an authorization that lives longer than a week", authorized(expires_at="2026-10-12T12:00:01Z"), False)

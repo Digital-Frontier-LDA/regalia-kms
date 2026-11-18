@@ -188,6 +188,74 @@ class Recovery(Case):
         self.assertEqual(document["serve_until_boottime_ms"], self.ticks + 7000)
 
 
+class Single(Case):
+    """regalia-kms-dx7.3 (docs/design/single-node.md 4.3): under the single-node profile the node serves in mode "single"
+    on the lease it issues itself, with the lease's state; recovery is never entered there, whatever is installed."""
+
+    def setUp(self):
+        super().setUp()
+        self.self_issuing()
+        self.manifest_now = self.s1
+        self.trail, self.authorization = [], [3600]
+        self.service = admission.Service(self.holder, lambda: self.manifest_now, self.renew_self, self.path, boottime=lambda: self.ticks,
+                                         boot=lambda: BOOT, record=self.trail.append, survivor=self.survivor)
+
+    def renew_self(self, request):
+        return self.issue_self(manifest=self.manifest_now, request=request)
+
+    def survivor(self, manifest):
+        return self.authorization[0]
+
+    def test_it_serves_in_mode_single_with_the_lease_s_state(self):
+        document = self.service.step()
+        self.assertEqual((document["mode"], document["serve_until_boottime_ms"]), ("single", self.ticks + (lease.MAX_LIFETIME - admission.MARGIN) * 1000))
+        self.assertEqual({k: document[k] for k in lease.STATE_KEYS}, lt.STATE)
+        self.assertGreater(document["requested_boottime_ms"], 0)         # asked for, so #72's token rule holds as for a peer's
+        self.assertEqual(admission.read(self.path)["mode"], "single")
+        self.assertEqual([(e["outcome"], e["peer"]) for e in self.trail], [("ALLOW", "a")])
+
+    def test_recovery_is_never_entered_under_single_node(self):
+        def refuses(request):
+            raise m.Refused("its own TPM did not answer")
+        self.service.renew = refuses                                    # no lease, and an authorization that would hold
+        document = self.service.step()
+        self.assertEqual((document["mode"], document["serve_until_boottime_ms"]), ("lease", 0))
+        self.assertIn("recovery is refused under the single-node profile", document["reason"])
+
+    def test_a_peer_s_lease_under_single_node_or_a_self_issued_one_under_multi_node_does_not_serve(self):
+        # a document of the wrong mode for the profile is never written as serving (mode_fits_profile)
+        self.refused("admission mode lease is refused under the single-node profile", admission.mode_fits_profile, "lease", m.SINGLE_NODE)
+        self.refused("admission mode recovery is refused under the single-node profile", admission.mode_fits_profile, "recovery", m.SINGLE_NODE)
+        self.refused("admission mode single is refused under the multi-node profile", admission.mode_fits_profile, "single", m.MULTI_NODE)
+        self.refused("an admission's mode is one of", admission.mode_fits_profile, "standby", m.MULTI_NODE)
+        self.refused("the topology profile is", admission.mode_fits_profile, "single", "two-node")
+        for mode, profile in (("single", m.SINGLE_NODE), ("lease", m.MULTI_NODE), ("recovery", m.MULTI_NODE)):
+            admission.mode_fits_profile(mode, profile)
+        # end to end: a lease the holder took under single-node, judged once the manifest is multi-node, serves nothing (and,
+        # with no survivor authorization installed there, no recovery either)
+        self.service.step()
+        self.manifest_now, self.authorization[0] = self.multi5(), None
+        document = self.service.step()
+        self.assertEqual(document["serve_until_boottime_ms"], 0)
+        self.assertIn("a node does not vouch for itself", document["reason"])
+
+    def test_a_held_lease_whose_mode_does_not_fit_the_profile_serves_nothing(self):
+        """The mode the lease service derives is checked against the profile before anything is served, whatever the lease
+        check said: a peer's lease held under single-node (which lease.verify cannot pass today) still serves nothing."""
+        envelope = self.issue("b", manifest=self.m1)
+        holder = unittest.mock.Mock(node_id="a", session_id=lt.SESSION)
+        holder.check.return_value, holder.held.return_value = lease.MAX_LIFETIME, envelope
+        service = admission.Service(holder, lambda: self.s1, self.renew_self, self.path, boottime=lambda: self.ticks, boot=lambda: BOOT)
+        document = service._publish(self.s1, "")
+        self.assertEqual((document["serve_until_boottime_ms"], document["mode"]), (0, "lease"))
+        self.assertIn("admission mode lease is refused under the single-node profile", document["reason"])
+
+    def test_a_single_admission_that_serves_carries_the_lease_s_state(self):
+        served = self.service.step()
+        target = os.path.join(self.d, "other.json")
+        self.refused("an admission that serves under a lease carries the lease's state", admission.write, target, dict(served, **admission.NO_STATE))
+
+
 class Backoff(Case):
     """48 on #347: while renewals fail they back off, RETRY_FIRST doubling to RETRY_MAX (2 s to 10 s within a 30 s lease,
     D32), and a success ends it."""
@@ -773,7 +841,7 @@ class Renewals(unittest.TestCase):
     """#340: node.admission_service records each renewal attempt on the node's own trail: ALLOW names the issuing peer,
     DENY carries its refusal, and a last DENY when no peer gave a lease. A lease whose record fails is not used."""
 
-    def service(self, answers, broken=False):
+    def service(self, answers, broken=False, manifest=None):
         from deploy.baremetal import node, sync
         self.trail = []
 
@@ -796,7 +864,7 @@ class Renewals(unittest.TestCase):
                         raise answers[name]
                     return answers[name]
                 return renew
-        manifest = {"epoch": 3, "nodes": []}
+        manifest = manifest or {"epoch": 3, "nodes": []}
         fake = unittest.mock.Mock(node_id="a", runtime="/run/regalia", run=None)
         fake.manifest.return_value = manifest
         fake.sources.return_value = {"b": None, "c": None}
@@ -883,3 +951,33 @@ class Renewals(unittest.TestCase):
         with self.assertRaises(OSError):
             service.renew({"nonce": "n"})
 
+    def test_under_single_node_the_node_issues_its_own_lease_and_asks_no_peer(self):
+        """dx7.3: the renewal under a single-node manifest is lease.issue_self, with this node's own verifier, quote,
+        heartbeat, signer and RevisionFloor (fed at the attempt); no peer is asked. Each attempt is on the trail, naming
+        the node itself."""
+        from deploy.baremetal import node
+        single = {"schema": m.SCHEMA_V5, "topology": {"profile": m.SINGLE_NODE}, "epoch": 3, "nodes": []}
+        issued, fed = [], []
+
+        def issue_self(manifest, node_id, request, attester, evidence, freshness, signer, floor):
+            issued.append((manifest["epoch"], node_id, request["nonce"], evidence))
+            if isinstance(answer[0], Exception):
+                raise answer[0]
+            return answer[0]
+        answer = [{"lease": "its own"}]
+        service = self.service({"b": AssertionError("a peer was asked")}, manifest=single)
+        self.fake.self_attester.return_value.nonce.return_value = b"\x11" * 32
+        self.fake.quote.return_value = lambda nonce, manifest, binding: {"answers": nonce}
+        floor = unittest.mock.Mock(applied=lambda *a: fed.append(a))
+        with mock.patch.object(node.lease, "issue_self", issue_self), mock.patch.object(node.lease, "read_applied", return_value=("c1" * 8, 1, 7)), \
+                mock.patch.object(node.lease, "request_binding", return_value=b"binding"), mock.patch.object(node.lease, "TpmSigner"), \
+                mock.patch.object(node.lease, "RevisionFloor", return_value=floor):
+            self.assertEqual(service.renew({"nonce": "n"}), {"lease": "its own"})
+            answer[0] = m.Refused("STALE STATE: below the floor")
+            with self.assertRaises(m.Refused):
+                service.renew({"nonce": "n2"})
+        self.assertEqual(issued, [(3, "a", "n", {"answers": "11" * 32}), (3, "a", "n2", {"answers": "11" * 32})])
+        self.assertEqual(fed, [("c1" * 8, 1, 7)] * 2)
+        self.fake.sources.assert_not_called()
+        self.assertEqual([(e["peer"], e["outcome"]) for e in self.trail], [("a", "ALLOW"), ("a", "DENY")])
+        self.assertIn("STALE STATE", self.trail[-1]["reason"])

@@ -12,7 +12,7 @@ THE CREDENTIALS are one fence-only iLO account per server (Virtual Power and Res
 to the owner card's decryption key and the backup owner card's, so one owner can fence during an outage. They arrive
 decrypted on a descriptor, never a file (keyfd):
 
-    owner.py fence --inventory fence-inventory.json --node b --node c --out fence.json \\
+    owner.py fence --chain chain.json --root-key <the pin> --inventory fence-inventory.json --node b --node c --out fence.json \\
         --credentials-fd 3 3< <(gpg --decrypt fence-credentials.json.gpg)
 
     {"b": {"username": ..., "password": ...}, "c": {...}}

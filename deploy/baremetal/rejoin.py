@@ -297,6 +297,7 @@ def audited_command(host, chain, me, command, node=None, line=None, member_id=No
     fields = {"node_id": me, "subject": node or me, "epoch": chain[-1]["epoch"]}
 
     def act():
+        membership.not_single_node(chain[-1], "a rejoin")    # dx7.3: one node has no survivor to rejoin, and no returner
         if command == "admit":
             got_line, got_id = admit(host, chain, me, node)
             return {"initial_cluster": got_line, "member_id": got_id}

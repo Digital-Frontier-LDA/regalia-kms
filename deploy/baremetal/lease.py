@@ -62,6 +62,15 @@ than the verifier's (then: fetch the chain, and refuse meanwhile) and at the sam
 agree, the signature is the issuer's, and the lease is unexpired on the verifier's authenticated clock.
 A manifest that revokes the subject or the issuer kills the lease wherever that manifest has arrived.
 
+SELF-ISSUED, UNDER THE SINGLE-NODE PROFILE ONLY (regalia-kms-dx7.3, docs/design/single-node.md 4.3). A v5 manifest of
+topology single-node names one node and no peer. That node issues its own lease (issue_self): issuer equals subject,
+signed by its own AK over a quote of its own TPM. Every other binding is kept: it re-attests in that very call to its
+own verifier (the measured boot against the manifest's measurements), the 30 s life, the heartbeat's bound (its own,
+self-signed: decision Q2), cluster_id, state_epoch, the state_revision floor (its own RevisionFloor: what it had applied
+a lease ago) and the daemon's session_key. It is a local liveness and binding check, not a vouch: nobody outside the node
+can stop renewing it. verify() takes issuer == subject under single-node and refuses it under every other manifest ("a
+node does not vouch for itself"), so a multi-node node can never serve on its own word.
+
 THE NODE HOLDS (Holder) one lease in a file under /run, gone at reboot. It installs only a lease for
 itself, for its current boot session, carrying a nonce it issued for that request (once), and keeps the
 later-expiring of two. check() is what a cooperative daemon asks before work: refused means stop serving
@@ -343,7 +352,10 @@ def verify(envelope, manifest, now, run=subprocess.run):
     require(lease["ak_name"] == subject["ak_name"], "the lease names another AK than the manifest's for %s" % lease["node_id"])
     require(membership.may(manifest, lease["node_id"], "serve"), "%s may not serve under epoch %d (%s)"
             % (lease["node_id"], manifest["epoch"], subject["state"]))
-    require(lease["issuer"] != lease["node_id"], "a node does not vouch for itself")
+    if lease["issuer"] == lease["node_id"]:
+        # dx7.3: the single-node profile's self-issued lease, and nowhere else
+        require(membership.profile(manifest) == membership.SINGLE_NODE, "a node does not vouch for itself: a self-issued lease "
+                "is the %s profile's alone, and epoch %d is %s" % (membership.SINGLE_NODE, manifest["epoch"], membership.profile(manifest)))
     require(issuer is not None and membership.may(manifest, lease["issuer"], "authorize"),
             "%s may not authorize under epoch %d" % (lease["issuer"], manifest["epoch"]))
     require(lease["epoch"] <= manifest["epoch"], "the lease is from epoch %d, newer than this verifier's %d: fetch the chain"
@@ -432,11 +444,28 @@ def issue(manifest, issuer_id, request, attester, evidence, freshness, signer, f
     ({ephemeral_public, nonce, quote, signature}, hex) answering a nonce from `attester`, the peer's
     attest.Verifier, and binding the request's state and session key (request_binding); `freshness` is the peer's
     heartbeat.Freshness; `signer(digest)` its TpmSigner; `floor` its RevisionFloor (D32)."""
+    return _issue(manifest, issuer_id, request, attester, evidence, freshness, signer, floor, self_issued=False)
+
+
+def issue_self(manifest, node_id, request, attester, evidence, freshness, signer, floor):
+    """The single-node profile's lease (regalia-kms-dx7.3; module docstring): `node_id` issues its own, or Refused.
+    Every argument is issue()'s, the node's own: `attester` its verifier of its own quotes (its own AK enrolled, its
+    measurements the manifest's), `evidence` its fresh quote over a nonce that verifier issued, `freshness` its own
+    heartbeat, `signer` its own TpmSigner and `floor` its own RevisionFloor. Refused under any other profile."""
+    return _issue(manifest, node_id, request, attester, evidence, freshness, signer, floor, self_issued=True)
+
+
+def _issue(manifest, issuer_id, request, attester, evidence, freshness, signer, floor, self_issued):
     validate_request(request)
     nodes = membership.validate(manifest)
     subject_id = request["node_id"]
     require(membership.may(manifest, issuer_id, "authorize"), "%s may not authorize under epoch %d" % (issuer_id, manifest["epoch"]))
-    require(issuer_id != subject_id, "a node does not vouch for itself")
+    if self_issued:
+        require(membership.profile(manifest) == membership.SINGLE_NODE, "a node issues its own lease only under the %s profile; "
+                "epoch %d is %s: a peer issues it" % (membership.SINGLE_NODE, manifest["epoch"], membership.profile(manifest)))
+        require(subject_id == issuer_id, "a self-issued lease is for the node that issues it (%s), not %s" % (issuer_id, subject_id))
+    else:
+        require(issuer_id != subject_id, "a node does not vouch for itself")
     require(membership.may(manifest, subject_id, "serve"), "%s may not serve under epoch %d: no lease" % (subject_id, manifest["epoch"]))
     # One reading of the peer's authenticated clock (with its floor) dates the lease, and the heartbeat's
     # absolute expiry bounds it: however long the attestation below takes, the lease cannot outlive the

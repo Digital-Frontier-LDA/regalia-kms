@@ -22,7 +22,8 @@ anyone else could swap; and it accepts the boot session beside it only from root
      "requested_boottime_ms": <when this node asked for the lease it holds>,
      "cluster_id": "<16 hex>", "state_epoch": <n>, "state_revision": <n>, "session_key": "<64 hex>",
      "serve_until_boottime_ms": <the daemon may serve while its CLOCK_BOOTTIME is below this; 0 = no>,
-     "mode": "lease" | "recovery" (a lone survivor under the owner's authorization: stateless operations only),
+     "mode": "lease" | "recovery" (a lone survivor under the owner's authorization: stateless operations only)
+             | "single" (the single-node profile's self-issued lease: stateless and stateful operations),
      "reason": "<why not, when serve_until is 0; in recovery, that it is>"}
 
 THE LEASE'S OPERATIONAL STATE (v4; ADR-0002 D32, #510). cluster_id, state_epoch, state_revision and session_key
@@ -43,6 +44,13 @@ check refuses (the node is revoked in a manifest that has arrived, the lease exp
 authenticated or went backwards, the chain was rolled back), serve_until is written as 0 with the
 reason, in that same step. When a renewal merely fails (a peer is down), the node keeps what its lease
 still gives it, and no more.
+
+MODE "single" (regalia-kms-dx7.3, docs/design/single-node.md 4.3). Under a v5 manifest of topology single-node, the
+node issues its own lease (lease.issue_self) and the file says "single": the daemon serves stateless and stateful
+operations under it, with the lease's state as in "lease" mode, and only once its membership chain shows the single-node
+profile (internal/admission). The mode is the profile's (mode_fits_profile, held equal to the Go reader's by
+tests/vectors/self-lease-v1.json): "single" under single-node only, and "lease" and "recovery" never under it. The
+owner's survivor authorization is never consulted under single-node: there is nothing to survive.
 
 IF THIS SERVICE STOPS, the last file stands, and it runs out by itself at the lease's expiry less the
 margin: the daemon stops with no one telling it to.
@@ -94,7 +102,9 @@ NO_STATE = {"cluster_id": "00" * 8, "state_epoch": 0, "state_revision": 0, "sess
 # v3 (ADR-0002 D32 item 6, #432 item (e)): "lease", served under a peer's runtime lease; "recovery", a lone survivor
 # served under the owner's survivor authorization (survivor.py), stateless operations only. The daemon refuses
 # "recovery" until its stateless-only gate exists (internal/admission; ed): fail closed.
-MODES = ("lease", "recovery")
+# "single" (dx7.3): the single-node profile's self-issued lease, serving stateless and stateful operations
+MODES = ("lease", "recovery", "single")
+STATEFUL_MODES = ("lease", "single")          # a mode that serves carries the lease's state (v4)
 MARGIN = 5                 # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
 NEVER = "1970-01-01T00:00:00Z"
 # The daemon reads this file with a limit of 4096 bytes (internal/admission/admission.go, maxFileBytes) and
@@ -153,6 +163,21 @@ def unit_started(unit="regalia-kms.service", run=subprocess.run, proc="/proc"):
     return started
 
 
+def mode_fits_profile(mode, profile):
+    """Refused unless admission `mode` may serve under topology `profile` (membership.profile): "single" under single-node
+    only; "lease" (a peer's lease) and "recovery" (a lone survivor) under multi-node only. The Go reader's modeFitsProfile
+    decides the same (tests/vectors/self-lease-v1.json)."""
+    require(mode in MODES, "an admission's mode is one of %s" % ", ".join(MODES))
+    require(profile in (membership.SINGLE_NODE, membership.MULTI_NODE), "the topology profile is %s or %s"
+            % (membership.SINGLE_NODE, membership.MULTI_NODE))
+    if profile == membership.SINGLE_NODE:
+        require(mode == "single", "admission mode %s is refused under the %s profile: one node serves only under its own lease "
+                "(mode single)" % (mode, membership.SINGLE_NODE))
+    else:
+        require(mode != "single", "admission mode single is refused under the %s profile: a node there serves only under a "
+                "peer's lease" % membership.MULTI_NODE)
+
+
 def _printable(text, limit=membership.NAME_LIMIT):
     return membership.printable(text, limit)
 
@@ -162,7 +187,7 @@ def _checked(document):
     (a real cluster ID or session key is never all zeros; 2f's read of #510, as internal/admission.Parse)."""
     require(document["mode"] in MODES, "an admission's mode is one of %s" % ", ".join(MODES))
     no_state = document["cluster_id"] == NO_STATE["cluster_id"] or document["session_key"] == NO_STATE["session_key"]
-    require(not (document["mode"] == "lease" and document["serve_until_boottime_ms"] and no_state),
+    require(not (document["mode"] in STATEFUL_MODES and document["serve_until_boottime_ms"] and no_state),
             "an admission that serves under a lease carries the lease's state")
 
 
@@ -242,7 +267,7 @@ class Service:
                 "lease_issued_at": held["issued_at"] if held and serve_until else NEVER,
                 "requested_boottime_ms": (requested if requested is not None else
                                           self._requests().get(held["nonce"], 0) if held and serve_until else 0),
-                **({k: held[k] for k in lease.STATE_KEYS} if held and serve_until and mode == "lease" else NO_STATE),
+                **({k: held[k] for k in lease.STATE_KEYS} if held and serve_until and mode in STATEFUL_MODES else NO_STATE),
                 "serve_until_boottime_ms": serve_until, "mode": mode, "reason": _printable(reason, ADMISSION_REASON_LIMIT)}
 
     def _may_serve(self, manifest):
@@ -258,6 +283,14 @@ class Service:
             return membership.validate(manifest).get(self.holder.node_id) if manifest else None
         except Refused:
             return None
+
+    def _single(self, manifest):
+        """Whether `manifest` is of the single-node profile; a manifest whose profile cannot be read is taken as single-node
+        here, where that answer only ever refuses (the survivor's recovery)."""
+        try:
+            return membership.profile(manifest) == membership.SINGLE_NODE
+        except (Refused, TypeError):
+            return True
 
     def _serials(self, manifest):
         """This node's hsm_serials in `manifest`, space-separated: "" when it has no entry, or past MAX_SERIALS (step()
@@ -354,16 +387,25 @@ class Service:
                 envelope = self.holder.held()
                 alive = left > 0
                 require(left > MARGIN, "the lease has %d s left, inside the %d s margin" % (left, MARGIN))
+                # dx7.3: a lease the node issued itself (lease.verify took it only under single-node) is mode single; the
+                # mode must fit the manifest's profile, or nothing is served
+                if envelope is not None and envelope["lease"]["issuer"] == self.holder.node_id:
+                    mode = "single"
+                mode_fits_profile(mode, membership.profile(manifest))
                 serve_until, reason = before + (left - MARGIN) * 1000, ""
             except Refused as refusal:            # serve_until is still 0: it is set only by a check that passed
                 reason = (reason + "; " if reason else "") + str(refusal)
-                envelope = None
+                envelope, mode = None, "lease"
                 last = self.written                 # the last lease admission written, judged on the boot clock: not run out yet
                 alive = alive or bool(last and last["mode"] == "lease" and last["serve_until_boottime_ms"]
                                       and before < last["serve_until_boottime_ms"] + MARGIN * 1000)
                 # the owner's survivor authorization only with NO unexpired normal lease, and only for a node the manifest
                 # lets serve (regalia-kms-ed on #494: never on any refusal of the normal check)
-                if self.survivor is not None and not alive and self._may_serve(manifest):
+                # dx7.3: never under the single-node profile, whatever is installed: there is nothing to survive
+                if self.survivor is not None and not alive and self._may_serve(manifest) and self._single(manifest):
+                    reason += ("; recovery is refused under the %s profile: one node is never a lone survivor, it serves only "
+                               "under its own lease" % membership.SINGLE_NODE)
+                elif self.survivor is not None and not alive and self._may_serve(manifest):
                     try:
                         auth_left = self.survivor(manifest)
                     except Refused as why:
@@ -465,7 +507,8 @@ def main(argv=None):
         return 1
     left = (document["serve_until_boottime_ms"] - boottime_ms()) / 1000
     print(json.dumps(document, indent=2))
-    print(("admitted for %.0f more seconds%s" % (left, " IN RECOVERY, alone, stateless operations only" if document["mode"] == "recovery" else ""))
+    print(("admitted for %.0f more seconds%s" % (left, " IN RECOVERY, alone, stateless operations only" if document["mode"] == "recovery" else
+                                                  " (single-node, under its own lease)" if document["mode"] == "single" else ""))
           if left > 0 else "NOT ADMITTED: %s" % (document["reason"] or "the lease ran out"))
     return 0 if left > 0 else 1
 

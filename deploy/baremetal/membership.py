@@ -524,6 +524,30 @@ def node_floor(manifest):
     return designed_nodes(manifest) // 2 + 1
 
 
+def profile(manifest):
+    """The manifest's topology profile (docs/design/single-node.md 4.1): SINGLE_NODE only for a v5 manifest whose topology
+    says so, MULTI_NODE for every other manifest (a v4 or older one is a three-node cluster, V4_DESIGNED_NODES). A v5
+    manifest whose topology is not one of the two is refused, never read as either: what depends on the profile fails
+    closed."""
+    require(isinstance(manifest, dict), "a manifest is an object")
+    if manifest.get("schema") != SCHEMA_V5:
+        return MULTI_NODE
+    topology = manifest.get("topology")
+    require(isinstance(topology, dict) and topology.get("profile") in (SINGLE_NODE, MULTI_NODE),
+            "topology.profile must be %s or %s" % (SINGLE_NODE, MULTI_NODE))
+    return topology["profile"]
+
+
+def not_single_node(manifest, what):
+    """Refused under the single-node profile, naming it (regalia-kms-dx7.3, docs/design/single-node.md 4.3): `what` (a
+    survivor authorization, a fence, a take-over, a rejoin) is the degraded state of a multi-node cluster, and one node has
+    no other node to survive, fence, take over from or rejoin. Refused rather than passed vacuously over no other node."""
+    require(profile(manifest) != SINGLE_NODE,
+            "%s is refused under the %s profile (epoch %s): one node has no other node to survive, fence, take over from or "
+            "rejoin; it is a profile of its own, never a lone survivor (docs/design/single-node.md 4.3)"
+            % (what, SINGLE_NODE, manifest.get("epoch")))
+
+
 def _topology(manifest, by_id):
     """A v5 manifest's topology field, and the number of its nodes that are not RETIRED or REVOKED_STOLEN against it.
     Checked before the signer rules, whose floors it gives."""

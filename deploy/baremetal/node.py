@@ -813,6 +813,20 @@ class Node:
         counter = heartbeat_counter(self.cfg, self.run, owner_auth)
         return heartbeat.Freshness(counter, self.clock(), self.tpm_clock(), self.path("freshness.json"))
 
+    def self_attester(self, manifest):
+        """dx7.3: this node's verifier of its OWN quotes, under the single-node profile only (lease.issue_self): the policy
+        names this node (measurements.self_attest_policy, from the document the manifest commits to), and its AK is
+        enrolled by the same credential activation a peer runs (enrolpeer.challenge, then this TPM's activation), so only
+        the manifest's AK in the manifest's EK's TPM is taken. Its state is its own file, apart from a peer's verifier."""
+        document = measurements.held(self.documents(), manifest)
+        attester = attest.Verifier(measurements.self_attest_policy(manifest, document, self.node_id), self.path("attest-self.json"),
+                                   run=self.run)
+        credential = enrolpeer.challenge(attester, manifest, self.node_id, *enrolpeer.tpm_identity(self.tcti, self.run)())
+        if credential is not None:
+            attester.enroll(self.node_id, enrolpeer.tpm_activate(self.tcti, self.run)(credential),
+                            ak_name=membership.validate(manifest)[self.node_id]["ak_name"])
+        return attester
+
     def attester_for(self, manifest):
         # the document THIS manifest commits to, by digest, and no other (#332): refused when it is not held
         document = measurements.held(self.documents(), manifest)
@@ -959,9 +973,31 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
     class Manifest:
         load = staticmethod(node.manifest)
     order = []
+    own = {}                # dx7.3: this node's own issuer parts, made at its first self-issued lease
+
+    def renew_self(request, manifest):
+        """dx7.3, single-node only: no peer exists, so this node issues its own lease (lease.issue_self) under every rule a
+        peer's follows: a fresh quote to its own verifier, its own heartbeat, TPM signer and RevisionFloor (fed here at
+        each attempt, so it fails closed for one lease after this service starts, as a restarted peer does)."""
+        if not own:
+            own.update(freshness=node.freshness(), signer=lease.TpmSigner(node.tcti, node.run), floor=lease.RevisionFloor())
+        event = {"event": "admission-renew", "epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest),
+                 "subject": node.node_id, "peer": node.node_id}
+        try:
+            own["floor"].applied(*lease.read_applied())
+            attester = node.self_attester(manifest)
+            evidence = node.quote(session, public)(attester.nonce(node.node_id).hex(), manifest, lease.request_binding(request))
+            got = lease.issue_self(manifest, node.node_id, request, attester, evidence, own["freshness"], own["signer"], own["floor"])
+        except Refused as refused:
+            quiet.deny(dict(event, outcome="DENY", reason=convergence._printable(refused, membership.REASON_LIMIT)))
+            raise
+        quiet.allow(dict(event, outcome="ALLOW", reason=""))
+        return got
 
     def renew(request):
         manifest = node.manifest()
+        if membership.profile(manifest) == membership.SINGLE_NODE:
+            return renew_self(request, manifest)
         sources = node.sources(manifest, timeout=admission.RENEW_TIMEOUT)    # a silent peer costs seconds, not a lease
         peers = sorted(sources)
         require(peers, "no peer to ask for a lease")

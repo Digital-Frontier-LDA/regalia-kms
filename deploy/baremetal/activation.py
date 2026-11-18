@@ -277,6 +277,24 @@ def _stamp(seconds):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(seconds)))
 
 
+def _alone(node_id, site, registry_digest, manifest, epoch, now, signer, trail):
+    """1-of-1 activation, under the single-node profile only (regalia-kms-dx7.3, docs/design/single-node.md 4.3):
+    activation_signers is {1, [this node]}, so the node records and signs its own lease and asks no one. Its grant record
+    (the NV counter, then the record, then the signature: Signer) still applies, so the activation epoch only rises. Mutual
+    exclusion holds because the manifest names one node, whose signing key never leaves its TPM; what one node does not
+    give is a second signer that would refuse a root-compromised node. verify() then counts it against the rule."""
+    lease = proposal(node_id, site, registry_digest, manifest, epoch, now)
+    try:
+        done = {"lease": lease, "signatures": [signer(lease, manifest, now)]}
+        verify(done, manifest)
+    except Refused as refused:
+        trail({"event": "activation", "outcome": "DENY", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site,
+               "reason": ("%s, alone: %s" % (membership.SINGLE_NODE, refused))[:240]})
+        raise
+    trail({"event": "activation", "outcome": "ALLOW", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site, "peer": ""})
+    return done
+
+
 def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers, trail):
     """This node's activation, the epoch one above the highest this node knows (its grant record's). Its own record is
     CHECKED first (nothing written); then one co-signer from `peers` (in order) checks, records and signs; only then does
@@ -293,6 +311,8 @@ def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers,
     now = _now(clock)
     last, _ = signer.record.state(now)
     epoch = (last["activation_epoch"] if last else 0) + 1
+    if membership.profile(manifest) == membership.SINGLE_NODE:
+        return _alone(node_id, site, registry_digest, manifest, epoch, now, signer, trail)
     refusals = []
     for attempt in range(2):
         lease = proposal(node_id, site, registry_digest, manifest, epoch, now)

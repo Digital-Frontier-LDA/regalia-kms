@@ -1,0 +1,104 @@
+{
+ "schema": "regalia.test-vectors/self-lease-v1",
+ "comment": [
+  "regalia-kms-dx7.3 (docs/design/single-node.md 4.3): the self-issued runtime lease, as Python and Go both decide it.",
+  "Each case is a lease of `issuer` for `subject` under a manifest of `manifest` (v1: before topology, multi-node; v5-multi; v5-single),",
+  "or, where `issuer` is null, an admission document of `mode` only. tests/test_baremetal_lease.py (SelfIssued) signs each lease with",
+  "the issuer's AK and replays lease.verify (`lease`: accepted, or the refusal's words), derives the admission mode the lease",
+  "service writes (single when issuer == subject, else lease) and replays admission.mode_fits_profile; the Go reader",
+  "(internal/admission, self_lease_vector_test.go) replays modeFitsProfile on `mode` and `profile` and Parse on the document the",
+  "lease service writes in that mode. `fits`: whether the mode may serve under the profile."
+ ],
+ "cases": [
+  {
+   "name": "single-node: the node's own lease",
+   "manifest": "v5-single",
+   "profile": "single-node",
+   "issuer": "a",
+   "subject": "a",
+   "lease": "accepted",
+   "mode": "single",
+   "fits": true
+  },
+  {
+   "name": "v5 multi-node: a self-issued lease",
+   "manifest": "v5-multi",
+   "profile": "multi-node",
+   "issuer": "a",
+   "subject": "a",
+   "lease": "a node does not vouch for itself",
+   "mode": null,
+   "fits": false
+  },
+  {
+   "name": "v1 (multi-node by definition): a self-issued lease",
+   "manifest": "v1",
+   "profile": "multi-node",
+   "issuer": "a",
+   "subject": "a",
+   "lease": "a node does not vouch for itself",
+   "mode": null,
+   "fits": false
+  },
+  {
+   "name": "v5 multi-node: a peer's lease",
+   "manifest": "v5-multi",
+   "profile": "multi-node",
+   "issuer": "b",
+   "subject": "a",
+   "lease": "accepted",
+   "mode": "lease",
+   "fits": true
+  },
+  {
+   "name": "v1: a peer's lease",
+   "manifest": "v1",
+   "profile": "multi-node",
+   "issuer": "b",
+   "subject": "a",
+   "lease": "accepted",
+   "mode": "lease",
+   "fits": true
+  },
+  {
+   "name": "single-node: a document claiming a peer's lease",
+   "manifest": "v5-single",
+   "profile": "single-node",
+   "issuer": null,
+   "subject": null,
+   "lease": null,
+   "mode": "lease",
+   "fits": false
+  },
+  {
+   "name": "single-node: a document claiming recovery",
+   "manifest": "v5-single",
+   "profile": "single-node",
+   "issuer": null,
+   "subject": null,
+   "lease": null,
+   "mode": "recovery",
+   "fits": false
+  },
+  {
+   "name": "multi-node: a document claiming single",
+   "manifest": "v5-multi",
+   "profile": "multi-node",
+   "issuer": null,
+   "subject": null,
+   "lease": null,
+   "mode": "single",
+   "fits": false
+  },
+  {
+   "name": "multi-node: a lone survivor's recovery",
+   "manifest": "v5-multi",
+   "profile": "multi-node",
+   "issuer": null,
+   "subject": null,
+   "lease": null,
+   "mode": "recovery",
+   "fits": true
+  }
+ ]
+}
