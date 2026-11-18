@@ -2140,7 +2140,7 @@ def commit_owner_auth(manifest, given, root_key, node_id, run=subprocess.run, di
     if given is not None:
         ownerauth.require_held(given[1], directory)
     owner_auth = None if given is None else ownerauth.confirm(given[0], given[1], root_key, node_id)
-    if manifest["schema"] == membership.SCHEMA_V4:
+    if manifest["schema"] in membership.QUORUM_SCHEMAS:
         ownerauth.require_production(run=run)
         require(owner_auth is not None, "under %s the TPM's owner authorization is set and enrolment takes it from this "
                 "node's envelope: gpg --decrypt ownerauth-%s.yk.gpg | enrol commit ... --ownerauth ownerauth.record.json"
@@ -2181,7 +2181,7 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     # before the anchor: the store commits no epoch whose document it does not hold
     store_documents(prefix + config["state_dir"], document, as_sync is None)
     journal.started("anchor")
-    production = manifest["schema"] == membership.SCHEMA_V4
+    production = manifest["schema"] in membership.QUORUM_SCHEMAS
     if production:                                  # #419: the owner's definitions here, as root; the sync step gets none
         # no regalia-sync process meanwhile: its service's locks are not these, so only that keeps its writers out
         # while root defines (regalia-kms-d9); it was also the handoff's guard

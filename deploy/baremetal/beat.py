@@ -55,7 +55,7 @@ def stamp(seconds):
 
 def counting_nodes(manifest):
     """The node IDs whose signature counts toward heartbeat_signers under `manifest`, sorted: the proposers' order."""
-    require(manifest.get("schema") == membership.SCHEMA_V4, "heartbeats are signed by the nodes only under a %s manifest" % membership.SCHEMA_V4)
+    require(manifest.get("schema") in membership.QUORUM_SCHEMAS, "heartbeats are signed by the nodes only under a %s manifest" % membership.SCHEMA_V4)
     nodes = membership.validate(manifest)
     return sorted(p for p in manifest["heartbeat_signers"]["parties"]
                   if p != membership.OWNER and p in nodes and "signing_key" in nodes[p] and nodes[p]["state"] not in membership.NOT_COUNTING)

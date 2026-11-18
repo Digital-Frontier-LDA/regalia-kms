@@ -662,7 +662,7 @@ def define_policy(cfg, manifest=None, pem_path=None):
     if not measurements.system_keys(manifest, document, cfg["node_id"]):
         # Owner-written is for unsigned LAB images only. Production is a v4 manifest (#199): there a definer never lays
         # down the weaker layout; measurements that name no system key for the node fail loudly here (24, #242)
-        require(manifest["schema"] != membership.SCHEMA_V4, "the measurements epoch %d commits to name no system-phase PCR key "
+        require(manifest["schema"] not in membership.QUORUM_SCHEMAS, "the measurements epoch %d commits to name no system-phase PCR key "
                 "for %s: under %s the anchor is defined only in the policy-written layout, and the owner-written one is "
                 "refused (a lab image under v1-v3 may have it)" % (manifest["epoch"], cfg["node_id"], membership.SCHEMA_V4))
         return None
@@ -1207,7 +1207,7 @@ class Sync:
                 # A refusal before any proposal (no authenticated time, not a UKI boot: no PCR key to sign under) is
                 # written once per cause, so a node that can never sign is not silent (regalia-kms-1e's read)
                 try:
-                    if self.manifest()["schema"] == membership.SCHEMA_V4:
+                    if self.manifest()["schema"] in membership.QUORUM_SCHEMAS:
                         proposer.step()
                 except (Refused, OSError) as refused:
                     if str(refused) != unable:

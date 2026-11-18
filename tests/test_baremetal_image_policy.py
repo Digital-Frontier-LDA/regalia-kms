@@ -224,6 +224,15 @@ class NoOwnerLayoutUnderV4(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, "under regalia.membership/v4 the anchor is defined only in the policy-written layout"):
             node.define_policy(self.cfg, manifest=manifest, pem_path=self.d + "/pcr.pem")
 
+    def test_v5_with_no_system_key_is_refused(self):
+        """dx7.1: a v5 manifest is production as v4 is, one node or three."""
+        import tests.test_baremetal_membership_v5 as v5
+        lone = v5.single5(1, "", [v5.one("a"), v5.one("b", "RETIRED", 1), v5.one("c", "RETIRED", 2)])
+        for manifest in (v5.manifest5(1, "", self.v4.nodes4()), lone):
+            with self.subTest(topology=manifest["topology"]["profile"]):
+                with self.assertRaisesRegex(m.Refused, "the anchor is defined only in the policy-written layout"):
+                    node.define_policy(self.cfg, manifest=self.bound(manifest, UKI_ONE), pem_path=self.d + "/pcr.pem")
+
     def test_v4_with_the_node_s_key_gives_its_policy(self):
         doc = signed(UKI_ONE, a=KEY, b=KEY, c=KEY)
         manifest = self.bound(self.v4.manifest4(1, "", self.v4.nodes4()), doc)

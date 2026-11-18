@@ -49,7 +49,7 @@ PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 def candidate(current, target, state, now):
     """The next manifest: `target` made `state`, epoch + 1, and nothing else changed; checked by membership's quorum
     rules before anybody signs it."""
-    require(current is not None and current["schema"] == membership.SCHEMA_V4, "a revocation without the root needs a %s manifest" % membership.SCHEMA_V4)
+    require(current is not None and current["schema"] in membership.QUORUM_SCHEMAS, "a revocation without the root needs a %s manifest" % membership.SCHEMA_V4)
     require(state in RESTRICTIVE, "a revocation sets %s: anything else is the root's" % " or ".join(RESTRICTIVE))
     nodes = membership.validate(current)
     require(target in nodes, "%s is not in the manifest at epoch %d" % (target, current["epoch"]))

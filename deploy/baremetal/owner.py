@@ -55,7 +55,7 @@ def propose(node, signer, trail):
     """Step 1, as regalia-sync: {"heartbeat", "signatures": [this node's]} for the current manifest, living the owner's
     lifetime. `node` is a node.Node; `signer` its beat.Signer."""
     manifest = node.store().load()
-    require(manifest is not None and manifest["schema"] == membership.SCHEMA_V4, "the owner co-signs heartbeats only under a %s manifest" % membership.SCHEMA_V4)
+    require(manifest is not None and manifest["schema"] in membership.QUORUM_SCHEMAS, "the owner co-signs heartbeats only under a %s manifest" % membership.SCHEMA_V4)
     require(node.node_id in beat.counting_nodes(manifest), "%s does not count toward heartbeat_signers under epoch %d" % (node.node_id, manifest["epoch"]))
     freshness = node.freshness()
     now = beat._now(node.clock())

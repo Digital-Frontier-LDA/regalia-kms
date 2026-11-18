@@ -154,16 +154,27 @@ class Floors(Case):
                      manifest5(1, "", nodes4() + [d]))
         self.genesis(manifest5(1, "", nodes4(c="RETIRED") + [d]))                # the control: c retired, d in its place
 
-    def test_one_designed_node_has_exactly_one_live_node(self):
+    def test_one_designed_node_has_at_most_one_live_node(self):
         for name, nodes, reason in (
-                ("two active nodes", [one("a"), one("b", i=1)], "a single-node topology lists exactly one node that is not RETIRED or "
+                ("two active nodes", [one("a"), one("b", i=1)], "a single-node topology lists at most one node that is not RETIRED or "
                  "REVOKED_STOLEN (2)"),
-                ("the node quarantined and another active", [one("a", "QUARANTINED"), one("b", i=1)], "(2)"),
-                ("no live node", [one("a", "RETIRED")], "a single-node topology lists exactly one node that is not RETIRED or "
-                 "REVOKED_STOLEN (0)")):
+                ("the node quarantined and another active", [one("a", "QUARANTINED"), one("b", i=1)], "(2)")):
             with self.subTest(name):
                 self.invalid(reason, single5(1, "", nodes))
         self.genesis(single5(1, "", [one("b", "RETIRED", 1), one("a")]))         # the control: a tombstone does not count
+        # none: the owner revoked it (CodeRabbit on #725), and the rules still name it
+        self.genesis(single5(1, "", [one("a", "REVOKED_STOLEN")]))
+
+    def test_with_no_live_node_the_rules_name_one_node_of_the_manifest(self):
+        stopped = [one("a", "REVOKED_STOLEN"), one("b", "RETIRED", 1)]
+        for name, rules, reason in (
+                ("the owner in the heartbeat rule", {"heartbeat_signers": {"threshold": 1, "parties": ["owner"]}},
+                 "under single-node heartbeat_signers is {threshold 1, parties [the node]}"),
+                ("two nodes named", {"activation_signers": {"threshold": 1, "parties": ["b"]}},
+                 "under single-node activation_signers is {threshold 1, parties [a]}")):
+            with self.subTest(name):
+                self.invalid(reason, single5(1, "", stopped, **rules))
+        self.genesis(single5(1, "", stopped, nid="b"))                              # the control: one node named in both
 
     def test_one_designed_node_has_one_shape_of_rules(self):
         for name, rules, reason in (
@@ -221,14 +232,19 @@ class Transitions(Case):
         replacement.check_replacement(first, replaced, "a", "d")
         self.assertEqual(m.accept(first, sign(replaced, ROOT), ROOT_PUB)["heartbeat_signers"], {"threshold": 1, "parties": ["d"]})
         both = single5(2, m.digest(first), [one("a"), one("d", i=3)], nid="d")
-        self.refused("a single-node topology lists exactly one node that is not RETIRED or REVOKED_STOLEN (2)",
+        self.refused("a single-node topology lists at most one node that is not RETIRED or REVOKED_STOLEN (2)",
                      m.accept, first, sign(both, ROOT), ROOT_PUB)
 
     def test_the_owner_alone_revokes_the_only_node(self):
+        """CodeRabbit on #725: the owner's REVOKED_STOLEN of the only node is a valid manifest (the KMS stops), and the root
+        then enrols a replacement."""
         first = self.genesis(single5(1, ""))
-        stolen = single5(2, m.digest(first), [one("a", "REVOKED_STOLEN")])
-        self.refused("a single-node topology lists exactly one node that is not RETIRED or REVOKED_STOLEN (0)",
-                     m.accept, first, quorum(stolen, O1), ROOT_PUB)
+        stolen = m.accept(first, quorum(single5(2, m.digest(first), [one("a", "REVOKED_STOLEN")]), O1), ROOT_PUB)
+        self.assertFalse(m.may(stolen, "a", "serve"))
+        revived = single5(3, m.digest(stolen), [one("a")])
+        self.refused("tombstone: a is REVOKED_STOLEN, which is terminal for every signer", m.accept, stolen, sign(revived, ROOT), ROOT_PUB)
+        replaced = single5(3, m.digest(stolen), [one("a", "REVOKED_STOLEN"), one("d", i=3)], nid="d")
+        self.assertEqual(m.accept(stolen, sign(replaced, ROOT), ROOT_PUB)["heartbeat_signers"]["parties"], ["d"])
         quarantined = single5(2, m.digest(first), [one("a", "QUARANTINED")])
         self.refused("meet no revocation_signers rule of the current manifest (counting: a)", m.accept, first, quorum(quarantined, A), ROOT_PUB)
         self.assertEqual(m.accept(first, quorum(quarantined, O1), ROOT_PUB)["epoch"], 2)

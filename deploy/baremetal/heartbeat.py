@@ -179,7 +179,7 @@ def signed_by(envelope, manifest):
     counting parties must meet the manifest's heartbeat_signers (two of the nodes and the owner). `parties` is that
     set, for verify()'s owner rule. Under v1 to v3, one revocation key the manifest names, as before; `parties` is
     empty."""
-    if manifest is not None and manifest.get("schema") == membership.SCHEMA_V4:
+    if manifest is not None and manifest.get("schema") in membership.QUORUM_SCHEMAS:
         membership.exact(envelope, ("heartbeat", "signatures"), "envelope")
         heartbeat = envelope["heartbeat"]
         issued, expires = validate(heartbeat)

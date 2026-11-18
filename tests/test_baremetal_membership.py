@@ -233,8 +233,9 @@ class SchemaV2(unittest.TestCase):
         self.assertEqual(m.accept(self.m2, sign(self.next2(v2(three())), ROOT), ROOT_PUB)["schema"], m.SCHEMA_V2)
 
     def test_an_unknown_schema_is_refused(self):
-        every = "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4"
-        for bad in ("regalia.membership/v5", "regalia.membership/v0", "", None, 2, ["regalia.membership/v2"]):
+        every = ("schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4 or "
+                 "regalia.membership/v5")
+        for bad in ("regalia.membership/v6", "regalia.membership/v0", "", None, 2, ["regalia.membership/v2"]):
             with self.subTest(schema=bad):
                 self.refused(every, self.m2, dict(self.next2(v2(three())), schema=bad))
         missing = self.next2(v2(three()))
@@ -1237,6 +1238,12 @@ class PolicyOnlyUnderV4(unittest.TestCase):
         self.assertEqual(str(caught.exception), "NV index 0x1500016 is owner-written: under regalia.membership/v4 the anchor is written by "
                          "policy only (re-anchor it)")
         self.assertIn("is owner-written", self.hw(m.SCHEMA_V4).unusable())        # what a re-anchor is for
+
+    def test_owner_written_is_unusable_under_v5(self):
+        """dx7.1: v5 is v4 and its topology, so production too: policy only, one node or three."""
+        with self.assertRaisesRegex(m.Unusable, "NV index 0x1500016 is owner-written: under regalia.membership/v4 the anchor is written by "
+                                    "policy only"):
+            self.hw(m.SCHEMA_V5).value()
 
     def test_the_tip_is_asked_for_once_and_only_for_an_owner_written_index(self):
         asked = []
