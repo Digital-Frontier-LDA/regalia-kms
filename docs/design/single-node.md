@@ -91,7 +91,8 @@ The ones that decide the design:
   - A change of profile is a new genesis.
 - **Validation (Python `membership.validate` and the Go twin, held equal by a vector):**
   - **single-node:**
-    - exactly one node that is not RETIRED or REVOKED_STOLEN;
+    - at most one node that is not RETIRED or REVOKED_STOLEN, and exactly one until the owner revokes it: the owner's REVOKED_STOLEN (4.4) leaves none, and the KMS stays stopped until a root-signed manifest enrols a replacement. Never a second live node;
+    - the rules below name that node (after a revocation, the revoked node, until the root names its replacement);
     - `heartbeat_signers = {1, [n]}`;
     - `activation_signers = {1, [n]}`;
     - `revocation_signers = [{1, ["owner"]}]`, with no node rule.
@@ -166,7 +167,9 @@ The ones that decide the design:
     - two sets are accepted (both the current and the NEXT image, so the reboot can fall back);
     - the operator passes `--planned-outage`, which the trail records.
   - The judge of the new image is the owner's unlock tool, which refuses an unlisted PCR 11 exactly as a peer does.
-  - **Retire evidence** (`retire_ready`, `stranded`: today "seen on the target set by at least one other node") comes from the owner tool's attestation state, the record of what the owner has unlocked. It never comes from the node's own state, which "says nothing about itself".
+  - **Retire evidence** (`retire_ready`, `stranded`: today "seen on the target set by at least one other node") is the owner tool's record of a **post-boot attestation**: a fresh quote the owner's tool takes from the running node in its booted (system) phase, over the target set's PCR values, after the node has come up and renewed its runtime lease under the new image.
+    - The owner's **unlock** record is not enough: it shows only that the initrd phase passed, and a boot that fails after unlock would then retire the working fallback.
+    - It never comes from the node's own state, which "says nothing about itself".
 - **Site advance.** It changes PCR 12, and the owner's unlock tool judges it the same way.
 - **Docs.** `KERNEL-UPDATE.md` gets a single-node runbook: a maintenance window, the owner present, the expected downtime.
 
@@ -177,13 +180,14 @@ The ones that decide the design:
   - the external audit collector's view of which epoch the node announced.
 - **Proposal:** a new source type in `convergence.agreed`, `owner-chain`.
   - It is the whole chain, verified from the pinned root, with an owner signature over its tip digest and the node's boot session (the `sign-recovery` statement).
-  - It is also cross-checked against the collector's highest epoch for that node when the collector answers. A collector that has seen a higher epoch is a refusal.
+  - It is cross-checked against the collector's highest epoch for that node. A collector that has seen a higher epoch is a refusal, and so is a collector that does not answer: the cross-check is never skipped (the collector is mandatory, decision Q4). Recovery waits for the collector, or is a new genesis.
   - Under `single-node` this one source is enough, for both:
     - `recover` in the crash window (`convergence.py:182`'s "2");
     - `reanchor` (`reanchor.py:93`'s "2").
 - **Recount** (a lost freshness state) takes its floor from the owner's statement and the collector, instead of "another node's freshness state".
 - **What it loses:** rollback protection after anchor damage rests on the owner's copy and the collector, not on two independent TPM anchors.
-  - A compromised owner laptop together with a damaged anchor can roll the node back to an older, still root-signed manifest. That window is bounded by what the collector saw.
+  - A compromised owner laptop together with a damaged anchor can roll the node back to an older, still root-signed manifest, but no lower than the collector's highest recorded epoch, which recovery requires.
+  - A compromised owner laptop together with a compromised collector is not bounded.
 - **A dead TPM or a destroyed node** is a node replacement: root-signed, keeping the profile (4.1).
   - The HSM keys come back from the DKEK backup, as in any replacement.
 
@@ -195,7 +199,9 @@ The ones that decide the design:
   - `MAX_LEARNERS` is irrelevant at N=1.
 - **What it loses:**
   - **Replication.** Spend-once, Cosmos sequences and key state rest on one disk. A spend or sequence lost with that disk is a double-spend risk on restore.
-  - **Mitigation:** an etcd restore under `single-node` must raise the state epoch (as a take-over does), so that a restored snapshot can never be mistaken for the live history.
+  - **Mitigation:** an etcd restore under `single-node` must raise the state epoch above a floor that survives the loss of the node, so that a restored snapshot can never be mistaken for the live history. (Take-over, which raises it with three nodes, is refused here.)
+    - The floor is the higher of the collector's highest recorded state epoch for the cluster and the owner tool's ledger of the restore epochs it has issued. The owner signs the restore statement that names the new epoch.
+    - The owner's tool issues each restore epoch once, so restoring one snapshot twice gives two different epochs. Only one of the two nodes can be the cluster's live node (4.1).
   - The collector's spend audit (`spendaudit.py`) then detects a re-spent approval. It does not prevent one.
 
 ### 4.9 Network

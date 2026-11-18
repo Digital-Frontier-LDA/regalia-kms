@@ -52,10 +52,10 @@ Not counted (false positives checked and left out):
 | `e2e/three-node-site-advance.py:150` | c | a, b, c = names: exactly 3 |
 | `e2e/three-node-theft.py:80` | c | names = ["a","b","c"] |
 | `e2e/three-node-wan.py:111` | c | names = ["a","b","c"] |
-| `LIMITATIONS.md:64` | b | KEY: "no authorization when every other node is RETIRED or REVOKED_STOLEN … that is a one-node membership, commissioned by a new manifest, not an outage. … Whether such a node may instead serve alone under an empty fence is not decided, so it stays … |
+| `LIMITATIONS.md:64` | b | KEY: "no authorization when every other node is RETIRED or REVOKED_STOLEN … that is a one-node membership, commissioned by a new manifest, not an outage. … Whether such a node may instead serve alone under an empty fence is not decided, so it stays …" (elided). Under `single-node` the one node is the membership, not a survivor under an empty fence (design 4.3). |
 | `tests/test_threenode_abrmd.py:100` | c | builds a 2-node Cluster ("ab") by object.__new__: already proves names is free; add a 1-node case |
 | `tests/vectors/make-highwater-v1.py:66` | c | nodes for i in (1, 2, 3): a 3-node v4 chain. |
-| `tests/vectors/make-membership-v4.py:64` | c | records whatever tests/test_baremetal_membership_v4.py does. The resulting membership-v4.json has 162 manifests with 3 nodes and 2 with 4; activation 2-of-3 ×152, heartbeat 2-of-4 ×146. No 1-node or 5-node manifest is accepted; the 1-party rules present … |
+| `tests/vectors/make-membership-v4.py:64` | c | records whatever tests/test_baremetal_membership_v4.py does. The resulting membership-v4.json has 162 manifests with 3 nodes and 2 with 4; activation 2-of-3 ×152, heartbeat 2-of-4 ×146. No 1-node or 5-node manifest is accepted; the 1-party rules present are the owner-alone revocation rule only. dx7.1 adds a v5 vector with one-node manifests. |
 | `THREE-SITE-THREAT-MODEL.md:38` | b | S2 says eligibility "to authorize (give a contribution): ACTIVE only". With no other node, nobody can authorize. |
 
 ## Quorum and signer-rule floors (24)
@@ -67,7 +67,7 @@ Not counted (false positives checked and left out):
 | `cmd/regalia-unlock/membership/v4.go:145` | a | least = heartbeatFloor/nodeRuleFloor, 1 only for [owner]; :152 threshold > len(parties) refused (the same N=1 genesis failure as membership.py:518). |
 | `deploy/baremetal/membership.py:68` | a | doc "heartbeat and activation thresholds are at least 2, a revocation rule that names a node needs at least 2" → make the floor a function of the number of node parties (1 when N=1, otherwise floor(N/2)+1, or a policy constant). |
 | `deploy/baremetal/membership.py:140` | a+b | HEARTBEAT_FLOOR = NODE_RULE_FLOOR = 2 ("no single party keeps a cluster alive or revokes alone"). This is the core literal. N=1: floor 1 for node-only rules, or keep 2 and require the owner as the second party. Odd N: majority floor. |
-| `deploy/baremetal/membership.py:517` | a | least = 1 only for [owner]; otherwise NODE_RULE_FLOOR / HEARTBEAT_FLOOR (2). Together with :518 this refuses any rule over one node. |
+| `deploy/baremetal/membership.py:517` | a | least = 1 only for [owner]; otherwise NODE_RULE_FLOOR / HEARTBEAT_FLOOR (2). Together with :518 this refuses every node-only rule over one node ({1, [n1]} is below the floor, {2, [n1]} has more threshold than parties). An owner-plus-node rule {2, [n1, owner]} passes, which is why N=1 would otherwise need the owner's touch for every heartbeat. |
 | `deploy/baremetal/membership.py:518` | b | require(least <= t <= len(parties)): with 1 node, {"threshold":2,"parties":[n1]} is invalid, so the genesis revocation rule is unbuildable. |
 | `e2e/three-node-leases.py:15` | c | "a's next renewal comes from the other peer": failover needs >=2 peers |
 | `e2e/three-node-leases.py:118` | c | other = next(n for n in ("b","c") if n != issuer): fixed peer set |
@@ -117,7 +117,7 @@ Not counted (false positives checked and left out):
 
 | Where | Cat | What it assumes, and what it becomes for N=1 (and odd N) |
 |---|---|---|
-| `deploy/baremetal/activation.py:7` | b | "WHY IT IS NOT ANY 2 OF {a, b, c, owner}": the mutual-exclusion argument assumes two node quorums always intersect. N=1: one node is its own quorum, so there is no intersection argument at all. Exclusion then rests on the single node's GrantRecord, or … |
+| `deploy/baremetal/activation.py:7` | b | "WHY IT IS NOT ANY 2 OF {a, b, c, owner}": the mutual-exclusion argument assumes two node quorums always intersect. N=1: one node is its own quorum, so there is no intersection argument at all. Exclusion then rests on the single node's GrantRecord and its TPM-held signing key (design 4.3). |
 | `deploy/baremetal/activation.py:10` | a | "NORMAL: activation_signers' threshold of NODE parties (2 of the 3)" → "floor(N/2)+1 of N". |
 | `deploy/baremetal/activation.py:12` | b | RECOVERY path: "the owner with fewer nodes… the other node parties QUARANTINED or REVOKED". N=1: "other" is empty, so owner+self would satisfy recovery trivially. |
 | `deploy/baremetal/activation.py:108` | b | node-only path requires len(node_parties) >= threshold. With N=1 and threshold 2, normal activation is impossible; with threshold 1, one node self-activates (no co-signer). |
@@ -135,8 +135,8 @@ Not counted (false positives checked and left out):
 | `internal/opstate/state_epoch.go:324-345` | b | a lone survivor "needs every other node quarantined, revoked or retired". At N=1 `loose` and `must` are empty, so the survivor check passes vacuously. What the fence evidence (347-350) means with no other nodes is undefined. |
 | `LIMITATIONS.md:222` | b | Admission v3 mode: lease (a peer's lease) or recovery (the owner's survivor authorization). At N=1 there is no peer lease, so the node is permanently in recovery, which "the daemon serves nothing in" (line 230). A third mode is needed: a sole-node lease. |
 | `LIMITATIONS.md:232` | a | "D28.6 as first written (2 of {a, b, c, owner})". Threshold and party list. |
-| `LIMITATIONS.md:240` | b | The runtime lease is "issued by one peer over the subject's re-attested TPM … A node cut off from both peers stops within 30 s … renew through the third node". The lease issuer is always another node. At N=1 no lease can be issued, so the node never … |
-| `LIMITATIONS.md:251` | b | "The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)" The overlap proof is for N=3 with threshold 2. For odd N the threshold must be floor(N/2)+1 over the nodes, and the owner path must not form a disjoint … |
+| `LIMITATIONS.md:240` | b | The runtime lease is "issued by one peer over the subject's re-attested TPM … A node cut off from both peers stops within 30 s … renew through the third node". The lease issuer is always another node. At N=1 no lease can be issued, so the node never serves; dx7.3 adds the self-issued lease under `single-node` (design 4.3). |
+| `LIMITATIONS.md:251` | b | "The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)" The overlap proof is for N=3 with threshold 2. For odd N the threshold must be floor(N/2)+1 over the nodes, and the owner path must not form a disjoint quorum with a node majority: it stays the recovery step behind its conditions (LIMITATIONS.md:252). |
 | `LIMITATIONS.md:252` | b | "Activation by the owner plus one node is a recovery step behind three conditions" (quarantine epoch, fencing attestation, wait). At N=1, owner+node is the only path, and conditions 1–2 are vacuous. |
 | `LIMITATIONS.md:257` | b | "The owner alone never activates." This should stay true at N=1, so the node must always sign. |
 | `LIMITATIONS.md:260` | b | "with one node dead … an unplanned reboot of a second node stops lease renewals". This is N=3 arithmetic. |
@@ -144,7 +144,7 @@ Not counted (false positives checked and left out):
 | `LIMITATIONS.md:468` | b | "Every issuer's revision floor refuses too". The issuers are peers. |
 | `LIMITATIONS.md:641` | c | "three-node-outage's step 5 … a's Proposer". The fixture names node a. |
 | `tests/test_baremetal_admission.py:104, 112` | c | issuer "c". |
-| `THREE-SITE-THREAT-MODEL.md:24` | a | "needs two signatures from {node a, node b, node c, the owner}, two of the three servers being the normal path". This should become a threshold of floor(N/2)+1 over the nodes plus the owner. At N=1 it means node+owner every time, or a new rule. |
+| `THREE-SITE-THREAT-MODEL.md:24` | a | "needs two signatures from {node a, node b, node c, the owner}, two of the three servers being the normal path". This should become a node-only quorum of floor(N/2)+1 of the nodes, so that any two node quorums intersect. The owner-assisted path stays the separate recovery step behind its conditions (LIMITATIONS.md:252), never a threshold over the nodes plus the owner, which would admit disjoint quorums such as {a, b} and {c, owner}. At N=1 the node quorum is the node itself (decisions Q2 and Q1: self-signed heartbeats and activation; the owner's card at boot). |
 | `THREE-SITE-THREAT-MODEL.md:46` | a | S4: "co-signed by two of the three servers". This should be "a majority of N". At N=1 the node signs its own lease. |
 | `THREE-SITE-THREAT-MODEL.md:57` | b | Root-compromise row: "no runtime lease without two co-signers". At N=1 a root-compromised node needs no co-signer. |
 | `THREE-SITE-THREAT-MODEL.md:120` | a | "co-signed by 2 of the 3 servers and non-exclusive". This should be "a majority of N". |
@@ -173,7 +173,7 @@ Not counted (false positives checked and left out):
 | Where | Cat | What it assumes, and what it becomes for N=1 (and odd N) |
 |---|---|---|
 | `e2e/three-node-recovery.py:159` | c | sorted(got["leases"]) == ["b","c"]: a's leases come from exactly b and c |
-| `internal/approval/approval.go:76-82` | b | Binding.Signer` is "the ONE node that may spend this approval … Empty only where no node ID is configured (a single-node deployment)". This hook already exists; with N=1 approvals are not node-bound when NodeID is unset (`coordinator.go:309-316` fills it … |
+| `internal/approval/approval.go:76-82` | b | `Binding.Signer` is "the ONE node that may spend this approval … Empty only where no node ID is configured (a single-node deployment)". This hook already exists; with N=1 approvals are not node-bound when NodeID is unset (`coordinator.go:309-316` fills it from the node's configuration). With one node the binding names that node; nothing changes. |
 | `internal/operations/approvals_test.go:207-245` | c | approvals for site-b refused on site-a. Assumes at least 2 nodes, but is harmless at N=1. |
 | `internal/operations/coordinator.go:190-192` | a | "re-enabling it is the majority's act". Assumes a majority of other nodes exists after a lone-survivor period. |
 | `LIMITATIONS.md:196` | b | "An approval is for one node … a client's failover to another node needs fresh approvals". Node-pinning is harmless at N=1, but there is no failover. |
@@ -190,18 +190,18 @@ Not counted (false positives checked and left out):
 | `deploy/baremetal/beat.py:60-61` | b | counting_nodes` excludes the owner, so only nodes propose. For N=1 there is one proposer and no possible co-signer. |
 | `deploy/baremetal/beat.py:197-200` | a | for peer in [... if n != self.node_id]` builds `{"signatures": [mine, theirs]}`: exactly 2 signatures are hard-coded. 5 and 7 nodes need t-1 co-signatures gathered; N=1 needs `[mine]` alone (if t=1 is allowed). |
 | `deploy/baremetal/beat.py:209` | b | raise Refused("no node co-signed … no other node counts")`. With N=1 every proposal fails and no heartbeat is ever produced automatically. |
-| `deploy/baremetal/heartbeat.py:6-7` | b | "the nodes sign, by quorum … a short-lived statement that a manifest is still the current one". With N=1 no second node can say the membership is current, so a heartbeat is either self-signed (it proves only that the node's clock and counter moved) or … |
+| `deploy/baremetal/heartbeat.py:6-7` | b | "the nodes sign, by quorum … a short-lived statement that a manifest is still the current one". With N=1 no second node can say the membership is current, so a heartbeat is either self-signed (it proves only that the node's clock and counter moved) or owner co-signed. Decision Q2: self-signed. |
 | `deploy/baremetal/heartbeat.py:23` | a | doc: "two of the nodes and the owner". Should read "the manifest's heartbeat_signers threshold". |
 | `deploy/baremetal/heartbeat.py:53-56` | b | the lifetime bound is "how long a peer cut off from the others goes on authorizing a node that was revoked". With N=1 there is no partitioned peer, so the bound only means time until the node stops. |
 | `deploy/baremetal/heartbeat.py:179` | a | docstring repeats "two of the nodes and the owner". |
 | `deploy/baremetal/heartbeat.py:188-190` | a | membership.meets(rule, parties)` already reads the threshold from the manifest, so it is N-generic. Only the floor blocks t=1. |
-| `deploy/baremetal/heartbeat.py:216-218` | b | an owner-co-signed heartbeat lives at most `owner_heartbeat_lifetime_s` (1 h by genesis default, 300 s minimum). With N=1 today the only valid heartbeat is node + owner, so the owner would have to sign hourly or the node stops. Needs a single-node rule or … |
+| `deploy/baremetal/heartbeat.py:216-218` | b | an owner-co-signed heartbeat lives at most `owner_heartbeat_lifetime_s` (1 h by genesis default, 300 s minimum). With N=1 today the only valid heartbeat is node + owner, so the owner would have to sign hourly or the node stops. Needs a single-node rule or an hourly owner touch. Decision Q2: a self-signed {1, [n]} rule under `single-node`. |
 | `deploy/baremetal/lease.py:2` | b | "a running node keeps serving only while a PEER keeps vouching for it". N=1: no peer, so no runtime lease, so it never serves. Needs a self-lease or owner lease, or dropping the condition. |
 | `deploy/baremetal/lease.py:52` | b | "A PEER ISSUES only if… it is not the subject". Single-issuer, but must be another node. |
 | `deploy/baremetal/lease.py:71` | b | PARTITION limit: "issuing peers" bound the lease. Not meaningful at N=1. |
 | `deploy/baremetal/lease.py:439` | b | require(issuer_id != subject_id, "a node does not vouch for itself"). Hard refusal at N=1. |
 | `deploy/baremetal/lease.py:548` | a | Holder keeps the later of "the other peer"'s lease. Assumes ≥2 issuers; harmless with 1. |
-| `deploy/baremetal/membership.py:55` | b | an owner-signed heartbeat is "always the owner AND at least one node: the heartbeat threshold is at least 2". With N=1 and threshold 2 over [n1, owner], EVERY heartbeat needs an owner touch: nodes can no longer sign their own 6 h beats. N=1 needs either … |
+| `deploy/baremetal/membership.py:55` | b | an owner-signed heartbeat is "always the owner AND at least one node: the heartbeat threshold is at least 2". With N=1 and threshold 2 over [n1, owner], EVERY heartbeat needs an owner touch: nodes can no longer sign their own 6 h beats. N=1 needs either a {1, [n]} heartbeat rule or an owner touch on every heartbeat. Decision Q2: {1, [n]}. |
 | `deploy/baremetal/node.py:967` | b | admission renew: require(peers, "no peer to ask for a lease"). N=1 can never get a runtime lease, so it is never admitted. |
 | `deploy/baremetal/owner.py:9` | b | hand recovery: "no other node is up to co-sign one… makes this node and the owner the two signers a v4 heartbeat needs". At N=1 this is not recovery but the ONLY heartbeat path (every 6 h, or every owner_heartbeat_lifetime_s ≤ 1 h by default). |
 | `deploy/baremetal/owner.py:14` | a | "long enough for the node to unlock the other two" → "the others". |
@@ -222,7 +222,7 @@ Not counted (false positives checked and left out):
 | `tests/test_baremetal_beat.py:49, 83` | c | three-node `Parts` fixture. |
 | `tests/test_baremetal_heartbeat_v4.py:43, 80` | c | quorum (B, C) and a {2, [a,b,owner]} rule. |
 | `tests/test_baremetal_heartbeat.py:47` | c | a/b/c manifest. |
-| `THREE-SITE-THREAT-MODEL.md:100` | a | "two signatures from {node a, node b, node c, the owner}". The heartbeat threshold should be a majority of nodes over the nodes plus the owner. At N=1 it is node+owner, meaning an owner touch for every heartbeat. |
+| `THREE-SITE-THREAT-MODEL.md:100` | a | "two signatures from {node a, node b, node c, the owner}". The heartbeat rule's node-only quorum should be a majority of the nodes (any two intersect); the owner's co-signature stays the hand-recovery path (`owner.py beat`), bounded by `owner_heartbeat_lifetime_s`. At N=1: self-signed {1, [n]} (decision Q2), not node + owner. |
 | `THREE-SITE-THREAT-MODEL.md:110` | b | "how long the nodes may go without a quorum (or the owner's hand recovery, owner.py beat)". At N=1 the owner's beat is the only path, not a recovery path. |
 
 ## Revocations (26)
@@ -307,12 +307,12 @@ Not counted (false positives checked and left out):
 | `e2e/three-node-recovery.py:166` | c | permutations(names, 2) plus "third": all directed pairs with a third node off; needs N>=3 |
 | `e2e/three-node-replace.py:123` | c | enrol("c2", peers=["a","b"]) |
 | `e2e/wg-boot-netns.sh:235` | c | "alder reaches both peers' unlock port" |
-| `PIN-CUSTODY.md:152` | b | "The root disk opens only with the TPM and a peer: each keyslot needs a half sealed to this TPM … and a half a peer gives". The PIN seal's revocability rests on peer unlock (#135). At N=1 a retired image cannot be locked out without a peer, so the PIN seal … |
+| `PIN-CUSTODY.md:152` | b | "The root disk opens only with the TPM and a peer: each keyslot needs a half sealed to this TPM … and a half a peer gives". The PIN seal's revocability rests on peer unlock (#135). At N=1 a retired image cannot be locked out without a peer, so the PIN seal loses that property unless the owner's card takes the peer's place at every boot (decision Q1, design 4.5). |
 | `PIN-CUSTODY.md:160` | c | "both peers refuse it naming PCR 11". This is the QEMU test with two peers. |
 | `PIN-CUSTODY.md:243` | b | The recovery key covers "a total outage of all three sites (threat model A3) … or a node with no healthy peer". At N=1 that is every cold boot, so the recovery key becomes routine rather than break-glass. That conflicts with "Using it spends it" (line 276). |
 | `tests/vectors/make-bootcreds-v1.py:26` | c | site(node, nodes=("a","b","c")) and manifest(order=("a","b","c")) (:42). Extra cases "with d" (:60), "b only" (:61), "no peers" refused (:138), "nine peers" refused (:139). There is no 1-node site that renders. |
 | `tests/vectors/unlock-v1.json:15` | c | a two-party transcript, target "alder" and peer "birch" (info "regalia/luks/v1/alder/birch/7", :38). The two-party shape is the protocol itself. |
-| `THREE-SITE-THREAT-MODEL.md:33` | b | S1: "no single location holds what unlocks a node's disk: the node's TPM contribution and one authorized peer's contribution are both required". This is impossible at N=1. The peer half needs a substitute (owner card, network escrow), or S1 is explicitly … |
+| `THREE-SITE-THREAT-MODEL.md:33` | b | S1: "no single location holds what unlocks a node's disk: the node's TPM contribution and one authorized peer's contribution are both required". This is impossible at N=1. The peer half needs a substitute (owner card, network escrow), or S1 is explicitly not held. Decision Q1: the owner's card is the second location at every boot (design 4.5). |
 | `THREE-SITE-THREAT-MODEL.md:56` | b | Theft row: "no peer contribution once revoked or once away from the datacenter networks". The theft defence rests on a peer refusing. At N=1 a stolen box's TPM half alone is not enough only if a second factor exists. |
 | `THREE-SITE-THREAT-MODEL.md:61` | b | Malicious-peer row: "The alternate peer path (A1)". There is no alternate path at N=1 or N=2. |
 | `THREE-SITE-THREAT-MODEL.md:64` | b | TPM row: "S1 still needs a peer contribution". This does not hold at N=1. |
@@ -329,7 +329,7 @@ Not counted (false positives checked and left out):
 | `deploy/baremetal/bootnet.py:59` | a | _others(): "the other nodes the manifest lets do action" (lines 59-71). |
 | `deploy/baremetal/bootnet.py:91` | b | require(peers, "the manifest leaves %s no peer that may authorize"): wg-unlock config refused at N=1. |
 | `deploy/baremetal/bootnet.py:136` | b | same refusal for the initrd nftables ruleset. |
-| `deploy/baremetal/etcdconf.py:230` | b | check()` requires every peer URL on `fd72:6567:6c61:` (the service mesh). On N=1 there is no `wg-svc` (see `sitecfg` below), so the address does not exist and etcd cannot bind `listen-peer-urls`. It needs a loopback or local exception, or a `wg-svc` with … |
+| `deploy/baremetal/etcdconf.py:230` | b | `check()` requires every peer URL on `fd72:6567:6c61:` (the service mesh). On N=1 there is no `wg-svc` (see `sitecfg` below), so the address does not exist and etcd cannot bind `listen-peer-urls`. It needs a loopback or local exception, or a `wg-svc` with a local address. Design 4.8: a loopback peer URL, accepted under `single-node` only. |
 | `deploy/baremetal/firewall.py:18` | a | "With a `boot_mesh` (three-site, #66)". |
 | `deploy/baremetal/firewall.py:64` | b | _set([...peers...])` (lines 64-65). An empty peers list would render `{ }`, which is invalid in nft. This is guarded only because `sitecfg` requires at least one peer. |
 | `deploy/baremetal/firewall.py:85` | b | The `service_mesh` WireGuard underlays are taken from `boot_mesh` peers. With N=1 there is no peer, so there is no service mesh. |
@@ -363,7 +363,7 @@ Not counted (false positives checked and left out):
 | `e2e/wg-boot-netns.sh:12` | c | "two running peers" birch and acacia for booting alder |
 | `e2e/wg-boot-netns.sh:52` | c | NS=(alder birch acacia outsider away): three cluster hosts |
 | `e2e/wg-boot-netns.sh:84` | c | "the three site configs" |
-| `e2e/wg-boot-netns.sh:293` | c | wg show wg-boot peers \| wc -l` = 2; becomes N-1 (0 at N=1: the boot mesh is empty) |
+| `e2e/wg-boot-netns.sh:293` | c | `wg show wg-boot peers \| wc -l` = 2; becomes N-1 (0 at N=1: the boot mesh is empty) |
 | `LIMITATIONS.md:635` | c | "three-node-wan … measures today's services across a WAN". Three-node only. |
 
 ## Site advance (10)
@@ -455,7 +455,7 @@ Not counted (false positives checked and left out):
 | `deploy/baremetal/membership.py:1470` | a | crash window: "convergence.recover then asks for two sources" (literal 2 sources). N=1 → 0 sources available. |
 | `deploy/baremetal/membership.py:1619` | b | Store.reanchor docstring "reanchor.py takes it from two other nodes that agree". Same as :1460. |
 | `deploy/baremetal/owner.py:264` | b | sign-recovery is "the owner as the second source of a one-peer recovery or re-anchor". It needs a peer chain, so it cannot be used at N=1. |
-| `deploy/baremetal/reanchor.py:17` | b | Docstring: a re-anchor needs whole chains from at least two other nodes, "the quorum everything else rests on". With N=1 there is no other node, so a re-anchor is impossible. It needs a rule like `min(2, N-1)` plus the owner, or a root ceremony. For odd N … |
+| `deploy/baremetal/reanchor.py:17` | b | Docstring: a re-anchor needs whole chains from at least two other nodes, "the quorum everything else rests on". With N=1 there is no other node, so a re-anchor is impossible. It needs a rule like `min(2, N-1)` plus the owner, or a root ceremony. For odd N: whole chains from a majority of the other nodes. N=1: the owner's chain plus the collector's cross-check (decision Q5, design 4.7). |
 | `deploy/baremetal/reanchor.py:23` | b | --one-source` (one peer plus an owner statement) still needs exactly one other node. With N=1 there is no path at all. It would need an owner-plus-root (or owner-only) source with no peer. |
 | `deploy/baremetal/reanchor.py:93` | a | require(len(sources) >= 2, ...)` is a literal 2. Make it a function of the manifest's node count and threshold. For N=1 it is 0 peers plus another authority. |
 | `deploy/baremetal/reanchor.py:95` | a | --one-source` requires `len(sources) == 1`. N=1 needs a zero-peer variant. |
@@ -463,7 +463,7 @@ Not counted (false positives checked and left out):
 | `deploy/baremetal/reanchor.py:102` | a | convergence.agreed(..., 2 if owner is None else 1, floor)` hard-codes minimum 2/1. Parameterize it as threshold minus the owner's contribution. |
 | `deploy/baremetal/reanchor.py:409` | a | --peer` help says "at least two". Derive it from the threshold. |
 | `deploy/baremetal/reanchor.py:416` | c | Help text mentions "the three-node fixture". |
-| `deploy/baremetal/recount.py:31` | b | If the node's own freshness state is lost, the floor comes from "any other node's freshness state" (lines 31-32). With N=1 there is none, so a lost state file plus a lost counter leaves no floor. A source off the node (the owner's, or the audit collector) … |
+| `deploy/baremetal/recount.py:31` | b | If the node's own freshness state is lost, the floor comes from "any other node's freshness state" (lines 31-32). With N=1 there is none, so a lost state file plus a lost counter leaves no floor. A source off the node (the owner's statement and the audit collector) must give the floor (design 4.7). |
 | `deploy/baremetal/recount.py:138` | b | require(held, ...)` "Give the node's freshness state, or another node's" (lines 138-139). Same issue. |
 | `deploy/baremetal/recover.py:3` | b | "2 of {a, b, c, owner}" names three nodes plus the owner. For N=1 it becomes "1 node + owner" or an owner/root-only rule. It needs a general k-of-(N+owner). |
 | `deploy/baremetal/recover.py:15` | b | In the crash window, two different nodes must agree. Impossible with N=1. |
