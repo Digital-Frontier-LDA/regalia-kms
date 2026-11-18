@@ -1,0 +1,108 @@
+# The inputs of a KMS host's install disk, built on a GitHub runner and kept as artifacts, so an operator does not
+# build them on a laptop (a root build of an amd64 tree, ~30 min on a runner, hours under emulation).
+#
+# WHAT THIS IS, AND IS NOT
+#   rootfs    deploy/baremetal/image/build-rootfs.sh, once, at the commit and the snapshot e2e/rootfs-reproducible.sh
+#             pins (ci.yml's rootfs-reproducible job proves on every pull request that two builds are identical).
+#             It is ONE builder's output. build-rootfs.sh's rule stands: before a commissioning install, a second
+#             builder, from its own clean clone at the same commit, must get the same rootfs_sha256 and the same
+#             rootfs-build.json. This artifact never replaces that builder; it can be compared with it.
+#   TEST UKI  e2e/uki-build.sh's own image: the TEST membership root of tests/vectors and the script's TEST keys,
+#             built twice, signed and verified. For a staging rehearsal only (make-install-disk.sh --test-uki marks
+#             the disk TEST). A commissioning UKI cannot come from here: it needs the ceremony's membership root, two
+#             builders' identical records and the offline signing with the release card (KERNEL-UPDATE.md, 1.0-1.3).
+#
+# No secret is used, and the jobs hold contents:read only.
+name: install inputs
+
+on:
+  workflow_dispatch:
+  # a pull request that changes this workflow runs it, so the change is seen working before it reaches main
+  pull_request:
+    paths:
+      - .github/workflows/install-inputs.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rootfs:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the tree builder
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mmdebstrap debian-archive-keyring
+      - name: Build the root filesystem once, at the pinned snapshot
+        run: sudo REGALIA_GO="$(command -v go)" bash e2e/rootfs-reproducible.sh "$RUNNER_TEMP/rootfs" 1
+      - name: Make the build readable, and name what it is
+        shell: bash
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/rootfs"
+          {
+            echo "### rootfs (ONE builder: a second builder must match it before a commissioning install)"
+            echo "commit \`$GITHUB_SHA\`"
+            echo "rootfs.tar sha256 \`$(sha256sum < "$RUNNER_TEMP/rootfs/build-1/rootfs.tar" | cut -d' ' -f1)\`, $(wc -l < "$RUNNER_TEMP/rootfs/build-1/rootfs-listing.txt") entries"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rootfs-one-builder
+          path: |
+            ${{ runner.temp }}/rootfs/build-1/rootfs.tar
+            ${{ runner.temp }}/rootfs/build-1/rootfs-listing.txt
+            ${{ runner.temp }}/rootfs/build-1/rootfs-build.json
+          if-no-files-found: error
+          retention-days: 7
+
+  test-uki:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    container:
+      image: debian:13
+      options: --privileged
+    steps:
+      - name: Install git
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the image tools, the software token and the software TPM
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends systemd systemd-ukify systemd-boot-efi sbsigntool openssl softhsm2 \
+            libengine-pkcs11-openssl swtpm swtpm-tools tpm2-tools python3 python3-cryptography cpio dracut-core kmod
+      - name: Fetch Debian's kernel package, unpacked and not installed (the image's .linux)
+        run: |
+          mkdir -p /tmp/kernel && cd /tmp/kernel
+          pkg="$(apt-cache depends linux-image-amd64 | awk '/Depends: linux-image-/{print $2; exit}')"
+          apt-get download "$pkg"
+          sha256sum ./*.deb
+          dpkg -x ./*.deb root
+      - name: Build, sign and verify the TEST image, and keep it
+        shell: bash
+        run: |
+          set -o pipefail
+          set -- /tmp/kernel/root/boot/vmlinuz-*
+          REGALIA_KEEP_TEST_IMAGE="$RUNNER_TEMP/test-uki" LINUX="$1" bash e2e/uki-build.sh | tee "$RUNNER_TEMP/uki.log"
+          grep -q '^uki-build: 33 passed, 0 failed$' "$RUNNER_TEMP/uki.log"
+          {
+            echo "### TEST UKI (staging rehearsal only: make-install-disk.sh --test-uki)"
+            grep '^uki-build: image ' "$RUNNER_TEMP/uki.log"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: TEST-uki-not-for-commissioning
+          path: ${{ runner.temp }}/test-uki/
+          if-no-files-found: error
+          retention-days: 7
