@@ -247,7 +247,7 @@ The ones that decide the design:
 
 ## 5. 1 node vs 3 nodes: what each supports
 
-This table is the source for the user-facing table in README and LIMITATIONS (slice dx7.11). Words used:
+This table was the source for the user-facing table in README and LIMITATIONS (slice dx7.11). Since dx7.11 the canonical text is [`docs/single-node-limits.md`](../single-node-limits.md), and `tests/test_single_node_limits.py` holds the README and LIMITATIONS copies equal to it. Words used:
 - **supported**: the guarantee holds as on three nodes;
 - **degraded**: it works, with the consequence named;
 - **not supported**: the guarantee does not exist on one node.
