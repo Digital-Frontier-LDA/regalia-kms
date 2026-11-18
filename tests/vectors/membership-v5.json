@@ -80,13 +80,13 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "5e4cae1423fc028837f9af7e3601788f9a9b2329f79cddb44f9ede725ee7b42399824f4b84fa616c64541c685ccc5d391e550ab202acff5663b02d858ffd720e",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "c903c506e3f53a5a37f7604bd4e15125167346b65e21935780fe5ad4ddd4a21260af312b834853b4ac1b8a901e8ae387d66826fc69ca3477e59b75ace027080e",
      "signer": "root"
     }
    },
    "name": "Consumers.test_the_owner_revokes_a_v5_node #1",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "54fd29b2d9a4ee441c3596e3b1c5fccbc95a29e1ade291c757cdf7f171a9159c",
@@ -248,7 +248,7 @@
     ]
    },
    "name": "Consumers.test_the_owner_revokes_a_v5_node #2",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -388,14 +388,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "8b44080366da17afbdc8d748503272f4293a1fd62beb622d4e927a5c00de4a3ca2817dc07e47b18d947154728bf58d7d7f3e773553e22d9011b2eef94818ce0a",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "162aaa5cad2906c2ee7e11b92be0e78b3e83727f71a800efb6a322b28a5704c5aa55643189af0ad2a924f32a6385cb45784502b57e058fba61b04b2629f47109",
      "signer": "root"
     }
    },
    "name": "Floors.test_more_live_nodes_than_designed_are_refused #1",
    "refused": "a 3-node topology lists at most 3 nodes that are not RETIRED or REVOKED_STOLEN (4)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "8d54e30d188dce592c14100964358de84cabb84248c7e8760c86fe14ae733ea4",
@@ -536,13 +536,13 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "d91bb0d00bc5489a47edd00e5b1cf6e24a9e442623e778dd95c809fdf3511c4b9f16cb042d026fd122a492371b6ae36b4604412ae798cac1c5fec711339ba70d",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "04f430d3203fad7c95b4eb7b45968ac678f2cc5a9ea964cb1182de9ddd59395b479e03b4f534cfcc07b375bf0070cc6e4a8c20f0a81cbdc32e901404e13a0605",
      "signer": "root"
     }
    },
    "name": "Floors.test_more_live_nodes_than_designed_are_refused #2",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -638,14 +638,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "1f2b091fee6038038b3f023451c159b49ec22b06559a89741e20b433bd5cc09735310bd88f072a05dcaa95eaff562c584ca493a35f34b4b05764f3e2b7931707",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "145c8ce3e651dd4530877bb45bbd8d06f2745aae3aa15065936e9c62cc15a7fc0834dfc3ea55202382cff4d2b4bed4f2623cf325fffc2429a5826ced17425c0d",
      "signer": "root"
     }
    },
    "name": "Floors.test_one_designed_node_has_at_most_one_live_node #1",
    "refused": "a single-node topology lists at most one node that is not RETIRED or REVOKED_STOLEN (2)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -741,14 +741,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "89cde0447e6fd73a89f7b650e3adb08f4399b07d3289698dc4cef3a1d90a079b3f23c9233aae72c6c7658f07235843754d3871beff7b437b338a1a4fdb8b920e",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "33152dc4e54153a982cd3005141dc58a0990853ffb6d2218c389cee5686a3203d5b9494e226d0bf8bdc59dccb7a91ae658e078fa4d9edd9f17eb8f991f50de08",
      "signer": "root"
     }
    },
    "name": "Floors.test_one_designed_node_has_at_most_one_live_node #2",
    "refused": "a single-node topology lists at most one node that is not RETIRED or REVOKED_STOLEN (2)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "b8f890c1b32957bf0c6a2612e655d8f753d0c69c0c6fd998e1cdd9d3b7b900d8",
@@ -845,13 +845,13 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "d3b798711f812e1001b6570f3873753591450088d67c688f57005292fce819097a0409244245462c4a746554de65afa7282f5147f65c290f0d05426eefc2930b",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "e617a6a320d28b4eeeb7270b473a98721ed1c9ad4371c0e7e00ca0b72e9af0cf834c8d936ce93cb589c3ab3bfff67801b54b0ba1f8a75e775dcef7d240bd8207",
      "signer": "root"
     }
    },
    "name": "Floors.test_one_designed_node_has_at_most_one_live_node #3",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "911b1c41e4eba110fc790910b13e7bebe9aaa7e4cb96d104b550703e04248de7",
@@ -932,13 +932,13 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "b9662fadae26f60549b81dd9db02dd0fcc00d5e48786750cbab171b753d0324edfa698d07305aa2d5602ac95c6a773e66fb09034dcbdfd6eb258318fefaf8402",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "5a2edc56db7775c460043b1c4671be4db3ea7ff02e3e36a5006a58611d07958de129bb86a865a02bbc8d2ca08390eb60bdde508075c3ab7ce27dc2c770abe20d",
      "signer": "root"
     }
    },
    "name": "Floors.test_one_designed_node_has_at_most_one_live_node #4",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -1035,14 +1035,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "49e3459b11dc8b7373f9ca0729eb74de943e389bd4c0633a1ecba3196bc01cdbc58f1a3a05112b4feef0db239e897754c86a18a091d9c6077e7dbf933c152b0e",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "a152564cfc7f510072da8a730a33d74deb3724772ad75aedee37bcef0e5ed62be1c1d3c3115055bc2d4ea6f486d6385326943bf1688071eef0aace9a0573d60f",
      "signer": "root"
     }
    },
    "name": "Floors.test_one_designed_node_has_one_shape_of_rules #1",
    "refused": "under single-node heartbeat_signers is {threshold 1, parties [a]}",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -1138,14 +1138,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "e07114c4b738fa350c671a1b021ef1f725e578c567a46b2d16b996505b27121a4831e6187d53a944d9d654128e221f7629d318df0f71fd3ddb78d794717f470d",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "966697e0d44323db25595df480c280c8c8a0c9d7c83eafc2a8d9963d749c2babd5b208a61e7ec23f4c6e9498ff210cf98a5eb529b676012860aad476158ebf07",
      "signer": "root"
     }
    },
    "name": "Floors.test_one_designed_node_has_one_shape_of_rules #2",
    "refused": "under single-node heartbeat_signers is {threshold 1, parties [a]}",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -1241,14 +1241,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "581810ae103c12d267e06d459d5b514fde25dd407f7f38c8517062a4c5d36bac785068e2b27eaf0e8c720d0be1b02f59f6de404d9cd1e226f499d6a502d1f20a",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "34ba18b988fdf1a71a9ef5c990579ea1efe2265270659f7edb320d2162b85f7ab128f9d4ab1ee02d23270979c2978feffdfbab68281123f70cc9b580d0a98a0f",
      "signer": "root"
     }
    },
    "name": "Floors.test_one_designed_node_has_one_shape_of_rules #3",
    "refused": "under single-node activation_signers is {threshold 1, parties [a]}",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -1345,14 +1345,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "68f26e6738c79339ae259abf1b02e019d71ce789805448ad8684224b0d5eb55b7d045a4b95c38fd842b183cab8ea8f582bd13198c97f4dd8535008b4f3c77206",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "e905ca1bbe5b7a7c8b5ba6c82fd820ecdb527c6bc2fb28aedf0fdd5fc93200c504498e515f1962e3abd0e2373ecb546466245974fe768cb7124a8fff605df60b",
      "signer": "root"
     }
    },
    "name": "Floors.test_one_designed_node_has_one_shape_of_rules #4",
    "refused": "under single-node activation_signers is {threshold 1, parties [a]}",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -1448,14 +1448,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "105d5600288f969a293bea8d496f7329c7f70b1f91581fe5a5a740b6f1e5906a0e7bc90f786d127476798cee2cc7408d52aed18c2cc1af49f5d73dd1280ff004",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "50e2ae8a25df9ff981702d23e6000733ff78b61c54da7638d48c964e8c40f76b76ba8160417fb0ea52846271c0116cc2ec5760e8cc60d7050f8c3ec361b5b009",
      "signer": "root"
     }
    },
    "name": "Floors.test_one_designed_node_has_one_shape_of_rules #5",
    "refused": "under single-node revocation_signers is [{threshold 1, parties [owner]}]",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -1557,14 +1557,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "56f64eac35e9ad3a2996b09b8051f1a8e80d5134b699f3e58415ef96ba5836bc7fcccbe844b9679e66eea792a824dc8ed29a42f3dbc91960b68f9001b4c21b05",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "cb9f2b901a4aa73cc8685928d88ecfab55bb13e5144b4c4d5c746fbd8caca76cc234fa62e596fb4bb72de95f04d8cffa4010512cf6d4ac9d909805b8df0cba0d",
      "signer": "root"
     }
    },
    "name": "Floors.test_one_designed_node_has_one_shape_of_rules #6",
    "refused": "under single-node revocation_signers is [{threshold 1, parties [owner]}]",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -1661,14 +1661,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "6b26eb5c79ec6767454b0d1ef0623852cd9e851bf8f99477513232fd218a41ae549a5ae4ded6c2091b0381e1db6b372533dece1fa69b165f27451835a883cf0c",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "1344b03ebe8c5bb30b63c5eba94591de774cef1a20c5552db533628ab697754b8a3481e9415e47bf8692fc8ad6b2a5d1607663d35daf221dbd3b01ac9e73d200",
      "signer": "root"
     }
    },
    "name": "Floors.test_one_designed_node_has_one_shape_of_rules #7",
    "refused": "under single-node revocation_signers is [{threshold 1, parties [owner]}]",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -1764,14 +1764,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "c441e4b1536200dede43c3557f2d761d7a4ee14b3d5c4e69abac1c369d3d720a331ece35c65b9e5503bb9c581917a0f165f78cdb3fceae626311fb855b371c04",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "e5840f37c8206e2604ee93d5e95cf63809fcc10a5362f2a8dd01ba0ba52f8ac5ad1efb6fa2b1ede0c9595bc66271226fc3952c1095b9f6ebc7a06e8cdf4b2904",
      "signer": "root"
     }
    },
    "name": "Floors.test_one_designed_node_has_one_shape_of_rules #8",
    "refused": "under single-node heartbeat_signers is {threshold 1, parties [a]}",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -1895,14 +1895,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "4359fe30ee42a2a0c3eb399f582900e6015a241fb6d3f68b9405afe8abb8c2f18e33dbcc56b8d3c80636bce81d7ddfabddf604a9cedc9b65014ee83b2947db08",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "a03dbc09113b2791d5603b241359e6935329307962bbc282ed13f256abaacfbcb1667572703351df2c5b23426a795f3d933498065b1ad07e9bb7afc680299c05",
      "signer": "root"
     }
    },
    "name": "Floors.test_three_designed_nodes_keep_v4_s_floors #1",
    "refused": "heartbeat_signers.threshold must be from 2 to the number of its parties (4)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -2026,14 +2026,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "ea8b81f633fbb8377cb0a486caa576a49675dd1c81db666e9c4b989e6ccb82949a378a0265468f0eb325731501f9511ee0181b8edfe087dd23fc8ec8a07af308",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "ef25bbb3a94cf80e8f08f29680f94ad61ebd45c8aa4d9a76e400831129d68e02ccd4baa4e3cb5682cf42fa5f64357dae34e9c72c4d9319c65bb522fa91376f08",
      "signer": "root"
     }
    },
    "name": "Floors.test_three_designed_nodes_keep_v4_s_floors #2",
    "refused": "activation_signers.threshold must be from 2 to the number of its parties (3)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -2157,14 +2157,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "ecb0a09b16287ed401c46f359ce8bbee7f22a399894540d3ba88cc71fa01291f6d6b2321556ed85afa7ee7c4245526ae7e4d5bd30f0f59e013e4178ba3e3c10a",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "8255bd4cf467a8ed142ffaf1540758ee87491e68c24d72969b3146d33bf1168ca12d856179152e2e4da377afecb0dec5bb9551f37f6f4ebb9251acb01430230d",
      "signer": "root"
     }
    },
    "name": "Floors.test_three_designed_nodes_keep_v4_s_floors #3",
    "refused": "revocation_signers[0].threshold must be from 2 to the number of its parties (3)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -2289,14 +2289,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "ca30b9738bb5c38b6e1a8e0b10f46fae97ea411a5e68d9cbcc2b34550b2e3c7bd4ca8e35c639798afd9644ad65ea44bd363bffac98e3210935a7a10c853faa0d",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "3acca9be71ce74fd9fd2d3e09a677641b257895e9401ac68ea7492e610a72ab0c5df61f6e62c36511a9bf7cf8bc4d8d999b906c81880916cee37fb225824fc04",
      "signer": "root"
     }
    },
    "name": "Floors.test_three_designed_nodes_keep_v4_s_floors #4",
    "refused": "revocation_signers[1].threshold must be from 2 to the number of its parties (2)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "4317c37f84d0d91330b8995860d0cf9baffd97752ff7232bef3553e7733e4163",
@@ -2421,13 +2421,13 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "9655332a04b2ab79641f8096e4ea1859edc0b1b2d399cb8c91a3aa6e1fc8efd84fa8abb234957974c77f26696be99ba65ddd44dce311df099de1e4a9f1d3ec08",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "1fa1c29387bd40404d93b19c1a2d13e14a0c0d7a250923032ae1229eb89540ddf5748fcc60457d11d36385b463d0cafe7e3730887e77f4fbd7552dc68400da09",
      "signer": "root"
     }
    },
    "name": "Floors.test_three_designed_nodes_keep_v4_s_floors #5",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -2506,14 +2506,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "c07bb1458b78a95d9a75fc54e252f2e459fba4153e05e115bcc976002d758022e3ad70220d993bc55e2e279f36a9ac08b0122c6bf6a2688a4a3f0c36ec06f106",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "09568758b9da5ef5995de1312cb837ee9f298e69ef1e26c1a9ae57a9bc5b10c0722edc17dc3d288fd7538a5341fe59bcdedf4f00d3230ee19feada67e15c8b0a",
      "signer": "root"
     }
    },
    "name": "Floors.test_three_designed_nodes_refuse_the_single_node_rules #1",
    "refused": "heartbeat_signers.threshold must be from 2 to the number of its parties (1)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -2624,14 +2624,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "18032e3132094c851e1a9ef683303de480d10e98bfd87dd158ae1774518d00c89c39bf905fb4aff7c925db8cbefa9a392882d8c3bffe0d4d8eade13c1f296e0e",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "d0e16179b1116f9a3a9810fa2990a08ce5a463c8c6ffeb438684f3273ab5f07b2abc7a0c74217e9061b702b26f8c00ba51a584b2cb24210e717338dba6561003",
      "signer": "root"
     }
    },
    "name": "Floors.test_two_retired_nodes_do_not_make_three_designed_nodes_one #1",
    "refused": "heartbeat_signers.threshold must be from 2 to the number of its parties (1)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "41037c67f5ee734ad6416008f03431570d811abefe40f0d4bb0ccfa08ded2b56",
@@ -2754,13 +2754,13 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "cf2a9c5136b2b36de0c7faffaae0bace352fd6a438bf01ab712b8ad72fb1259900c76b65418f28f47455d3db134161d05d7055f5e861df2643726ecdcd1def03",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "b8c4da689a12b3719f19fe3498b1ba6558d185e8949be7e12aa0973ebc3f9e869ceb4932c8f92e3d38d98fb8a4298a98ab4228627b7d0c204954a774a2eafc04",
      "signer": "root"
     }
    },
    "name": "Floors.test_two_retired_nodes_do_not_make_three_designed_nodes_one #2",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -2856,14 +2856,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "457df0b736a0110589b121a5a50c202f936cd4240cec84101846a18031de56538a51ceb168e67572863b9ce002054df87a27f1b85cf7e22ef61ce12913d43a0d",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "ab9f4d1910596bef574c085fd69fb182b5c31a39a7e05a6aec3a1e5bf1f63bab047abd262bfae0889c5f5deb4c03e27fbd20cbb58c2c9bb7b690c2e6cfe7f607",
      "signer": "root"
     }
    },
    "name": "Floors.test_with_no_live_node_the_rules_name_one_node_of_the_manifest #1",
    "refused": "under single-node heartbeat_signers is {threshold 1, parties [the node]}",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -2959,14 +2959,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "a9ab42801cf0b3d9f02ffcf8b33938a823854a1a15ce987b898b0a53bd4091d004dfc2dfea6f2307011a83b1b82d1d96983e427978830ecba1a754834ef5340e",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "319ea5da9338c544e633eff5e5de491f546cf99d62e08fc27f7a1ce4774dfdc93d2afe36a8fc3ae661715f290613d222348d3715a8c52a166250a8895fdf7206",
      "signer": "root"
     }
    },
    "name": "Floors.test_with_no_live_node_the_rules_name_one_node_of_the_manifest #2",
    "refused": "under single-node activation_signers is {threshold 1, parties [a]}",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "edcbd8eaeae41ab618b09b2e56f075726233190e64a84f6bef8fd28b5ab5cca5",
@@ -3063,13 +3063,13 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "6c3ad0037d822754ec9eb15b57d2525f89cb6f67a271281cec2c04ca2843683d6e8779fd7ecd1ddec73fdcb3794e3e3cc97a0ce64c91fa5662a663528bb8ca00",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "eb10a1180144a8da94c26b5c9ccecd5b6eef973099d814cb810c4269036396156480268c7a9146546e49d56966cd943d68eee4c6d169a67399974f8dda984301",
      "signer": "root"
     }
    },
    "name": "Floors.test_with_no_live_node_the_rules_name_one_node_of_the_manifest #3",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -3189,14 +3189,14 @@
      "schema": "regalia.membership/v5"
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "38bcf82682465c17755f400a4a82b6540e3bd666ff0f29c15160efa8d9e7a5a8825fb043c90ff10a197b05b74466714c9e476915f5a750b88a729b4404b56c00",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "67f267f7b4c1121495c5e8c7d49333b12246804745698e0f30f68b09dcaa5415a91311e8f7fee5ca602c0fe98f43190aa93d2953f93d1b9a55d05cd85513850a",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #1",
    "refused": "manifest fields mismatch: missing=['topology'] unknown=[]",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -3320,14 +3320,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "120f1949e0441b0708c68540ee76a6cb92d5d5ab1964677f59acb41da2f7bb2526dd8ce57923a2a6751a2490a3bde65762efb0b4369896190f6e9ea62190170e",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "a3ff131c2029043da453fa8d55abe4acac64a60268f12886092dfb3c717de2b05b403b569bc18fe92f21b95a7f3ef1aa734eb06551aa1872331780e1213df501",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #2",
    "refused": "manifest fields mismatch: missing=[] unknown=['topology']",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -3448,14 +3448,14 @@
      "topology": "multi-node"
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "60b5536dc144fdd275c514629f038275aaae0c0bcf694c2a586ff3270e55c9de314b2c6925f1715b8dd79036f138978ca2e919387cabcf4b72205c2acb1e1903",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "2b3b53f10f899299df115f8b232038b08de30b3eb436d7d80d9d1128b98d0cf3e018933c60f0280e59891a922557b86da663577451910c87f735de4e95ad0803",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #3",
    "refused": "topology must be an object",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -3579,14 +3579,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "970b4c03b03d3d166974b5b43943a68db89e849b2fedd795cd694c6b92a0e140c309f8eab6a585d00180752dd45bf4bf39199581c3da5c30b5a9006d5eefd905",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "b6df8efcf0e0fe8583d469f7d25cdfe340fbd8ddc883a6b2db63b3dae5a775cf0a189f24bcf2627aa9c62d752d73029c2b922029f0887bfd4bd45ed0b81eb506",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #4",
    "refused": "topology.profile must be single-node or multi-node",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -3710,14 +3710,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "2620b6b61baa6aaf824bd30c8614718b4b1a518b267df980145627e9fbc72394ce009b1fa11aa57063bf01d39313b5d334b803c63c199450d4e2d1d303de720f",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "8938cf3eeeaf1bff5f365fa5d6c3f2990beeb9ffb3c15e09596cecc15e474bacbbf2068c5d8279f6332185683a1ce5c9a9809db3d0e99646a41fe8ce72d1620f",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #5",
    "refused": "topology.profile must be single-node or multi-node",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -3842,14 +3842,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "745980a46b513b98466de8e825f21eefb8d6187d18be41bfe76e97fb020bea4a6e75ca1e269caeb1cc5ee9b6e9ccd472c635f310c5a5d9ae89704d48e3ccaa03",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "5bf1328fb0a64824f192e60aedd0db92a8100dc82bf8e4c9a61c1f8a919c469e5dd65a19d8c503a9fae1677d26c698cc50ee93fab787d70eca8c3b9f290d400b",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #6",
    "refused": "topology fields mismatch: missing=[] unknown=['zone']",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -3974,14 +3974,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "690a0298809d9f8fb54f7c2472fd875fc068c16e8abbf615b2d8d789c2a1eca671a046f43707d537cbaf140579263a7f53a04601c5cea7016c2902810d3e8e0c",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "fa484382e51dcd652ae7cb429318eab569ba2299b1533c256b088502a9ca7a256e3e81d665b2b316aaee0d3c5336590cdd089c9d5f726aff58ed31df2864490c",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #7",
    "refused": "topology fields mismatch: missing=[] unknown=['single_node_limits_sha256']",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -4060,14 +4060,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "6f7ea7cb6c3cefd57053f1656e53efcdd5212f5df3edea894718749c2cde09b77aa7156f9f06c49fb6c43163cc7d4ec97576f3dfd099fc709c901b7ccb149c08",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "54711b805d9113a833aac386d21db6f07946f03629a1fef09357a8a394677b5c3751c879000064b45b3c3f60796810873aff429dce4b33860fb22aaa55a5a801",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #8",
    "refused": "topology fields mismatch: missing=['single_node_limits_sha256'] unknown=[]",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -4147,14 +4147,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "5f74d08f65d7dccfcb4d4d5179de5437c05cdc505ee2343ccb7fc3f43791c39915d829cb5801a02b012cf10c0eaf7446ba80c35cd18bc61afc1cb5d339a26403",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "578959bc5feee09e37dda7846a51cd65adcb30d3a30bc5c07ccaef1886837dbd87598b08608323f5242a6f1c9477fa442d4c5267e4a838455775c52b55384e0c",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #9",
    "refused": "topology.single_node_limits_sha256 must be 64 lowercase hex",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -4234,14 +4234,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "e01baec5a754399c82ef3b1393c146b3bb3c2329d573c39c93fb738b19239acb94ba079e23117d74f8db8a9fcd32a95b195bff73b0866a7d1834b1352e94b306",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "838e75f02ab29abc2ed23d4de2607de60fad5f9f44051ee03cf31430c63fcfb0d081a6933dbe403e33a9609ef2c0147810c7164d8100e2c4d60bfdf4bfa4360f",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #10",
    "refused": "topology.single_node_limits_sha256 must be 64 lowercase hex",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -4365,14 +4365,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "608c46ac54cea20b8e172883a2957b73b1568df665245269b206cbff9b643446d33547e309766727c2e8a4dd3219cc77b729b7dab3f257dc0d3447e4ed915e03",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "d89e35326eaf1d8d19f6a67b57be1188c731929bfc379f13eff81b25b93b525359889ecd475e6b042ad5e3dadb16528fa6b4beae52fae7ae411e2de906352d08",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #11",
    "refused": "topology.nodes must be an integer",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -4496,14 +4496,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "7c3e7b23fd51f0ea56876d58213831ab2abbd8af9d7ebfe895b0a37693a9442019ffb977a9138cce416106246f0ee47904dda849020e154b367690604c838203",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "1d8f6256c085747adf7e05f2a7ad210f16589ba4717b94f8f5cfbad44f8f902cc19de718427e3f928f5e2f2cfc998bdcacd240d23226c1daa38fc503afcb8b0e",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #12",
    "refused": "topology.nodes must be an integer",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -4583,14 +4583,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "3e8c2aa617cf32f97439cd279fbc15e07f7ef44838f72549e2940688ae690158b7e9ee0aa849b070f92e55cf227a672d26978c94a149eef44bbed7389b041707",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "d6cea18f622b25d65125e1de155466608a82adb75d37605d986b12ea69c1e02e68997bb7e3ed580c1106967e1ebcec64590667074cc96f085a26f8e7d5deb005",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #13",
    "refused": "a single-node topology has nodes 1, not 3",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -4714,14 +4714,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "e72d23a6942d490da6f20b62151b98fa853ab0148280a9ccf38c8777a450520345edaddec56d63c2b090dd6e040efbe5968196a53044aa88b47afae86437e802",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "dbae5cb895b22240a10644aa2f25e4e3ad8d569d19ca00c0a5b3895eec198f838891ded4bb1270b93d0cad9dd46d7d40a2f5a07639ff82e2967803b47316f10d",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #14",
-   "refused": "a multi-node topology has an odd number of nodes from 3, not 1 (an even size has no majority that survives a loss)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "refused": "a multi-node topology has an odd number of nodes from 3, not 1 (an even size tolerates no more lost nodes than the odd size below it)",
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -4845,14 +4845,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "670cf62e213244a66f467c8e8ffec5aef3dbd596ae98b0e7796105ccbb7846385fc2c462fc08a37bf080be1c31925ccd5a6511d1b1c27a6dc4a4c95d5e069904",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "f48deb487f0ec7657581b3966ec92a644d1e8a465a5b25a3b5b427a10c29fdf1e98e0bfdcf5bde5b477f8feeeada17d48c307e2600a3e57b71ad8004daced70e",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #15",
-   "refused": "a multi-node topology has an odd number of nodes from 3, not 2 (an even size has no majority that survives a loss)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "refused": "a multi-node topology has an odd number of nodes from 3, not 2 (an even size tolerates no more lost nodes than the odd size below it)",
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -4976,14 +4976,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "f177413e8e7864b49f1d4b9ea24624fdb26b5277ee0b28f42b2f742895285e42c3704730ce54b686d89dbd3377e17a44e74e895048ae257a97e6198ccd75c902",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "aec6f54bdd218b014f47fae416feab6d4198554485b3812cbcd37bd663dfa579578d258199fc934b226495b898833b68361ebd0518dac59b5f4485a7ec3c960a",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #16",
-   "refused": "a multi-node topology has an odd number of nodes from 3, not 4 (an even size has no majority that survives a loss)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "refused": "a multi-node topology has an odd number of nodes from 3, not 4 (an even size tolerates no more lost nodes than the odd size below it)",
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -5107,14 +5107,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "3ab4284b09410fe7f195e76871a2eba35ec962c46ccceed72387bf2d3422c3ca2f8922210fb9b3d079c8e5b03220d61bb17d1397919428ffc5e4958b3b39950c",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "621f000354ee9498640cd579d6c69880a06a801153eef4f4de30b0af7ec5cd1cb38a4718d3b36d68e3193b877c92746622f3715ba581000b68e460a1aee64700",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #17",
-   "refused": "a multi-node topology has an odd number of nodes from 3, not 0 (an even size has no majority that survives a loss)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "refused": "a multi-node topology has an odd number of nodes from 3, not 0 (an even size tolerates no more lost nodes than the odd size below it)",
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -5238,14 +5238,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "ce0386b4814141ca5fcf0d3430cfa61c70f51e47faa9ca010da2a2b51136807434c783b81a7506e3525acdc757e7cb4d551d783710b26b3a238c584b5cc2020f",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "6ea902829a57d0a6569cebd3d19aafb26345165d008da7cf75bec46cf1eef51623552768f50541b27650c9a088c01e92381bacb62fd8c1e5dc9a2d704e0a5b0c",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #18",
    "refused": "a multi-node topology of 5 nodes is not supported yet (3 only; 5 and 7 are regalia-kms-dx7.12)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -5369,14 +5369,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "97b09e02246ac7929c28d9ad2fac228eeea2aa056fb780c4a6e3e550ee95a229423bb8fa5542ffc2f2bef5e6b130d67a24494ab6aa0cac3633bf044c9f2f200c",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "00705f4b90cf0e61ad0f32ffd17343e4a588365bb9ac1ea7b6e70b48c641851e6ab65ac0dc61079a3f8763f170aad459d410b4a6af002d7e7636678d89511e05",
      "signer": "root"
     }
    },
    "name": "Topology.test_the_field_is_validated #19",
    "refused": "a multi-node topology of 7 nodes is not supported yet (3 only; 5 and 7 are regalia-kms-dx7.12)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -5538,7 +5538,7 @@
    },
    "name": "Transitions.test_a_quorum_cannot_change_the_topology #1",
    "refused": "a revocation quorum cannot change topology",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "3ec2a0efd644d521045fab41ca3377302ca61587335563246ed2035f99ae19d2",
@@ -5700,7 +5700,7 @@
     ]
    },
    "name": "Transitions.test_a_quorum_cannot_change_the_topology #2",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "11f89d5899c3e415eb7a11e77c4c753d28d99cfd99fe9b83bed4085d7fd84048",
@@ -5870,13 +5870,13 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "4e17de145e4fb16b8552497e1b671c75a2841e6dcf39c4a74814dec12f3d47a0bb633fb51c94614d0183d170c518a59fde47bc8c231f3dc2969ff31059970008",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "1cbf36ddcac58f9dfd6937f65925b314a055e18078d86302f2754dbdd6d694266b2ff761faf6179edc839528410c0407ddf658943b8f11b86d2f83fc461e5005",
      "signer": "root"
     }
    },
    "name": "Transitions.test_a_single_node_is_replaced_by_the_root #1",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -6045,14 +6045,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "0843fc9f20e660817a1df36a6ad8ba79d44575c05ea0cd352cbb5e45bcc5c5e1de81e2a26a317c6070b32b34aa479b50a9ee9a9b9b978fee47edecd53179dd02",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "18aff352cdf4fd2531f54d0db6d89c69b74001a5e9abde83c003306e9929bbd3084473d5b03d07eed9a0adb23919e0e89a0005378df458f1fdec98d4ad50550e",
      "signer": "root"
     }
    },
    "name": "Transitions.test_a_single_node_is_replaced_by_the_root #2",
    "refused": "a single-node topology lists at most one node that is not RETIRED or REVOKED_STOLEN (2)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "8d5c16ff88faa705ae50496ae8ea4a3314b304707444be2baa138f5fb89b0c6c",
@@ -6171,13 +6171,13 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "c9b9e28071207698ff6f162d8058223312dce07a2542acffaa550496b6ae074909135961c7c7f2a505cfd3fa3f9996a79ff88b3ca57ef9bac4b035b10b980400",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "c2623bf26e08f68bd64e1f94469b3c4e5faf2366cd080325abce8cd2df71e92f42f0cd8bc9c0ed42aed422a88727dd170d942b94ce9d5c413bfcf86a7701050a",
      "signer": "root"
     }
    },
    "name": "Transitions.test_a_v4_chain_never_becomes_one_node_in_place #1",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -6400,14 +6400,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "ba9a3a5aff025dc1d7a8d076985f61a273c8a149f04a44d834dcd8b7a683bc2db3dcb13e3fcf04043aac4341659ef38eb6f0476073b1ad8d063323192806dd0b",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "cab0f6462e593687af2540cdee03db6a5ed1857a26695f5b6b49986443fd704b0fbfa3d2646db43d7126e46f4d1ae8f8697079e9e61559727318219d8ee20a0f",
      "signer": "root"
     }
    },
    "name": "Transitions.test_a_v4_chain_never_becomes_one_node_in_place #2",
    "refused": "a regalia.membership/v4 chain is a three-node cluster: its move to regalia.membership/v5 names the topology {multi-node, 3 nodes} (one node is a new genesis)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -6634,14 +6634,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "29e6d659f5d311f8484a135fc75bb255b3becff03392f2f1798f0c2dee9dabd50c0417010e06ccb07de05eed38b32c3f7251a045ce5830e2d9c541f2ae263d01",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "ceb9636d990680505697b3f27611c8e3acc0580b64a6a250b746c0b5a5b54e0fabe8686a0a1007da20722b07508b4b5c4c255f76d15e4f2c61d9286411c5ea00",
      "signer": "root"
     }
    },
    "name": "Transitions.test_not_even_the_root_changes_the_topology #1",
    "refused": "topology is set at genesis and never changes, for any signer: another size or profile is a new genesis",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -6794,14 +6794,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "2c090207e887dd4f7337d70c6ff12fd617bc7db83c2c7dfe5c32c6040a33754ad4d0e7cc15bdc57c4401f5c60fb3f07abbbc6df46df21b29feae5c574e79f80f",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "17a9b6e7c097ce1a279154da9e4cc9a0fc6f687d5c84335f04079b143b0cc8a8972d7be45f189fc49c9b9a9e9c97581f8e7ac21f476198dd0ad1a0de6f64b204",
      "signer": "root"
     }
    },
    "name": "Transitions.test_not_even_the_root_changes_the_topology #2",
    "refused": "topology is set at genesis and never changes, for any signer: another size or profile is a new genesis",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "24561b2b60954fc45c4faa81535f678228b43cfd66317be533811110b8de0b8f",
@@ -6955,13 +6955,13 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "522ea5671a323aebd822309052353accc6d35a6381be132f6d7566a3bbe47282645a2610f0f07082e1eff74e17834ad5992e2b2ec64edb542b6326d88c3fff0b",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "a0004a66c49f1880a5c490ac36835cf8c4bea9db2ad5eb8331a6fe04d35db7846a093d3a262bfaef95b3d650c6b01edbe1642a34f33f32e80d486ba6189db203",
      "signer": "root"
     }
    },
    "name": "Transitions.test_not_even_the_root_changes_the_topology #3",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -7198,14 +7198,14 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "0b82178d5d1e92a56263d4c2754310982e757ab9579981cacf4a2379fe5141fe05ab53e084d83e0323475d3190f9a2b81e30ef8674b8470c024312c35f965d08",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "4db67bac4769af503eb8c7fc22d5226e69a25c9ac70a11442515418695dfb1aa3328e384d203e0fe2168eb1f6c4e00f586713f4a2ab042ed768868498d19c00c",
      "signer": "root"
     }
    },
    "name": "Transitions.test_nothing_moves_a_chain_back_from_v5 #1",
    "refused": "schema regalia.membership/v4 cannot follow regalia.membership/v5: the schema only moves forward",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "d88ea11a802aae88c314260989fa961af0e50c66dc1606ab958a6450eca6e3aa",
@@ -7326,13 +7326,13 @@
      "schema": "regalia.membership/v4"
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "60c4cf88d70d0de859001779a4111fc0b1315b8dfa2e9c163f53378323cee829209f47bd7fcc058c0e9a636edde9e3472525613c9d3f59423495abf5f183720a",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "6afe70ccc5c356e4ca9837ab74c87ce2f3b4687903300dc56f46972520a71a93cd8d15c3954a86e5244a18b207f6660317d3cc87bc639d3964f69ed8506ab60b",
      "signer": "root"
     }
    },
    "name": "Transitions.test_the_move_to_v5_keeps_k_a_and_the_card_rules #1",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -7569,14 +7569,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "2d439dfec8cd05c632b5bc58a03a6b732974f93e7deb8600023f67b7f1bcd574824ac2fd3af9a586b6630089ce85067cea49bfe7e9f7d6dc919b12ca1e5a850a",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "afaa829525884c9c01f52d97222d24add3a13849559fa7f056b243036afabbdbbfbdd6d4a2eb9d337f2de2b00d9459ef242d5b04fc00fc6e4ab31708d1a2940b",
      "signer": "root"
     }
    },
    "name": "Transitions.test_the_move_to_v5_keeps_k_a_and_the_card_rules #2",
    "refused": "anchor_policy_key is set at genesis and never changes, for any signer: every node's TPM objects are defined under it (a new one is a new genesis)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -7809,14 +7809,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "f116fb657ae4edfc267625e9174058c109108d1be40e9887cfb77522494972df5d82f11650c43417c509a587d3a97a438bcbea63f086f31b5310149d639c8500",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "e468a75726968421d0765d3d2f8f49c35fe10fe59ea425dfbc74f43ea2a62881bbe2fd5909014900cac1fe031305e4699d9bb745c416a8296c0d6794c198450d",
      "signer": "root"
     }
    },
    "name": "Transitions.test_the_move_to_v5_keeps_k_a_and_the_card_rules #3",
    "refused": "owner_keys change only with a new card_record: the card ceremony's record names them",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -8057,14 +8057,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "d1c8ddace51dac4ec795254db9c66aec6a9a6b6feef0cffa57a827cca65608085b59489c8e6e3440505eb6e8856b141f6f7633c9fe054f3455540f73e3109107",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "ed4f2f2a77edd2d2648761f4b09cd0043e6f4b4d45a6c08cd39352404fad24ad866836c5cae0486cd32bcb25707765e84caa697fc5921aefb6bfa7827663dd00",
      "signer": "root"
     }
    },
    "name": "Transitions.test_the_move_to_v5_keeps_k_a_and_the_card_rules #4",
    "refused": "anchor_policy_key is set at genesis and never changes, for any signer: every node's TPM objects are defined under it (a new one is a new genesis)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -8305,14 +8305,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "47bac7eae0cc494b6e7d36ed5de756979088b3d2278487df0d73ba4cb27b005a67f8c04e367bd29710217150517111f3d5f95541841a50dac375039540b0fd09",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "9a2266bad64ae52779bc0dd2da046d8efbecafda93d4b6b1f6b2d401a31a6c54502b812c3930391bc1a2776c832a13e6e487206c0448746a42bac7d8aa26aa02",
      "signer": "root"
     }
    },
    "name": "Transitions.test_the_move_to_v5_keeps_k_a_and_the_card_rules #5",
    "refused": "card_record changes only to a later card ceremony's record (sequence 1 after 1)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "fe5d8b49c959771e18c8d5aed2c34d963ec620e61b31ea2277dea02731d1cad9",
@@ -8550,13 +8550,13 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "2bded80e2672a856fa481d21ec05428bceffa649f238147f9b871de2fadb15911705e0ace9e121f46b558d61d9f049a6a5fba1023f35051680cf0da9d294b80f",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "7c17378de4abb517e44d7c4e2a05b88cf7bbd7940064a5a4b061064b539738fb621b59fde75292a79047c9c88968199fdb981ea9786501c8dba705d4b26f9209",
      "signer": "root"
     }
    },
    "name": "Transitions.test_the_move_to_v5_keeps_k_a_and_the_card_rules #6",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "ea95321b77135c008fc1c21257cd341f143d3134b28ef1aa6c42b574f0276be3",
@@ -8718,7 +8718,7 @@
     ]
    },
    "name": "Transitions.test_the_owner_alone_revokes_the_only_node #1",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -8871,14 +8871,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "b54d7d1344d6a8c4060dd82eaef5f43acb1d5233e8c5019183c17d0d5ebfd9460165579007e18c52eca46c61e2a0a2a2ae97d91eb77fa4943e1de1c0b516960a",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "da9998d189121c39650535c17d9c3c1ae7505daedeefcb81934715e82acfb9d3abf23ac4eb97d368c7d0a1a44712506313b94d62a64dacf0d3dbed103e103704",
      "signer": "root"
     }
    },
    "name": "Transitions.test_the_owner_alone_revokes_the_only_node #2",
    "refused": "tombstone: a is REVOKED_STOLEN, which is terminal for every signer (ACTIVE refused); hardware that may return belongs in MAINTENANCE or QUARANTINED",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "accepted": "8096126acbbece80fd3f0a4b524748dcf034da375fae1251a212f09c0efd6db3",
@@ -9048,13 +9048,13 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "7f3acf8007f1306c8ba33a9d38a7db1cbf38ea1fc0d48168295324ac588ea27b046ceccc65868009504a446b19e37889c4fcc0be831be1dd6960887f5f124301",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "c0e9fe1045b3da32a7144911fb57a82cd9bc62f4b59bb1afdd39a58aae3401f6cf2dc7597fdcded082fd5bd4a89049622fa88d3738ed948249d64d59f33d880e",
      "signer": "root"
     }
    },
    "name": "Transitions.test_the_owner_alone_revokes_the_only_node #3",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -9210,13 +9210,13 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "bd978b8815380175de55cd9965455a4c9105275674030a1763b9b66c913cf186057c4bfa00fbe80b269e100ee30b1ad68ccd2c2a5d02bf21f8e1779f8cf4adcf"
+      "sig": "cca5fd0b9a21cceb3a9028441989fb0b577e4a7ee724bd5dcf4951231dc2cbe421dfeb8925ebe3185c2a18fd5e755f4075ca744c80aa583041bf4be9237cecfb"
      }
     ]
    },
    "name": "Transitions.test_the_owner_alone_revokes_the_only_node #4",
    "refused": "the manifest's signatures meet no revocation_signers rule of the current manifest (counting: a)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": null,
@@ -9316,7 +9316,7 @@
       },
       {
        "alg": "ed25519",
-       "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+       "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
       }
      ],
      "policy_version": "p1",
@@ -9344,14 +9344,14 @@
      }
     },
     "signature": {
-     "public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6",
-     "sig": "68f76fbba2b09cac20d805b0d6d709c260e03d7b18a4cc95cb95df6248111d59474cdcf5ec156effaace31ebd85d6b1e1c16090ac7a21f2d964b61b055f0a503",
+     "public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46",
+     "sig": "bae31fe9f6921e008f22faf0293905f925a306f506d3fe3b3a09e9d73b9816df6935df000ef26ea501081ef6b6634644651b4730c5616c0132a1dfdd8a4cd506",
      "signer": "root"
     }
    },
    "name": "Transitions.test_the_root_is_never_a_party #1",
    "refused": "owner_keys[3] is a pinned root key: the payload root is never a quorum party",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   },
   {
    "current": {
@@ -9591,18 +9591,18 @@
      {
       "party": "a",
       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-      "sig": "f9d1f5afcaee36d50529fd784960fcd90aacd7ce47020db1646e4b9bc90869a97aec729a211330bd4ba0192ae5fc49284aa2981b12c719d7116a6c96e9fde024"
+      "sig": "a7a18f0e1f42c09926b8d17f57c57431a72f4b8bd2f3bb18d63187a118efe0e85933c9b17ca8ee3585dee4e352546dca7724d1e8a7a29796166a39c7b8d7b70d"
      },
      {
       "party": "b",
       "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2",
-      "sig": "ff1ae35afd53bfb5b7bb5822d436856ecfd3485009918dd48f89f614c2316d1b7d5add9f52f5601106a5409e47c7b07b8a5a436d4829697a6e41f6f9db87ee77"
+      "sig": "5456f5b5cfee157267c4e2be7860270bc410b508d0af3466876f05360e800b2e06fbada9c8c2a5dec7c9f4a8fc51fdc42e72c700569cde9ed5409f010a5280bf"
      }
     ]
    },
    "name": "Transitions.test_the_root_moves_a_v4_chain_to_a_three_node_v5 #1",
    "refused": "only the root can change the schema (regalia.membership/v4 to regalia.membership/v5)",
-   "root_public": "7227d4d9a40629970cc3bc4c51ce2690c094563f1795c76ff267bcf989f155e6"
+   "root_public": "1beccbad0ba29fe9ee21890fe6f461f975ec6bf3be2a55629c7bedd6c1292b46"
   }
  ]
 }

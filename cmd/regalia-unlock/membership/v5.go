@@ -84,8 +84,8 @@ func topology(manifest map[string]any, byID map[string]map[string]any) ([]string
 		return live, nil
 	}
 	if n.Cmp(big.NewInt(3)) < 0 || n.Bit(0) == 0 {
-		return nil, refuse("a multi-node topology has an odd number of nodes from 3, not %d (an even size has no majority that "+
-			"survives a loss)", n)
+		return nil, refuse("a multi-node topology has an odd number of nodes from 3, not %d (an even size tolerates no more lost "+
+			"nodes than the odd size below it)", n)
 	}
 	supported := false
 	for _, s := range supportedMultiNodes {

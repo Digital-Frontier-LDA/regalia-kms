@@ -75,7 +75,9 @@ func TestADamagedV5DocumentIsRefusedNeverAPanic(t *testing.T) {
 			continue
 		}
 		current, _ := c["current"].(map[string]any)
-		attempt := func(label string, candidate map[string]any) {
+		_, invalid := Validate(manifest)
+		valid := invalid == nil // a case that is invalid on purpose (an extra field) may be made valid by removing it
+		attempt := func(label string, candidate map[string]any, removed bool) {
 			tried++
 			defer func() {
 				if r := recover(); r != nil {
@@ -83,17 +85,23 @@ func TestADamagedV5DocumentIsRefusedNeverAPanic(t *testing.T) {
 				}
 			}()
 			_, _ = Accept(current, replaced(envelope, "manifest", candidate), c["root_public"])
-			_, _ = Validate(candidate)
+			_, err := Validate(candidate)
+			// every key of a valid v5 manifest, and of its topology, is required: removing one is a refusal
+			if _, refused := err.(*Refused); valid && removed && !refused {
+				t.Errorf("%s, %s removed: Validate gave %v, want a *Refused", c["name"], label, err)
+			}
 		}
 		for _, key := range sortedKeys(manifest) {
 			for _, v := range append([]any{missing{}}, odd...) {
-				attempt("manifest."+key, replaced(manifest, key, v))
+				_, removed := v.(missing)
+				attempt("manifest."+key, replaced(manifest, key, v), removed)
 			}
 		}
 		if topology, ok := manifest["topology"].(map[string]any); ok {
 			for _, key := range sortedKeys(topology) {
 				for _, v := range append([]any{missing{}}, odd...) {
-					attempt("topology."+key, replaced(manifest, "topology", replaced(topology, key, v)))
+					_, removed := v.(missing)
+					attempt("topology."+key, replaced(manifest, "topology", replaced(topology, key, v)), removed)
 				}
 			}
 		}

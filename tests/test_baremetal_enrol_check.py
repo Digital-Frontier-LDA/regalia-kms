@@ -97,6 +97,22 @@ class Check(unittest.TestCase):
             else:
                 self.refused("the manifest's signing_key for a is not this host's", self.envelope(man))
 
+    def test_a_single_node_manifest_enrols_its_node_at_genesis_only(self):
+        """regalia-kms-dx7.19 (CodeRabbit on #734): a single-node node enrolled after epoch 1, i.e. a replacement after
+        the owner's revocation, would sign its epoch's heartbeats alone, so nothing could start its counter. check
+        refuses it before anything is written; the single-node genesis is the control."""
+        from tests import test_baremetal_membership_v4 as v4
+        from tests import test_baremetal_membership_v5 as v5
+        first = v5.single5(1, "", v4.nodes4(b="RETIRED", c="RETIRED"), policy_version=measurements.version(self.document))
+        first["nodes"][0].update(hsm_serials=self.bundle["hsm_serials"], ek_name=self.bundle["ek_name"], ak_name=self.bundle["ak_name"],
+                                 wg_service_pub=bytes(range(32)).hex(), wg_boot_pub=bytes(range(32, 64)).hex(),
+                                 ssh_host_pub=self.bundle["ssh_host_pub"])
+        with open(self.d + "/bundle.json", "w") as f:
+            json.dump(dict(self.bundle, signing_key=first["nodes"][0]["signing_key"]["key"]), f)
+        self.assertEqual(self.check(self.envelope(first)), first)
+        second = dict(copy.deepcopy(first), epoch=2, prev_digest=m.digest(first), issued_at="2026-10-05T09:00:00Z")
+        self.refused("a single-node manifest enrols its node only at epoch 1 for now, not epoch 2", [self.envelope(first), self.envelope(second)])
+
     def test_a_signing_key_a_manifest_before_v4_does_not_name_is_said(self):
         """51's read of #358: a host with a signing key checked against a v3 (or older) manifest passes, and is told its key
         waits for v4."""

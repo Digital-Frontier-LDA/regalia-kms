@@ -78,7 +78,7 @@ chosen at genesis and never inferred from how many nodes are live (a three-node 
 three-node cluster in an outage, not a one-node cluster):
   * `topology`: {"profile": "multi-node", "nodes": 3} or {"profile": "single-node", "nodes": 1,
     "single_node_limits_sha256": <64 hex>, the digest of the single-node limits text the operator acknowledged}. An even
-    size is refused for ever (no majority survives a loss); 5 and 7 until their epic. Not even the root changes it: another
+    size is refused for ever (it tolerates no more lost nodes than the odd size below it); 5 and 7 until their epic. Not even the root changes it: another
     size or profile is a new genesis. A v4 chain's root-signed move to v5 names {multi-node, 3}.
   * THE FLOORS ARE THE DESIGNED SIZE'S: floor(nodes / 2) + 1, 2 for three nodes (v4's, which is a three-node cluster) and
     1 for one; only a rule naming the owner alone may be 1 otherwise. A multi-node manifest lists at most `nodes` nodes
@@ -541,8 +541,8 @@ def _topology(manifest, by_id):
         # none once the owner has revoked it (REVOKED_STOLEN, 4.4): the KMS is stopped until the root enrols a replacement
         require(len(live) <= 1, "a single-node topology lists at most one node that is not RETIRED or REVOKED_STOLEN (%d)" % len(live))
     else:
-        require(n >= 3 and n % 2 == 1, "a multi-node topology has an odd number of nodes from 3, not %d (an even size has no "
-                "majority that survives a loss)" % n)
+        require(n >= 3 and n % 2 == 1, "a multi-node topology has an odd number of nodes from 3, not %d (an even size tolerates "
+                "no more lost nodes than the odd size below it)" % n)
         require(n in SUPPORTED_MULTI_NODES, "a multi-node topology of %d nodes is not supported yet (3 only; 5 and 7 are "
                 "regalia-kms-dx7.12)" % n)
         require(len(live) <= n, "a %d-node topology lists at most %d nodes that are not RETIRED or REVOKED_STOLEN (%d)" % (n, n, len(live)))

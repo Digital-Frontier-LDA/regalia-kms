@@ -10,6 +10,7 @@ from deploy.baremetal import membership as m
 from deploy.baremetal import owner
 from tests.test_baremetal_beat import Case
 from tests.test_baremetal_membership_v4 import OWNER_KEYS, STRANGER, manifest4, nodes4, pub
+from tests.test_baremetal_membership_v5 import MULTI, manifest5, single5
 
 
 class FakeStore:
@@ -121,6 +122,16 @@ class Owner(Case):
         self.man = dict(self.man, schema=m.SCHEMA)
         self.refused("only under a regalia.membership/v4 manifest", self.proposed)
         self.assertEqual(self.nodes["a"].signing.value(), 0)
+
+    def test_a_rule_that_does_not_name_the_owner_is_refused_and_a_v5_rule_that_does_proposes(self):
+        # decision Q2 (regalia-kms-dx7): a single-node node signs its own heartbeats, {1, [n]}; the owner's beat is refused
+        self.man = single5(1, "", nodes4(b="RETIRED", c="RETIRED"))
+        m.validate(self.man)   # a valid single-node manifest: the refusal below is the owner rule's, not the format's
+        self.assertEqual(self.man["heartbeat_signers"], {"threshold": 1, "parties": ["a"]})
+        self.refused("the owner co-signs heartbeats only when heartbeat_signers names the owner: under epoch 1", self.proposed)
+        self.assertEqual(self.nodes["a"].signing.value(), 0)
+        self.man = manifest5(1, "", nodes4(), MULTI)
+        self.assertEqual(self.proposed()["heartbeat"]["sequence"], 1)
 
 
 if __name__ == "__main__":

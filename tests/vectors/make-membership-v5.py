@@ -5,7 +5,10 @@
 as a majority of the designed nodes, the single-node shape, a topology no signer changes, and the root's move
 from v4. A drift on either side fails CI: the Python test replays this file too.
 
-    python3 -Es tests/vectors/make-membership-v5.py > tests/vectors/membership-v5.json
+    python3 -Es tests/vectors/make-membership-v5.py tests/vectors/membership-v5.json
+
+The file is replaced only once every test has passed (written beside it, then renamed), so a failing run leaves the
+last good vector in place; the runner's report goes to stderr. With no path, the JSON goes to stdout.
 
 Every "key" field (a typed key's, a signature's, a typed root's) is written "public": a public key written as
 `"key": "<hex>"` reads as a credential to the secret scanner, and the repository fixes such findings by
@@ -59,12 +62,29 @@ class Naming(unittest.TextTestResult):
         super().startTest(test)
 
 
+def leaves(suite):
+    """Every test in a suite, at any depth (a module that failed to import is one synthetic test, not a group)."""
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            yield from leaves(item)
+        else:
+            yield item
+
+
 membership.accept = recording
-loader = unittest.defaultTestLoader
-suite = unittest.TestSuite(t for t in loader.loadTestsFromName("tests.test_baremetal_membership_v5")
-                           if not t.__class__.__name__.startswith("Vectors"))
-suite = unittest.TestSuite(test for group in suite for test in group if "Vectors" not in test.id())
-result = unittest.TextTestRunner(stream=open(os.devnull, "w"), resultclass=Naming).run(suite)
+loader = unittest.TestLoader()
+loaded = loader.loadTestsFromName("tests.test_baremetal_membership_v5")
+if loader.errors:
+    raise SystemExit("the v5 membership tests did not load: no vector is written\n" + "\n".join(loader.errors))
+suite = unittest.TestSuite(test for test in leaves(loaded) if "Vectors" not in test.id())
+result = unittest.TextTestRunner(stream=sys.stderr, resultclass=Naming).run(suite)
 if not result.wasSuccessful():
     raise SystemExit("the v5 membership tests failed: no vector is written")
-print(json.dumps({"about": __doc__.strip().split("\n\n")[0], "cases": cases}, indent=1, sort_keys=True))
+text = json.dumps({"about": __doc__.strip().split("\n\n")[0], "cases": cases}, indent=1, sort_keys=True) + "\n"
+if len(sys.argv) > 1:
+    partial = sys.argv[1] + ".partial"
+    with open(partial, "w") as out:
+        out.write(text)
+    os.replace(partial, sys.argv[1])
+else:
+    sys.stdout.write(text)
