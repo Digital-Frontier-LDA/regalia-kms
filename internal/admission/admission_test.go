@@ -253,7 +253,7 @@ func TestEveryDefectOfTheFileIsNotAdmitted(t *testing.T) {
 		// a lease that serves carries its state, or the state gate has nothing to check (2f's read of #510)
 		{"serving under a lease with no cluster", "serves under a lease but carries no lease state", change("cluster_id", strings.Repeat("0", 16))},
 		{"serving under a lease with no session key", "serves under a lease but carries no lease state", change("session_key", strings.Repeat("0", 64))},
-		{"an unknown mode", "neither lease nor recovery", change("mode", "standby")},
+		{"an unknown mode", "not lease, recovery or single", change("mode", "standby")},
 		{"recovery, with no stateless-only gate yet", "no stateless-only gate yet", change("mode", "recovery")},
 		{"a local time", "lease_issued_at is not UTC", change("lease_issued_at", "2026-10-02T09:00:00+02:00")},
 		{"a fractional bound", "serve_until_boottime_ms is not a whole number", change("serve_until_boottime_ms", 1.0e6+0.5)},

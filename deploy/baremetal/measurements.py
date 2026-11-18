@@ -216,6 +216,18 @@ def attest_policy(manifest, document, peer_id):
     return replacement.attest_policy(manifest, bound, peer_id=peer_id)
 
 
+def self_attest_policy(manifest, document, node_id):
+    """The policy a node holds for its OWN quotes (lease.issue_self), under the single-node profile only (regalia-kms-dx7.3,
+    docs/design/single-node.md 4.3): the manifest's node, from the document the manifest commits to and from nothing else,
+    so the self-issued lease still judges the measured boot. Refused under any other profile: there a peer attests a node,
+    and a peer's policy never lists the peer itself (attest_policy)."""
+    require(membership.profile(manifest) == membership.SINGLE_NODE, "a node attests its own quotes only under the %s profile; "
+            "epoch %d is %s" % (membership.SINGLE_NODE, manifest["epoch"], membership.profile(manifest)))
+    bound = bind(manifest, document)
+    require(isinstance(node_id, str) and node_id in membership.validate(manifest), "%r is not a node of the manifest" % (node_id,))
+    return replacement.attest_policy(manifest, bound)
+
+
 def check_replacement(current, candidate, old_document, new_document, old_id, new_id):
     """A node replacement (#76) under bound measurements: `candidate` replaces `old_id` by `new_id`, and
     the document it commits to is the old one with the new node's entry added, the replaced node's entry

@@ -9,7 +9,14 @@
 //	{"schema": "regalia.admission/v4", "node_id": ..., "session_id": ..., "boot_id": ...,
 //	 "epoch": ..., "manifest_digest": ..., "hsm_serials": ..., "lease_issued_at": ...,
 //	 "requested_boottime_ms": ..., "cluster_id": ..., "state_epoch": ..., "state_revision": ...,
-//	 "session_key": ..., "serve_until_boottime_ms": ..., "mode": "lease" or "recovery", "reason": ...}
+//	 "session_key": ..., "serve_until_boottime_ms": ..., "mode": "lease", "recovery" or "single", "reason": ...}
+//
+// MODE SINGLE (regalia-kms-dx7.3, docs/design/single-node.md 4.3). Under a v5 manifest of topology single-node the node
+// issues its own runtime lease (lease.issue_self) and the file says "single". It serves stateless and stateful
+// operations as "lease" does, with the lease's state, and only when the membership chain is configured and its verified
+// tip is of the single-node profile: the mode must fit the profile (modeFitsProfile, which admission.mode_fits_profile
+// decides alike over tests/vectors/self-lease-v1.json). Under single-node, "lease" and "recovery" are refused: there is no
+// peer to issue a lease and nothing to survive.
 //
 // THE LEASE'S OPERATIONAL STATE (v4; ADR-0002 D32, #510). cluster_id, state_epoch, state_revision and
 // session_key are the held lease's own (lease.py v2): what the issuer vouched this node's etcd watch
@@ -98,7 +105,8 @@ type Document struct {
 	RequestedBoottimeMs  int64
 	State                LeaseState
 	ServeUntilBoottimeMs int64
-	// Mode is ModeLease (a peer's runtime lease) or ModeRecovery (a lone survivor under the owner's authorization).
+	// Mode is ModeLease (a peer's runtime lease), ModeRecovery (a lone survivor under the owner's authorization) or
+	// ModeSingle (the single-node profile's self-issued lease).
 	Mode   string
 	Reason string
 }
@@ -122,7 +130,32 @@ func (state LeaseState) none() bool {
 const (
 	ModeLease    = "lease"
 	ModeRecovery = "recovery"
+	// ModeSingle is the single-node profile's self-issued lease (regalia-kms-dx7.3): stateless and stateful operations.
+	ModeSingle = "single"
 )
+
+// modeFitsProfile is admission.mode_fits_profile: ModeSingle under the single-node profile only; ModeLease and
+// ModeRecovery under multi-node only. tests/vectors/self-lease-v1.json holds the two equal.
+func modeFitsProfile(mode, profile string) error {
+	if mode != ModeLease && mode != ModeRecovery && mode != ModeSingle {
+		return errors.New("an admission's mode is one of lease, recovery, single")
+	}
+	switch profile {
+	case membership.ProfileSingleNode:
+		if mode != ModeSingle {
+			return fmt.Errorf("admission mode %s is refused under the %s profile: one node serves only under its own lease (mode single)",
+				mode, membership.ProfileSingleNode)
+		}
+	case membership.ProfileMultiNode:
+		if mode == ModeSingle {
+			return fmt.Errorf("admission mode single is refused under the %s profile: a node there serves only under a peer's lease",
+				membership.ProfileMultiNode)
+		}
+	default:
+		return fmt.Errorf("the topology profile is %s or %s", membership.ProfileSingleNode, membership.ProfileMultiNode)
+	}
+	return nil
+}
 
 // Status is what the gate last decided.
 type Status struct {
@@ -190,6 +223,7 @@ type Gate struct {
 	chainKnown bool
 	tipEpoch   uint64
 	tipDigest  string
+	tipProfile string
 	tipErr     error
 }
 
@@ -209,42 +243,47 @@ const MaxChainBytes = 64 << 20
 
 // chainTip is the published chain's tip, verified from the pinned root: read again only when the file is
 // another one or has changed.
-func (gate *Gate) chainTip() (uint64, string, error) {
+func (gate *Gate) chainTip() (uint64, string, string, error) {
 	gate.chainMutex.Lock()
 	defer gate.chainMutex.Unlock()
 	var stat unix.Stat_t
 	if err := unix.Lstat(gate.options.ChainPath, &stat); err == nil && gate.chainKnown && identityOf(stat) == gate.chainID {
-		return gate.tipEpoch, gate.tipDigest, gate.tipErr
+		return gate.tipEpoch, gate.tipDigest, gate.tipProfile, gate.tipErr
 	}
 	raw, opened, err := readTrustedStat(gate.options.ChainPath, gate.options.ChainOwnerUID, MaxChainBytes)
 	if err != nil {
 		gate.chainKnown = false
-		return 0, "", err
+		return 0, "", "", err
 	}
 	gate.chainID, gate.chainKnown = identityOf(opened), true
-	gate.tipEpoch, gate.tipDigest, gate.tipErr = verifyChain(raw, gate.options.Root)
-	return gate.tipEpoch, gate.tipDigest, gate.tipErr
+	gate.tipEpoch, gate.tipDigest, gate.tipProfile, gate.tipErr = verifyChain(raw, gate.options.Root)
+	return gate.tipEpoch, gate.tipDigest, gate.tipProfile, gate.tipErr
 }
 
-func verifyChain(raw []byte, root any) (uint64, string, error) {
+// verifyChain returns the verified tip's epoch, digest and topology profile (membership.Profile).
+func verifyChain(raw []byte, root any) (uint64, string, string, error) {
 	document, err := membership.Load(raw, MaxChainBytes)
 	if err != nil {
-		return 0, "", fmt.Errorf("it is not JSON: %w", err)
+		return 0, "", "", fmt.Errorf("it is not JSON: %w", err)
 	}
 	envelopes, ok := document.([]any)
 	if !ok {
-		return 0, "", errors.New("it is not a list of envelopes")
+		return 0, "", "", errors.New("it is not a list of envelopes")
 	}
 	manifests, err := membership.ReadChain(envelopes, root)
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	tip := manifests[len(manifests)-1]
 	epoch, err := strconv.ParseUint(fmt.Sprint(tip["epoch"]), 10, 64)
 	if err != nil {
-		return 0, "", errors.New("its tip has no epoch")
+		return 0, "", "", errors.New("its tip has no epoch")
 	}
-	return epoch, membership.Digest(tip), nil
+	profile, err := membership.Profile(tip)
+	if err != nil {
+		return 0, "", "", fmt.Errorf("its tip's profile: %w", err)
+	}
+	return epoch, membership.Digest(tip), profile, nil
 }
 
 // Open prepares a gate. It does not need the admission file to exist: until the lease service
@@ -480,7 +519,7 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 	// the lease service wrote under the previous epoch (a lease from a now-quarantined issuer, say) is refused,
 	// not served until it expires. A chain briefly ahead of the admission refuses too, until the next round.
 	if gate.options.ChainPath != "" {
-		epoch, digest, err := gate.chainTip()
+		epoch, digest, profile, err := gate.chainTip()
 		if err != nil {
 			return refuse("the membership chain: " + err.Error())
 		}
@@ -490,6 +529,15 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 		if digest != document.ManifestDigest {
 			return refuse(fmt.Sprintf("the admission is for another manifest at epoch %d than the chain's", epoch))
 		}
+		// dx7.3: the mode is the chain's profile's: single under single-node only, a peer's lease under multi-node only
+		if err := modeFitsProfile(document.Mode, profile); err != nil {
+			return refuse(err.Error())
+		}
+	} else if document.Mode == ModeSingle {
+		// dx7.3: a self-issued lease serves only where the verified chain shows the single-node profile; with no chain
+		// configured, nothing here can show it (fail closed)
+		return refuse("an admission in mode single is served only against the membership chain's single-node profile, and no " +
+			"membership chain is configured")
 	}
 	return Status{Admitted: true, Epoch: document.Epoch, RequestedBoottimeMs: document.RequestedBoottimeMs, HSMSerials: document.HSMSerials,
 		State: document.State}
@@ -699,12 +747,12 @@ func Parse(contents []byte) (Document, error) {
 	if document.Mode, err = text("mode"); err != nil {
 		return Document{}, err
 	}
-	if document.Mode != ModeLease && document.Mode != ModeRecovery {
-		return Document{}, errors.New("the admission file's mode is neither lease nor recovery")
+	if document.Mode != ModeLease && document.Mode != ModeRecovery && document.Mode != ModeSingle {
+		return Document{}, errors.New("the admission file's mode is not lease, recovery or single")
 	}
 	// A lease serves only with the lease's state: a lease-mode file that serves with none would hand the state
-	// gate nothing to check (2f's read of #510, adopted)
-	if document.Mode == ModeLease && document.ServeUntilBoottimeMs > 0 && document.State.none() {
+	// gate nothing to check (2f's read of #510, adopted). A self-issued lease (single, dx7.3) alike.
+	if (document.Mode == ModeLease || document.Mode == ModeSingle) && document.ServeUntilBoottimeMs > 0 && document.State.none() {
 		return Document{}, errors.New("the admission file serves under a lease but carries no lease state")
 	}
 	if document.Reason, err = text("reason"); err != nil {

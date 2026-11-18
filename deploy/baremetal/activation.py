@@ -41,6 +41,9 @@ SKEW_S = 60                       # a signer's allowance for not_before ahead of
 # the recovery path's wait, and a node's busy window after a start without its record: any activation lease AND any
 # runtime lease the cut-off side may hold has expired by then (#432, amendment 1). Derived, never a second literal.
 RECOVERY_WAIT_S = max(MAX_LEASE_S, runtime_lease.MAX_LIFETIME) + SKEW_S
+# under the single-node profile the counter is raised to the epoch granted (GrantRecord.record): one raise is at most this
+# many TPM increments, else nothing is signed (a reused TPM far behind its record: a new TPM, or the owner, settles it)
+MAX_FLOOR_JUMP = 4096
 MAX_FENCED_BYTES = 512
 SITE = re.compile(r"[a-z0-9][a-z0-9-]{2,62}")            # a registry site (>= 3 characters), not a node_id
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
@@ -142,6 +145,14 @@ class GrantRecord:
     holding the epoch keeps every advance a single increment, however many leases the others granted while this
     node was away.
 
+    UNDER THE SINGLE-NODE PROFILE (regalia-kms-dx7.3) no co-signer can name this node's last grant after the record is
+    lost, so the counter is raised TO the epoch granted instead (record(..., floor=True)): the counter is then at least
+    every epoch this node granted under that profile. And it signs only on a record that STANDS, or on a new TPM (counter
+    0): a record lost, restored from an older disk, or left by a crash or an interrupted raise is refused (Signer), since
+    an activation is not bound to its genesis and no co-signer can name the last grant (regalia-kms-dx7.24 is the owner's
+    way back). Activation epochs therefore only rise within this node's record, across a new genesis on a reused TPM too. The first such grant on a reused TPM (a counter that counted multi-node grants, or an old
+    cluster's) lifts it from its count to the epoch in one raise of at most MAX_FLOOR_JUMP increments.
+
     BUSY. When the record does not stand, this node cannot know what it granted, so it signs nothing until `started`
     (its authenticated time at THIS start, never persisted) + RECOVERY_WAIT_S: any lease it might have granted has
     expired by then. After that it signs again, and its next grant writes a record that stands. So a NEW cluster
@@ -198,9 +209,12 @@ class GrantRecord:
                                                                                 lease["site"], lease["node_id"], SKEW_S))
         return start, expires
 
-    def record(self, lease, expires):
-        count = self.counter.value() + 1
-        self.counter.advance(count, 1)                       # reserved first: a crash after it costs a count
+    def record(self, lease, expires, floor=False):
+        now = self.counter.value()
+        count = max(now + 1, lease["activation_epoch"]) if floor else now + 1
+        require(count - now <= MAX_FLOOR_JUMP, "raising this node's activation counter from %d to epoch %d is %d increments, above "
+                "%d: nothing is signed" % (now, count, count - now, MAX_FLOOR_JUMP))
+        self.counter.advance(count, count - now)             # reserved first: a crash after it costs a count
         tmp = self.path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as f:
@@ -231,9 +245,23 @@ class Signer:
                 "%s does not count toward activation under epoch %d: it signs no activation" % (self.node_id, manifest["epoch"]))
         require(lease["manifest_epoch"] == manifest["epoch"] and lease["manifest_digest"] == membership.digest(manifest),
                 "a signer signs only for its own current manifest (epoch %d)" % manifest["epoch"])
+        single = membership.profile(manifest) == membership.SINGLE_NODE
         with _locked(self.record.lock_path):                  # one grant at a time (d9)
+            if single:
+                # #736: an activation lease is not bound to its genesis (LEASE_KEYS: no genesis or cluster field; verify()
+                # checks manifest_digest only at the current epoch; the signing key persists across a TPM's reuse). With the
+                # record gone and the counter moved, the counter cannot prove the last epoch granted (a reused TPM's counter
+                # counted multi-node grants, or its first raise was interrupted), and no co-signer can name it: fail closed.
+                # A record that does not stand cannot prove it either: one restored from an older disk, one left by a crash
+                # between the counter and the record (whose overlap restriction would then be lost), one left by a raise
+                # interrupted half-way. Only a record that stands, or a new TPM (counter 0, nothing granted), is signed on.
+                count, held = self.record.counter.value(), self.record._held()
+                require(count == 0 or (held is not None and held["grants"] == count), "this node's grant record does not stand "
+                        "(%s on disk, %d on its activation counter): under the %s profile nothing can prove the last epoch it "
+                        "granted, so it signs no activation until the owner re-establishes the floor (regalia-kms-dx7.24)"
+                        % (held and held.get("grants"), count, membership.SINGLE_NODE))
             _, expires = self.record.check(lease, now)
-            self.record.record(lease, expires)
+            self.record.record(lease, expires, floor=single)
             return {"party": self.node_id, "key": self.key, "sig": self._sign(message(lease))}
 
 
@@ -277,6 +305,24 @@ def _stamp(seconds):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(seconds)))
 
 
+def _alone(node_id, site, registry_digest, manifest, epoch, now, signer, trail):
+    """1-of-1 activation, under the single-node profile only (regalia-kms-dx7.3, docs/design/single-node.md 4.3):
+    activation_signers is {1, [this node]}, so the node records and signs its own lease and asks no one. Its grant record
+    (the NV counter, then the record, then the signature: Signer) still applies, so the activation epoch only rises. Mutual
+    exclusion holds because the manifest names one node, whose signing key never leaves its TPM; what one node does not
+    give is a second signer that would refuse a root-compromised node. verify() then counts it against the rule."""
+    lease = proposal(node_id, site, registry_digest, manifest, epoch, now)
+    try:
+        done = {"lease": lease, "signatures": [signer(lease, manifest, now)]}
+        verify(done, manifest)
+    except Refused as refused:
+        trail({"event": "activation", "outcome": "DENY", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site,
+               "reason": ("%s, alone: %s" % (membership.SINGLE_NODE, refused))[:240]})
+        raise
+    trail({"event": "activation", "outcome": "ALLOW", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site, "peer": ""})
+    return done
+
+
 def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers, trail):
     """This node's activation, the epoch one above the highest this node knows (its grant record's). Its own record is
     CHECKED first (nothing written); then one co-signer from `peers` (in order) checks, records and signs; only then does
@@ -293,6 +339,10 @@ def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers,
     now = _now(clock)
     last, _ = signer.record.state(now)
     epoch = (last["activation_epoch"] if last else 0) + 1
+    if membership.profile(manifest) == membership.SINGLE_NODE:
+        # #736: no co-signer can say "last grant, N" here; the Signer signs only on a record that stands (or a new TPM),
+        # so the last epoch is the record's, and the counter it raised to that epoch keeps the record honest
+        return _alone(node_id, site, registry_digest, manifest, epoch, now, signer, trail)
     refusals = []
     for attempt in range(2):
         lease = proposal(node_id, site, registry_digest, manifest, epoch, now)

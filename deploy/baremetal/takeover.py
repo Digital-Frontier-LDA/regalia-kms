@@ -224,6 +224,7 @@ def run(host, signed, chain, node_id, now, sign, facts=None):
     it (the cluster, the revisions, the state epoch)."""
     facts = {} if facts is None else facts
     current = chain[-1]
+    membership.not_single_node(current, "a take-over")       # dx7.3: one node has no etcd majority to take over from
     # 1. the scope
     _, scope = survivor.in_force(signed, current, node_id, now)
     auth = signed["authorization"]

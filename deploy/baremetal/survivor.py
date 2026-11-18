@@ -146,6 +146,9 @@ def authorization_message(auth):
 def verify_authorization(signed, current, node_id=None):
     """The authorization in `signed` ({"authorization", "signature"}) if it holds against the CURRENT manifest (module
     docstring), else Refused. With `node_id`, it must be that node's."""
+    # dx7.3: first, whatever the authorization says: a single-node manifest has no other node, so the checks below would
+    # pass vacuously over none (internal/opstate's verifySurvivorAuthorization refuses alike)
+    membership.not_single_node(current, "a survivor authorization")
     membership.exact(signed, ("authorization", "signature"), "the signed survivor authorization")
     auth = signed["authorization"]
     validate_authorization(auth)
@@ -216,6 +219,7 @@ def make_authorization(tip, survivor, how, now, confirm, open_signer, life_s=Non
     fence is checked against `inventory` (fence.inventory()): each node's box, as commissioned (05).
     Returns {"authorization", "signature"}."""
     nodes = membership.validate(tip)
+    membership.not_single_node(tip, "a survivor authorization")          # dx7.3: named, before the owner is asked anything
     others = sorted(n for n in nodes if n != survivor)
     _text(how, "how the other servers are fenced")
     targets = fenceable(nodes, survivor)

@@ -106,6 +106,7 @@ acknowledges at genesis, and a test keeps the two equal. **supported**: the guar
 | Signing and decryption (stateless operations) | supported | supported | One HSM per node holds the keys either way |
 | Stateful operations (approval spend-once, Cosmos sequence, key state) | degraded | supported | Committed to a single-member etcd on one disk, with no replica: a lost disk loses the latest spends. A restore raises the state epoch, and the audit collector detects a re-spend; it does not prevent one. Refused while no audit collector is configured |
 | Activation (who may serve) | degraded | supported | The node activates itself (1 of 1): no second signer can refuse a root-compromised node |
+| Activation after a crash during a grant | degraded | supported | A crash between the activation counter's raise and the grant record's write stops every activation, the same site's included, until the owner restores the floor (regalia-kms-dx7.24). 3 nodes: a co-signer names the last grant |
 | Runtime lease (a revoked or cut-off node stops within 30 s) | degraded | supported | Self-issued: it still binds the measured boot and the current state, but nobody outside the node can withhold it |
 | Survives the loss of a node | not supported | supported | Any node failure, reboot or maintenance is a full outage of the KMS |
 | Survives a site, provider or network-path outage | not supported | supported | One site is a single failure domain |

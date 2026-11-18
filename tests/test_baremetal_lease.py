@@ -192,6 +192,34 @@ class Case(unittest.TestCase):
                      "cluster_id": CLUSTER, "state_epoch": STATE_EPOCH, "state_revision": REVISION, "session_key": SESSION_KEY,
                      "issued_at": hbt.stamp(self.now), "expires_at": hbt.stamp(self.now + lease.MAX_LIFETIME)}, **override)
 
+    # ---- regalia-kms-dx7.3: the single-node profile's self-issued lease (SelfIssued, and admission's Single) ----
+
+    def single(self, epoch=1, prev="", state="ACTIVE"):
+        """A v5 single-node manifest naming node a alone, under a's TPM identities."""
+        import tests.test_baremetal_membership_v5 as v5
+        return v5.single5(epoch, prev, nodes=[dict(v5.one("a", state), ek_name=self.keys["a"].ek_name, ak_name=self.keys["a"].ak_name)])
+
+    def multi5(self):
+        """A v5 multi-node manifest of three nodes, under their TPM identities."""
+        import tests.test_baremetal_membership_v5 as v5
+        nodes = [dict(n, ek_name=self.keys[n["node_id"]].ek_name, ak_name=self.keys[n["node_id"]].ak_name) for n in v5.nodes4()]
+        return v5.manifest5(1, "", nodes)
+
+    def self_issuing(self):
+        """Node a's own issuer parts (self.own) and its single-node manifest (self.s1). Its verifier of its own quotes is
+        b's here: the same policy for a, and a's AK enrolled."""
+        self.s1 = self.single()
+        self.own = {"attester": self.peers["b"]["attester"], "freshness": LiveHeartbeat(self.clock, lambda: self.now + 3600),
+                    "signer": self.keys["a"].signer(), "floor": self.floor()}
+
+    def issue_self(self, manifest=None, request=None, evidence="default", node_id="a", **kw):
+        manifest = manifest or self.s1
+        args = dict(self.own, **kw)
+        request = request or self.holder.request()
+        if evidence == "default":
+            evidence = self.evidence(args["attester"], manifest, request["session_id"], binding=lease.request_binding(request))
+        return lease.issue_self(manifest, node_id, request, evidence=evidence, **args)
+
     def refused(self, reason, fn, *args, **kw):
         with self.assertRaises(m.Refused) as caught:
             fn(*args, **kw)
@@ -819,6 +847,99 @@ class StateAndSessionKey(Case):
                                       ("key", dict(session_key="ab" * 31), "session_key must be 64 lowercase hex")):
             with self.subTest(label):
                 self.refused(reason, lease.validate_request, dict(self.holder.request(), **change))
+
+
+class LiveHeartbeat:
+    """A heartbeat.Freshness stand-in that holds until `until` on `clock`: the single-node node's own, self-signed heartbeat
+    (decision Q2; heartbeat.py's own tests judge it). Only live_until is asked by an issuer."""
+
+    def __init__(self, clock, until):
+        self.clock, self.until = clock, until
+
+    def live_until(self, manifest):
+        return self.clock()[0], self.until()
+
+
+class SelfIssued(Case):
+    """regalia-kms-dx7.3 (docs/design/single-node.md 4.3): under the single-node profile the node issues its own runtime
+    lease, keeping every binding but the second party; under any other manifest a self-issued lease is refused."""
+
+    def setUp(self):
+        super().setUp()
+        self.self_issuing()
+
+    def test_under_single_node_the_node_holds_its_own_thirty_second_lease_bound_to_quote_and_state(self):
+        envelope = self.issue_self()
+        held = envelope["lease"]
+        self.assertEqual((held["issuer"], held["node_id"], held["ak_name"]), ("a", "a", self.keys["a"].ak_name))
+        self.assertEqual({k: held[k] for k in lease.STATE_KEYS}, STATE)
+        self.assertEqual((held["epoch"], held["manifest_digest"], held["session_id"]), (1, m.digest(self.s1), SESSION))
+        self.assertEqual(lease.verify(envelope, self.s1, self.now), lease.MAX_LIFETIME)
+        self.assertEqual(self.holder.install(envelope, self.s1), lease.MAX_LIFETIME)
+        self.assertEqual(self.holder.check(self.s1), lease.MAX_LIFETIME)
+        self.later(lease.MAX_LIFETIME)                      # nobody renews it: it lapses as a peer's would
+        self.refused("EXPIRED", self.holder.check, self.s1)
+
+    def test_under_multi_node_a_self_issued_lease_is_refused_to_issue_and_to_verify(self):
+        for label, manifest in (("v1", self.m1), ("v5 multi-node", self.multi5())):
+            with self.subTest(label):
+                self.refused("a node issues its own lease only under the single-node profile; epoch 1 is multi-node",
+                             self.issue_self, manifest)
+                self_signed = sign(self.body(manifest, issuer="a"), self.keys["a"])
+                self.refused("a node does not vouch for itself: a self-issued lease is the single-node profile's alone, and epoch 1 "
+                             "is multi-node", lease.verify, self_signed, manifest, self.now)
+        # the very envelope that holds under single-node, shown to a multi-node verifier at the same epoch
+        envelope = self.issue_self()
+        self.refused("a node does not vouch for itself", lease.verify, envelope, self.multi5(), self.now)
+
+    def test_a_peer_s_issue_never_takes_the_self_issued_path(self):
+        self.refused("a node does not vouch for itself", self.issue, "a", manifest=self.s1, attester=self.own["attester"],
+                     freshness=self.own["freshness"], signer=self.own["signer"], floor=self.own["floor"])
+
+    def test_it_is_for_the_node_that_issues_it(self):
+        request = dict(self.holder.request(), node_id="b")
+        self.refused("a self-issued lease is for the node that issues it (a), not b",
+                     self.issue_self, request=request, evidence=None)
+
+    def test_the_shared_vector(self):
+        """tests/vectors/self-lease-v1.json, which internal/admission replays too: each lease verified here, the mode the lease
+        service would write from it, and whether that mode fits the profile."""
+        import pathlib
+        from deploy.baremetal import admission
+        vector = json.loads((pathlib.Path(__file__).resolve().parent / "vectors" / "self-lease-v1.json").read_text())
+        self.assertEqual(vector["schema"], "regalia.test-vectors/self-lease-v1")
+        manifests = {"v1": self.m1, "v5-multi": self.multi5(), "v5-single": self.s1}
+        for case in vector["cases"]:
+            with self.subTest(case["name"]):
+                manifest = manifests[case["manifest"]]
+                self.assertEqual(m.profile(manifest), case["profile"])
+                mode = case["mode"]
+                if case["issuer"] is not None:
+                    envelope = sign(self.body(manifest, issuer=case["issuer"], node_id=case["subject"]), self.keys[case["issuer"]])
+                    if case["lease"] == "accepted":
+                        self.assertEqual(lease.verify(envelope, manifest, self.now), lease.MAX_LIFETIME)
+                        self.assertEqual(mode, "single" if case["issuer"] == case["subject"] else "lease")
+                    else:
+                        self.refused(case["lease"], lease.verify, envelope, manifest, self.now)
+                        self.assertIsNone(mode)
+                if mode is not None:
+                    if case["fits"]:
+                        admission.mode_fits_profile(mode, case["profile"])
+                    else:
+                        self.refused("admission mode %s is refused under the %s profile" % (mode, case["profile"]),
+                                     admission.mode_fits_profile, mode, case["profile"])
+
+    def test_every_other_binding_is_kept(self):
+        self.refused("STALE STATE", self.issue_self, floor=self.floor(held=REVISION + 1))
+        self.refused("less than one lease", self.issue_self, floor=self.floor(watched=lease.MAX_LIFETIME - 1))
+        other = dict(STATE, state_revision=REVISION + 1)
+        self.refused("the subject's attestation is refused", self.issue_self,
+                     evidence=self.evidence(self.own["attester"], self.s1, binding=lease.request_binding(other)))
+        self.refused("the subject has not re-attested", self.issue_self, evidence=None)
+        self.refused("may not authorize", self.issue_self, manifest=self.single(state="QUARANTINED"))
+        # the lease never outlives the node's own heartbeat
+        envelope = self.issue_self(freshness=LiveHeartbeat(self.clock, lambda: self.now + 7))
+        self.assertEqual(lease.verify(envelope, self.s1, self.now), 7)
 
 
 class RunFiles(unittest.TestCase):

@@ -270,6 +270,21 @@ class TheEvidenceSurvivorTakes(unittest.TestCase):
             sv.validate_authorization(dict(raw_full(), fence=evidence))
 
 
+@contextlib.contextmanager
+def multi_node_chain(directory):
+    """owner.py fence's --chain and --root-key (regalia-kms-dx7.3: it refuses a single-node chain), for a multi-node
+    quarantine tip: the chain file is a stand-in, and manifest.verify_chain returns the tip."""
+    from deploy.baremetal import manifest as manifest_tool
+    from tests.test_baremetal_membership import ROOT_PUB
+    from tests.test_baremetal_membership_v4 import manifest4, nodes4
+    path = os.path.join(directory, "chain.json")
+    with open(path, "w") as f:
+        json.dump([{"the chain": "verify_chain's, stood in for"}], f)
+    tip = manifest4(2, "", nodes4(b="QUARANTINED", c="QUARANTINED"))
+    with unittest.mock.patch.object(manifest_tool, "verify_chain", lambda chain, root: tip):
+        yield ["--chain", path, "--root-key", ROOT_PUB]
+
+
 class OwnerFence(Stand):
     def test_owner_py_fence_reads_the_credentials_from_a_pipe_and_writes_the_evidence(self):
         from deploy.baremetal import owner
@@ -290,10 +305,11 @@ class OwnerFence(Stand):
         real = redfish.PinnedHTTPS
         on_port = lambda host, pin, user, password: real(host, pin, user, password, timeout=5, port=self.ports[host])  # noqa: E731
         with unittest.mock.patch.object(fe.time, "sleep", sleep), unittest.mock.patch.object(fe.time, "time", lambda: clock[0]), \
-                unittest.mock.patch.object(fe.redfish, "PinnedHTTPS", on_port), \
+                unittest.mock.patch.object(fe.redfish, "PinnedHTTPS", on_port), multi_node_chain(self.dir) as chain, \
                 contextlib.redirect_stdout(io.StringIO()) as said, \
                 contextlib.redirect_stderr(io.StringIO()) as complained:
-            got = owner.main(["fence", "--inventory", inventory, "--node", "b", "--node", "c", "--credentials-fd", str(fd), "--out", out])
+            got = owner.main(["fence", *chain, "--inventory", inventory, "--node", "b", "--node", "c", "--credentials-fd", str(fd),
+                              "--out", out])
         self.assertEqual(got, 0, said.getvalue() + complained.getvalue())
         evidence = json.load(open(out))
         self.assertEqual(set(evidence["nodes"]), {"b", "c"})
@@ -382,8 +398,9 @@ class OwnerFenceOrder(unittest.TestCase):
         os.write(write, b'{"b": {"username": "u", "password": "p"}}')
         os.close(write)
         with unittest.mock.patch.object(fe, "fence", fence), unittest.mock.patch.object(owner, "off_the_nodes", lambda: None), \
+                multi_node_chain(d) as chain, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as complained:
-            got = owner.main(["fence", "--inventory", inventory, "--node", "b", "--credentials-fd", str(read), "--out", out])
+            got = owner.main(["fence", *chain, "--inventory", inventory, "--node", "b", "--credentials-fd", str(read), "--out", out])
         return got, complained.getvalue()
 
     def test_a_path_it_cannot_write_refuses_before_any_fence(self):

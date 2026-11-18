@@ -293,6 +293,8 @@ def main(argv=None):
     w.add_argument("--fence-evidence", help="the fence step's power readback (JSON, owner.py fence); without it the fence is the typed fallback")
     w.add_argument("--inventory", help="the fence inventory the evidence is checked against (with --fence-evidence)")
     f = sub.add_parser("fence", help="(off the nodes, on the management network) power the fenced servers off through their iLOs (G1, fence.py)")
+    f.add_argument("--chain", required=True, help="the survivor's signed chain: a fence is refused under the single-node profile (dx7.3)")
+    f.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
     f.add_argument("--inventory", required=True, help="the fence inventory: each node's iLO, pinned certificate, serial and UUID")
     f.add_argument("--node", action="append", required=True, help="a node to fence (repeat)")
     f.add_argument("--credentials-fd", type=int, required=True, help="the decrypted fence-only credentials, on a pipe (gpg --decrypt)")
@@ -325,6 +327,9 @@ def main(argv=None):
         if args.op == "fence":
             off_the_nodes()
             from deploy.baremetal import fence as fence_tool, manifest as manifest_tool
+            # dx7.3: before anything is read or powered off, the profile: one node has no other server to fence
+            tip = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), manifest_tool.root_key(args.root_key))
+            membership.not_single_node(tip, "a fence")
             boxes = fence_tool.inventory(manifest_tool.read_json(args.inventory, 65536), args.node)
             raw = keyfd.read(args.credentials_fd, "the fence credentials")
             try:
