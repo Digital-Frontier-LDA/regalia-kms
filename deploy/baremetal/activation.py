@@ -147,9 +147,10 @@ class GrantRecord:
 
     UNDER THE SINGLE-NODE PROFILE (regalia-kms-dx7.3) no co-signer can name this node's last grant after the record is
     lost, so the counter is raised TO the epoch granted instead (record(..., floor=True)): the counter is then at least
-    every epoch this node granted under that profile, and propose() takes max(last, counter, the held record's epoch) + 1.
-    A record that is GONE with the counter above 0 is refused there instead (Signer): an activation is not bound to its
-    genesis, and a reused TPM's counter need not hold its last epoch (regalia-kms-dx7.24 restores the floor). The first such grant on a reused TPM (a counter that counted multi-node grants, or an old
+    every epoch this node granted under that profile. And it signs only on a record that STANDS, or on a new TPM (counter
+    0): a record lost, restored from an older disk, or left by a crash or an interrupted raise is refused (Signer), since
+    an activation is not bound to its genesis and no co-signer can name the last grant (regalia-kms-dx7.24 is the owner's
+    way back). Activation epochs therefore only rise within this node's record, across a new genesis on a reused TPM too. The first such grant on a reused TPM (a counter that counted multi-node grants, or an old
     cluster's) lifts it from its count to the epoch in one raise of at most MAX_FLOOR_JUMP increments.
 
     BUSY. When the record does not stand, this node cannot know what it granted, so it signs nothing until `started`
@@ -251,10 +252,14 @@ class Signer:
                 # checks manifest_digest only at the current epoch; the signing key persists across a TPM's reuse). With the
                 # record gone and the counter moved, the counter cannot prove the last epoch granted (a reused TPM's counter
                 # counted multi-node grants, or its first raise was interrupted), and no co-signer can name it: fail closed.
-                count = self.record.counter.value()
-                require(count == 0 or self.record._held() is not None, "this node's grant record is gone and its activation counter "
-                        "stands at %d: under the %s profile nothing can name the last epoch it granted, so it signs no activation "
-                        "until the owner re-establishes the floor (regalia-kms-dx7.24)" % (count, membership.SINGLE_NODE))
+                # A record that does not stand cannot prove it either: one restored from an older disk, one left by a crash
+                # between the counter and the record (whose overlap restriction would then be lost), one left by a raise
+                # interrupted half-way. Only a record that stands, or a new TPM (counter 0, nothing granted), is signed on.
+                count, held = self.record.counter.value(), self.record._held()
+                require(count == 0 or (held is not None and held["grants"] == count), "this node's grant record does not stand "
+                        "(%s on disk, %d on its activation counter): under the %s profile nothing can prove the last epoch it "
+                        "granted, so it signs no activation until the owner re-establishes the floor (regalia-kms-dx7.24)"
+                        % (held and held.get("grants"), count, membership.SINGLE_NODE))
             _, expires = self.record.check(lease, now)
             self.record.record(lease, expires, floor=single)
             return {"party": self.node_id, "key": self.key, "sig": self._sign(message(lease))}
@@ -335,13 +340,8 @@ def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers,
     last, _ = signer.record.state(now)
     epoch = (last["activation_epoch"] if last else 0) + 1
     if membership.profile(manifest) == membership.SINGLE_NODE:
-        # CodeRabbit on #736: no co-signer can say "last grant, N" here, so the floor must survive the record's loss. Under
-        # this profile the signer raises the TPM counter (nv_activation, which only rises) TO each epoch it grants, before
-        # the record is written (GrantRecord.record, floor=True): counter + 1 is above every epoch granted, record or not.
-        # A record that does not stand still bounds what was granted (CodeRabbit on #736: a raise is one increment at a
-        # time, and one interrupted half-way leaves the counter under the record's epoch, the record intact).
-        held = signer.record._held()
-        epoch = max(epoch - 1, signer.record.counter.value(), held["activation_epoch"] if held else 0) + 1
+        # #736: no co-signer can say "last grant, N" here; the Signer signs only on a record that stands (or a new TPM),
+        # so the last epoch is the record's, and the counter it raised to that epoch keeps the record honest
         return _alone(node_id, site, registry_digest, manifest, epoch, now, signer, trail)
     refusals = []
     for attempt in range(2):

@@ -165,48 +165,60 @@ class Activation(Case):
             json.dump({"grants": counter_at, "activation_epoch": epoch, "site": "site-a", "node_id": "a", "expires_at": T0 - 600}, f)
         return a, counter
 
-    LOST = "this node's grant record is gone and its activation counter stands at %d: under the single-node profile nothing can " \
-           "name the last epoch it granted, so it signs no activation until the owner re-establishes the floor (regalia-kms-dx7.24)"
+    def refused_unproven(self, a, t, on_disk, count, site="site-a"):
+        self.refused("this node's grant record does not stand (%s on disk, %d on its activation counter): under the single-node "
+                     "profile nothing can prove the last epoch it granted, so it signs no activation until the owner "
+                     "re-establishes the floor (regalia-kms-dx7.24)" % (on_disk, count),
+                     act.propose, "a", site, "sha256:" + "ab" * 32, self.s1, lambda: (t, True), a, None, [], lambda e: None)
+        self.assertEqual(a.record.counter.v, count)                        # nothing moved
 
     def test_a_lost_grant_record_signs_nothing(self):
-        """#736: a lost record leaves no last grant, no co-signer can name it, and an activation is not bound to its genesis,
-        so the counter of a reused TPM cannot be trusted as the floor: nothing is signed, nothing moves."""
+        """#736: a lost record leaves no last grant, no co-signer can name it, and an activation is not bound to its genesis
+        (LEASE_KEYS; verify() checks manifest_digest at the current epoch only): nothing is signed, nothing moves."""
         counter = Counter()
         a = self.node("a", counter)
         for t in (T0, T0 + 60):
             self.act(a, t)
         os.unlink(a.record.path)
-        self.refused(self.LOST % 2, self.act, a, T0 + 60 + act.RECOVERY_WAIT_S)
-        self.assertEqual(counter.v, 2)
+        self.refused_unproven(a, T0 + 60 + act.RECOVERY_WAIT_S, None, 2)
         # a TPM whose counter never moved (a new one) still activates, after the busy wait
-        fresh = self.node("a", Counter(), record="new-tpm")
-        self.assertEqual(self.act(fresh, T0 + act.RECOVERY_WAIT_S)["lease"]["activation_epoch"], 1)
+        self.assertEqual(self.act(self.node("a", Counter(), record="new-tpm"), T0 + act.RECOVERY_WAIT_S)["lease"]["activation_epoch"], 1)
 
     def test_the_counter_is_raised_to_the_epoch_so_a_reused_tpm_never_falls_back_to_its_count(self):
         """CodeRabbit's case on #736: record epoch 100 at count 2; the next grant is 101; that record is lost. The next epoch
-        must be 102, never 4 (count + 1). Also the TPM reused for a new single-node genesis: the record it brings rules."""
+        is never 4 (count + 1): nothing is signed. Also the TPM reused for a new single-node genesis: the record it brings rules."""
         for manifest in (self.s1, single5(1, "", issued_at="2026-11-01T00:00:00Z")):     # this genesis, and a new one
             with self.subTest(m.digest(manifest)[:8]):
                 a, counter = self.inherited(2, 100)
                 self.assertEqual(self.act(a, T0, manifest)["lease"]["activation_epoch"], 101)
                 self.assertEqual(counter.v, 101)                           # raised to the epoch, before the record
-                os.unlink(a.record.path)                                   # lost: never 4, and not trusted either
-                self.refused(self.LOST % 101, self.act, a, T0 + act.RECOVERY_WAIT_S, manifest)
-                self.assertEqual(counter.v, 101)
+                self.assertEqual(self.act(a, T0 + 60, manifest)["lease"]["activation_epoch"], 102)
+                os.unlink(a.record.path)
+                self.refused_unproven(a, T0 + act.RECOVERY_WAIT_S, None, 102)
 
-    def test_a_crash_between_the_counter_and_the_record_never_lowers_the_epoch(self):
+    def test_a_record_restored_from_an_older_disk_signs_nothing(self):
+        """CodeRabbit on #736 (b7a75de7): the TPM granted epoch 100 at count 2; the disk comes back with epoch 1 at count 1.
+        It exists but does not stand: never epoch 2 or 3."""
         a, counter = self.inherited(2, 100)
-        real = os.replace
+        with open(a.record.path, "w") as f:
+            json.dump({"grants": 1, "activation_epoch": 1, "site": "site-a", "node_id": "a", "expires_at": T0 - 7200}, f)
+        self.refused_unproven(a, T0 + act.RECOVERY_WAIT_S, 1, 2)
+
+    def test_a_crash_between_the_counter_and_the_record_signs_nothing_for_any_site(self):
+        """CodeRabbit on #736 (b7a75de7): the renewal's record write fails after the counter moved. The old record no longer
+        stands, so its overlap restriction would be lost: nothing is signed, for site-b or for a site-a retry."""
+        a, counter = self.inherited(2, 100)
+        self.assertEqual(self.act(a, T0)["lease"]["activation_epoch"], 101)
         with unittest.mock.patch("os.replace", side_effect=OSError("crash before the record")):
             with self.assertRaises(OSError):
-                self.act(a, T0)
-        self.assertEqual(counter.v, 101)                                   # the counter moved, the record did not
-        self.assertIs(os.replace, real)
-        self.assertEqual(self.act(a, T0 + 60)["lease"]["activation_epoch"], 102)  # the record (count 2) does not stand: 101 + 1
+                self.act(a, T0 + 60)
+        self.assertEqual(counter.v, 102)                                   # the counter moved, the record (101) did not
+        self.refused_unproven(a, T0 + 61, 101, 102, site="site-b")
+        self.refused_unproven(a, T0 + 61, 101, 102)
 
-    def test_a_raise_interrupted_half_way_never_lowers_the_epoch(self):
+    def test_a_raise_interrupted_half_way_signs_nothing(self):
         """CodeRabbit on #736 (d43c4423): the raise is one increment at a time; power lost at 50 of 2 -> 101 leaves the
-        counter under the record's epoch and the record not standing. The record still bounds what was granted."""
+        counter under the record's epoch: never 51, with the record kept or lost."""
         class Interrupted(Counter):
             stop = 50
 
@@ -218,19 +230,10 @@ class Activation(Case):
         a, counter = self.inherited(2, 100, Interrupted(2))
         with self.assertRaises(OSError):
             self.act(a, T0)
-        self.assertEqual(counter.v, 50)                                    # half-way; the record (count 2, epoch 100) intact
-        if self._testMethodName.endswith("_lost_at_once"):
-            os.unlink(a.record.path)
-            self.refused(self.LOST % 50, self.act, a, T0 + 60)
-            return
-        self.assertEqual(self.act(a, T0 + 60)["lease"]["activation_epoch"], 101)   # not 51
-        self.assertEqual(counter.v, 101)
-        os.unlink(a.record.path)                                         # interrupted AND lost: the double fault fails closed
-        self.refused(self.LOST % 101, self.act, a, T0 + 120)
-
-    def test_a_raise_interrupted_half_way_and_the_record_lost_at_once(self):
-        """CodeRabbit's residual on #736: the raise stops at 50 AND the inherited record is lost: never 51, nothing signed."""
-        self.test_a_raise_interrupted_half_way_never_lowers_the_epoch()
+        self.assertEqual(counter.v, 50)
+        self.refused_unproven(a, T0 + 60, 2, 50)
+        os.unlink(a.record.path)
+        self.refused_unproven(a, T0 + 120, None, 50)
 
     def test_a_raise_past_the_bound_signs_nothing_and_moves_nothing(self):
         a, counter = self.inherited(1, act.MAX_FLOOR_JUMP + 1)              # the next epoch is MAX_FLOOR_JUMP + 1 above the count
