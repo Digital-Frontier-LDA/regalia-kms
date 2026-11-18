@@ -362,7 +362,7 @@ for number, raw in enumerate(open(sys.argv[1]), 1):
     line = raw.strip()
     if not line or line.startswith("#"):
         continue
-    m = re.fullmatch(r"\[([a-z]+)\]", line)
+    m = re.fullmatch(r"\[([a-z-]+)\]", line)
     if m:
         section = m.group(1)
         if section not in sections:

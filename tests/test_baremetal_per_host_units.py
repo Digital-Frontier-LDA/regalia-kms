@@ -296,6 +296,44 @@ class PerHostUnits(unittest.TestCase):
                                          "regalia-kms.service` then starts what the boot skipped (`systemctl daemon-reload`, `systemctl enable --runtime x.service`)")), [])
 
 
+class TheBuildReadsTheList(unittest.TestCase):
+    """build-rootfs.sh's own parser of units-enabled.txt (its python heredoc, run here as the build runs it): every
+    [per-host] row becomes an enablement and a GATE the build checks, every [masked] row a MASK. CI's first run of this
+    change stopped the build: the parser's section pattern had no '-', so [per-host] was read as [dropped] rows."""
+
+    def spec(self, text):
+        build = (ROOT / BUILD).read_text()
+        code = re.search(r"ENABLE_SPEC=\"\$\(python3 -I - \"\$ENABLED\" <<'PY'\n(.*?)\nPY\n", build, re.S).group(1)
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write(text)
+        done = subprocess.run([sys.executable, "-I", "-", f.name], input=code, capture_output=True, text=True)
+        os.unlink(f.name)
+        return done.returncode, done.stdout.splitlines(), done.stderr
+
+    def test_every_row_is_read(self):
+        rc, lines, err = self.spec((ROOT / ENABLED).read_text())
+        self.assertEqual(rc, 0, err)
+        spec = sections((ROOT / ENABLED).read_text())
+        for target, unit, path, _ in spec["per-host"]:
+            self.assertIn("ENABLE %s %s" % (target, unit), lines)
+            self.assertIn("GATE %s %s" % (unit, path), lines)
+        for unit, _ in spec["masked"]:
+            self.assertIn("MASK %s -" % unit, lines)
+        for target, unit, _ in spec["enabled"]:
+            self.assertIn("ENABLE %s %s" % (target, unit), lines)
+        self.assertEqual(len([l for l in lines if l.startswith("GATE ")]), len(spec["per-host"]))
+
+    def test_a_malformed_row_stops_the_build(self):
+        text = (ROOT / ENABLED).read_text()
+        for bad in (text.replace("| %s |" % RULESET, "| /etc/../nftables.d/x.nft |"),           # not a plain /etc path
+                    text.replace("sysinit.target | nftables.service | %s | " % RULESET, "sysinit.target | nftables.service | "),  # 3 fields
+                    text + "\n[nonsense]\n"):
+            with self.subTest():
+                rc, _, err = self.spec(bad)
+                self.assertNotEqual(rc, 0)
+                self.assertIn("units-enabled.txt line", err)
+
+
 class Generator(unittest.TestCase):
     """deploy/baremetal/generators/regalia-kms-credentials: this host's PIN credentials, from /var, named to the KMS."""
 
