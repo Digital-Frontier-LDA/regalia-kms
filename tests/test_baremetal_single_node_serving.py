@@ -153,6 +153,18 @@ class Activation(Case):
         again = act.propose("a", "site-a", "sha256:" + "ab" * 32, self.s1, lambda: (T0 + 60, True), a, None, [], events.append)
         self.assertEqual((again["lease"]["activation_epoch"], a.record.counter.v), (2, 2))
 
+    def test_a_lost_grant_record_never_lowers_the_epoch(self):
+        """CodeRabbit on #736: a crash between the counter's advance and the record (or a lost record) leaves no last grant;
+        with no co-signer to name it, the epoch comes from the TPM counter, which only rises."""
+        counter = Counter()
+        a = self.node("a", counter)
+        for t in (T0, T0 + 60):
+            act.propose("a", "site-a", "sha256:" + "ab" * 32, self.s1, lambda t=t: (t, True), a, None, [], lambda e: None)
+        os.unlink(a.record.path)                                         # the record lost; the counter stands at 2
+        later = T0 + 60 + act.RECOVERY_WAIT_S                              # past the busy wait of a record that does not stand
+        again = act.propose("a", "site-a", "sha256:" + "ab" * 32, self.s1, lambda: (later, True), a, None, [], lambda e: None)
+        self.assertEqual((again["lease"]["activation_epoch"], counter.v), (3, 3))
+
     def test_under_multi_node_one_node_alone_never_activates(self):
         a, events = self.node("a"), []
         self.refused("no node co-signed this activation", act.propose, "a", "site-a", "sha256:" + "ab" * 32, self.multi,

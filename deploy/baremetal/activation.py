@@ -312,6 +312,11 @@ def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers,
     last, _ = signer.record.state(now)
     epoch = (last["activation_epoch"] if last else 0) + 1
     if membership.profile(manifest) == membership.SINGLE_NODE:
+        # CodeRabbit on #736: no co-signer can say "last grant, N" here, so the floor must survive the record's loss. The
+        # TPM counter (nv_activation) only rises and advances once for every grant this node signs, before the record is
+        # written; under single-node each grant takes max(last, count) + 1, so every epoch granted is at most the count
+        # after it, and count + 1 is above all of them even when the record is gone.
+        epoch = max(epoch - 1, signer.record.counter.value()) + 1
         return _alone(node_id, site, registry_digest, manifest, epoch, now, signer, trail)
     refusals = []
     for attempt in range(2):
