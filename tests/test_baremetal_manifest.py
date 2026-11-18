@@ -750,6 +750,7 @@ class Genesis(unittest.TestCase):
         import hashlib
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         from tests.test_baremetal_membership_v4 import manifest4, nodes4
+        from tests.test_baremetal_membership_v5 import manifest5
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
         self.state = os.path.join(self.d, "state")
@@ -758,8 +759,8 @@ class Genesis(unittest.TestCase):
         self.root = OfflineRoot.raw(self.key).hex()
         marked(self.state, self.root)
         self.fingerprint = hashlib.sha256(bytes.fromhex(self.root)).hexdigest()
-        self.manifest4, self.nodes4 = manifest4, nodes4
-        self.first = manifest4(1, "", nodes4())
+        self.manifest4, self.manifest5, self.nodes4 = manifest4, manifest5, nodes4
+        self.first = manifest5(1, "", nodes4())                 # a genesis is v5, with its topology (regalia-kms-dx7.2)
         self.paths = {n: os.path.join(self.d, n) for n in ("p.json", "e1.json", "chain.json")}
         self.write(self.first)
 
@@ -856,21 +857,24 @@ class Genesis(unittest.TestCase):
         self.assertIn("is not the pinned root", err)
         self.assertEqual((self.asked, self.record()), ([], []))
 
-    def test_only_a_fresh_epoch_1_v4_manifest_is_a_genesis(self):
-        """Refused by THIS rule, by its message: a well-formed v3 epoch 1, and a well-formed v4 epoch 2."""
+    def test_only_a_fresh_epoch_1_v5_manifest_is_a_genesis(self):
+        """Refused by THIS rule, by its message: a well-formed v3 and v4 epoch 1 (no topology: dx7.2), and a well-formed
+        v5 epoch 2."""
         from tests.test_baremetal_membership_v4 import manifest3
         v3 = manifest3(1, "", [{k: v for k, v in n.items() if k != "signing_key"} for n in self.nodes4()])
         m.validate(v3)                                                    # a well-formed manifest: only the schema is wrong
-        later = self.manifest4(2, "cd" * 32, self.nodes4())
+        v4 = self.manifest4(1, "", self.nodes4())
+        m.validate(v4)
+        later = self.manifest5(2, "cd" * 32, self.nodes4())
         m.validate(later)                                                 # a well-formed epoch 2: only "fresh" is wrong
-        for proposal in (v3, later):
+        for proposal in (v3, v4, later):
             with self.subTest(schema=proposal["schema"], epoch=proposal["epoch"]):
                 self.write(proposal)
                 code, err = self.run_genesis()
                 self.assertEqual(code, 2, err)
-                self.assertIn("the genesis is a fresh epoch-1 %s manifest with no prev_digest" % m.SCHEMA_V4, err)
+                self.assertIn("the genesis is a fresh epoch-1 %s manifest with no prev_digest" % m.SCHEMA_V5, err)
         # an epoch 1 naming a previous manifest is not even well-formed: validate's own rule refuses it first
-        self.write(self.manifest4(1, "ab" * 32, self.nodes4()))
+        self.write(self.manifest5(1, "ab" * 32, self.nodes4()))
         self.assertIn("epoch 1 has no previous manifest", self.run_genesis()[1])
         self.assertEqual(self.record(), [])
 
@@ -923,11 +927,12 @@ class ProposeGenesis(unittest.TestCase):
     def owners(self):
         return {self.MAIN: self.owner_a, self.BACKUP: self.owner_b}
 
-    def propose(self, entries=None, owners=None, release=None, policy=None, document=None, anchor=None, card_record=None):
+    def propose(self, entries=None, owners=None, release=None, policy=None, document=None, anchor=None, card_record=None,
+                topology="multi-node"):
         return tool.propose_genesis(self.entries if entries is None else entries, document or self.document,
                                     self.owners() if owners is None else owners, release or self.release, self.root,
                                     "2026-10-04T12:00:00Z", policy, anchor or self.anchor(),
-                                    card_record or {"sequence": 1, "digest": "ca" * 32})
+                                    card_record or {"sequence": 1, "digest": "ca" * 32}, topology)
 
     def anchor(self, key=None):
         from tests.test_baremetal_membership_v4 import typed
@@ -989,7 +994,8 @@ class ProposeGenesis(unittest.TestCase):
 
     def test_a_genesis_a_node_accepts_from_the_root(self):
         candidate = self.propose()
-        self.assertEqual((candidate["schema"], candidate["epoch"], candidate["prev_digest"]), (m.SCHEMA_V4, 1, ""))
+        self.assertEqual((candidate["schema"], candidate["epoch"], candidate["prev_digest"]), (m.SCHEMA_V5, 1, ""))
+        self.assertEqual(candidate["topology"], {"profile": "multi-node", "nodes": 3})
         self.assertEqual(candidate["policy_version"], measurements.version(self.document))
         self.assertEqual([n["state"] for n in candidate["nodes"]], ["ACTIVE"] * 3)
         self.assertEqual(candidate["owner_keys"], [{"alg": "ed25519", "key": self.owner_a}, {"alg": "ed25519", "key": self.owner_b}])
@@ -1153,7 +1159,9 @@ class ProposeGenesis(unittest.TestCase):
             os.chmod(os.path.join(state, name), 0o600)
         return state
 
-    def run_cli(self, *extra, typed="40000001 40000002", record=None, root=None, with_record=True, logged=None, with_state=True):
+    def run_cli(self, *extra, typed="40000001 40000002", record=None, root=None, with_record=True, logged=None, with_state=True,
+                topology="multi-node"):
+        """`typed`: what the console gives every prompt, or a function of the prompt."""
         record = record or self.card_record()
         nodes = []
         for e in self.entries:                       # each node's three files; their proof is enrol's (stubbed below, tested there)
@@ -1174,7 +1182,8 @@ class ProposeGenesis(unittest.TestCase):
             json.dump(record, f)
         out = os.path.join(self.d, "e1.json")
         args = ["propose", "--genesis", "--root-key", root or self.root, "--measurements", doc, "--out", out,
-                "--issued-at", "2026-10-04T12:00:00Z"] + (["--card-record", cards] if with_record else []) \
+                "--issued-at", "2026-10-04T12:00:00Z"] + (["--topology", topology] if topology else []) \
+            + (["--card-record", cards] if with_record else []) \
             + (["--state-dir", self.state(*(logged or [record]))] if with_state else [])
         generated = os.path.join(self.d, "offline-keys.record.json")
         with open(generated, "w") as f:
@@ -1189,7 +1198,8 @@ class ProposeGenesis(unittest.TestCase):
             return bundle, self.enrolled[bundle["node_id"]]
         stdout, stderr = io.StringIO(), io.StringIO()
         with unittest.mock.patch("sys.stdout", stdout), unittest.mock.patch("sys.stderr", stderr), \
-                unittest.mock.patch.object(tool.keyfd, "tty_line", lambda prompt: typed), unittest.mock.patch.object(tool.enrol, "proven_entry", proven):
+                unittest.mock.patch.object(tool.keyfd, "tty_line", typed if callable(typed) else lambda prompt: typed), \
+                unittest.mock.patch.object(tool.enrol, "proven_entry", proven):
             code = tool.main(args + list(extra))
         return code, stdout.getvalue(), stderr.getvalue(), out
 
@@ -1255,7 +1265,7 @@ class ProposeGenesis(unittest.TestCase):
             self.assertEqual(tool.main(["propose", "--root-key", self.root, "--chain", os.path.join(self.d, "none.json"),
                                         "--card-record", os.path.join(self.d, "x.json"), "--set-state", "c=MAINTENANCE",
                                         "--out", os.path.join(self.d, "x")]), 2)
-        self.assertIn("--node, --system-pub, --measurements, --card-record, --state-dir, --offline-keys-record and the lifetimes are for --genesis only", stderr.getvalue())
+        self.assertIn("--node, --system-pub, --measurements, --card-record, --state-dir, --offline-keys-record, --topology and the lifetimes are for --genesis only", stderr.getvalue())
 
     def test_each_node_was_enrolled_on_the_reviewed_image(self):
         """#399 (regalia-kms-d9): the PCR 11 each node's AK quoted at activation is the SYSTEM-phase value the genesis

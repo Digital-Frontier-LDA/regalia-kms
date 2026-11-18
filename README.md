@@ -91,11 +91,12 @@ topology (regalia-kms-dx7, [design](docs/design/single-node.md)). The node count
 the membership manifest; it is never inferred from how many nodes answer. Some guarantees do not exist on one node,
 and the operator acknowledges them at genesis.
 
-**Status on `main`: a one-node deployment is not built.** Built: the membership format only. Schema
+**Status on `main`: a one-node deployment is not built.** Built: the membership format and the genesis. Schema
 `regalia.membership/v5` carries the root-signed `topology` and validates a one-node manifest, in Python and Go
-(dx7.1, #734). Not built: everything else. `manifest propose --genesis` still writes a v4 manifest with thresholds
-of 2 (`deploy/baremetal/manifest.py`), so a one-node genesis cannot even be proposed, and no lease, unlock, update
-or recovery path knows the profile. The table is the design; each row's status is in [LIMITATIONS](LIMITATIONS.md#single-node-deployments).
+(dx7.1, #734). The genesis is built too (dx7.2): `manifest propose --genesis` takes a required `--topology
+single-node|multi-node`, writes a v5 manifest whose thresholds come from it, and for one node prints the limits text
+and records its digest after the operator types the acknowledgement. Not built: the boot unlock, update and recovery
+paths, which do not know the profile yet. The table is the design; each row's status is in [LIMITATIONS](LIMITATIONS.md#single-node-deployments).
 
 The table is copied from [`docs/single-node-limits.md`](docs/single-node-limits.md), the text the operator
 acknowledges at genesis, and a test keeps the two equal. **supported**: the guarantee holds as on three nodes;

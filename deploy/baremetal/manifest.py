@@ -12,8 +12,9 @@ envelope, so nothing a node would refuse is ever signed.
     python3 -Es -m deploy.baremetal.manifest propose --chain CHAIN.json --root-key ROOT (--from-rollout R.json | --set-state NODE=STATE ...)
                                                      [--issued-at YYYY-MM-DDTHH:MM:SSZ] --out PROPOSAL.json
                                                      [--old OLD.json --new NEW.json [--state NODE=STATE.json]...]
-    python3 -Es -m deploy.baremetal.manifest propose --genesis --root-key ROOT --card-record CARDS.json --measurements DOC.json
-                                                     --system-pub SYSTEM-PCR-KEY.pem --node A-BUNDLE A-KEEP A-ACTIVATION ... --out EPOCH1.json
+    python3 -Es -m deploy.baremetal.manifest propose --genesis --topology single-node|multi-node --root-key ROOT
+                                                     --card-record CARDS.json --measurements DOC.json --system-pub SYSTEM-PCR-KEY.pem
+                                                     --node A-BUNDLE A-KEEP A-ACTIVATION ... --out EPOCH1.json
     python3 -Es -m deploy.baremetal.manifest diff    --chain CHAIN.json --root-key ROOT --proposal PROPOSAL.json
     python3 -Es -m deploy.baremetal.manifest sign    --chain CHAIN.json --root-key ROOT --expected-epoch N --proposal PROPOSAL.json
                                                      --signer root|revocation --key 'pkcs11:serial=…;token=…;id=%01;type=private'
@@ -61,7 +62,7 @@ envelopes), verified from ROOT every time.
      signature that does not verify, or a record that cannot be written, leaves nothing but the refusal.
 
 GENESIS (`sign --genesis`, the first ceremony): there is no chain yet, so step 1 is replaced. The proposal must be
-a fresh epoch-1 manifest of the current schema (v4) with no prev_digest, passing membership.validate and the
+a fresh epoch-1 manifest of the current schema (v5, with its topology) with no prev_digest, passing membership.validate and the
 first-manifest rule; --chain and --expected-epoch are refused; only the offline root (--key-fd) signs it. At this
 one moment the pin vouches for itself (nothing earlier names the root), so before the epoch and digest the operator
 types the root key's FULL SHA-256 fingerprint, 64 hex, read from the ceremony's own record of the generated key and
@@ -70,6 +71,15 @@ manifest sign --genesis take it)` that offline-keys.py generate prints and recor
 operator copied onto the ceremony sheet (regalia-ceremony#119; the format `enrol check` takes, #243). NOT its
 `spki-sha256`, which is another hash of the same key. The key must be --root-key's and have that
 fingerprint. The finished envelope must pass membership.accept(None, ...); the record line carries "genesis": true.
+
+TOPOLOGY (regalia-kms-dx7.2, docs/design/single-node.md 4.2 and 6): `propose --genesis` takes a required --topology,
+single-node or multi-node, never a default and never deduced from the --node count; one --node with multi-node, or
+three with single-node, is refused. The signer rules come from it (genesis_signers). single-node prints
+docs/single-node-limits.md verbatim (refused unless its bytes are the ones this tool ships, SINGLE_NODE_LIMITS_SHA256)
+and reads, at the console (keyfd.tty_line: never an argument, refused without a terminal), the phrase
+`single node: I accept the limits <first 8 hex of its SHA-256>`; the full digest goes into
+topology.single_node_limits_sha256, which the root's signature covers. `sign --genesis` shows the profile and that
+digest once the root fingerprint is confirmed, and refuses a digest other than the shipped one.
 
 A key in a file is not a signing backend here: the root signs on its token, or from the offline session's
 descriptor, and every step above runs either way.
@@ -167,6 +177,87 @@ ENTRY_FIELDS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub"
 # the bench's tokens (membership.BENCH_TOKENS: its Nitrokeys and YubiKeys, in every form hsm_serials pins): never a
 # production node's (ADR-0002 D28.5, D30). Genesis is where the root first vouches for a node's tokens, so refused here.
 BENCH_SERIALS = membership.BENCH_TOKENS
+
+
+# ---- the topology (regalia-kms-dx7.2, docs/design/single-node.md 4.2 and 6) ----
+
+# The designed size of each profile a genesis may name: chosen by the operator (--topology, required), never inferred
+# from how many --node are given; each --node count other than the profile's is refused.
+TOPOLOGY_NODES = {membership.SINGLE_NODE: 1, membership.MULTI_NODE: 3}
+# The single-node limits text the operator acknowledges, as this tool ships it (dx7.11; regalia.single-node-limits/v2,
+# #736). Its SHA-256 goes into topology.single_node_limits_sha256: `propose --genesis` refuses a file on disk with any
+# other digest, and `sign --genesis` a proposal naming any other. tests/test_baremetal_genesis_topology.py holds this
+# constant equal to the file's bytes: a new version of the text changes both, in one commit.
+SINGLE_NODE_LIMITS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                                  "docs", "single-node-limits.md")
+SINGLE_NODE_LIMITS_SHA256 = "5a496c71c57747ff86fa3596244a581fc401d6f0caf30a3cc31ae43a64885f54"
+SINGLE_NODE_LIMITS_MAX = 64 * 1024
+# What the operator types at the console (never an argument): the first 8 hex of the text's digest bind the phrase to
+# the text printed above it.
+ACKNOWLEDGEMENT = "single node: I accept the limits %s"
+
+
+def genesis_topology(profile, count):
+    """The topology field of a genesis of `count` nodes under `profile` (--topology). Refused unless the profile is one
+    of the two and `count` is its designed size: one --node with multi-node, three with single-node, are refused."""
+    require(profile in TOPOLOGY_NODES, "--topology is required, %s or %s: it is never inferred from the --node count"
+            % (membership.SINGLE_NODE, membership.MULTI_NODE))
+    nodes = TOPOLOGY_NODES[profile]
+    require(count == nodes, "--topology %s is a %d-node genesis: %d --node given (a different size is a different "
+            "--topology, never a fallback)" % (profile, nodes, count))
+    topology = {"profile": profile, "nodes": nodes}
+    if profile == membership.SINGLE_NODE:
+        topology["single_node_limits_sha256"] = SINGLE_NODE_LIMITS_SHA256
+    return topology
+
+
+def genesis_signers(topology, ids):
+    """The signer rules of a genesis, from its topology (membership 4.1), replacing the three-node literals: single-node,
+    the node alone signs its heartbeats and its activation and the owner alone revokes; multi-node, a majority of the
+    designed nodes (the owner as one more party), as membership.node_floor computes it."""
+    if topology["profile"] == membership.SINGLE_NODE:
+        return {"heartbeat_signers": {"threshold": 1, "parties": list(ids)},
+                "activation_signers": {"threshold": 1, "parties": list(ids)},
+                "revocation_signers": [{"threshold": 1, "parties": [OWNER_PARTY]}]}
+    floor = topology["nodes"] // 2 + 1
+    return {"heartbeat_signers": {"threshold": floor, "parties": list(ids) + [OWNER_PARTY]},
+            "activation_signers": {"threshold": floor, "parties": list(ids) + [OWNER_PARTY]},
+            "revocation_signers": [{"threshold": floor, "parties": list(ids)}, {"threshold": 1, "parties": [OWNER_PARTY]}]}
+
+
+def single_node_limits(path=None):
+    """The shipped single-node limits text, as str. Refused unless the file's bytes are the ones this tool ships
+    (SINGLE_NODE_LIMITS_SHA256): what is printed is exactly what the digest in the manifest names."""
+    path = path or SINGLE_NODE_LIMITS
+    try:
+        with open(path, "rb") as f:
+            data = f.read(SINGLE_NODE_LIMITS_MAX + 1)
+    except OSError as error:
+        raise Refused("the single-node limits text %s cannot be read (%s): a single-node genesis prints it" % (path, error.strerror)) from None
+    require(len(data) <= SINGLE_NODE_LIMITS_MAX, "the single-node limits text %s is over %d bytes" % (path, SINGLE_NODE_LIMITS_MAX))
+    digest = hashlib.sha256(data).hexdigest()
+    require(hmac.compare_digest(digest, SINGLE_NODE_LIMITS_SHA256), "the single-node limits text %s has SHA-256 %s, not the "
+            "%s this tool ships: nothing is acknowledged but the shipped text" % (path, digest, SINGLE_NODE_LIMITS_SHA256))
+    return data.decode("ascii")
+
+
+def acknowledge_single_node(confirm, say, path=None):
+    """Prints the shipped limits text verbatim, then reads the acknowledgement phrase through `confirm` (the console,
+    keyfd.tty_line: never an argument, refused without a terminal). Refused unless the phrase is typed exactly."""
+    text = single_node_limits(path)
+    say(text[:-1] if text.endswith("\n") else text)
+    phrase = ACKNOWLEDGEMENT % SINGLE_NODE_LIMITS_SHA256[:8]
+    say("SINGLE-NODE GENESIS: the text above is the single-node limits, SHA-256 %s; this genesis records that digest, "
+        "under the root's signature" % SINGLE_NODE_LIMITS_SHA256)
+    typed = confirm("type, to accept these limits: %s\n> " % phrase).strip()
+    require(hmac.compare_digest(typed.encode(), phrase.encode()), "the acknowledgement typed is not \"%s\": nothing was written" % phrase)
+
+
+def describe_topology(topology):
+    """One line naming the profile (in capitals) and, for single-node, the acknowledged text's digest."""
+    if topology["profile"] == membership.SINGLE_NODE:
+        return "SINGLE-NODE (1 node); single-node limits acknowledged, SHA-256 %s" % topology["single_node_limits_sha256"]
+    return "MULTI-NODE (%d nodes)" % topology["nodes"]
 
 
 def _raw_ed25519(value, what):
@@ -286,8 +377,10 @@ def offline_keys_record(envelope, root):
     return {"alg": alg, "key": key}, record
 
 
-def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None, anchor_policy=None, card_record=None):
-    """Epoch 1 (v4), unsigned: every node from its `enrol entry` output (state ACTIVE), the measurements `document` it
+def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None, anchor_policy=None, card_record=None,
+                    topology=None):
+    """Epoch 1 (v5), unsigned, of the `topology` profile (--topology: single-node or multi-node, required; the signer
+    rules from it, genesis_topology and genesis_signers): every node from its `enrol entry` output (state ACTIVE), the measurements `document` it
     commits to, the owner's two keys, K_A (`anchor_policy`, offline_keys_record's typed entry), the card record that names the
     owner's keys (`card_record`, {"sequence", "digest"} from card_record_keys), and GENESIS_POLICY (with `policy`
     overrides). Refused unless it is a manifest a
@@ -326,13 +419,12 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
         for node in nodes:
             require(key != node["signing_key"].get("key"), "the %s's key is %s's signing key" % (name, node["node_id"]))
     ids = [n["node_id"] for n in nodes]
+    shape = genesis_topology(topology, len(nodes))
     candidate = dict(GENESIS_POLICY, **(policy or {}))
+    candidate.update(genesis_signers(shape, ids))
     candidate.update({
-        "schema": membership.SCHEMA_V4, "epoch": 1, "prev_digest": "", "policy_version": measurements.version(document), "issued_at": issued_at,
+        "schema": membership.SCHEMA_V5, "topology": shape, "epoch": 1, "prev_digest": "", "policy_version": measurements.version(document), "issued_at": issued_at,
         "owner_keys": [{"alg": "ed25519", "key": owners[serial]} for serial in sorted(owners)],
-        "heartbeat_signers": {"threshold": 2, "parties": ids + [OWNER_PARTY]},
-        "activation_signers": {"threshold": 2, "parties": ids + [OWNER_PARTY]},
-        "revocation_signers": [{"threshold": 2, "parties": ids}, {"threshold": 1, "parties": [OWNER_PARTY]}],
         "anchor_policy_key": anchor_policy, "card_record": {"sequence": card_record.get("sequence"), "digest": card_record.get("digest")},
         "nodes": nodes})
     membership.validate(candidate)
@@ -546,8 +638,13 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
         require(chain == [] and expected_epoch is None and step is None, "the genesis takes no chain, no expected epoch and no "
                 "measurements step: nothing comes before it")
         membership.validate(candidate)
-        require(candidate["schema"] == membership.SCHEMA_V4 and candidate["epoch"] == 1 and candidate["prev_digest"] == "",
-                "the genesis is a fresh epoch-1 %s manifest with no prev_digest" % membership.SCHEMA_V4)
+        require(candidate["schema"] == membership.SCHEMA_V5 and candidate["epoch"] == 1 and candidate["prev_digest"] == "",
+                "the genesis is a fresh epoch-1 %s manifest with no prev_digest" % membership.SCHEMA_V5)
+        topology = candidate["topology"]                                                       # validate checked its shape
+        require(topology["profile"] != membership.SINGLE_NODE
+                or hmac.compare_digest(topology["single_node_limits_sha256"], SINGLE_NODE_LIMITS_SHA256),
+                "the genesis names single-node limits SHA-256 %s, not the %s this tool ships: the acknowledgement is of "
+                "another text, nothing is signed" % (topology.get("single_node_limits_sha256"), SINGLE_NODE_LIMITS_SHA256))
         current, judged = None, None
         membership.transition(None, candidate, "root")
     else:
@@ -571,6 +668,7 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
         fingerprint = hashlib.sha256(bytes.fromhex(public)).hexdigest()
         typed_fp = confirm("GENESIS: type the root key's ROOT-FINGERPRINT from the ceremony sheet (64 hex, not the spki-sha256): ").strip().lower()
         require(hmac.compare_digest(typed_fp.encode(), fingerprint.encode()), "the fingerprint typed is not this key's: nothing was signed")
+        say("root fingerprint confirmed; GENESIS topology: %s" % describe_topology(candidate["topology"]))
     digest = membership.digest(candidate)                                                      # 5
     for line in diff(current or {"nodes": []}, candidate):
         say("  " + line)
@@ -634,6 +732,9 @@ def _propose_genesis(args, root, confirm=None, say=print):
     require(args.node and args.system_pub, "--genesis needs --node BUNDLE KEEP ACTIVATION for each node, and --system-pub (#399)")
     require(args.offline_keys_record, "--genesis needs --offline-keys-record (offline-keys.record.json, signed by the pinned root: "
             "K_A is taken from it, #361)")
+    genesis_topology(args.topology, len(args.node))           # before anything is read: the profile is the operator's choice
+    if args.topology == membership.SINGLE_NODE:
+        single_node_limits()                                  # the shipped text, refused before the ceremony goes further
     cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root, args.state_dir)
     owners, release_key = cards["owners"], cards["release_key"]
     with open(args.system_pub, "rb") as f:
@@ -650,7 +751,8 @@ def _propose_genesis(args, root, confirm=None, say=print):
     policy = {k: v for k, v in (("heartbeat_max_lifetime_s", args.heartbeat_max_lifetime_s),
                                 ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s)) if v is not None}
     anchor_policy, generated = offline_keys_record(read_json(args.offline_keys_record, membership.MAX_BYTES), root)
-    candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy, anchor_policy, cards)
+    candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy, anchor_policy, cards,
+                                args.topology)
     require(not os.path.lexists(args.out), "%s exists: nothing is overwritten" % args.out)
     for line in diff({"nodes": []}, candidate):
         say("  " + line)
@@ -679,11 +781,14 @@ def _propose_genesis(args, root, confirm=None, say=print):
         % (anchor_policy["key"], hashlib.sha256(bytes.fromhex(anchor_policy["key"])).hexdigest()))
     say("K_A is from the offline-keys generation record of %s (sealed set %s, %d of %d shares), signed by the pinned root; its "
         "private half signed a challenge when it was sealed" % (generated["at"], generated["master_id"], generated["threshold"], generated["shares"]))
+    say("topology: %s" % describe_topology(candidate["topology"]))
+    if candidate["topology"]["profile"] == membership.SINGLE_NODE:
+        acknowledge_single_node(confirm or keyfd.tty_line, say)
     typed = (confirm or keyfd.tty_line)("type the two owner cards' serials, as printed ON THE CARDS, in the order above: ").split()
     require(typed == order, "the serials typed are not the owner cards above: nothing was written")
     _write_new(args.out, json.dumps(candidate, indent=2, sort_keys=True).encode() + b"\n")
-    say("UNSIGNED genesis (epoch 1, %s) written to %s, digest %s: `sign --genesis` it on the offline laptop"
-        % (membership.SCHEMA_V4, args.out, membership.digest(candidate)))
+    say("UNSIGNED genesis (epoch 1, %s, %s) written to %s, digest %s: `sign --genesis` it on the offline laptop"
+        % (membership.SCHEMA_V5, describe_topology(candidate["topology"]), args.out, membership.digest(candidate)))
     return 0
 
 
@@ -770,6 +875,8 @@ def main(argv=None):
                    "life of the genesis")
     c.add_argument("--heartbeat-max-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["heartbeat_max_lifetime_s"])
     c.add_argument("--owner-heartbeat-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["owner_heartbeat_lifetime_s"])
+    c.add_argument("--topology", choices=sorted(TOPOLOGY_NODES), help="--genesis, required: the designed size, single-node (one "
+                   "--node, after the limits text is acknowledged at the console) or multi-node (three); never inferred")
     c.add_argument("--from-rollout", metavar="R.json", help="the output of `rollout propose --json`")
     c.add_argument("--set-state", action="append", default=[], metavar="NODE=STATE", help="change a node's state; repeat")
     c.add_argument("--issued-at", metavar="YYYY-MM-DDTHH:MM:SSZ")
@@ -813,9 +920,9 @@ def main(argv=None):
         if args.command == "propose":
             require(args.chain is not None, "give --chain (or --genesis)")
             require(not (args.node or args.system_pub or args.measurements or args.card_record or args.state_dir or args.offline_keys_record
-                         or args.heartbeat_max_lifetime_s
+                         or args.heartbeat_max_lifetime_s or args.topology
                          or args.owner_heartbeat_lifetime_s), "--node, --system-pub, --measurements, --card-record, --state-dir, "
-                    "--offline-keys-record and the lifetimes are for --genesis only")
+                    "--offline-keys-record, --topology and the lifetimes are for --genesis only")
         if args.command == "sign" and args.genesis:
             # the first ceremony: no chain at all, the offline root only (see GENESIS above)
             require(args.chain is None and args.expected_epoch is None, "--genesis takes no --chain and no --expected-epoch")
