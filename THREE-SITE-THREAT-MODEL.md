@@ -137,6 +137,41 @@ unattended-availability invariants A1 and A2**: unlocking them needs an operator
 mechanism that a separate decision would have to define and justify. Hardware equivalence is never
 assumed.
 
+## Single-node profile (regalia-kms-dx7)
+
+**Status: design, decided 2026-11-18, not built.** Only the membership format is built (schema v5's root-signed
+`topology`, dx7.1). The design is [docs/design/single-node.md](docs/design/single-node.md); the limits the operator
+acknowledges at genesis are [docs/single-node-limits.md](docs/single-node-limits.md); what is built is in
+[LIMITATIONS.md](LIMITATIONS.md#single-node-deployments).
+
+A single-node deployment is a profile of its own, signed at genesis (`topology.profile` = `single-node`), not a
+three-node cluster in a permanent outage. The owner, present with a card, takes the peer's place where a peer was
+the party with current knowledge (boot unlock, image retirement, revocation). Where nobody can take it, the
+invariant is lost, and the operator acknowledges it.
+
+| Invariant | On one node | Why |
+|---|---|---|
+| **A1** one rebooted node restored unattended by a peer | **does not hold** | No peer. Every boot needs the owner's card (decision Q1), or the recovery key |
+| **A2** two rebooted nodes restored by the third | **does not hold** | There is one node |
+| **A3** a total outage restored by one manual recovery | **holds, and is every boot** | One owner-attended unlock restores the whole deployment; there is no rest of the cluster. Anchor damage is re-anchored from the owner's chain, cross-checked against the audit collector (Q5) |
+| **A4** no single provider, site, path or device failure stops serving | **does not hold** | One node at one site is a single failure domain |
+| **S1** no single location holds what unlocks a disk | **holds** | The disk still needs the TPM's contribution and a second one: the owner's, encrypted to both owner cards and never stored on the node, given in the existing protocol. The recovery-key exception is unchanged |
+| **S2** eligibility to receive and to authorize, from the current membership | **holds, with the owner as the authorizer** | The owner's unlock tool applies the same check a peer does: the node must be ACTIVE or MAINTENANCE, on an image the manifest lists. No node authorizes |
+| **S3** a captured exchange cannot be replayed | **holds** | The owner's answer is bound to the boot session's fresh key and nonce, as a peer's is |
+| **S4** unlocking grants nothing else | **holds, weaker** | Unlocking still grants no lease and no key use (the HSM's own authorization). But the runtime lease is self-issued and the activation 1 of 1: no party outside the node can withhold serving |
+| **S5** long-term keys never leave hardware | **holds** | Unchanged |
+| **S6** an off-node audit record of every decision | **holds** | The external audit collector is mandatory (Q4): stateful operations are refused without one |
+
+Attacker cases on one node:
+- **Powered-off theft (case 1):** defended by the owner unlock. A stolen node does not open without the owner's card,
+  wherever it is powered on. There is no freshness-bound window, since no peer helps it.
+- **Running root compromise (case 2):** not bounded by co-signers. The node is its only signer. Revocation is the owner
+  alone, and it reaches the node only if the node is reachable (hot theft, Q7, accepted).
+- **Malicious peer (case 3) and stale membership on a peer (case 4):** no peer.
+- **Rollback (case 5):** the node's TPM anchor holds as on three nodes. With the anchor damaged, the bound is the owner's
+  copy of the chain plus the audit collector's highest epoch, not two independent TPM anchors.
+- **Provider or site failure (case 6):** a full outage.
+
 ## Lab baseline (recorded 2026-10-01)
 
 | Item | State |

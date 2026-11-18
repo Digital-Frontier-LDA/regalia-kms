@@ -616,6 +616,66 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Collector receipts carry no signed time** (#398), so a stale receipt still verifies. This matters
   for the one-peer recovery witness (#387).
 
+## Single-node deployments
+
+A one-node KMS is being added as a supported topology beside three nodes (regalia-kms-dx7,
+[`docs/design/single-node.md`](docs/design/single-node.md)). Some guarantees do not exist on one node, on purpose.
+
+**Status on `main`: a one-node deployment is not built.** Built: the membership format only. Schema
+`regalia.membership/v5` carries the root-signed `topology` and validates a one-node manifest, in Python and Go
+(dx7.1, #734). Not built: everything else. `manifest propose --genesis` still writes a v4 manifest with thresholds
+of 2 (`deploy/baremetal/manifest.py`), so a one-node genesis cannot even be proposed, and no lease, unlock, update
+or recovery path knows the profile. The table is the design; each row's slice is named below.
+
+The table is copied from [`docs/single-node-limits.md`](docs/single-node-limits.md), the text the operator
+acknowledges at genesis; `tests/test_single_node_limits.py` holds this copy and the README's equal to it.
+
+| Feature or guarantee | 1 node | 3 nodes | Consequence with 1 node |
+|---|---|---|---|
+| Signing and decryption (stateless operations) | supported | supported | One HSM per node holds the keys either way |
+| Stateful operations (approval spend-once, Cosmos sequence, key state) | degraded | supported | Committed to a single-member etcd on one disk, with no replica: a lost disk loses the latest spends. A restore raises the state epoch, and the audit collector detects a re-spend; it does not prevent one. Refused while no audit collector is configured |
+| Activation (who may serve) | degraded | supported | The node activates itself (1 of 1): no second signer can refuse a root-compromised node |
+| Runtime lease (a revoked or cut-off node stops within 30 s) | degraded | supported | Self-issued: it still binds the measured boot and the current state, but nobody outside the node can withhold it |
+| Survives the loss of a node | not supported | supported | Any node failure, reboot or maintenance is a full outage of the KMS |
+| Survives a site, provider or network-path outage | not supported | supported | One site is a single failure domain |
+| Unattended reboot | not supported | supported | Every boot needs the owner's card, or the disk recovery key. A power cut means downtime until the owner acts |
+| Theft of a powered-off node | supported | supported | The disk opens only with the owner's contribution (3 nodes: a peer's), so a stolen box does not unlock |
+| Theft of a running node (hot theft) | degraded | supported | No peer stops leasing it: it serves until it loses power or the owner's revocation is imported on that node, so a revocation does not reach a stolen node that is no longer reachable |
+| Root compromise of the node | not supported | degraded | The node is its only signer (3 nodes: no lease without two co-signers) |
+| Retiring an old signed boot image | supported | supported | The owner's unlock tool refuses an image the manifest no longer lists (3 nodes: the peers) |
+| Revocation | degraded | supported | The owner alone revokes. Revoking or quarantining the only node stops the KMS |
+| Heartbeats | degraded | supported | Self-signed: they prove only the node's own freshness, with no peer bound to stop helping a revoked node |
+| Rolling measured-boot update | degraded | supported | Each reboot is a planned outage, with the owner present to judge the new image |
+| Site advance (PCR 12) | degraded | supported | The same: a planned outage, and the owner judges the new site configuration |
+| Rollback protection of the membership (TPM anchor) | supported | supported | The TPM counter and record work on one node |
+| Re-anchor after anchor damage | degraded | supported | From the owner's copy of the chain, cross-checked against the audit collector, instead of two independent nodes. A compromised owner laptop can roll the node back, but not below what the collector saw. A compromised laptop and a compromised collector together are not bounded |
+| Recovery after a total outage | degraded | supported | One owner-attended boot. There is no rest of the cluster to restore from, and anchor damage is the re-anchor row above |
+| Lone-survivor mode, fencing, take-over, rejoin | not supported | supported | Nothing to survive or fence: each is refused, naming the profile |
+| Cross-node detection (fleet alerts, a withheld chain) | not supported | supported | No fleet to compare with. Replaced by comparison with the audit collector |
+| Audit trail | supported | supported | The external audit collector is mandatory: it is the only witness besides the owner |
+| Operation approvals (m-of-n card holders) | supported | supported | Not bound to nodes. An approval names the one node, with no failover |
+| Key backup and restore (DKEK, Shamir) | supported | supported | Unchanged. With no peer, a restore onto a replacement node is the recovery path |
+| Latency of stateful operations | supported | supported | No majority round trip: faster than 3 nodes |
+
+Each row marked not supported or degraded is an accepted risk of the one-node profile:
+
+- **Stateful operations (approval spend-once, Cosmos sequence, key state)** (degraded): **accepted** (regalia-kms-dx7), because one disk holds the state, and a restore that raises the state epoch plus detection by the collector is the accepted bound (Q4). Not built: single-member etcd on loopback and the epoch-raising restore (dx7.6), the collector made mandatory (dx7.9).
+- **Activation (who may serve)** (degraded): **accepted** (regalia-kms-dx7), because with one node there is no second signer to ask. Not built: 1-of-1 activation (dx7.3) and the co-signer count of threshold - 1 in `activation.py` (dx7.4).
+- **Runtime lease (a revoked or cut-off node stops within 30 s)** (degraded): **accepted** (regalia-kms-dx7), because the self-issued lease keeps every binding but the outside vouch. Not built (dx7.3): a lease in `lease.py` is a peer vouching for the node, and admission's only lease-less mode (`recovery`) serves nothing.
+- **Survives the loss of a node** (not supported): **accepted** (regalia-kms-dx7), because inherent to one node: nothing to build.
+- **Survives a site, provider or network-path outage** (not supported): **accepted** (regalia-kms-dx7), because inherent to one site: nothing to build.
+- **Unattended reboot** (not supported): **accepted** (regalia-kms-dx7), because the price of keeping theft resistance and image retirement (Q1). Not built: the owner unlock (dx7.5); today the disk opens with the TPM and one peer, and enrolment refuses a node with no peer.
+- **Theft of a running node (hot theft)** (degraded): **accepted** (regalia-kms-dx7), because a server is normally powered off to be moved, and then the owner unlock holds (Q7). Not built: owner-only revocation (dx7.4), owner unlock (dx7.5).
+- **Root compromise of the node** (not supported): **accepted** (regalia-kms-dx7), because inherent to one signer: nothing to build.
+- **Revocation** (degraded): **accepted** (regalia-kms-dx7), because the owner is the only other party. Not built (dx7.4): owner-only revocation with the typed shutdown phrase.
+- **Heartbeats** (degraded): **accepted** (regalia-kms-dx7), because there is no peer for a heartbeat to bound (Q2). Not built (dx7.4): `beat.py` still collects exactly one co-signer.
+- **Rolling measured-boot update** (degraded): **accepted** (regalia-kms-dx7), because no peer can keep serving during the reboot. Not built (dx7.8): `--planned-outage` and retire evidence from the owner tool; today `rollout.may_reboot` refuses a node with no other authorizer.
+- **Site advance (PCR 12)** (degraded): **accepted** (regalia-kms-dx7), because as the rolling update. Not built (dx7.8).
+- **Re-anchor after anchor damage** (degraded): **accepted** (regalia-kms-dx7), because a new genesis for every damaged NV index would rotate K_A for a fault, not an attack (Q5). Not built (dx7.7): `reanchor` and `recover` still need another node's chain (two nodes, or one node plus the owner).
+- **Recovery after a total outage** (degraded): **accepted** (regalia-kms-dx7), because every boot of one node is attended anyway. Not built: owner unlock (dx7.5), recovery from the owner chain (dx7.7).
+- **Lone-survivor mode, fencing, take-over, rejoin** (not supported): **accepted** (regalia-kms-dx7), because nothing to survive or fence. Built in part: `survivor.py` refuses a node that counts alone (regalia-4rt). Not built (dx7.3): refusals naming the profile in fence, take-over and rejoin.
+- **Cross-node detection (fleet alerts, a withheld chain)** (not supported): **accepted** (regalia-kms-dx7), because no fleet to compare with. Not built (dx7.9): the collector-relative alerts that replace it.
+
 ## Products on the roadmap
 
 - **No OpenBao plugin** ([`OPENBAO-COMPATIBILITY.md`](OPENBAO-COMPATIBILITY.md)).
