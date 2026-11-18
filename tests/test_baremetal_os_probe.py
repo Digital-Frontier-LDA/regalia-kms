@@ -80,7 +80,34 @@ def proc_status(**changed):
     caps = dict(CapInh="0000000000000000", CapPrm="0000000000000000", CapEff="0000000000000000",
                 CapBnd="0000000000000000", CapAmb="0000000000000000")
     caps.update(changed)
-    return "Name:\tregalia-kms\nUid:\t995\t995\t995\t995\n" + "".join(f"{k}:\t{v}\n" for k, v in caps.items())
+    return ("Name:\tregalia-kms\nUid:\t995\t995\t995\t995\nGid:\t995\t995\t995\t995\nGroups:\t\n"
+            + "".join(f"{k}:\t{v}\n" for k, v in caps.items()))
+
+
+# The KMS daemon (pid 20) and the bootstrap process, regalia-sync (pid 40), each as its own user (regalia-kms-r1s.5)
+KMS_IDENTITY = ("systemctl", "show", os_probe.SERVICE, "-p", "User,MainPID,LoadState")
+SYNC_IDENTITY = ("systemctl", "show", os_probe.BOOTSTRAP_SERVICE, "-p", "User,MainPID,LoadState")
+KMS_USER = ("getent", "passwd", "regalia-kms")
+SYNC_USER = ("getent", "passwd", "regalia-sync")
+
+
+def sync_status(uid="990", gid="990", groups="106 993"):
+    return "Name:\tpython3\nUid:\t%s\t%s\t%s\t%s\nGid:\t%s\t%s\t%s\t%s\nGroups:\t%s \n" % ((uid,) * 4 + (gid,) * 4 + (groups,))
+
+
+INTERFACES = ("all", "default", "lo", "eno1", "wg-svc")
+
+
+def sysctl_paths(key, interface=None):
+    """The /proc/sys files a baseline key names on the fake host: one, or with "*" one per interface (or only the one given)."""
+    if "*" not in key:
+        return ["/proc/sys/" + key.replace(".", "/")]
+    head, tail = key.split(".*.")
+    return ["/proc/sys/%s/%s/%s" % (head.replace(".", "/"), i, tail.replace(".", "/")) for i in INTERFACES if interface in (None, i)]
+
+
+def sysctl_path(key):
+    return sysctl_paths(key, "eno1")[0]
 
 
 class FakeHost:
@@ -99,9 +126,15 @@ class FakeHost:
             CONFIG: json.dumps(ADMISSION),
             os_probe.PCSCD_RULE_PATH: SHIPPED_PCSCD_RULE,
             "/usr/share/polkit-1/rules.d/50-default.rules": DEBIAN_DEFAULT_RULE,
+            "/proc/40/status": sync_status(),
         }
+        # the kernel as the image's sysctl.d leaves it (the kernel writes each value with a newline)
+        for key, value in os_probe.SYSCTL_BASELINE.items():
+            for path in sysctl_paths(key):
+                self.files[path] = value + "\n"
         self.dirs = {"/etc/polkit-1/rules.d": ["50-regalia-kms-pcscd.rules"], "/usr/share/polkit-1/rules.d": ["50-default.rules"],
-                     "/run/polkit-1/rules.d": [], "/usr/local/share/polkit-1/rules.d": []}
+                     "/run/polkit-1/rules.d": [], "/usr/local/share/polkit-1/rules.d": [],
+                     "/proc/sys/net/ipv4/conf": list(INTERFACES), "/proc/sys/net/ipv6/conf": list(INTERFACES)}
         self.unlistable = set()
         self.commands = {
             ("systemctl", "show", os_probe.SERVICE, "-p", "LimitCORE,LoadState"): "LimitCORE=0\nLoadState=loaded\n",
@@ -117,6 +150,10 @@ class FakeHost:
             EXEC_SHOW: exec_start(),
             LEASE_SHOW: show(User="regalia-admission", NoNewPrivileges="yes", CapabilityBoundingSet="", MainPID="30", LoadState="loaded"),
             LEASE_USER: "regalia-admission:x:991:991:Regalia KMS runtime admission:/var/lib/regalia-admission:/usr/sbin/nologin\n",
+            KMS_IDENTITY: show(User="regalia-kms", MainPID="20", LoadState="loaded"),
+            SYNC_IDENTITY: show(User="regalia-sync", MainPID="40", LoadState="loaded"),
+            KMS_USER: "regalia-kms:x:995:995:Regalia KMS daemon:/var/lib/regalia-kms:/usr/sbin/nologin\n",
+            SYNC_USER: "regalia-sync:x:990:990:Regalia KMS three-site transport:/var/lib/regalia-sync:/usr/sbin/nologin\n",
             ("systemd-analyze", "cat-config", "systemd/coredump.conf"): "[Coredump]\n#Storage=external\nStorage=none\n",
             ("systemd-analyze", "cat-config", "systemd/sleep.conf"): "[Sleep]\n",
             # The real layout (measured with pcsc_scan): the server endpoint carries the socket path,
@@ -215,6 +252,84 @@ class OSProbeTests(unittest.TestCase):
                     others = {k: v["value"] for k, v in measure(host).items() if k != control}
                     self.assertTrue(all(others.values()), others)
 
+    def test_each_hardening_item_fails_its_own_control_and_no_other(self):
+        """regalia-kms-r1s.5: one broken item, one failing control (the #89 pattern), and never a silent pass."""
+        def setting(key, value):
+            return lambda g: g.files.__setitem__(sysctl_path(key), value)
+
+        def unit(command, **props):
+            base = dict(User="regalia-kms", MainPID="20", LoadState="loaded") if command == KMS_IDENTITY else \
+                dict(User="regalia-sync", MainPID="40", LoadState="loaded")
+            base.update(props)
+            return lambda g: g.commands.__setitem__(command, show(**base))
+
+        sysctl = []
+        for key, value in os_probe.SYSCTL_BASELINE.items():
+            # each setting alone, at another value, and unreadable (a kernel without it)
+            other = "1" if value == "0" else "0"
+            sysctl += [setting(key, other + "\n"), (lambda k: lambda g: g.files.pop(sysctl_path(k)))(key)]
+            if "*" in key:
+                # an interface that already existed keeps what it was made with: "all" and "default" right is not enough
+                sysctl += [(lambda k, o: lambda g: g.files.__setitem__(sysctl_paths(k, "lo")[0], o + "\n"))(key, other),
+                           (lambda k, o: lambda g: g.files.__setitem__(sysctl_paths(k, "all")[0], o + "\n"))(key, other)]
+        # a conf directory that does not list "all" and "default" is not the kernel's: nothing was measured
+        sysctl += [lambda g: g.dirs.__setitem__("/proc/sys/net/ipv4/conf", []),
+                   lambda g: g.dirs.__setitem__("/proc/sys/net/ipv6/conf", ["lo", "eno1"])]
+        cases = {
+            "kernel_sysctl_baseline": sysctl,
+            "bootstrap_and_kms_users_separate": [
+                # the two services as one user, by name or by uid
+                # (the kernel agreeing with each: these fail on the users, not on a process that is not theirs)
+                lambda g: (unit(SYNC_IDENTITY, User="regalia-kms", MainPID="40")(g),
+                           g.files.__setitem__("/proc/40/status", sync_status(uid="995", gid="995", groups=""))),
+                lambda g: (g.commands.__setitem__(SYNC_USER, "regalia-sync:x:995:990::/:/usr/sbin/nologin\n"),
+                           g.files.__setitem__("/proc/40/status", sync_status(uid="995"))),
+                # one primary group for both
+                lambda g: g.commands.__setitem__(SYNC_USER, "regalia-sync:x:990:995::/:/usr/sbin/nologin\n"),
+                # each process holding the other's group
+                lambda g: g.files.__setitem__("/proc/20/status", proc_status().replace("Groups:\t\n", "Groups:\t990\n")),
+                lambda g: g.files.__setitem__("/proc/40/status", sync_status(groups="106 995")),
+                # either one as root, or with no user, or a user the host does not know
+                unit(SYNC_IDENTITY, User=""), unit(SYNC_IDENTITY, User="root"), unit(KMS_IDENTITY, User="root"),
+                lambda g: g.commands.pop(SYNC_USER),
+                lambda g: g.commands.__setitem__(SYNC_USER, "regalia-sync:x:0:990::/:/usr/sbin/nologin\n"),
+                # either one not loaded or not running: its user cannot be read from the kernel
+                unit(SYNC_IDENTITY, LoadState="not-found"), unit(SYNC_IDENTITY, MainPID="0"), unit(KMS_IDENTITY, MainPID=""),
+                # the kernel's uids are not the unit's user (started before the unit changed, or setuid)
+                lambda g: g.files.__setitem__("/proc/40/status", sync_status(uid="995")),
+                lambda g: g.files.__setitem__("/proc/40/status", sync_status().replace("Uid:\t990\t990\t990\t990", "Uid:\t990\t0\t990\t990")),
+                lambda g: g.files.__setitem__("/proc/40/status", "Name:\tpython3\nUid:\t990\t990\t990\t990\n"),
+                # both started under one Group= other than their users' own (the accounts stay 995 and 990): the kernel's
+                # gids decide, not passwd
+                lambda g: (g.files.__setitem__("/proc/20/status", proc_status().replace("Gid:\t995\t995\t995\t995", "Gid:\t123\t123\t123\t123")),
+                           g.files.__setitem__("/proc/40/status", sync_status(gid="123"))),
+                # one of them only, or a saved gid left behind
+                lambda g: g.files.__setitem__("/proc/40/status", sync_status(gid="123")),
+                lambda g: g.files.__setitem__("/proc/40/status", sync_status().replace("Gid:\t990\t990\t990\t990", "Gid:\t990\t990\t995\t990")),
+            ],
+        }
+        for control, breakers in cases.items():
+            for index, breaker in enumerate(breakers):
+                with self.subTest(control=control, case=index):
+                    host = FakeHost()
+                    breaker(host)
+                    results = measure(host)
+                    self.assertFalse(results[control]["value"], results[control]["why"])
+                    others = {k: v["value"] for k, v in results.items() if k != control}
+                    self.assertTrue(all(others.values()), others)
+        # every difference is named, not the first one only
+        host = FakeHost()
+        host.files[sysctl_path("kernel.kptr_restrict")] = "0\n"
+        host.files.pop(sysctl_path("kernel.kexec_load_disabled"))
+        value, why = os_probe.PROBES["kernel_sysctl_baseline"](host)
+        self.assertFalse(value)
+        self.assertIn("kernel.kptr_restrict='0' (want 2)", why)
+        host.files[sysctl_paths("net.ipv4.conf.*.accept_redirects", "wg-svc")[0]] = "1\n"
+        self.assertIn("net.ipv4.conf.wg-svc.accept_redirects='1' (want 0)", os_probe.PROBES["kernel_sysctl_baseline"](host)[1])
+        self.assertIn("kernel.kexec_load_disabled cannot be read", why)
+        # a value is compared as the kernel prints it: tabs between the numbers of a multi-value setting are one space
+        self.assertEqual(os_probe.SYSCTL_BASELINE["kernel.yama.ptrace_scope"], "2")
+
     def test_the_alternatives_that_are_also_hardened(self):
         host = FakeHost()
         for target in os_probe.HIBERNATING_TARGETS:
@@ -289,7 +404,8 @@ class OSProbeTests(unittest.TestCase):
                 lambda g: g.files.__setitem__("/proc/20/status", proc_status(CapBnd="000001ffffffffff")),
                 lambda g: g.files.__setitem__("/proc/20/status", proc_status(CapEff="0000000000000400")),
                 lambda g: g.files.__setitem__("/proc/20/status", proc_status(CapAmb="0000000000000400")),
-                lambda g: g.files.__setitem__("/proc/20/status", "Name:\tregalia-kms\n"),
+                lambda g: g.files.__setitem__("/proc/20/status", "".join(
+                    line + "\n" for line in proc_status().splitlines() if not line.startswith("Cap"))),
                 lambda g: g.files.pop("/proc/20/status"),
             ],
             "kms_apparmor_enforced": [
@@ -313,8 +429,10 @@ class OSProbeTests(unittest.TestCase):
                     self.assertFalse(results[control]["value"], results[control]["why"])
                     others = {k: v["value"] for k, v in results.items() if k != control}
                     self.assertTrue(all(others.values()), others)
-                    # And nothing here touches the host-role controls measured beside them.
-                    self.assertTrue(all(v["value"] for k, v in measure(host).items() if k not in SANDBOX))
+                    # And nothing here touches the host-role controls measured beside them, except that a KMS
+                    # process status the kernel does not give also hides the daemon's user.
+                    shared = {"bootstrap_and_kms_users_separate"} if "/proc/20/status" not in host.files else set()
+                    self.assertTrue(all(v["value"] for k, v in measure(host).items() if k not in set(SANDBOX) | shared))
 
     def test_the_daemon_s_own_configuration_must_require_a_runtime_lease(self):
         """kms_runtime_admission_required reads the file the unit starts the daemon with (#74)."""
@@ -475,6 +593,89 @@ ENV_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "Environment,Environmen
 OPENSC = "/etc/regalia-kms/opensc.conf"
 BOTH_TOKENS = dict(ADMISSION, pkcs11_module_path="/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so", yubikey_devices={"yubikey-site-a": "35718625"})
 IGNORE_YUBIKEY = (pathlib.Path(__file__).resolve().parent.parent / "deploy/opensc/ignore-yubikey.conf").read_text()
+
+
+class ShippedHardening(unittest.TestCase):
+    """What the image ships for the sysctl baseline and the users is what os_probe measures (regalia-kms-r1s.5)."""
+
+    SYSCTL = ROOT / "deploy" / "baremetal" / "regalia-kms.sysctl.conf"
+
+    def settings(self, text):
+        """[(key, value, paragraph)]: the settings in sysctl.d syntax, each with the comments of its paragraph."""
+        found, paragraph = [], []
+        for line in text.splitlines() + [""]:
+            stripped = line.strip()
+            if not stripped:
+                paragraph = []
+                continue
+            if stripped.startswith(("#", ";")):
+                paragraph.append(stripped)
+                continue
+            key, sep, value = stripped.partition("=")
+            self.assertTrue(sep, "not a setting: %r" % line)
+            found.append((key.strip(), value.strip(), list(paragraph)))
+        return found
+
+    def test_the_shipped_file_is_the_measured_baseline(self):
+        found = self.settings(self.SYSCTL.read_text(encoding="utf-8"))
+        keys = [k for k, _, _ in found]
+        self.assertEqual(len(keys), len(set(keys)), "a key set twice: the last wins and the first misleads")
+        elsewhere = {k: value for k, (value, control) in os_probe.SYSCTL_MEASURED_ELSEWHERE.items()}
+        self.assertEqual({k: v for k, v, _ in found}, dict(os_probe.SYSCTL_BASELINE, **elsewhere))
+        for key, (value, control) in os_probe.SYSCTL_MEASURED_ELSEWHERE.items():
+            self.assertIn(control, os_probe.MEASURED)
+            self.assertNotIn(key, os_probe.SYSCTL_BASELINE)
+        for key, _, comments in found:
+            # every value carries its reason: a comment in its own paragraph
+            self.assertTrue(comments, "%s has no reason above it" % key)
+            # no "-" prefix: with one, systemd-sysctl ignores a key it cannot set, and the probe would be the only witness
+            self.assertFalse(key.startswith("-"), key)
+
+    def test_the_image_installs_it_under_usr_lib_sysctl_d(self):
+        build = (ROOT / "deploy" / "baremetal" / "image" / "build-rootfs.sh").read_text(encoding="utf-8")
+        self.assertIn('install -D -m 0644 "$SRC/deploy/baremetal/regalia-kms.sysctl.conf" "$ROOT%s"' % os_probe.SYSCTL_FILE, build)
+        self.assertTrue(os_probe.SYSCTL_FILE.startswith("/usr/lib/sysctl.d/"), "under /usr: verity covers it, /etc is the factory copy")
+
+    def sysusers(self):
+        """{user or group name: (type, file)} over every sysusers file the image installs."""
+        declared = {}
+        files = sorted((ROOT / "deploy" / "baremetal" / "units").glob("*.sysusers.conf")) + \
+            sorted((ROOT / "deploy" / "systemd").glob("*.sysusers.conf"))
+        members = []
+        for path in files:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                words = line.split()
+                if not words or words[0].startswith("#"):
+                    continue
+                if words[0] == "m":
+                    members.append((words[1], words[2]))
+                elif words[0] in ("u", "u!"):
+                    declared[words[1]] = ("u", path.name)
+        return declared, members
+
+    def unit_settings(self, path):
+        settings = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition("=")
+            if sep and not key.startswith("#"):
+                settings.setdefault(key.strip(), []).append(value.strip())
+        return settings
+
+    def test_the_bootstrap_and_kms_users_are_separate_in_sysusers(self):
+        declared, members = self.sysusers()
+        kms = self.unit_settings(ROOT / "deploy" / "systemd" / "regalia-kms.service")
+        sync = self.unit_settings(ROOT / "deploy" / "baremetal" / "units" / os_probe.BOOTSTRAP_SERVICE)
+        self.assertEqual(kms["User"], ["regalia-kms"])
+        self.assertEqual(sync["User"], ["regalia-sync"])
+        self.assertEqual(declared.get("regalia-kms"), ("u", "regalia-kms.sysusers.conf"))
+        self.assertEqual(declared.get("regalia-sync"), ("u", "regalia.sysusers.conf"))
+        # "u name -" gives each its own group, of its own name; nothing adds either user to the other's group
+        self.assertNotIn(("regalia-kms", "regalia-sync"), members)
+        self.assertNotIn(("regalia-sync", "regalia-kms"), members)
+        self.assertNotIn("regalia-sync", " ".join(kms.get("SupplementaryGroups", [])).split())
+        self.assertNotIn("regalia-kms", " ".join(sync.get("SupplementaryGroups", [])).split())
+        self.assertEqual(kms.get("Group"), ["regalia-kms"])
+        self.assertEqual(sync.get("Group"), ["regalia-sync"])
 
 
 class OpenSCLeavesThePIVCards(unittest.TestCase):

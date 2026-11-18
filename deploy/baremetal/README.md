@@ -170,6 +170,24 @@ an authenticated update from the OS, at the cost of a key ceremony; it is not pa
   (no capability in the unit's bounding or ambient set, nor in the running process's) and
   `kms_apparmor_enforced` (the running process is confined by a profile in enforce mode; the
   profile and how to load it are under **AppArmor** below). All three are required in the evidence.
+- **Kernel settings** (regalia-kms-r1s.5). The image ships `deploy/baremetal/regalia-kms.sysctl.conf` as
+  `/usr/lib/sysctl.d/90-regalia-kms.conf`, with the reason for each value: kernel pointers and the kernel log hidden,
+  no kexec, no unprivileged eBPF, perf or userfaultfd, ptrace for CAP_SYS_PTRACE only, no SysRq, the protected-file
+  settings, and a host that forwards nothing, filters by reverse path and ignores redirects and source routes. The
+  per-interface settings are written with `*`, so they reach every interface, including one that existed before the
+  file was applied, and are measured on each one the kernel lists.
+  Under `/usr`, so dm-verity covers it. Measured: `kernel_sysctl_baseline`, read from `/proc/sys` on the running
+  kernel, not from the file. A value that differs or cannot be read fails it, and the failure names every one.
+  `fs.suid_dumpable` is `core_dumps_disabled`'s, as before.
+- **The bootstrap and the KMS run as separate users** (#61, regalia-kms-r1s.5). The bootstrap process is
+  `regalia-sync`. It serves booting peers their half of the disk credential (`unlock.serve`), and runs heartbeats
+  and leases. It runs as `regalia-sync` (`units/regalia.sysusers.conf`). The daemon runs as `regalia-kms`
+  (`deploy/systemd/regalia-kms.sysusers.conf`). Each has its own group, and neither user is a member of the other's
+  group. Measured: `bootstrap_and_kms_users_separate`, from the units, from `getent` and from the kernel for each
+  running main process. It needs two users, neither root, with different uids and different primary groups. Each
+  process's uids must be its own user's, and neither process may hold the other's primary group.
+- **SSH.** The image has no sshd (`image/packages.txt`). Whether a KMS host ever runs one, and if so whether it is
+  bound to WireGuard only, is an open owner question (q-20, regalia-kms-r1s.5). Nothing measures sshd yet.
 - **Token clients root-only.** This host seals and re-seals its own PINs, so
   `seal-hsm-pin.sh` needs `opensc-tool` and `pkcs11-tool` here. They must be `root:root`, mode `0700`
   (`chown root:root … && chmod 0700 …`), so the KMS user cannot run them, and every process
