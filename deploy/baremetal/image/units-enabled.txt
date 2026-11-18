@@ -15,6 +15,10 @@
 # with ConditionFirstBoot= in the image are the timers dropped below (measured: Debian 13, these packages); trixie's
 # systemd has no systemd-firstboot. The QEMU boot shows /etc/systemd/system empty after boot (e2e/unlock-boot-qemu.sh).
 #
+# PER HOST (regalia-kms-r1s.8): what a host starts once ITS state is there (the firewall, the node's units, the audit
+# shippers) is enabled here too, in [per-host], each gated on its per-host file; what the image never runs is [masked].
+# Nothing an operator does writes /etc/systemd/system (tests/etc_writes.py refuses it in deploy/).
+#
 # Format: one entry per line, fields separated by " | ", in sections. Blank lines and lines starting with # are ignored.
 
 [enabled]
@@ -38,3 +42,54 @@ timers.target | apt-daily.timer | no apt sources in the image: a host is updated
 timers.target | apt-daily-upgrade.timer | as apt-daily.timer
 timers.target | dpkg-db-backup.timer | the dpkg database is the image's, read-only in /usr (/usr/lib/sysimage/dpkg, owner decision q-18): nothing to back up on /var
 timers.target | fstrim.timer | /var is a LUKS2 volume opened without discards (90regalia-unlock's crypttab), so a trim would only fail; /usr is read-only
+
+[per-host]
+# What THIS host runs once its own state is there (regalia-kms-r1s.8). / is a tmpfs and /etc is made from the image at
+# every boot, so an operator's `systemctl enable` (a link under /etc/systemd/system) is gone at the next boot, and was
+# never seen at unit load. Each line is enabled here, under /usr, like [enabled], and GATED: the unit (or a drop-in of
+# it under deploy/baremetal/units) carries ConditionPathExists= on the file named, a per-host file under /etc whose
+# /etc name links to /var (hostpaths.PER_HOST), so it starts at every boot once the operator has written that file, and
+# is skipped before. build-rootfs.sh refuses a line whose unit does not carry its condition;
+# tests/test_baremetal_per_host_units.py holds the list to the units and to deploy/baremetal/trails.py's registry.
+# Where a skip would leave the host unprotected, the unit that depends on it refuses instead: with no firewall ruleset
+# nftables.service is skipped, and regalia-kms.service ASSERTS the ruleset and checks its table is loaded
+# (units/regalia-kms.service.d/firewall.conf).
+# target | unit | the per-host file it waits for | why the host starts it
+sysinit.target | nftables.service | /etc/nftables.d/regalia-kms.nft | the host firewall (README.md, Host firewall): the image's /etc/nftables.conf includes this host's ruleset; regalia-kms.service requires it
+multi-user.target | regalia-authtime.service | /etc/regalia/node.json | a node unit (README.md, the node's services): from enrolment's commit on
+multi-user.target | regalia-site-check.service | /etc/regalia/node.json | a node unit (README.md, the node's services): from enrolment's commit on
+multi-user.target | regalia-wg-apply.service | /etc/regalia/node.json | a node unit (README.md, the node's services): from enrolment's commit on
+multi-user.target | regalia-wg-apply.path | /etc/regalia/node.json | a node unit (README.md, the node's services): from enrolment's commit on
+multi-user.target | regalia-boot-session.service | /etc/regalia/node.json | a node unit (README.md, the node's services): from enrolment's commit on
+multi-user.target | regalia-admission.service | /etc/regalia/node.json | a node unit (README.md, the node's services): from enrolment's commit on
+multi-user.target | regalia-sync.service | /etc/regalia/node.json | a node unit (README.md, the node's services): from enrolment's commit on
+multi-user.target | regalia-etcd.service | /etc/regalia/node.json | a node unit (README.md, the node's services): from enrolment's commit on
+multi-user.target | regalia-esp-advance.service | /etc/regalia/node.json | a node unit (README.md, the node's services): from enrolment's commit on
+multi-user.target | regalia-esp-advance.path | /etc/regalia/node.json | a node unit (README.md, the node's services): from enrolment's commit on
+multi-user.target | regalia-audit-ship@sync.service | /etc/regalia/audit-ship.env | ships the sync trail (README.md, Shipping the audit trails; AUDIT-COLLECTOR.md)
+multi-user.target | regalia-audit-ship@admission.service | /etc/regalia/audit-ship.env | ships the admission trail (README.md, Shipping the audit trails; AUDIT-COLLECTOR.md)
+multi-user.target | regalia-audit-ship@enrol.service | /etc/regalia/audit-ship.env | ships the enrol trail (README.md, Shipping the audit trails; AUDIT-COLLECTOR.md)
+multi-user.target | regalia-audit-ship@time.service | /etc/regalia/audit-ship.env | ships the time trail (README.md, Shipping the audit trails; AUDIT-COLLECTOR.md)
+multi-user.target | regalia-audit-ship@esp-advances.service | /etc/regalia/audit-ship.env | ships the esp-advances trail (README.md, Shipping the audit trails; AUDIT-COLLECTOR.md)
+multi-user.target | regalia-audit-ship@reanchor.service | /etc/regalia/audit-ship.env | ships the reanchor trail (README.md, Shipping the audit trails; AUDIT-COLLECTOR.md)
+multi-user.target | regalia-audit-ship@recount.service | /etc/regalia/audit-ship.env | ships the recount trail (README.md, Shipping the audit trails; AUDIT-COLLECTOR.md)
+multi-user.target | regalia-audit-ship@update.service | /etc/regalia/audit-ship.env | ships the update trail (README.md, Shipping the audit trails; AUDIT-COLLECTOR.md)
+multi-user.target | regalia-audit-ship@recovery-key.service | /etc/regalia/audit-ship.env | ships the recovery-key trail (README.md, Shipping the audit trails; AUDIT-COLLECTOR.md)
+multi-user.target | regalia-audit-ship@recovery-reconcile.service | /etc/regalia/audit-ship.env | ships the recovery-reconcile trail (README.md, Shipping the audit trails; AUDIT-COLLECTOR.md)
+multi-user.target | regalia-audit-ship@survivor.service | /etc/regalia/audit-ship.env | ships the survivor trail (README.md, Shipping the audit trails; AUDIT-COLLECTOR.md)
+timers.target | regalia-audit-prune@sync.timer | /etc/regalia/audit-ship.env | removes the sync trail's archives the collector has committed, daily
+timers.target | regalia-audit-prune@admission.timer | /etc/regalia/audit-ship.env | removes the admission trail's archives the collector has committed, daily
+timers.target | regalia-audit-prune@enrol.timer | /etc/regalia/audit-ship.env | removes the enrol trail's archives the collector has committed, daily
+timers.target | regalia-audit-prune@time.timer | /etc/regalia/audit-ship.env | removes the time trail's archives the collector has committed, daily
+timers.target | regalia-audit-prune@esp-advances.timer | /etc/regalia/audit-ship.env | removes the esp-advances trail's archives the collector has committed, daily
+timers.target | regalia-audit-prune@reanchor.timer | /etc/regalia/audit-ship.env | removes the reanchor trail's archives the collector has committed, daily
+timers.target | regalia-audit-prune@recount.timer | /etc/regalia/audit-ship.env | removes the recount trail's archives the collector has committed, daily
+timers.target | regalia-audit-prune@update.timer | /etc/regalia/audit-ship.env | removes the update trail's archives the collector has committed, daily
+timers.target | regalia-audit-prune@recovery-key.timer | /etc/regalia/audit-ship.env | removes the recovery-key trail's archives the collector has committed, daily
+timers.target | regalia-audit-prune@recovery-reconcile.timer | /etc/regalia/audit-ship.env | removes the recovery-reconcile trail's archives the collector has committed, daily
+timers.target | regalia-audit-prune@survivor.timer | /etc/regalia/audit-ship.env | removes the survivor trail's archives the collector has committed, daily
+
+[masked]
+# unit (in the image's /usr/lib/systemd/system) | why the image masks it (a link to /dev/null in its place, under /usr)
+chronyd-restricted.service | chrony's other way to run chronyd: chrony.service (units/chrony.service.d) must be the only one setting the clock (README.md, authenticated time)
+chrony-dnssrv@.timer | chrony's servers from DNS SRV records: the servers are this site's, from enrolment's /etc/chrony/regalia.conf only

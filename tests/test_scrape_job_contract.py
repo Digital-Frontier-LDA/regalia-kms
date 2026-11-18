@@ -5,9 +5,10 @@ the rules' matcher differ, those rules never fire and nothing reports that they 
 series arrive, and the alerts that tell a missing writer from a node that is down are silently gone. So the name is
 read from the documentation and every `job` matcher in the rule files is held to it.
 
-Also: README's `systemctl enable --now` command names exactly the registry's trails, one instance per line and no
-brace expansion (sh would pass the braces through), so a node set up by the README ships every trail (one left out
-raises RegaliaAuditShipMetricsMissing for ever).
+Also: the image enables exactly the registry's trails (image/units-enabled.txt, [per-host], regalia-kms-r1s.8: on a
+verity host an operator's `systemctl enable` is gone at the next boot), and README's `systemctl start` command, which
+starts them without a reboot, names exactly the same, one instance per line and no brace expansion (sh would pass the
+braces through), so every trail is shipped (one left out raises RegaliaAuditShipMetricsMissing for ever).
 """
 
 import pathlib
@@ -27,7 +28,8 @@ RULE_FILES = sorted((ROOT / "deploy" / "monitoring").glob("*.rules.yml"))
 DOCUMENTED = re.compile(r"\*\*The scrape job is `([^`]+)`\.\*\*")
 # any matcher on the job label: =, !=, =~, !~, quoted either way
 JOB_MATCHER = re.compile(r"""\bjob\s*(=~|!~|!=|=)\s*(["'])(.*?)\2""")
-ENABLE = re.compile(r"systemctl enable --now \\\n((?:    regalia-audit-ship@[a-z-]+(?: \\)?\n)+)")
+START = re.compile(r"systemctl start \\\n((?:    regalia-audit-ship@[a-z-]+(?: \\)?\n)+)")
+UNITS_ENABLED = ROOT / "deploy" / "baremetal" / "image" / "units-enabled.txt"
 
 
 def documented_job():
@@ -71,10 +73,19 @@ class ScrapeJobContract(unittest.TestCase):
 
 
 class ShipperEnableList(unittest.TestCase):
-    def test_the_readme_enables_every_trail(self):
-        lines = ENABLE.findall(README.read_text(encoding="utf-8"))
-        self.assertEqual(len(lines), 1, "README must give the enable line exactly once")
+    def test_the_readme_starts_every_trail(self):
+        lines = START.findall(README.read_text(encoding="utf-8"))
+        self.assertEqual(len(lines), 1, "README must give the start line exactly once")
         self.assertEqual(sorted(re.findall(r"regalia-audit-ship@([a-z-]+)", lines[0])), sorted(trails.TRAILS))
+    def test_the_image_enables_every_trail(self):
+        section, enabled = None, []
+        for line in UNITS_ENABLED.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if re.fullmatch(r"\[[a-z-]+\]", line):
+                section = line[1:-1]
+            elif section == "per-host" and line and not line.startswith("#"):
+                enabled.append(line.split(" | ")[1])
+        self.assertEqual(sorted(re.findall(r"^regalia-audit-ship@([a-z-]+)\.service$", "\n".join(enabled), re.M)), sorted(trails.TRAILS))
 
 
 if __name__ == "__main__":

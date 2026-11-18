@@ -359,7 +359,8 @@ class AuditShipUnit(unittest.TestCase):
         """#283 (regalia-kms-24): one drop-in per trail in trails.py's registry, naming its group: the
         writer's own for a service's trail, regalia-audit for the operator tools'. No other drop-in."""
         from deploy.baremetal import trails
-        dropins = sorted(p.name for p in UNITS.glob("regalia-audit-ship@*.service.d"))
+        # (the template's own drop-in directory, regalia-audit-ship@.service.d, is every instance's per-host gate: r1s.8)
+        dropins = sorted(p.name for p in UNITS.glob("regalia-audit-ship@?*.service.d"))
         self.assertEqual(dropins, sorted("regalia-audit-ship@%s.service.d" % name for name in trails.TRAILS))
         for name, (_, _, _, group) in trails.TRAILS.items():
             with self.subTest(name):

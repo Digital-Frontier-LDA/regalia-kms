@@ -1,5 +1,7 @@
 [Service]
-# Install as /etc/systemd/system/regalia-kms.service.d/hardening.conf on a bare-metal KMS host (#61).
+# The bare-metal KMS host's sandbox for regalia-kms.service (#61). The image installs it as
+# /usr/lib/systemd/system/regalia-kms.service.d/hardening.conf (build-rootfs.sh, regalia-kms-r1s.8); on another host,
+# install it as a drop-in of the unit (hardening.conf).
 # It states every setting deploy/baremetal/os_probe.py measures for the unit's sandbox, so the host
 # passes or fails on this file and not on what deploy/systemd/regalia-kms.service happens to carry.
 # Check the result on the host with: systemctl show regalia-kms.service -p <property>

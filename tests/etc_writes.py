@@ -20,6 +20,10 @@ WHAT COUNTS AS A WRITE, by kind of file:
   units    ReadWritePaths=, BindPaths=, ConfigurationDirectory= naming a per-host /etc path, and the Exec*= command
            lines read as shell (sh -c bodies included)
   tmpfiles any line on a per-host /etc path, except 00-regalia-etc.conf's L/L+ line linking it to its /var name
+AND ANY WRITE UNDER /etc/systemd/system (regalia-kms-r1s.8), by the same rules, and a `systemctl` that writes there
+(enable, disable, mask, link, preset, edit, set-property, revert, add-wants, set-default, ... without --runtime or
+--root=): PID 1 loads units while /etc is empty, so a link or drop-in there is never seen and is gone at the next boot.
+What a host starts is the image's, under /usr (image/units-enabled.txt [per-host], gated on per-host files).
 NOT SEEN (a limitation, stated): a path built at run time from data (node.json's "site" is a value read from a file;
 enrol._install guards that one itself, by writing only hostpaths' /var names); prose procedures in the .md files
 (image/etc-inventory.txt lists the operator's writes)."""
@@ -52,18 +56,40 @@ Finding = collections.namedtuple("Finding", "file line path entry how")
 UNKNOWN = None   # a segment of a value not known statically
 
 
+# /etc/systemd/system (regalia-kms-r1s.8): PID 1 loads units while /etc is still EMPTY (a tmpfs, made from the image
+# later), so a unit, a link or a drop-in written there is never seen at unit load and is gone at the next boot. What a
+# host starts is the image's, under /usr (image/units-enabled.txt, [per-host] gated on per-host files); deploy code
+# writes nothing there. Refused like a per-host path, with its own reason (describe).
+SYSTEMD_ETC = "/etc/systemd/system"
+# systemctl verbs that write /etc/systemd/system (links, masks, drop-ins, presets, the default target) unless given
+# --runtime (/run) or --root=/--image= (another tree, as build-rootfs.sh's chroot preset pass)
+SYSTEMCTL_WRITES = frozenset(("enable", "disable", "reenable", "mask", "unmask", "link", "preset", "preset-all", "edit",
+                              "set-property", "revert", "add-wants", "add-requires", "set-default"))
+
+
 def per_host(text, complete):
-    """The PER_HOST entry a resolved value writes to, or None. A partial value counts only if its known prefix is
-    already strictly inside a per-host DIRECTORY (CONFIG_DIR + name), never a mere prefix of a name."""
+    """The PER_HOST entry a resolved value writes to (or SYSTEMD_ETC), or None. A partial value counts only if its known
+    prefix is already strictly inside a per-host DIRECTORY (CONFIG_DIR + name), never a mere prefix of a name."""
     if not text.startswith("/etc"):
         return None
     if complete:
         path = os.path.normpath(text) if text.startswith("/etc/") else text
+        if path == SYSTEMD_ETC or path.startswith(SYSTEMD_ETC + "/"):
+            return SYSTEMD_ETC
         return hostpaths.covering(path)
-    for entry in hostpaths.PER_HOST:
+    for entry in tuple(hostpaths.PER_HOST) + (SYSTEMD_ETC,):
         if text.startswith(entry + "/"):
             return entry
     return None
+
+
+def systemctl_writes(words):
+    """The verb, when a systemctl command line (its arguments, literal words or None) writes /etc/systemd/system."""
+    literal = [w for w in words if w is not None]
+    if any(w == "--runtime" or w.startswith(("--root=", "--image=")) or w in ("--root", "--image") for w in literal):
+        return None
+    verb = next((w for w in literal if not w.startswith("-")), None)
+    return verb if verb in SYSTEMCTL_WRITES else None
 
 
 # ------------------------------------------------------------------------------------------------ Python
@@ -252,6 +278,9 @@ def _argv_writes(node):
         return None
     command = os.path.basename(first.value)
     words = [e.value if isinstance(e, ast.Constant) and isinstance(e.value, str) else None for e in node.elts[1:]]
+    if command == "systemctl":
+        verb = systemctl_writes(words)
+        return ("argv systemctl %s" % verb, [ast.Constant(SYSTEMD_ETC)]) if verb else None
     if command in SHELL_WRITERS:
         written = _written_args(command, words)
         return ("argv %s" % command, [node.elts[1 + i] for i in written]) if written else None
@@ -504,6 +533,10 @@ def _scan_shell(text, name):
             while words and (words[0] in WRAPPERS or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[0])):
                 words = words[1:]
             command_name = os.path.basename(words[0].strip("\"'")) if words else None
+            if command_name == "systemctl":
+                verb = systemctl_writes([w.strip("\"'") for w in words[1:]])
+                if verb:
+                    findings.append(Finding(name, number, SYSTEMD_ETC, SYSTEMD_ETC, "systemctl " + verb))
             if command_name in SHELL_WRITERS:
                 args = words[1:]
                 for i in _written_args(command_name, [w.strip("\"'") for w in args]):
@@ -579,7 +612,7 @@ def deploy_files(root=ROOT):
         rel = str(path.relative_to(root))
         if path.suffix == ".py":
             out[rel] = "python"
-        elif path.suffix == ".sh" or (path.parent.name == "initrd" and path.suffix == "" and path.read_bytes()[:2] == b"#!"):
+        elif path.suffix == ".sh" or (path.parent.name in ("initrd", "generators") and path.suffix == "" and path.read_bytes()[:2] == b"#!"):
             out[rel] = "shell"
         elif path.name.endswith(".tmpfiles.conf"):
             out[rel] = "tmpfiles"
@@ -619,6 +652,10 @@ def scan(root=ROOT, overrides=None):
 
 
 def describe(f):
+    if f.entry == SYSTEMD_ETC:
+        return "%s:%d writes %s (%s): /etc/systemd/system is empty when PID 1 loads units on a verity host and gone at the " \
+               "next boot; enable or configure it in the image, under /usr (deploy/baremetal/image/units-enabled.txt " \
+               "[per-host], gated on a per-host file)" % (f.file, f.line, f.path, f.how)
     return "%s:%d writes %s (%s) by its /etc name: %s is this host's own (hostpaths.PER_HOST) and lives on /var; " \
            "write %s (hostpaths.persistent)" % (f.file, f.line, f.path, f.how, f.entry, hostpaths.VAR_ETC + f.entry[len("/etc"):])
 

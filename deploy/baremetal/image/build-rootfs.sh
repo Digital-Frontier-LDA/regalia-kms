@@ -29,7 +29,8 @@
 #          AppArmor profile, and the [built] programs at their paths. systemd-sysusers runs in it, so the system
 #          users exist in the image. What it STARTS is units-enabled.txt, enabled under /usr (#61 K61V-4: /etc is a tmpfs,
 #          empty when PID 1 loads units), with a "disable *" preset so the first-boot preset pass every boot runs enables
-#          nothing more; dpkg's database is moved to /usr/lib/sysimage/dpkg (owner decision q-18 = A).
+#          nothing more; its [per-host] units each gated on a per-host file on /var (regalia-kms-r1s.8), its [masked]
+#          units linked to /dev/null under /usr; dpkg's database is moved to /usr/lib/sysimage/dpkg (owner decision q-18 = A).
 #
 # THE HERMETIC /usr (#61's dm-verity design of 2026-10-05; the owner requires it before the first ceremony, #297): the
 #   host tree's /etc is also copied to /usr/share/factory/etc, so /usr alone holds everything a booted host runs and
@@ -49,8 +50,9 @@
 #     to the guest's /usr; a host needs the pairing (a later slice), as it needs network configuration and node.json.
 #   * BOOTED IN QEMU, NOT ON A DL360: this image's /usr, installed by install-host.sh (test mode) and opened by the
 #     UKI's usrhash=, boots in QEMU with /var from the initrd, /etc from the factory copy and its units started
-#     (OnQemuVerity). The node units (regalia-sync, admission, etcd, the audit shippers) are not enabled by the image, and
-#     an operator's `systemctl enable` writes the tmpfs /etc, gone at the next boot: regalia-kms-r1s.8. What lives
+#     (OnQemuVerity). The node units, the audit shippers and the firewall are enabled by the image too, each gated on
+#     its per-host file on /var (units-enabled.txt [per-host], regalia-kms-r1s.8): nothing an operator enables is lost
+#     at a reboot, because an operator enables nothing. What lives
 #     outside /usr is the /etc and /var inventory's (etc-inventory.txt).
 #   * NO HARDENING beyond the units' own sandboxes: AppArmor profiles other than the daemon's, sysctl, sshd policy,
 #     removing unwanted binaries (#61's baseline) are later slices.
@@ -297,6 +299,11 @@ cp -a "$SRC/deploy" "$ROOT/usr/lib/regalia-kms/deploy"                          
      if [ -d "$f" ]; then mkdir -p "$ROOT/usr/lib/systemd/system/$f"; else install -m 0644 "$f" "$ROOT/usr/lib/systemd/system/$f"; fi
    done)
 install -m 0644 "$SRC/deploy/systemd/regalia-kms.service" "$ROOT/usr/lib/systemd/system/regalia-kms.service"
+# the KMS's sandbox, the image's (regalia-kms-r1s.8: a drop-in under /etc/systemd/system is gone at every boot), from the
+# one file os_probe's controls are written against; and the generator that names this host's PIN credentials to it,
+# from the /var credstore, at every boot (generators/regalia-kms-credentials)
+install -D -m 0644 "$SRC/deploy/baremetal/regalia-kms-hardening.conf.example" "$ROOT/usr/lib/systemd/system/regalia-kms.service.d/hardening.conf"
+install -D -m 0755 "$SRC/deploy/baremetal/generators/regalia-kms-credentials" "$ROOT/usr/lib/systemd/system-generators/regalia-kms-credentials"
 for f in "$SRC"/deploy/baremetal/units/*.sysusers.conf "$SRC"/deploy/systemd/*.sysusers.conf; do
   [ -e "$f" ] && install -m 0644 "$f" "$ROOT/usr/lib/sysusers.d/$(basename "$f" .sysusers.conf).conf"
 done
@@ -349,7 +356,8 @@ echo "### the units the image starts, enabled under /usr ($ENABLED)"
 ENABLE_SPEC="$(python3 -I - "$ENABLED" <<'PY'
 import re, sys
 UNIT, TARGET = re.compile(r"[a-zA-Z0-9:_.\\-]+(@[a-zA-Z0-9:_.\\-]*)?\.(service|socket|timer|path|target)"), re.compile(r"[a-z0-9-]+\.target")
-sections, section = {"enabled": "ENABLE", "alias": "ALIAS", "dropped": "DROP"}, None
+sections, section = {"enabled": "ENABLE", "alias": "ALIAS", "dropped": "DROP", "per-host": "ENABLE", "masked": "MASK"}, None
+WIDTH = {"per-host": 4, "masked": 2}
 for number, raw in enumerate(open(sys.argv[1]), 1):
     line = raw.strip()
     if not line or line.startswith("#"):
@@ -361,10 +369,21 @@ for number, raw in enumerate(open(sys.argv[1]), 1):
             raise SystemExit("units-enabled.txt line %d: no section [%s]" % (number, section))
         continue
     fields = [f.strip() for f in line.split("|")]
+    if section == "masked":
+        if len(fields) != 2 or not fields[1] or not UNIT.fullmatch(fields[0]):
+            raise SystemExit("units-enabled.txt line %d: not 'unit | why'" % number)
+        print("MASK", fields[0], "-")
+        continue
     first = UNIT if section == "alias" else TARGET
-    if section is None or len(fields) != 3 or not fields[2] or not first.fullmatch(fields[0]) or not UNIT.fullmatch(fields[1]):
-        raise SystemExit("units-enabled.txt line %d: not '%s | unit | why'" % (number, "alias" if section == "alias" else "target"))
+    shape = "target | unit | the per-host file | why" if section == "per-host" else "%s | unit | why" % ("alias" if section == "alias" else "target")
+    if section is None or len(fields) != WIDTH.get(section, 3) or not fields[-1] or not first.fullmatch(fields[0]) or not UNIT.fullmatch(fields[1]):
+        raise SystemExit("units-enabled.txt line %d: not '%s'" % (number, shape))
     print(sections[section], fields[0], fields[1])
+    if section == "per-host":
+        # a per-host file under /etc (its /var name is the host's own): an absolute, plain path
+        if not re.fullmatch(r"/etc/[A-Za-z0-9._/-]+", fields[2]) or "/../" in fields[2] or fields[2].endswith("/"):
+            raise SystemExit("units-enabled.txt line %d: %r is not a per-host /etc path" % (number, fields[2]))
+        print("GATE", fields[1], fields[2])
 PY
 )" || die "$ENABLED cannot be read (above)"
 UNITDIR="$ROOT/usr/lib/systemd/system"
@@ -389,6 +408,16 @@ while read -r kind a b; do
       [ -f "$UNITDIR/$b" ] || die "$ENABLED aliases $a to $b, and the image has no /usr/lib/systemd/system/$b"
       [ ! -e "$UNITDIR/$a" ] && [ ! -L "$UNITDIR/$a" ] || die "the image already has /usr/lib/systemd/system/$a"
       ln -s "$b" "$UNITDIR/$a" ;;
+    GATE)
+      # [per-host] (regalia-kms-r1s.8): the unit, its template's drop-ins or its own must carry the condition on the
+      # per-host file, or the image would start it on every host, enrolled or not
+      file="$a"; [[ "$a" =~ ^([^@]+@)[^.]+(\..+)$ ]] && file="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+      grep -qsxF "ConditionPathExists=$b" "$UNITDIR/$file" "$UNITDIR/$file.d/"*.conf "$UNITDIR/$a.d/"*.conf \
+        || die "$ENABLED gates $a on $b, and neither the unit nor its drop-ins under /usr/lib/systemd/system say ConditionPathExists=$b" ;;
+    MASK)
+      # [masked]: the package's unit replaced, in the image's /usr, by a link to /dev/null (systemctl mask's own form)
+      [ -f "$UNITDIR/$a" ] || die "$ENABLED masks $a, and the image has no /usr/lib/systemd/system/$a"
+      rm -f -- "$UNITDIR/$a" && ln -s /dev/null "$UNITDIR/$a" ;;
   esac
 done <<< "$ENABLE_SPEC"
 find "$ROOT/etc/systemd/system" -type l -delete
@@ -421,6 +450,11 @@ printf 'localhost\n' > "$ROOT/etc/hostname"
 printf '127.0.0.1\tlocalhost\n::1\t\tlocalhost ip6-localhost ip6-loopback\n' > "$ROOT/etc/hosts"
 printf '# The KMS host image names no resolver (regalia-kms#61): audit_sink_url and the NTS servers are addresses, or names in the hosts file.\n' > "$ROOT/etc/resolv.conf"
 printf '# The KMS host mounts nothing from /etc/fstab (regalia-kms#61): / is a tmpfs, /usr the verity image and /var the\n# LUKS2 volume, all from the signed kernel command line.\n' > "$ROOT/etc/fstab"
+# the firewall (regalia-kms-r1s.8): the image's nftables.conf loads THIS host's ruleset and nothing else. Debian's
+# example table (accept everything) is not kept; the file named, not a glob, so a ruleset missing at load fails
+# nftables.service (which a missing one skips first: units/nftables.service.d/regalia.conf; the KMS then refuses)
+printf '#!/usr/sbin/nft -f\n# The KMS host image'"'"'s (regalia-kms#61, regalia-kms-r1s.8): this host'"'"'s ruleset, rendered by\n# deploy/baremetal/firewall.py from its site configuration; /etc/nftables.d/regalia-kms.nft links to /var.\nflush ruleset\ninclude "/etc/nftables.d/regalia-kms.nft"\n' \
+  > "$ROOT/etc/nftables.conf"
 rm -f -- "$ROOT/etc/.pwd.lock" "$ROOT/etc/passwd-" "$ROOT/etc/group-" "$ROOT/etc/shadow-" "$ROOT/etc/gshadow-"
 
 # the hermetic /usr: the image's /etc, as built, is also /usr's factory copy (the dm-verity design: / is a tmpfs and

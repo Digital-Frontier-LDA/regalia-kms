@@ -30,7 +30,7 @@
 /etc/chrony/regalia.conf | /var/lib/regalia-etc/chrony/regalia.conf | enrol commit (install_config), authtime chrony-conf --install (STORED_CHRONY_CONF) | chronyd -f (units/chrony.service.d/regalia.conf), its ConditionPathExists | rendered from this site's NTS servers; chronyd's AppArmor profile reads it through the link (K61V-4's boots: chronyd runs confined, enforce)
 /etc/ssh/ssh_host_ed25519_key | /var/lib/regalia-etc/ssh/ssh_host_ed25519_key | the operator (enrol's refusal says: ssh-keygen -f the /var name) | sshd, if ever installed: [not-on-image] | the SSH host key the manifest names must outlive a reboot
 /etc/ssh/ssh_host_ed25519_key.pub | /var/lib/regalia-etc/ssh/ssh_host_ed25519_key.pub | as the key | enrol init (ssh_host_pub, the manifest's ssh_host_pub) | as the key
-/etc/nftables.d/regalia-kms.nft | /var/lib/regalia-etc/nftables.d/regalia-kms.nft | the operator (README.md, firewall.py: rendered, checked, loaded, then moved into the /var name) | nftables.service (include "/etc/nftables.d/*.nft"): [open] | rendered from this host's site configuration
+/etc/nftables.d/regalia-kms.nft | /var/lib/regalia-etc/nftables.d/regalia-kms.nft | the operator (README.md, firewall.py: rendered, checked, loaded, then moved into the /var name) | nftables.service (the image's /etc/nftables.conf includes it; enabled under /usr, gated on it: regalia-kms-r1s.8), regalia-kms.service (asserts it) | rendered from this host's site configuration
 /etc/default/prometheus-node-exporter | /var/lib/regalia-etc/default/prometheus-node-exporter | the operator (MONITORING.md: metrics node-exporter-args) | prometheus-node-exporter.service (EnvironmentFile) | ARGS from this site's monitoring CIDRs and port; L+: the package's own file is in the factory copy and is replaced by the link
 
 [boot]
@@ -57,7 +57,8 @@
 /etc/chrony | Debian's chrony.conf (a package conffile, never touched) and sources.d; only regalia.conf in it is this host's ([per-host])
 /etc/ssh | the directory; only the ed25519 host key in it is this host's ([per-host])
 /etc/default | the packages' defaults; only prometheus-node-exporter in it is this host's ([per-host])
-/etc/nftables.d | made by the link's parent; nftables.conf's include of it is [open]
+/etc/nftables.d | made by the link's parent
+/etc/nftables.conf | the image's (build-rootfs.sh, regalia-kms-r1s.8): `flush ruleset` and an include of this host's ruleset, /etc/nftables.d/regalia-kms.nft, by name; Debian's accept-everything example table is not kept
 /etc/hostname | build-rootfs.sh writes fixed ones before the factory copy (K61V-4): `localhost`, and /etc/hosts' localhost lines; /etc/resolv.conf and /etc/fstab hold comments only (MEASURED before: the BUILD container's, leaked by mmdebstrap); nothing reads the hostname
 /etc/apt/sources.list.d | emptied by the build: a host is updated by a new image, never by apt
 
@@ -83,7 +84,7 @@
 [early]
 # /etc path | read by | before the factory copy, so on its compiled-in default: why that is acceptable, or [open]
 /etc/systemd/system.conf | PID 1, at start | Debian's file sets nothing (every line commented): the defaults are the same
-/etc/systemd/system | PID 1, loading units | EMPTY when units load, and nothing is enabled there: the image's enablement is under /usr/lib/systemd/system/*.wants (K61V-4: deploy/baremetal/image/units-enabled.txt names each link, or the build stops), and a `disable *` preset (00-regalia-kms.preset) makes a first boot's preset-all pass, which runs at every boot, enable nothing. What an operator enables per host is regalia-kms-r1s.8
+/etc/systemd/system | PID 1, loading units | EMPTY when units load, and nothing is enabled there: the image's enablement is under /usr/lib/systemd/system/*.wants (K61V-4: deploy/baremetal/image/units-enabled.txt names each link, or the build stops), and a `disable *` preset (00-regalia-kms.preset) makes a first boot's preset-all pass, which runs at every boot, enable nothing. What a host starts once ITS state is there (the firewall, the node units, the audit shippers) is enabled there too, each gated on its per-host file under /etc (on /var), and per-host unit content comes from /var through the image's generator (regalia-kms-r1s.8: units-enabled.txt [per-host]); tests/etc_writes.py refuses a write under /etc/systemd/system in deploy/
 /etc/systemd/journald.conf | systemd-journald (started before sysinit) | Debian's file sets nothing; journald reads it again on a restart
 /etc/udev/udev.conf | systemd-udevd | Debian's file sets nothing
 /etc/modules-load.d/modules.conf | systemd-modules-load (sysinit, not ordered after the copy) | empty in the image; the image's modules belong in /usr/lib/modules-load.d
@@ -109,7 +110,5 @@
 
 [open]
 # subject | the question | recommendation (who decides)
-per-host systemd drop-ins | README.md and SSH.md have the operator write /etc/systemd/system/*.d drop-ins (credentials, hardening, firewall); on a tmpfs /etc they are gone at reboot and unseen at unit load | the image's, under /usr/lib/systemd/system, with any per-host value read from /etc/regalia (on /var) (regalia-kms-r1s.8)
-nftables | /etc/nftables.conf (the image's) must include /etc/nftables.d/*.nft and nftables.service be enabled in /usr | the image (regalia-kms-r1s.9)
 polkit rule | 50-regalia-kms-pcscd.rules is installed by the operator into /etc/polkit-1/rules.d | install it into /usr/share/polkit-1/rules.d at build (regalia-kms-r1s.9)
 chronyd's AppArmor profile | chronyd reads /etc/chrony/regalia.conf through the link, and AppArmor checks the /var file | shipped: the local include (apparmor/local/usr.sbin.chronyd) linked by 00-regalia-etc.conf; K61V-4's boot shows chronyd starts in enforce mode

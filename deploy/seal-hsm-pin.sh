@@ -414,6 +414,7 @@ SEALED
   device        : $KIND $SERIAL
   key           : $([ "$BENCH" = 1 ] && echo "host (BENCH, not production)" || echo "host key + tpm2, PCRs $PCRS")$([ "${#TPMDEV[@]}" -gt 0 ] && echo " (TEST TPM $REGALIA_TPM2_DEVICE, not production)")$([ "$BENCH" = 0 ] && [ -n "${SYSTEMD_CREDENTIAL_SECRET:-}" ] && echo " (TEST host key $HOSTKEY, not production)")$SIGNED_REC
   sealed at    : $(date -u +%FT%TZ)
-Service drop-in line (/etc/systemd/system/regalia-kms.service.d/credentials.conf):
+Service line (on the KMS host image its generator names this credential to regalia-kms.service at the next boot,
+or now: systemctl daemon-reload; elsewhere, a drop-in of the unit's, deploy/systemd/regalia-kms-credentials.conf.example):
   LoadCredentialEncrypted=$NAME:$READ_AS
 REC
