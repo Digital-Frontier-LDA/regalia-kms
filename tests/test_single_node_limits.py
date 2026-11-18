@@ -67,6 +67,7 @@ class CanonicalText(unittest.TestCase):
     def test_its_table_has_four_columns_and_only_the_three_words(self):
         lines = table(self.text)
         self.assertEqual(lines[0], "| Feature or guarantee | 1 node | 3 nodes | Consequence with 1 node |")
+        self.assertEqual(lines[1], "|---|---|---|---|")      # without it GitHub renders no table, copies or not
         for row in rows(lines):
             with self.subTest(row[0]):
                 self.assertEqual(len(row), 4)
@@ -82,7 +83,11 @@ class CanonicalText(unittest.TestCase):
 
     def test_the_owner_s_seven_decisions_are_recorded(self):
         decisions = section(self.text, "## The owner's decisions (2026-11-18)")
-        self.assertEqual(re.findall(r"^- (Q\d)\. ", decisions, re.M), ["Q%d" % i for i in range(1, 8)])
+        found = re.findall(r"^- (Q\d)\. (.*)$", decisions, re.M)
+        self.assertEqual([q for q, _ in found], ["Q%d" % i for i in range(1, 8)])
+        for q, first_line in found:
+            with self.subTest(q):
+                self.assertRegex(first_line, r"\w.{20,}")    # a decision, not its bare marker
 
 
 class Copies(unittest.TestCase):
@@ -111,7 +116,7 @@ class Copies(unittest.TestCase):
                 self.assertIn(feature, by_feature)
                 word, rest = by_feature[feature]
                 self.assertEqual(word, one)
-                self.assertIn("**accepted** (regalia-kms-dx7)", rest)
+                self.assertTrue(rest.startswith("**accepted** (regalia-kms-dx7), because "), rest)
 
 
 class MutantControls(unittest.TestCase):
@@ -133,6 +138,14 @@ class MutantControls(unittest.TestCase):
             for line, column in ((2, 0), (5, 1), (9, 2), (12, 3)):
                 with self.subTest(name=name, line=line, column=column):
                     self.assertEqual(len(differences(canonical, self.mutated(copy, line, column))), 1)
+
+    def test_the_entry_and_decision_patterns_refuse_their_hollow_forms(self):
+        entry = re.compile(r"^- \*\*(.+?)\*\* \((.+?)\): (.+)$", re.M)
+        hollow = "- **Heartbeats** (degraded): **not accepted**; previously **accepted** (regalia-kms-dx7), because x."
+        rest = entry.findall(hollow)[0][2]
+        self.assertFalse(rest.startswith("**accepted** (regalia-kms-dx7), because "))
+        self.assertNotRegex("", r"\w.{20,}")
+        self.assertNotEqual(table("| a | b |\n| a | b |\n")[1], "|---|---|---|---|")
 
     def test_a_dropped_row_fails_the_comparison(self):
         canonical = CANONICAL.read_text()

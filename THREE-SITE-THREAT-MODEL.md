@@ -160,7 +160,7 @@ invariant is lost, and the operator acknowledges it.
 | **S3** a captured exchange cannot be replayed | **holds** | The owner's answer is bound to the boot session's fresh key and nonce, as a peer's is |
 | **S4** unlocking grants nothing else | **holds, weaker** | Unlocking still grants no lease and no key use (the HSM's own authorization). But the runtime lease is self-issued and the activation 1 of 1: no party outside the node can withhold serving |
 | **S5** long-term keys never leave hardware | **holds** | Unchanged |
-| **S6** an off-node audit record of every decision | **holds** | The external audit collector is mandatory (Q4): stateful operations are refused without one |
+| **S6** an off-node audit record of every decision | **holds as far as the collector has acknowledged** | The external audit collector is mandatory (Q4): stateful operations are refused while none is configured. An allowed operation already waits for the collector to acknowledge its record, and fails closed without it (`requireRemote` in `internal/operations/coordinator.go`). Other records (denials, the node's own trails) are on the node's disk until the collector takes them, so a node destroyed or stolen before then takes them with it. With no peer, the collector holds the only off-node copy |
 
 Attacker cases on one node:
 - **Powered-off theft (case 1):** defended by the owner unlock. A stolen node does not open without the owner's card,
