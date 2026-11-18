@@ -133,7 +133,7 @@ Not counted (false positives checked and left out):
 | `e2e/lib/threenode.py:1018` | b | activation_signers {threshold 2, parties nodes}: cannot be met with one node; needs threshold 1 (and a decision whether one node may activate alone) or floor(N/2)+1 |
 | `internal/admission/admission.go:449-454` | b | ModeRecovery`: "this daemon has no stateless-only gate yet: it serves nothing". An N=1 node can only serve under a peer lease (impossible) or recovery (refused), so today it serves nothing. |
 | `internal/opstate/state_epoch.go:324-345` | b | a lone survivor "needs every other node quarantined, revoked or retired". At N=1 `loose` and `must` are empty, so the survivor check passes vacuously. What the fence evidence (347-350) means with no other nodes is undefined. |
-| `LIMITATIONS.md:222` | b | Admission v3 mode: lease (a peer's lease) or recovery (the owner's survivor authorization). At N=1 there is no peer lease, so the node is permanently in recovery, which "the daemon serves nothing in" (line 230). A third mode is needed: a sole-node lease. |
+| `LIMITATIONS.md:222` | b | Admission v3 mode: lease (a peer's lease) or recovery (the owner's survivor authorization). Today, at N=1 there is no peer lease, so the node would be permanently in recovery, which "the daemon serves nothing in" (line 230). The design adds a third mode, `single`, under a self-issued lease (design 4.3, dx7.3). |
 | `LIMITATIONS.md:232` | a | "D28.6 as first written (2 of {a, b, c, owner})". Threshold and party list. |
 | `LIMITATIONS.md:240` | b | The runtime lease is "issued by one peer over the subject's re-attested TPM … A node cut off from both peers stops within 30 s … renew through the third node". The lease issuer is always another node. At N=1 no lease can be issued, so the node never serves; dx7.3 adds the self-issued lease under `single-node` (design 4.3). |
 | `LIMITATIONS.md:251` | b | "The normal path is 2 of the 3 nodes, which always overlap. ({a, b} and {c, owner} share no signer.)" The overlap proof is for N=3 with threshold 2. For odd N the threshold must be floor(N/2)+1 over the nodes, and the owner path must not form a disjoint quorum with a node majority: it stays the recovery step behind its conditions (LIMITATIONS.md:252). |
@@ -203,20 +203,20 @@ Not counted (false positives checked and left out):
 | `deploy/baremetal/lease.py:548` | a | Holder keeps the later of "the other peer"'s lease. Assumes ≥2 issuers; harmless with 1. |
 | `deploy/baremetal/membership.py:55` | b | an owner-signed heartbeat is "always the owner AND at least one node: the heartbeat threshold is at least 2". With N=1 and threshold 2 over [n1, owner], EVERY heartbeat needs an owner touch: nodes can no longer sign their own 6 h beats. N=1 needs either a {1, [n]} heartbeat rule or an owner touch on every heartbeat. Decision Q2: {1, [n]}. |
 | `deploy/baremetal/node.py:967` | b | admission renew: require(peers, "no peer to ask for a lease"). N=1 can never get a runtime lease, so it is never admitted. |
-| `deploy/baremetal/owner.py:9` | b | hand recovery: "no other node is up to co-sign one… makes this node and the owner the two signers a v4 heartbeat needs". At N=1 this is not recovery but the ONLY heartbeat path (every 6 h, or every owner_heartbeat_lifetime_s ≤ 1 h by default). |
+| `deploy/baremetal/owner.py:9` | b | hand recovery: "no other node is up to co-sign one… makes this node and the owner the two signers a v4 heartbeat needs". Today, with the threshold of 2, N=1 would make this the only heartbeat path (every owner_heartbeat_lifetime_s, ≤ 1 h by default). Under `single-node` the node self-signs {1, [n]} (decision Q2) and `owner.py beat` is refused (design 4.4). |
 | `deploy/baremetal/owner.py:14` | a | "long enough for the node to unlock the other two" → "the others". |
 | `deploy/baremetal/owner.py:26` | a | "Peers pull it from here." No peers at N=1. |
 | `deploy/baremetal/owner.py:79` | b | parties == [node.node_id, membership.OWNER]` means the owner envelope is exactly node+owner. Not used at N=1: under `single-node` the owner co-signed path is refused (decision Q2, design 4.4). |
 | `deploy/baremetal/README.md:885` | b | "signed by two of {the nodes, the owner} … If no two of them can sign … stays locked … or the owner co-signs (owner.py beat, at most an hour)". At N=1 the node self-signs every heartbeat, {1, [n]} (decision Q2), and owner.py beat is refused under `single-node`. |
 | `deploy/baremetal/README.md:1272` | a | "Heartbeats need two signatures from {node a, node b, node c, the owner}". Threshold and party list. |
-| `deploy/baremetal/README.md:1278` | b | "The hand recovery when fewer than two nodes run". At N=1 this is permanent. |
+| `deploy/baremetal/README.md:1278` | b | "The hand recovery when fewer than two nodes run". Today, with the threshold of 2, N=1 would need it permanently. Under `single-node` there is no hand recovery: the node self-signs {1, [n]} (decision Q2). |
 | `e2e/lib/threenode.py:1017` | b | heartbeat_signers {threshold 2, parties nodes+OWNER}: with N=1 only node+owner reach 2. Decision Q2: under `single-node` the rule is {1, [n]} and the owner's beat is refused. For odd N the threshold is a majority of the designed nodes (dx7.1). |
-| `e2e/lib/threenode.py:1884` | b | docstring: "With one, nobody can co-sign it"; a lone counting node never self-heartbeats; N=1 is permanently in this state |
+| `e2e/lib/threenode.py:1884` | b | docstring: "With one, nobody can co-sign it"; a lone counting node never self-heartbeats. Today N=1 would be permanently in this state; under `single-node` the node self-signs {1, [n]} (decision Q2, dx7.4). |
 | `e2e/lib/threenode.py:1889` | a | if len(counting) >= 2` waits for node-signed beats; the literal 2 should be the manifest's heartbeat threshold |
 | `e2e/three-node-netns.py:108` | c | with a down, b and c answer each other; needs >=3 nodes |
 | `e2e/three-node-netns.py:113` | c | "b and c answer its pulls" after a restarts; named peers |
-| `e2e/three-node-outage.py:19` | b | hand recovery: X plus an owner key sign X's heartbeat; at N=1 this is the only steady state, not a recovery |
-| `e2e/three-node-recovery.py:316` | b | counting survivors; `len(counting) == 1` (322) falls back to hand recovery: the 1-node path already exists here as a special case |
+| `e2e/three-node-outage.py:19` | b | hand recovery: X plus an owner key sign X's heartbeat. Today, with the threshold of 2, it would be N=1's only steady state; under `single-node` the node self-signs and this path is refused (decision Q2). |
+| `e2e/three-node-recovery.py:316` | b | counting survivors; `len(counting) == 1` (322) falls back to hand recovery. That is a three-node outage path, not the single-node one: under `single-node` the node self-signs (decision Q2). |
 | `e2e/three-node-replace.py:115` | c | fresh(["a","b"]): two signers |
 | `e2e/three-node-theft.py:144` | b | "b and c sign epoch 2's heartbeat together, with no owner": 2 counting nodes |
 | `tests/test_baremetal_beat.py:49, 83` | c | three-node `Parts` fixture. |
@@ -302,7 +302,7 @@ Not counted (false positives checked and left out):
 | `e2e/lib/threenode.py:1659` | a | peers default = all other authorizing nodes (empty at N=1) |
 | `e2e/lib/threenode.py:1744` | c | unlock(): tokens[0]["local"] raises IndexError when the disk has no peer path (N=1); needs a guard or a 1-node unlock mode |
 | `e2e/peer-unlock-swtpm.sh:3` | c | "Three software TPMs (target a, peers b and c)": runs tests.test_baremetal_unlock OnSwtpm (tests/test_baremetal_unlock.py:1044, 1064, 1155 fix a,b,c) |
-| `e2e/peer-unlock-swtpm.sh:13` | b | PoC 7.2-7.4 "with b down, c restores a; with no peer the disk stays locked": at N=1 "no peer" is permanent, so the disk opens only with the recovery key (S1 property gone) |
+| `e2e/peer-unlock-swtpm.sh:13` | b | PoC 7.2-7.4 "with b down, c restores a; with no peer the disk stays locked": today, at N=1 "no peer" would be permanent and the disk would open only with the recovery key. Decision Q1: the owner's card takes the peer's place at every boot (design 4.5). |
 | `e2e/three-node-recovery.py:15` | c | "three disks ... one path from each other node" |
 | `e2e/three-node-recovery.py:166` | c | permutations(names, 2) plus "third": all directed pairs with a third node off; needs N>=3 |
 | `e2e/three-node-replace.py:123` | c | enrol("c2", peers=["a","b"]) |
@@ -525,7 +525,7 @@ Not counted (false positives checked and left out):
 | `deploy/baremetal/rejoin.py:38` | a | "commits, now needing two of two". The size of the voting set during rejoin is hard-coded. |
 | `deploy/baremetal/rejoin.py:40` | b | The two-of-two window analysis (lines 40-44) is for N=3 only. For N=5 it is a 2→3→4→5 sequence with windows where no failure can be tolerated. For N=1 it does not apply. |
 | `deploy/baremetal/takeover.py:3` | a | "With two of three servers fenced ... the survivor's etcd has no quorum". For N=1 etcd always has quorum and takeover is never needed. For odd N it should say "a majority of N fenced". |
-| `deploy/baremetal/takeover.py:114` | b | alone()` requires the member list to equal `[node_id]`. That is the one-member state a 1-node cluster is in permanently, so "alone" stops meaning "recovery". |
+| `deploy/baremetal/takeover.py:114` | b | alone()` requires the member list to equal `[node_id]`. That is the one-member state a 1-node cluster is always in, so "alone" would stop meaning "recovery". Under `single-node` take-over is refused by name (design 4.3). |
 | `deploy/baremetal/units/regalia-etcd.service:1` | a | Comment says "the three servers' operational-state store"; line 9 Description says "shared by the three servers". |
 | `deploy/baremetal/units/regalia-etcd.service:24` | b | "ready only once a majority has elected a leader: a lone survivor waits", with `TimeoutStartSec=infinity`. Fine for N=1. For N≥3 a lone node hangs at start. |
 | `internal/config/config.go:105-106` | a | "etcd replicates across the three servers". |
@@ -553,7 +553,7 @@ Not counted (false positives checked and left out):
 | `deploy/monitoring/regalia-node.rules.yml:75` | b | RegaliaSurvivorRecoveryActive` assumes the other servers are fenced. It must not fire for a 1-node deployment. |
 | `deploy/monitoring/regalia-node.rules.yml:122` | b | RegaliaMembershipBehindFleet` compares against `max by (job)`. With one node it can never fire, so a node withholding the newer chain goes undetected. N=1 needs a reference from outside the node (collector or owner). |
 | `deploy/monitoring/regalia-node.rules.yml:133` | b | RegaliaAnchorBehindFleet` has the same blind spot with N=1. |
-| `deploy/monitoring/regalia-node.rules.yml:159` | b | RegaliaNextBootNeedsRecoveryKey`: "no peer ... next boot asks for the recovery key" (line 164). `bootnet.py:91/136` refuses with "no peer that may authorize", so with N=1 this alert fires permanently. Unattended boot needs a design (unlock/boot area). |
+| `deploy/monitoring/regalia-node.rules.yml:159` | b | RegaliaNextBootNeedsRecoveryKey`: "no peer ... next boot asks for the recovery key" (line 164). `bootnet.py:91/136` refuses with "no peer that may authorize", so today with N=1 this alert would fire permanently. Decision Q1: attended boot with the owner's card (design 4.5); the alert follows (dx7.9). |
 | `LIMITATIONS.md:354` | b | "It is caught ACROSS the nodes: RegaliaMembershipBehindFleet … RegaliaAnchorBehindFleet". This detection needs at least 2 nodes. At N=1 a compromised regalia-sync that stops publishing is undetected. |
 | `LIMITATIONS.md:358` | b | "needs … at least one honest peer ahead". Void at N=1. |
 
