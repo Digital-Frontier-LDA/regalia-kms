@@ -7,7 +7,7 @@ from v4. A drift on either side fails CI: the Python test replays this file too.
 
     python3 -Es tests/vectors/make-membership-v5.py tests/vectors/membership-v5.json
 
-The file is replaced only once every test has passed (written beside it, then renamed), so a failing run leaves the
+The file is replaced only once every test has passed (written to a temporary file of this run's beside it, then renamed), so a failing run leaves the
 last good vector in place; the runner's report goes to stderr. With no path, the JSON goes to stdout.
 
 Every "key" field (a typed key's, a signature's, a typed root's) is written "public": a public key written as
@@ -19,6 +19,7 @@ has a field of its own named "public". The reasons are Python's words; the Go te
 import json
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -82,14 +83,15 @@ if not result.wasSuccessful():
     raise SystemExit("the v5 membership tests failed: no vector is written")
 text = json.dumps({"about": __doc__.strip().split("\n\n")[0], "cases": cases}, indent=1, sort_keys=True) + "\n"
 if len(sys.argv) > 1:
-    partial = sys.argv[1] + ".partial"
+    # this run's own temporary file beside the target (unique, so concurrent runs never share one), renamed over it
+    fd, partial = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(sys.argv[1])), suffix=".partial")
     try:
-        with open(partial, "w") as out:
+        with os.fdopen(fd, "w") as out:
             out.write(text)
+        os.chmod(partial, 0o644)      # mkstemp makes it 0600; the vector is an ordinary repository file
         os.replace(partial, sys.argv[1])
     except BaseException:
-        if os.path.exists(partial):
-            os.unlink(partial)        # the last good vector stays; no stray .partial beside it
+        os.unlink(partial)            # only the file this run created; the last good vector stays
         raise
 else:
     sys.stdout.write(text)
